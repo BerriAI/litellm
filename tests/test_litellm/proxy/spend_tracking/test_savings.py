@@ -7,6 +7,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_toke
 from litellm.llms.anthropic.cost_calculation import cost_per_token as anthropic_cost_per_token
 from litellm.proxy.spend_tracking.savings import (
     _baseline_usage,
+    _resolve_model,
     compute_autorouter_savings,
     compute_savings_spend,
     marks_gateway_injection,
@@ -757,6 +758,84 @@ def test_a_switch_onto_a_partly_cached_model_still_pays_for_the_write():
     assert reported < if_treated_as_same_model / 10, "a mostly-cold switch must not be priced as a continuation"
 
 
+def test_a_baseline_that_prices_caching_implicitly_still_pays_for_its_prompt():
+    """OpenAI, Azure and Gemini entries carry no `cache_creation_input_token_cost`,
+    because those providers cache implicitly and charge nothing to write. Leaving this
+    request's written tokens in the creation bucket priced them at the 0.0 the cost
+    resolver falls back to, so the baseline carried a 20k prompt for free and a first
+    turn that saved money reported a loss. Those tokens are plain input on such a model.
+    """
+    first_turn = _usage(fresh=0, cached=0, written=20_000, out=1_000)
+    reported = compute_autorouter_savings(
+        baseline_model="gpt-5",
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=first_turn,
+        conversation_continuing=False,
+    )
+
+    gpt5 = litellm.get_model_info("gpt-5", "openai")
+    assert gpt5.get("cache_creation_input_token_cost") is None, "pick a baseline with no cache-write rate"
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    baseline_pays_input = 20_000 * gpt5["input_cost_per_token"] + 1_000 * gpt5["output_cost_per_token"]
+    actually_paid = 20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
+    assert reported == pytest.approx(baseline_pays_input - actually_paid)
+    assert reported > 0, "routing a cold first turn onto a cheaper model is a saving, not a loss"
+
+
+def _priced_chat_model_without_cache_read_rate() -> tuple[str, str, str]:
+    """A chat model the bundled map prices per token for input and output but not for cache
+    reads, derived from the map itself: a hardcoded pick goes stale the moment the registry
+    prices that model's cache reads, which is exactly how this test's premise last broke.
+    Candidates go through the savings module's own resolver, so the pick is one the code
+    under test can actually price."""
+    for key in sorted(litellm.model_cost):
+        entry = litellm.model_cost[key]
+        provider = entry.get("litellm_provider")
+        if not isinstance(provider, str) or not key.startswith(f"{provider}/"):
+            continue
+        if entry.get("mode") != "chat" or entry.get("cache_read_input_token_cost") is not None:
+            continue
+        if not entry.get("input_cost_per_token") or not entry.get("output_cost_per_token"):
+            continue
+        if _resolve_model(key, None) is None:
+            continue
+        priced = compute_autorouter_savings(
+            baseline_model=key,
+            selected_model="claude-haiku-4-5",
+            selected_provider="anthropic",
+            usage=_usage(fresh=1_000, cached=0, written=0, out=100),
+            conversation_continuing=True,
+        )
+        if priced == 0.0:
+            continue
+        return key, key.removeprefix(f"{provider}/"), provider
+    raise AssertionError("the bundled map has no per-token chat model without a cache-read rate")
+
+
+def test_a_baseline_with_no_cache_read_rate_is_charged_its_input_rate():
+    """The same hole on the other bucket. A baseline whose entry has no
+    `cache_read_input_token_cost` reads for 0.0, so a continuing turn priced the whole
+    prompt at nothing and every switch away from it reported a loss.
+    """
+    baseline_key, baseline_name, baseline_provider = _priced_chat_model_without_cache_read_rate()
+    continuing = _usage(fresh=0, cached=0, written=20_000, out=1_000)
+    reported = compute_autorouter_savings(
+        baseline_model=baseline_key,
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=continuing,
+        conversation_continuing=True,
+    )
+
+    baseline = litellm.get_model_info(baseline_name, baseline_provider)
+    assert baseline.get("cache_read_input_token_cost") is None, "pick a baseline with no cache-read rate"
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    baseline_pays_input = 20_000 * baseline["input_cost_per_token"] + 1_000 * baseline["output_cost_per_token"]
+    actually_paid = 20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
+    assert reported == pytest.approx(baseline_pays_input - actually_paid)
+
+
 def _breakdown(input_cost: float, output_cost: float = 0.0, **extra: object) -> dict:
     """A `cost_breakdown` as the cost calculator records it on the spend log."""
     return {"input_cost": input_cost, "output_cost": output_cost, **extra}
@@ -794,6 +873,51 @@ def test_the_served_arm_is_read_from_the_record_not_repriced():
     opus = litellm.get_model_info("claude-opus-5", "anthropic")
     public = 20_000 * opus["input_cost_per_token"] + 1_000 * opus["output_cost_per_token"]
     assert reported == pytest.approx(public - (negotiated_input + negotiated_output))
+
+
+@pytest.mark.parametrize(
+    "basis, expected_multiplier",
+    [
+        pytest.param({"service_tier": "priority"}, 2.5, id="priority tier uplifts the baseline"),
+        pytest.param({"data_residency": "eu"}, 1.1, id="eu residency uplifts the baseline"),
+        pytest.param({}, 1.0, id="no basis recorded prices at standard"),
+        pytest.param(None, 1.0, id="row predating the field prices at standard"),
+        pytest.param({"service_tier": True, "data_residency": 17}, 1.0, id="a non-string basis is dropped"),
+    ],
+)
+def test_the_baseline_is_priced_on_the_basis_the_request_was_billed_at(basis, expected_multiplier):
+    """A request billed at a priority tier, or through a regional host, would have been
+    billed the same way on the single model an operator ran instead of the router, so the
+    counterfactual carries that basis too. Dropping it prices the two arms from different
+    books; neither multiplier cancels out of the difference, because both are per-model.
+
+    The served model has no tiered rates and no uplift of its own, so only the baseline
+    can move: a fix that forwards the basis to the served arm alone leaves these numbers
+    unchanged. The non-string case guards the JSON round trip, where `.lower()` inside
+    the pricer would raise and be swallowed into a silent $0.00 for the whole row.
+    """
+    gpt = litellm.get_model_info("gpt-5.5", "openai")
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    assert gpt.get("input_cost_per_token_priority") == pytest.approx(2.5 * gpt["input_cost_per_token"])
+    assert gpt.get("output_cost_per_token_priority") == pytest.approx(2.5 * gpt["output_cost_per_token"])
+    assert gpt.get("regional_processing_uplift_multiplier_eu") == 1.1
+    assert haiku.get("input_cost_per_token_priority") is None, "served model must not move with the basis"
+    assert haiku.get("regional_processing_uplift_multiplier_eu") is None
+
+    usage = _usage(fresh=20_000, cached=0, written=0, out=1_000)
+    served = 20_000 * haiku["input_cost_per_token"] + 1_000 * haiku["output_cost_per_token"]
+
+    reported = compute_autorouter_savings(
+        baseline_model="openai/gpt-5.5",
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=usage,
+        conversation_continuing=False,
+        cost_breakdown=None if basis is None else _breakdown(served, **basis),
+    )
+
+    baseline = 20_000 * gpt["input_cost_per_token"] + 1_000 * gpt["output_cost_per_token"]
+    assert reported == pytest.approx(expected_multiplier * baseline - served)
 
 
 def test_the_baseline_is_priced_on_the_vertex_location_the_request_was_billed_at(monkeypatch):

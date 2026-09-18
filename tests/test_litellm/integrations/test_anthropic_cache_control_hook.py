@@ -1586,11 +1586,40 @@ class TestEnableAnthropicPromptCaching:
         points = self._points(model="us.anthropic.claude-sonnet-4-5-20250929-v1:0", provider="bedrock")
         assert [p["index"] for p in points] == [None, -1]
 
+    @pytest.mark.parametrize("model, provider", [("gpt-4o", "openai"), ("gemini-2.0-flash", "gemini")])
+    def test_non_anthropic_providers_never_injected(self, monkeypatch, model, provider):
+        """These report supports_prompt_caching=True but never consume cache_control markers."""
+        from litellm.utils import supports_prompt_caching
+
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert supports_prompt_caching(model=model, custom_llm_provider=provider) is True
+        assert self._points(model=model, provider=provider) == []
+
+    def test_databricks_claude_not_injected_despite_caching_support(self, monkeypatch, local_model_cost_map):
+        from litellm.utils import supports_prompt_caching
+
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        model = "databricks/databricks-claude-sonnet-4-5"
+        assert supports_prompt_caching(model=model, custom_llm_provider="databricks") is True
+        assert self._points(model=model, provider="databricks") == []
 
     def test_model_without_caching_support_not_injected(self, monkeypatch):
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
         assert self._points(model="anthropic.claude-3-5-sonnet-20240620-v1:0", provider="bedrock") == []
 
+    @pytest.mark.parametrize("model", ["us.xai.grok-4.6", "global.xai.grok-4.6"])
+    def test_bedrock_grok_not_injected(self, monkeypatch, local_model_cost_map, model):
+        """Bedrock supports only implicit prompt caching for Grok: explicit cachePoint
+        breakpoints make it reject the whole request ("You invoked an unsupported model
+        or your request did not allow prompt caching"), so supports_prompt_caching stays
+        false, while implicit cache hits still bill at the cache-read rate."""
+        from litellm.utils import supports_prompt_caching
+
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert supports_prompt_caching(model=model, custom_llm_provider="bedrock") is False
+        assert self._points(model=model, provider="bedrock") == []
+        entry = litellm.model_cost[model]
+        assert 0 < entry["cache_read_input_token_cost"] < entry["input_cost_per_token"]
 
     def test_stands_down_when_client_sent_cache_control(self, monkeypatch):
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)

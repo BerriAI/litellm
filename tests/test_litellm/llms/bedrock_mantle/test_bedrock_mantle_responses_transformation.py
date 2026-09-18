@@ -1296,6 +1296,37 @@ class TestMantleBaseSegment:
     the /openai/v1 base, everything else on /v1. An unmapped model defaults to /v1.
     """
 
+    @pytest.mark.parametrize(
+        "model,model_cost,expected",
+        [
+            (
+                "openai.gpt-5.5",
+                {"bedrock_mantle/openai.gpt-5.5": {"use_openai_responses_path": True}},
+                "openai/v1",
+            ),
+            (
+                "google.gemma-4-31b",
+                {
+                    "bedrock_mantle/google.gemma-4-31b": {
+                        "use_openai_responses_path": True
+                    }
+                },
+                "openai/v1",
+            ),
+            (
+                "openai.gpt-oss-120b",
+                {"bedrock_mantle/openai.gpt-oss-120b": {}},
+                "v1",
+            ),
+            ("openai.gpt-oss-120b", {}, "v1"),
+            (None, {}, "v1"),
+        ],
+    )
+    def test_base_segment(self, model, model_cost, expected):
+        from litellm.llms.bedrock_mantle.common_utils import mantle_base_segment
+
+        assert mantle_base_segment(model, model_cost) == expected
+
 
 class TestMantleSupportsResponses:
     """The capability helper is data-driven (supported_endpoints / mode), with no

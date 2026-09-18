@@ -204,6 +204,18 @@ class TestPerplexityCostCalculator:
         assert math.isclose(prompt_cost, (1000 * 1e-07) + (100 * 2e-06), rel_tol=1e-10)
         assert math.isclose(completion_cost, (150 * 2e-07) + (50 * 3e-06) + 0.005, rel_tol=1e-10)
 
+    def test_off_peak_defaults_to_the_current_time(self):
+        """The proxy's cost dispatch passes no clock, so an all-day window has to apply on the
+        default current time."""
+        self._register_off_peak_model(
+            {"hours_utc": "00:00-00:00", "input_cost_per_token": 1e-07, "output_cost_per_token": 2e-07}
+        )
+        usage = Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200)
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(model=self.OFF_PEAK_MODEL, usage=usage)
+
+        assert math.isclose(prompt_cost, 1000 * 1e-07, rel_tol=1e-10)
+        assert math.isclose(completion_cost, 200 * 2e-07, rel_tol=1e-10)
 
     def test_provider_stated_cost_still_wins_inside_an_off_peak_window(self):
         """A response that carries Perplexity's own metered cost bills that cost whatever the

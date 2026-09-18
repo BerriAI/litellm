@@ -427,6 +427,74 @@ def test_transcription_usage_cost_returns_zero_for_unknown_type():
     assert _transcription_usage_cost({}, {}) == 0.0
 
 
+def test_get_transcription_model_falls_back_to_session_model(monkeypatch):
+    """session.model is used when transcription-specific model fields are absent."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    from litellm.cost_calculator import _get_transcription_model_name_from_results
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-realtime-whisper"}},
+    ]
+    assert _get_transcription_model_name_from_results(results) == "gpt-realtime-whisper"
+
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "prod/claude-3-5-sonnet-20240620",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
+                    "api_key": "test_api_key",
+                },
+                "model_info": {
+                    "id": "my-unique-model-id",
+                    "input_cost_per_token": 0.000006,
+                    "output_cost_per_token": 0.00003,
+                    "cache_creation_input_token_cost": 0.0000075,
+                    "cache_read_input_token_cost": 0.0000006,
+                },
+            },
+            {
+                "model_name": "claude-3-5-sonnet-20240620",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
+                    "api_key": "test_api_key",
+                },
+                "model_info": {
+                    "input_cost_per_token": 100,
+                    "output_cost_per_token": 200,
+                },
+            },
+        ]
+    )
+
+    result = router.completion(
+        model="claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response=True,
+    )
+
+    result_2 = router.completion(
+        model="prod/claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response=True,
+    )
+
+    assert result._hidden_params["response_cost"] > result_2._hidden_params["response_cost"]
+
+    model_info = router.get_deployment_model_info(
+        model_id="my-unique-model-id", model_name="anthropic/claude-sonnet-4-5-20250929"
+    )
+    assert model_info is not None
+    assert model_info["input_cost_per_token"] == 0.000006
+    assert model_info["output_cost_per_token"] == 0.00003
+    assert model_info["cache_creation_input_token_cost"] == 0.0000075
+    assert model_info["cache_read_input_token_cost"] == 0.0000006
+
+
 def test_custom_pricing_cost_calc_uses_router_model_id_from_litellm_metadata():
     """When custom pricing is in litellm_metadata.model_info,
     use_custom_pricing_for_model should return True and
@@ -2270,6 +2338,42 @@ def test_anthropic_geo_multiplier_applies_to_cache_tokens(_local_model_cost_map,
     assert geo_completion_cost == pytest.approx(base_completion_cost * 1.1)
 
 
+def test_anthropic_geo_and_fast_multipliers_compose(_local_model_cost_map, monkeypatch):
+    """
+    Anthropic's fast-mode pricing doubles every token type, cache reads and
+    writes included, and the regional uplift stacks on top, so a fast +
+    regional row prices as ``(non_cache + cache) * fast * geo``.
+    """
+    from litellm.llms.anthropic.cost_calculation import (
+        cost_per_token as anthropic_cost_per_token,
+    )
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    model = "claude-test-geo-fast-cache-model"
+    _register_anthropic_geo_cache_model(model)
+
+    usage = Usage(
+        prompt_tokens=10_000,
+        completion_tokens=500,
+        total_tokens=10_500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=2_000,
+            cache_creation_tokens=6_000,
+        ),
+    )
+    usage.inference_geo = "us"
+    usage.speed = "fast"
+
+    prompt_cost, completion_cost = anthropic_cost_per_token(model=model, usage=usage)
+
+    cache_cost = 2_000 * 0.5e-6 + 6_000 * 6.25e-6
+    non_cache_cost = 2_000 * 5e-6
+    assert prompt_cost == pytest.approx((non_cache_cost + cache_cost) * 2.0 * 1.1)
+    assert completion_cost == pytest.approx(500 * 25e-6 * 2.0 * 1.1)
+
+
 @pytest.mark.parametrize(
     "model",
     ["claude-sonnet-4-6", "claude-mythos-5", "claude-mythos-preview"],
@@ -2806,6 +2910,60 @@ def test_custom_pricing_without_cache_keys_preserves_legacy_behavior():
     assert cost == pytest.approx(expected)
 
 
+def test_completion_cost_logs_the_rates_it_billed_at(monkeypatch):
+    """A caller reporting the cost lines beside their per-token rates reads both off this one call.
+    completion_cost infers the provider, and xai's inclusive tier thresholds put a request sitting
+    exactly on 200k at the tier rate, which a lookup made without that inferred provider would miss.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "xai/tiered-model",
+        {
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+            "input_cost_per_token_above_200k_tokens": 6e-6,
+            "output_cost_per_token_above_200k_tokens": 3e-5,
+            "cache_read_input_token_cost_above_200k_tokens": 6e-7,
+            "litellm_provider": "xai",
+            "mode": "chat",
+        },
+    )
+    logging_obj = Logging(
+        model="xai/tiered-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="billed-rates",
+        function_id="f",
+    )
+    usage = Usage(
+        prompt_tokens=200_000,
+        completion_tokens=1_000,
+        total_tokens=201_000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100_000),
+    )
+
+    litellm.completion_cost(
+        completion_response=ModelResponse(model="xai/tiered-model", usage=usage),
+        model="xai/tiered-model",
+        custom_llm_provider=None,
+        litellm_logging_obj=logging_obj,
+    )
+
+    rates = logging_obj.billed_token_rates
+    assert rates is not None
+    assert rates.input_cost_per_token == pytest.approx(6e-6)
+    assert rates.cache_read_input_token_cost == pytest.approx(6e-7)
+    assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(100_000 * rates.cache_read_input_token_cost)
+    assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(1_000 * rates.output_cost_per_token)
+
+
 def test_completion_cost_logs_cache_and_reasoning_breakdown_for_custom_pricing():
     """
     A custom-priced deployment bills cache tokens at its custom cache rates, but the
@@ -3063,6 +3221,35 @@ def test_completion_cost_bills_interactions_google_search_per_query():
     assert model_info.get("web_search_billing_unit") == "per_query"
     assert cost == pytest.approx(expected)
     assert cost > 3 * per_query_cost
+
+
+def test_completion_cost_bills_interactions_video_output_at_video_rate():
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    model_info = litellm.get_model_info(model="gemini-omni-flash-preview", custom_llm_provider="gemini")
+    video_tokens = 5792 * 8
+    response = InteractionsAPIResponse(
+        id="interactions/video123",
+        model="gemini-omni-flash-preview",
+        status="completed",
+        steps=[],
+        usage={
+            "total_tokens": 10 + video_tokens,
+            "total_input_tokens": 10,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 10}],
+            "total_cached_tokens": 0,
+            "total_output_tokens": video_tokens,
+            "output_tokens_by_modality": [{"modality": "video", "tokens": video_tokens}],
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 0,
+        },
+    )
+
+    cost = completion_cost(completion_response=response, custom_llm_provider="gemini")
+
+    expected = 10 * model_info["input_cost_per_token"] + video_tokens * model_info["output_cost_per_video_token"]
+    assert model_info["output_cost_per_video_token"] != model_info["output_cost_per_token"]
+    assert cost == pytest.approx(expected)
 
 
 @pytest.mark.parametrize("video_count", [2, 3])

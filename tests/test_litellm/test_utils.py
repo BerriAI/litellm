@@ -3378,6 +3378,38 @@ _FIREWORKS_ROUTER_SHORT_FORMS = [
 ]
 
 
+@pytest.fixture
+def fireworks_short_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "fireworks_ai/accounts/fireworks/models/glm-5p3": {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "litellm_provider": "fireworks_ai",
+                "mode": "chat",
+                "max_tokens": 100,
+            },
+            "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast": {
+                "input_cost_per_token": 2.1e-6,
+                "output_cost_per_token": 6.6e-6,
+                "litellm_provider": "fireworks_ai",
+                "mode": "chat",
+            },
+            "fireworks_ai/nomic-ai/nomic-embed-text-v1.5": {
+                "input_cost_per_token": 8e-9,
+                "output_cost_per_token": 0.0,
+                "litellm_provider": "fireworks_ai",
+                "mode": "embedding",
+            },
+        },
+    )
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
+
+
 class TestBedrockBaseModelLabelKeepsTools:
     """Regression for #29618: a Bedrock deployment whose ``base_model`` is a friendly
     label must not silently drop ``tools``/``tool_choice`` under ``drop_params``."""

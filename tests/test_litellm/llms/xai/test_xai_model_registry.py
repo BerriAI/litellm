@@ -7,6 +7,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).parents[4]
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
 BACKUP_PRICES_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
@@ -19,6 +21,12 @@ RESPONSES_ONLY_MODELS = (
 )
 
 MAP_PATHS = (PRICES_PATH, BACKUP_PRICES_PATH)
+
+
+@pytest.fixture(scope="module", params=[p.name for p in MAP_PATHS])
+def cost_map(request: pytest.FixtureRequest) -> dict:
+    path = next(p for p in MAP_PATHS if p.name == request.param)
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def test_both_cost_maps_agree_on_xai_entries():

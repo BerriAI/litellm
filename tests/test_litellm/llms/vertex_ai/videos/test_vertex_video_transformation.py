@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.vertex_ai.videos.transformation import (
     VertexAIVideoConfig,
     _convert_image_to_vertex_format,
@@ -120,6 +121,25 @@ class TestVertexAIVideoConfig:
             self.config.get_complete_url(
                 model="veo-002", api_base=None, litellm_params={}
             )
+
+
+    def test_veo_31_lite_provider_routing_from_local_model_map(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
+        vertex_video_models = {
+            model_name.removeprefix("vertex_ai/")
+            for model_name, info in model_cost.items()
+            if info.get("litellm_provider") == "vertex_ai-video-models"
+        }
+        monkeypatch.setattr(litellm, "vertex_ai_video_models", vertex_video_models)
+
+        model, custom_llm_provider, _, _ = get_llm_provider(
+            model="veo-3.1-lite-generate-001"
+        )
+
+        assert model == "veo-3.1-lite-generate-001"
+        assert custom_llm_provider == "vertex_ai"
 
 
     def test_transform_video_create_request(self):

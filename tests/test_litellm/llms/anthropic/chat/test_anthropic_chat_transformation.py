@@ -2464,6 +2464,42 @@ def test_get_max_tokens_for_model_none():
     assert max_tokens == 4096
 
 
+def test_get_config_with_model_uses_dynamic_max_tokens():
+    """
+    Test that get_config returns dynamic max_tokens based on model.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/8835
+    """
+
+    def _mock_get_max_tokens(model):
+        """Return expected max_output_tokens for each model."""
+        model_map = {
+            "claude-3-sonnet-20240229": 4096,
+            "claude-3-5-sonnet-20241022": 8192,
+            "claude-3-7-sonnet-20250219": 64000,
+        }
+        result = model_map.get(model)
+        if result is None:
+            raise Exception(f"Model {model} not found")
+        return result
+
+    with patch(
+        "litellm.llms.anthropic.chat.transformation.get_max_tokens",
+        side_effect=_mock_get_max_tokens,
+    ):
+        # Claude 3 model should get 4096
+        config_claude3 = AnthropicConfig.get_config(model="claude-3-sonnet-20240229")
+        assert config_claude3["max_tokens"] == 4096
+
+        # Claude 3.5 model should get 8192
+        config_claude35 = AnthropicConfig.get_config(model="claude-3-5-sonnet-20241022")
+        assert config_claude35["max_tokens"] == 8192
+
+        # Claude 3.7 model should get 64000 (64K default, 128K requires beta header)
+        config_claude37 = AnthropicConfig.get_config(model="claude-3-7-sonnet-20250219")
+        assert config_claude37["max_tokens"] == 64000
+
+
 def test_get_config_without_model_uses_fallback():
     """
     Test that get_config without model parameter uses 4096 fallback.
@@ -3166,6 +3202,27 @@ def test_max_effort_accepted_for_opus_47():
     assert result["output_config"]["effort"] == "max"
 
 
+def test_effort_beta_header_not_injected_for_46_models():
+    """
+    Test that is_effort_used returns False for Claude 4.6 models.
+
+    Claude 4.6 models use output_config as a stable API feature —
+    no beta header should be injected.
+    """
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    model_info = AnthropicModelInfo()
+
+    for model in ["claude-opus-4-6-20250514", "claude-sonnet-4-6-20260219"]:
+        # Even with output_config present, should return False for 4.6 models
+        result = model_info.is_effort_used(
+            optional_params={"output_config": {"effort": "high"}},
+            model=model,
+            custom_llm_provider="anthropic",
+        )
+        assert result is False, f"is_effort_used should return False for {model}"
+
+
 @pytest.mark.parametrize(
     "model",
     [
@@ -3259,6 +3316,23 @@ def test_reasoning_effort_minimal_floors_at_anthropic_provider_minimum():
 
     assert result["thinking"]["type"] == "enabled"
     assert result["thinking"]["budget_tokens"] >= 1024
+
+
+def test_effort_beta_header_still_injected_for_older_models():
+    """
+    Test that is_effort_used still returns True for pre-4.6 models
+    when output_config is present.
+    """
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    model_info = AnthropicModelInfo()
+
+    result = model_info.is_effort_used(
+        optional_params={"output_config": {"effort": "low"}},
+        model="claude-opus-4-5-20251101",
+        custom_llm_provider="anthropic",
+    )
+    assert result is True
 
 
 def test_code_execution_tool_results_extraction():
@@ -4073,6 +4147,48 @@ def test_fast_mode_usage_calculation():
     assert usage.completion_tokens == 500
     assert hasattr(usage, "speed")
     assert usage.speed == "fast"
+
+
+def test_fast_mode_cost_calculation():
+    """
+    Test that fast mode applies the 'fast' multiplier from provider_specific_entry
+    on top of the base model cost (1.1x for claude-opus-4-6).
+    """
+
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+    from litellm.types.utils import Usage
+
+    base_prompt = 0.005
+    base_completion = 0.025
+
+    with (
+        patch(
+            "litellm.llms.anthropic.cost_calculation.generic_cost_per_token"
+        ) as mock_cost,
+        patch("litellm.get_model_info") as mock_info,
+    ):
+        mock_cost.return_value = (base_prompt, base_completion)
+        mock_info.return_value = {"provider_specific_entry": {"fast": 1.1, "us": 1.1}}
+
+        usage_fast = Usage(
+            prompt_tokens=1000,
+            completion_tokens=1000,
+            speed="fast",
+        )
+
+        prompt_cost, completion_cost = cost_per_token(
+            model="claude-opus-4-6",
+            usage=usage_fast,
+        )
+
+        # generic_cost_per_token called with the plain base model name
+        mock_cost.assert_called_once()
+        assert mock_cost.call_args[1]["model"] == "claude-opus-4-6"
+        assert mock_cost.call_args[1]["custom_llm_provider"] == "anthropic"
+
+        # 1.1x multiplier applied
+        assert abs(prompt_cost - base_prompt * 1.1) < 1e-10
+        assert abs(completion_cost - base_completion * 1.1) < 1e-10
 
 
 def test_fast_mode_with_inference_geo():
@@ -5927,6 +6043,35 @@ def test_sampling_params_forwarded_on_models_that_accept_them(model):
 
     assert result["temperature"] == 0.5
     assert result["top_p"] == 0.9
+
+
+def test_sampling_param_gating_driven_by_model_map_flag(monkeypatch):
+    """The drop/raise decision must come from ``supports_sampling_params`` in
+    the model map, not just name matching: a flagged entry gates a model whose
+    name says nothing, and an explicit ``true`` overrides the name fallback."""
+    monkeypatch.setitem(
+        litellm.model_cost, "claude-zeta-9", {"supports_sampling_params": False}
+    )
+    monkeypatch.setitem(
+        litellm.model_cost, "claude-fable-5-test", {"supports_sampling_params": True}
+    )
+    config = AnthropicConfig()
+
+    flagged_off = config.map_openai_params(
+        non_default_params={"top_p": 0.9},
+        optional_params={},
+        model="claude-zeta-9",
+        drop_params=True,
+    )
+    assert "top_p" not in flagged_off
+
+    flagged_on = config.map_openai_params(
+        non_default_params={"top_p": 0.9},
+        optional_params={},
+        model="claude-fable-5-test",
+        drop_params=True,
+    )
+    assert flagged_on["top_p"] == 0.9
 
 
 def test_top_k_dropped_at_transform_for_models_that_removed_it():

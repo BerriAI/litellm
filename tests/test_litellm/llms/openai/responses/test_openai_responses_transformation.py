@@ -2226,6 +2226,18 @@ class TestReasoningFollowsModelSupport:
         )
         assert mapped["reasoning"] == reasoning
 
+    def test_an_explicit_supports_reasoning_false_beats_the_bundled_floor(self, local_model_cost_map, monkeypatch):
+        overridden = {
+            name: ({**entry, "supports_reasoning": False} if name == "o3" else entry)
+            for name, entry in litellm.model_cost.items()
+        }
+        monkeypatch.setattr(litellm, "model_cost", overridden)
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium"}},
+            model="o3",
+            drop_params=True,
+        )
+        assert "reasoning" not in mapped
 
     def test_azure_deployments_keep_reasoning_even_on_a_non_reasoning_model_name(self, local_model_cost_map):
         mapped = AzureOpenAIResponsesAPIConfig().map_openai_params(

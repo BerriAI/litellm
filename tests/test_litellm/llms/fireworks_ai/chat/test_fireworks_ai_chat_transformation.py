@@ -337,6 +337,39 @@ def test_get_supported_openai_params_preserves_generic_reasoning_fallback():
     assert "reasoning_effort" in supported_params
 
 
+def test_get_supported_openai_params_parallel_tool_calls_without_tool_choice(
+    monkeypatch,
+):
+    """Test that parallel_tool_calls is gated on tools, not tool_choice."""
+    config = FireworksAIConfig()
+    model = "fireworks_ai/test-tools-without-tool-choice"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "supports_function_calling": True,
+            "supports_tool_choice": False,
+        },
+    )
+
+    supported_params = config.get_supported_openai_params(model)
+
+    assert "tools" in supported_params
+    assert "parallel_tool_calls" in supported_params
+    assert "tool_choice" not in supported_params
+
+
+def test_get_provider_info_omits_false_supports_reasoning(monkeypatch):
+    """Test that Fireworks only overrides supports_reasoning for supported models."""
+    config = FireworksAIConfig()
+    model = "fireworks_ai/test-reasoning-false"
+    monkeypatch.setitem(litellm.model_cost, model, {"supports_reasoning": False})
+
+    info = config.get_provider_info(model)
+
+    assert "supports_reasoning" not in info
+
+
 @pytest.mark.parametrize(
     "api_base, expected_url_prefix",
     [
@@ -424,6 +457,14 @@ def test_transform_messages_helper_removes_provider_specific_fields():
     )
     for msg in out:
         assert "provider_specific_fields" not in msg
+
+
+def test_unmapped_model_fallback_function_calling():
+    """Test that a model not in model_cost still defaults to supporting function calling for Fireworks."""
+    config = FireworksAIConfig()
+    model = "fireworks_ai/unmapped-future-model"
+    info = config.get_provider_info(model)
+    assert info["supports_function_calling"] is True
 
 
 def test_transform_messages_helper_strips_thinking_blocks_but_keeps_reasoning_content():
@@ -1048,6 +1089,26 @@ def test_transform_messages_helper_no_transform_inline():
     block = out[0]["content"][0]
     assert block["image_url"] == url
     assert "#transform=inline" not in block["image_url"]
+
+
+def test_get_provider_info_vision_from_model_cost(monkeypatch):
+    config = FireworksAIConfig()
+
+    vision_model = "fireworks_ai/test-vision-from-cost"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        vision_model,
+        {"supports_vision": True, "supports_pdf_input": True},
+    )
+    info = config.get_provider_info(vision_model)
+    assert info["supports_vision"] is True
+    assert info["supports_pdf_input"] is True
+
+    no_vision_model = "fireworks_ai/test-no-vision-from-cost"
+    monkeypatch.setitem(litellm.model_cost, no_vision_model, {})
+    info_no_vision = config.get_provider_info(no_vision_model)
+    assert info_no_vision.get("supports_vision") is not True
+    assert "supports_pdf_input" not in info_no_vision
 
 
 def test_reasoning_effort_boolean_true_to_medium():

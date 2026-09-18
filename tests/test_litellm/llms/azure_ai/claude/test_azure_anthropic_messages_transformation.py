@@ -317,6 +317,46 @@ class TestProviderConfigManagerAzureAnthropicMessages:
         assert config is None
 
 
+def test_messages_thinking_shape_follows_exact_azure_entry_flag(local_model_cost_map, monkeypatch):
+    """The Azure messages config must probe capabilities under ``azure_ai`` so an
+    operator setting ``supports_adaptive_thinking: false`` on the exact
+    ``azure_ai/claude-opus-4-8`` entry beats the unmodified ``anthropic`` entry.
+    With the inherited ``"anthropic"`` provider default the flip was ignored and
+    the transform kept emitting ``thinking.type='adaptive'``."""
+    import litellm
+
+    config = AzureAnthropicMessagesConfig()
+
+    def transform():
+        return config.transform_anthropic_messages_request(
+            model="claude-opus-4-8",
+            messages=[{"role": "user", "content": "Hello"}],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 4096,
+                "reasoning_effort": "medium",
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    result = transform()
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
+    assert result.get("output_config") == {"effort": "medium"}
+
+    monkeypatch.setitem(
+        litellm.model_cost["azure_ai/claude-opus-4-8"], "supports_adaptive_thinking", False
+    )
+    litellm.get_model_info.cache_clear()
+    assert litellm.model_cost["claude-opus-4-8"]["supports_adaptive_thinking"] is True
+
+    flipped = transform()
+    thinking = flipped.get("thinking")
+    assert isinstance(thinking, dict)
+    assert thinking.get("type") == "enabled"
+    assert isinstance(thinking.get("budget_tokens"), int)
+    assert "output_config" not in flipped
+
+
 def _azure_transform(model, messages, system=None):
     config = AzureAnthropicMessagesConfig()
     params = {"max_tokens": 256}
