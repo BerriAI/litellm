@@ -339,7 +339,7 @@ mod tests {
             "cohere/parse",
             "https://example.com",
             json!({
-                "output_format":"markdown", "metadata":{"host":true},
+                "output_format":"markdown", "timeout":30,
                 "extra_body":{
                     "output_format": {"future":true},
                     "document":{"type":"image_url","image_url":"https://example.com/a.png",
