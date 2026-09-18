@@ -18,22 +18,25 @@ fn provider_config(provider: &str) -> Option<&'static dyn BaseAudioTranscription
 }
 
 pub fn prepare_audio_transcription_provider_call(
-    request: AudioTranscriptionRequest<'_>,
+    request: AudioTranscriptionRequest,
 ) -> Result<ProviderAudioTranscriptionRequest, Error> {
-    let provider_info = get_custom_llm_provider(request.model, request.custom_llm_provider)
-        .or_else(|| {
-            request
-                .custom_llm_provider
-                .map(|provider| CustomLlmProvider {
-                    model: request.model,
-                    custom_llm_provider: provider,
-                })
-        })
-        .ok_or_else(|| {
-            Error::InvalidProvider(
-                "unable to resolve custom_llm_provider for audio transcription request".to_string(),
-            )
-        })?;
+    let provider_info =
+        get_custom_llm_provider(&request.model, request.custom_llm_provider.as_deref())
+            .or_else(|| {
+                request
+                    .custom_llm_provider
+                    .as_deref()
+                    .map(|provider| CustomLlmProvider {
+                        model: &request.model,
+                        custom_llm_provider: provider,
+                    })
+            })
+            .ok_or_else(|| {
+                Error::InvalidProvider(
+                    "unable to resolve custom_llm_provider for audio transcription request"
+                        .to_string(),
+                )
+            })?;
     let model = provider_info.model.to_string();
     let config = provider_config(provider_info.custom_llm_provider)
         .ok_or_else(|| Error::InvalidProvider(provider_info.custom_llm_provider.to_string()))?;
@@ -42,7 +45,7 @@ pub fn prepare_audio_transcription_provider_call(
     let auth = config.auth_strategy(&model, &request.optional_params, &env_lookup)?;
     if matches!(auth, AudioTranscriptionAuth::Bearer)
         && !has_header(&headers, "authorization")
-        && let Some(api_key) = request.api_key
+        && let Some(api_key) = request.api_key.as_deref()
     {
         headers.push(("Authorization".to_string(), format!("Bearer {api_key}")));
     }
@@ -50,7 +53,7 @@ pub fn prepare_audio_transcription_provider_call(
         headers.push(("Content-Type".to_string(), "application/json".to_string()));
     }
     let url = config.get_complete_url(
-        request.api_base,
+        request.api_base.as_deref(),
         &model,
         &request.optional_params,
         &env_lookup,

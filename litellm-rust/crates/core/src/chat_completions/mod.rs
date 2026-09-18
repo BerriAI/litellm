@@ -23,7 +23,7 @@ use serde_json::{Map, Value};
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 
 pub async fn chat_completions(
-    request: ChatCompletionsRequest<'_>,
+    request: ChatCompletionsRequest,
 ) -> Result<ChatCompletionsResponse, Error> {
     execute_chat_completions_provider_call(resolve_request(request)?).await
 }

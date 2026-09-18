@@ -6,27 +6,27 @@ use super::types::{ChatCompletionsRequest, ProviderChatCompletionsRequest};
 use crate::llms::base_llm::chat::transformation::ChatCompletionsAuth;
 
 fn prepare_chat_completions_call(
-    request: ChatCompletionsRequest<'_>,
+    request: ChatCompletionsRequest,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
     prepare_provider_request(resolve_request(request)?)
 }
 
-fn request<'a>(
-    model: &'a str,
-    provider: Option<&'a str>,
+fn request(
+    model: &str,
+    provider: Option<&str>,
     messages: Value,
     optional_params: Value,
-) -> ChatCompletionsRequest<'a> {
+) -> ChatCompletionsRequest {
     ChatCompletionsRequest {
-        model,
+        model: model.into(),
         messages,
         optional_params: match optional_params {
             Value::Object(map) => map,
             other => panic!("params must be an object, got {other}"),
         },
-        api_key: Some("sk-test"),
+        api_key: Some("sk-test".into()),
         api_base: None,
-        custom_llm_provider: provider,
+        custom_llm_provider: provider.map(str::to_string),
         extra_headers: None,
         timeout: None,
     }
@@ -34,7 +34,7 @@ fn request<'a>(
 
 /// `ProviderChatCompletionsRequest` deliberately has no `Debug` (its headers
 /// carry resolved credentials), so unwrap the failure case by hand.
-fn decline(request: ChatCompletionsRequest<'_>) -> Error {
+fn decline(request: ChatCompletionsRequest) -> Error {
     match prepare_chat_completions_call(request) {
         Err(error) => error,
         Ok(prepared) => panic!("expected a decline, prepared a call to {}", prepared.url),
@@ -654,16 +654,16 @@ mod round_trip {
         (format!("http://127.0.0.1:{port}/v1/messages"), handle)
     }
 
-    fn call(api_base: &str, messages: Value, params: Value) -> ChatCompletionsRequest<'_> {
+    fn call(api_base: &str, messages: Value, params: Value) -> ChatCompletionsRequest {
         ChatCompletionsRequest {
-            model: "anthropic/claude-sonnet-4-5",
+            model: "anthropic/claude-sonnet-4-5".into(),
             messages,
             optional_params: match params {
                 Value::Object(map) => map,
                 other => panic!("params must be an object, got {other}"),
             },
-            api_key: Some("sk-test"),
-            api_base: Some(api_base),
+            api_key: Some("sk-test".into()),
+            api_base: Some(api_base.into()),
             custom_llm_provider: None,
             extra_headers: None,
             timeout: Some(std::time::Duration::from_secs(10)),

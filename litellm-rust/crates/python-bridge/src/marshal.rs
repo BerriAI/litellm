@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashMap};
-use std::time::Duration;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -8,16 +7,6 @@ use serde_json::{Map, Value};
 
 use litellm_auth::InputSource;
 use litellm_host_python::{from_py, from_py_argument};
-
-/// The keyword arguments every value route shares, validated at the Python boundary.
-pub(crate) struct RouteOptions {
-    pub(crate) model: String,
-    pub(crate) api_key: Option<String>,
-    pub(crate) api_base: Option<String>,
-    pub(crate) custom_llm_provider: Option<String>,
-    pub(crate) extra_headers: Option<Map<String, Value>>,
-    pub(crate) timeout: Option<Duration>,
-}
 
 pub(crate) fn optional_params_argument(
     value: &Bound<'_, PyAny>,
@@ -46,16 +35,6 @@ fn optional_object(
         return Ok(None);
     }
     required_object(name, from_py_argument(value)?).map(Some)
-}
-
-pub(crate) fn optional_timeout(timeout_seconds: Option<f64>) -> Option<Duration> {
-    timeout_seconds.and_then(|secs| {
-        if secs.is_finite() && secs > 0.0 {
-            Some(Duration::from_secs_f64(secs))
-        } else {
-            None
-        }
-    })
 }
 
 pub(crate) fn python_timeout_seconds(py: Python<'_>, timeout: Py<PyAny>) -> PyResult<Option<f64>> {

@@ -11,24 +11,24 @@ use crate::llms::base_llm::chat::transformation::{BaseConfig, ChatCompletionsAut
 /// names by the host, exactly as the messages route receives an already
 /// Anthropic-shaped body. The core owns the conversation translation, the
 /// provider call, and the response normalization.
-pub struct ChatCompletionsRequest<'a> {
-    pub model: &'a str,
+pub struct ChatCompletionsRequest {
+    pub model: String,
     pub messages: Value,
     pub optional_params: Map<String, Value>,
-    pub api_key: Option<&'a str>,
-    pub api_base: Option<&'a str>,
-    pub custom_llm_provider: Option<&'a str>,
+    pub api_key: Option<String>,
+    pub api_base: Option<String>,
+    pub custom_llm_provider: Option<String>,
     pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
 }
 
-pub(super) struct ResolvedChatCompletionsRequest<'a> {
+pub(super) struct ResolvedChatCompletionsRequest {
     pub(super) model: String,
     pub(super) config: &'static dyn BaseConfig,
     pub(super) messages: Vec<ChatMessage>,
     pub(super) optional_params: Map<String, Value>,
-    pub(super) api_key: Option<&'a str>,
-    pub(super) api_base: Option<&'a str>,
+    pub(super) api_key: Option<String>,
+    pub(super) api_base: Option<String>,
     pub(super) extra_headers: Option<Map<String, Value>>,
     pub(super) timeout: Option<Duration>,
 }

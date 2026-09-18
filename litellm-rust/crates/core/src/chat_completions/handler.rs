@@ -11,7 +11,7 @@ use crate::http_utils::{http_request, truncate_error_body};
 use crate::llms::base_llm::chat::transformation::ChatCompletionsAuth;
 
 pub(super) async fn execute_chat_completions_provider_call(
-    request: ResolvedChatCompletionsRequest<'_>,
+    request: ResolvedChatCompletionsRequest,
 ) -> Result<ChatCompletionsResponse, Error> {
     let request = prepare_provider_request(request)?;
     let body = serde_json::to_vec(&request.body).map_err(|err| {

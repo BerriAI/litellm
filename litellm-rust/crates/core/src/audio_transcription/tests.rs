@@ -34,11 +34,11 @@ async fn bedrock_request_is_signed_and_contains_audio() {
     ]);
     let api_base = format!("http://{address}");
     let response = audio_transcription(AudioTranscriptionRequest {
-        model: "mistral.voxtral-mini-3b-2507",
+        model: "mistral.voxtral-mini-3b-2507".into(),
         audio: json!({"data": "AQI=", "format": "wav", "filename": "audio.wav"}),
         api_key: None,
-        api_base: Some(&api_base),
-        custom_llm_provider: Some("bedrock"),
+        api_base: Some(api_base),
+        custom_llm_provider: Some("bedrock".into()),
         extra_headers: None,
         optional_params,
         timeout: None,
