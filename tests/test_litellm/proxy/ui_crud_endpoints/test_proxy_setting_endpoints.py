@@ -3439,3 +3439,31 @@ class TestSyncUiSettingsToGeneralSettings:
 
         assert dict(applied) == {}
         assert general_settings == {"allow_agents_for_team_admins": True}
+
+    def test_applied_runtime_flags_keep_the_ui_row_as_the_source(self, monkeypatch):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.config_resolvers import SettingsStore
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import apply_runtime_general_settings_flags
+
+        general_settings = SettingsStore("general_settings")
+        general_settings.load_yaml({})
+        monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+
+        apply_runtime_general_settings_flags({"forward_client_headers_to_llm_api": True})
+
+        assert general_settings["forward_client_headers_to_llm_api"] is True
+        assert general_settings.source("forward_client_headers_to_llm_api") == "db"
+
+    def test_applied_runtime_flags_cannot_override_the_config_file(self, monkeypatch):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.config_resolvers import SettingsStore
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import apply_runtime_general_settings_flags
+
+        general_settings = SettingsStore("general_settings")
+        general_settings.load_yaml({"forward_client_headers_to_llm_api": False})
+        monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+
+        apply_runtime_general_settings_flags({"forward_client_headers_to_llm_api": True})
+
+        assert general_settings["forward_client_headers_to_llm_api"] is False
+        assert general_settings.source("forward_client_headers_to_llm_api") == "config"

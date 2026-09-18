@@ -574,7 +574,6 @@ class Logging(LiteLLMLoggingBaseClass):
         self.streaming_chunks: list[Any] = []  # for generating complete stream response
         self.sync_streaming_chunks: list[Any] = []  # for generating complete stream response
         self.log_raw_request_response = log_raw_request_response
-        self._native_callback_fast_path: bool = False
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = dynamic_input_callbacks
@@ -3915,9 +3914,8 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> InteractionsAPIResponse | None:
         """
         The Interactions API streaming iterator hands the terminal event to the
-        success handlers: the new schema (Api-Revision: 2026-05-20) emits
-        ``interaction.completed`` carrying the full interaction object, the
-        legacy schema (2026-05-07) emits a chunk with ``status="completed"``
+        success handlers: ``interaction.completed`` may carry the full
+        interaction object, or the final chunk may carry ``status="completed"``
         and usage on the chunk itself. Build the equivalent non-streaming
         response so cost calculation and spend tracking see one shape.
         """

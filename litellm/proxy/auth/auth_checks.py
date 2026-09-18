@@ -3635,6 +3635,22 @@ async def get_jwt_key_mapping_cache_keys_for_token(
     return tuple(jwt_key_mapping_cache_key(m.jwt_claim_name, m.jwt_claim_value, m.jwt_issuer) for m in mappings)
 
 
+class _TokenInFilter(TypedDict):
+    token: ReadOnly[Mapping[str, Sequence[str]]]
+
+
+async def get_jwt_key_mapping_cache_keys_for_tokens(
+    hashed_tokens: Sequence[str],
+    prisma_client: PrismaClient,
+) -> tuple[str, ...]:
+    """Cache keys of every JWT claim mapped to any of the given virtual keys."""
+    if not hashed_tokens:
+        return ()
+    token_filter: Final[_TokenInFilter] = {"token": {"in": tuple(hashed_tokens)}}
+    mappings: Final = await _jwt_key_mapping_table(JWTKeyMappingRepository(prisma_client)).find_many(where=token_filter)
+    return tuple(jwt_key_mapping_cache_key(m.jwt_claim_name, m.jwt_claim_value, m.jwt_issuer) for m in mappings)
+
+
 @log_db_metrics
 async def get_jwt_key_mapping_object(
     jwt_claim_name: str,

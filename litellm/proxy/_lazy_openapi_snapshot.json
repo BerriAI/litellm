@@ -20374,6 +20374,50 @@
         }
       },
       "/typesafe/{endpoint}": {
+        "delete": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/typesafe)",
+          "operationId": "typesafe_proxy_route_typesafe__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Typesafe Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
         "get": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/typesafe)",
           "operationId": "typesafe_proxy_route_typesafe__endpoint__get",
@@ -20418,9 +20462,97 @@
             "llm_passthrough"
           ]
         },
+        "patch": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/typesafe)",
+          "operationId": "typesafe_proxy_route_typesafe__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Typesafe Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
         "post": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/typesafe)",
           "operationId": "typesafe_proxy_route_typesafe__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Typesafe Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/typesafe)",
+          "operationId": "typesafe_proxy_route_typesafe__endpoint__put",
           "parameters": [
             {
               "in": "path",
