@@ -1,4 +1,4 @@
-import { isAdminRole, isProxyAdminTierRole } from "@/utils/roles";
+import { isAdminRole, isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { CircleHelp, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -109,7 +109,7 @@ const readToolsOAuthServerId = (): string | null => {
   }
 };
 
-const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID }) => {
+const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, isViewOnly = false }) => {
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
 
   // Fetch health status for all servers
@@ -578,6 +578,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                 accessToken={accessToken}
                 userID={userID}
                 userRole={userRole}
+                isViewOnly={isViewOnly}
                 availableAccessGroups={uniqueMcpAccessGroups}
                 initialTabIndex={selectedServerId === toolsTabServerId ? 1 : 0}
               />
@@ -755,7 +756,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           )}
           {isProxyAdminTierRole(userRole) && (
             <TabsContent value="connections">
-              <MCPGatewaySessionsTab accessToken={accessToken} />
+              <MCPGatewaySessionsTab
+                accessToken={accessToken}
+                canTerminate={isProxyAdminRole(userRole) && !isViewOnly}
+              />
             </TabsContent>
           )}
         </Tabs>

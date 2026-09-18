@@ -26,7 +26,6 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
-
 import litellm
 import litellm.proxy.proxy_server as proxy_server_module
 from litellm.caching.caching import RedisCache
@@ -41,6 +40,7 @@ from litellm.proxy._types import (
     TokenCountRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.login_throttle import LoginThrottle
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
 from litellm.proxy.proxy_server import app, initialize, openai_exception_handler
@@ -139,13 +139,14 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     }
     assert response.cookies.get("token") == "signed-token"
 
-    mock_authenticate_user.assert_awaited_once_with(
-        username="alice",
-        password="secret",
-        master_key="test-master-key",
-        prisma_client=mock_prisma_client,
-        general_settings={},
-    )
+    mock_authenticate_user.assert_awaited_once()
+    auth_kwargs = mock_authenticate_user.call_args.kwargs
+    assert auth_kwargs["username"] == "alice"
+    assert auth_kwargs["password"] == "secret"
+    assert auth_kwargs["master_key"] == "test-master-key"
+    assert auth_kwargs["prisma_client"] is mock_prisma_client
+    assert auth_kwargs["general_settings"] == {}
+    assert isinstance(auth_kwargs["throttle"], LoginThrottle), "the endpoint must thread a throttle through"
     mock_create_ui_token_object.assert_called_once_with(
         login_result=mock_login_result,
         general_settings={},
@@ -3408,6 +3409,60 @@ async def test_load_config_user_url_validation_handles_null_and_string_false(tmp
 
     await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(false_config_file))
     assert litellm.user_url_validation is False
+
+
+@pytest.mark.asyncio
+async def test_load_config_warns_per_worker_login_counters_without_general_settings(tmp_path, monkeypatch, caplog):
+    """Regression: the failed-login throttle is on by default, so a multi-worker proxy with no
+    Redis must hear that its counters are per worker even when the config has no general_settings."""
+    import logging
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.auth.login_throttle import warn_login_counters_are_per_worker
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    for redis_var in ("REDIS_HOST", "REDIS_URL", "REDIS_CLUSTER_NODES", "REDIS_SENTINEL_NODES"):
+        monkeypatch.delenv(redis_var, raising=False)
+    monkeypatch.setenv("NUM_WORKERS", "4")
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+    warn_login_counters_are_per_worker.cache_clear()
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("model_list: []\n")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+
+    assert "Running 4 workers but Redis is not configured" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_load_config_warns_that_the_source_login_limit_is_off_without_trusted_proxy_ranges(
+    tmp_path, monkeypatch, caplog
+):
+    """The per-source failed-login limit is skipped when the source cannot be attributed, and the
+    operator must be told so at startup. Both a configured range and an explicit empty list (no
+    proxies, the peer is the source) silence it, since both keep the limit on."""
+    import logging
+
+    from litellm.proxy.auth.login_throttle import warn_source_login_limit_is_off
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("NUM_WORKERS", "1")
+    warn_source_login_limit_is_off.cache_clear()
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("model_list: []\n")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+    assert "trusted_proxy_ranges is not set" in caplog.text
+
+    for configured in ("['10.0.0.0/8']", "[]"):
+        caplog.clear()
+        warn_source_login_limit_is_off.cache_clear()
+        config_file.write_text(f"model_list: []\ngeneral_settings:\n  trusted_proxy_ranges: {configured}\n")
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+        assert "trusted_proxy_ranges is not set" not in caplog.text, configured
 
 
 @pytest.mark.asyncio
@@ -7536,25 +7591,35 @@ async def test_deleting_the_stored_pass_through_row_takes_the_route_out_of_servi
     deleted. The proxy's own registry of live pass-through routes is what decides whether
     a request is routed upstream or falls through to the auth error, so it has to lose the
     entry on the reload rather than at the next process restart."""
-    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
-    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+        _registered_pass_through_routes,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig, app
 
     path: Final = f"/v1/deleted-{uuid.uuid4().hex[:8]}"
     db_endpoint: Final = {"id": "db-1", "path": path, "target": "https://example.com/post"}
+    prior_routes: Final = list(app.routes)
+    prior_registry: Final = dict(_registered_pass_through_routes)
 
     def live_routes() -> set[str]:
         return {route for route in InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes() if path in route}
 
     settings: Final = patch("litellm.proxy.proxy_server.general_settings", {})  # test-quality-ok: the method reads this module global; no injection seam
     yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", None)  # test-quality-ok: module global holding the YAML endpoints; this case has none
-    with settings, yaml_endpoints:
-        pc = ProxyConfig()
-        await pc._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
-        assert live_routes(), "the stored endpoint should be serving before the row is deleted"
+    try:
+        with settings, yaml_endpoints:
+            pc = ProxyConfig()
+            await pc._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
+            assert live_routes(), "the stored endpoint should be serving before the row is deleted"
 
-        await pc._update_general_settings(db_general_settings={})
+            await pc._update_general_settings(db_general_settings={})
 
-        assert live_routes() == set()
+            assert live_routes() == set()
+    finally:
+        app.routes[:] = prior_routes
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(prior_registry)
 
 
 @pytest.mark.asyncio
@@ -7564,15 +7629,18 @@ async def test_a_stored_pass_through_row_never_disturbs_the_config_declared_rout
     serving untouched. The stored entry never gets a route of its own."""
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
         InitPassThroughEndpointHelpers,
+        _registered_pass_through_routes,
         initialize_pass_through_endpoints,
     )
-    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.proxy_server import ProxyConfig, app
 
     marker: Final = uuid.uuid4().hex[:8]
     config_path: Final = f"/v1/kept-{marker}"
     db_path: Final = f"/v1/ignored-{marker}"
     config_endpoint: Final = {"id": f"cfg-{marker}", "path": config_path, "target": "https://example.com/post"}
     db_endpoint: Final = {"id": f"db-{marker}", "path": db_path, "target": "https://example.com/post"}
+    prior_routes: Final = list(app.routes)
+    prior_registry: Final = dict(_registered_pass_through_routes)
 
     def live_paths() -> set[str]:
         registered: Final = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
@@ -7580,17 +7648,22 @@ async def test_a_stored_pass_through_row_never_disturbs_the_config_declared_rout
 
     settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [config_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
     yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [config_endpoint])  # test-quality-ok: module global holding the YAML endpoints the reload merges in
-    with settings, yaml_endpoints:
-        await initialize_pass_through_endpoints(pass_through_endpoints=[config_endpoint])
-        assert live_paths() == {config_path}
+    try:
+        with settings, yaml_endpoints:
+            await initialize_pass_through_endpoints(pass_through_endpoints=[config_endpoint])
+            assert live_paths() == {config_path}
 
-        pc = ProxyConfig()
-        await pc._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
-        assert live_paths() == {config_path}
+            pc = ProxyConfig()
+            await pc._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
+            assert live_paths() == {config_path}
 
-        await pc._update_general_settings(db_general_settings={})
+            await pc._update_general_settings(db_general_settings={})
 
-        assert live_paths() == {config_path}
+            assert live_paths() == {config_path}
+    finally:
+        app.routes[:] = prior_routes
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(prior_registry)
 
 
 def _fill_user_api_key_cache(cache: DualCache, count: int) -> None:
@@ -13953,6 +14026,35 @@ async def test_authoritative_floor_spend_keeps_a_reset_marker_written_during_the
 
 
 @pytest.mark.asyncio
+async def test_login_throttle_settings_are_not_hot_applied_from_the_database():
+    """LIT-5285: a stored sign-in limit does not take effect on a live worker.
+
+    _update_general_settings copies an allowlist of keys out of the DB row on every config
+    poll. Adding these to it would let a stored value outrank config.yaml without a restart,
+    so an operator locked out by a bad value could not fix it by editing YAML and restarting.
+    """
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    original = dict(ps.general_settings)
+    try:
+        ps.general_settings.clear()
+        await ProxyConfig()._update_general_settings(
+            db_general_settings={
+                "max_failed_login_attempts_per_source": 999,
+                "failed_login_window_seconds": 1,
+                "failed_login_block_seconds": 1,
+            }
+        )
+        assert "max_failed_login_attempts_per_source" not in ps.general_settings
+        assert "failed_login_window_seconds" not in ps.general_settings
+        assert "failed_login_block_seconds" not in ps.general_settings
+    finally:
+        ps.general_settings.clear()
+        ps.general_settings.update(original)
+
+
+@pytest.mark.asyncio
 async def test_load_config_router_authorizes_fallback_targets_against_the_calling_key(tmp_path):
     from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
     from litellm.proxy.proxy_server import ProxyConfig
@@ -14284,3 +14386,74 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
         ]
     finally:
         litellm.utils._select_custom_tokenizer_helper.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_auth_cache_invalidation_subscriber_evicts_byok_credentials_cached_by_this_worker():
+    """A peer worker's BYOK revocation broadcast must reach this worker's BYOK credential cache."""
+    from redis.asyncio import Redis
+
+    from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
+        byok_credential_cache,
+        byok_credential_cache_key,
+        cache_byok_credential,
+        get_cached_byok_credential,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    class _QueuePubSub:
+        def __init__(self, messages: list[object]) -> None:
+            self.queue: asyncio.Queue[object] = asyncio.Queue()
+            for message in messages:
+                self.queue.put_nowait(message)
+
+        async def subscribe(self, *channels: str) -> None:
+            return None
+
+        async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> object | None:
+            try:
+                return await asyncio.wait_for(self.queue.get(), timeout)
+            except asyncio.TimeoutError:
+                return None
+
+        async def aclose(self) -> None:
+            return None
+
+    class _PubSubRedisClient(Redis):
+        def __init__(self, pubsub: _QueuePubSub) -> None:
+            self._scripted_pubsub = pubsub
+
+        def pubsub(self) -> _QueuePubSub:
+            return self._scripted_pubsub
+
+    class _FakeRedisCache:
+        namespace = None
+
+        def __init__(self, client: object) -> None:
+            self._client = client
+
+        def init_async_client(self) -> object:
+            return self._client
+
+    byok_credential_cache.flush_cache()
+    cache_byok_credential("mallory", "srv-byok", "sk-revoked-elsewhere")
+    message: Final = {
+        "type": "message",
+        "data": json.dumps({"cache_key": byok_credential_cache_key("mallory", "srv-byok")}).encode(),
+    }
+    proxy_config: Final = proxy_server_module.ProxyConfig()
+    proxy_config.start_auth_cache_invalidation_subscriber(
+        redis_cache=_FakeRedisCache(_PubSubRedisClient(_QueuePubSub([message]))),  # pyright: ignore[reportArgumentType]  # fake pub/sub capable redis; no live redis in this unit test
+        user_api_key_cache=UserApiKeyCache(),
+    )
+    try:
+        for _ in range(200):
+            if get_cached_byok_credential("mallory", "srv-byok") is None:
+                break
+            await asyncio.sleep(0.01)
+        evicted: Final = get_cached_byok_credential("mallory", "srv-byok") is None
+    finally:
+        await proxy_config.stop_auth_cache_invalidation_subscriber()
+        byok_credential_cache.flush_cache()
+
+    assert evicted, "the subscriber does not evict the BYOK credential cache on a peer worker's broadcast"

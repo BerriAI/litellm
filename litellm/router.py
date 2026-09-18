@@ -3940,12 +3940,24 @@ class Router:
             )
 
             _router_timeout: Final = (
-                float(self._explicit_timeout) if isinstance(self._explicit_timeout, (int, float)) else None
+                self.request_timeout
+                if self.request_timeout is not None
+                else float(self._explicit_timeout)
+                if isinstance(self._explicit_timeout, (int, float))
+                else None
+            )
+            _router_stream_timeout: Final = (
+                self.stream_timeout
+                if self.stream_timeout is not None
+                else self.request_timeout
+                if self.request_timeout is not None
+                else self.default_litellm_params.get("stream_timeout")
             )
             kwargs["timeout"] = resolve_llm_passthrough_timeout(
                 kwargs=kwargs,
                 litellm_params=deployment["litellm_params"],
                 router_timeout=_router_timeout,
+                router_stream_timeout=_router_stream_timeout,
             )
         else:
             kwargs["timeout"] = self._get_timeout(kwargs=kwargs, data=deployment["litellm_params"])
