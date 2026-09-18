@@ -174,9 +174,8 @@ def _item_rollover_max_budget(
         case "key":
             return None
         case "user" | "team":
-            return cast(
-                "LiteLLM_UserTable | LiteLLM_TeamTable", item
-            ).rollover_max_budget  # cast-ok: item_type already restricts the member, pyright just cannot narrow it
+            capped: Final = cast("LiteLLM_UserTable | LiteLLM_TeamTable", item)  # cast-ok: item_type picks the member
+            return capped.rollover_max_budget
         case _:
             assert_never(item_type)
 

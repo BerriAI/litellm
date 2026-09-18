@@ -1527,7 +1527,8 @@ async def _update_single_user_helper(
 
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(non_default_values.get("spend"))
-    validate_rollover_max_budget(cast("float | None", non_default_values.get("rollover_max_budget")))
+    rollover_cap: Final = cast("float | None", non_default_values.get("rollover_max_budget"))  # cast-ok: untyped dict
+    validate_rollover_max_budget(rollover_cap)
 
     # Upsert the grants into their own row and link it, mirroring /key/update and /team/update.
     # This also removes object_permission from the payload, which is not a column on the user table.
