@@ -57,6 +57,12 @@ def assert_future_reset_time(value):
     assert value > datetime.now(timezone.utc)
 
 
+def stored_budget_row(mock_tx):
+    """The budget row the create call persists, minus the audit columns."""
+    data = mock_tx.litellm_budgettable.create.await_args.kwargs["data"]
+    return {k: v for k, v in data.items() if k not in ("created_by", "updated_by")}
+
+
 # TEST: an empty patch (caller sent no budget fields) leaves everything alone.
 # This is the merge-patch contract: absent != clear. Updating only a member's
 # role must not silently wipe their budget.
@@ -224,10 +230,7 @@ async def test_create_from_temp_budget_pair_only(mock_tx, fake_user):
     )
 
     mock_tx.litellm_budgettable.create.assert_awaited_once()
-    data = mock_tx.litellm_budgettable.create.await_args.kwargs["data"]
-    assert data["temp_budget_increase"] == 5.0
-    assert data["temp_budget_expiry"] == expiry
-    assert "max_budget" not in data
+    assert stored_budget_row(mock_tx) == {"temp_budget_increase": 5.0, "temp_budget_expiry": expiry}
     mock_tx.litellm_teammembership.upsert.assert_awaited_once()
     mock_tx.litellm_teammembership.update.assert_not_called()
 
@@ -249,11 +252,7 @@ async def test_create_from_temp_pair_never_snapshots_team_default(mock_tx, fake_
     )
 
     mock_tx.litellm_budgettable.find_unique.assert_not_awaited()
-    data = mock_tx.litellm_budgettable.create.await_args.kwargs["data"]
-    assert "max_budget" not in data
-    assert "rpm_limit" not in data
-    assert data["temp_budget_increase"] == 1.0
-    assert data["temp_budget_expiry"] == expiry
+    assert stored_budget_row(mock_tx) == {"temp_budget_increase": 1.0, "temp_budget_expiry": expiry}
     mock_tx.litellm_teammembership.upsert.assert_awaited_once()
 
 
@@ -275,11 +274,7 @@ async def test_temp_pair_on_shared_default_member_creates_bare_row(mock_tx, fake
 
     mock_tx.litellm_budgettable.find_unique.assert_not_awaited()
     mock_tx.litellm_budgettable.update.assert_not_called()
-    data = mock_tx.litellm_budgettable.create.await_args.kwargs["data"]
-    assert "max_budget" not in data
-    assert "rpm_limit" not in data
-    assert data["temp_budget_increase"] == 1.0
-    assert data["temp_budget_expiry"] == expiry
+    assert stored_budget_row(mock_tx) == {"temp_budget_increase": 1.0, "temp_budget_expiry": expiry}
     mock_tx.litellm_teammembership.upsert.assert_awaited_once()
 
 
@@ -342,10 +337,7 @@ async def test_create_from_plain_patch_does_not_snapshot_team_default(mock_tx, f
     )
 
     mock_tx.litellm_budgettable.find_unique.assert_not_awaited()
-    data = mock_tx.litellm_budgettable.create.await_args.kwargs["data"]
-    assert data["tpm_limit"] == 500
-    assert "max_budget" not in data
-    assert "rpm_limit" not in data
+    assert stored_budget_row(mock_tx) == {"tpm_limit": 500}
     mock_tx.litellm_teammembership.upsert.assert_awaited_once()
 
 
