@@ -571,9 +571,9 @@ async def delete_allowed_ip(
     if ip_address.ip not in _allowed_ips:
         raise HTTPException(status_code=404, detail="IP address not found")
 
-    _allowed_ips.remove(ip_address.ip)
-    if _allowed_ips:
-        general_settings["allowed_ips"] = _allowed_ips
+    remaining_ips: Final = [ip for ip in _allowed_ips if ip != ip_address.ip]
+    if remaining_ips:
+        general_settings["allowed_ips"] = remaining_ips
     else:
         general_settings.pop("allowed_ips", None)
 

@@ -36,7 +36,7 @@ class Request:
         (None, "127.0.0.1", True),  # No IP restrictions, should be allowed
         (["127.0.0.1"], "127.0.0.1", True),  # IP in allowed list
         (["192.168.1.1"], "127.0.0.1", False),  # IP not in allowed list
-        ([], "127.0.0.1", False),  # Empty allowed list, no IP should be allowed
+        ([], "127.0.0.1", True),  # Empty allowed list means no allowlist, so every IP is allowed
         (["192.168.1.1", "10.0.0.1"], "10.0.0.1", True),  # IP in allowed list
         (
             ["192.168.1.1"],
@@ -62,7 +62,7 @@ def test_check_valid_ip(allowed_ips: Optional[List[str]], client_ip: Optional[st
         (None, "127.0.0.1", True),  # No IP restrictions, should be allowed
         (["127.0.0.1"], "127.0.0.1", True),  # IP in allowed list
         (["192.168.1.1"], "127.0.0.1", False),  # IP not in allowed list
-        ([], "127.0.0.1", False),  # Empty allowed list, no IP should be allowed
+        ([], "127.0.0.1", True),  # Empty allowed list means no allowlist, so every IP is allowed
         (["192.168.1.1", "10.0.0.1"], "10.0.0.1", True),  # IP in allowed list
         (
             ["192.168.1.1"],

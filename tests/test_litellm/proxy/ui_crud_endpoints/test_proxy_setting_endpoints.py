@@ -3572,3 +3572,12 @@ class TestDeleteAllowedIpClearsTheKeyWhenTheListEmpties:
         assert resp.status_code == 404
         assert general_settings["allowed_ips"] == ["203.0.113.77"]
         assert "config" not in saved
+
+    def test_persisted_and_runtime_views_agree_when_the_list_holds_duplicates(self, monkeypatch):
+        general_settings, saved = self._harness(monkeypatch, ["203.0.113.77", "198.51.100.1", "203.0.113.77"])
+
+        assert self._delete("203.0.113.77").status_code == 200
+
+        persisted = saved["config"]["general_settings"]["allowed_ips"]
+        assert persisted == ["198.51.100.1"]
+        assert general_settings["allowed_ips"] == persisted
