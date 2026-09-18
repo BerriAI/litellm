@@ -218,7 +218,10 @@ def decode_call(token: str, authorization: str) -> CodexRealtimeCall:
         call: Final = CodexRealtimeCall.model_validate_json(plaintext or "")
     except (ValueError, TypeError, UnicodeError) as exc:
         raise HTTPException(403, "Invalid realtime call") from exc
-    if call.expires_at < time.time() or call.owner != hashlib.sha256(authorization.encode()).hexdigest():
+    if (
+        call.expires_at < time.time()
+        or call.owner != hashlib.sha256(authorization.encode(), usedforsecurity=False).hexdigest()
+    ):
         raise HTTPException(403, "Invalid or expired realtime call")
     return call
 
@@ -231,6 +234,7 @@ async def _cache_bounded_offer_body(request: Request) -> None:
         if int(request.headers.get("content-length", "")) > MAX_REALTIME_OFFER_BYTES:
             raise HTTPException(413, "Realtime offer exceeds the 8 MiB limit")
     except ValueError:
+        # A missing or non-numeric content length is checked while streaming below.
         pass
     if hasattr(request, "_body"):
         if len(request._body) > MAX_REALTIME_OFFER_BYTES:  # pyright: ignore[reportPrivateUsage]  # validate Starlette's cached body without consuming it again
@@ -396,7 +400,9 @@ async def _create_codex_realtime_call(request: Request) -> Response:
             call: Final = parse_call_response(
                 response,
                 alias=model,
-                owner=hashlib.sha256(f"Bearer {owner_key}".encode()).hexdigest(),
+                owner=hashlib.sha256(
+                    f"Bearer {owner_key}".encode(), usedforsecurity=False
+                ).hexdigest(),
                 expires_at=time.time() + 3600,
             )
         except ValueError as exc:

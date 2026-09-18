@@ -6024,7 +6024,9 @@ def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:
         bool: True if model matches the pattern, False otherwise
     """
     if "*" in allowed_model_pattern:
-        pattern: Final = f"^{allowed_model_pattern.replace('*', '.*')}$"
+        # Treat the configured model pattern as a glob; only '*' is special.
+        escaped_pattern: Final = re.escape(allowed_model_pattern)
+        pattern: Final = "^" + escaped_pattern.replace("\\*", ".*") + "$"
         return bool(re.match(pattern, model))
 
     return False

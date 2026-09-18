@@ -264,8 +264,8 @@ class Litellm_EntityType(enum.Enum):
 def hash_token(token: str):
     import hashlib
 
-    # Hash the string using SHA-256
-    hashed_token: Final = hashlib.sha256(token.encode()).hexdigest()
+    # This digest is an opaque lookup identifier, not a password hash.
+    hashed_token: Final = hashlib.sha256(token.encode(), usedforsecurity=False).hexdigest()
 
     return hashed_token
 

@@ -185,7 +185,7 @@ def rewrite_session_ids(value: JsonValue | Mapping[str, JsonValue], raw_id: str,
 def _owner(auth: UserAPIKeyAuth) -> str:
     if not auth.api_key:
         raise HTTPException(403, "Live sessions require an authenticated API key")
-    return hashlib.sha256(auth.api_key.encode()).hexdigest()
+    return hashlib.sha256(auth.api_key.encode(), usedforsecurity=False).hexdigest()
 
 
 async def _auth(request: Request) -> UserAPIKeyAuth:
@@ -1475,11 +1475,13 @@ async def websocket_live_session(websocket: WebSocket, session_id: str | None = 
         try:
             await websocket.close(code=1008, reason="Live session rejected")
         except RuntimeError:
+            # The peer may have closed the socket before the rejection response.
             pass
     except Exception:
         try:
             await websocket.close(code=1011, reason="Live upstream connection failed")
         except RuntimeError:
+            # The peer may have closed the socket before the failure response.
             pass
     finally:
         if state.connection is not None:
