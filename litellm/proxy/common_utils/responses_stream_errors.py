@@ -73,6 +73,23 @@ def _failure_details(original: Exception) -> _FailureDetails:
     )
 
 
+_CLIENT_ERROR_CODES: Final = MappingProxyType(
+    {
+        int(HTTPStatus.UNAUTHORIZED): "authentication_error",
+        int(HTTPStatus.FORBIDDEN): "permission_error",
+        int(HTTPStatus.NOT_FOUND): "not_found_error",
+        int(HTTPStatus.REQUEST_TIMEOUT): "request_timeout",
+        int(HTTPStatus.TOO_MANY_REQUESTS): "rate_limit_exceeded",
+    }
+)
+
+
+def _status_error_code(status_code: int | None) -> str:
+    if status_code is None or not HTTPStatus.BAD_REQUEST <= status_code < HTTPStatus.INTERNAL_SERVER_ERROR:
+        return "server_error"
+    return _CLIENT_ERROR_CODES.get(status_code, "invalid_request_error")
+
+
 def _response_error_code(details: _FailureDetails) -> str:
     for value in (details.code, details.type):
         if value == "insufficient_quota":
@@ -81,21 +98,7 @@ def _response_error_code(details: _FailureDetails) -> str:
             return "rate_limit_exceeded"
     if isinstance(details.code, str) and details.code and not details.code.isdecimal():
         return details.code
-    match details.status_code:
-        case HTTPStatus.UNAUTHORIZED:
-            return "authentication_error"
-        case HTTPStatus.FORBIDDEN:
-            return "permission_error"
-        case HTTPStatus.NOT_FOUND:
-            return "not_found_error"
-        case HTTPStatus.REQUEST_TIMEOUT:
-            return "request_timeout"
-        case HTTPStatus.TOO_MANY_REQUESTS:
-            return "rate_limit_exceeded"
-        case int(status) if HTTPStatus.BAD_REQUEST <= status < HTTPStatus.INTERNAL_SERVER_ERROR:
-            return "invalid_request_error"
-        case _:
-            return "server_error"
+    return _status_error_code(details.status_code)
 
 
 class ResponsesStreamErrorState:
