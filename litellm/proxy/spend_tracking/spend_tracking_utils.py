@@ -743,9 +743,10 @@ def _get_session_id_for_spend_log(
     omit_when_missing: bool,
     batch_trace_session_id: str | None = None,
 ) -> str | None:
-    """Under `omit` only `metadata.session_id`, the key Langfuse reads, counts as a session; `litellm_session_id` may
-    be a copied trace id. Batch call types carry a deterministic session derived from the batch id, which outranks
-    the per-request trace ids because those differ between the create call and the cost poller's row."""
+    """Under `omit` only `metadata.session_id`, the key Langfuse reads, counts as a session. Batch call types carry
+    a deterministic session derived from the batch id, which outranks the per-request trace ids because those differ
+    between the create call and the cost poller's row. Without an explicit session the legacy fallback groups by
+    `litellm_trace_id`, but a client-supplied `metadata.trace_id` is a trace correlation id, never a session."""
     if omit_when_missing:
         session_id: Final = metadata.get("session_id") if metadata else None
         return str(session_id) if session_id else None
@@ -754,10 +755,20 @@ def _get_session_id_for_spend_log(
 
     if batch_trace_session_id is not None:
         return batch_trace_session_id
-    if standard_logging_payload is not None and standard_logging_payload.get("trace_id") is not None:
-        return str(standard_logging_payload.get("trace_id"))
-    if kwargs.get("litellm_trace_id") is not None:
-        return str(kwargs.get("litellm_trace_id"))
+    litellm_params: Final = kwargs.get("litellm_params")
+    explicit_session_id: Final = (
+        kwargs.get("litellm_session_id")
+        or (litellm_params.get("litellm_session_id") if isinstance(litellm_params, Mapping) else None)
+        or (metadata.get("session_id") if metadata else None)
+    )
+    if explicit_session_id:
+        return str(explicit_session_id)
+    metadata_trace_id: Final = metadata.get("trace_id") if metadata else None
+    trace_id: Final = (
+        standard_logging_payload.get("trace_id") if standard_logging_payload is not None else None
+    ) or kwargs.get("litellm_trace_id")
+    if trace_id is not None and (metadata_trace_id is None or str(trace_id) != str(metadata_trace_id)):
+        return str(trace_id)
     return str(uuid.uuid4())
 
 
