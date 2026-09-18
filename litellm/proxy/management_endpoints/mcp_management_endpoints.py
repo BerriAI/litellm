@@ -22,7 +22,7 @@ import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol
 
 from fastapi import (
     APIRouter,
@@ -220,6 +220,7 @@ if MCP_AVAILABLE:
         MCP_ADMIN_CONFIG_CREDENTIAL_KEYS,
         MCPAuth,
         MCPCredentials,
+        MCPGatewaySessionsResponse,
         normalize_upstream_header_name,
     )
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -1345,6 +1346,32 @@ if MCP_AVAILABLE:
             )
         # Do NOT add to runtime registry — pending servers are not active
         return _redact_mcp_credentials(new_mcp_server)
+
+    @router.get(
+        "/sessions",
+        description="Live stateful MCP gateway sessions on this proxy worker, grouped by AI client and by user.",
+        dependencies=(Depends(user_api_key_auth),),
+        response_model=MCPGatewaySessionsResponse,
+    )
+    @management_endpoint_wrapper
+    async def get_mcp_gateway_sessions(
+        user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    ) -> MCPGatewaySessionsResponse:
+        if user_api_key_dict.user_role not in (
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={  # mutable-ok: HTTPException detail must be a plain mapping to keep this route's {"error": ...} response shape
+                    "error": "Admin access required to view MCP gateway sessions."
+                },
+            )
+        from litellm.proxy._experimental.mcp_server.server import (
+            get_mcp_gateway_sessions_report,
+        )
+
+        return get_mcp_gateway_sessions_report()
 
     @router.get(
         "/server/submissions",

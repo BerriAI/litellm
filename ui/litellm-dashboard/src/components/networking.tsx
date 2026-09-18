@@ -97,7 +97,7 @@ import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelM
 import type { ObjectPermission } from "./object_permission_types";
 import type { components } from "@/lib/http/schema";
 import { jsonFields } from "./common_components/check_openapi_schema";
-import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
+import type { MCPGatewaySessionsResponse, MCPUserEnvVarsStatus } from "./mcp_tools/types";
 import type {
   CoordinationRedisSettings,
   CoordinationRedisSettingsResponse,
@@ -4964,6 +4964,9 @@ export const fetchMCPSubmissions = async (accessToken: string) => {
     throw error;
   }
 };
+
+export const fetchMCPGatewaySessions = async (accessToken: string): Promise<MCPGatewaySessionsResponse> =>
+  apiClient.get<MCPGatewaySessionsResponse>(`/v1/mcp/sessions`, { accessToken });
 
 export const approveMCPServer = async (accessToken: string, serverId: string) => {
   try {

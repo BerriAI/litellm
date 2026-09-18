@@ -19135,6 +19135,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/mcp/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Mcp Gateway Sessions
+         * @description Live stateful MCP gateway sessions on this proxy worker, grouped by AI client and by user.
+         */
+        get: operations["get_mcp_gateway_sessions_v1_mcp_sessions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp/tools": {
         parameters: {
             query?: never;
@@ -32533,6 +32553,54 @@ export interface components {
          * @enum {string}
          */
         MCPEnvVarScope: "global" | "user";
+        /**
+         * MCPGatewaySession
+         * @description One live stateful Streamable HTTP session held by this proxy worker.
+         */
+        MCPGatewaySession: {
+            /** Client Ip */
+            client_ip?: string | null;
+            /** Client Name */
+            client_name?: string | null;
+            /** Client Version */
+            client_version?: string | null;
+            /** Idle Seconds */
+            idle_seconds: number;
+            /** In Flight Requests */
+            in_flight_requests: number;
+            /** Key Alias */
+            key_alias?: string | null;
+            /** Session Id Prefix */
+            session_id_prefix: string;
+            /** Team Alias */
+            team_alias?: string | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
+        /** MCPGatewaySessionGroupCount */
+        MCPGatewaySessionGroupCount: {
+            /** Count */
+            count: number;
+            /** Label */
+            label?: string | null;
+        };
+        /** MCPGatewaySessionsResponse */
+        MCPGatewaySessionsResponse: {
+            /** By Client */
+            by_client?: components["schemas"]["MCPGatewaySessionGroupCount"][];
+            /** By User */
+            by_user?: components["schemas"]["MCPGatewaySessionGroupCount"][];
+            /** Sessions */
+            sessions?: components["schemas"]["MCPGatewaySession"][];
+            /** Total Sessions */
+            total_sessions: number;
+            /** Worker Pid */
+            worker_pid: number;
+        };
         /**
          * MCPOAuthUserCredentialRequest
          * @description Stores a user's OAuth2 token for an OpenAPI MCP server.
@@ -65831,6 +65899,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_mcp_gateway_sessions_v1_mcp_sessions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPGatewaySessionsResponse"];
                 };
             };
         };

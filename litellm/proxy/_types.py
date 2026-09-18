@@ -534,6 +534,7 @@ class LiteLLMRoutes(enum.Enum):
     mcp_management_routes = [
         "/v1/mcp/server",
         "/v1/mcp/server/{path:path}",
+        "/v1/mcp/sessions",
     ]
 
     # Backwards-compat union — virtual keys may be configured with
