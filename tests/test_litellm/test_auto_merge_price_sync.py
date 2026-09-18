@@ -23,7 +23,6 @@ sys.modules[_spec.name] = merger
 _spec.loader.exec_module(merger)
 
 HEAD_SHA: Final = "deadbeef" * 5
-HEAD_DATE: Final = datetime(2026, 1, 10, tzinfo=timezone.utc)
 ALLOWLIST: Final = frozenset({"berriai-litellm-provider-info-sync[bot]"})
 COST_MAP_FILES: Final = ("model_prices_and_context_window.json",)
 
@@ -42,24 +41,6 @@ def _pr(**overrides: object) -> merger.PullRequest:
     return merger.PullRequest(**{**base, **overrides})
 
 
-def _greptile(score: int, updated_at: datetime) -> merger.IssueComment:
-    return merger.IssueComment(
-        author_login="greptile-apps[bot]",
-        body=f"Confidence Score: {score}/5",
-        updated_at=updated_at,
-    )
-
-
-def _bugbot(commit_id: str, body: str, submitted_at: datetime) -> merger.Review:
-    return merger.Review(
-        author_login="cursor[bot]",
-        state="COMMENTED",
-        body=body,
-        commit_id=commit_id,
-        submitted_at=submitted_at,
-    )
-
-
 def _inputs(**overrides: object) -> merger.EvaluationInputs:
     base: Final = {
         "pr": _pr(),
@@ -67,15 +48,7 @@ def _inputs(**overrides: object) -> merger.EvaluationInputs:
         "required_contexts": frozenset({"build"}),
         "check_runs": (merger.CheckRun(name="build", status="completed", conclusion="success"),),
         "statuses": (),
-        "comments": (_greptile(5, datetime(2026, 1, 11, tzinfo=timezone.utc)),),
-        "reviews": (
-            _bugbot(
-                HEAD_SHA,
-                "<!-- BUGBOT_REVIEW --> cursor bugbot found no new issues",
-                datetime(2026, 1, 11, tzinfo=timezone.utc),
-            ),
-        ),
-        "head_commit_date": HEAD_DATE,
+        "reviews": (),
         "self_check_name": "auto-merge-price-sync",
         "author_allowlist": ALLOWLIST,
     }
@@ -182,82 +155,10 @@ def test_pending_commit_status_holds() -> None:
     )
 
 
-def test_greptile_missing_holds() -> None:
-    _holds(_inputs(comments=()), "greptile score not available")
-
-
-def test_greptile_four_of_five_holds() -> None:
-    _holds(
-        _inputs(comments=(_greptile(4, datetime(2026, 1, 11, tzinfo=timezone.utc)),)),
-        "greptile score 4/5",
-    )
-
-
-def test_greptile_older_than_head_holds() -> None:
-    _holds(
-        _inputs(comments=(_greptile(5, datetime(2026, 1, 9, tzinfo=timezone.utc)),)),
-        "older than head commit",
-    )
-
-
-def test_bugbot_missing_holds() -> None:
-    _holds(_inputs(reviews=()), "bugbot review not available")
-
-
-def test_bugbot_stale_marker_ignored() -> None:
-    _holds(
-        _inputs(
-            reviews=(
-                _bugbot(
-                    HEAD_SHA,
-                    "<!-- BUGBOT_REVIEW --><!-- BUGBOT_REVIEW_STALE --> cursor bugbot found no new issues",
-                    datetime(2026, 1, 11, tzinfo=timezone.utc),
-                ),
-            )
-        ),
-        "bugbot review not available",
-    )
-
-
-def test_bugbot_old_commit_ignored() -> None:
-    _holds(
-        _inputs(
-            reviews=(
-                _bugbot(
-                    "0" * 40,
-                    "<!-- BUGBOT_REVIEW --> cursor bugbot found no new issues",
-                    datetime(2026, 1, 11, tzinfo=timezone.utc),
-                ),
-            )
-        ),
-        "bugbot review not available",
-    )
-
-
-def test_bugbot_issues_found_holds() -> None:
-    _holds(
-        _inputs(
-            reviews=(
-                _bugbot(
-                    HEAD_SHA,
-                    "<!-- BUGBOT_REVIEW --> cursor bugbot found 2 new issues",
-                    datetime(2026, 1, 11, tzinfo=timezone.utc),
-                ),
-            )
-        ),
-        "bugbot reported issues",
-    )
-
-
 def test_changes_requested_holds() -> None:
     _holds(
         _inputs(
             reviews=(
-                _bugbot(
-                    HEAD_SHA,
-                    "<!-- BUGBOT_REVIEW --> cursor bugbot found no new issues",
-                    datetime(2026, 1, 11, tzinfo=timezone.utc),
-                ),
                 merger.Review(
                     author_login="human-reviewer",
                     state="CHANGES_REQUESTED",
@@ -275,11 +176,6 @@ def test_superseded_changes_requested_merges() -> None:
     verdict: Final = _evaluate(
         _inputs(
             reviews=(
-                _bugbot(
-                    HEAD_SHA,
-                    "<!-- BUGBOT_REVIEW --> cursor bugbot found no new issues",
-                    datetime(2026, 1, 12, tzinfo=timezone.utc),
-                ),
                 merger.Review(
                     author_login="human-reviewer",
                     state="CHANGES_REQUESTED",
