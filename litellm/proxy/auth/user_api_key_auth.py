@@ -382,7 +382,7 @@ async def _check_user_model_budget(
         return
     check: Final = partial(
         model_max_budget_limiter.is_user_within_model_budget,
-        user_id=cast(str, valid_token.user_id),
+        user_id=valid_token.user_id,
         user_model_max_budget=user_model_max_budget,
     )
     for model_name in models:
@@ -439,7 +439,7 @@ async def _check_team_model_budget(
 
 
 async def _check_model_budget_with_fallback(
-    check: Callable[[str], Awaitable[object]],
+    check: Callable[..., Awaitable[object]],
     budget_fallbacks: Mapping[str, Sequence[str]] | None,
     model_name: str,
     request_data: dict,
@@ -505,7 +505,7 @@ async def _check_model_budget_with_fallback(
         _safe_set_request_parsed_body(request=request, parsed_body=request_data)
         request._json = request_data
         request._body = orjson.dumps(request_data)
-        path_params: Final = request.scope.get("path_params")
+        path_params = request.scope.get("path_params")
         if isinstance(path_params, dict) and "model" in path_params:
             path_params["model"] = fallback_model
         return
