@@ -3312,6 +3312,29 @@ class TestApplyUserBudgetToTeamKeysUISetting:
         assert response.status_code == 200
         assert response.json()["values"]["apply_user_budget_to_team_keys"] is True
 
+    def test_non_json_values_elsewhere_in_general_settings_do_not_break_get(self, mock_auth, monkeypatch):
+        """general_settings holds non-JSON values at runtime (e.g. RoleBasedPermissions
+        instances under "role_permissions"); only the flag itself may be inspected."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"role_permissions": [object()], "apply_user_budget_to_team_keys": True},
+        )
+        self._mock_prisma(monkeypatch)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["apply_user_budget_to_team_keys"] is True
+
+    def test_reads_only_the_flag_key(self):
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            _apply_user_budget_to_team_keys_enabled,
+        )
+
+        assert _apply_user_budget_to_team_keys_enabled({"apply_user_budget_to_team_keys": True}) is True
+        assert _apply_user_budget_to_team_keys_enabled({}) is False
+        assert _apply_user_budget_to_team_keys_enabled({"apply_user_budget_to_team_keys": "true"}) is False
+
     def test_a_persisted_true_cannot_forge_the_derived_value(self, mock_auth, monkeypatch):
         """A row written before the allowlist existed must not be able to turn the feature on."""
         monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
