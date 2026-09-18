@@ -557,7 +557,17 @@ class TagRateLimit:
     tpm_limit: int | None
 
 
-TagRateLimitResolver: TypeAlias = Callable[[Sequence[str]], Awaitable[Mapping[str, TagRateLimit]]]
+class TagRateLimitResolver(Protocol):
+    def __call__(self, tag_names: Sequence[str], /) -> Awaitable[Mapping[str, TagRateLimit]]: ...
+
+
+def _tag_rate_limit_descriptor(tag: str, limit: TagRateLimit, window_size: int) -> RateLimitDescriptor:
+    rate_limit: Final[RateLimitDescriptorRateLimitObject] = {
+        "requests_per_unit": limit.rpm_limit,
+        "tokens_per_unit": limit.tpm_limit,
+        "window_size": window_size,
+    }
+    return RateLimitDescriptor(key="tag", value=tag, rate_limit=rate_limit)
 
 
 async def resolve_tag_rate_limits_from_db(tag_names: Sequence[str]) -> Mapping[str, TagRateLimit]:
@@ -2727,15 +2737,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return ()
         tag_limits: Final = await self._tag_rate_limit_resolver(tags)
         return tuple(
-            RateLimitDescriptor(
-                key="tag",
-                value=tag,
-                rate_limit={
-                    "requests_per_unit": limit.rpm_limit,
-                    "tokens_per_unit": limit.tpm_limit,
-                    "window_size": self.window_size,
-                },
-            )
+            _tag_rate_limit_descriptor(tag, limit, self.window_size)
             for tag in tags
             if (limit := tag_limits.get(tag)) is not None
         )
