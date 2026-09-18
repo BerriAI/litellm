@@ -72,10 +72,12 @@ class PromptManager:
         prompt_directory: str | None = None,
         prompt_data: dict[str, dict[str, Any]] | None = None,
         prompt_file: str | None = None,
+        prompt_version: int | None = None,
     ):
         self.prompt_directory = Path(prompt_directory) if prompt_directory else None
         self.prompts: dict[str, PromptTemplate] = {}
         self.prompt_file = prompt_file
+        self.prompt_version = prompt_version
         # Sandboxed env: templates can come from user input via /prompts/test,
         # so we must block access to unsafe Python attributes and mutation of
         # caller-supplied mutables.
@@ -101,6 +103,8 @@ class PromptManager:
 
             template: Final = self._load_prompt_file(self.prompt_file, prompt_id)
             self.prompts[prompt_id] = template
+            if self.prompt_version is not None and not prompt_id.endswith(f".v{self.prompt_version}"):
+                self.prompts[f"{prompt_id}.v{self.prompt_version}"] = template
 
         # Load prompts from JSON data if provided
         if prompt_data:
@@ -157,6 +161,8 @@ class PromptManager:
                     template_id=template_id,
                 )
                 self.prompts[template_id] = template
+                if self.prompt_version is not None and not template_id.endswith(f".v{self.prompt_version}"):
+                    self.prompts[f"{template_id}.v{self.prompt_version}"] = template
             except Exception:
                 pass
 

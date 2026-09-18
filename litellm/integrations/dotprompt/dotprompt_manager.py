@@ -47,6 +47,7 @@ class DotpromptManager(CustomPromptManagement):
         prompt_file: str | None = None,
         prompt_data: dict | str | None = None,
         prompt_id: str | None = None,
+        prompt_version: int | None = None,
     ):
         import litellm
 
@@ -60,6 +61,7 @@ class DotpromptManager(CustomPromptManagement):
         self._prompt_manager: PromptManager | None = None
         self.prompt_file = prompt_file
         self.prompt_id = prompt_id
+        self.prompt_version = prompt_version
 
     @property
     def integration_name(self) -> str:
@@ -80,6 +82,7 @@ class DotpromptManager(CustomPromptManagement):
                 prompt_data=self.prompt_data,
                 prompt_file=self.prompt_file,
                 prompt_id=self.prompt_id,
+                prompt_version=self.prompt_version,
             )
         return self._prompt_manager
 
@@ -96,8 +99,17 @@ class DotpromptManager(CustomPromptManagement):
         """
         if prompt_id is None:
             return False
+        if self.prompt_id is not None and prompt_id != self.prompt_id:
+            from .prompt_manager import strip_version_suffix
+
+            base_prompt_id: Final = strip_version_suffix(prompt_id) or prompt_id
+            if base_prompt_id != self.prompt_id:
+                return False
+        if prompt_spec is not None and prompt_spec.version is not None and self.prompt_version is not None:
+            if prompt_spec.version != self.prompt_version:
+                return False
         try:
-            return self.prompt_manager.get_prompt(prompt_id) is not None
+            return self.prompt_manager.get_prompt(prompt_id, version=self.prompt_version) is not None
         except Exception:
             # If there's any error accessing prompts, don't run prompt management
             return False
@@ -124,18 +136,19 @@ class DotpromptManager(CustomPromptManagement):
         if prompt_id is None:
             raise ValueError("prompt_id is required for dotprompt manager")
 
+        effective_version: Final = prompt_version if prompt_version is not None else self.prompt_version
         try:
             # Get the prompt template (versioned or base)
-            template: Final = self.prompt_manager.get_prompt(prompt_id=prompt_id, version=prompt_version)
+            template: Final = self.prompt_manager.get_prompt(prompt_id=prompt_id, version=effective_version)
             if template is None:
-                version_str: Final = f" (version {prompt_version})" if prompt_version else ""
+                version_str: Final = f" (version {effective_version})" if effective_version else ""
                 raise ValueError(f"Prompt '{prompt_id}'{version_str} not found in prompt directory")
 
             # Render the template with variables (pass version for proper lookup)
             rendered_content: Final = self.prompt_manager.render(
                 prompt_id=prompt_id,
                 prompt_variables=prompt_variables,
-                version=prompt_version,
+                version=effective_version,
             )
 
             # Convert rendered content to chat messages
@@ -199,6 +212,7 @@ class DotpromptManager(CustomPromptManagement):
     ) -> tuple[str, list[AllMessageValues], dict]:
         from litellm.integrations.prompt_management_base import PromptManagementBase
 
+        effective_version: Final = prompt_version if prompt_version is not None else self.prompt_version
         return PromptManagementBase.get_chat_completion_prompt(
             self,
             model,
@@ -209,7 +223,7 @@ class DotpromptManager(CustomPromptManagement):
             dynamic_callback_params,
             prompt_spec=prompt_spec,
             prompt_label=prompt_label,
-            prompt_version=prompt_version,
+            prompt_version=effective_version,
             ignore_prompt_manager_model=ignore_prompt_manager_model,
             ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )
@@ -235,6 +249,7 @@ class DotpromptManager(CustomPromptManagement):
         """
         from litellm.integrations.prompt_management_base import PromptManagementBase
 
+        effective_version: Final = prompt_version if prompt_version is not None else self.prompt_version
         return await PromptManagementBase.async_get_chat_completion_prompt(
             self,
             model,
@@ -247,7 +262,7 @@ class DotpromptManager(CustomPromptManagement):
             prompt_spec=prompt_spec,
             tools=tools,
             prompt_label=prompt_label,
-            prompt_version=prompt_version,
+            prompt_version=effective_version,
             ignore_prompt_manager_model=ignore_prompt_manager_model,
             ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )
