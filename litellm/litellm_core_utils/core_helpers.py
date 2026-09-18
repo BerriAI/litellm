@@ -29,6 +29,13 @@ def is_codex_user_agent(user_agent: str) -> bool:
     return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
 
 
+def qualify_provider_stripped_model(model: str, custom_llm_provider: str) -> str:
+    """Put the provider prefix back on a provider-stripped model."""
+    if not custom_llm_provider or model.startswith(f"{custom_llm_provider}/"):
+        return model
+    return f"{custom_llm_provider}/{model}"
+
+
 def safe_divide_seconds(seconds: float, denominator: float, default: float | None = None) -> float | None:
     """
     Safely divide seconds by denominator, handling zero division.
