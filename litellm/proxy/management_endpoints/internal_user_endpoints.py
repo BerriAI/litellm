@@ -1264,7 +1264,7 @@ def _process_keys_for_user_info(
 def _prepare_user_budget_limits(value: object) -> str:
     from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
-    if not value:
+    if not isinstance(value, list) or not value:
         return json.dumps(None)
     initialized_windows: Final = tuple(
         {  # mutable-ok: prisma stores a dict row per budget window
@@ -1273,7 +1273,7 @@ def _prepare_user_budget_limits(value: object) -> str:
         }
         for w in (
             window if isinstance(window, dict) else window.model_dump()  # pyright: ignore[reportAttributeAccessIssue]  # BudgetLimitEntry or its JSON dict
-            for window in cast(Sequence[object], value)
+            for window in value
         )
     )
     return json.dumps(initialized_windows)
