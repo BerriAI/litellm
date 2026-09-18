@@ -549,7 +549,7 @@ async def test_message_methods_forward_key_bound_identity_not_pre_call_rewrite(m
     }
 
     async def apply_user_header_mapping(data: dict[str, object], **kwargs: object) -> dict[str, object]:
-        LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
             general_settings, user_api_key_dict, dict(mock_request.headers)
         )
         return await _add_proxy_data(data, **kwargs)
