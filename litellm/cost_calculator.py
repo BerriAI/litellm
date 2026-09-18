@@ -947,6 +947,40 @@ def _extract_service_tier(source: object) -> str | None:
     return None
 
 
+def _service_tier_from_traffic_type(completion_response: object) -> str | None:
+    hidden_params: Final = cast(Mapping[str, object] | None, getattr(completion_response, "_hidden_params", None))
+    if hidden_params is None:
+        return None
+    provider_specific: Final = cast(Mapping[str, object], hidden_params.get("provider_specific_fields") or {})
+    raw_traffic_type: Final = provider_specific.get("traffic_type")
+    return _map_traffic_type_to_service_tier(raw_traffic_type if isinstance(raw_traffic_type, str) else None)
+
+
+def _resolve_service_tier(
+    requested: str | None,
+    optional_params: dict[str, object] | None,
+    completion_response: object,
+    cost_per_token_usage_object: Usage | None,
+) -> str | None:
+    response_tier: Final = _normalize_service_tier(_extract_service_tier(completion_response))
+    if response_tier is not None:
+        return response_tier
+    usage_tier: Final = _normalize_service_tier(_extract_service_tier(cost_per_token_usage_object))
+    if usage_tier is not None:
+        return usage_tier
+    requested_tier: Final = _normalize_service_tier(requested)
+    if requested_tier is not None:
+        return requested_tier
+    params_tier: Final = _normalize_service_tier(
+        optional_params.get("service_tier") if optional_params is not None else None
+    )
+    if params_tier is not None:
+        return params_tier
+    return _normalize_service_tier(
+        _service_tier_from_traffic_type(completion_response) if completion_response is not None else None
+    )
+
+
 def _get_usage_object(
     completion_response: object,
 ) -> Usage | None:
@@ -1341,25 +1375,12 @@ def completion_cost(
         )
         rerank_billed_units: RerankBilledUnits | None = None
 
-        # The tier the provider reports serving takes precedence over the requested
-        # tier: providers can fall back to a cheaper tier when priority capacity is
-        # unavailable, and the served tier is what is actually billed
-        requested_service_tier: Final = _normalize_service_tier(service_tier)
-        service_tier = None
-
-        if completion_response is not None:
-            service_tier = _normalize_service_tier(_extract_service_tier(completion_response))
-
-        # Usage reported by the provider is response-side evidence too
-        if service_tier is None and cost_per_token_usage_object is not None:
-            service_tier = _normalize_service_tier(_extract_service_tier(cost_per_token_usage_object))
-
-        if service_tier is None:
-            service_tier = requested_service_tier
-
-        # Extract service_tier from optional_params if not provided directly
-        if service_tier is None and optional_params is not None:
-            service_tier = _normalize_service_tier(optional_params.get("service_tier"))
+        resolved_service_tier: Final = _resolve_service_tier(
+            requested=service_tier,
+            optional_params=optional_params,
+            completion_response=completion_response,
+            cost_per_token_usage_object=cost_per_token_usage_object,
+        )
 
         explicit_pricing: Final = custom_pricing is True or base_model is not None
         selected_model: Final = _select_model_name_for_cost_calc(
@@ -1451,15 +1472,6 @@ def completion_cost(
                         custom_llm_provider = hidden_params.get("custom_llm_provider", custom_llm_provider or None)
                         region_name = hidden_params.get("region_name", region_name)
 
-                        # For Gemini/Vertex AI responses, trafficType is stored in
-                        # provider_specific_fields.  Map it to the service_tier used
-                        # by the cost key lookup (_priority / _flex suffixes) so that
-                        # ON_DEMAND_PRIORITY requests are billed at priority prices.
-                        if service_tier is None:
-                            provider_specific = hidden_params.get("provider_specific_fields") or {}
-                            raw_traffic_type = provider_specific.get("traffic_type")
-                            if raw_traffic_type:
-                                service_tier = _map_traffic_type_to_service_tier(raw_traffic_type)
                 else:
                     if model is None:
                         raise ValueError(
@@ -1651,7 +1663,7 @@ def completion_cost(
                         margin_percent=margin_percent,
                         margin_fixed_amount=margin_fixed_amount,
                         margin_total_amount=margin_total_amount,
-                        service_tier=service_tier,
+                        service_tier=resolved_service_tier,
                         data_residency=data_residency,
                     )
 
@@ -1731,7 +1743,7 @@ def completion_cost(
                     call_type=call_type,
                     audio_transcription_file_duration=audio_transcription_file_duration,
                     rerank_billed_units=rerank_billed_units,
-                    service_tier=service_tier,
+                    service_tier=resolved_service_tier,
                     data_residency=data_residency,
                     vertex_location=vertex_location,
                     response=completion_response,
@@ -1820,7 +1832,7 @@ def completion_cost(
                             model=model,
                             custom_llm_provider=_breakdown_provider,
                             usage=cost_per_token_usage_object,
-                            service_tier=service_tier,
+                            service_tier=resolved_service_tier,
                             data_residency=data_residency,
                             vertex_location=vertex_location,
                             custom_cost_per_token=custom_cost_per_token,
@@ -1845,7 +1857,7 @@ def completion_cost(
                         cache_read_cost=_cache_read_cost,
                         cache_creation_cost=_cache_creation_cost,
                         reasoning_cost=_reasoning_cost,
-                        service_tier=service_tier,
+                        service_tier=resolved_service_tier,
                         data_residency=data_residency,
                         vertex_location=vertex_location,
                         billed_token_rates=_billed_token_rates,
