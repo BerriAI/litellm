@@ -112,6 +112,9 @@ ResponseTools: TypeAlias = Sequence[Mapping[str, object]] | None
 ChatToolParam: TypeAlias = ChatCompletionToolParam | OpenAIMcpServerTool
 NAMESPACE_DESCRIPTION_SEPARATOR: Final = "\n\n"
 NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS: Final = frozenset({"function", "custom"})
+_INCOMPLETE_REASON_BY_FINISH_REASON: Final[Mapping[str, Literal["max_output_tokens", "content_filter"]]] = (
+    MappingProxyType({"length": "max_output_tokens", "content_filter": "content_filter", "refusal": "content_filter"})
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2303,13 +2306,10 @@ class LiteLLMCompletionResponsesConfig:
     ) -> IncompleteDetails | None:
         if existing is not None:
             return existing
-        match finish_reason:
-            case "length":
-                return IncompleteDetails(reason="max_output_tokens")
-            case "content_filter" | "refusal":
-                return IncompleteDetails(reason="content_filter")
-            case _:
-                return None
+        if finish_reason is None:
+            return None
+        reason: Final = _INCOMPLETE_REASON_BY_FINISH_REASON.get(finish_reason)
+        return IncompleteDetails(reason=reason) if reason is not None else None
 
     @staticmethod
     def _tool_call_id_from_responses_item(item_id: str | None, call_id: str | None) -> str:
