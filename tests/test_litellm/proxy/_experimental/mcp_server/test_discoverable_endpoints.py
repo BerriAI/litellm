@@ -11874,7 +11874,7 @@ async def test_oauth_credential_write_keeps_virtual_key_permissions(
 
     handler, signing_key = jwt_oauth_identity
     monkeypatch.setattr(
-        "litellm.proxy.auth.user_api_key_auth.get_org_object",
+        "litellm.proxy.auth.auth_checks.get_org_object",
         AsyncMock(side_effect=OrganizationNotFoundError("Organization doesn't exist in db.")),
     )
     key: Final = "sk-oauth-permission-test"

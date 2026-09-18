@@ -6065,7 +6065,7 @@ async def test_centralized_common_checks_inherits_org_identity(
                 return_value=fetched_team,
             ) as mock_get_team_object,
             patch(  # test-quality-ok: centralized auth calls this module helper directly; no dependency injection seam exists
-                "litellm.proxy.auth.user_api_key_auth.get_org_object",
+                "litellm.proxy.auth.auth_checks.get_org_object",
                 new_callable=AsyncMock,
                 return_value=organization,
             ) as mock_get_org_object,

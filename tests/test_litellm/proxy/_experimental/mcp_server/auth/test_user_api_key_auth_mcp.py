@@ -5746,7 +5746,7 @@ class TestMCPDcrBridgeDelegateAdmission:
         patchers = [
             patch("litellm.proxy.auth.auth_checks.get_key_object", get_key_object),
             patch(  # test-quality-ok: central auth now resolves org limits; this fixture models a missing org row
-                "litellm.proxy.auth.user_api_key_auth.get_org_object", get_org_object
+                "litellm.proxy.auth.auth_checks.get_org_object", get_org_object
             ),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
