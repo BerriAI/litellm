@@ -1,0 +1,11 @@
+{
+  "kind": {
+    "type": "api_connection"
+  },
+  "message": "MistralException - api_connection",
+  "model": "ocr-model",
+  "llm_provider": null,
+  "litellm_debug_info": "\nModel: ocr-model",
+  "litellm_response_headers": null,
+  "print_banner": false
+}
