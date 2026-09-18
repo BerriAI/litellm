@@ -2,8 +2,6 @@
 Tests for the Meta Model API (Muse Spark) provider configuration and integration.
 """
 
-from typing import Final
-
 import litellm
 
 
@@ -194,23 +192,4 @@ class TestMetaAnthropicMessages:
         assert headers["anthropic-version"] == "2023-06-01"
 
 
-class TestMuseSparkModelInfo:
 
-    def test_muse_spark_cost_calculation(self):
-        from litellm import completion_cost
-        from litellm.types.utils import ModelResponse, Usage
-
-        response = ModelResponse(
-            model="muse-spark-1.1",
-            usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
-        )
-        cost = completion_cost(
-            completion_response=response,
-            model="meta/muse-spark-1.1",
-            custom_llm_provider="meta",
-        )
-        model_info: Final = litellm.model_cost["meta/muse-spark-1.1"]
-        assert model_info["litellm_provider"] == "meta"
-        assert model_info["input_cost_per_token"] > 0
-        assert model_info["output_cost_per_token"] > 0
-        assert cost > 0

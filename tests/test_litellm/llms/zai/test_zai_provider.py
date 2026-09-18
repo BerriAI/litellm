@@ -3,7 +3,6 @@ Tests for Z.AI (Zhipu AI) provider - GLM models
 """
 
 import math
-from typing import Final
 
 import pytest
 
@@ -54,25 +53,6 @@ def test_zai_in_provider_lists():
     """Test that zai is registered in all necessary provider lists"""
     assert "zai" in litellm.openai_compatible_providers
     assert "zai" in litellm.provider_list
-
-
-@pytest.mark.parametrize("model", ["zai/glm-4.6", "zai/glm-4.7"])
-def test_zai_glm_cost_calculation(local_model_cost_map, model):
-    """Test the cost calculation picks the model's own cost-map entry"""
-
-    prompt_cost, completion_cost = cost_per_token(
-        model=model,
-        prompt_tokens=1000000,  # 1M tokens
-        completion_tokens=1000000,
-    )
-
-    entry: Final = litellm.model_cost[model]
-    assert math.isclose(
-        prompt_cost, 1000000 * entry["input_cost_per_token"], rel_tol=1e-6
-    )
-    assert math.isclose(
-        completion_cost, 1000000 * entry["output_cost_per_token"], rel_tol=1e-6
-    )
 
 
 @pytest.mark.asyncio

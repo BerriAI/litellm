@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 
 import httpx
 import pytest
@@ -304,3 +305,7 @@ class TestOptionalParams:
         )
         assert "response_format" not in optional_params
         assert optional_params["language"] == "fr-FR"
+
+
+class TestModelCostEntry:
+    REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))

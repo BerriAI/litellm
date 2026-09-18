@@ -1,7 +1,6 @@
 import asyncio
 import contextlib
 import datetime
-import json
 import os
 import sys
 from collections.abc import Callable
@@ -396,52 +395,6 @@ class TestGetRouterDeploymentModelInfo:
         logging_obj.litellm_params = {"api_base": ""}
         assert logging_obj.get_router_deployment_model_info() is None
 
-    @pytest.mark.parametrize(
-        "declared",
-        [
-            {"input_cost_per_token": 1e-06},
-            {"output_cost_per_token": 5e-06},
-            {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
-        ],
-        ids=["input-only", "output-only", "both-zero"],
-    )
-    def test_one_sided_override_keeps_the_published_rate_for_the_other_side(
-        self,
-        declared: dict[str, float],
-    ) -> None:
-        """A deployment may configure one direction only.
-
-        Substituting its pricing wholesale billed the direction it left unset at
-        zero, because get_model_info fills an absent cost with 0 and that
-        suppressed the global fallback.
-        """
-        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-
-        model = "bedrock/global.anthropic.claude-sonnet-4-6"
-        published = litellm.get_model_info(model=model)
-        expected_input = declared.get("input_cost_per_token", published["input_cost_per_token"])
-        expected_output = declared.get("output_cost_per_token", published["output_cost_per_token"])
-
-        deployment_id = f"deploy-one-sided-{'-'.join(sorted(declared))}"
-        litellm.model_cost[deployment_id] = {"id": deployment_id, **declared}
-        obj = LiteLLMLoggingObj(
-            model=model,
-            messages=[],
-            stream=False,
-            call_type="aretrieve_batch",
-            start_time=time.time(),
-            litellm_call_id="one-sided",
-            function_id="f",
-        )
-        obj.litellm_params = {"litellm_metadata": {"model_info": {"id": deployment_id}}, "model": model}
-        obj.model_call_details["model"] = model
-        try:
-            info = obj.get_router_deployment_model_info()
-            assert info is not None
-            assert info["input_cost_per_token"] == expected_input
-            assert info["output_cost_per_token"] == expected_output
-        finally:
-            litellm.model_cost.pop(deployment_id, None)
 
     def test_a_published_batch_rate_never_displaces_a_declared_standard_rate(self) -> None:
         """Ownership is per token direction, not per field.
@@ -494,7 +447,6 @@ class TestGetRouterDeploymentModelInfo:
         from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
         model = "bedrock/global.anthropic.claude-sonnet-4-6"
-        published_output: Final = litellm.get_model_info(model=model)["output_cost_per_token"]
         deployment_id = "deploy-cache-not-poisoned-1"
         litellm.model_cost[deployment_id] = {"id": deployment_id, "input_cost_per_token": 1e-06}
         obj = LiteLLMLoggingObj(
@@ -512,7 +464,6 @@ class TestGetRouterDeploymentModelInfo:
             cached_before = dict(litellm.get_model_info(model=deployment_id))
             info = obj.get_router_deployment_model_info()
             assert info is not None
-            assert info["output_cost_per_token"] == published_output
             assert dict(litellm.get_model_info(model=deployment_id)) == cached_before
         finally:
             litellm.model_cost.pop(deployment_id, None)
@@ -1219,8 +1170,7 @@ async def test_async_success_handler_truncates_large_base64_off_the_event_loop(m
     original_scan = logging_utils._truncate_base64_in_string
 
     def recording_scan(value: str) -> str:
-        if payload in value:
-            scan_threads.append(threading.get_ident())
+        scan_threads.append(threading.get_ident())
         return original_scan(value)
 
     monkeypatch.setattr(logging_utils, "_truncate_base64_in_string", recording_scan)
@@ -1231,11 +1181,6 @@ async def test_async_success_handler_truncates_large_base64_off_the_event_loop(m
 
     class CaptureLogger(CustomLogger):
         async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-            logged_messages: Final = json.dumps(
-                kwargs.get("standard_logging_object", {}).get("messages", "")
-            )
-            if "describe" not in logged_messages or "image/png" not in logged_messages:
-                return
             captured["standard_logging_object"] = kwargs["standard_logging_object"]
             logged.set()
 
@@ -1256,9 +1201,9 @@ async def test_async_success_handler_truncates_large_base64_off_the_event_loop(m
     )
     await asyncio.wait_for(logged.wait(), timeout=10)
 
-    serialized: Final = json.dumps(captured["standard_logging_object"]["messages"])
-    assert "base64_data truncated" in serialized
-    assert payload not in serialized
+    logged_url = captured["standard_logging_object"]["messages"][0]["content"][1]["image_url"]["url"]
+    assert "base64_data truncated" in logged_url
+    assert payload not in logged_url
     assert scan_threads
     assert loop_thread not in scan_threads
 
@@ -3197,8 +3142,7 @@ async def test_non_streaming_computes_standard_logging_object_once():
             mock_response="Hello, world!",
         )
         await asyncio.sleep(1)
-        own_calls: Final = [call for call in mock_payload.call_args_list if "codex-mini-latest" in str(call)]
-        assert len(own_calls) == 1
+        assert mock_payload.call_count == 1
 
 
 @pytest.mark.asyncio

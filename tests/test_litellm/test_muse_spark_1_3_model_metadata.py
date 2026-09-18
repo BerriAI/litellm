@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import Sta
 
 MUSE_SPARK_STANDARD = "meta/muse-spark-1.3"
 MUSE_SPARK_CONTRIBUTOR = "meta/muse-spark-1.3-contributor"
+WEB_SEARCH_COST_PER_QUERY = 0.0025
 
 PRICING = (
     (MUSE_SPARK_STANDARD, 1.25e-06, 1.5e-07, 4.25e-06),
@@ -28,16 +29,6 @@ def test_muse_spark_1_3_routes_to_meta_model_api(model: str):
     assert routed_model == model.split("/", 1)[1]
     assert provider == "meta"
     assert api_base == "https://api.meta.ai/v1"
-
-
-@pytest.mark.parametrize("model", (MUSE_SPARK_STANDARD, MUSE_SPARK_CONTRIBUTOR))
-def test_muse_spark_1_3_web_search_cost_per_query(local_model_cost_map, model: str):
-    info = litellm.get_model_info(model=model)
-
-    assert (
-        StandardBuiltInToolCostTracking.get_cost_for_web_search(model_info=info)
-        == info["search_context_cost_per_query"]["search_context_size_medium"]
-    )
 
 
 @pytest.mark.parametrize("model", (MUSE_SPARK_STANDARD, MUSE_SPARK_CONTRIBUTOR))

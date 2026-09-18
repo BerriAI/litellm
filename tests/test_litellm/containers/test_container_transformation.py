@@ -377,8 +377,6 @@ class TestOpenAIContainerTransformation:
             in container._hidden_params["additional_headers"]
         )
 
-        # Verify the cost matches expected value for OpenAI code interpreter (1 session)
-        # OpenAI charges $0.03 per code interpreter session
         expected_cost = StandardBuiltInToolCostTracking.get_cost_for_code_interpreter(
             sessions=1, provider="openai"
         )

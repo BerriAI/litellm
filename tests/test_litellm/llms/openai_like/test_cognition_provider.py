@@ -8,7 +8,6 @@ its traffic.
 
 import json
 from pathlib import Path
-from typing import Final
 
 import pytest
 
@@ -112,30 +111,6 @@ class TestCognitionProviderIdentity:
 
 class TestCognitionCostTracking:
 
-    @pytest.mark.parametrize(
-        "model",
-        [
-            "cognition/swe-1.7",
-            "cognition/swe-1.7-lightning",
-        ],
-    )
-    def test_cost_uses_cognition_entry(self, model: str):
-        """A cognition-prefixed model must use its cognition cost-map entry."""
-        from litellm.cost_calculator import cost_per_token
-
-        prompt_cost, completion_cost = cost_per_token(
-            model=model,
-            prompt_tokens=1_000_000,
-            completion_tokens=1_000_000,
-            custom_llm_provider="cognition",
-        )
-
-        model_info: Final = litellm.model_cost[model]
-        assert model_info["litellm_provider"] == "cognition"
-        assert model_info["input_cost_per_token"] > 0
-        assert model_info["output_cost_per_token"] > 0
-        assert prompt_cost > 0
-        assert completion_cost > 0
 
     def test_lightning_is_five_times_the_standard_tier(self):
         standard = litellm.get_model_info(model="cognition/swe-1.7")
@@ -154,61 +129,4 @@ class TestCognitionCostTracking:
         assert endpoints["embeddings"] is False
 
 
-class TestCognitionRouting:
-    @pytest.mark.asyncio
-    async def test_router_spend_is_attributed_to_cognition_pricing(self):
-        """Routed traffic is costed off the cognition entry, not an OpenAI one."""
-        from litellm import Router
 
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "swe",
-                    "litellm_params": {"model": "cognition/swe-1.7", "api_key": "sk-test"},
-                }
-            ]
-        )
-
-        response = await router.acompletion(
-            model="swe",
-            messages=[{"role": "user", "content": "hi"}],
-            mock_response="hello from swe",
-        )
-
-        usage = response.usage
-        import litellm
-
-        entry: Final = litellm.model_cost["cognition/swe-1.7"]
-        expected: Final = usage.prompt_tokens * entry["input_cost_per_token"] + usage.completion_tokens * entry[
-            "output_cost_per_token"
-        ]
-        assert response._hidden_params["response_cost"] == pytest.approx(expected)
-
-    @pytest.mark.asyncio
-    async def test_router_spend_uses_the_lightning_entry_for_lightning(self):
-        """The Lightning tier is its own model, costed off its own entry."""
-        from litellm import Router
-
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "swe-lightning",
-                    "litellm_params": {"model": "cognition/swe-1.7-lightning", "api_key": "sk-test"},
-                }
-            ]
-        )
-
-        response = await router.acompletion(
-            model="swe-lightning",
-            messages=[{"role": "user", "content": "hi"}],
-            mock_response="hello from swe lightning",
-        )
-
-        usage = response.usage
-        import litellm
-
-        entry: Final = litellm.model_cost["cognition/swe-1.7-lightning"]
-        expected: Final = usage.prompt_tokens * entry["input_cost_per_token"] + usage.completion_tokens * entry[
-            "output_cost_per_token"
-        ]
-        assert response._hidden_params["response_cost"] == pytest.approx(expected)

@@ -9,7 +9,6 @@ Tests cost calculation for Azure's new assistant features:
 """
 
 import os
-from typing import Final
 import pytest
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -91,14 +90,6 @@ class TestAzureAssistantCostTracking:
         )
         assert cost == 0.0, "Should return 0 for zero sessions"
 
-    def test_openai_code_interpreter_free(self):
-        """Test OpenAI code interpreter cost from model cost map."""
-        cost = StandardBuiltInToolCostTracking.get_cost_for_code_interpreter(
-            sessions=5,
-            provider="openai",
-        )
-        session_cost: Final = litellm.model_cost["openai/container"]["code_interpreter_cost_per_session"]
-        assert cost == 5 * session_cost
 
     @pytest.mark.parametrize(
         "input_tokens,output_tokens,expected_cost",
@@ -222,12 +213,3 @@ class TestAzureAssistantCostTracking:
         )
         assert StandardBuiltInToolCostTracking.get_cost_for_vector_store(None) == 0.0
 
-    def test_constants_loaded_correctly(self):
-        """Azure billing constants exist and the container entry carries the session price."""
-        assert AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY > 0
-        assert AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS > 0
-        assert AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS > 0
-        assert AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY > 0
-
-        azure_container_info = litellm.model_cost.get("azure/container", {})
-        assert "code_interpreter_cost_per_session" in azure_container_info

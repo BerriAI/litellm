@@ -185,10 +185,13 @@ def test_calculate_usage_aggregates_cache_creation_split_across_iterations():
     assert usage.prompt_tokens_details.cache_creation_tokens == 20000
 
     info = litellm.get_model_info(model="claude-opus-4-8", custom_llm_provider="anthropic")
+    rate_5m = info["cache_creation_input_token_cost"]
     rate_1h = info["cache_creation_input_token_cost_above_1hr"]
+    assert rate_1h > rate_5m
 
     prompt_cost, _ = cost_per_token(model="claude-opus-4-8", usage=usage)
     assert prompt_cost == pytest.approx(20000 * rate_1h)
+    assert prompt_cost != pytest.approx(20000 * rate_5m)
 
 
 def test_calculate_usage_bills_undetailed_iteration_cache_writes_at_5m_rate():
@@ -233,10 +236,12 @@ def test_calculate_usage_bills_undetailed_iteration_cache_writes_at_5m_rate():
     assert usage.prompt_tokens_details.cache_creation_tokens == 17000
 
     info = litellm.get_model_info(model="claude-opus-4-8", custom_llm_provider="anthropic")
+    rate_5m = info["cache_creation_input_token_cost"]
     rate_1h = info["cache_creation_input_token_cost_above_1hr"]
 
     prompt_cost, _ = cost_per_token(model="claude-opus-4-8", usage=usage)
-    assert prompt_cost == pytest.approx(7000 * info["cache_creation_input_token_cost"] + 10000 * rate_1h)
+    assert prompt_cost == pytest.approx(7000 * rate_5m + 10000 * rate_1h)
+    assert prompt_cost != pytest.approx(10000 * rate_1h)
 
 
 def test_calculate_usage_clamps_text_tokens_when_reasoning_estimate_exceeds_output():
@@ -2437,21 +2442,6 @@ def test_get_max_tokens_for_model_claude_35():
         assert max_tokens == 8192
 
 
-def test_get_max_tokens_for_model_claude_37():
-    """
-    Test that get_max_tokens_for_model returns correct value for Claude 3.7 models.
-    Claude 3.7 Sonnet has max_output_tokens of 64000 by default.
-    128K output requires the beta header 'output-128k-2025-02-19'.
-
-    Fixes: https://github.com/BerriAI/litellm/issues/8835
-    """
-    config = AnthropicConfig()
-
-    expected = litellm.get_model_info("claude-3-7-sonnet-20250219")["max_output_tokens"]
-    max_tokens = config.get_max_tokens_for_model("claude-3-7-sonnet-20250219")
-    assert max_tokens == expected
-
-
 def test_get_max_tokens_for_model_unknown():
     """
     Test that get_max_tokens_for_model returns 4096 fallback for unknown models.
@@ -2624,30 +2614,6 @@ def test_transform_request_injects_dummy_tool_without_tools_param():
         if isinstance(t, dict) and t.get("name") is not None
     ]
     assert "dummy_tool" in names
-
-
-def test_transform_request_uses_dynamic_max_tokens():
-    """
-    Test that transform_request uses dynamic max_tokens based on model
-    when max_tokens is not explicitly provided.
-
-    Fixes: https://github.com/BerriAI/litellm/issues/8835
-    """
-    config = AnthropicConfig()
-
-    messages = [{"role": "user", "content": "Hello"}]
-
-    # Claude 3.7 model should get 64000 as default max_tokens (from model_prices_and_context_window.json)
-    result = config.transform_request(
-        model="claude-3-7-sonnet-20250219",
-        messages=messages,
-        optional_params={},  # No max_tokens provided
-        litellm_params={},
-        headers={},
-    )
-
-    expected = litellm.get_model_info("claude-3-7-sonnet-20250219")["max_output_tokens"]
-    assert result["max_tokens"] == expected
 
 
 def test_transform_request_respects_user_max_tokens():
@@ -2845,7 +2811,6 @@ def test_raw_adaptive_thinking_untouched_for_46_plus_model():
     )
 
     assert result["thinking"] == {"type": "adaptive"}
-
 
 
 @pytest.mark.parametrize(

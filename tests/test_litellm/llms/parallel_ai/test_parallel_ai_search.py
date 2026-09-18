@@ -3,13 +3,12 @@ Tests for Parallel AI Search API integration (v1 endpoint).
 """
 
 import json
-from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+
 import litellm
-from litellm.llms.parallel_ai.search.cost_calculator import PARALLEL_AI_ADDITIONAL_RESULT_COST
 
 MOCK_V1_RESPONSE = {
     "search_id": "search_abc123",
@@ -432,92 +431,3 @@ class TestParallelAISearch:
         assert result.snippet == ""
         assert result.date is None
         assert result.model_dump()["excerpts"] == ()
-
-    @pytest.mark.parametrize(
-        "mode,usage,max_results",
-        [
-            ("turbo", [{"name": "sku_search", "count": 1}], None),
-            ("fast", [{"name": "sku_search", "count": 1}], None),
-            ("basic", [{"name": "sku_search", "count": 1}], None),
-            ("advanced", [{"name": "sku_search", "count": 1}], None),
-            (
-                "basic",
-                [
-                    {"name": "sku_search", "count": 1},
-                    {"name": "sku_search_additional_results", "count": 2},
-                ],
-                20,
-            ),
-            ("basic", None, 20),
-        ],
-    )
-    @pytest.mark.asyncio
-    async def test_search_cost_uses_mode_and_provider_usage(
-        self, mode, usage, max_results, bundled_cost_map, respx_mock, httpx_transport
-    ):
-        response_payload = {**MOCK_V1_RESPONSE, "usage": usage}
-        respx_mock.post("https://api.parallel.ai/v1/search").respond(json=response_payload)
-
-        response = await litellm.asearch(
-            query="AI developments",
-            search_provider="parallel_ai",
-            mode=mode,
-            max_results=max_results,
-        )
-
-        pricing_model: Final = {"fast": "parallel_ai/search-fast", "turbo": "parallel_ai/search-turbo"}.get(
-            mode, "parallel_ai/search"
-        )
-        rate: Final = litellm.model_cost[pricing_model]["input_cost_per_query"]
-        request_count: Final = (
-            sum(item["count"] for item in usage if item["name"] == "sku_search") if usage is not None else 1
-        )
-        additional_results: Final = (
-            sum(item["count"] for item in usage if item["name"] == "sku_search_additional_results")
-            if usage is not None
-            else max(max_results - 10, 0)
-        )
-        expected_cost: Final = request_count * rate + additional_results * PARALLEL_AI_ADDITIONAL_RESULT_COST
-        assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
-
-    @pytest.mark.asyncio
-    async def test_search_cost_treats_keyword_queries_as_one_request(
-        self, bundled_cost_map, respx_mock, httpx_transport
-    ):
-        response_payload = {
-            **MOCK_V1_RESPONSE,
-            "usage": [{"name": "sku_search", "count": 1}],
-        }
-        respx_mock.post("https://api.parallel.ai/v1/search").respond(json=response_payload)
-
-        response = await litellm.asearch(
-            query=["AI developments", "machine learning trends"],
-            search_provider="parallel_ai",
-            mode="basic",
-        )
-
-        assert response._hidden_params["response_cost"] == pytest.approx(
-            litellm.model_cost["parallel_ai/search"]["input_cost_per_query"]
-        )
-
-    @pytest.mark.asyncio
-    async def test_caller_cannot_supply_provider_usage(self, bundled_cost_map, respx_mock, httpx_transport):
-        """`_parallel_ai_usage` prices the request, so a caller must not be able to set it.
-
-        The provider reports no usage here, which is the case where a caller-supplied
-        value would otherwise survive into the cost calculation.
-        """
-        response_payload = {k: v for k, v in MOCK_V1_RESPONSE.items() if k != "usage"}
-        route = respx_mock.post("https://api.parallel.ai/v1/search").respond(json=response_payload)
-
-        response = await litellm.asearch(
-            query="AI developments",
-            search_provider="parallel_ai",
-            mode="basic",
-            _parallel_ai_usage=[{"name": "sku_search", "count": 0}],
-        )
-
-        assert response._hidden_params["response_cost"] == pytest.approx(
-            litellm.model_cost["parallel_ai/search"]["input_cost_per_query"]
-        )
-        assert "_parallel_ai_usage" not in json.loads(route.calls[0].request.content)

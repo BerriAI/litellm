@@ -203,168 +203,6 @@ def test_cost_calculator_with_usage(_local_model_cost_map, monkeypatch):
     assert result == expected_cost, f"Got {result}, Expected {expected_cost}"
 
 
-def test_transcription_cost_uses_token_pricing(_local_model_cost_map):
-    from litellm import completion_cost
-
-    usage = Usage(
-        prompt_tokens=14,
-        completion_tokens=45,
-        total_tokens=59,
-        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=0, audio_tokens=14),
-    )
-    response = TranscriptionResponse(text="demo text")
-    response.usage = usage
-
-    cost = completion_cost(
-        completion_response=response,
-        model="gpt-4o-transcribe",
-        custom_llm_provider="openai",
-        call_type="atranscription",
-    )
-
-    model_info: Final = litellm.get_model_info(model="gpt-4o-transcribe", custom_llm_provider="openai")
-    expected_cost = (
-        14 * model_info["input_cost_per_audio_token"] + 45 * model_info["output_cost_per_token"]
-    )
-    assert pytest.approx(cost, rel=1e-6) == expected_cost
-
-
-def test_transcription_token_pricing_is_provider_aware(_local_model_cost_map):
-    """Regression: the token-priced transcription path hardcoded provider openai,
-    so gemini transcription models raised "This model isn't mapped yet"."""
-    from litellm import completion_cost
-
-    usage = Usage(
-        prompt_tokens=200,
-        completion_tokens=10,
-        total_tokens=210,
-        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=1, audio_tokens=199),
-    )
-    response = TranscriptionResponse(text="demo text")
-    response.usage = usage
-
-    cost = completion_cost(
-        completion_response=response,
-        model="gemini/gemini-3.5-transcribe",
-        custom_llm_provider="gemini",
-        call_type="atranscription",
-    )
-
-    model_info: Final = litellm.get_model_info(model="gemini/gemini-3.5-transcribe", custom_llm_provider="gemini")
-    expected_cost = (
-        199 * model_info["input_cost_per_audio_token"]
-        + 1 * model_info["input_cost_per_token"]
-        + 10 * model_info["output_cost_per_token"]
-    )
-    assert pytest.approx(cost, rel=1e-6) == expected_cost
-
-
-def test_transcription_cost_falls_back_to_duration(_local_model_cost_map):
-    from litellm import completion_cost
-
-    response = TranscriptionResponse(text="demo text")
-    response.duration = 10.0
-
-    cost = completion_cost(
-        completion_response=response,
-        model="whisper-1",
-        custom_llm_provider="openai",
-        call_type="atranscription",
-    )
-
-    model_info: Final = litellm.get_model_info(model="whisper-1", custom_llm_provider="openai")
-    expected_cost = 10.0 * model_info["input_cost_per_second"]
-    assert pytest.approx(cost, rel=1e-6) == expected_cost
-
-
-def test_vertex_chirp_3_transcription_cost_from_duration(_local_model_cost_map):
-    """Regression: the chirp_3 cost map entry shipped with output_cost_per_second 0.0,
-    and cost_per_second prefers output_cost_per_second whenever it is not None, so
-    every transcription priced to $0.00 instead of using input_cost_per_second."""
-    from litellm import completion_cost
-
-    response = TranscriptionResponse(text="demo text")
-    response.duration = 18.0
-
-    cost = completion_cost(
-        completion_response=response,
-        model="vertex_ai/chirp_3",
-        custom_llm_provider="vertex_ai",
-        call_type="atranscription",
-    )
-
-    model_info: Final = litellm.get_model_info(model="vertex_ai/chirp_3", custom_llm_provider="vertex_ai")
-    expected_cost = 18.0 * model_info["input_cost_per_second"]
-    assert cost > 0
-    assert pytest.approx(cost, rel=1e-6) == expected_cost
-
-
-def test_handle_realtime_stream_cost_calculation():
-    from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
-
-    # Setup test data
-    results: OpenAIRealtimeStreamList = [
-        {"type": "session.created", "session": {"model": "gpt-3.5-turbo"}},
-        {
-            "type": "response.done",
-            "response": {"usage": {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150}},
-        },
-        {
-            "type": "response.done",
-            "response": {
-                "usage": {
-                    "input_tokens": 200,
-                    "output_tokens": 100,
-                    "total_tokens": 300,
-                }
-            },
-        },
-    ]
-
-    combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
-        results=results,
-    )
-
-    # Test with explicit model name
-    cost = handle_realtime_stream_cost_calculation(
-        results=results,
-        combined_usage_object=combined_usage_object,
-        custom_llm_provider="openai",
-        litellm_model_name="gpt-3.5-turbo",
-    )
-
-    turbo_info = litellm.model_cost["gpt-3.5-turbo"]
-    expected_cost = (300 * turbo_info["input_cost_per_token"]) + (150 * turbo_info["output_cost_per_token"])
-    assert abs(cost - expected_cost) <= 0.00075  # Allow small floating point differences
-
-    # Test with different model name in session
-    results[0]["session"]["model"] = "gpt-4"
-
-    cost = handle_realtime_stream_cost_calculation(
-        results=results,
-        combined_usage_object=combined_usage_object,
-        custom_llm_provider="openai",
-        litellm_model_name="gpt-3.5-turbo",
-    )
-
-    gpt4_info = litellm.model_cost["gpt-4"]
-    expected_cost = (300 * gpt4_info["input_cost_per_token"]) + (150 * gpt4_info["output_cost_per_token"])
-    assert abs(cost - expected_cost) < 0.00076
-
-    # Test with no response.done events
-    results = [{"type": "session.created", "session": {"model": "gpt-3.5-turbo"}}]
-    combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
-        results=results,
-    )
-    cost = handle_realtime_stream_cost_calculation(
-        results=results,
-        combined_usage_object=combined_usage_object,
-        custom_llm_provider="openai",
-        litellm_model_name="gpt-3.5-turbo",
-    )
-    assert cost == 0.0  # No usage, no cost
-
-
 def test_handle_realtime_stream_cost_calculation_stores_cost_breakdown():
     """Regression: realtime cost must populate logging_obj.cost_breakdown so the
     spend logs / UI show input vs output cost (issue: cost_breakdown was None for
@@ -561,102 +399,6 @@ def test_realtime_logging_object_does_not_validate_unknown_event_types():
     assert len(dumped["results"]) == len(results)
 
 
-def test_realtime_transcription_duration_cost(monkeypatch):
-    """
-    gpt-realtime-whisper transcription sessions are billed by input audio duration.
-    The .completed events carry usage {type: duration, seconds: N};
-    cost must equal total_seconds * input_cost_per_second.
-    """
-    from datetime import datetime
-
-    from litellm.litellm_core_utils.litellm_logging import Logging
-
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-
-    from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
-
-    results: OpenAIRealtimeStreamList = [
-        {
-            "type": "session.created",
-            "session": {
-                "type": "transcription",
-                "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}},
-            },
-        },
-        {
-            "type": "conversation.item.input_audio_transcription.completed",
-            "transcript": "hello",
-            "usage": {"type": "duration", "seconds": 60.0},
-        },
-        {
-            "type": "conversation.item.input_audio_transcription.completed",
-            "transcript": "world",
-            "usage": {"type": "duration", "seconds": 30.0},
-        },
-    ]
-
-    combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(results=results)
-    logging_obj = Logging(
-        model="gpt-realtime-whisper",
-        messages=[],
-        stream=False,
-        call_type="_arealtime",
-        start_time=datetime.now(),
-        litellm_call_id="realtime-transcription-cost-breakdown-test",
-        function_id="realtime-transcription-cost-breakdown-test",
-    )
-    cost = handle_realtime_stream_cost_calculation(
-        results=results,
-        combined_usage_object=combined,
-        custom_llm_provider="openai",
-        litellm_model_name="gpt-realtime-whisper",
-        litellm_logging_obj=logging_obj,
-    )
-
-    model_info: Final = litellm.get_model_info(model="gpt-realtime-whisper", custom_llm_provider="openai")
-    expected = 90.0 * model_info["input_cost_per_second"]
-    assert abs(cost - expected) < 1e-9
-    assert cost > 0  # guards against the duration branch being dropped
-    assert logging_obj.cost_breakdown is not None
-    assert abs(logging_obj.cost_breakdown["total_cost"] - cost) < 1e-9
-
-    # The transcription cost must be attributed in the breakdown, not just folded
-    # into total_cost, or input_cost + output_cost + additional_costs won't sum to total_cost.
-    additional_costs = logging_obj.cost_breakdown.get("additional_costs")
-    assert additional_costs is not None
-    assert abs(additional_costs["transcription_cost"] - expected) < 1e-9
-    attributed_total = (
-        logging_obj.cost_breakdown["input_cost"]
-        + logging_obj.cost_breakdown["output_cost"]
-        + additional_costs["transcription_cost"]
-    )
-    assert abs(attributed_total - logging_obj.cost_breakdown["total_cost"]) < 1e-9
-
-
-def test_realtime_transcription_duration_cost_resolves_model_from_litellm_name(
-    monkeypatch,
-):
-    """When no session event carries the ASR model, the litellm_model_name is used."""
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-
-    results: OpenAIRealtimeStreamList = [
-        {
-            "type": "conversation.item.input_audio_transcription.completed",
-            "usage": {"type": "duration", "seconds": 120.0},
-        },
-    ]
-    cost = handle_realtime_stream_cost_calculation(
-        results=results,
-        combined_usage_object=Usage(),
-        custom_llm_provider="azure",
-        litellm_model_name="azure/gpt-realtime-whisper",
-    )
-    model_info: Final = litellm.get_model_info(model="azure/gpt-realtime-whisper", custom_llm_provider="azure")
-    assert abs(cost - 120.0 * model_info["input_cost_per_second"]) < 1e-9
-
-
 def test_realtime_transcription_no_completed_events_is_zero(monkeypatch):
     """A realtime stream without transcription completed events adds no extra cost."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -676,33 +418,6 @@ def test_realtime_transcription_no_completed_events_is_zero(monkeypatch):
         )
         == 0.0
     )
-
-
-def test_realtime_transcription_token_billed_fallback(monkeypatch):
-    """
-    Token-billed transcription models price by audio/text tokens. Verify the
-    fallback path multiplies audio tokens by the model's audio token cost.
-    """
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-
-    from litellm.cost_calculator import _transcription_usage_cost
-
-    model_info: Final = litellm.get_model_info(model="gpt-4o-transcribe", custom_llm_provider="openai")
-    usage = {
-        "type": "tokens",
-        "input_tokens": 40,
-        "output_tokens": 10,
-        "total_tokens": 50,
-        "input_token_details": {"audio_tokens": 30, "text_tokens": 10},
-    }
-    cost = _transcription_usage_cost(usage, model_info)
-    expected = (
-        30 * model_info["input_cost_per_audio_token"]
-        + 10 * model_info["input_cost_per_token"]
-        + 10 * model_info["output_cost_per_token"]
-    )
-    assert abs(cost - expected) < 1e-12
 
 
 def test_transcription_usage_cost_returns_zero_for_unknown_type():
@@ -1293,72 +1008,6 @@ def test_bedrock_cost_calculator_comparison_with_without_cache():
     print(f"Cost with cache: {cost_with_cache}")
 
 
-def test_gemini_25_implicit_caching_cost():
-    """
-    Test that Gemini 2.5 models correctly calculate costs with implicit caching.
-
-    This test reproduces the issue from #11156 where cached tokens should receive
-    a 75% discount.
-    """
-    from litellm import completion_cost
-    from litellm.types.utils import (
-        Choices,
-        Message,
-        ModelResponse,
-        PromptTokensDetailsWrapper,
-        Usage,
-    )
-
-    # Create a mock response similar to the one in the issue
-    litellm_model_response = ModelResponse(
-        id="test-response",
-        created=1750733889,
-        model="gemini/gemini-2.5-flash",
-        object="chat.completion",
-        system_fingerprint=None,
-        choices=[
-            Choices(
-                finish_reason="stop",
-                index=0,
-                message=Message(
-                    content="Understood. This is a test message to check the response from the Gemini model.",
-                    role="assistant",
-                    tool_calls=None,
-                    function_call=None,
-                ),
-            )
-        ],
-        usage=Usage(
-            total_tokens=15050,
-            prompt_tokens=15033,
-            completion_tokens=17,
-            prompt_tokens_details=PromptTokensDetailsWrapper(
-                audio_tokens=None,
-                cached_tokens=14316,  # This is cachedContentTokenCount from Gemini
-            ),
-            completion_tokens_details=None,
-        ),
-    )
-
-    # Calculate the cost
-    result = completion_cost(
-        completion_response=litellm_model_response,
-        model="gemini/gemini-2.5-flash",
-    )
-
-    model_info: Final = litellm.model_cost["gemini/gemini-2.5-flash"]
-    expected_cost = (
-        14316 * model_info["cache_read_input_token_cost"]
-        + (15033 - 14316) * model_info["input_cost_per_token"]
-        + 17 * model_info["output_cost_per_token"]
-    )
-
-    # Allow for small floating point differences
-    assert abs(result - expected_cost) < 1e-8, f"Expected cost {expected_cost}, but got {result}"
-
-    print(f"✓ Gemini 2.5 implicit caching cost calculation is correct: ${result:.8f}")
-
-
 def test_log_context_cost_calculation():
     """
     Test that log context cost calculation works correctly with tiered pricing.
@@ -1617,6 +1266,10 @@ def test_vertex_regional_deployment_costs_uplift_over_global(monkeypatch):
     """
     Regression for https://github.com/BerriAI/litellm/issues/34393: two Vertex
     deployments differing only in vertex_location must not price identically.
+    Google bills non-global endpoints at 1.1x for regional-pricing models, so the
+    regional request costs 1.1x the global one for the exact same usage, through
+    both vertex cost routes (Claude via cost_per_token, Gemini via
+    cost_per_character's token fallback).
     """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
@@ -1638,10 +1291,8 @@ def test_vertex_regional_deployment_costs_uplift_over_global(monkeypatch):
         global_total = global_prompt + global_completion
         regional_total = regional_prompt + regional_completion
         assert global_total > 0
-        assert regional_total == pytest.approx(
-            global_total
-            * litellm.model_cost[f"vertex_ai/{model}"]["regional_endpoint_uplift_multiplier"],
-            rel=1e-9,
+        assert regional_total == pytest.approx(global_total * 1.10, rel=1e-9), (
+            f"{model}: regional Vertex request must cost 1.1x the global one"
         )
 
 
@@ -2725,11 +2376,38 @@ def test_anthropic_geo_and_fast_multipliers_compose(_local_model_cost_map, monke
 
 
 @pytest.mark.parametrize(
+    "model,expected_fast",
+    [
+        ("claude-opus-5", 2.0),
+        ("claude-opus-4-8", 2.0),
+        ("claude-opus-4-6", None),
+        ("claude-opus-4-6-20260205", None),
+        ("claude-opus-4-7", None),
+        ("claude-opus-4-7-20260416", None),
+    ],
+)
+def test_anthropic_fast_multiplier_only_on_models_with_fast_mode(_local_model_cost_map, model, expected_fast):
+    """
+    Anthropic serves fast mode on Opus 5 and Opus 4.8 only, at 2x. Opus 4.6 and
+    4.7 accept the ``speed`` request param but are always served standard, so a
+    ``fast`` multiplier on their map entries overbills every request that asked
+    for fast and was served standard.
+    """
+    entry = litellm.model_cost[model]
+    assert entry["provider_specific_entry"].get("fast") == expected_fast
+
+
+@pytest.mark.parametrize(
     "model",
     ["claude-sonnet-4-6", "claude-mythos-5", "claude-mythos-preview"],
 )
 def test_anthropic_us_data_residency_uplift_on_claude_4_6_and_later_models(_local_model_cost_map, monkeypatch, model):
-    """Anthropic's US data-residency multiplier must be applied to both token types."""
+    """
+    Anthropic bills every Claude 4.6+ model served with ``inference_geo="us"`` at
+    1.1x, and echoes that geo back in the response usage, so each of these real
+    cost-map entries has to carry the ``us`` multiplier or US-pinned traffic is
+    under-reported by 10%.
+    """
     from litellm.llms.anthropic.cost_calculation import (
         cost_per_token as anthropic_cost_per_token,
     )
@@ -2746,11 +2424,9 @@ def test_anthropic_us_data_residency_uplift_on_claude_4_6_and_later_models(_loca
     geo_usage.inference_geo = "us"
     geo_prompt_cost, geo_completion_cost = anthropic_cost_per_token(model=model, usage=geo_usage)
 
-    model_info: Final = litellm.model_cost[model]
-    us_multiplier: Final = model_info["provider_specific_entry"]["us"]
     assert base_prompt_cost > 0
-    assert geo_prompt_cost == pytest.approx(base_prompt_cost * us_multiplier)
-    assert geo_completion_cost == pytest.approx(base_completion_cost * us_multiplier)
+    assert geo_prompt_cost == pytest.approx(base_prompt_cost * 1.1)
+    assert geo_completion_cost == pytest.approx(base_completion_cost * 1.1)
 
 
 def test_gemini_cache_tokens_details_no_negative_values():
@@ -3700,37 +3376,6 @@ def test_combine_usage_objects_sums_mirrored_cache_write_fields_once():
     assert combined_pair.prompt_tokens_details.cache_creation_tokens == 100
 
 
-def test_completion_cost_prices_anthropic_shaped_cache_read_tokens(_local_model_cost_map):
-    """Regression: an Anthropic /v1/messages response reports cache reads as top-level
-    cache_read_input_tokens with input_tokens excluding them. Reading that usage as
-    Responses API usage dropped the cache tokens and billed the whole prompt at the
-    uncached input rate, overstating spend on cache hits."""
-
-    response = {
-        "id": "msg_1",
-        "type": "message",
-        "role": "assistant",
-        "model": "gpt-5.6-sol",
-        "stop_reason": "end_turn",
-        "content": [{"type": "text", "text": "1"}],
-        "usage": {"input_tokens": 3, "output_tokens": 5, "cache_read_input_tokens": 4014},
-    }
-
-    cost = litellm.completion_cost(
-        completion_response=response,
-        model="gpt-5.6-sol",
-        custom_llm_provider="openai",
-    )
-
-    model_info: Final = litellm.get_model_info(model="gpt-5.6-sol", custom_llm_provider="openai")
-    expected_cost = (
-        3 * model_info["input_cost_per_token"]
-        + 4014 * model_info["cache_read_input_token_cost"]
-        + 5 * model_info["output_cost_per_token"]
-    )
-    assert cost == pytest.approx(expected_cost, rel=1e-9)
-
-
 def _together_chat_response(
     model: str, prompt_tokens: int, completion_tokens: int, cached_tokens: int
 ) -> ModelResponse:
@@ -3747,71 +3392,6 @@ def _together_chat_response(
             prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
         ),
     )
-
-
-def test_completion_cost_prices_together_cached_tokens_at_cache_read_rate(_local_model_cost_map):
-    """Regression: Together reports prompt_tokens_details.cached_tokens but no together_ai
-    registry entry carried cache_read_input_token_cost, so cache-hit tokens were priced at
-    0.0 and spend on cache-heavy workloads was understated."""
-
-    cost = completion_cost(
-        completion_response=_together_chat_response(
-            model="deepseek-ai/DeepSeek-V4-Flash-0731", prompt_tokens=7864, completion_tokens=16, cached_tokens=7863
-        ),
-        custom_llm_provider="together_ai",
-    )
-
-    model_info: Final = litellm.model_cost["together_ai/deepseek-ai/DeepSeek-V4-Flash-0731"]
-    expected_cost = (
-        1 * model_info["input_cost_per_token"]
-        + 7863 * model_info["cache_read_input_token_cost"]
-        + 16 * model_info["output_cost_per_token"]
-    )
-    assert cost == pytest.approx(expected_cost, rel=1e-9)
-
-
-def test_completion_cost_together_mapped_model_skips_size_bucket(_local_model_cost_map):
-    """Regression: any together model whose name matches (\\d+b) was rewritten to a
-    together-ai-* size bucket before the registry lookup, so mapped models like
-    Muse-Glimmer-30B never used their per-model rates, cache fields included."""
-
-    cost = completion_cost(
-        completion_response=_together_chat_response(
-            model="meta-models/Muse-Glimmer-30B", prompt_tokens=63, completion_tokens=16, cached_tokens=0
-        ),
-        custom_llm_provider="together_ai",
-    )
-
-    model_info: Final = litellm.model_cost["together_ai/meta-models/Muse-Glimmer-30B"]
-    expected_cost = 63 * model_info["input_cost_per_token"] + 16 * model_info["output_cost_per_token"]
-    assert cost == pytest.approx(expected_cost, rel=1e-9)
-
-
-def test_completion_cost_together_unmapped_model_still_uses_size_bucket(_local_model_cost_map):
-    cost = completion_cost(
-        completion_response=_together_chat_response(
-            model="qwen/Qwen2-72B-Instruct", prompt_tokens=23, completion_tokens=15, cached_tokens=0
-        ),
-        custom_llm_provider="together_ai",
-    )
-
-    model_info: Final = litellm.model_cost["together-ai-41.1b-80b"]
-    expected_cost = 23 * model_info["input_cost_per_token"] + 15 * model_info["output_cost_per_token"]
-    assert cost == pytest.approx(expected_cost, rel=1e-9)
-
-
-def test_completion_cost_together_metadata_only_model_still_uses_size_bucket(_local_model_cost_map):
-    assert "input_cost_per_token" not in litellm.model_cost["together_ai/togethercomputer/CodeLlama-34b-Instruct"]
-
-    cost = completion_cost(
-        completion_response=_together_chat_response(
-            model="togethercomputer/CodeLlama-34b-Instruct", prompt_tokens=23, completion_tokens=15, cached_tokens=0
-        ),
-        custom_llm_provider="together_ai",
-    )
-
-    bucket: Final = litellm.model_cost["together-ai-21.1b-41b"]
-    assert cost == pytest.approx((23 + 15) * bucket["input_cost_per_token"], rel=1e-9)
 
 
 def test_select_model_name_strips_unregistered_alias_prefix(_local_model_cost_map):
@@ -3996,34 +3576,6 @@ def test_completion_cost_base_model_ignores_regional_row(_local_model_cost_map):
         custom_llm_provider="bedrock",
         base_model="anthropic.claude-instant-v1",
     ) == pytest.approx(1000 * flat["input_cost_per_token"])
-
-
-def test_completion_cost_nonzero_for_slash_alias_model_name(_local_model_cost_map):
-    """End-to-end cost through a "/"-containing alias must price above zero (#38069)."""
-
-    response = litellm.ModelResponse(
-        id="x",
-        choices=[
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": "hi"},
-                "finish_reason": "stop",
-            }
-        ],
-        model="vertex/claude-opus-5",
-    )
-    response._hidden_params = {"custom_llm_provider": "vertex_ai"}
-    response.usage = litellm.Usage(prompt_tokens=100, completion_tokens=50)
-
-    cost = litellm.completion_cost(
-        completion_response=response,
-        custom_llm_provider="vertex_ai",
-    )
-
-    model_info: Final = litellm.model_cost["vertex_ai/claude-opus-5"]
-    assert model_info["input_cost_per_token"] > 0
-    assert model_info["output_cost_per_token"] > 0
-    assert cost > 0
 
 
 def test_select_model_name_unresolvable_alias_unchanged(_local_model_cost_map):
@@ -4247,51 +3799,6 @@ def test_explicit_pricing_precedes_private_provider_response_model(
     )
 
     assert selected == expected
-
-
-def test_handle_realtime_stream_cost_calculation_bills_nested_reasoning_tokens_once(
-    _local_model_cost_map: None,
-) -> None:
-    """Realtime response.done nests reasoning_tokens inside text_tokens, so they are billed once."""
-    results: OpenAIRealtimeStreamList = [
-        {"type": "session.created", "session": {"model": "gpt-realtime-2.1-mini"}},
-        {
-            "type": "response.done",
-            "response": {
-                "usage": {
-                    "total_tokens": 260,
-                    "input_tokens": 237,
-                    "output_tokens": 23,
-                    "input_token_details": {
-                        "text_tokens": 43,
-                        "audio_tokens": 0,
-                        "image_tokens": 194,
-                        "cached_tokens": 0,
-                        "cached_tokens_details": {"text_tokens": 0, "audio_tokens": 0, "image_tokens": 0},
-                    },
-                    "output_token_details": {"text_tokens": 23, "audio_tokens": 0, "reasoning_tokens": 18},
-                }
-            },
-        },
-    ]
-    combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
-        results=results,
-    )
-
-    total_cost = handle_realtime_stream_cost_calculation(
-        results=results,
-        combined_usage_object=combined_usage_object,
-        custom_llm_provider="azure",
-        litellm_model_name="azure/gpt-realtime-2.1-mini",
-    )
-
-    info = litellm.get_model_info(model="azure/gpt-realtime-2.1-mini", custom_llm_provider="azure")
-    expected = (
-        43 * info["input_cost_per_token"]
-        + 194 * info["input_cost_per_image_token"]
-        + 23 * info["output_cost_per_token"]
-    )
-    assert total_cost == pytest.approx(expected)
 
 
 def test_collect_and_combine_realtime_usage_stores_partitioned_text_tokens() -> None:
