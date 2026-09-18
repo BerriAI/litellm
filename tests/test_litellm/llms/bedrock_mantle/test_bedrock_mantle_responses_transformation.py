@@ -1844,6 +1844,11 @@ class TestBedrockMantleResponsesPricing:
         ["openai.gpt-5.6-sol", "openai.gpt-5.6-terra", "openai.gpt-5.6-luna"],
     )
     def test_mantle_matches_in_region_converse_pricing(self, local_cost_map, model):
+        """bedrock-mantle serves these models In-Region only, and the AWS model
+        cards price In-Region and Geo CRIS identically -- so every cost field on
+        the mantle key must equal the `us.` converse key. A price change applied
+        to one namespace but not the other shows up here.
+        """
         mantle = litellm.model_cost[f"bedrock_mantle/{model}"]
         converse = litellm.model_cost[f"us.{model}"]
 
