@@ -544,7 +544,8 @@ class TestUsageAiChatCompletionRouting:
     async def test_stream_usage_ai_chat_falls_back_to_litellm_for_unknown_model(self):
         mock_router = MagicMock()
         mock_router.get_model_names.return_value = ["other"]
-        mock_router.pattern_router.route.return_value = None
+        mock_router.default_deployment = None
+        mock_router.pattern_router.patterns = {}
         mock_router.acompletion = AsyncMock(return_value=self._plain_content_response())
         mock_acompletion = AsyncMock(return_value=self._plain_content_response())
 
@@ -574,10 +575,11 @@ class TestUsageAiChatCompletionRouting:
             assert "error" not in event_types
 
     @pytest.mark.asyncio
-    async def test_stream_usage_ai_chat_uses_router_for_wildcard_matched_model(self):
+    async def test_stream_usage_ai_chat_uses_router_when_wildcard_pattern_exists(self):
         mock_router = MagicMock()
         mock_router.get_model_names.return_value = []
-        mock_router.pattern_router.route.return_value = [{"model_name": "openai/*"}]
+        mock_router.default_deployment = None
+        mock_router.pattern_router.patterns = {"openai/.*": [{"model_name": "openai/*"}]}
         mock_router.acompletion = AsyncMock(return_value=self._plain_content_response())
         mock_acompletion = AsyncMock(return_value=self._plain_content_response())
 
@@ -598,7 +600,41 @@ class TestUsageAiChatCompletionRouting:
             ):
                 events.append(json.loads(event.replace("data: ", "").strip()))
 
-            mock_router.pattern_router.route.assert_called_once_with(request="gpt-5.6-terra")
+            mock_router.acompletion.assert_awaited_once()
+            assert mock_router.acompletion.await_args.kwargs["model"] == "gpt-5.6-terra"
+            assert mock_router.acompletion.await_args.kwargs["drop_params"] is True
+            mock_acompletion.assert_not_called()
+
+            event_types = [e["type"] for e in events]
+            assert "chunk" in event_types
+            assert "error" not in event_types
+
+    @pytest.mark.asyncio
+    async def test_stream_usage_ai_chat_uses_router_when_default_deployment_exists(self):
+        mock_router = MagicMock()
+        mock_router.get_model_names.return_value = []
+        mock_router.default_deployment = {"model_name": "default", "litellm_params": {}}
+        mock_router.pattern_router.patterns = {}
+        mock_router.acompletion = AsyncMock(return_value=self._plain_content_response())
+        mock_acompletion = AsyncMock(return_value=self._plain_content_response())
+
+        with (
+            patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
+                "litellm.proxy.proxy_server.llm_router", mock_router
+            ),
+            patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
+                new=mock_acompletion,
+            ),
+        ):
+            events = []
+            async for event in stream_usage_ai_chat(
+                messages=[{"role": "user", "content": "hi"}],
+                model="gpt-5.6-terra",
+                is_admin=True,
+            ):
+                events.append(json.loads(event.replace("data: ", "").strip()))
+
             mock_router.acompletion.assert_awaited_once()
             assert mock_router.acompletion.await_args.kwargs["model"] == "gpt-5.6-terra"
             assert mock_router.acompletion.await_args.kwargs["drop_params"] is True

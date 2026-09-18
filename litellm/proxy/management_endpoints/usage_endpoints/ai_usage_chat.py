@@ -447,7 +447,11 @@ def _sse(event: SSEEvent) -> str:
 
 
 def _router_knows_model(router: "Router", model: str) -> bool:
-    return model in router.get_model_names() or router.pattern_router.route(request=model) is not None  # pyright: ignore[reportUnknownMemberType]  # PatternMatchDeployments.route returns untyped dicts
+    return (
+        model in router.get_model_names()
+        or router.default_deployment is not None
+        or len(router.pattern_router.patterns) > 0  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # PatternMatchRouter.patterns values are bare `list`
+    )
 
 
 async def _acompletion(
