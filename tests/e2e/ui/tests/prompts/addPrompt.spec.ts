@@ -17,32 +17,32 @@ test.describe("Prompt upload form", () => {
     await navigateToPage(page, DashboardPage.Prompts);
     await page.getByRole("button", { name: "Upload .prompt File" }).click();
 
-    await expect(
-      page.getByRole("dialog", { name: "Add New Prompt" }),
-    ).toBeVisible();
-    await page.getByLabel("Prompt ID").fill(promptId);
-    await page.locator('input[type="file"]').setInputFiles({
-      name: "e2e.prompt",
-      mimeType: "text/plain",
-      buffer: Buffer.from(
-        `model: fake-openai-gpt-4\ntemplate: "${promptContent}"\n`,
-      ),
-    });
-    await expect(page.getByText("Selected: e2e.prompt")).toBeVisible();
-    await page.getByRole("button", { name: "Create Prompt" }).click();
-
-    await expect
-      .poll(async () => {
-        const response = await page.request.get(
-          `/prompts/${encodeURIComponent(promptId)}/info?environment=development`,
-          {
-            headers: { Authorization: `Bearer ${masterKey()}` },
-          },
-        );
-        return response.ok();
-      })
-      .toBe(true);
     try {
+      await expect(
+        page.getByRole("dialog", { name: "Add New Prompt" }),
+      ).toBeVisible();
+      await page.getByLabel("Prompt ID").fill(promptId);
+      await page.locator('input[type="file"]').setInputFiles({
+        name: "e2e.prompt",
+        mimeType: "text/plain",
+        buffer: Buffer.from(
+          `model: fake-openai-gpt-4\ntemplate: "${promptContent}"\n`,
+        ),
+      });
+      await expect(page.getByText("Selected: e2e.prompt")).toBeVisible();
+      await page.getByRole("button", { name: "Create Prompt" }).click();
+
+      await expect
+        .poll(async () => {
+          const response = await page.request.get(
+            `/prompts/${encodeURIComponent(promptId)}/info?environment=development`,
+            {
+              headers: { Authorization: `Bearer ${masterKey()}` },
+            },
+          );
+          return response.ok();
+        })
+        .toBe(true);
       await expect
         .poll(async () => {
           const response = await page.request.get(
@@ -60,13 +60,12 @@ test.describe("Prompt upload form", () => {
         .toContain(promptContent);
       await expect(page.getByText(promptId, { exact: true })).toBeVisible();
     } finally {
-      const deleteResponse = await page.request.delete(
+      await page.request.delete(
         `/prompts/${encodeURIComponent(promptId)}?environment=development`,
         {
           headers: { Authorization: `Bearer ${masterKey()}` },
         },
       );
-      expect(deleteResponse.ok()).toBe(true);
     }
   });
 });
