@@ -955,8 +955,11 @@ def test_responses_api_sends_tools_and_maps_reasoning_and_function_call():
     request_body = json.loads(captured_requests[0].content)
     assert str(captured_requests[0].url) == TOGETHER_CHAT_URL
     assert [tool["function"]["name"] for tool in request_body["tools"]] == ["get_weather"]
+    # Unsigned plain-text reasoning is intentionally not emitted as a standalone
+    # reasoning output item (signed-only policy); only the function_call item is
+    # present.
     outputs = {item.type: item for item in response.output}
-    assert outputs["reasoning"].content[0].text == "Need the weather tool."
+    assert "reasoning" not in outputs
     assert outputs["function_call"].name == "get_weather"
     assert json.loads(outputs["function_call"].arguments) == {"city": "San Francisco"}
 
