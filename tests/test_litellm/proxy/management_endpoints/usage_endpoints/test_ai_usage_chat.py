@@ -482,9 +482,9 @@ class TestUsageAiChatCompletionRouting:
         mock_acompletion = AsyncMock(return_value=self._plain_content_response())
 
         with (
-            patch(
+            patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
                 "litellm.proxy.proxy_server.llm_router", None
-            ),  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
+            ),
             patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
                 new=mock_acompletion,
@@ -515,9 +515,9 @@ class TestUsageAiChatCompletionRouting:
         mock_acompletion = AsyncMock(return_value=self._plain_content_response())
 
         with (
-            patch(
+            patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
                 "litellm.proxy.proxy_server.llm_router", mock_router
-            ),  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
+            ),
             patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
                 new=mock_acompletion,
@@ -549,9 +549,9 @@ class TestUsageAiChatCompletionRouting:
         mock_acompletion = AsyncMock(return_value=self._plain_content_response())
 
         with (
-            patch(
+            patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
                 "litellm.proxy.proxy_server.llm_router", mock_router
-            ),  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
+            ),
             patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
                 new=mock_acompletion,
@@ -582,9 +582,9 @@ class TestUsageAiChatCompletionRouting:
         mock_acompletion = AsyncMock(return_value=self._plain_content_response())
 
         with (
-            patch(
+            patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
                 "litellm.proxy.proxy_server.llm_router", mock_router
-            ),  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
+            ),
             patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
                 new=mock_acompletion,
@@ -649,9 +649,9 @@ class TestUsageAiChatCompletionRouting:
         mock_router.acompletion = AsyncMock(side_effect=[mock_first_response, mock_stream()])
 
         with (
-            patch(
+            patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
                 "litellm.proxy.proxy_server.llm_router", mock_router
-            ),  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
+            ),
             patch(  # test-quality-ok: the stream calls the module-level _fetch_usage_data directly; no injection seam
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_usage_data",
                 new_callable=AsyncMock,
