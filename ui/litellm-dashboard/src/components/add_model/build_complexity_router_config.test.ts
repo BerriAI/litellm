@@ -76,7 +76,7 @@ describe("buildComplexityRouterConfig", () => {
   });
 
   it.each([false, true])("serializes JEV with shared context and no LLM config, custom tiers: %s", (custom) => {
-    const config = buildComplexityRouterConfig({
+    const params: BuildComplexityRouterConfigParams = {
       ...baseParams,
       classifierType: "jev",
       jevClassifierConfig: {
@@ -102,15 +102,17 @@ describe("buildComplexityRouterConfig", () => {
           fallback_tier_id: "quick",
         },
       }),
-    });
+    };
+    const config = buildComplexityRouterConfig(params);
     expect(config.classifier_type).toBe("jev");
-    expect(config.jev_classifier_config).toEqual({
+    const expectedJevConfig = {
       model: "jev-test",
       timeout_ms: 4500,
       instructions: "Choose the configured tier",
       circuit_breaker_enabled: false,
       circuit_breaker_cooldown_seconds: 12.5,
-    });
+    };
+    expect(config.jev_classifier_config).toEqual(expectedJevConfig);
     expect(config.classifier_context_window_size).toBe(4);
     expect(config.classifier_context_budget_chars).toBe(2000);
     expect(config.classifier_context_include_assistant_turns).toBe(true);
@@ -133,12 +135,13 @@ describe("buildComplexityRouterConfig", () => {
       jevClassifierConfig: { model: "jev-latest", timeout_ms: 3000, instructions: "  " },
     });
     expect(jev.jev_classifier_config).toEqual({ model: "jev-latest", timeout_ms: 3000 });
-    const llm = buildComplexityRouterConfig({
+    const llmParams: BuildComplexityRouterConfigParams = {
       ...baseParams,
       classifierType: "llm",
       classifierLlmConfig: { model: "judge", timeout_ms: 1000 },
       jevClassifierConfig: jev.jev_classifier_config,
-    });
+    };
+    const llm = buildComplexityRouterConfig(llmParams);
     expect(llm).not.toHaveProperty("jev_classifier_config");
   });
 

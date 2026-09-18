@@ -694,12 +694,13 @@ describe("autorouter_presets", () => {
         classifier_context_window_size: 6,
       };
       const prefill = buildPresetPrefill(config, groupsOnly(["fast"]));
-      expect(prefill.complexityRouterConfig).toMatchObject({
+      const expectedJevConfig = {
         classifier_type: "jev",
         jev_classifier_config: config.jev_classifier_config,
         classifier_context_window_size: 6,
         classifier_llm_config: undefined,
-      });
+      };
+      expect(prefill.complexityRouterConfig).toMatchObject(expectedJevConfig);
       const llmConfig = { ...config, classifier_type: "llm" as const };
       const llmPrefill = buildPresetPrefill(llmConfig, groupsOnly(["fast"]));
       expect(llmPrefill.complexityRouterConfig.jev_classifier_config).toBeUndefined();
