@@ -17,7 +17,7 @@ Add the same provider again with another name to reach a second gateway or a sec
 
 ## Requirements
 
-VS Code 1.109 or newer and a LiteLLM AI Gateway the key can reach. The key needs access to at least one model group whose mode is `chat`
+VS Code 1.115 or newer and a LiteLLM AI Gateway the key can reach. The key needs access to at least one model group whose mode is `chat`
 
 ## Development
 
