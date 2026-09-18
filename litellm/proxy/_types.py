@@ -1831,6 +1831,7 @@ class NewUserRequest(GenerateRequestBase):
 
 class NewUserResponse(GenerateKeyResponse):
     max_budget: float | None = None
+    rollover_max_budget: float | None = None
     user_email: str | None = None
     user_role: (
         Literal[

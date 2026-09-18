@@ -226,10 +226,11 @@ describe("BulkEditUserModal", () => {
     editFormValues.current = { user_role: "admin", max_budget: 100, rollover_max_budget: null };
     await user.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() => {
-      expect(mockUserBulkUpdateUserCall).toHaveBeenLastCalledWith("test-token", { user_role: "admin", max_budget: 100 }, [
-        "user1",
-        "user2",
-      ]);
+      expect(mockUserBulkUpdateUserCall).toHaveBeenLastCalledWith(
+        "test-token",
+        { user_role: "admin", max_budget: 100 },
+        ["user1", "user2"],
+      );
     });
   });
 
