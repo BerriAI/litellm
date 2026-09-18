@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeGuard, cast
+from typing import TYPE_CHECKING, Annotated, Final, Literal
 
 import httpx
 from fastapi import HTTPException
@@ -55,12 +55,22 @@ DROPPED_RESULT_TEXT: Final = (
 )
 
 
-def _is_str_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
-    return isinstance(value, dict)
+_STR_OBJECT_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 
 
-def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
-    return isinstance(value, list)
+def _as_str_object_dict(value: object) -> dict[str, object] | None:
+    try:
+        return _STR_OBJECT_DICT_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _as_object_list(value: object) -> list[object] | None:
+    try:
+        return _OBJECT_LIST_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
 
 
 def _safe_response_text(response: HttpxResponse | None, limit: int = 500) -> str:
@@ -99,15 +109,16 @@ def _question_instructions(question_id: str) -> str:
 
 
 def _tool_call_entries(assistant_message: Mapping[str, object]) -> list[dict[str, object]]:
-    tool_calls: Final = assistant_message.get("tool_calls")
-    if not _is_object_list(tool_calls):
+    tool_calls: Final = _as_object_list(assistant_message.get("tool_calls"))
+    if tool_calls is None:
         return []
     entries: Final[list[dict[str, object]]] = []
     for tool_call in tool_calls:
-        if not _is_str_object_dict(tool_call):
+        parsed_call = _as_str_object_dict(tool_call)
+        if parsed_call is None:
             continue
-        function = tool_call.get("function")
-        fn = function if _is_str_object_dict(function) else tool_call
+        function = _as_str_object_dict(parsed_call.get("function"))
+        fn = function if function is not None else parsed_call
         entries.append({"name": fn.get("name"), "arguments": fn.get("arguments")})
     return entries
 
@@ -137,7 +148,7 @@ class TypeSafeGuardrail(CustomGuardrail):
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
         async_handler: AsyncHTTPHandler | None = None,
-    ):
+    ) -> None:
         raw_api_base: Final = (api_base or get_secret_str("TYPESAFE_API_BASE") or DEFAULT_API_BASE).rstrip("/")
         self.typesafe_api_base = raw_api_base
         self.typesafe_api_key = api_key or get_secret_str("TYPESAFE_API_KEY")
@@ -266,7 +277,7 @@ class TypeSafeGuardrail(CustomGuardrail):
             )
             return None
         try:
-            body: Final = cast(object, raw_response.json())
+            body: Final[object] = raw_response.json()  # pyright: ignore[reportAny]  # httpx Response.json() is untyped
         except (ValueError, httpx.DecodingError, RecursionError):
             self._handle_failure(
                 "TypeSafe evaluation service returned an unreadable response",
@@ -293,12 +304,13 @@ class TypeSafeGuardrail(CustomGuardrail):
         if input_type != "request":
             return inputs
 
-        structured_messages: Final = inputs.get("structured_messages")
-        if not _is_object_list(structured_messages) or not structured_messages:
+        structured_messages: Final = _as_object_list(inputs.get("structured_messages"))
+        if not structured_messages:
             return inputs
-        messages: Final = [m for m in structured_messages if _is_str_object_dict(m)]
-        if len(messages) != len(structured_messages):
+        parsed_messages: Final = [_as_str_object_dict(m) for m in structured_messages]
+        if any(m is None for m in parsed_messages):
             return inputs
+        messages: Final = [m for m in parsed_messages if m is not None]
 
         candidates: Final = self._candidate_exchanges(messages)
         if not candidates:
