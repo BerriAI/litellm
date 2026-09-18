@@ -47,6 +47,7 @@ COHERE_BACKEND = "cohere/command-r-08-2024"
 GEMINI_BACKEND = "gemini/gemini-2.5-flash"
 VERTEX_BACKEND: Final = "vertex_ai/gemini-2.5-flash"
 AZURE_OPENAI_BACKEND: Final = "azure/gpt-5.6-sol"
+AZURE_OPENAI_API_VERSION: Final = "v1"
 AZURE_FOUNDRY_BACKEND: Final = "azure_ai/claude-haiku-4-5"
 OPENAI_BACKEND = "openai/gpt-5.6"
 ANTHROPIC_BACKEND = "anthropic/claude-haiku-4-5-20251001"
@@ -459,6 +460,7 @@ class TestAzureOpenAIChatCompletions:
                 model=AZURE_OPENAI_BACKEND,
                 api_base="os.environ/AZURE_API_BASE",
                 api_key="os.environ/AZURE_API_KEY",
+                api_version=AZURE_OPENAI_API_VERSION,
             ),
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))

@@ -41,6 +41,7 @@ class _OptionalResponsesBody(BaseModel):
 BEDROCK_CONVERSE_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 VERTEX_BACKEND: Final = "vertex_ai/gemini-2.5-flash"
 AZURE_OPENAI_BACKEND: Final = "azure/gpt-5.6-sol"
+AZURE_OPENAI_API_VERSION: Final = "v1"
 
 WEATHER_TOOL = ResponsesFunctionTool(
     name="get_weather",
@@ -375,6 +376,7 @@ class TestResponses:
                 model=AZURE_OPENAI_BACKEND,
                 api_base="os.environ/AZURE_API_BASE",
                 api_key="os.environ/AZURE_API_KEY",
+                api_version=AZURE_OPENAI_API_VERSION,
             ),
         )
 
@@ -397,6 +399,7 @@ class TestResponses:
                 model=AZURE_OPENAI_BACKEND,
                 api_base="os.environ/AZURE_API_BASE",
                 api_key="os.environ/AZURE_API_KEY",
+                api_version=AZURE_OPENAI_API_VERSION,
             ),
         )
 
