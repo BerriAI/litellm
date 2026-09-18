@@ -20853,6 +20853,96 @@
             "/v1/audio/transcriptions"
         ]
     },
+    "deepgram/streaming/nova-3": {
+        "input_cost_per_second": 8e-05,
+        "litellm_provider": "deepgram",
+        "metadata": {
+            "calculation": "$0.0048/60 seconds = $0.00008000 per second",
+            "note": "Nova-3 monolingual streaming, pay as you go",
+            "original_pricing_per_minute": 0.0048
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://deepgram.com/pricing",
+        "supported_endpoints": [
+            "/v1/listen"
+        ]
+    },
+    "deepgram/streaming/nova-3-multilingual": {
+        "input_cost_per_second": 9.667e-05,
+        "litellm_provider": "deepgram",
+        "metadata": {
+            "calculation": "$0.0058/60 seconds = $0.00009667 per second",
+            "note": "Nova-3 multilingual (language=multi) streaming, pay as you go",
+            "original_pricing_per_minute": 0.0058
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://deepgram.com/pricing",
+        "supported_endpoints": [
+            "/v1/listen"
+        ]
+    },
+    "deepgram/streaming/redact": {
+        "input_cost_per_second": 3.333e-05,
+        "litellm_provider": "deepgram",
+        "metadata": {
+            "calculation": "$0.0020/60 seconds = $0.00003333 per second",
+            "note": "Redaction add-on (redact query param), streaming, pay as you go",
+            "original_pricing_per_minute": 0.002
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://deepgram.com/pricing",
+        "supported_endpoints": [
+            "/v1/listen"
+        ]
+    },
+    "deepgram/streaming/keyterm": {
+        "input_cost_per_second": 2.167e-05,
+        "litellm_provider": "deepgram",
+        "metadata": {
+            "calculation": "$0.0013/60 seconds = $0.00002167 per second",
+            "note": "Keyterm Prompting add-on (keyterm query param), streaming, pay as you go",
+            "original_pricing_per_minute": 0.0013
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://deepgram.com/pricing",
+        "supported_endpoints": [
+            "/v1/listen"
+        ]
+    },
+    "deepgram/streaming/detect_entities": {
+        "input_cost_per_second": 2.833e-05,
+        "litellm_provider": "deepgram",
+        "metadata": {
+            "calculation": "$0.0017/60 seconds = $0.00002833 per second",
+            "note": "Entity Detection add-on (detect_entities query param), streaming, pay as you go",
+            "original_pricing_per_minute": 0.0017
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://deepgram.com/pricing",
+        "supported_endpoints": [
+            "/v1/listen"
+        ]
+    },
+    "deepgram/streaming/diarize": {
+        "input_cost_per_second": 3.333e-05,
+        "litellm_provider": "deepgram",
+        "metadata": {
+            "calculation": "$0.0020/60 seconds = $0.00003333 per second",
+            "note": "Speaker Diarization add-on (diarize / diarize_model query params), streaming, pay as you go",
+            "original_pricing_per_minute": 0.002
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://deepgram.com/pricing",
+        "supported_endpoints": [
+            "/v1/listen"
+        ]
+    },
     "deepgram/whisper": {
         "input_cost_per_second": 0.0001,
         "litellm_provider": "deepgram",

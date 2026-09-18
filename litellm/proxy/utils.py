@@ -7499,6 +7499,7 @@ def _check_and_merge_model_level_guardrails(
     data: dict,
     llm_router: Router | None,
     trust_client_model_info: bool = True,
+    model_alias: str | None = None,
 ) -> dict:
     """
     Check if the model has guardrails defined and merge them with existing guardrails in the request data.
@@ -7506,6 +7507,7 @@ def _check_and_merge_model_level_guardrails(
     Args:
         data: The request data dict
         llm_router: The LLM router instance to get deployment info from
+        model_alias: Resolve guardrails for this model group instead of data["model"]
         trust_client_model_info: If False, ignore metadata.model_info.id and
             resolve guardrails by alias-union only. Set to False on the
             pre_call path because add_litellm_data_to_request preserves
@@ -7550,13 +7552,13 @@ def _check_and_merge_model_level_guardrails(
         # set on ANY eligible deployment still fires (#29652; addresses
         # veria-ai HIGH on the single-deployment fallback that would skip
         # non-first deployments).
-        model_alias: Final = data.get("model")
-        if not isinstance(model_alias, str) or not model_alias:
+        alias: Final = model_alias if model_alias is not None else data.get("model")
+        if not isinstance(alias, str) or not alias:
             return data
         # Pass team_id so team-scoped public model names resolve the same way
         # route_request resolves them; otherwise team-scoped deployments are
         # invisible to this lookup and their guardrails are silently dropped.
-        deployments: Final = llm_router.get_model_list(model_name=model_alias, team_id=team_id) or []
+        deployments: Final = llm_router.get_model_list(model_name=alias, team_id=team_id) or []
         seen: Final[set] = set()
         union: Final[list] = []
         for dep in deployments:

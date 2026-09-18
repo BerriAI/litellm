@@ -746,9 +746,11 @@ def _apply_budget_limits_to_end_user_params(
     verbose_proxy_logger.debug("Applied budget limits to end user %s", end_user_id)
 
 
-async def user_api_key_auth_websocket(websocket: WebSocket):
-    # Accept the WebSocket connection
+async def user_api_key_auth_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
+    return await user_api_key_auth_websocket_for_model(websocket, model=websocket.query_params.get("model"))
 
+
+async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str | None) -> UserAPIKeyAuth:
     ws_scope: Final = websocket.scope or {}
     scope_headers: Final = list(ws_scope.get("headers") or [])
     # ``get_request_route`` falls back to ``request.url.path`` when
@@ -767,10 +769,6 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
     request: Final = Request(scope=synthetic_scope)
 
     request._url = websocket.url
-
-    query_params: Final = websocket.query_params
-
-    model: Final = query_params.get("model")
 
     async def return_body():
         return _realtime_request_body(model)

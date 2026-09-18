@@ -320,6 +320,9 @@ REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = float(
 # RFC 6455 caps the close frame payload at 125 bytes, 2 of which carry the status code
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
 
+DEEPGRAM_DEFAULT_API_BASE: Final = "https://api.deepgram.com/v1"
+DEEPGRAM_LISTEN_DEFAULT_MODEL: Final = "nova-3"
+
 BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_session_update"
 BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY: Final = "litellm.bedrock_realtime.session_committed"
 BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY: Final = "litellm.bedrock_realtime.committed_failure"
@@ -2079,6 +2082,9 @@ PTU_ROLLUP_MAX_BACKFILL_DAYS: Final[int] = 90
 # Deployments named in the lapsed-window alert before it is truncated, so a fleet-wide
 # expiry cannot produce an alert too large for the channel delivering it.
 PTU_LAPSED_ALERT_LIMIT: Final[int] = 10
+DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID: Final[str] = "daily_global_spend_reconcile_job"
+DAILY_GLOBAL_SPEND_RECONCILE_LOCK_TTL_SECONDS: Final[int] = 3600
+DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM: Final[str] = "daily_global_spend_reconciled_through"
 # Slack allowed when deciding a sentinel row is stale. The row's updated_at and the
 # run's cutoff are stamped by different hosts, so clock skew between them must not let
 # one run delete a charge another just wrote. A stale row is hours old and a concurrent

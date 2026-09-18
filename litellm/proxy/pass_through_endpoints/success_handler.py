@@ -26,6 +26,9 @@ from .llm_provider_handlers.cohere_passthrough_logging_handler import (
 from .llm_provider_handlers.cursor_passthrough_logging_handler import (
     CursorPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.deepgram_listen_passthrough_logging_handler import (
+    DeepgramListenPassthroughLoggingHandler,
+)
 from .llm_provider_handlers.gemini_passthrough_logging_handler import (
     GeminiPassthroughLoggingHandler,
 )
@@ -349,6 +352,21 @@ class PassThroughEndpointLogging:
 
             standard_logging_response_object = vertex_ai_live_handler_result["result"]
             kwargs = vertex_ai_live_handler_result["kwargs"]
+        elif DeepgramListenPassthroughLoggingHandler.is_deepgram_listen_route(url_route):
+            deepgram_handler_result: Final = (
+                DeepgramListenPassthroughLoggingHandler().deepgram_listen_passthrough_handler(
+                    websocket_messages=tuple(
+                        message
+                        for message in (response_body if isinstance(response_body, list) else ())
+                        if isinstance(message, dict)
+                    ),
+                    logging_obj=logging_obj,
+                    upstream_url=str(httpx_response.request.url),
+                    kwargs=kwargs,
+                )
+            )
+            standard_logging_response_object = deepgram_handler_result["result"]  # rebind-ok: elif-chain
+            kwargs = deepgram_handler_result["kwargs"]  # rebind-ok: elif-chain contract
         return_dict["standard_logging_response_object"] = standard_logging_response_object
 
         return_dict["kwargs"] = kwargs
