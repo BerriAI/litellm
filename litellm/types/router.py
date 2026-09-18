@@ -653,6 +653,7 @@ class RouterErrors(enum.Enum):
     """
 
     user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
+    max_parallel_requests_exceeded = "Deployment has all max_parallel_requests slots in use."
     no_deployments_available = "No deployments available for selected model"
     all_deployments_in_cooldown = "All deployments for selected model are in cooldown"
     no_deployments_with_tag_routing = "Not allowed to access model due to tags configuration"

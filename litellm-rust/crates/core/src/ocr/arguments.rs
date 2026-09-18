@@ -1,5 +1,7 @@
+use litellm_core_utils::call_arguments::ArgumentSpec;
+use litellm_llms::base_llm::ocr::error::Error;
+
 use super::provider_config::{OcrConfigKind, resolve_provider_config};
-use crate::call_arguments::ArgumentSpec;
 
 const COMMON_OPTION_FIELDS: &[&str] = &["req_format", "extra_body", "max_response_bytes"];
 const AZURE_AUTH_OPTION_FIELDS: &[&str] = &[
@@ -29,7 +31,7 @@ pub fn is_supported_request(model: &str, custom_llm_provider: Option<&str>) -> b
 pub fn consumed_optional_param_names(
     model: &str,
     custom_llm_provider: Option<&str>,
-) -> Result<Vec<&'static str>, super::Error> {
+) -> Result<Vec<&'static str>, Error> {
     let (model, config) = resolve_provider_config(model, custom_llm_provider)?;
     let provider_fields = config.get_supported_ocr_params(&model);
     let auth_fields: &[&str] = match config {
@@ -47,23 +49,27 @@ pub fn consumed_optional_param_names(
         .collect())
 }
 
+pub(crate) fn is_secret_param(name: &str) -> bool {
+    matches!(
+        name,
+        "azure_ad_token"
+            | "client_secret"
+            | "azure_federated_token_file"
+            | "vertex_credentials"
+            | "vertex_ai_credentials"
+    )
+}
+
 pub fn consumed_optional_params(
     model: &str,
     custom_llm_provider: Option<&str>,
-) -> Result<Vec<ArgumentSpec>, super::Error> {
+) -> Result<Vec<ArgumentSpec>, Error> {
     consumed_optional_param_names(model, custom_llm_provider).map(|names| {
         names
             .into_iter()
             .map(|name| ArgumentSpec {
                 name,
-                secret: matches!(
-                    name,
-                    "azure_ad_token"
-                        | "client_secret"
-                        | "azure_federated_token_file"
-                        | "vertex_credentials"
-                        | "vertex_ai_credentials"
-                ),
+                secret: is_secret_param(name),
             })
             .collect()
     })

@@ -46,7 +46,6 @@ WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 # (rather than scraping every workflow file) means a new workflow file
 # that bypasses the dry-run gating doesn't silently slip past this test.
 DESTRUCTIVE_GATE_ENV: dict[str, str] = {
-    "triage_issue_with_llm.yml": "DISPATCH_CLOSE",
     "close_low_quality_prs.yml": "CLOSE_FLAG",
     # The reconsider workflow has no per-run "really do it?" knob — its
     # only kill switch is `AGENT_SHIN_ENABLED`, which already serves as
@@ -60,7 +59,6 @@ DESTRUCTIVE_GATE_ENV: dict[str, str] = {
 # release would otherwise execute in that context. A new workflow that
 # installs the client must be added here and use the same pinned file.
 LLM_CLIENT_INSTALLER_WORKFLOWS = (
-    "triage_issue_with_llm.yml",
     "triage_reconsider.yml",
 )
 

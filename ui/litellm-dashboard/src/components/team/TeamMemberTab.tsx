@@ -8,7 +8,21 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { CircleHelp } from "lucide-react";
 import type { ComponentProps } from "react";
-import { TeamData } from "./TeamInfo";
+import { TeamData, TeamMembership } from "./TeamInfo";
+
+export const seedMemberBudgetFields = (
+  record: Member,
+  budget: TeamMembership["litellm_budget_table"] | undefined,
+): Member => ({
+  ...record,
+  max_budget_in_team: budget?.max_budget ?? null,
+  tpm_limit: budget?.tpm_limit ?? null,
+  rpm_limit: budget?.rpm_limit ?? null,
+  budget_duration: budget?.budget_duration || null,
+  allowed_models: budget?.allowed_models || [],
+  temp_budget_increase: budget?.temp_budget_increase ?? null,
+  temp_budget_expiry: budget?.temp_budget_expiry ?? null,
+});
 
 interface TeamMemberTabProps {
   teamData: TeamData;
@@ -192,15 +206,7 @@ export default function TeamMemberTab({
       canEdit={canEditTeam}
       onEdit={(record) => {
         const membership = teamData.team_memberships.find((tm) => tm.user_id === record.user_id);
-        const enhancedMember = {
-          ...record,
-          max_budget_in_team: membership?.litellm_budget_table?.max_budget ?? null,
-          tpm_limit: membership?.litellm_budget_table?.tpm_limit ?? null,
-          rpm_limit: membership?.litellm_budget_table?.rpm_limit ?? null,
-          budget_duration: membership?.litellm_budget_table?.budget_duration || null,
-          allowed_models: membership?.litellm_budget_table?.allowed_models || [],
-        };
-        setSelectedEditMember(enhancedMember);
+        setSelectedEditMember(seedMemberBudgetFields(record, membership?.litellm_budget_table));
         setIsEditMemberModalVisible(true);
       }}
       onDelete={handleMemberDelete}
