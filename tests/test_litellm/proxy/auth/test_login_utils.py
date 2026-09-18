@@ -934,10 +934,23 @@ async def test_an_empty_trusted_proxy_ranges_means_the_peer_is_the_client_and_th
     assert await _fail(throttle, username="user-99@corp.com") == "429", "the spray is stopped by the source limit"
 
 
-@pytest.mark.parametrize("configured", [None, 5, {"10.0.0.0/8": True}, ["", "  "]])
+@pytest.mark.parametrize(
+    "configured",
+    [
+        None,
+        5,
+        {"10.0.0.0/8": True},
+        ["", "  "],
+        ["not-a-range"],
+        ["10.0.0.0/8, 172.16.0.0/12"],
+        ["10.0.0.0/8", "10.0.0.0/33"],
+        "10.0.0.0/8;172.16.0.0/12",
+    ],
+)
 def test_a_trusted_proxy_ranges_value_that_names_no_ranges_leaves_the_topology_unknown(configured):
-    """Only a real list of ranges or an explicit empty list counts as a declaration; anything else is the same
-    as unset, so a typo cannot switch the source-wide block on behind a shared ingress."""
+    """Only a list of valid ranges or an explicit empty list counts as a declaration; anything else, including a
+    list with one bad entry, is the same as unset, so a typo cannot switch the source-wide block on against
+    the shared ingress address and lock out everyone behind it."""
     from litellm.proxy.auth.login_throttle import LoginThrottle, declared_proxy_ranges
 
     settings = {"trusted_proxy_ranges": configured} if configured is not None else {}
