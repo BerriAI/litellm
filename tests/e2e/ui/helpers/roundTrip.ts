@@ -37,10 +37,12 @@ export async function runWithCleanup(
   action: () => Promise<void>,
   cleanup: () => Promise<boolean>,
 ): Promise<void> {
-  const outcome = await action().then(
-    () => ({ status: "success" as const }),
-    (error: unknown) => ({ status: "failure" as const, error }),
-  );
+  const outcome = await Promise.resolve()
+    .then(action)
+    .then(
+      () => ({ status: "success" as const }),
+      (error: unknown) => ({ status: "failure" as const, error }),
+    );
   try {
     if (outcome.status === "failure") throw outcome.error;
   } finally {
