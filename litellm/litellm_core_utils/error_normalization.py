@@ -67,9 +67,7 @@ _MESSAGE_PATTERNS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
     (re.compile(r"is not supported for provider|not implemented", re.IGNORECASE), UNSUPPORTED_OPERATION),
     (re.compile(r"budget has been exceeded|max budget|exceeded.*budget", re.IGNORECASE), BUDGET_EXCEEDED),
     (
-        re.compile(
-            r"context window|context length|too long|prompt is too long|tokens? ?> ?\d+ ?maximum", re.IGNORECASE
-        ),
+        re.compile(r"context window|context length|(prompt|input) is too long|tokens? ?> ?\d+ ?maximum", re.IGNORECASE),
         CONTEXT_WINDOW_EXCEEDED,
     ),
     (re.compile(r"missing required parameter|field required", re.IGNORECASE), MISSING_REQUIRED_PARAMETER),
