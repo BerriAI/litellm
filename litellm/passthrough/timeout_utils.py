@@ -1,4 +1,5 @@
 import sys
+from collections.abc import Mapping
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict
@@ -42,8 +43,8 @@ def resolve_pass_through_request_timeout(
 
 
 def resolve_llm_passthrough_timeout(
-    kwargs: dict | None = None,
-    litellm_params: dict | None = None,
+    kwargs: Mapping[str, object] | None = None,
+    litellm_params: Mapping[str, object] | None = None,
     router_timeout: float | str | None = None,
     router_stream_timeout: float | str | None = None,
 ) -> float:
