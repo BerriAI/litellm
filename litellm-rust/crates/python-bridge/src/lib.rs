@@ -1,4 +1,3 @@
-mod constants;
 mod credentials;
 mod diagnostics;
 mod errors;
@@ -6,98 +5,47 @@ mod marshal;
 mod routes;
 mod token_counter;
 
-use litellm_core::responses::websocket::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
-use pyo3::prelude::*;
-use pyo3::types::PyAny;
-use serde_json::Value;
-
-use crate::errors::responses_error_to_pyerr;
-use crate::marshal::{marshal_headers, optional_timeout};
-
-#[pyclass]
-struct ResponsesWebSocketConnection {
-    inner: RustResponsesWebSocketConnection,
-}
-
-#[pymethods]
-impl ResponsesWebSocketConnection {
-    #[classmethod]
-    #[pyo3(signature = (url, headers=None, timeout_seconds=None))]
-    fn connect<'py>(
-        _cls: &Bound<'py, pyo3::types::PyType>,
-        py: Python<'py>,
-        url: String,
-        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] headers: Option<Value>,
-        timeout_seconds: Option<f64>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let headers = marshal_headers(headers)?;
-        let timeout = optional_timeout(timeout_seconds);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
-                .await
-                .map_err(responses_error_to_pyerr)?;
-            Ok(ResponsesWebSocketConnection { inner })
-        })
-    }
-
-    fn send_text<'py>(&self, py: Python<'py>, text: String) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            inner
-                .send_text(text)
-                .await
-                .map_err(responses_error_to_pyerr)
-        })
-    }
-
-    fn recv_text<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            inner.recv_text().await.map_err(responses_error_to_pyerr)
-        })
-    }
-
-    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            inner.close().await.map_err(responses_error_to_pyerr)
-        })
-    }
-}
-
 #[pymodule(gil_used = true)]
 mod _native {
-    use pyo3::prelude::*;
+    #[cfg(feature = "panic-test")]
+    #[pymodule_export]
+    use crate::diagnostics::_panic_for_test;
+    #[pymodule_export]
+    use crate::diagnostics::gil_stats;
+    #[pymodule_export]
+    use crate::errors::{RustBridgeDeclined, RustUpstreamError};
+    #[pymodule_export]
+    use crate::routes::audio_transcription::{atranscription, transcription};
+    #[pymodule_export]
+    use crate::routes::chat_completions::{
+        achat_completions, chat_completions, chat_completions_decline,
+    };
+    #[pymodule_export]
+    use crate::routes::messages::{amessages, messages};
+    #[pymodule_export]
+    use crate::routes::ocr::{aocr, ocr};
+    #[pymodule_export]
+    use crate::routes::responses::ResponsesWebSocketConnection;
+    #[pymodule_export]
+    use crate::token_counter::TokenCounter;
+}
 
-    #[pymodule_init]
-    fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
-        super::errors::register(module)?;
-        super::routes::register(module)?;
-        module.add_class::<super::ResponsesWebSocketConnection>()?;
-        super::token_counter::register(module)?;
-        super::diagnostics::register(module)
-    }
+use pyo3::prelude::*;
+
+#[cfg(test)]
+pub(crate) fn native_module(py: Python<'_>) -> Bound<'_, PyModule> {
+    pyo3::wrap_pymodule!(_native)(py).into_bound(py)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::CString;
-    use std::time::Duration;
-
-    use futures_util::{SinkExt, StreamExt};
-    use pyo3::types::PyDict;
-    use tokio::net::TcpListener;
-    use tokio_tungstenite::{accept_async, tungstenite::Message};
-
     use super::*;
 
     #[test]
     fn module_registration_preserves_the_public_surface() {
         Python::initialize();
         Python::attach(|py| {
-            let module = pyo3::wrap_pymodule!(_native)(py).into_bound(py);
-
-            let expected = [
+            let mut expected = vec![
                 "RustBridgeDeclined",
                 "RustUpstreamError",
                 "ocr",
@@ -113,8 +61,9 @@ mod tests {
                 "TokenCounter",
                 "gil_stats",
             ];
+            expected.sort_unstable();
 
-            let public_names: Vec<String> = module
+            let mut public_names: Vec<String> = native_module(py)
                 .dict()
                 .keys()
                 .extract::<Vec<String>>()
@@ -122,71 +71,8 @@ mod tests {
                 .into_iter()
                 .filter(|name| !name.starts_with('_'))
                 .collect();
+            public_names.sort_unstable();
             assert_eq!(public_names, expected);
         });
-    }
-
-    #[test]
-    fn responses_websocket_connection_round_trips_through_python() {
-        Python::initialize();
-        let runtime = pyo3_async_runtimes::tokio::get_runtime();
-        let listener = runtime
-            .block_on(TcpListener::bind("127.0.0.1:0"))
-            .expect("listener should bind");
-        let address = listener
-            .local_addr()
-            .expect("listener should have an address");
-        let server = runtime.spawn(async move {
-            let (stream, _) = listener.accept().await.expect("server should accept");
-            let mut socket = accept_async(stream)
-                .await
-                .expect("handshake should succeed");
-
-            let message = socket
-                .next()
-                .await
-                .expect("client should send a frame")
-                .expect("client frame should be valid");
-            assert_eq!(message, Message::Text("from-python".into()));
-            socket
-                .send(Message::Text("from-server".into()))
-                .await
-                .expect("server should reply");
-            assert!(matches!(socket.next().await, Some(Ok(Message::Close(_)))));
-        });
-
-        Python::attach(|py| {
-            let module = pyo3::wrap_pymodule!(_native)(py).into_bound(py);
-            let locals = PyDict::new(py);
-            locals
-                .set_item("native", &module)
-                .expect("module should enter Python locals");
-            locals
-                .set_item("url", format!("ws://{address}"))
-                .expect("URL should enter Python locals");
-            let code = CString::new(
-                r#"
-import asyncio
-
-async def exercise():
-    connection = await native.ResponsesWebSocketConnection.connect(url)
-    assert type(connection) is native.ResponsesWebSocketConnection
-    await connection.send_text("from-python")
-    assert await connection.recv_text() == "from-server"
-    await connection.close()
-    assert await connection.recv_text() is None
-
-asyncio.run(asyncio.wait_for(exercise(), timeout=5))
-"#,
-            )
-            .expect("Python source should not contain null bytes");
-            py.run(&code, Some(&locals), Some(&locals))
-                .expect("Python WebSocket methods should round trip");
-        });
-
-        runtime
-            .block_on(async { tokio::time::timeout(Duration::from_secs(5), server).await })
-            .expect("server should finish")
-            .expect("server task should not panic");
     }
 }

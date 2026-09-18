@@ -39,7 +39,7 @@ fn run_ocr(
 }
 
 #[pyfunction]
-fn ocr(
+pub(crate) fn ocr(
     py: Python<'_>,
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
@@ -49,16 +49,11 @@ fn ocr(
 }
 
 #[pyfunction]
-fn aocr(
+pub(crate) fn aocr(
     py: Python<'_>,
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
 ) -> PyResult<Py<PyAny>> {
     run_ocr(py, request, args, kwargs, true)
-}
-
-pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(ocr, module)?)?;
-    module.add_function(wrap_pyfunction!(aocr, module)?)
 }

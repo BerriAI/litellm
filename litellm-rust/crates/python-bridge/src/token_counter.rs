@@ -11,7 +11,6 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use tokio::sync::Semaphore;
 
-use crate::constants::TOKEN_COUNT_FALLBACK_PARALLELISM;
 use crate::errors::RustBridgeDeclined;
 use litellm_host_python::run_async;
 
@@ -21,7 +20,7 @@ use litellm_host_python::run_async;
 /// async task, where a cancelled Python awaiter drops them before any blocking
 /// work is scheduled.
 #[pyclass(frozen)]
-struct TokenCounter {
+pub(crate) struct TokenCounter {
     inner: Arc<CoreTokenCounter>,
     encode_slots: Arc<Semaphore>,
 }
@@ -77,7 +76,7 @@ impl TokenCounter {
 }
 
 fn encode_parallelism() -> usize {
-    available_parallelism().map_or(TOKEN_COUNT_FALLBACK_PARALLELISM, NonZero::get)
+    available_parallelism().map_or(1, NonZero::get)
 }
 
 fn count_body(counter: &CoreTokenCounter, body: &[u8]) -> Result<InputTokenCount, Error> {
@@ -98,8 +97,4 @@ fn token_count_error_to_pyerr(error: Error) -> PyErr {
         | Error::JsonUtf8(_) => RustBridgeDeclined::new_err(message),
         Error::Encode(_) | Error::Task(_) => PyRuntimeError::new_err(message),
     }
-}
-
-pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_class::<TokenCounter>()
 }

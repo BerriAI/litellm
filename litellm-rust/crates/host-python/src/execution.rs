@@ -158,13 +158,14 @@ where
 #[cfg(test)]
 mod tests {
     use std::ffi::CString;
-    use std::future::poll_fn;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::future::{pending, poll_fn};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, mpsc};
     use std::task::Poll;
     use std::thread;
     use std::time::Instant;
 
+    use pyo3::exceptions::PyLookupError;
     use pyo3::panic::PanicException;
     use pyo3::types::{PyDict, PyModule};
     use rstest::{fixture, rstest};
@@ -206,6 +207,52 @@ mod tests {
 
     fn panicking_error_mapper(_error: Error) -> PyErr {
         panic!("error mapper panicked")
+    }
+
+    static ECHO_FUTURE_DROPPED: AtomicBool = AtomicBool::new(false);
+
+    struct EchoDropGuard;
+
+    impl Drop for EchoDropGuard {
+        fn drop(&mut self) {
+            ECHO_FUTURE_DROPPED.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn echo_error(error: Error) -> PyErr {
+        if error.0 == "panic in mapper" {
+            panic!("error mapper panicked")
+        }
+        PyLookupError::new_err(error.0)
+    }
+
+    #[pyfunction]
+    fn async_echo(py: Python<'_>, value: String) -> PyResult<Bound<'_, PyAny>> {
+        ECHO_FUTURE_DROPPED.store(false, Ordering::SeqCst);
+        let drop_guard = (value == "pending").then_some(EchoDropGuard);
+        run_async(
+            py,
+            async move {
+                let _drop_guard = drop_guard;
+                tokio::task::yield_now().await;
+                match value.as_str() {
+                    "error" => Err(Error("mapped error".into())),
+                    "map_panic" => Err(Error("panic in mapper".into())),
+                    "panic" => panic!("route future panicked"),
+                    "pending" => {
+                        pending::<()>().await;
+                        unreachable!()
+                    }
+                    _ => Ok(value),
+                }
+            },
+            echo_error,
+        )
+    }
+
+    #[pyfunction]
+    fn echo_future_dropped() -> bool {
+        ECHO_FUTURE_DROPPED.load(Ordering::SeqCst)
     }
 
     struct PanickingOutput;
@@ -578,6 +625,79 @@ asyncio.run(exercise())
             .expect("Python source should not contain null bytes");
             py.run(&code, Some(&locals), Some(&locals))
                 .expect("result delivery should leave Tokio workers responsive");
+        });
+    }
+
+    #[rstest]
+    fn async_runner_delivers_values_and_errors_and_drops_cancelled_futures(
+        #[from(initialized_python)] python: &InitializedPython,
+    ) {
+        python.attach(|py| {
+            let module = PyModule::new(py, "runtime").expect("module should be created");
+            for function in [
+                wrap_pyfunction!(async_echo, &module).expect("function should wrap"),
+                wrap_pyfunction!(echo_future_dropped, &module).expect("function should wrap"),
+            ] {
+                module
+                    .add_function(function)
+                    .expect("function should register");
+            }
+            let locals = PyDict::new(py);
+            locals
+                .set_item("runtime", &module)
+                .expect("module should enter Python locals");
+            let code = CString::new(
+                r#"
+import asyncio
+
+async def exercise():
+    assert await runtime.async_echo("value") == "value"
+
+    try:
+        await runtime.async_echo("error")
+    except LookupError as error:
+        assert str(error) == "mapped error"
+    else:
+        raise AssertionError("mapped error was not raised")
+
+    try:
+        await runtime.async_echo("panic")
+    except BaseException as error:
+        assert type(error).__name__ == "PanicException"
+        assert str(error) == "route future panicked"
+    else:
+        raise AssertionError("panic was not raised")
+
+    try:
+        await runtime.async_echo("map_panic")
+    except BaseException as error:
+        assert type(error).__name__ == "PanicException"
+        assert str(error) == "error mapper panicked"
+    else:
+        raise AssertionError("mapper panic was not raised")
+
+    task = asyncio.ensure_future(runtime.async_echo("pending"))
+    await asyncio.sleep(0)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("cancelled route completed")
+
+    for _ in range(100):
+        if runtime.echo_future_dropped():
+            break
+        await asyncio.sleep(0.001)
+    assert runtime.echo_future_dropped()
+
+asyncio.run(exercise())
+"#,
+            )
+            .expect("Python source should not contain null bytes");
+            py.run(&code, Some(&locals), Some(&locals))
+                .expect("async route contract should hold");
         });
     }
 }
