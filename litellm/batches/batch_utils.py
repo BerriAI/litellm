@@ -701,7 +701,7 @@ def _get_batch_job_usage_from_response_body(
     return usage
 
 
-def _bedrock_embedding_usage(response_body: Mapping[str, Any]) -> Usage | None:
+def _bedrock_embedding_usage(response_body: Mapping[str, object]) -> Usage | None:
     token_count: Final = response_body.get("inputTextTokenCount")
     if not isinstance(token_count, int):
         return None
