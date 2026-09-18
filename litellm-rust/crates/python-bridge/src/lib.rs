@@ -17,12 +17,6 @@ mod _native {
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
-    use crate::routes::chat_completions::{
-        achat_completions, chat_completions, chat_completions_decline,
-    };
-    #[pymodule_export]
-    use crate::routes::messages::{amessages, messages};
-    #[pymodule_export]
     use crate::routes::ocr::{aocr, ocr};
     #[pymodule_export]
     use crate::routes::responses::ResponsesWebSocketConnection;
@@ -52,11 +46,6 @@ mod tests {
                 "aocr",
                 "transcription",
                 "atranscription",
-                "messages",
-                "amessages",
-                "chat_completions_decline",
-                "chat_completions",
-                "achat_completions",
                 "ResponsesWebSocketConnection",
                 "TokenCounter",
                 "gil_stats",

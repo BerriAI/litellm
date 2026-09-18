@@ -38,51 +38,6 @@ def atranscription(
     optional_params: Mapping[str, object] | None = None,
     timeout_seconds: float | None = None,
 ) -> Future[dict[str, object]]: ...
-def messages(
-    model: str,
-    body: Mapping[str, object],
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    timeout_seconds: float | None = None,
-) -> dict[str, object]: ...
-def amessages(
-    model: str,
-    body: Mapping[str, object],
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    timeout_seconds: float | None = None,
-) -> Future[dict[str, object]]: ...
-def chat_completions_decline(
-    model: str,
-    messages: Sequence[object],
-    optional_params: Mapping[str, object] | None = None,
-    custom_llm_provider: str | None = None,
-) -> str | None: ...
-def chat_completions(
-    model: str,
-    messages: Sequence[object],
-    optional_params: Mapping[str, object] | None = None,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    timeout_seconds: float | None = None,
-) -> dict[str, object]: ...
-def achat_completions(
-    model: str,
-    messages: Sequence[object],
-    optional_params: Mapping[str, object] | None = None,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    timeout_seconds: float | None = None,
-) -> Future[dict[str, object]]: ...
-
 @final
 class ResponsesWebSocketConnection:
     def __new__(cls, _uninstantiable: Never, /) -> Never: ...
@@ -113,14 +68,9 @@ __all__ = [
     "RustBridgeDeclined",
     "RustUpstreamError",
     "TokenCounter",
-    "achat_completions",
-    "amessages",
     "aocr",
     "atranscription",
-    "chat_completions",
-    "chat_completions_decline",
     "gil_stats",
-    "messages",
     "ocr",
     "transcription",
 ]

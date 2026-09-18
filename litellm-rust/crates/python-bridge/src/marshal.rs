@@ -19,17 +19,6 @@ pub(crate) struct RouteOptions {
     pub(crate) timeout: Option<Duration>,
 }
 
-pub(crate) fn body_argument(value: &Bound<'_, PyAny>) -> PyResult<Map<String, Value>> {
-    required_object("body", from_py_argument(value)?)
-}
-
-pub(crate) fn messages_argument(value: &Bound<'_, PyAny>) -> PyResult<Vec<Value>> {
-    match from_py_argument(value)? {
-        Value::Array(values) => Ok(values),
-        _ => Err(PyValueError::new_err("messages must be a list")),
-    }
-}
-
 pub(crate) fn optional_params_argument(
     value: &Bound<'_, PyAny>,
 ) -> PyResult<Option<Map<String, Value>>> {
@@ -180,34 +169,18 @@ mod tests {
     fn argument_converters_keep_nested_values_and_accept_explicit_none() {
         Python::initialize();
         Python::attach(|py| {
-            let messages = py
+            let params = py
                 .eval(
-                    c"[{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}]",
+                    c"{'language': 'en', 'options': {'diarize': True}}",
                     None,
                     None,
                 )
                 .unwrap();
             assert_eq!(
-                Value::Array(messages_argument(&messages).unwrap()),
-                json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}])
-            );
-
-            let body = py
-                .eval(
-                    c"{'model': 'claude', 'metadata': {'user': '1'}}",
-                    None,
-                    None,
-                )
-                .unwrap();
-            assert_eq!(
-                Value::Object(body_argument(&body).unwrap()),
-                json!({"model": "claude", "metadata": {"user": "1"}})
-            );
-
-            let params = py.eval(c"{'temperature': 0.2}", None, None).unwrap();
-            assert_eq!(
-                optional_params_argument(&params).unwrap(),
-                Some(required_object("optional_params", json!({"temperature": 0.2})).unwrap())
+                optional_params_argument(&params)
+                    .unwrap()
+                    .map(Value::Object),
+                Some(json!({"language": "en", "options": {"diarize": true}}))
             );
             assert_eq!(
                 optional_params_argument(&py.None().into_bound(py)).unwrap(),

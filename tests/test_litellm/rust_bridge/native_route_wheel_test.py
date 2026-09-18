@@ -19,13 +19,6 @@ from typing import Final
 REQUEST_STARTED: Final = threading.Event()
 REQUEST_CANCELLED: Final = threading.Event()
 
-ANTHROPIC_RESPONSE: Final = (
-    b'{"id":"msg_native","type":"message","role":"assistant",'
-    b'"model":"claude-sonnet-4-5","content":[{"type":"text","text":"native-message"}],'
-    b'"stop_reason":"end_turn","stop_sequence":null,'
-    b'"usage":{"input_tokens":2,"output_tokens":3}}'
-)
-
 
 class NativeRouteHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -33,9 +26,8 @@ class NativeRouteHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         content_length: Final = int(self.headers.get("content-length", "0"))
         body: Final = json.loads(self.rfile.read(content_length))
-        route: Final = self.headers.get("x-test-route")
         outcome: Final = self.headers.get("x-test-outcome")
-        assert_native_request(route, outcome, self.path, self.headers, body)
+        assert_native_request(outcome, self.path, self.headers, body)
         if outcome == "hang":
             REQUEST_STARTED.set()
             self.connection.settimeout(5)
@@ -44,7 +36,7 @@ class NativeRouteHandler(BaseHTTPRequestHandler):
             return
 
         status: Final = 429 if outcome == "429" else 200
-        response_body: Final = native_response(status, route)
+        response_body: Final = native_response(status)
 
         self.send_response(status)
         self.send_header("content-type", "application/json")
@@ -66,43 +58,22 @@ def connection_was_cancelled(connection: Socket) -> bool:
         return True
 
 
-def assert_native_request(
-    route: str | None,
-    outcome: str | None,
-    path: str,
-    headers: HTTPMessage,
-    body: object,
-) -> None:
-    if route not in {"transcription", "messages", "chat_completions"}:
-        raise AssertionError(f"unexpected route marker: {route!r}")
+def assert_native_request(outcome: str | None, path: str, headers: HTTPMessage, body: object) -> None:
     if outcome not in {"success", "429", "hang"}:
         raise AssertionError(f"unexpected outcome marker: {outcome!r}")
     if not isinstance(body, dict):
-        raise TypeError(f"{route} sent {type(body).__name__}, expected a JSON object")
-    if route == "transcription":
-        assert path == "/model/mistral.voxtral-mini-3b-2507/converse"
-        assert headers.get("authorization", "").startswith("AWS4-HMAC-SHA256 ")
-        assert headers.get("x-amz-date")
-        assert body["messages"][0]["content"][0]["audio"]["source"]["bytes"] == "AQI="
-        assert "The audio language is en" in body["messages"][0]["content"][1]["text"]
-        return
-    assert path == "/v1/messages"
-    assert headers.get("x-api-key") == "sk-native"
-    assert body["model"] == "claude-sonnet-4-5"
-    if route == "messages":
-        assert body["max_tokens"] == 16
-        assert body["messages"][0]["content"] == "hello-from-messages"
-        return
-    assert body["max_tokens"] == 17
-    assert body["messages"][0]["content"] == [{"type": "text", "text": "hello-from-chat"}]
+        raise TypeError(f"transcription sent {type(body).__name__}, expected a JSON object")
+    assert path == "/model/mistral.voxtral-mini-3b-2507/converse"
+    assert headers.get("authorization", "").startswith("AWS4-HMAC-SHA256 ")
+    assert headers.get("x-amz-date")
+    assert body["messages"][0]["content"][0]["audio"]["source"]["bytes"] == "AQI="
+    assert "The audio language is en" in body["messages"][0]["content"][1]["text"]
 
 
-def native_response(status: int, route: str | None) -> bytes:
+def native_response(status: int) -> bytes:
     if status == 429:
         return b'{"error":"native-rate-limit"}'
-    if route == "transcription":
-        return b'{"output":{"message":{"content":[{"text":"native-transcription"}]}}}'
-    return ANTHROPIC_RESPONSE
+    return b'{"output":{"message":{"content":[{"text":"native-transcription"}]}}}'
 
 
 def load_native(native_path: Path) -> object:
@@ -114,103 +85,62 @@ def load_native(native_path: Path) -> object:
     return native_module
 
 
-def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
-    common: Final = {
+def route_kwargs(api_base: str, outcome: str) -> dict[str, object]:
+    return {
+        "model": "mistral.voxtral-mini-3b-2507",
+        "audio": {"data": "AQI=", "format": "wav", "filename": "audio.wav"},
         "api_base": api_base,
-        "extra_headers": {"x-test-outcome": outcome, "x-test-route": route},
+        "custom_llm_provider": "bedrock",
+        "extra_headers": {"x-test-outcome": outcome},
+        "optional_params": {
+            "aws_access_key_id": "native-access-key",
+            "aws_secret_access_key": "native-secret-key",
+            "aws_region_name": "us-east-1",
+            "language": "en",
+        },
         "timeout_seconds": 3.0,
     }
-    if route == "transcription":
-        return common | {
-            "model": "mistral.voxtral-mini-3b-2507",
-            "audio": {"data": "AQI=", "format": "wav", "filename": "audio.wav"},
-            "custom_llm_provider": "bedrock",
-            "optional_params": {
-                "aws_access_key_id": "native-access-key",
-                "aws_secret_access_key": "native-secret-key",
-                "aws_region_name": "us-east-1",
-                "language": "en",
-            },
-        }
-    if route == "messages":
-        return common | {
-            "model": "claude-sonnet-4-5",
-            "body": {
-                "model": "claude-sonnet-4-5",
-                "max_tokens": 16,
-                "messages": [{"role": "user", "content": "hello-from-messages"}],
-            },
-            "api_key": "sk-native",
-            "custom_llm_provider": "anthropic",
-        }
-    if route == "chat_completions":
-        return common | {
-            "model": "anthropic/claude-sonnet-4-5",
-            "messages": [{"role": "user", "content": "hello-from-chat"}],
-            "optional_params": {"max_tokens": 17},
-            "api_key": "sk-native",
-        }
-    raise AssertionError(f"unknown route: {route}")
 
 
-def assert_success(route: str, response: object) -> None:
+def assert_success(response: object) -> None:
     if not isinstance(response, dict):
-        raise TypeError(f"{route} returned {type(response).__name__}, expected dict")
-    actual: Final = success_value(route, response)
-    expected: Final = "native-transcription" if route == "transcription" else "native-message"
-    if actual != expected:
-        raise AssertionError(f"{route} returned {actual!r}, expected {expected!r}")
+        raise TypeError(f"transcription returned {type(response).__name__}, expected dict")
+    if response["text"] != "native-transcription":
+        raise AssertionError(f"transcription returned {response['text']!r}")
 
 
-def success_value(route: str, response: dict[object, object]) -> object:
-    if route == "transcription":
-        return response["text"]
-    if route == "messages":
-        return response["content"][0]["text"]
-    return response["choices"][0]["message"]["content"]
-
-
-def assert_rate_limit(native: object, route: str, error: BaseException) -> None:
-    if route == "chat_completions":
-        upstream_error: Final = native.RustUpstreamError
-        if not isinstance(error, upstream_error) or error.args[0] != 429:
-            raise AssertionError(f"{route} returned the wrong 429 error: {error!r}")
-        return
+def assert_rate_limit(error: BaseException) -> None:
     if not isinstance(error, RuntimeError) or "429" not in str(error):
-        raise AssertionError(f"{route} returned the wrong 429 error: {error!r}")
+        raise AssertionError(f"transcription returned the wrong 429 error: {error!r}")
 
 
 def exercise_sync(native: object, api_base: str) -> None:
-    for route in ("transcription", "messages", "chat_completions"):
-        function: Final = getattr(native, route)
-        assert_success(route, function(**route_kwargs(route, api_base, "success")))
-        try:
-            function(**route_kwargs(route, api_base, "429"))
-        except (RuntimeError, native.RustUpstreamError) as error:
-            assert_rate_limit(native, route, error)
-        else:
-            raise AssertionError(f"{route} accepted a 429 response")
+    assert_success(native.transcription(**route_kwargs(api_base, "success")))
+    try:
+        native.transcription(**route_kwargs(api_base, "429"))
+    except RuntimeError as error:
+        assert_rate_limit(error)
+    else:
+        raise AssertionError("transcription accepted a 429 response")
 
 
 async def exercise_async(native: object, api_base: str) -> None:
-    for route in ("transcription", "messages", "chat_completions"):
-        function: Final = getattr(native, f"a{route}")
-        assert_success(route, await function(**route_kwargs(route, api_base, "success")))
-        try:
-            await function(**route_kwargs(route, api_base, "429"))
-        except (RuntimeError, native.RustUpstreamError) as error:
-            assert_rate_limit(native, route, error)
-        else:
-            raise AssertionError(f"a{route} accepted a 429 response")
+    assert_success(await native.atranscription(**route_kwargs(api_base, "success")))
+    try:
+        await native.atranscription(**route_kwargs(api_base, "429"))
+    except RuntimeError as error:
+        assert_rate_limit(error)
+    else:
+        raise AssertionError("atranscription accepted a 429 response")
 
 
 async def exercise_async_concurrency(native: object, api_base: str) -> None:
     responses: Final = await asyncio.wait_for(
-        asyncio.gather(*(native.amessages(**route_kwargs("messages", api_base, "success")) for _ in range(32))),
+        asyncio.gather(*(native.atranscription(**route_kwargs(api_base, "success")) for _ in range(32))),
         timeout=15,
     )
     for response in responses:
-        assert_success("messages", response)
+        assert_success(response)
 
 
 def exercise_routes(native_path: Path, api_base: str) -> object:
@@ -223,9 +153,7 @@ def exercise_routes(native_path: Path, api_base: str) -> object:
 
 def exercise_signal(native: object, api_base: str) -> int:
     try:
-        native.messages(
-            **route_kwargs("messages", api_base, "hang"),
-        )
+        native.transcription(**route_kwargs(api_base, "hang"))
     except KeyboardInterrupt:
         sys.stdout.write("KeyboardInterrupt\n")
         sys.stdout.flush()
