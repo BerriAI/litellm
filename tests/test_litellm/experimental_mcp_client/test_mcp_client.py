@@ -1096,17 +1096,50 @@ def test_mcp_extra_matches_proxy_extra_and_supports_streamable_http():
 
     pyproject_path = Path(__file__).parents[3] / "pyproject.toml"
     with pyproject_path.open("rb") as f:
-        extras = tomllib.load(f)["project"]["optional-dependencies"]
+        project = tomllib.load(f)
+    extras = project["project"]["optional-dependencies"]
 
     mcp_extra = extras["mcp"]
     assert len(mcp_extra) == 1
 
     proxy_mcp_requirements = [req for req in extras["proxy"] if Requirement(req).name == "mcp"]
     assert mcp_extra == proxy_mcp_requirements
+    assert mcp_extra == [req for req in project["dependency-groups"]["e2e-dev"] if Requirement(req).name == "mcp"]
 
     specifier = Requirement(mcp_extra[0]).specifier
     assert not specifier.contains("1.23.0")
     assert specifier.contains("1.28.1")
+    assert not specifier.contains("2.2.0")
+    with (pyproject_path.parent / "uv.lock").open("rb") as f:
+        locked = tomllib.load(f)
+    mcp_versions = [package["version"] for package in locked["package"] if package["name"] == "mcp"]
+    assert len(mcp_versions) == 1
+    assert specifier.contains(mcp_versions[0])
+
+
+@pytest.mark.parametrize("module", ["mcp", "mcp_types", "httpx2", "httpcore2"])
+def test_base_sdk_guard_rejects_mcp_dependencies(tmp_path: Path, module: str) -> None:
+    import subprocess
+    import sys
+
+    (tmp_path / f"{module}.py").write_text("")
+    checker = Path(__file__).parents[2] / "base_sdk_tests" / "check_base_sdk_install.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            "-c",
+            "import runpy, sys; sys.path.insert(0, sys.argv[2]); "
+            "runpy.run_path(sys.argv[1])['check_environment_is_base_only']()",
+            str(checker),
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0, f"base-only guard accepted installed {module}"
+    assert f"{module} installed" in result.stderr
 
 
 @pytest.mark.parametrize(

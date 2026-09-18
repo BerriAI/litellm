@@ -27,6 +27,17 @@ from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
 
 
+def test_sdk1_proxy_keeps_mcp_available():
+    from importlib.metadata import version
+
+    from packaging.version import Version
+
+    from litellm.proxy._experimental.mcp_server.server import MCP_AVAILABLE
+
+    assert Version("1.28.1") <= Version(version("mcp")) < Version("2")
+    assert MCP_AVAILABLE is True
+
+
 def _rendered_log_message(call):
     message = str(call.args[0])
     values = call.args[1:]
