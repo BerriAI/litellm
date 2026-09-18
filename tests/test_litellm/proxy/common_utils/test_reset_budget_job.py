@@ -3687,6 +3687,15 @@ def test_reset_spend_forgives_overage_when_rollover_off():
     assert _reset_spend(30.0, band) == -70.0
 
 
+def test_reset_band_zero_max_budget_keeps_overage_without_credit(rollover_enabled):
+    """budget_rollover on with max_budget 0 still carries the whole overage, as it
+    did before caps existed, and a cap on a zero allowance never opens a credit floor."""
+    band = _reset_band(0.0, 600.0)
+    assert band == _ResetBand(base=0.0, lo=0.0, keep_overage=True)
+    assert _reset_spend(40.0, band) == 40.0
+    assert _reset_spend(0.0, band) == 0.0
+
+
 def test_direct_reset_carries_unused_allowance_as_negative_spend(
     reset_budget_job, mock_prisma_client, monkeypatch
 ):
