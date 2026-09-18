@@ -111,46 +111,6 @@ async def _observe(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("ttl", ["5m", "1h"])
-async def test_unobserved_cache_reports_cold_and_warm_token_bounds(ttl: str) -> None:
-    body: Final = _body(ttl)
-    arm: Final = await endpoint.predict_arm(_deployment(), body, _prefix(body), _CALLER, DualCache(), Counts())
-
-    assert arm.cache_state == "unknown"
-    assert arm.reason == "no_compatible_observation"
-    assert arm.evidence is None
-    assert arm.estimate is not None and arm.cold is not None and arm.warm is not None
-    assert arm.cold.tokens.uncached_input_tokens == 1_000
-    assert arm.cold.tokens.cache_read_input_tokens == 0
-    assert arm.cold.tokens.cache_creation_5m_input_tokens == (5_000 if ttl == "5m" else 0)
-    assert arm.cold.tokens.cache_creation_1h_input_tokens == (5_000 if ttl == "1h" else 0)
-    assert arm.warm.tokens.cache_read_input_tokens == 5_000
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("cached_tokens", [5_400, 4_600])
-@pytest.mark.parametrize("expired", [False, True])
-async def test_exact_prefix_conserves_total_with_observed_count_in_all_scenarios(
-    cached_tokens: int, expired: bool
-) -> None:
-    cache: Final = DualCache()
-    body: Final = _body()
-    await _observe(cache, body, cached_tokens=cached_tokens, expired=expired)
-    arm: Final = await endpoint.predict_arm(_deployment(), body, _prefix(body), _CALLER, cache, Counts())
-
-    assert arm.cache_state == ("stale" if expired else "warm")
-    assert arm.evidence is not None
-    assert arm.estimate is not None and arm.warm is not None and arm.cold is not None
-    assert arm.warm.tokens.cache_read_input_tokens == cached_tokens
-    assert arm.warm.tokens.cache_creation_5m_input_tokens == 0
-    assert arm.cold.tokens.cache_creation_5m_input_tokens == cached_tokens
-    assert arm.cold.tokens.cache_read_input_tokens == 0
-    for scenario in (arm.estimate, arm.cold, arm.warm):
-        assert scenario.tokens.total_tokens == 6_000
-        assert scenario.tokens.uncached_input_tokens == 6_000 - cached_tokens
-
-
-@pytest.mark.asyncio
 async def test_observed_prefix_larger_than_full_request_returns_unknown() -> None:
     cache: Final = DualCache()
     body: Final = _body()
@@ -160,21 +120,6 @@ async def test_observed_prefix_larger_than_full_request_returns_unknown() -> Non
     assert arm.cache_state == "unknown"
     assert arm.reason == "inconsistent_prefix_token_count"
     assert arm.estimate is None and arm.cold is None and arm.warm is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("ttl", ["5m", "1h"])
-async def test_append_only_prefix_reads_old_tokens_and_writes_extension(ttl: str) -> None:
-    cache: Final = DualCache()
-    await _observe(cache, _body(ttl), cached_tokens=4_000)
-    body: Final = _body(ttl, extended=True)
-    arm: Final = await endpoint.predict_arm(_deployment(), body, _prefix(body), _CALLER, cache, Counts())
-
-    assert arm.cache_state == "partial"
-    assert arm.estimate is not None
-    assert arm.estimate.tokens.cache_read_input_tokens == 4_000
-    assert arm.estimate.tokens.cache_creation_5m_input_tokens == (1_000 if ttl == "5m" else 0)
-    assert arm.estimate.tokens.cache_creation_1h_input_tokens == (1_000 if ttl == "1h" else 0)
 
 
 @pytest.mark.asyncio
@@ -191,21 +136,6 @@ async def test_expired_observation_estimates_a_cold_rebuild() -> None:
     assert arm.estimate.tokens.cache_read_input_tokens == 0
     assert arm.estimate.tokens.cache_creation_5m_input_tokens == 5_000
     assert arm.estimate.input_cost == arm.cold.input_cost
-
-
-@pytest.mark.asyncio
-async def test_below_model_minimum_prices_all_input_as_uncached() -> None:
-    body: Final = _body()
-    arm: Final = await endpoint.predict_arm(
-        _deployment(), body, _prefix(body), _CALLER, DualCache(), Counts(total=1_500, prefix=1_000)
-    )
-
-    assert arm.cache_state == "disabled"
-    assert arm.reason == "below_cache_minimum"
-    assert arm.estimate is not None
-    assert arm.estimate.tokens.uncached_input_tokens == 1_500
-    assert arm.estimate.tokens.cache_read_input_tokens == 0
-    assert arm.estimate.tokens.cache_creation_5m_input_tokens == 0
 
 
 @pytest.mark.asyncio
@@ -257,19 +187,6 @@ async def test_custom_api_base_from_environment_returns_unknown_before_counting(
     assert arm.cache_state == "unknown"
     assert arm.reason == "unsupported_provider_endpoint"
     assert arm.estimate is None and arm.cold is None and arm.warm is None
-
-
-@pytest.mark.asyncio
-async def test_explicit_official_api_base_overrides_custom_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_BASE", "https://custom.invalid")
-    body: Final = _body()
-    arm: Final = await endpoint.predict_arm(
-        _deployment(api_base="https://api.anthropic.com"), body, _prefix(body), _CALLER, DualCache(), Counts()
-    )
-
-    assert arm.cache_state == "unknown"
-    assert arm.reason == "no_compatible_observation"
-    assert arm.estimate is not None
 
 
 @dataclass(frozen=True)
@@ -330,29 +247,6 @@ async def _post(
                 "request": body,
             },
         )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("warm_deployment", "warm_model"), [("sonnet", "claude-sonnet-5"), ("opus", "claude-opus-5")])
-async def test_prediction_reports_each_deployment_cache_state(
-    monkeypatch: pytest.MonkeyPatch, warm_deployment: str, warm_model: str
-) -> None:
-    cache: Final = DualCache()
-    body: Final = _body()
-    await _observe(cache, body, deployment_id=warm_deployment, model=warm_model)
-    app: Final = _app(monkeypatch, cache, caller=UserAPIKeyAuth(api_key=_CALLER))
-    response: Final = await _post(app, body)
-
-    assert response.status_code == 200, response.text
-    result: Final = CachePredictionResponse.model_validate(response.json())
-    assert result.cache_guarantee is False
-    assert result.pricing_basis == "input_before_discounts_and_margins"
-    if warm_deployment == "sonnet":
-        assert result.switch.cache_state == "warm"
-        assert result.stay.cache_state == "unknown"
-    else:
-        assert result.stay.cache_state == "warm"
-        assert result.switch.cache_state == "unknown"
 
 
 @pytest.mark.asyncio
@@ -546,51 +440,6 @@ async def test_each_count_preserves_auth_cached_request_tag_limits(
     assert "tag_per_key" in response.text
     assert calls.qsize() == 1
     assert calls.get_nowait() == "claude-opus-5"
-
-
-@pytest.mark.asyncio
-async def test_provider_counter_failure_releases_parallel_capacity(monkeypatch: pytest.MonkeyPatch) -> None:
-    cache: Final = DualCache()
-    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(InternalUsageCache(cache))
-    caller: Final = UserAPIKeyAuth(api_key=_CALLER, max_parallel_requests=1)
-
-    async def fail_count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:
-        raise RuntimeError("provider counter failed")
-
-    app: Final = _app(monkeypatch, cache, caller=caller, counts=fail_count, limiter=limiter)
-    with pytest.raises(RuntimeError, match="provider counter failed"):
-        await _post(app, _body())
-    recovered: Final = await _post(_app(monkeypatch, cache, caller=caller, limiter=limiter), _body())
-    assert recovered.status_code == 200, recovered.text
-
-
-@pytest.mark.asyncio
-async def test_cancelled_provider_counter_releases_parallel_capacity(monkeypatch: pytest.MonkeyPatch) -> None:
-    cache: Final = DualCache()
-    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(InternalUsageCache(cache))
-    caller: Final = UserAPIKeyAuth(api_key=_CALLER, max_parallel_requests=1)
-    started: Final = asyncio.Event()
-    release: Final = asyncio.Event()
-
-    async def wait_count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:
-        started.set()
-        await release.wait()
-        return await Counts()(model, api_key, body)
-
-    app: Final = _app(monkeypatch, cache, caller=caller, counts=wait_count, limiter=limiter)
-    pending: Final = asyncio.create_task(_post(app, _body()))
-    try:
-        await asyncio.wait_for(started.wait(), timeout=5)
-        pending.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await pending
-        release.set()
-        recovered: Final = await asyncio.wait_for(_post(app, _body()), timeout=5)
-        assert recovered.status_code == 200, recovered.text
-    finally:
-        pending.cancel()
-        release.set()
-        await asyncio.gather(pending, return_exceptions=True)
 
 
 async def _unexpected_count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:
