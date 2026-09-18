@@ -17,7 +17,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cache
-from typing import Final, Literal, NamedTuple, NoReturn, Protocol, TypeAlias
+from typing import Final, Literal, NamedTuple, Protocol, TypeAlias
 
 from fastapi import Request, status
 from pydantic import TypeAdapter, ValidationError
@@ -256,7 +256,7 @@ class LoginThrottle:
         general_settings: Mapping[str, object] | None,
         redis_cache: RedisCache | None,
     ) -> LoginThrottle:
-        settings: Final = general_settings if general_settings is not None else EMPTY_MAPPING
+        settings: Final[Mapping[str, object]] = general_settings if general_settings is not None else EMPTY_MAPPING
         proxies: Final = declared_proxy_ranges(settings)
         resolved, _ = resolve_client_ip(
             request, TrustedProxyConfig(use_forwarded_for=bool(proxies), trusted_proxy_cidrs=proxies or ())
@@ -298,7 +298,7 @@ class LoginThrottle:
             username,
             self.client_ip,
         )
-        self.refuse(block.retry_after)
+        raise self.refused(block.retry_after)
 
     async def _active_block(self, keys: _Keys) -> Block | None:
         local: Final = self._local_block_ttls(keys)
@@ -375,8 +375,8 @@ class LoginThrottle:
         )
 
     @staticmethod
-    def refuse(retry_after: int) -> NoReturn:
-        raise ProxyException(
+    def refused(retry_after: int) -> ProxyException:
+        return ProxyException(
             message="Too many failed sign-in attempts. Try again later.",
             type=ProxyErrorTypes.auth_error,
             param="username",

@@ -1436,8 +1436,8 @@ async def test_a_failed_redis_delete_still_clears_this_workers_counter(monkeypat
 @pytest.mark.asyncio
 async def test_counters_do_not_share_the_key_authentication_cache(monkeypatch):
     """Regression: throttle entries must not evict cached credentials from user_api_key_cache."""
-    from litellm.proxy import proxy_server as ps
     from litellm.constants import LOGIN_THROTTLE_CACHE_KEY_PREFIX
+    from litellm.proxy import proxy_server as ps
     from litellm.proxy.auth.login_throttle import LoginThrottle
 
     monkeypatch.setenv("UI_USERNAME", "admin")
