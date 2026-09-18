@@ -142,7 +142,6 @@ def test_health_intersects_route_restricted_key_grants_in_both_management_modes(
         ):
             first = register_mcp(scenario, peer, "health" + uuid.uuid4().hex)
             second = register_mcp(scenario, peer, "health" + uuid.uuid4().hex)
-            owned = {first, second}
             control = scenario.key(object_permission={"mcp_servers": [first]})
             names = tool_names(candidate, control, first)
             healthy = call_tool(candidate, control, first, names["add"], {"a": 3, "b": 5})
@@ -154,7 +153,7 @@ def test_health_intersects_route_restricted_key_grants_in_both_management_modes(
                 )
                 listed = candidate.request("GET", "/v1/mcp/server", key=key)
                 assert listed.status_code == 200, listed.text
-                assert {row["server_id"] for row in listed.json()}.intersection(owned) == set(grants)
+                assert {row["server_id"] for row in listed.json()} == set(grants), listed.text
                 for requested in (None, [second], [first, second]):
                     response = candidate.client.get(
                         "/v1/mcp/server/health",
@@ -163,8 +162,8 @@ def test_health_intersects_route_restricted_key_grants_in_both_management_modes(
                     )
                     assert response.status_code == 200, response.text
                     expected = set(grants) if requested is None else set(grants).intersection(requested)
-                    assert {row["server_id"] for row in response.json()}.intersection(owned) == expected, response.text
-                    assert all(row["status"] == "healthy" for row in response.json() if row["server_id"] in owned)
+                    assert {row["server_id"] for row in response.json()} == expected, response.text
+                    assert all(row["status"] == "healthy" for row in response.json())
 
 
 @pytest.mark.covers("other.mcp.credentials.warm_removal_fails_closed_without_upstream_traffic")
