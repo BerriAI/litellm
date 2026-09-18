@@ -8895,7 +8895,10 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.OPENROUTER == provider:
             return litellm.OpenRouterResponsesAPIConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
-            return litellm.HostedVLLMResponsesAPIConfig()
+            # vLLM deployments vary in their Responses API fidelity. Default to the
+            # chat-completions bridge; deployment model_info can opt into native
+            # /v1/responses via supported_endpoints.
+            return None
         elif litellm.LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIResponsesAPIConfig()
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:

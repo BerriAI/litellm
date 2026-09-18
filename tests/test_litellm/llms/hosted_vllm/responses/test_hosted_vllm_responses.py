@@ -7,91 +7,21 @@ when extra_body=None was passed through the responses→completion pipeline for
 hosted_vllm (and any OpenAI-compatible provider using add_provider_specific_params_to_optional_params).
 """
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-
-import litellm
 from litellm.llms.hosted_vllm.responses.transformation import (
     HostedVLLMResponsesAPIConfig,
 )
+from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+from litellm.responses.litellm_completion_transformation.transformation import (
+    LiteLLMCompletionResponsesConfig,
+)
+from litellm.responses.main import _resolve_responses_api_provider_config
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
-
-
-def _make_mock_responses_api_response(content: str = "Hello! I'm doing well.") -> dict:
-    return {
-        "id": "resp-test123",
-        "object": "response",
-        "created_at": 1234567890,
-        "model": "Qwen/Qwen3-8B",
-        "output": [
-            {
-                "type": "message",
-                "id": "msg-test123",
-                "status": "completed",
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "text": content,
-                        "annotations": [],
-                    }
-                ],
-            }
-        ],
-        "status": "completed",
-        "usage": {
-            "input_tokens": 10,
-            "output_tokens": 20,
-            "total_tokens": 30,
-        },
-    }
-
-
-def _make_mock_http_client(response_body: dict) -> MagicMock:
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.headers = {"content-type": "application/json"}
-    mock_response.json.return_value = response_body
-    mock_response.text = json.dumps(response_body)
-    mock_client.post.return_value = mock_response
-    return mock_client
-
-
-def test_hosted_vllm_responses_create_with_string_input():
-    """
-    Test that hosted_vllm routes directly to the native /v1/responses endpoint
-    when the Responses API config is registered, and correctly parses the response.
-    """
-    mock_client = _make_mock_http_client(
-        _make_mock_responses_api_response("I'm doing well, thanks!")
-    )
-
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
-        return_value=mock_client,
-    ):
-        response = litellm.responses(
-            model="hosted_vllm/Qwen/Qwen3-8B",
-            input="Hello, how are you?",
-            api_base="https://test-vllm.example.com/v1",
-            api_key="test-key",
-        )
-
-    from litellm.types.llms.openai import ResponsesAPIResponse
-
-    assert response is not None
-    assert isinstance(response, ResponsesAPIResponse)
-    assert len(response.output) > 0
-    output_message = response.output[0]
-    assert output_message.role == "assistant"  # type: ignore[union-attr]
-    assert len(output_message.content) > 0  # type: ignore[union-attr]
-    assert "well" in output_message.content[0].text  # type: ignore[union-attr]
 
 
 def test_hosted_vllm_responses_create_with_explicit_none_extra_body():
@@ -115,16 +45,52 @@ def test_hosted_vllm_responses_create_with_explicit_none_extra_body():
     )
 
 
-def test_hosted_vllm_provider_config_registration():
-    """Test that ProviderConfigManager returns HostedVLLMResponsesAPIConfig for hosted_vllm."""
+def test_hosted_vllm_provider_defaults_to_chat_completions_bridge():
+    """Hosted vLLM backends vary in Responses API fidelity, so default to the bridge.
+
+    A deployment may explicitly opt into native /v1/responses via model_info.
+    """
     config = ProviderConfigManager.get_provider_responses_api_config(
         model="hosted_vllm/Qwen/Qwen3-8B",
         provider=LlmProviders.HOSTED_VLLM,
     )
 
-    assert config is not None
-    assert isinstance(config, HostedVLLMResponsesAPIConfig)
-    assert config.custom_llm_provider == LlmProviders.HOSTED_VLLM
+    assert config is None
+
+
+def test_hosted_vllm_provider_supports_deployment_opt_in():
+    config = _resolve_responses_api_provider_config(
+        "Qwen/Qwen3-8B",
+        "hosted_vllm",
+        {"supported_endpoints": ["/v1/responses"]},
+    )
+
+    assert isinstance(config, OpenAILikeResponsesConfig)
+
+
+@pytest.mark.parametrize("tool_type", ["tool_search", "local_shell"])
+def test_hosted_vllm_bridge_drops_unsupported_server_tools(tool_type):
+    """Codex sends these server-side tools to every Responses backend.
+
+    Hosted vLLM's chat completions schema only accepts function tools, so
+    passing them through turns a valid agent turn into a 400 request.
+    """
+    tools, web_search_options = (
+        LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            [
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+                {"type": tool_type},
+            ]
+        )
+    )
+
+    assert [tool["function"]["name"] for tool in tools] == ["get_weather"]
+    assert web_search_options is None
 
 
 def test_hosted_vllm_responses_api_url():
