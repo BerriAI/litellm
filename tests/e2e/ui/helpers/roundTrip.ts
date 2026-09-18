@@ -12,17 +12,41 @@ export async function captureRequestBody(
   match: { method: string; urlIncludes: string },
   action: () => Promise<void>,
 ): Promise<Record<string, any>> {
-  const pending = page.waitForRequest((req) => req.method() === match.method && req.url().includes(match.urlIncludes));
+  const pending = page.waitForRequest(
+    (req) =>
+      req.method() === match.method && req.url().includes(match.urlIncludes),
+  );
   await action();
   const request = await pending;
   return JSON.parse(request.postData() ?? "{}") as Record<string, any>;
 }
 
 /** Reads an endpoint as the master key, so a failure is bad data and not an expired UI token. */
-export async function readBack<T = any>(page: Page, endpoint: string): Promise<T> {
+export async function readBack<T = any>(
+  page: Page,
+  endpoint: string,
+): Promise<T> {
   const res = await page.request.get(endpoint, {
     headers: { Authorization: `Bearer ${masterKey()}` },
   });
   expect(res.ok(), `GET ${endpoint}`).toBe(true);
   return (await res.json()) as T;
+}
+
+export async function runWithCleanup(
+  action: () => Promise<void>,
+  cleanup: () => Promise<boolean>,
+): Promise<void> {
+  const outcome = await action().then(
+    () => ({ status: "success" as const }),
+    (error: unknown) => ({ status: "failure" as const, error }),
+  );
+  try {
+    if (outcome.status === "failure") throw outcome.error;
+  } finally {
+    const cleanupSucceeded = await cleanup().catch(() => false);
+    if (outcome.status === "success" && !cleanupSucceeded) {
+      throw new Error("Failed to clean up UI E2E resource");
+    }
+  }
 }
