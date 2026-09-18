@@ -26,9 +26,9 @@ def _coerce_event_hook(
     if isinstance(mode, Mode):
         return mode
     if isinstance(mode, list):
-        return [
+        return [  # mutable-ok: CustomGuardrail event_hook contract wants a list
             GuardrailEventHooks(item) for item in mode
-        ]  # mutable-ok: CustomGuardrail event_hook contract wants a list
+        ]
     return GuardrailEventHooks(mode)
 
 
