@@ -24,6 +24,7 @@ from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LitellmUserRoles,
     MCPTransport,
+    MCPUserCredentialResponse,
     NewMCPServerRequest,
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
@@ -5220,7 +5221,11 @@ async def test_user_naming_themselves_still_deletes_own_byok_credential():
         delete_mcp_user_credential,
     )
 
-    delete_mock = AsyncMock(return_value=None)
+    deleted_rows: list[tuple[str, str]] = []  # mutable-ok: test-local recorder for the fake delete boundary
+
+    async def _fake_delete_user_credential(_prisma_client: object, user_id: str, server_id: str) -> None:
+        deleted_rows.append((user_id, server_id))
+
     with (
         patch(  # test-quality-ok: endpoint test stubs the Prisma client lookup
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
@@ -5228,19 +5233,20 @@ async def test_user_naming_themselves_still_deletes_own_byok_credential():
         ),
         patch(  # test-quality-ok: endpoint test stubs the credential row delete
             "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
-            new=delete_mock,
+            new=_fake_delete_user_credential,
         ),
         patch.object(  # test-quality-ok: the cache invalidator is module scoped; the suite's only seam
             mcp_server, "_invalidate_byok_cred_cache", new=AsyncMock()
         ),
     ):
-        await delete_mcp_user_credential(
+        result = await delete_mcp_user_credential(
             server_id="srv-byok-self",
             user_api_key_dict=_make_user_auth("user-self"),
             user_id="user-self",
         )
 
-    assert delete_mock.await_args.args[1:] == ("user-self", "srv-byok-self")
+    assert deleted_rows == [("user-self", "srv-byok-self")]
+    assert result == MCPUserCredentialResponse(server_id="srv-byok-self", has_credential=False)
 
 
 @pytest.mark.asyncio
