@@ -6,8 +6,10 @@ pub(crate) mod responses;
 
 #[cfg(test)]
 mod tests {
-    use pyo3::prelude::*;
-    use pyo3::types::{PyDict, PyList};
+    use pyo3::{
+        prelude::*,
+        types::{PyDict, PyList},
+    };
 
     #[test]
     fn sync_and_async_route_signatures_match_the_python_contract() {
