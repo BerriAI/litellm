@@ -1,4 +1,7 @@
 import RoutingOptions from "./RoutingOptions";
+import type { JevClassifierConfig } from "./jev_classifier_config";
+import { type ClassifierType } from "./classifier_types";
+export { type ClassifierType, usesLlmClassifier, usesClassifierContext } from "./classifier_types";
 import PlanModeOverrideControls from "./PlanModeOverrideControls";
 import ForecastClassifierConfig, { ForecastSolverModels } from "./ForecastClassifierConfig";
 import { isForecastClassifier, type CapabilitySettings, type FuseSettings } from "./forecast_classifier_config";
@@ -147,23 +150,6 @@ export interface ClassifierLLMConfig {
   system_prompt?: string;
 }
 
-export type ClassifierType =
-  | "heuristic"
-  | "heuristic_v2"
-  | "llm"
-  | "heuristic_first"
-  | "hybrid"
-  | "capability"
-  | "llm_v2";
-
-/**
- * Whether this router can call classifier_llm_config.model. Mirrors the backend's
- * ComplexityRouterConfig.uses_llm_classifier, and is the single gate for every classifier-only
- * control and payload key, so a new chaining type cannot strip knobs the operator set.
- */
-export const usesLlmClassifier = (classifierType: ClassifierType): boolean =>
-  (["llm", "heuristic_first", "hybrid", "capability", "llm_v2"] as const).some((type) => type === classifierType);
-
 export type ClassifierFallback = "heuristic" | "default_model";
 
 export const DEFAULT_CLASSIFIER_FALLBACK: ClassifierFallback = "heuristic";
@@ -200,7 +186,7 @@ export const heuristicScoringRole = (value: ComplexityRouterConfigValue): Heuris
 // Derived, never written into the value, so undoing a tier edit reverts the form with nothing left behind.
 export const effectiveClassifierType = (
   value: Pick<ComplexityRouterConfigValue, "custom_tier_set" | "classifier_type">,
-): ClassifierType => (value.custom_tier_set ? "llm" : value.classifier_type);
+): ClassifierType => (value.custom_tier_set && value.classifier_type !== "jev" ? "llm" : value.classifier_type);
 
 const rowOrigin = (row: TierRow, editing: boolean): string => {
   if (!editing) return row.id;
@@ -251,8 +237,8 @@ const TierSetToolbar: React.FC<{
     </div>
     {editing && (
       <span className="block mt-1 text-xs text-muted-foreground">
-        Add or remove tiers to define your own set. Every custom tier needs a definition the LLM classifier routes on,
-        and an edited set requires the LLM classification method
+        Add or remove tiers to define your own set. Every custom tier needs a definition the classifier routes on, and
+        an edited set requires the LLM or JEV classification method
       </span>
     )}
     {editing && keywordRulesError && (
@@ -271,7 +257,7 @@ const FallbackTierField: React.FC<{
   <div className="mt-4">
     <div className="flex items-center gap-2 mb-2">
       <strong className="text-base font-semibold">Fallback Tier</strong>
-      <SimpleTooltip content="Where requests route when the LLM classifier errors, times out, or returns an unparseable reply. Required for an edited tier set: the heuristic scorer cannot produce your tiers.">
+      <SimpleTooltip content="Where requests route when the classifier errors, times out, or returns an unparseable reply. Required for an edited tier set: the heuristic scorer cannot produce your tiers">
         <Info className="size-4 text-muted-foreground" />
       </SimpleTooltip>
     </div>
@@ -377,6 +363,7 @@ export interface ComplexityRouterConfigValue {
   capability_classifier_config?: CapabilitySettings;
   llm_v2_config?: FuseSettings;
   classifier_llm_config?: ClassifierLLMConfig;
+  jev_classifier_config?: JevClassifierConfig;
   classifier_context_window_size?: number;
   classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
@@ -641,7 +628,11 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
           <Card>
             <CardContent>
               {!customTierSet && (
-                <NonReasoningTierToggle value={value} onChange={onChange} available={value.classifier_type === "llm"} />
+                <NonReasoningTierToggle
+                  value={value}
+                  onChange={onChange}
+                  available={value.classifier_type === "llm" || value.classifier_type === "jev"}
+                />
               )}
 
               {tierRows.map((row, index) => {

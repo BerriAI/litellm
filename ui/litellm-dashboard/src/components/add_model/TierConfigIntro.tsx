@@ -4,6 +4,9 @@ import { type ComplexityRouterConfigValue, heuristicScoringRole, usesLlmClassifi
 import { restrictedBy } from "./TierRestrictions";
 
 const tierConfigIntroText = (value: ComplexityRouterConfigValue): string => {
+  if (value.classifier_type === "jev") {
+    return "JEV classifies each request with TypeSafe System One Choice evaluation and routes it to a tier. Configure which models handle each tier";
+  }
   if (value.classifier_type === "heuristic_v2") {
     return "The complexity router classifies each request with a calibrated local four-tier model (no API calls). Configure which model(s) handle each tier.";
   }
