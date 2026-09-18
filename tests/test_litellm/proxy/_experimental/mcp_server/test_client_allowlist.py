@@ -157,6 +157,12 @@ def test_jwt_caller_is_judged_by_its_claim_even_when_the_header_would_pass() -> 
     assert check_mcp_client_allowed(JWT_AND_HEADER, {"azp": "antigravity-cli"}, {"x-mcp-client": "claude-code"}) is None
 
 
+def test_jwt_caller_with_an_empty_claim_set_cannot_fall_back_to_the_header() -> None:
+    rejection: Final = check_mcp_client_allowed(JWT_AND_HEADER, {}, {"x-mcp-client": "antigravity-cli"})
+    assert isinstance(rejection, MCPClientRejection)
+    assert "azp" in rejection.details
+
+
 def test_non_jwt_caller_falls_back_to_the_header_when_both_sources_are_configured() -> None:
     assert check_mcp_client_allowed(JWT_AND_HEADER, None, {"x-mcp-client": "antigravity-cli"}) is None
     assert check_mcp_client_allowed(JWT_AND_HEADER, None, {"x-mcp-client": "claude-code"}) is not None

@@ -77,6 +77,7 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_route_relative_request_path,
     well_known_root_suffix,
 )
+from litellm.proxy._experimental.mcp_server.ui_session_utils import is_ui_session_credential
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
@@ -3711,11 +3712,14 @@ if MCP_AVAILABLE:
 
         return load_mcp_client_allowlist(general_settings)
 
-    def _reject_disallowed_mcp_client(scope: Scope, user_api_key_auth: UserAPIKeyAuth | None) -> None:
+    def reject_disallowed_mcp_client(headers: Mapping[str, str], user_api_key_auth: UserAPIKeyAuth | None) -> None:
+        """Gate every MCP tool surface on ``mcp_allowed_clients``; the dashboard's own session is not a client app."""
+        if user_api_key_auth is not None and is_ui_session_credential(user_api_key_auth):
+            return
         rejection: Final = check_mcp_client_allowed(
             allowlist=_load_mcp_client_allowlist(),
             jwt_claims=user_api_key_auth.jwt_claims if user_api_key_auth is not None else None,
-            headers=StarletteRequest(scope).headers,
+            headers=headers,
         )
         if rejection is None:
             return
@@ -4558,7 +4562,7 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
-            _reject_disallowed_mcp_client(scope, user_api_key_auth)
+            reject_disallowed_mcp_client(StarletteRequest(scope).headers, user_api_key_auth)
             scoped_server_endpoint: Final = len(_get_mcp_servers_in_path(path) or []) == 1
 
             # Extract client IP for MCP access control
@@ -4887,7 +4891,7 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
-            _reject_disallowed_mcp_client(scope, user_api_key_auth)
+            reject_disallowed_mcp_client(StarletteRequest(scope).headers, user_api_key_auth)
             scoped_server_endpoint: Final = len(_get_mcp_servers_in_path(path) or []) == 1
 
             # Extract client IP for MCP access control
