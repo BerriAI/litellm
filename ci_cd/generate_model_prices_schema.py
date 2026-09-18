@@ -19,6 +19,10 @@ NONNEG_NUMBER: JsonSchema = {"type": "number", "minimum": 0}
 NONNEG_INTEGER: JsonSchema = {"type": "integer", "minimum": 0}
 BOOLEAN: JsonSchema = {"type": "boolean"}
 STRING: JsonSchema = {"type": "string"}
+TIME_WINDOW: JsonSchema = {"type": "string", "pattern": r"^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$"}
+WEEKDAY_PATTERN = (
+    r"(?i)^(mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)$"
+)
 
 EXTRA_BOOLEAN_KEYS = frozenset(
     {
@@ -33,7 +37,7 @@ EXTRA_BOOLEAN_KEYS = frozenset(
 
 HOURS_UTC: JsonSchema = {
     "description": 'UTC "HH:MM-HH:MM" window, or a list of them; a window may wrap past midnight.',
-    "oneOf": [STRING, {"type": "array", "items": STRING, "minItems": 1}],
+    "oneOf": [TIME_WINDOW, {"type": "array", "items": TIME_WINDOW, "minItems": 1}],
 }
 
 OFF_PEAK_WINDOW: JsonSchema = {
@@ -43,7 +47,12 @@ OFF_PEAK_WINDOW: JsonSchema = {
         "weekdays": {
             "type": "array",
             "description": "ISO-8601 weekday numbers (1 = Monday .. 7 = Sunday) or English day names the window applies on.",
-            "items": {"oneOf": [{"type": "integer", "minimum": 1, "maximum": 7}, STRING]},
+            "items": {
+                "oneOf": [
+                    {"type": "integer", "minimum": 1, "maximum": 7},
+                    {"type": "string", "pattern": WEEKDAY_PATTERN},
+                ]
+            },
             "minItems": 1,
         },
     },
@@ -68,6 +77,7 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
             "cache_read_input_token_cost": NONNEG_NUMBER,
             "cache_creation_input_token_cost": NONNEG_NUMBER,
         },
+        "anyOf": [{"required": ["hours_utc"]}, {"required": ["windows"]}],
         "additionalProperties": False,
     },
     "search_context_cost_per_query": {
@@ -365,9 +375,7 @@ def render(schema: JsonSchema) -> str:
 
 
 def validation_errors(prices: dict, schema: JsonSchema) -> tuple:
-    validator = jsonschema.Draft202012Validator(
-        schema, format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER
-    )
+    validator = jsonschema.Draft202012Validator(schema, format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER)
     return tuple(
         f"{'.'.join(str(part) for part in error.absolute_path)}: {error.message}"
         for error in validator.iter_errors(prices)
