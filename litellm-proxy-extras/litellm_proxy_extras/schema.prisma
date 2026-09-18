@@ -426,6 +426,7 @@ model LiteLLM_VerificationToken {
     key_alias   String?
     soft_budget_cooldown Boolean @default(false) // key-level state on if budget alerts need to be cooled down
     spend      Float    @default(0.0)
+    total_spend Float   @default(0.0)
     expires    DateTime?
     models     String[]
     aliases    Json  @default("{}")
@@ -528,6 +529,7 @@ model LiteLLM_DeletedVerificationToken {
     key_alias               String?
     soft_budget_cooldown    Boolean  @default(false)
     spend                   Float    @default(0.0)
+    total_spend             Float    @default(0.0)
     expires                 DateTime?
     models                  String[]
     aliases                 Json     @default("{}")
@@ -676,6 +678,7 @@ model LiteLLM_SpendLogs {
   @@index([end_user])
   @@index([session_id])
   @@index([litellm_call_id])
+  @@index([api_key, startTime])
 }
 
 model LiteLLM_BudgetWindowSpend {
@@ -801,6 +804,8 @@ model LiteLLM_DailyUserSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -837,6 +842,8 @@ model LiteLLM_DailyOrganizationSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -873,6 +880,8 @@ model LiteLLM_DailyEndUserSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
   @@unique([end_user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
@@ -908,6 +917,8 @@ model LiteLLM_DailyAgentSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
   @@unique([agent_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
@@ -943,6 +954,8 @@ model LiteLLM_DailyTeamSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   ptu_flat_cost       Float    @default(0.0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
@@ -981,6 +994,8 @@ model LiteLLM_DailyTagSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -1364,6 +1379,7 @@ model LiteLLM_PolicyAttachmentTable {
   keys             String[]  @default([])  // Key aliases or patterns
   models           String[]  @default([])  // Model names or patterns
   tags             String[]  @default([])  // Tag patterns (e.g., ["healthcare", "prod-*"])
+  priority         Int?                    // Explicit execution order
   created_at       DateTime  @default(now())
   created_by       String?
   updated_at       DateTime  @default(now()) @updatedAt

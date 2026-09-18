@@ -18,6 +18,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
 from urllib.parse import quote, unquote
 
+from typing_extensions import ReadOnly, TypedDict
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
@@ -109,6 +111,10 @@ def _batch_cost_row_to_write(payload: SpendLogsPayload, disable_spend_logs: bool
     return MappingProxyType({field: value for field, value in payload.items() if field in _BATCH_COST_CLAIM_FIELDS})
 
 
+class _SpendIncrement(TypedDict):
+    increment: ReadOnly[float]
+
+
 class _SpendBatch(Protocol):
     litellm_usertable: BatchTable
     litellm_verificationtoken: BatchTable
@@ -135,6 +141,19 @@ class _SpendTransactionManager(Protocol):
     async def __aenter__(self) -> _SpendTransaction: ...
 
     async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+
+
+def _timed_request_duration_ms(
+    payload: dict | SpendLogsPayload,
+    request_status: Literal["success", "failure"],
+    is_internal_call: bool,
+) -> int | None:
+    if is_internal_call or request_status != "success":
+        return None
+    duration_ms: Final = payload.get("request_duration_ms")
+    if not isinstance(duration_ms, int) or duration_ms < 0:
+        return None
+    return duration_ms
 
 
 def _spend_update_tx(prisma_client: PrismaClient) -> _SpendTransactionManager:
@@ -238,8 +257,8 @@ class DBSpendUpdateWriter:
         # Completion object fields
         kwargs: dict | None,
         completion_response: object,
-        start_time: datetime | None,
-        end_time: datetime | None,
+        start_time: datetime,
+        end_time: datetime,
         response_cost: float | None,
     ) -> bool:
         """Record the request's spend, answering whether its cost still needs charging.
@@ -280,6 +299,7 @@ class DBSpendUpdateWriter:
                 response_obj=completion_response,
                 start_time=start_time,
                 end_time=end_time,
+                llm_router=get_llm_router(),
             )
             payload["spend"] = response_cost or 0.0
             if isinstance(payload["startTime"], datetime):
@@ -1602,10 +1622,12 @@ class DBSpendUpdateWriter:
                         async with transaction.batch_() as batcher:
                             # Sort by token for consistent lock ordering across pods to prevent deadlocks.
                             for token, response_cost in sorted(key_list_transactions.items()):
+                                spend_increment: _SpendIncrement = {"increment": response_cost}
                                 batcher.litellm_verificationtoken.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"token": token},
                                     data={
-                                        "spend": {"increment": response_cost},
+                                        "spend": spend_increment,
+                                        "total_spend": spend_increment,
                                         "last_active": datetime.now(timezone.utc),
                                     },
                                 )
@@ -2232,6 +2254,7 @@ class DBSpendUpdateWriter:
                 recorded_autorouter_savings=_metadata.get("autorouter_savings"),
                 billed_at=payload.get("endTime"),
             )
+            timed_duration_ms: Final = _timed_request_duration_ms(payload, request_status, is_internal_call)
 
             daily_transaction: Final = BaseDailySpendTransaction(
                 date=date,
@@ -2259,6 +2282,8 @@ class DBSpendUpdateWriter:
                 prompt_caching_savings_spend=savings_spend.prompt_caching,
                 gateway_injected_caching_savings_spend=savings_spend.gateway_injected_caching,
                 autorouter_savings_spend=0.0 if is_internal_call else savings_spend.autorouter,
+                total_response_time_ms=timed_duration_ms or 0,
+                timed_requests=0 if timed_duration_ms is None else 1,
             )
             return daily_transaction
         except Exception as e:

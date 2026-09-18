@@ -9,6 +9,7 @@ from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequenc
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import groupby
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 from urllib.parse import urlencode, urlparse
 
@@ -72,7 +73,9 @@ from litellm.proxy.auth.auth_utils import request_dispatched_to_pass_through_end
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
+    log_llm_api_exception,
     open_sse_before_first_byte,
+    resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
@@ -80,6 +83,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
+    litellm_call_id_headers,
     openai_error_param,
     openai_error_type,
 )
@@ -196,14 +200,15 @@ async def chat_completion_pass_through_endpoint(
         version,
     )
 
-    data = {}
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+    data = {"litellm_call_id": litellm_call_id}
     try:
         body: Final = await request.body()
         body_str: Final = body.decode()
         try:
-            data = ast.literal_eval(body_str)
+            data = ast.literal_eval(body_str) | data
         except Exception:
-            data = json.loads(body_str)
+            data = json.loads(body_str) | data
 
         data["adapter_id"] = adapter_id
 
@@ -290,9 +295,7 @@ async def chat_completion_pass_through_endpoint(
         response_cost: Final = hidden_params.get("response_cost", None) or ""
 
         ### ALERTING ###
-        asyncio.create_task(
-            proxy_logging_obj.update_request_status(litellm_call_id=data.get("litellm_call_id", ""), status="success")
-        )
+        asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
 
         verbose_proxy_logger.debug("final response: %s", response)
 
@@ -313,12 +316,13 @@ async def chat_completion_pass_through_endpoint(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.completion(): Exception occured - %s", e)
+        log_llm_api_exception(e, litellm_call_id)
         error_msg: Final = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=openai_error_type(e, error_status_code(e, 500)),
             param=openai_error_param(e),
+            headers=litellm_call_id_headers(litellm_call_id),
             code=error_status_code(e, 500),
         )
 
@@ -609,6 +613,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         # merely shares the name.
         if not request_dispatched_to_pass_through_endpoint(request):
             _metadata["user_api_key_model_max_budget"] = user_api_key_dict.model_max_budget
+            _metadata["user_api_key_team_model_max_budget"] = user_api_key_dict.team_model_max_budget
             _metadata["user_api_key_user_model_max_budget"] = user_api_key_dict.user_model_max_budget
             _metadata["user_api_key_end_user_model_max_budget"] = user_api_key_dict.end_user_model_max_budget
         _metadata.update(
@@ -985,8 +990,9 @@ async def pass_through_request(
             headers=headers,
             forward_headers=forward_headers,
         )
+        upstream_headers: Final = _with_trace_context(headers, parent_span=user_api_key_dict.parent_otel_span)
 
-        requested_query_params: dict | None = query_params or dict(request.query_params)
+        requested_query_params: dict | None = query_params or dict(request.query_params) or None
 
         endpoint_type: Final[EndpointType] = HttpPassThroughEndpointHelpers.get_endpoint_type(str(url))
 
@@ -1018,7 +1024,7 @@ async def pass_through_request(
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
-            headers,
+            upstream_headers,
             _parsed_body,
         )
 
@@ -1188,7 +1194,7 @@ async def pass_through_request(
                 query=urlencode(
                     HttpPassThroughEndpointHelpers.get_merged_query_parameters(
                         existing_url=url,
-                        request_query_params=requested_query_params,
+                        request_query_params=requested_query_params or MappingProxyType({}),
                         default_query_params=default_query_params,
                     )
                 ).encode("ascii")
@@ -1256,7 +1262,7 @@ async def pass_through_request(
             additional_args={
                 "complete_input_dict": _parsed_body,
                 "api_base": str(logging_url),
-                "headers": headers,
+                "headers": upstream_headers,
             },
         )
         stream = HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
@@ -1273,7 +1279,7 @@ async def pass_through_request(
                     request=request,
                     async_client=async_client,
                     url=url,
-                    headers=headers,
+                    headers=upstream_headers,
                     requested_query_params=requested_query_params,
                     stream=True,
                 )
@@ -1285,7 +1291,7 @@ async def pass_through_request(
                         request.method,
                         url,
                         params=requested_query_params,
-                        headers=headers,
+                        headers=upstream_headers,
                         content=state_raw_body,
                     )
                     if state_raw_body is not None
@@ -1293,7 +1299,7 @@ async def pass_through_request(
                         request.method,
                         url,
                         params=requested_query_params,
-                        headers=headers,
+                        headers=upstream_headers,
                         json=_parsed_body,
                     )
                 )
@@ -1370,7 +1376,7 @@ async def pass_through_request(
             raw_body_request: Final = async_client.build_request(
                 request.method,
                 url,
-                headers=headers,
+                headers=upstream_headers,
                 params=requested_query_params,
                 content=state_raw_body,
             )
@@ -1380,7 +1386,7 @@ async def pass_through_request(
                 request=request,
                 async_client=async_client,
                 url=url,
-                headers=headers,
+                headers=upstream_headers,
                 requested_query_params=requested_query_params,
                 _parsed_body=_parsed_body,
                 forward_multipart=is_multipart,
@@ -2157,6 +2163,17 @@ def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
     return upstream_close
 
 
+_WEBSOCKET_FORWARDED_HEADERS: Final = frozenset(("authorization", "x-api-key", "x-goog-user-project"))
+
+
+def _with_trace_context(headers: Mapping[str, str], parent_span: object) -> dict[str, str]:
+    try:
+        from litellm.integrations.otel.plumbing.context import inject_trace_context
+    except ImportError:
+        return dict(headers)  # mutable-ok: matches inject_trace_context's carrier return type
+    return inject_trace_context(headers, parent_span=parent_span)
+
+
 async def websocket_passthrough_request(
     websocket: WebSocket,
     target: str,
@@ -2199,20 +2216,15 @@ async def websocket_passthrough_request(
         await websocket.accept()
         verbose_proxy_logger.debug("WebSocket passthrough (%s): WebSocket connection accepted", endpoint)
 
-    # Prepare headers for the upstream connection
-    upstream_headers: Final = custom_headers.copy()
-
-    if forward_headers:
-        # Forward relevant headers from the incoming request
-        incoming_headers: Final = dict(websocket.headers)
-        for header_name, header_value in incoming_headers.items():
-            # Only forward certain headers to avoid conflicts
-            if header_name.lower() in [
-                "authorization",
-                "x-api-key",
-                "x-goog-user-project",
-            ]:
-                upstream_headers[header_name] = header_value
+    forwarded_headers: Final = {  # mutable-ok: one-shot upstream header dict, read as a Mapping
+        **custom_headers,
+        **{
+            header_name: header_value
+            for header_name, header_value in websocket.headers.items()
+            if forward_headers and header_name.lower() in _WEBSOCKET_FORWARDED_HEADERS
+        },
+    }
+    upstream_headers: Final = _with_trace_context(forwarded_headers, parent_span=user_api_key_dict.parent_otel_span)
 
     # Initialize logging object similar to HTTP passthrough
     team_callbacks: Final = _resolve_team_callback_wiring(

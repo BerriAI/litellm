@@ -42,6 +42,10 @@ async def call_native_aocr(server: RecordingServer, **kwargs: object) -> OCRResp
     return await call_aocr(server, **kwargs)
 
 
+async def call_native(server: RecordingServer, asynchronous: bool, **kwargs: object) -> OCRResponse:
+    return await call_native_aocr(server, **kwargs) if asynchronous else call_native_ocr(server, **kwargs)
+
+
 def request_body(kwargs: dict[str, object]) -> dict[str, object]:
     additional_args = kwargs["additional_args"]
     assert isinstance(additional_args, dict)

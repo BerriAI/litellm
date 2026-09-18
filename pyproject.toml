@@ -15,7 +15,7 @@ dependencies = [
     # When changing a floor, verify it installs + imports on every supported
     # Python with: `uv pip install --resolution=lowest-direct .`
     "fastuuid>=0.14.0,<1.0",
-    "httpx>=0.28.0,<1.0",
+    "httpx[http2]>=0.28.0,<1.0",
     "openai>=2.20.0,<3.0.0",
     "python-dotenv>=1.0.0,<2.0",
     "tiktoken>=0.8.0,<1.0",
@@ -67,7 +67,7 @@ proxy = [
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.28.1,<2.0",
-    "litellm-proxy-extras==0.4.98",
+    "litellm-proxy-extras==0.4.99",
     "litellm-enterprise==0.1.68",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
@@ -143,8 +143,9 @@ bedrock-realtime = [
     # InvokeModelWithBidirectionalStream API, which boto3 cannot do. This
     # experimental AWS SDK (with its smithy-* deps, pulled transitively)
     # provides the bidirectional stream; imported lazily in the realtime
-    # handler so litellm core stays usable without it.
-    "aws-sdk-bedrock-runtime>=0.7.0,<0.8.0; python_version >= '3.12'",
+    # handler so litellm core stays usable without it. The awscrt extra is
+    # required: the SDK's default aiohttp transport has no duplex streaming.
+    "aws-sdk-bedrock-runtime[awscrt]>=0.10.0,<0.12.0; python_version >= '3.12'",
 ]
 proxy-runtime = [
     # Historically bundled in the proxy Docker images via requirements.txt.
@@ -173,7 +174,7 @@ proxy-runtime = [
 [project.scripts]
 litellm = "litellm:run_server"
 lite = "litellm.proxy.client.cli:cli"
-litellm-proxy = "litellm.proxy.client.cli:cli"
+litellm-proxy = "litellm.proxy.client.cli:litellm_proxy_cli"
 
 [dependency-groups]
 dev = [

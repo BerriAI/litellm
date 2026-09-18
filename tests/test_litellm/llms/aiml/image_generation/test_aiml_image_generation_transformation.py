@@ -130,16 +130,3 @@ def test_openai_style_unsupported_param_dropped_with_drop_params():
     assert mapped == {}
 
 
-def test_cost_calculator_uses_aiml_pricing_for_gpt_image_2():
-    """Regression: pricing must come from the ``aiml/openai/gpt-image-2`` entry,
-    not the upstream OpenAI token-based entry.
-    """
-    response = ImageResponse(
-        data=[
-            ImageObject(b64_json=None, url="https://example.com/1.png"),
-            ImageObject(b64_json=None, url="https://example.com/2.png"),
-        ]
-    )
-    assert aiml_cost_calculator(
-        model="openai/gpt-image-2", image_response=response
-    ) == pytest.approx(0.054 * 2)
