@@ -1551,12 +1551,12 @@ class WebSearchInterceptionLogger(CustomLogger):
             )
             search_kwargs: Final = MappingProxyType(
                 {
-                    **parent_correlation.as_search_kwargs(),
                     **{
                         key: value
                         for key, value in search_litellm_params.items()
                         if key != "search_provider" and value is not None
                     },
+                    **parent_correlation.as_search_kwargs(),
                 }
             )
             result: Final = (

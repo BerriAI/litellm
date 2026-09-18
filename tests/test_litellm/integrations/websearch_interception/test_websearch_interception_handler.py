@@ -338,7 +338,9 @@ def _perplexity_router() -> MagicMock:
         ),
     ],
 )
-async def test_execute_search_inherits_parent_request_session_and_trace(monkeypatch, parent_kwargs):
+async def test_execute_search_inherits_parent_request_session_and_trace(
+    monkeypatch: pytest.MonkeyPatch, parent_kwargs: dict[str, object]
+):
     """The intercepted asearch is billed as its own call but must land in the parent request's
     session and trace, otherwise every search shows up as a separate one-call session in SpendLogs."""
     import litellm
@@ -373,7 +375,7 @@ async def test_execute_search_inherits_parent_request_session_and_trace(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_execute_search_forwards_parent_otel_span_from_key_auth(monkeypatch):
+async def test_execute_search_forwards_parent_otel_span_from_key_auth(monkeypatch: pytest.MonkeyPatch):
     import litellm
     from litellm.proxy import proxy_server
 
@@ -392,7 +394,7 @@ async def test_execute_search_forwards_parent_otel_span_from_key_auth(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_execute_search_without_parent_session_does_not_invent_one(monkeypatch):
+async def test_execute_search_without_parent_session_does_not_invent_one(monkeypatch: pytest.MonkeyPatch):
     """A parent request with no session/trace must not stamp empty correlation keys on the search."""
     import litellm
     from litellm.proxy import proxy_server
@@ -414,7 +416,7 @@ async def test_execute_search_without_parent_session_does_not_invent_one(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_concurrent_searches_keep_their_own_parent_session(monkeypatch):
+async def test_concurrent_searches_keep_their_own_parent_session(monkeypatch: pytest.MonkeyPatch):
     import asyncio
 
     import litellm
