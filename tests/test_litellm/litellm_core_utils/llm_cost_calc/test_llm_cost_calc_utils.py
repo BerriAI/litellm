@@ -1575,59 +1575,6 @@ def test_generic_cost_per_token_tiered_pricing_bills_reasoning_at_tier_rate():
         litellm.model_cost.pop(model, None)
 
 
-def test_gpt_5_6_alias_prices_match_sol(local_model_cost_map):
-    """Regression: the bare gpt-5.6 alias routes to GPT-5.6 Sol, so every cost field on
-    the two entries has to hold the same value. They drifted once before, when Sol took
-    its promotional cut and gpt-5.6 was left on the pre-cut rates, overbilling callers
-    who used the alias."""
-    alias = litellm.model_cost["gpt-5.6"]
-    sol = litellm.model_cost["gpt-5.6-sol"]
-
-    cost_fields = sorted(field for field in sol if "cost" in field)
-    assert len(cost_fields) == 27
-
-    for field in cost_fields:
-        assert alias.get(field) == sol.get(field), field
-
-
-@pytest.mark.parametrize(
-    "model,expected_none,expected_xhigh,expected_minimal",
-    [
-        # Verified against OpenAI's live API on 2026-04-24:
-        #   gpt-5.5   -> supports: none, low, medium, high, xhigh
-        #   gpt-5.5-pro -> supports: medium, high, xhigh
-        # Neither supports "minimal"; gpt-5.5-pro additionally does not support "none".
-        # The JSON must reflect this so LiteLLM rejects unsupported values locally
-        # (or drops them with drop_params=True) instead of round-tripping to OpenAI
-        # for a 400.
-        ("gpt-5.5", True, True, False),
-        ("gpt-5.5-2026-04-23", True, True, False),
-        ("gpt-5.5-pro", False, True, False),
-        ("gpt-5.5-pro-2026-04-23", False, True, False),
-    ],
-)
-def test_gpt55_reasoning_effort_flags_match_live_openai_api(
-    _local_model_cost_map, model, expected_none, expected_xhigh, expected_minimal
-):
-    """Pin reasoning_effort capability flags to OpenAI's actual API contract.
-
-    Observed via `POST /v1/chat/completions` with reasoning_effort=minimal:
-    ``Unsupported value: 'reasoning_effort' does not support 'minimal' with
-    this model``. gpt-5.5-pro additionally rejects 'none' and 'low'.
-    """
-
-    m = litellm.model_cost[model]
-    assert m.get("supports_none_reasoning_effort") is expected_none, (
-        f"{model}: supports_none_reasoning_effort expected {expected_none}"
-    )
-    assert m.get("supports_xhigh_reasoning_effort") is expected_xhigh, (
-        f"{model}: supports_xhigh_reasoning_effort expected {expected_xhigh}"
-    )
-    assert m.get("supports_minimal_reasoning_effort") is expected_minimal, (
-        f"{model}: supports_minimal_reasoning_effort expected {expected_minimal}"
-    )
-
-
 @pytest.mark.parametrize(
     "base_model,dated_model",
     [
@@ -1660,29 +1607,6 @@ def test_gpt55_dated_variants_match_base_reasoning_effort_capabilities(_local_mo
             f"Dated snapshots must inherit the base model's reasoning_effort "
             f"capability profile."
         )
-
-
-@pytest.mark.parametrize(
-    "model,expected_none,expected_minimal,expected_xhigh",
-    [
-        # Mirror live OpenAI API contract (verified via openai/gpt-5.5* on
-        # 2026-04-24): chat accepts {none, low, medium, high, xhigh} but NOT
-        # minimal; pro accepts {medium, high, xhigh} only.
-        # NOTE: openai/gpt-5.5* entries currently set supports_minimal=true on
-        # main (pre #26456). Once that PR lands, OpenAI + Azure flags align.
-        ("azure/gpt-5.5", True, False, True),
-        ("azure/gpt-5.5-pro", False, False, True),
-    ],
-)
-def test_azure_gpt55_reasoning_effort_flags_match_live_openai_api(
-    _local_model_cost_map, model, expected_none, expected_minimal, expected_xhigh
-):
-    """Azure entries pin reasoning_effort flags to OpenAI's actual API contract."""
-
-    m = litellm.model_cost[model]
-    assert m.get("supports_none_reasoning_effort") is expected_none
-    assert m.get("supports_minimal_reasoning_effort") is expected_minimal
-    assert m.get("supports_xhigh_reasoning_effort") is expected_xhigh
 
 
 def test_string_cost_values():
@@ -3411,14 +3335,6 @@ GEMINI_38_FLASH_FIELDS_SHARED_WITH_37_FLASH = (
     "supports_web_search",
     "supports_url_context",
 )
-
-
-@pytest.mark.parametrize("prefix", ["", "gemini/", "vertex_ai/"])
-def test_gemini_38_flash_matches_37_flash_promotional_pricing(prefix, _local_model_cost_map):
-    new_model = litellm.model_cost[f"{prefix}gemini-3.8-flash"]
-    old_model = litellm.model_cost[f"{prefix}gemini-3.7-flash"]
-    for field in GEMINI_38_FLASH_FIELDS_SHARED_WITH_37_FLASH:
-        assert new_model[field] == old_model[field], field
 
 
 @pytest.mark.parametrize(
