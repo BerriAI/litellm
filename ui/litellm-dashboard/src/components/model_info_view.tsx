@@ -115,7 +115,9 @@ export default function ModelInfoView({
   // Keep modelData variable name for backwards compatibility
   const modelData = transformedModelData;
 
-  const teamAlias = teams?.find((team) => team.team_id === modelData?.model_info?.team_id)?.team_alias || null;
+  const aliasForTeam = (teamId: string | null | undefined): string | null =>
+    teams?.find((team) => team.team_id === teamId)?.team_alias || null;
+  const teamAlias = aliasForTeam(modelData?.model_info?.team_id);
   const rawModelInfoEntries = Object.entries(modelData?.model_info ?? {}).flatMap((entry) =>
     entry[0] === "team_id" && teamAlias ? [entry, ["team_alias", teamAlias]] : [entry],
   );
@@ -724,7 +726,7 @@ export default function ModelInfoView({
                 <ModelInfoEditForm
                   localModelData={localModelData}
                   modelData={modelData}
-                  teamAlias={teamAlias}
+                  teamAlias={aliasForTeam(localModelData.model_info?.team_id)}
                   accessToken={accessToken}
                   isEditing={isEditing}
                   isSaving={isSaving}

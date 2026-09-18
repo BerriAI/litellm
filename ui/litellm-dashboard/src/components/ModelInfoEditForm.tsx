@@ -818,8 +818,8 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               ) : (
                 <Display>
                   {teamAlias
-                    ? `${teamAlias} (${modelData.model_info.team_id})`
-                    : modelData.model_info.team_id || "Not Set"}
+                    ? `${teamAlias} (${localModelData.model_info?.team_id})`
+                    : localModelData.model_info?.team_id || "Not Set"}
                 </Display>
               )}
             </div>

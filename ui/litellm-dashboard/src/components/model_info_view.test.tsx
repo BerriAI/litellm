@@ -1509,6 +1509,11 @@ describe("ModelInfoView", () => {
       expect(await screen.findByRole("button", { name: /save changes/i })).toBeInTheDocument();
     };
 
+    const openSelect = async (user: ReturnType<typeof userEvent.setup>, triggerText: string) => {
+      await user.click(await screen.findByText(triggerText));
+      await screen.findByRole("combobox", { expanded: true });
+    };
+
     const save = async (user: ReturnType<typeof userEvent.setup>) => {
       await user.click(screen.getByRole("button", { name: /save changes/i }));
       await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalled());
@@ -1660,12 +1665,39 @@ describe("ModelInfoView", () => {
       const user = userEvent.setup();
       await enterEditMode(user);
 
-      await user.click(screen.getByText("alpha (team-1)"));
+      await openSelect(user, "alpha (team-1)");
       await user.click(await screen.findByText("beta (team-2)"));
 
       const payload = await save(user);
 
       expect(payload.model_info.team_id).toBe("team-2");
+    });
+
+    it("shows the picked team in read mode right after saving", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [
+          { team_id: "team-1", team_alias: "alpha" },
+          { team_id: "team-2", team_alias: "beta" },
+        ],
+        isLoading: false,
+        error: null,
+      });
+      const teamModel = {
+        ...defaultModelData,
+        model_info: { ...defaultModelData.model_info, team_id: "team-1" },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openSelect(user, "alpha (team-1)");
+      await user.click(await screen.findByText("beta (team-2)"));
+      await save(user);
+
+      expect(await screen.findByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      expect(screen.getByText("beta (team-2)")).toBeInTheDocument();
+      expect(screen.queryByText("alpha (team-1)")).not.toBeInTheDocument();
     });
 
     it("shows the Team ID placeholder for a model with no team", async () => {
@@ -1734,7 +1766,7 @@ describe("ModelInfoView", () => {
       const user = userEvent.setup();
       await enterEditMode(user);
 
-      await user.click(await screen.findByText("selected-credential"));
+      await openSelect(user, "selected-credential");
       await user.click(await screen.findByText("other-credential"));
 
       const payload = await save(user);
@@ -1770,7 +1802,7 @@ describe("ModelInfoView", () => {
       const user = userEvent.setup();
       await enterEditMode(user);
 
-      await user.click(screen.getByText("Select existing health check model"));
+      await openSelect(user, "Select existing health check model");
       await user.click(await screen.findByText("openai/gpt-4o"));
 
       const payload = await save(user);
