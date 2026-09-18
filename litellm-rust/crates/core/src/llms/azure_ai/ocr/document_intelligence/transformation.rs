@@ -444,7 +444,7 @@ async fn read_operation_response(
         let bytes =
             crate::ocr::client::read_response_bytes(response, connection.max_response_bytes)
                 .await?;
-        crate::ocr::handler::post_call(host, &bytes).await?;
+        crate::ocr::handler::emit_response_received(host, &bytes).await?;
         return crate::ocr::json::decode_response(&bytes, native);
     }
     let location = response
@@ -463,7 +463,7 @@ async fn read_operation_response(
     }
     let bytes =
         crate::ocr::client::read_response_bytes(response, connection.max_response_bytes).await?;
-    crate::ocr::handler::post_call(host, &bytes).await?;
+    crate::ocr::handler::emit_response_received(host, &bytes).await?;
     poll_operation(http_client, operation, headers, connection, native, host).await
 }
 
@@ -515,7 +515,7 @@ async fn poll_operation(
         .map_err(|_| crate::ocr::Error::PollTimeout)??;
         match &decoded.data.status {
             Some(OperationStatus::Succeeded) => {
-                crate::ocr::handler::post_call(host, decoded.text.as_bytes()).await?;
+                crate::ocr::handler::emit_response_received(host, decoded.text.as_bytes()).await?;
                 return Ok(decoded);
             }
             Some(OperationStatus::Running | OperationStatus::NotStarted) => {
@@ -986,7 +986,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accepted_response_runs_post_call_for_submission_and_completed_poll() {
+    async fn accepted_response_emits_response_received_for_submission_and_completed_poll() {
         let (base, seen, server) = mock_server(vec![
             MockResponse {
                 status: 202,
@@ -996,9 +996,9 @@ mod tests {
             MockResponse::json(json!({"status":"succeeded"})),
         ])
         .await;
-        let post_calls = Arc::new(Mutex::new(Vec::new()));
+        let responses_received = Arc::new(Mutex::new(Vec::new()));
         let request_count = seen.clone();
-        let observed = post_calls.clone();
+        let observed = responses_received.clone();
         let host = LocalOcrHost::new(wire_request(
             "azure_ai/doc-intelligence/prebuilt-read",
             &base,
@@ -1017,7 +1017,7 @@ mod tests {
         server.await.unwrap();
         assert_eq!(seen.lock().unwrap().len(), 2);
         assert_eq!(
-            *post_calls.lock().unwrap(),
+            *responses_received.lock().unwrap(),
             [
                 (1, r#"{"submitted":true}"#.to_string()),
                 (2, r#"{"status":"succeeded"}"#.to_string()),

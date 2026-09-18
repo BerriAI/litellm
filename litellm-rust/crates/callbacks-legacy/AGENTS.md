@@ -7,5 +7,8 @@
   - Re-alias every `caller_fields` body key to the caller's object before `pre_call`; a keyword wins over the request attribute even when it is an explicit `None`
   - Retain independently captured body/header roots from `pre_call` to `post_call`; in-place mutation reaches the wire, envelope field replacement is visible to later callbacks only
   - A later kind of callback host (WASM, in-process Rust) has none of these obligations, so they stay out of `litellm-callbacks`, `litellm-host-python` and the bridge; the only facts that cross from the route are the prepared keyword view and `WireRequest.caller_fields`
-- Success and failure handlers receive the exact selected public response or exception; ordinary handler errors are reported and swallowed, a cancellation ends the call
+- Success and failure handlers receive the exact selected public response or exception; logging projections, redaction and snapshots keep their own copy contracts
+  - Ordinary failure-handler errors cannot suppress the other eligible family or replace the mapped provider error; a cancellation ends the call with no further dispatch
+  - Dispatch errors never replay provider work or trigger the opposite outcome; the proxy's acceptance or rejection releases deferred success at most once
+  - Delivery follows the registry, not the callable's type: direct, awaited, executor-submitted, logging-worker and deferred paths stay distinct
 - Traverse every retained Python edge; `close` is idempotent and restores the correlation context once

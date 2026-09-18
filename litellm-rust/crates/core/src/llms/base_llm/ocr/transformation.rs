@@ -132,7 +132,7 @@ pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
                 context.connection.max_response_bytes,
             )
             .await?;
-            crate::ocr::handler::post_call(context.host, &bytes).await?;
+            crate::ocr::handler::emit_response_received(context.host, &bytes).await?;
             self.transform_ocr_response(model, &bytes, context.request_format)
         }
     }

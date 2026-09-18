@@ -102,7 +102,10 @@ fn request_headers(request: &reqwest::Request) -> Result<Vec<(String, String)>, 
         .collect()
 }
 
-pub(crate) async fn post_call(host: &OcrHost, bytes: &[u8]) -> Result<(), super::Error> {
+pub(crate) async fn emit_response_received(
+    host: &OcrHost,
+    bytes: &[u8],
+) -> Result<(), super::Error> {
     host.emit(CallEvent::ResponseReceived {
         raw: RawResponse {
             body: String::from_utf8_lossy(bytes).into_owned(),

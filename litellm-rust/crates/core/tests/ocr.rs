@@ -395,11 +395,11 @@ async fn failed_before_send_does_not_replay_or_reach_transport() {
 }
 
 #[tokio::test]
-async fn invalid_provider_response_runs_post_call_before_normalization_failure() {
+async fn invalid_provider_response_emits_response_received_before_normalization_failure() {
     let (base, seen, server) =
         mock_server(vec![MockResponse::json(json!({"pages":"invalid"}))]).await;
-    let post_calls = Arc::new(Mutex::new(Vec::new()));
-    let observed = post_calls.clone();
+    let responses_received = Arc::new(Mutex::new(Vec::new()));
+    let observed = responses_received.clone();
     let host = LocalOcrHost::new(wire_request("mistral/model", &base, json!({}))).with_observer(
         move |event| {
             if let CallEvent::ResponseReceived { raw } = event {
@@ -411,7 +411,10 @@ async fn invalid_provider_response_runs_post_call_before_normalization_failure()
     server.await.unwrap();
     assert!(matches!(error, crate::ocr::Error::ResponseField { .. }));
     assert_eq!(seen.lock().unwrap().len(), 1);
-    assert_eq!(*post_calls.lock().unwrap(), [r#"{"pages":"invalid"}"#]);
+    assert_eq!(
+        *responses_received.lock().unwrap(),
+        [r#"{"pages":"invalid"}"#]
+    );
 }
 
 #[tokio::test]

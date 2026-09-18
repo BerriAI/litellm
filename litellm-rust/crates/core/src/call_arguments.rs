@@ -37,11 +37,6 @@ pub struct ArgumentSpec {
     pub secret: bool,
 }
 
-pub fn should_project(name: &str, consumed: &[ArgumentSpec], bound_fields: &[&str]) -> bool {
-    consumed.iter().any(|field| field.name == name)
-        || (!bound_fields.contains(&name) && !is_control(name))
-}
-
 pub fn is_control(name: &str) -> bool {
     crate::params::is_control_param(name) || HOST_CONTROLS.contains(&name)
 }
@@ -410,21 +405,6 @@ mod tests {
             })
         );
         assert_eq!(serde_json::to_value(arguments).unwrap(), original);
-    }
-
-    #[test]
-    fn projection_prioritizes_consumed_fields_and_keeps_unknown_names() {
-        let fields = [ArgumentSpec {
-            name: "id",
-            secret: false,
-        }];
-        assert!(should_project("id", &fields, &[]));
-        assert!(!should_project("id", &[], &[]));
-        assert!(should_project("future_option", &[], &[]));
-        assert!(!should_project("document", &fields, &["document"]));
-        assert!(!should_project("metadata", &fields, &[]));
-        assert!(!should_project("callbacks", &fields, &[]));
-        assert!(!should_project("ocr_cost_per_page", &fields, &[]));
     }
 
     #[test]

@@ -785,7 +785,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_call_stays_after_reducto_upload_and_parse() {
+    async fn response_received_stays_after_reducto_upload_and_parse() {
         let (base, seen, server) = mock_server(vec![
             MockResponse::json(json!({"file_id":"reducto://uploaded.pdf"})),
             MockResponse::json(json!({"result":{"chunks":[]}})),

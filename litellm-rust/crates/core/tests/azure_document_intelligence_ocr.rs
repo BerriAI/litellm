@@ -243,7 +243,7 @@ async fn accepted_response_polls_to_success_with_only_credentials() {
 }
 
 #[tokio::test]
-async fn accepted_response_runs_post_call_before_polling() {
+async fn accepted_response_emits_response_received_before_polling() {
     let (base, seen, server) = mock_server(vec![
         MockResponse {
             status: 202,
