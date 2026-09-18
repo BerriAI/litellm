@@ -314,3 +314,38 @@ def test_active_mistral_chat_rows_price_cache_reads_below_input(path: Path):
         and not cache_read_is_tenth_of_input(entry)
     ]
     assert drifted == []
+
+
+BEDROCK_MANTLE_GOVCLOUD_GPT_MODELS: Final = (
+    "openai.gpt-5.4",
+    "openai.gpt-5.6-luna",
+    "openai.gpt-5.6-sol",
+    "openai.gpt-5.6-terra",
+)
+
+
+@pytest.mark.parametrize("model_suffix", BEDROCK_MANTLE_GOVCLOUD_GPT_MODELS)
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_bedrock_mantle_govcloud_gpt_rows_mirror_base_and_scale_pricing(path: Path, model_suffix: str):
+    """GovCloud Bedrock Mantle rows must exist in both registries, mirror base context windows and
+    capabilities, and scale input/output/cache pricing by the 1.2x GovCloud premium (issue #40102)."""
+    rows: Mapping[str, object] = json.loads(path.read_text())
+    gov_key: Final = f"bedrock_mantle/us-gov-west-1/{model_suffix}"
+    base_key: Final = f"bedrock_mantle/{model_suffix}"
+    assert gov_key in rows, f"missing {gov_key} in {path.name}"
+    gov: Final = rows[gov_key]
+    base: Final = rows[base_key]
+    assert isinstance(gov, dict) and isinstance(base, dict)
+    assert gov["litellm_provider"] == "bedrock_mantle"
+    assert gov["mode"] == base["mode"]
+    assert gov["max_input_tokens"] == base["max_input_tokens"]
+    assert gov["max_output_tokens"] == base["max_output_tokens"]
+    assert gov["input_cost_per_token"] == pytest.approx(base["input_cost_per_token"] * 1.2)
+    assert gov["output_cost_per_token"] == pytest.approx(base["output_cost_per_token"] * 1.2)
+    if "cache_read_input_token_cost" in base:
+        assert gov.get("cache_read_input_token_cost") == pytest.approx(base["cache_read_input_token_cost"] * 1.2)
+    if "cache_creation_input_token_cost" in base:
+        assert gov.get("cache_creation_input_token_cost") == pytest.approx(
+            base["cache_creation_input_token_cost"] * 1.2
+        )
+
