@@ -179,7 +179,8 @@ def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway:
         key_selected = scenario.key(object_permission=permission, guardrails=[guardrail])
         team = scenario.team(guardrails=[guardrail])
         team_selected = scenario.key(team_id=team, object_permission=permission)
-        names = tool_names(candidate, key, identity)
+        catalog_key = scenario.key(object_permission={"mcp_servers": [identity]})
+        names = tool_names(candidate, catalog_key, identity)
         assert set(names) == {"add", "multiply", "fail"}
         for virtual in (False, True):
             for caller, selected, tool, expected in (
