@@ -23,8 +23,10 @@ from typing import Final
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
+from litellm._logging import verbose_proxy_logger
+from litellm.caching.dual_cache import DualCache
 from litellm.constants import (
     CLI_JWT_EXPIRATION_HOURS,
     CLI_SSO_SESSION_TTL_SECONDS,
@@ -45,9 +47,10 @@ _POST_ONLY: Final = ["POST"]  # mutable-ok: FastAPI's add_api_route only accepts
 
 class _GatewaySessionData(BaseModel):
     user_id: str
-    user_role: str | None = None
+    user_role: str | None
     models: list[str] = Field(default_factory=list)
     teams: tuple[str, ...] = ()
+    team_details: object | None = None
 
 
 class _OAuthErrorBody(BaseModel):
@@ -212,19 +215,51 @@ async def device_authorization(request: Request) -> JSONResponse:
 def _mint_access_token_from_flow(flow: Mapping[str, object]) -> str:
     from litellm.proxy._types import LiteLLM_UserTable
     from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+    from litellm.proxy.management_endpoints.ui_sso import selected_cli_sso_team_detail
 
-    raw_session_data: Final = flow.get("session_data")
-    if not isinstance(raw_session_data, dict):
-        raise _oauth_error(status_code=400, error="authorization_pending")
+    try:
+        session_data: Final = _GatewaySessionData.model_validate(flow.get("session_data"))
+    except ValidationError as err:
+        verbose_proxy_logger.warning("Claude Code gateway login session is malformed: %s", err)
+        raise _oauth_error(
+            status_code=400, error="invalid_grant", description="The login session is malformed; sign in again"
+        ) from err
 
-    session_data: Final = _GatewaySessionData.model_validate(raw_session_data)
     team_id: Final = session_data.teams[0] if session_data.teams else None
+    selected_team: Final = selected_cli_sso_team_detail(team_details=session_data.team_details, team_id=team_id)
+    if selected_team is None:
+        raise _oauth_error(
+            status_code=400,
+            error="invalid_grant",
+            description=f"Could not resolve the model grants for team {team_id}; sign in again",
+        )
+
     user_info: Final = LiteLLM_UserTable(
         user_id=session_data.user_id,
         user_role=session_data.user_role,
         models=session_data.models,
     )
-    return ExperimentalUIJWTToken.get_cli_jwt_auth_token(user_info=user_info, team_id=team_id)
+    return ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        user_info=user_info,
+        team_id=team_id,
+        team_alias=selected_team.team_alias,
+        team_models=selected_team.team_models,
+        team_model_aliases=selected_team.team_model_aliases,
+        max_budget=None,
+    )
+
+
+async def _claim_device_code(device_code: str, cache: DualCache) -> bool:
+    from litellm.proxy.management_endpoints.ui_sso import (
+        _get_cli_sso_flow_cache_key,  # pyright: ignore[reportPrivateUsage]  # shared device-flow helper
+    )
+
+    claims: Final = await cache.async_increment_cache(
+        key=f"{_get_cli_sso_flow_cache_key(device_code)}:claimed",
+        value=1,
+        ttl=CLI_SSO_SESSION_TTL_SECONDS,
+    )
+    return claims == 1
 
 
 async def _handle_device_code_grant(device_code: str | None) -> JSONResponse:
@@ -249,12 +284,15 @@ async def _handle_device_code_grant(device_code: str | None) -> JSONResponse:
     if not flow.get("sso_complete") or not flow.get("user_code_verified"):
         return _oauth_error_response(_oauth_error(status_code=400, error="authorization_pending"))
 
+    if not await _claim_device_code(device_code, cli_sso_session_cache):
+        return _oauth_error_response(_oauth_error(status_code=400, error="expired_token"))
+
+    await cli_sso_session_cache.async_delete_cache(key=_get_cli_sso_flow_cache_key(device_code))
     try:
         access_token: Final = _mint_access_token_from_flow(flow)
     except _OAuthError as err:
         return _oauth_error_response(err)
 
-    cli_sso_session_cache.delete_cache(key=_get_cli_sso_flow_cache_key(device_code))
     body: Final = _AccessTokenBody(access_token=access_token, expires_in=CLI_JWT_EXPIRATION_HOURS * _SECONDS_PER_HOUR)
     return JSONResponse(content=body.model_dump())
 
