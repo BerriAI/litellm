@@ -23,12 +23,12 @@ describe("interactions_api", () => {
   const mockFetch = vi.fn();
 
   beforeEach(() => {
-    // @ts-ignore - assigning to global for test environment
-    global.fetch = mockFetch;
+    vi.stubGlobal("fetch", mockFetch);
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("parses native Gemini step events and captures the nested interaction model", async () => {
