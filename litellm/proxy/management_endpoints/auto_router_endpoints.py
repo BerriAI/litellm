@@ -319,7 +319,7 @@ async def _authorize_models_this_test_can_call(
     its calls through the proxy. Team and member budgets are already enforced on every route.
     """
     models: Final = _models_this_test_can_call(config)
-    if not models:
+    if not models and config.classifier_type != "jev":
         return
 
     from litellm.proxy.proxy_server import proxy_logging_obj
