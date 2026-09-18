@@ -200,5 +200,14 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "vispark": {
+    "base_url": "https://api.lab.vispark.in/v1",
+    "api_key_env": "VISPARK_LAB_API_KEY",
+    "api_base_env": "VISPARK_LAB_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/completions"]
   }
 }
