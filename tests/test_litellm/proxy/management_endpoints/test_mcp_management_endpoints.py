@@ -1704,14 +1704,26 @@ class TestTemporaryMCPSessionEndpoints:
 
             return _inherit_credentials_from_existing_server(payload)
 
-    def test_admin_config_alone_does_not_suppress_credential_inheritance(self):
-        """The edit form round-trips upstream_resource, which is admin config rather than a credential.
-        Treating the blob as "credentials supplied" left the Authorize session with no declared app on
-        the exact path where this knob is configured."""
-        updated = self._inherit_with({"upstream_resource": "api://audience"})
+    @pytest.mark.parametrize(
+        "credentials",
+        [
+            {"upstream_resource": "api://audience"},
+            {"scopes": ["scope:a", "scope:b"]},
+            {"scopes": ["scope:edited"], "upstream_resource": "api://audience"},
+            {"scopes": ["scope:edited"], "upstream_token_header": "esb-oauth"},
+            {"scopes": []},
+            {"scopes": None},
+        ],
+    )
+    def test_admin_config_alone_does_not_suppress_credential_inheritance(self, credentials: MCPCredentials):
+        updated = self._inherit_with(credentials, scopes=["scope:stored"])
 
-        assert updated.credentials["client_id"] == "client-123"
-        assert updated.credentials["client_secret"] == "secret-xyz"
+        assert updated.credentials == {
+            "client_id": "client-123",
+            "client_secret": "secret-xyz",
+            "scopes": ["scope:stored"],
+            **credentials,
+        }
 
     def test_upstream_token_header_is_inherited_like_other_admin_config(self):
         """It is admin config rather than a credential, so a session server derived from an existing
@@ -1730,11 +1742,18 @@ class TestTemporaryMCPSessionEndpoints:
         assert updated.credentials["client_secret"] == "secret-xyz"
         assert updated.credentials["upstream_token_header"] == "esb-oauth"
 
-    def test_supplied_credential_still_wins_over_inheritance(self):
-        """A caller that supplies a real credential keeps it; inheritance must not overwrite it."""
-        updated = self._inherit_with({"auth_value": "caller-token"})
+    @pytest.mark.parametrize(
+        "credentials",
+        [
+            {"auth_value": "caller-token"},
+            {"client_id": "caller-client", "scopes": ["scope:edited"]},
+            {"client_secret": "caller-secret", "scopes": ["scope:edited"]},
+        ],
+    )
+    def test_supplied_credential_still_wins_over_inheritance(self, credentials: MCPCredentials):
+        updated = self._inherit_with(credentials)
 
-        assert updated.credentials == {"auth_value": "caller-token"}
+        assert updated.credentials == credentials
 
     def test_inheritance_carries_upstream_resource_to_the_session_server(self):
         """Without this the temporary server omits the resource indicator and the Authorize leg it
