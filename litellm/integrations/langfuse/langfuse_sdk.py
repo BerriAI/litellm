@@ -17,15 +17,15 @@ from typing import Final, Literal
 
 import httpx
 import opentelemetry.trace as otel_trace
-from langfuse import Langfuse, LangfuseOtelSpanAttributes
-from langfuse.api import LangfuseAPI
-from langfuse.model import BasePromptClient
+from langfuse import LangfuseOtelSpanAttributes
+from langfuse.api import LangfuseAPI, Prompt, Prompt_Chat
+from langfuse.model import BasePromptClient, ChatPromptClient, PromptClient, TextPromptClient
 from opentelemetry.context import Context
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
-from opentelemetry.sdk.trace.sampling import Decision, Sampler, SamplingResult
+from opentelemetry.sdk.trace.sampling import ALWAYS_ON, Decision, Sampler, SamplingResult
 from opentelemetry.trace import Link, NonRecordingSpan, Span, SpanContext, SpanKind, TraceFlags, Tracer, TraceState
 from opentelemetry.util.types import Attributes, AttributeValue
 from requests import PreparedRequest, RequestException, Response, Session
@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 __all__ = (
     "DiscardingSpanExporter",
+    "LangfuseApiClient",
     "LangfuseObservation",
     "LangfuseTracing",
     "RetryingSpanExporter",
@@ -43,7 +44,9 @@ __all__ = (
     "acquire_langfuse_tracing",
     "build_langfuse_client",
     "build_langfuse_tracing",
+    "configured_flush_at",
     "configured_sample_rate",
+    "flush_langfuse_tracing",
     "observation_attributes",
     "resolve_observation_id",
     "resolve_trace_id",
@@ -55,7 +58,19 @@ __all__ = (
 
 _TRACE_ID_PATTERN: Final = re.compile(r"^(?=.*[1-9a-f])[0-9a-f]{32}$")
 _OBSERVATION_ID_PATTERN: Final = re.compile(r"^(?=.*[1-9a-f])[0-9a-f]{16}$")
-_TRACER_NAME: Final = "litellm.langfuse"
+_TRACER_NAME: Final = "langfuse-sdk"
+_MAX_QUEUE_SIZE: Final = 100_000
+_DEFAULT_FLUSH_AT: Final = 512
+_SPAN_LIMITS: Final = SpanLimits(
+    max_attributes=SpanLimits.UNSET,
+    max_events=128,
+    max_links=128,
+    max_span_attributes=SpanLimits.UNSET,
+    max_event_attributes=128,
+    max_link_attributes=128,
+    max_attribute_length=SpanLimits.UNSET,
+    max_span_attribute_length=SpanLimits.UNSET,
+)
 
 
 def to_unix_nanos(value: datetime | float | None) -> int | None:
@@ -76,7 +91,9 @@ def resolve_trace_id(trace_id: object | None) -> str:
     normalized: Final = serialized.lower().replace("-", "")
     if _TRACE_ID_PATTERN.fullmatch(normalized):
         return normalized
-    return Langfuse.create_trace_id(seed=serialized) if serialized else Langfuse.create_trace_id()
+    if not serialized:
+        return format(RandomIdGenerator().generate_trace_id(), "032x")
+    return sha256(serialized.encode("utf-8")).digest()[:16].hex()
 
 
 def resolve_observation_id(observation_id: object | None) -> str | None:
@@ -395,12 +412,6 @@ def _parse_sample_rate(raw: str) -> float | None:
     return rate if 0.0 <= rate <= 1.0 else None
 
 
-def _usable_sample_rate() -> float:
-    raw: Final = os.environ.get("LANGFUSE_SAMPLE_RATE")
-    parsed: Final = _parse_sample_rate(raw) if raw is not None else 1.0
-    return 1.0 if parsed is None else parsed
-
-
 def configured_sample_rate() -> float:
     """``LANGFUSE_SAMPLE_RATE`` as a fraction, exporting everything when it is unset or unusable."""
     raw: Final = os.environ.get("LANGFUSE_SAMPLE_RATE")
@@ -415,10 +426,27 @@ def configured_sample_rate() -> float:
     return parsed
 
 
+def configured_flush_at() -> int:
+    """``LANGFUSE_FLUSH_AT`` as the export batch size, the SDK's own knob, with its default when unset or unusable."""
+    raw: Final = os.environ.get("LANGFUSE_FLUSH_AT")
+    if raw is None:
+        return _DEFAULT_FLUSH_AT
+    parsed: Final = int(raw) if raw.strip().isdigit() else None
+    if parsed is None or not 0 < parsed <= _MAX_QUEUE_SIZE:
+        verbose_logger.warning(
+            "LANGFUSE_FLUSH_AT=%r is not a whole number between 1 and %d; exporting batches of %d",
+            raw,
+            _MAX_QUEUE_SIZE,
+            _DEFAULT_FLUSH_AT,
+        )
+        return _DEFAULT_FLUSH_AT
+    return parsed
+
+
 class DiscardingSpanExporter(SpanExporter):
     """Accept and drop every span, for mock mode.
 
-    The mock intercepts the httpx client the SDK uses for its API, but observations
+    The mock intercepts the httpx client behind the REST API, but observations
     travel over OTLP, so without this the "no network calls" contract silently sends
     real traces to the configured host.
     """
@@ -447,16 +475,17 @@ class RetryingSpanExporter(SpanExporter):
     delays: Sequence[float] = (1.0, 2.0, 4.0)
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        for delay in chain(self.delays, (None,)):
+        for delay in self.delays:
             try:
                 return self.exporter.export(spans)
             except RequestException as error:
-                if delay is None:
-                    verbose_logger.error("Langfuse export failed after %d retries: %s", len(self.delays), error)
-                    return SpanExportResult.FAILURE
                 verbose_logger.warning("Langfuse export raised %s, retrying in %ss", error, delay)
                 sleep(delay)
-        return SpanExportResult.FAILURE
+        try:
+            return self.exporter.export(spans)
+        except RequestException as error:
+            verbose_logger.error("Langfuse export failed after %d retries: %s", len(self.delays), error)
+            return SpanExportResult.FAILURE
 
     def shutdown(self) -> None:
         self.exporter.shutdown()
@@ -552,6 +581,7 @@ class _TracingKey:
     environment: str | None
     release: str | None
     sample_rate: float
+    flush_at: int
     flush_interval_millis: int
     mock_mode: bool
 
@@ -584,6 +614,7 @@ def acquire_langfuse_tracing(
         environment=environment,
         release=release,
         sample_rate=configured_sample_rate(),
+        flush_at=configured_flush_at(),
         flush_interval_millis=int(flush_interval * 1000),
         mock_mode=mock_mode,
     )
@@ -598,6 +629,7 @@ def acquire_langfuse_tracing(
             environment=environment,
             release=release,
             sample_rate=key.sample_rate,
+            flush_at=key.flush_at,
             flush_interval_millis=key.flush_interval_millis,
         )
         _TRACING[key] = created
@@ -641,63 +673,116 @@ def build_langfuse_tracing(
     release: str | None,
     sample_rate: float,
     flush_interval_millis: int,
+    flush_at: int = _DEFAULT_FLUSH_AT,
 ) -> LangfuseTracing:
+    """Wire the provider from litellm's own settings so a host's ``OTEL_*`` variables do not steer it.
+
+    An unset sampler or span limit falls back to ``OTEL_TRACES_SAMPLER`` and
+    ``OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT`` style variables, which are meant for the
+    host application's own tracing. ``OTEL_SDK_DISABLED`` still applies, as it does to the SDK.
+
+    The tracer carries the SDK's scope name because Langfuse keys on it: spans from any other
+    scope are treated as foreign OTel traffic and get their raw attributes echoed into metadata.
+    """
+    if os.environ.get("OTEL_SDK_DISABLED", "").strip().lower() == "true":
+        verbose_logger.warning("OTEL_SDK_DISABLED=true also disables the langfuse callback's export channel")
     provider: Final = TracerProvider(
         resource=_resource(environment=environment, release=release),
-        sampler=TraceIdHashSampler(sample_rate) if sample_rate < 1 else None,
+        sampler=ALWAYS_ON if sample_rate >= 1 else TraceIdHashSampler(sample_rate),
         id_generator=_RequestedIdGenerator(),
+        span_limits=_SPAN_LIMITS,
     )
-    provider.add_span_processor(BatchSpanProcessor(exporter, schedule_delay_millis=flush_interval_millis))
+    provider.add_span_processor(
+        BatchSpanProcessor(
+            exporter,
+            max_queue_size=_MAX_QUEUE_SIZE,
+            max_export_batch_size=flush_at,
+            schedule_delay_millis=flush_interval_millis,
+        )
+    )
     return LangfuseTracing(provider=provider, tracer=provider.get_tracer(_TRACER_NAME))
+
+
+@dataclass(frozen=True, slots=True)
+class _CachedPrompt:
+    prompt: PromptClient
+    fetched_at: float
+
+
+def _prompt_client(prompt: Prompt) -> PromptClient:
+    return ChatPromptClient(prompt) if isinstance(prompt, Prompt_Chat) else TextPromptClient(prompt)
+
+
+class LangfuseApiClient:
+    """litellm's handle on one Langfuse project over its REST API: prompts, ``auth_check`` and the project id.
+
+    The SDK's ``Langfuse`` client is deliberately not constructed. It keeps one tracing bundle per
+    public key and hands it to every ``Langfuse()`` a host application builds for the same key, so
+    litellm's exporter, host and masking would leak into that application. Observations travel
+    over ``LangfuseTracing``; nothing here exports spans.
+
+    Prompts are cached for ``LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS`` (60 by default) as the SDK
+    does, refreshed on the request that finds them stale; a refresh that fails keeps serving the
+    stale prompt rather than failing the request, again like the SDK.
+    """
+
+    def __init__(self, api: LangfuseAPI, *, prompt_cache_ttl_seconds: float) -> None:
+        self.api: Final = api
+        self.prompt_cache_ttl_seconds: Final = prompt_cache_ttl_seconds
+        self._prompts: Final[dict[str, _CachedPrompt]] = {}  # mutable-ok: per-client prompt cache, guarded by _lock
+        self._lock: Final = threading.Lock()
+
+    def auth_check(self) -> bool:
+        try:
+            self.api.projects.get()
+        except Exception:
+            return False
+        return True
+
+    def project_id(self) -> str | None:
+        projects: Final = self.api.projects.get().data
+        return projects[0].id if projects else None
+
+    def get_prompt(self, name: str, *, label: str | None = None, version: int | None = None) -> PromptClient:
+        key: Final = f"{name}:version:{version}" if version is not None else f"{name}:label:{label}"
+        with self._lock:
+            cached: Final = self._prompts.get(key)
+        if cached is not None and monotonic() - cached.fetched_at < self.prompt_cache_ttl_seconds:
+            return cached.prompt
+        try:
+            fetched: Final = _prompt_client(self.api.prompts.get(name, version=version, label=label))
+        except Exception as error:
+            if cached is None:
+                raise
+            verbose_logger.warning("Langfuse prompt %r refresh failed, serving the cached version: %s", name, error)
+            return cached.prompt
+        with self._lock:
+            self._prompts[key] = _CachedPrompt(prompt=fetched, fetched_at=monotonic())
+        return fetched
 
 
 def build_langfuse_client(
     *,
-    parameters: Mapping[str, object],
-    environment: str | None,
-    release: str | None,
-    mock_mode: bool,
-) -> Langfuse:
-    """The SDK client litellm keeps for prompt management and ``auth_check``.
+    public_key: str | None,
+    secret_key: str | None,
+    base_url: str,
+    httpx_client: httpx.Client | None,
+) -> LangfuseApiClient:
+    """The REST client for prompt management, ``auth_check`` and the Slack project link.
 
-    Observations never go through it, but the SDK still builds a tracer for it and, given no
-    provider, claims the process-global one, which disables litellm's other OTel exporters.
-    It gets a provider of its own instead. The SDK caches one resource bundle per public key,
-    so a user application constructing ``Langfuse`` for the same key afterwards shares this
-    bundle; the exporter it carries is litellm's so that application's spans still reach Langfuse.
-
-    That same cache keeps the first secret and host it saw for a public key, so the REST client
-    behind ``get_prompt`` and ``auth_check`` is rebuilt from the credentials actually supplied.
-    Without both keys the SDK disables the client, which has no REST client to rebuild.
-
-    The SDK reads ``LANGFUSE_SAMPLE_RATE`` itself and raises on anything it cannot parse, so it
-    gets the rate litellm already validated; the sampler that matters is on litellm's provider.
+    Missing keys are passed through as absent credentials: the server answers 401, which
+    ``auth_check`` reports as ``False`` rather than raising at construction.
     """
-    public_key: Final = parameters.get("public_key")
-    secret_key: Final = parameters.get("secret_key")
-    base_url: Final = str(parameters.get("base_url"))
-    httpx_client: Final = parameters.get("httpx_client")
-    credentialed: Final = isinstance(public_key, str) and isinstance(secret_key, str)
-    client: Final = Langfuse(
-        **parameters,  # pyright: ignore[reportArgumentType]  # kwargs-ok: dict mirrors the typed ctor, values resolved by the callers
-        sample_rate=_usable_sample_rate(),
-        tracer_provider=TracerProvider(
-            resource=_resource(environment=environment, release=release), shutdown_on_exit=False
+    return LangfuseApiClient(
+        LangfuseAPI(
+            base_url=base_url,
+            username=public_key,
+            password=secret_key,
+            x_langfuse_sdk_name="python",
+            x_langfuse_sdk_version=version("langfuse"),
+            x_langfuse_public_key=public_key,
+            httpx_client=httpx_client,
+            timeout=int(os.getenv("LANGFUSE_TIMEOUT", "5")),
         ),
-        span_exporter=_build_span_exporter(public_key=str(public_key), secret_key=str(secret_key), base_url=base_url)
-        if credentialed and not mock_mode
-        else DiscardingSpanExporter(),
+        prompt_cache_ttl_seconds=float(os.getenv("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS", "60")),
     )
-    if not isinstance(public_key, str) or not isinstance(secret_key, str):
-        return client
-    client.api = LangfuseAPI(
-        base_url=base_url,
-        username=public_key,
-        password=secret_key,
-        x_langfuse_sdk_name="python",
-        x_langfuse_sdk_version=version("langfuse"),
-        x_langfuse_public_key=public_key,
-        httpx_client=httpx_client if isinstance(httpx_client, httpx.Client) else None,
-        timeout=int(os.getenv("LANGFUSE_TIMEOUT", "5")),
-    )
-    return client

@@ -45,13 +45,11 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from langfuse import Langfuse
-
-    from litellm.integrations.langfuse.langfuse_sdk import LangfuseObservation, LangfuseTracing
+    from litellm.integrations.langfuse.langfuse_sdk import LangfuseApiClient, LangfuseObservation, LangfuseTracing
     from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
 else:
     DynamicLoggingCache = Any
-    Langfuse = Any
+    LangfuseApiClient = Any
     LangfuseObservation = Any
     LangfuseTracing = Any
 
@@ -280,7 +278,7 @@ class LangFuseLogger:
         allow_env_credentials: bool = True,
     ):
         try:
-            from langfuse import Langfuse
+            from litellm.integrations.langfuse.langfuse_sdk import acquire_langfuse_tracing
         except Exception as e:
             raise Exception(
                 f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\n{traceback.format_exc()}\033[0m"
@@ -312,19 +310,7 @@ class LangFuseLogger:
             self.langfuse_client = self._http_handler.client
             self.is_mock_mode = False
 
-        self.langfuse_client_parameters: Final[dict[str, object]] = {
-            "public_key": self.public_key,
-            "secret_key": self.secret_key,
-            "base_url": self.langfuse_host,
-            "release": self.langfuse_release,
-            "debug": self.langfuse_debug,
-            "flush_interval": self.langfuse_flush_interval,  # flush interval in seconds
-            "httpx_client": self.langfuse_client,
-            "environment": self.langfuse_environment,
-        }
-        self.Langfuse: Langfuse = self.safe_init_langfuse_client(self.langfuse_client_parameters)
-        from litellm.integrations.langfuse.langfuse_sdk import acquire_langfuse_tracing
-
+        self.api_client: LangfuseApiClient = self.safe_init_langfuse_client()
         self.tracing: LangfuseTracing = acquire_langfuse_tracing(
             public_key=str(self.public_key),
             secret_key=str(self.secret_key),
@@ -342,26 +328,19 @@ class LangFuseLogger:
             verbose_logger.debug("Langfuse Mock: Using mock project ID")
         else:
             try:
-                project_id: Final = self.Langfuse.api.projects.get().data[0].id
-                os.environ["LANGFUSE_PROJECT_ID"] = project_id
+                project_id: Final = self.api_client.project_id()
+                if project_id is not None:
+                    os.environ["LANGFUSE_PROJECT_ID"] = project_id
             except Exception:
                 verbose_logger.debug("Langfuse project id unavailable, alerting links will omit it")
 
         warn_if_upstream_langfuse_configured()
-        if os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY") is not None:
-            self.upstream_langfuse_secret_key = os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY")
-            self.upstream_langfuse_public_key = os.getenv("UPSTREAM_LANGFUSE_PUBLIC_KEY")
-            self.upstream_langfuse_host = os.getenv("UPSTREAM_LANGFUSE_HOST")
-            self.upstream_langfuse_release = os.getenv("UPSTREAM_LANGFUSE_RELEASE")
-            self.upstream_langfuse_debug = os.getenv("UPSTREAM_LANGFUSE_DEBUG")
 
-    def safe_init_langfuse_client(self, parameters: dict) -> Langfuse:
-        """
-        Safely init a langfuse client if the number of initialized clients is less than the max
+    def safe_init_langfuse_client(self) -> LangfuseApiClient:
+        """Build the REST client while the process is under its logger budget.
 
-        Note:
-            - Langfuse initializes 1 thread everytime a client is initialized.
-            - We've had an incident in the past where we reached 100% cpu utilization because Langfuse was initialized several times.
+        The budget dates from the SDK client, which started a consumer thread per instance and once
+        pinned a CPU at 100% when many were built; it still bounds the number of per-key loggers.
         """
         if litellm.initialized_langfuse_clients >= MAX_LANGFUSE_INITIALIZED_CLIENTS:
             raise Exception(
@@ -369,22 +348,19 @@ class LangFuseLogger:
             )
         from litellm.integrations.langfuse.langfuse_sdk import build_langfuse_client
 
-        environment_param: Final = cast(str | None, parameters.get("environment"))  # cast-ok: untyped dict
-        release_param: Final = cast(str | None, parameters.get("release"))  # cast-ok: untyped dict
-        langfuse_client: Final = build_langfuse_client(
-            parameters=parameters,
-            environment=environment_param,
-            release=release_param,
-            mock_mode=self.is_mock_mode,
+        api_client: Final = build_langfuse_client(
+            public_key=self.public_key,
+            secret_key=self.secret_key,
+            base_url=self.langfuse_host,
+            httpx_client=self.langfuse_client,
         )
         litellm.initialized_langfuse_clients += 1
         verbose_logger.debug("Created langfuse client number %s", litellm.initialized_langfuse_clients)
-        return langfuse_client
+        return api_client
 
     def flush(self) -> None:
         """Push every queued observation to Langfuse before the process goes away."""
         self.tracing.flush()
-        self.Langfuse.flush()
 
     @staticmethod
     def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict[str, object]:
@@ -859,36 +835,25 @@ class LangFuseLogger:
             generation_params = {
                 "name": generation_name,
                 "id": clean_metadata.pop("generation_id", generation_id),
-                "start_time": start_time,
-                "end_time": end_time,
-                "model": model_name,
-                "model_parameters": optional_params,
                 "input": masked_input if not mask_input else "redacted-by-litellm",
                 "output": masked_output if not mask_output else "redacted-by-litellm",
-                "usage": usage,
-                "usage_details": usage_details,
                 "cost_details": {"total": cost}  # mutable-ok: langfuse serializes this payload
                 if usage is not None and isinstance(cost, (int, float))
                 else None,
                 "metadata": {  # mutable-ok: langfuse serializes this payload, a proxy is not json-encodable
-                    **(_object_mapping(trace_params.get("metadata")) or _NO_METADATA),
                     **log_requester_metadata(redact_user_api_key_info(metadata=allowlisted_metadata)),  # pyright: ignore[reportArgumentType]  # TypedDict in, plain metadata dict out
                     **enrichments,
                     **_lookup_ids(litellm_call_id, response_obj),
                 },
-                "level": level,
                 "version": _optional_str(clean_metadata.pop("version", None)),
             }
 
             parent_observation_id: Final = metadata.get("parent_observation_id", None)
-            if parent_observation_id is not None:
-                generation_params["parent_observation_id"] = parent_observation_id
-
             generation_params = _add_prompt_to_generation_params(
                 generation_params=generation_params,
                 clean_metadata=clean_metadata,
                 prompt_management_metadata=prompt_management_metadata,
-                langfuse_client=self.Langfuse,
+                langfuse_client=self.api_client,
             )
             if masked_output is not None and isinstance(masked_output, str) and level == "ERROR":
                 generation_params["status_message"] = masked_output
@@ -1151,17 +1116,14 @@ def _add_prompt_to_generation_params(
     generation_params: dict,
     clean_metadata: dict,
     prompt_management_metadata: StandardLoggingPromptManagementMetadata | None,
-    langfuse_client: object,
+    langfuse_client: "LangfuseApiClient",
 ) -> dict:
-    from langfuse import Langfuse
     from langfuse.model import (
         ChatPromptClient,
         Prompt_Chat,
         Prompt_Text,
         TextPromptClient,
     )
-
-    langfuse_client = cast(Langfuse, langfuse_client)
 
     user_prompt: Final = clean_metadata.pop("prompt", None)
     if user_prompt is None and prompt_management_metadata is None:

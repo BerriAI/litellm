@@ -394,7 +394,7 @@ async def health_services_endpoint(
             from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
             langfuse_logger: Final = LangFuseLogger()
-            if langfuse_logger.Langfuse.auth_check() is False:
+            if langfuse_logger.api_client.auth_check() is False:
                 raise ValueError(
                     "langfuse auth_check failed - verify LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are set correctly"
                 )

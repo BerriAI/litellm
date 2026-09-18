@@ -67,6 +67,7 @@ from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
+    LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
@@ -1040,10 +1041,16 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
         try:
             from litellm.integrations.langfuse.langfuse_sdk import flush_langfuse_tracing
 
-            flush_langfuse_tracing()
-        except Exception:
-            # [DO NOT BLOCK shutdown events for this]
-            pass
+            flushed: Final = await asyncio.to_thread(flush_langfuse_tracing, LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS)
+            if flushed:
+                verbose_proxy_logger.info("Langfuse export channels flushed")
+            else:
+                verbose_proxy_logger.warning(
+                    "Langfuse export did not finish within %dms; remaining spans are left to the background exporter",
+                    LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
+                )
+        except Exception as e:  # noqa: BLE001  # shutdown must continue even if the flush fails
+            verbose_proxy_logger.exception("Error flushing Langfuse export channels on shutdown: %s", e)
 
     ## RESET CUSTOM VARIABLES ##
     cleanup_router_config_variables()

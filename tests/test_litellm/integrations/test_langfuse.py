@@ -35,29 +35,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         )
         self.env_patcher.start()
 
-        # Create mock objects
-        self.mock_langfuse_client = MagicMock()
-        # Mock the client attribute to prevent errors during logger initialization
-        self.mock_langfuse_client.client = MagicMock()
-        self.mock_langfuse_trace = MagicMock()
-        self.mock_langfuse_generation = MagicMock()
-        self.mock_langfuse_generation.trace_id = "test-trace-id"
-
-        # Mock span method for trace (used by log_provider_specific_information_as_span and _log_guardrail_information_as_span)
-        self.mock_langfuse_span = MagicMock()
-        self.mock_langfuse_span.end = MagicMock()
-        self.mock_langfuse_trace.span.return_value = self.mock_langfuse_span
-
-        # Setup the trace and generation chain
-        self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
-        self.last_trace_kwargs = {}
-
-        def _trace_side_effect(*args, **kwargs):
-            self.last_trace_kwargs = kwargs
-            return self.mock_langfuse_trace
-
-        self.mock_langfuse_client.trace.side_effect = _trace_side_effect
-
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import SimpleSpanProcessor
         from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -68,17 +45,9 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.real_provider = TracerProvider()
         self.real_provider.add_span_processor(SimpleSpanProcessor(self.span_exporter))
 
-        # the real SDK is installed; inject the client instead of replacing the module,
-        # so the v4 imports under test resolve normally
-        import langfuse as _langfuse_module
-
-        self.real_langfuse_class = _langfuse_module.Langfuse
-        # no patching: the host above is unreachable, so a real client is cheap to build
-        # and each test swaps in the client it wants
+        # the host above is unreachable, so the REST client is cheap to build
+        # and each test swaps in the export channel it wants
         self.logger = LangFuseLogger()
-
-        # Explicitly set the Langfuse client to our mock
-        self.logger.Langfuse = self.mock_langfuse_client
 
         # Add the log_event_on_langfuse method to the instance
         def log_event_on_langfuse(
@@ -113,9 +82,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
     def tearDown(self):
         # Clean up logger instance to prevent state leakage
         if hasattr(self, "logger"):
-            # Reset logger's Langfuse client to break any references
-            self.logger.Langfuse = None
-            # Delete logger instance to ensure complete cleanup
             del self.logger
 
         # Restore global Langfuse client counter to prevent cross-test pollution
@@ -281,18 +247,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         Test that _log_langfuse_v2 correctly handles None values in the usage object
         by converting them to 0, preventing validation errors.
         """
-        # Reset the mock to ensure clean state; clear side_effect so return_value takes effect
-        self.mock_langfuse_client.reset_mock(side_effect=True)
-        self.mock_langfuse_trace.reset_mock(side_effect=True)
-        self.mock_langfuse_generation.reset_mock(side_effect=True)
-
-        # Re-setup the trace and generation chain with clean state
-        self.mock_langfuse_generation.trace_id = "test-trace-id"
-        mock_span = MagicMock()
-        mock_span.end = MagicMock()
-        self.mock_langfuse_trace.span.return_value = mock_span
-        self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
-
         self.use_real_langfuse_client()
 
         with (
@@ -611,9 +565,13 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         debug_langfuse dumps request metadata into the trace as a second emit site.
         It must be sourced from the allowlisted payload too.
         """
-        dumped = self._drive_with_canary(extra_metadata={"debug_langfuse": True})["metadata_passed_to_litellm"]
+        import json
+
+        self._drive_with_canary(extra_metadata={"debug_langfuse": True})
+        dumped = json.loads(self.exported_generation().attributes["langfuse.trace.metadata.metadata_passed_to_litellm"])
 
         assert "user_api_key_auth" not in dumped
+        assert dumped["first_custom"] == "keep-first"
         assert self.CANARY not in self._emitted_payload_text()
 
     def test_raw_request_metadata_reaches_the_emitted_blob_through_no_key(self):
@@ -1327,52 +1285,40 @@ def test_max_langfuse_clients_limit():
     litellm.initialized_langfuse_clients = original_initialized_langfuse_clients
 
 
-class _RecordingLangfuse:
-    last_parameters: Optional[dict] = None
-
-    def __init__(self, environment=None, **parameters):
-        type(self).last_parameters = {"environment": environment, **parameters}
-        self.client = MagicMock()
+_UNREACHABLE_HOST: Final = "http://127.0.0.1:1"
 
 
-def _build_langfuse_logger(monkeypatch) -> LangFuseLogger:
+def _build_langfuse_logger(monkeypatch, **overrides) -> LangFuseLogger:
     monkeypatch.setenv("LANGFUSE_MOCK", "false")
     monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
-    with patch("litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuse):  # test-quality-ok: the ctor must be intercepted where build_langfuse_client resolves it; a real client spawns export threads
-        return LangFuseLogger(
-            langfuse_public_key="pk-lit5228",
-            langfuse_secret="sk-lit5228",
-            langfuse_host="https://test.langfuse.com",
-        )
+    return LangFuseLogger(
+        **{
+            "langfuse_public_key": "pk-lit5228",
+            "langfuse_secret": "sk-lit5228",
+            "langfuse_host": _UNREACHABLE_HOST,
+            **overrides,
+        }
+    )
 
 
-def test_langfuse_environment_is_passed_to_sdk_client(monkeypatch):
-    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+def _exported_environment(logger: LangFuseLogger):
+    from langfuse import LangfuseOtelSpanAttributes
+
+    return logger.tracing.provider.resource.attributes.get(LangfuseOtelSpanAttributes.ENVIRONMENT)
+
+
+def test_langfuse_environment_lands_on_every_exported_span(monkeypatch):
     monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
-    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
-    with patch("litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuse):  # test-quality-ok: the ctor must be intercepted where build_langfuse_client resolves it; a real client spawns export threads
-        logger = LangFuseLogger(
-            langfuse_public_key="pk-env",
-            langfuse_secret="sk-env",
-            langfuse_host="https://test.langfuse.com",
-            langfuse_environment="staging",
-        )
+    logger = _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-env", langfuse_environment="staging")
     assert logger.langfuse_environment == "staging"
-    assert _RecordingLangfuse.last_parameters["environment"] == "staging"
+    assert _exported_environment(logger) == "staging"
 
 
 def test_langfuse_environment_falls_back_to_deployment_env_var(monkeypatch):
-    monkeypatch.setenv("LANGFUSE_MOCK", "false")
     monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "deployment-wide")
-    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
-    with patch("litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuse):  # test-quality-ok: the ctor must be intercepted where build_langfuse_client resolves it; a real client spawns export threads
-        logger = LangFuseLogger(
-            langfuse_public_key="pk-env",
-            langfuse_secret="sk-env",
-            langfuse_host="https://test.langfuse.com",
-        )
+    logger = _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-env")
     assert logger.langfuse_environment == "deployment-wide"
-    assert _RecordingLangfuse.last_parameters["environment"] == "deployment-wide"
+    assert _exported_environment(logger) == "deployment-wide"
 
 
 def test_dynamic_langfuse_environment_triggers_dynamic_logger():
@@ -1389,7 +1335,7 @@ def test_dynamic_langfuse_environment_triggers_dynamic_logger():
     assert config["langfuse_environment"] == "team-a-env"
 
 
-def test_langfuse_sdk_client_survives_httpx_cache_eviction(monkeypatch):
+def test_langfuse_rest_client_survives_httpx_cache_eviction(monkeypatch):
     import gc
     import weakref
 
@@ -1399,21 +1345,20 @@ def test_langfuse_sdk_client_survives_httpx_cache_eviction(monkeypatch):
 
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
     logger = _build_langfuse_logger(monkeypatch)
-    sdk_client = _RecordingLangfuse.last_parameters["httpx_client"]
 
     cached_handler = _get_httpx_client()
     handler_ref = weakref.ref(cached_handler)
 
-    assert sdk_client is logger.langfuse_client
-    assert sdk_client is cached_handler.client
+    assert logger.langfuse_client is cached_handler.client
 
     litellm.in_memory_llm_clients_cache = LLMClientCache()
     del cached_handler
     gc.collect()
 
     assert litellm.in_memory_llm_clients_cache.get_cache("httpx_client") is None
-    assert handler_ref() is not None, "logger must keep the handler that owns the client it handed the SDK"
-    assert not sdk_client.is_closed
+    assert handler_ref() is not None, "logger must keep the handler that owns the client behind its REST API"
+    assert not logger.langfuse_client.is_closed
+    assert logger.api_client.auth_check() is False
 
 
 def test_langfuse_logger_reuses_the_shared_cached_client(monkeypatch):
@@ -1451,16 +1396,8 @@ def _steering_logger():
     logger.tracing = build_langfuse_tracing(
         exporter=exporter, environment=None, release=None, sample_rate=1.0, flush_interval_millis=10
     )
-    logger.Langfuse = build_langfuse_client(
-        parameters={
-            "public_key": "pk-steering-test",
-            "secret_key": "sk-steering-test",
-            "base_url": "http://127.0.0.1:1",
-            "tracing_enabled": False,
-        },
-        environment=None,
-        release=None,
-        mock_mode=True,
+    logger.api_client = build_langfuse_client(
+        public_key="pk-steering-test", secret_key="sk-steering-test", base_url=_UNREACHABLE_HOST, httpx_client=None
     )
     logger.langfuse_sdk_version = installed_langfuse_version()
     return logger, exporter
@@ -1998,8 +1935,7 @@ def test_update_trace_keys_from_the_request_body_list_applies_when_enabled(monke
     assert span.attributes["langfuse.release"] == "v1.2.3"
 
 
-def test_update_trace_keys_trace_metadata_reaches_the_trace_not_just_the_generation(monkeypatch):
-    """v2 updated the trace object's metadata; v4 has to propagate it as a trace attribute."""
+def test_update_trace_keys_trace_metadata_reaches_the_trace_and_stays_off_the_generation(monkeypatch):
     rig = _steering_logger()
 
     monkeypatch.setattr(litellm, "langfuse_enable_update_trace_keys", True)
@@ -2015,7 +1951,7 @@ def test_update_trace_keys_trace_metadata_reaches_the_trace_not_just_the_generat
 
     assert span.attributes["langfuse.trace.metadata.step"] == 2
     assert span.attributes["langfuse.trace.metadata.note"] == "x" * 300
-    assert span.attributes["langfuse.observation.metadata.step"] == 2
+    assert "langfuse.observation.metadata.step" not in span.attributes
 
 
 def test_non_mapping_trace_metadata_does_not_lose_the_event():
@@ -2049,25 +1985,12 @@ def test_update_trace_keys_matches_whole_keys_not_substrings():
 
 
 def test_langfuse_environment_is_coerced_and_validated(monkeypatch):
-    monkeypatch.setenv("LANGFUSE_MOCK", "false")
     monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
-    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
-    with patch("litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuse):  # test-quality-ok: the ctor must be intercepted where build_langfuse_client resolves it; a real client spawns export threads
-        logger = LangFuseLogger(
-            langfuse_public_key="pk-env",
-            langfuse_secret="sk-env",
-            langfuse_host="https://test.langfuse.com",
-            langfuse_environment=123,  # non-string: must coerce, not crash
-        )
+    logger = _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-env", langfuse_environment=123)
     assert logger.langfuse_environment == "123"
 
     with pytest.raises(ValueError, match="langfuse_environment"):
-        LangFuseLogger(
-            langfuse_public_key="pk-env",
-            langfuse_secret="sk-env",
-            langfuse_host="https://test.langfuse.com",
-            langfuse_environment="Production",
-        )
+        _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-env", langfuse_environment="Production")
 
 
 def test_langfuse_empty_environment_falls_back_and_is_not_dynamic(monkeypatch):
@@ -2077,15 +2000,7 @@ def test_langfuse_empty_environment_falls_back_and_is_not_dynamic(monkeypatch):
     monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "production")
 
     # '' falls back to the deployment env var at init
-    monkeypatch.setenv("LANGFUSE_MOCK", "false")
-    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
-    with patch("litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuse):  # test-quality-ok: the ctor must be intercepted where build_langfuse_client resolves it; a real client spawns export threads
-        logger = LangFuseLogger(
-            langfuse_public_key="pk-env",
-            langfuse_secret="sk-env",
-            langfuse_host="https://test.langfuse.com",
-            langfuse_environment="",
-        )
+    logger = _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-env", langfuse_environment="")
     assert logger.langfuse_environment == "production"
 
     # env-only params that add nothing do not select a dynamic logger

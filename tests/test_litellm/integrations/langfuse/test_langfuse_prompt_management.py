@@ -71,20 +71,15 @@ class TestLangfusePromptManagement:
         from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
         shared_client = _get_httpx_client().client
-
-        mock_langfuse_class = MagicMock()
+        built = MagicMock()
         with (
             patch(
                 "litellm.integrations.langfuse.langfuse_prompt_management.resolve_langfuse_credentials",
                 return_value=("pk-1234", "sk-1234", "https://localhost"),
             ),
             patch(
-                "litellm.integrations.langfuse.langfuse_prompt_management.LangFuseLogger._get_langfuse_flush_interval",
-                return_value=1,
-            ),
-            patch(
-                "litellm.integrations.langfuse.langfuse_sdk.Langfuse", mock_langfuse_class
-            ),  # test-quality-ok: the ctor must be intercepted where build_langfuse_client resolves it; a real client spawns export threads
+                "litellm.integrations.langfuse.langfuse_sdk.build_langfuse_client", built
+            ),  # test-quality-ok: the REST client is built where langfuse_client_init resolves it; the transport it gets is the behavior under test
             patch(
                 "litellm.llms.custom_httpx.http_handler.get_ssl_configuration",
                 return_value=False,
@@ -96,10 +91,8 @@ class TestLangfusePromptManagement:
                 langfuse_host="https://localhost",
             )
 
-            mock_langfuse_class.assert_called_once()
-            call_kwargs = mock_langfuse_class.call_args[1]
-            assert "httpx_client" in call_kwargs
-            passed_client = call_kwargs["httpx_client"]
+            built.assert_called_once()
+            passed_client = built.call_args.kwargs["httpx_client"]
             assert isinstance(passed_client, httpx.Client)
             assert passed_client is not shared_client
             mock_get_ssl.assert_called_once()
@@ -107,32 +100,22 @@ class TestLangfusePromptManagement:
         langfuse_client_init.cache_clear()
 
 
-class _RecordingLangfuseForEnv:
-    last_environment: str | None = None
-
-    def __init__(
-        self, *, environment: str | None = None, **parameters: object
-    ) -> None:  # kwargs-ok: records only environment out of whatever langfuse_client_init forwards
-        type(self).last_environment = environment
-
-
 @pytest.mark.parametrize(
     ("env_value", "expected"),
     (("Production", "default"), ("production ", "production"), ("prod", "prod")),
 )
-def test_langfuse_client_init_resolves_deployment_environment(monkeypatch, env_value, expected):
+def test_prompt_management_logger_exports_the_resolved_deployment_environment(monkeypatch, env_value, expected):
+    from langfuse import LangfuseOtelSpanAttributes
+
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
-    monkeypatch.setenv("LANGFUSE_HOST", "https://test.langfuse.com")
+    monkeypatch.setenv("LANGFUSE_HOST", "http://127.0.0.1:1")
+    monkeypatch.setenv("LANGFUSE_MOCK", "true")
     monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", env_value)
-    monkeypatch.setattr(_RecordingLangfuseForEnv, "last_environment", None)
-    with patch(
-        "litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuseForEnv
-    ):  # test-quality-ok: the ctor must be intercepted where build_langfuse_client resolves it; a real client spawns export threads
-        langfuse_client_init.cache_clear()
-        langfuse_client_init()
     langfuse_client_init.cache_clear()
-    assert _RecordingLangfuseForEnv.last_environment == expected
+    logger = LangfusePromptManagement()
+    langfuse_client_init.cache_clear()
+    assert logger.tracing.provider.resource.attributes[LangfuseOtelSpanAttributes.ENVIRONMENT] == expected
 
 
 def test_langfuse_client_init_warns_that_upstream_langfuse_is_ignored(monkeypatch, caplog):
@@ -143,12 +126,7 @@ def test_langfuse_client_init_warns_that_upstream_langfuse_is_ignored(monkeypatc
     monkeypatch.setenv("LANGFUSE_HOST", "https://test.langfuse.com")
     monkeypatch.setenv("UPSTREAM_LANGFUSE_SECRET_KEY", "sk-upstream")
     monkeypatch.setenv("UPSTREAM_LANGFUSE_HOST", "https://upstream.example")
-    with (
-        patch(
-            "litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuseForEnv
-        ),  # test-quality-ok: the ctor must be intercepted where build_langfuse_client resolves it; a real client spawns export threads
-        caplog.at_level("WARNING", logger="LiteLLM"),
-    ):
+    with caplog.at_level("WARNING", logger="LiteLLM"):
         langfuse_client_init.cache_clear()
         langfuse_client_init()
     langfuse_client_init.cache_clear()

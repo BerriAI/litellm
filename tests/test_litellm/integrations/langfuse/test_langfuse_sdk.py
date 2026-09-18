@@ -18,7 +18,6 @@ import httpx
 import opentelemetry.trace as otel_trace
 import pytest
 from langfuse import LangfuseOtelSpanAttributes as A
-from langfuse.api import UnauthorizedError
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -36,6 +35,7 @@ from litellm.integrations.langfuse.langfuse_sdk import (
     acquire_langfuse_tracing,
     build_langfuse_client,
     build_langfuse_tracing,
+    configured_flush_at,
     configured_sample_rate,
     flush_langfuse_tracing,
     observation_attributes,
@@ -457,6 +457,165 @@ def test_configured_sample_rate_reads_the_env_var(monkeypatch: pytest.MonkeyPatc
     assert configured_sample_rate() == 0.25
 
 
+def _exported_generations(exporter: InMemorySpanExporter, tracing: LangfuseTracing, count: int) -> tuple:
+    for _ in range(count):
+        _generation(tracing, trace_id=resolve_trace_id(uuid.uuid4())).end(CALL_END)
+    tracing.flush()
+    return exporter.get_finished_spans()
+
+
+def test_full_sample_rate_exports_every_trace_even_when_the_host_turned_otel_sampling_off(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A provider built without a sampler reads ``OTEL_TRACES_SAMPLER``, which belongs to the host's tracing."""
+    monkeypatch.setenv("OTEL_TRACES_SAMPLER", "always_off")
+    exporter = InMemorySpanExporter()
+    tracing = build_langfuse_tracing(
+        exporter=exporter, environment=None, release=None, sample_rate=1.0, flush_interval_millis=10
+    )
+    assert len(_exported_generations(exporter, tracing, 5)) == 5
+
+
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [
+        ("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "4"),
+        ("OTEL_ATTRIBUTE_COUNT_LIMIT", "4"),
+        ("OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT", "8"),
+        ("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", "8"),
+    ],
+)
+def test_host_otel_span_limits_do_not_truncate_langfuse_observations(
+    monkeypatch: pytest.MonkeyPatch, variable: str, value: str
+):
+    monkeypatch.setenv(variable, value)
+    exporter = InMemorySpanExporter()
+    tracing = build_langfuse_tracing(
+        exporter=exporter, environment=None, release=None, sample_rate=1.0, flush_interval_millis=10
+    )
+    attributes = {f"langfuse.observation.metadata.k{i}": "v" * 32 for i in range(40)}
+    _generation(tracing, attributes=attributes).end(CALL_END)
+    tracing.flush()
+
+    span = _only_span(exporter, "gen")
+    assert span.dropped_attributes == 0
+    assert all(span.attributes[key] == "v" * 32 for key in attributes)
+
+
+def test_many_metadata_keys_never_evict_the_generation_input_and_output():
+    """OTel's default 128-attribute cap drops the earliest attributes, and v2 never capped metadata."""
+    exporter = InMemorySpanExporter()
+    tracing = build_langfuse_tracing(
+        exporter=exporter, environment=None, release=None, sample_rate=1.0, flush_interval_millis=10
+    )
+    attributes = {
+        A.OBSERVATION_INPUT: "the-prompt",
+        A.OBSERVATION_OUTPUT: "the-completion",
+        **{f"langfuse.observation.metadata.k{i}": str(i) for i in range(300)},
+    }
+    _generation(tracing, attributes=attributes).end(CALL_END)
+    tracing.flush()
+
+    span = _only_span(exporter, "gen")
+    assert span.dropped_attributes == 0
+    assert span.attributes[A.OBSERVATION_INPUT] == "the-prompt"
+    assert span.attributes[A.OBSERVATION_OUTPUT] == "the-completion"
+    assert span.attributes["langfuse.observation.metadata.k299"] == "299"
+
+
+def test_otel_sdk_disabled_still_wins_but_is_called_out(monkeypatch: pytest.MonkeyPatch, caplog):
+    monkeypatch.setenv("OTEL_SDK_DISABLED", "true")
+    exporter = InMemorySpanExporter()
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        tracing = build_langfuse_tracing(
+            exporter=exporter, environment=None, release=None, sample_rate=1.0, flush_interval_millis=10
+        )
+    assert "OTEL_SDK_DISABLED" in caplog.text
+    assert _exported_generations(exporter, tracing, 3) == ()
+
+
+def test_spans_carry_the_langfuse_sdk_scope_name(channel):
+    """Langfuse keys on the SDK's instrumentation scope (langfuse 4.15.2, ``langfuse/_client/constants.py``,
+    read 2026-09-17); any other scope is foreign OTel traffic whose raw attributes get echoed into metadata."""
+    tracing, exporter = channel
+    _generation(tracing).end(CALL_END)
+    tracing.flush()
+    assert _only_span(exporter, "gen").instrumentation_scope.name == "langfuse-sdk"
+
+
+class _GatedExporter(SpanExporter):
+    """Hold the export thread until released, so spans pile up in the processor queue."""
+
+    def __init__(self) -> None:
+        self.gate = threading.Event()
+        self.batches: list[int] = []
+
+    def export(self, spans) -> SpanExportResult:
+        self.gate.wait(timeout=30)
+        self.batches.append(len(spans))
+        return SpanExportResult.SUCCESS
+
+    def shutdown(self) -> None:
+        return None
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        return True
+
+
+def test_export_queue_holds_a_v2_sized_burst_while_the_destination_stalls():
+    """v2 queued 100k events; OTel's default 2048 dropped most of a burst during a destination stall."""
+    exporter = _GatedExporter()
+    tracing = build_langfuse_tracing(
+        exporter=exporter, environment=None, release=None, sample_rate=1.0, flush_interval_millis=10
+    )
+    for _ in range(6000):
+        _generation(tracing, trace_id=resolve_trace_id(uuid.uuid4())).end(CALL_END)
+    exporter.gate.set()
+    assert tracing.flush(timeout_millis=30_000) is True
+    assert sum(exporter.batches) == 6000
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(None, 512), ("64", 64), ("0", 512), ("-5", 512), ("abc", 512), ("100001", 512), ("100000", 100_000)],
+    ids=["unset", "valid", "zero", "negative", "text", "over-queue", "at-queue"],
+)
+def test_langfuse_flush_at_is_parsed_like_the_sdk_did(monkeypatch: pytest.MonkeyPatch, raw, expected, caplog):
+    if raw is None:
+        monkeypatch.delenv("LANGFUSE_FLUSH_AT", raising=False)
+    else:
+        monkeypatch.setenv("LANGFUSE_FLUSH_AT", raw)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        assert configured_flush_at() == expected
+    assert ("LANGFUSE_FLUSH_AT" in caplog.text) is (raw is not None and str(expected) != raw)
+
+
+def test_langfuse_flush_at_sizes_the_export_batches(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LANGFUSE_FLUSH_AT", "64")
+    exporter = _GatedExporter()
+    exporter.gate.set()
+    tracing = build_langfuse_tracing(
+        exporter=exporter,
+        environment=None,
+        release=None,
+        sample_rate=1.0,
+        flush_interval_millis=60_000,
+        flush_at=configured_flush_at(),
+    )
+    for _ in range(200):
+        _generation(tracing, trace_id=resolve_trace_id(uuid.uuid4())).end(CALL_END)
+    tracing.flush()
+    assert sum(exporter.batches) == 200
+    assert max(exporter.batches) == 64
+
+
+def test_acquired_channel_reads_langfuse_flush_at(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LANGFUSE_FLUSH_AT", "7")
+    small = _acquire(public_key="pk-flush-at-test")
+    monkeypatch.setenv("LANGFUSE_FLUSH_AT", "9")
+    assert _acquire(public_key="pk-flush-at-test") is not small
+
+
 def test_channel_does_not_take_over_the_process_tracer_provider():
     provider_before = otel_trace.get_tracer_provider()
 
@@ -589,82 +748,97 @@ def test_a_changed_sample_rate_rebuilds_the_channel(monkeypatch: pytest.MonkeyPa
     assert "TraceIdHashSampler" not in full.provider.sampler.get_description()
 
 
-def test_sdk_client_rest_api_follows_the_supplied_credentials_not_the_registry():
-    """The SDK keeps one resource bundle per public key, so a rotated secret or another host
-    would otherwise keep authenticating prompt fetches with whatever it saw first."""
-    requests = []
-
+def _recording_transport(requests: list[httpx.Request], status: int = 401) -> httpx.Client:
     def record(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(401, json={"message": "unauthorized"})
+        return httpx.Response(status, json=_PROJECTS_BODY if status == 200 else {"message": "unauthorized"})
 
-    parameters = {
-        "public_key": "pk-rest-test",
-        "secret_key": "sk-first",
-        "base_url": "http://127.0.0.1:1",
-        "httpx_client": httpx.Client(transport=httpx.MockTransport(record)),
-    }
-    build_langfuse_client(parameters=parameters, environment=None, release=None, mock_mode=True)
+    return httpx.Client(transport=httpx.MockTransport(record))
+
+
+_PROJECTS_BODY: Final = {
+    "data": [{"id": "proj-under-test", "name": "p", "metadata": {}, "organization": {"id": "o", "name": "o"}}]
+}
+
+
+def test_rest_client_authenticates_with_the_credentials_it_was_built_with():
+    """Two loggers for one public key but different secrets or hosts each talk to their own project."""
+    requests: list[httpx.Request] = []
+    build_langfuse_client(
+        public_key="pk-rest-test",
+        secret_key="sk-first",
+        base_url="http://127.0.0.1:1",
+        httpx_client=_recording_transport(requests),
+    )
     rotated = build_langfuse_client(
-        parameters={**parameters, "secret_key": "sk-second", "base_url": "http://127.0.0.1:2"},
-        environment=None,
-        release=None,
-        mock_mode=True,
+        public_key="pk-rest-test",
+        secret_key="sk-second",
+        base_url="http://127.0.0.1:2",
+        httpx_client=_recording_transport(requests),
     )
 
-    with pytest.raises(UnauthorizedError):
-        rotated.auth_check()
+    assert rotated.auth_check() is False
     assert requests[-1].url.host == "127.0.0.1" and requests[-1].url.port == 2
     assert requests[-1].headers["authorization"] == "Basic " + b64encode(b"pk-rest-test:sk-second").decode()
 
 
-def test_sdk_client_without_keys_is_built_disabled_and_fails_auth_check(monkeypatch):
+def test_rest_client_without_keys_fails_auth_check_instead_of_raising(monkeypatch):
     """``/health/services?service=langfuse`` with no credentials must report a failed check, not crash."""
     for name in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
         monkeypatch.delenv(name, raising=False)
-    client = build_langfuse_client(
-        parameters={"public_key": None, "secret_key": None, "base_url": "http://127.0.0.1:1"},
-        environment=None,
-        release=None,
-        mock_mode=True,
-    )
+    client = build_langfuse_client(public_key=None, secret_key=None, base_url="http://127.0.0.1:1", httpx_client=None)
     assert client.auth_check() is False
 
 
-@pytest.mark.parametrize("raw", ["1.5", "-0.5", "abc"])
-def test_sdk_client_is_built_despite_an_unusable_sample_rate(monkeypatch: pytest.MonkeyPatch, raw: str):
-    """The SDK parses ``LANGFUSE_SAMPLE_RATE`` itself and would raise, which took the whole callback down."""
-    monkeypatch.setenv("LANGFUSE_SAMPLE_RATE", raw)
-    requests = []
-
-    def record(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return httpx.Response(401, json={"message": "unauthorized"})
-
+def test_rest_client_reports_the_project_id_and_a_passing_auth_check():
+    requests: list[httpx.Request] = []
     client = build_langfuse_client(
-        parameters={
-            "public_key": "pk-sr-test-" + raw,
-            "secret_key": "sk",
-            "base_url": "http://127.0.0.1:1",
-            "httpx_client": httpx.Client(transport=httpx.MockTransport(record)),
-        },
-        environment=None,
-        release=None,
-        mock_mode=True,
+        public_key="pk-project-test",
+        secret_key="sk",
+        base_url="http://127.0.0.1:1",
+        httpx_client=_recording_transport(requests, status=200),
     )
-
-    with pytest.raises(UnauthorizedError):
-        client.auth_check()
-    assert requests[-1].headers["authorization"] == "Basic " + b64encode(f"pk-sr-test-{raw}:sk".encode()).decode()
+    assert client.project_id() == "proj-under-test"
+    assert client.auth_check() is True
 
 
-def test_sdk_client_does_not_take_over_the_process_tracer_provider():
+def test_rest_client_leaves_a_host_applications_langfuse_client_alone():
+    """The SDK hands every ``Langfuse()`` built for one public key the same resource bundle, so a
+    litellm-built SDK client used to make a host application's client fetch through litellm's
+    host, secret and httpx client. litellm now speaks REST directly and registers nothing."""
+    from langfuse import Langfuse
+
+    requests: list[httpx.Request] = []
+    litellm_client = build_langfuse_client(
+        public_key="pk-shared-with-host",
+        secret_key="sk-litellm",
+        base_url="http://litellm.example",
+        httpx_client=_recording_transport(requests, status=200),
+    )
+    assert litellm_client.project_id() == "proj-under-test"
+
+    host_requests: list[httpx.Request] = []
+    host = Langfuse(
+        public_key="pk-shared-with-host",
+        secret_key="sk-host",
+        base_url="http://host.example",
+        httpx_client=_recording_transport(host_requests, status=200),
+        tracing_enabled=False,
+    )
+    try:
+        assert host.auth_check() is True
+    finally:
+        host.shutdown()
+
+    assert [request.url.host for request in requests] == ["litellm.example"]
+    assert host_requests[-1].url.host == "host.example"
+    assert host_requests[-1].headers["authorization"] == "Basic " + b64encode(b"pk-shared-with-host:sk-host").decode()
+
+
+def test_rest_client_does_not_take_over_the_process_tracer_provider():
     provider_before = otel_trace.get_tracer_provider()
     build_langfuse_client(
-        parameters={"public_key": "pk-sdk-global-test", "secret_key": "sk", "base_url": "http://127.0.0.1:1"},
-        environment=None,
-        release=None,
-        mock_mode=True,
+        public_key="pk-sdk-global-test", secret_key="sk", base_url="http://127.0.0.1:1", httpx_client=None
     )
     assert otel_trace.get_tracer_provider() is provider_before
 

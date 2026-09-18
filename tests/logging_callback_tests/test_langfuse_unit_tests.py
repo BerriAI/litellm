@@ -354,7 +354,7 @@ def test_langfuse_e2e_sync(monkeypatch):
         )
         for logger in litellm.logging_callback_manager._get_all_callbacks():
             if isinstance(logger, LangFuseLogger):
-                logger.Langfuse.flush()
+                logger.flush()
         deadline = time.time() + 10
         while not received_paths and time.time() < deadline:
             time.sleep(0.1)

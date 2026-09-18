@@ -22,7 +22,6 @@ from ..prompt_management_base import PromptManagementBase
 from .langfuse import (
     LangFuseLogger,
     installed_langfuse_version,
-    parse_langfuse_debug,
     raise_if_unsupported_langfuse_version,
     resolve_langfuse_credentials,
     warn_if_upstream_langfuse_configured,
@@ -31,12 +30,13 @@ from .langfuse_handler import LangFuseHandler
 from .langfuse_mock_client import create_mock_langfuse_client, should_use_langfuse_mock
 
 if TYPE_CHECKING:
-    from langfuse import Langfuse
     from langfuse.model import ChatPromptClient, TextPromptClient
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-    LangfuseClass: TypeAlias = Langfuse
+    from .langfuse_sdk import LangfuseApiClient
+
+    LangfuseClass: TypeAlias = LangfuseApiClient
 
     PROMPT_CLIENT = TextPromptClient | ChatPromptClient
 else:
@@ -56,24 +56,22 @@ def langfuse_client_init(
     allow_env_credentials: bool = True,
 ) -> LangfuseClass:
     """
-    Initialize Langfuse client with caching to prevent multiple initializations.
+    Initialize the Langfuse REST client with caching to prevent multiple initializations.
 
     Args:
         langfuse_public_key (str, optional): Public key for Langfuse. Defaults to None.
         langfuse_secret (str, optional): Secret key for Langfuse. Defaults to None.
         langfuse_host (str, optional): Host URL for Langfuse. Defaults to None.
-        flush_interval (int, optional): Flush interval in seconds. Defaults to 1.
+        flush_interval (int, optional): Kept in the signature so cached callers keep their cache key.
 
     Returns:
-        Langfuse: Initialized Langfuse client instance
+        LangfuseApiClient: prompt, auth and project lookups for one credential set
 
     Raises:
         Exception: If langfuse package is not installed
     """
     try:
-        from langfuse import (
-            Langfuse,  # noqa: F401  # the import is the install probe; construction happens in build_langfuse_client
-        )
+        from .langfuse_sdk import build_langfuse_client
     except Exception as e:
         raise Exception(
             f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\n\033[0m"
@@ -91,18 +89,6 @@ def langfuse_client_init(
         # add http:// if unset, assume communicating over private network - e.g. render
         langfuse_host = "http://" + langfuse_host
 
-    langfuse_release: Final = os.getenv("LANGFUSE_RELEASE")
-    langfuse_debug: Final = parse_langfuse_debug(os.getenv("LANGFUSE_DEBUG"))
-
-    parameters: Final = {
-        "public_key": public_key,
-        "secret_key": secret_key,
-        "base_url": langfuse_host,
-        "release": langfuse_release,
-        "debug": langfuse_debug,
-        "flush_interval": LangFuseLogger._get_langfuse_flush_interval(flush_interval),  # pyright: ignore[reportPrivateUsage]  # shared env-fallback helper, not part of the logger's API
-    }
-
     raise_if_unsupported_langfuse_version(installed_langfuse_version())
     warn_if_upstream_langfuse_configured()
 
@@ -112,28 +98,20 @@ def langfuse_client_init(
 
     from ...llms.custom_httpx.http_handler import get_ssl_configuration
 
-    is_mock_mode: Final = should_use_langfuse_mock()
-    parameters["httpx_client"] = (
+    httpx_client: Final = (
         create_mock_langfuse_client()
-        if is_mock_mode
+        if should_use_langfuse_mock()
         else httpx.Client(
             verify=get_ssl_configuration(),
             cert=os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate),
         )
     )
-
-    parameters["environment"] = LangFuseLogger.resolve_deployment_environment()
-
-    from .langfuse_sdk import build_langfuse_client
-
-    client: Final = build_langfuse_client(
-        parameters=parameters,
-        environment=parameters["environment"],
-        release=langfuse_release,
-        mock_mode=is_mock_mode,
+    return build_langfuse_client(
+        public_key=public_key,
+        secret_key=secret_key,
+        base_url=langfuse_host,
+        httpx_client=httpx_client,
     )
-
-    return client
 
 
 def _remember_trace_id(litellm_call_id: object, logged: LangfuseLoggedEvent) -> None:
@@ -157,7 +135,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
 
         from .langfuse_sdk import acquire_langfuse_tracing
 
-        self.Langfuse = langfuse_client_init(
+        self.api_client = langfuse_client_init(
             langfuse_public_key=langfuse_public_key,
             langfuse_secret=langfuse_secret,
             langfuse_host=langfuse_host,
