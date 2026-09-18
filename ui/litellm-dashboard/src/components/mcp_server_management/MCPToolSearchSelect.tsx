@@ -9,11 +9,25 @@ const OPTIONS = [
   { value: "disabled", label: "Disabled" },
 ] as const;
 
-const toOptionValue = (value: McpToolSearchSetting): string =>
-  value === true ? "enabled" : value === false ? "disabled" : "inherit";
+const toOptionValue = (value: McpToolSearchSetting): string => {
+  if (value === true) {
+    return "enabled";
+  }
+  if (value === false) {
+    return "disabled";
+  }
+  return "inherit";
+};
 
-const fromOptionValue = (value: string | null): McpToolSearchSetting =>
-  value === "enabled" ? true : value === "disabled" ? false : null;
+const fromOptionValue = (value: string | null): McpToolSearchSetting => {
+  if (value === "enabled") {
+    return true;
+  }
+  if (value === "disabled") {
+    return false;
+  }
+  return null;
+};
 
 interface MCPToolSearchSelectProps {
   id?: string;
