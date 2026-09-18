@@ -67401,7 +67401,7 @@
         "supports_audio_input": false,
         "supports_function_calling": true,
         "supports_pdf_input": false,
-        "supports_prompt_caching": false,
+        "supports_prompt_caching": true,
         "supports_reasoning": false,
         "supports_tool_choice": true,
         "supports_response_schema": true,
@@ -71655,6 +71655,7 @@
         "supports_web_search": false
     },
     "openrouter/dots-studio/dots-3-note-preview:free": {
+        "deprecation_date": "2026-09-30",
         "input_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
         "max_input_tokens": 512000,
