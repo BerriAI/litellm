@@ -1937,6 +1937,44 @@ async def test_list_batches_registers_and_returns_unified_output_file_ids():
 
 
 @pytest.mark.asyncio
+async def test_afile_list_returns_persisted_batch_output_file():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    unified_file_id = "managed-output-file-id"
+    row = MagicMock()
+    row.unified_file_id = unified_file_id
+    row.file_object = OpenAIFileObject(
+        id=unified_file_id,
+        object="file",
+        purpose="batch_output",
+        filename="output.jsonl.out",
+        created_at=1,
+        bytes=42,
+        status="processed",
+    ).model_dump()
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_managedfiletable.find_many = AsyncMock(return_value=[row])
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+
+    result = await proxy_managed_files.afile_list(
+        purpose="batch_output",
+        user_api_key_dict=UserAPIKeyAuth(user_id="owner-user"),
+        litellm_parent_otel_span=None,
+        limit=10,
+    )
+
+    listed = result.data[0]
+    assert listed.id == unified_file_id
+    assert listed.filename == "output.jsonl.out"
+    assert listed.bytes == 42
+    assert listed.purpose == "batch_output"
+
+
+@pytest.mark.asyncio
 async def test_list_batches_resolves_existing_managed_rows_without_minting():
     """When the raw provider file IDs already have managed file rows, listing must
     swap in the existing unified IDs via one bulk lookup for the whole page, with
