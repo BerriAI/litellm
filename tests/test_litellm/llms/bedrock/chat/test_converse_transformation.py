@@ -4,6 +4,7 @@ import os
 import httpx
 import pytest
 
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -7402,23 +7403,25 @@ def test_transform_response_honors_json_mode_kwarg_when_optional_params_lack_it(
     assert json.loads(result.choices[0].message.content) == {"city": "Paris", "population": 2100000}
 
 
-FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14"
-EAGER_TOOL_SCHEMA = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+FINE_GRAINED_TOOL_STREAMING_BETA: Final = "fine-grained-tool-streaming-2025-05-14"
+EAGER_TOOL_SCHEMA: Final = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
 
 
-def _eager_openai_tool(**extra):
+def _eager_openai_tool(**extra: object) -> dict[str, object]:
     return {"type": "function", "function": {"name": "write_file", "parameters": EAGER_TOOL_SCHEMA}, **extra}
 
 
-def _eager_openai_function_tool(**extra):
+def _eager_openai_function_tool(**extra: object) -> dict[str, object]:
     return {"type": "function", "function": {"name": "write_file", "parameters": EAGER_TOOL_SCHEMA, **extra}}
 
 
-def _eager_anthropic_tool(**extra):
+def _eager_anthropic_tool(**extra: object) -> dict[str, object]:
     return {"name": "write_file", "input_schema": EAGER_TOOL_SCHEMA, **extra}
 
 
-def _converse_request(model, tools, headers=None):
+def _converse_request(
+    model: str, tools: list[dict[str, object]], headers: dict[str, object] | None = None
+) -> dict[str, object]:
     return AmazonConverseConfig()._transform_request_helper(
         model=model,
         system_content_blocks=[],

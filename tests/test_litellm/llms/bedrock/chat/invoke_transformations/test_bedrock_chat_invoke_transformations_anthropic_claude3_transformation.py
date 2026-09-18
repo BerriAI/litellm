@@ -1,6 +1,7 @@
 import asyncio
 import json
 import uuid
+from typing import Final
 from unittest.mock import patch
 
 import httpx
@@ -861,14 +862,16 @@ def test_bedrock_chat_invoke_tool_search_beta_follows_model_map(
     assert result.get("anthropic_beta") == expected_betas
 
 
-FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14"
-EAGER_TOOL_SCHEMA = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+FINE_GRAINED_TOOL_STREAMING_BETA: Final = "fine-grained-tool-streaming-2025-05-14"
+EAGER_TOOL_SCHEMA: Final = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
 
 
-def _chat_invoke_request_with_tools(tools, headers=None):
-    config = AmazonAnthropicClaudeConfig()
-    model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-    optional_params = config.map_openai_params(
+def _chat_invoke_request_with_tools(
+    tools: list[dict[str, object]], headers: dict[str, str] | None = None
+) -> dict[str, object]:
+    config: Final = AmazonAnthropicClaudeConfig()
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    optional_params: Final = config.map_openai_params(
         non_default_params={"max_tokens": 64, "stream": True, "tools": tools},
         optional_params={},
         model=model,
@@ -883,7 +886,7 @@ def _chat_invoke_request_with_tools(tools, headers=None):
     )
 
 
-def _eager_openai_tool(name, **extra):
+def _eager_openai_tool(name: str, **extra: object) -> dict[str, object]:
     return {"type": "function", "function": {"name": name, "parameters": EAGER_TOOL_SCHEMA}, **extra}
 
 
