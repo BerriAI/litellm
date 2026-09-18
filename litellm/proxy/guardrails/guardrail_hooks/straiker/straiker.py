@@ -166,6 +166,22 @@ _JSON_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 class _WebhookFailure:
     message: str
     is_unreachable: bool
+    retryable: bool = False
+
+
+def _status_failure(status: int, text: str) -> _WebhookFailure:
+    return _WebhookFailure(
+        f"HTTP {status}: {text[:200]}",
+        is_unreachable=status in UNREACHABLE_STATUS,
+        retryable=status in RETRY_STATUS,
+    )
+
+
+def _error_response_text(response: httpx.Response) -> str:
+    try:
+        return response.text
+    except Exception:  # noqa: BLE001  # a masked response may carry no body
+        return ""
 
 
 def _as_dict(value: object) -> dict:
@@ -840,66 +856,44 @@ class StraikerGuardrail(CustomGuardrail):
             )
 
         for attempt in range(attempts):
-            try:
-                try:
-                    resp = await self.async_handler.post(url, content=body, headers=headers, timeout=self.timeout)
-                except httpx.HTTPStatusError as status_error:
-                    # LiteLLM's client raises on any non-2xx, so an error status never reaches
-                    # the branch below on its own. Treat it as the same failure a plain client
-                    # would have returned: retryable when the status says so, otherwise final.
-                    status: int = status_error.response.status_code
-                    text: str = ""
-                    try:
-                        text = status_error.response.text
-                    except Exception:  # noqa: BLE001 - masked responses may lack a body
-                        text = ""
-                    last_failure = _WebhookFailure(
-                        f"HTTP {status}: {text[:200]}", is_unreachable=status in UNREACHABLE_STATUS
-                    )
-                    if status not in RETRY_STATUS:
-                        return None, last_failure
-                    if attempt < attempts - 1:
-                        backoff = min(self.initial_backoff * (2**attempt), self.max_backoff)
-                        await asyncio.sleep(random.uniform(0, backoff))
-                    continue
-                if resp.status_code == 200:
-                    try:
-                        body = resp.json()
-                        parsed = (
-                            _v3_response(body)
-                            if self.api_version == "v3"
-                            else StraikerWebhookResponse.model_validate(body)
-                        )
-                    except (ValidationError, json.JSONDecodeError) as ve:
-                        return None, _WebhookFailure(f"invalid response schema: {ve}", is_unreachable=False)
-                    if self.verbose:
-                        verbose_proxy_logger.info(
-                            json.dumps(
-                                {
-                                    "event": "straiker.webhook_response",
-                                    "status_code": resp.status_code,
-                                    "body": body,
-                                },
-                                default=str,
-                            )
-                        )
-                    return parsed, None
-                last_failure = _WebhookFailure(
-                    f"HTTP {resp.status_code}: {resp.text[:200]}",
-                    is_unreachable=resp.status_code in UNREACHABLE_STATUS,
-                )
-                if resp.status_code not in RETRY_STATUS:
-                    return None, last_failure
-            except (httpx.RequestError, asyncio.TimeoutError, Timeout) as e:
-                last_failure = _WebhookFailure(f"{type(e).__name__}: {e}", is_unreachable=True)
-            except (json.JSONDecodeError, TypeError, ValueError) as e:
-                return None, _WebhookFailure(f"{type(e).__name__}: {e}", is_unreachable=False)
-
+            parsed, last_failure = await self._attempt(url, body, headers)
+            if last_failure is None or not last_failure.retryable:
+                return parsed, last_failure
             if attempt < attempts - 1:
                 backoff = min(self.initial_backoff * (2**attempt), self.max_backoff)
                 await asyncio.sleep(random.uniform(0, backoff))
 
         return None, last_failure or _WebhookFailure("unknown error", is_unreachable=True)
+
+    async def _attempt(
+        self, url: str, body: bytes, headers: Mapping[str, str]
+    ) -> tuple[StraikerWebhookResponse | None, _WebhookFailure | None]:
+        try:
+            resp = await self.async_handler.post(url, content=body, headers=headers, timeout=self.timeout)
+        except httpx.HTTPStatusError as status_error:
+            return None, _status_failure(status_error.response.status_code, _error_response_text(status_error.response))
+        except (httpx.RequestError, asyncio.TimeoutError, Timeout) as e:
+            return None, _WebhookFailure(f"{type(e).__name__}: {e}", is_unreachable=True, retryable=True)
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
+            return None, _WebhookFailure(f"{type(e).__name__}: {e}", is_unreachable=False)
+        if resp.status_code == 200:
+            return self._parse_verdict(resp)
+        return None, _status_failure(resp.status_code, resp.text)
+
+    def _parse_verdict(self, resp: httpx.Response) -> tuple[StraikerWebhookResponse | None, _WebhookFailure | None]:
+        try:
+            body = resp.json()
+            parsed = _v3_response(body) if self.api_version == "v3" else StraikerWebhookResponse.model_validate(body)
+        except (ValidationError, json.JSONDecodeError) as ve:
+            return None, _WebhookFailure(f"invalid response schema: {ve}", is_unreachable=False)
+        if self.verbose:
+            verbose_proxy_logger.info(
+                json.dumps(
+                    {"event": "straiker.webhook_response", "status_code": resp.status_code, "body": body},
+                    default=str,
+                )
+            )
+        return parsed, None
 
     def _record(
         self,
