@@ -8,7 +8,7 @@
 ## This provides an LLM Guard Integration for content moderation on the proxy
 
 import asyncio
-from typing import Optional
+from typing import Final, Optional
 
 import aiohttp
 from fastapi import HTTPException
@@ -137,15 +137,25 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             return
 
         self.print_verbose("Makes LLM Guard Check")
-        if call_type not in [
+        accepted_call_types: Final = (
             "completion",
+            "acompletion",
+            "text_completion",
+            "atext_completion",
             "embeddings",
+            "embedding",
+            "aembedding",
             "image_generation",
+            "aimage_generation",
             "moderation",
+            "amoderation",
             "audio_transcription",
-        ]:
+            "transcription",
+            "atranscription",
+        )
+        if call_type not in accepted_call_types:
             self.print_verbose(
-                f"Call Type - {call_type}, not in accepted list - ['completion','embeddings','image_generation','moderation','audio_transcription']"
+                f"Call Type - {call_type}, not in accepted list - {accepted_call_types}"
             )
             return data
 
