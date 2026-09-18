@@ -2967,9 +2967,15 @@ def test_gemini_embedding_2_ga_in_cost_map():
         assert info.get("mode") == "embedding"
         assert info.get("supports_multimodal") is True
         assert info.get("input_cost_per_token") == 2e-07
-        assert info.get("input_cost_per_image") == 0.00012
-        assert info.get("input_cost_per_audio_per_second") == 0.00016
-        assert info.get("input_cost_per_video_per_second") == 0.00079
+        if key.endswith("gemini-embedding-2"):
+            assert info.get("input_cost_per_audio_token") == 6.5e-06
+            assert info.get("input_cost_per_image_token") == 4.5e-07
+            assert info.get("input_cost_per_token_batches") == 1e-07
+            assert info.get("input_cost_per_video_token") == 1.2e-05
+        else:
+            assert info.get("input_cost_per_image") == 0.00012
+            assert info.get("input_cost_per_audio_per_second") == 0.00016
+            assert info.get("input_cost_per_video_per_second") == 0.00079
         if provider in ("vertex_ai-embedding-models", "vertex_ai"):
             assert (
                 info.get("uses_embed_content") is True
@@ -6503,3 +6509,4 @@ def test_completion_finishes_response_metadata_before_handing_the_response_to_th
     assert snapshot["litellm_call_id"]
     assert snapshot["response_cost"] is not None
     assert snapshot["api_base"]
+
