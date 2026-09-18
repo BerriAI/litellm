@@ -6214,7 +6214,6 @@ async def test_prompt_hooks_compose_vector_search_with_anthropic_cache_control(l
     )
     monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
 
-    # main.py:504 seeds this key at runtime before the prompt-management hook is selected.
     AnthropicCacheControlHook.maybe_seed_default_injection_points(
         non_default_params=params, messages=messages, model=model, custom_llm_provider="bedrock"
     )
@@ -6225,35 +6224,40 @@ async def test_prompt_hooks_compose_vector_search_with_anthropic_cache_control(l
     )
     assert isinstance(selected, AnthropicCacheControlHook)
 
-    search: Final = AsyncMock(
-        return_value=VectorStoreSearchResponse(
-            object="vector_store.search_results.page",
-            search_query="What does the handbook say about refunds?",
-            data=[
-                VectorStoreSearchResult(
-                    score=1.0,
-                    content=[VectorStoreResultContent(text="Refunds take seven days", type="text")],
-                )
-            ],
-        )
-    )
+    class _RecordingRouter:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def avector_store_search(self, **kwargs: object) -> VectorStoreSearchResponse:
+            self.calls.append(kwargs)
+            return VectorStoreSearchResponse(
+                object="vector_store.search_results.page",
+                search_query="What does the handbook say about refunds?",
+                data=[
+                    VectorStoreSearchResult(
+                        score=1.0,
+                        content=[VectorStoreResultContent(text="Refunds take seven days", type="text")],
+                    )
+                ],
+            )
+
+    router = _RecordingRouter()
     runtime = MagicMock()
-    runtime.llm_router.return_value = None
+    runtime.llm_router.return_value = router
     runtime.prisma_client.return_value = None
     vector_store_hook = VectorStorePreCallHook(proxy_runtime=runtime)
     previous_loggers = tuple(logging_module._in_memory_loggers)
     logging_module._in_memory_loggers.clear()
     logging_module._in_memory_loggers.append(vector_store_hook)
     try:
-        with patch("litellm.vector_stores.asearch", search):
-            _, result_messages, remaining_params = await logging_obj.async_get_chat_completion_prompt(
-                model=model,
-                messages=messages,
-                non_default_params=params,
-                prompt_variables=None,
-            )
+        _, result_messages, remaining_params = await logging_obj.async_get_chat_completion_prompt(
+            model=model,
+            messages=messages,
+            non_default_params=params,
+            prompt_variables=None,
+        )
 
-        search.assert_awaited_once()
+        assert len(router.calls) == 1
         assert result_messages[0]["content"] == "Context:\n\nRefunds take seven days\n\n"
         assert result_messages[1]["content"] == "What does the handbook say about refunds?"
         assert result_messages[1]["cache_control"] == {"type": "ephemeral"}
