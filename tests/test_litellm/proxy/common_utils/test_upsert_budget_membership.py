@@ -280,6 +280,29 @@ async def test_create_from_temp_pair_skips_zero_team_default_cap(mock_tx, fake_u
     mock_tx.litellm_teammembership.upsert.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_create_from_plain_patch_does_not_snapshot_team_default(mock_tx, fake_user):
+    mock_tx.litellm_budgettable.find_unique = AsyncMock(
+        return_value=budget_row(budget_id="team-default-budget-1", max_budget=0.4, rpm_limit=10)
+    )
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-default",
+        user_id="user-unlinked",
+        existing_budget_id=None,
+        user_api_key_dict=fake_user,
+        budget_patch={"tpm_limit": 500},
+        team_default_budget_id="team-default-budget-1",
+    )
+
+    mock_tx.litellm_budgettable.find_unique.assert_not_awaited()
+    data = mock_tx.litellm_budgettable.create.await_args.kwargs["data"]
+    assert data["tpm_limit"] == 500
+    assert "max_budget" not in data
+    assert "rpm_limit" not in data
+    mock_tx.litellm_teammembership.upsert.assert_awaited_once()
+
+
 # TEST: clone-on-write when the membership still points at the team's shared
 # default budget. Editing this member must fork a private budget instead of
 # mutating the shared row, and cloning a duration must seed a fresh reset time.
