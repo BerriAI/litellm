@@ -23,7 +23,6 @@ from litellm.constants import (
     DAILY_GLOBAL_SPEND_RECONCILE_LOCK_TTL_SECONDS,
     DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM,
 )
-from litellm.repositories.config_repository import ConfigRepository
 
 if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
@@ -81,6 +80,17 @@ _PENDING_DAYS_SQL: Final = (
     'SELECT DISTINCT "date" FROM "LiteLLM_DailyUserSpend" WHERE "date" <= $1 '
     'AND ("date" > $2 OR "updated_at" >= $3::timestamp - INTERVAL \'1 hour\') '
     'ORDER BY "date"'
+)
+# Runs can overlap (Redis unreachable, lock expired on a long backfill), so the database keeps the
+# later of the stored and the incoming day and scan time in one statement; GREATEST skips NULL.
+_ADVANCE_MARKER_SQL: Final = (
+    'INSERT INTO "LiteLLM_Config" ("param_name", "param_value") '
+    "VALUES ($1, jsonb_build_object('reconciled_through', $2::text, 'scanned_at', $3::text)) "
+    'ON CONFLICT ("param_name") DO UPDATE SET "param_value" = jsonb_build_object('
+    "'reconciled_through', GREATEST(\"LiteLLM_Config\".\"param_value\" ->> 'reconciled_through', "
+    "EXCLUDED.\"param_value\" ->> 'reconciled_through'), "
+    "'scanned_at', GREATEST(\"LiteLLM_Config\".\"param_value\" ->> 'scanned_at', "
+    "EXCLUDED.\"param_value\" ->> 'scanned_at'))"
 )
 
 
@@ -152,31 +162,18 @@ async def reconciled_through(prisma_client: "PrismaClient") -> str | None:
     return None if marker is None else marker.reconciled_through
 
 
-async def _record_marker(prisma_client: "PrismaClient", marker: ReconciledThrough) -> None:
+async def _advance_marker(prisma_client: "PrismaClient", days: tuple[str, ...], *, scanned_at: str | None) -> None:
+    """Move the stored marker to the last of ``days`` and to ``scanned_at`` where those are later
+    than what is stored, so a slower overlapping run can only add to a faster run's marker."""
     from litellm.proxy.utils import invalidate_config_param
 
-    await ConfigRepository(prisma_client).set_param(
-        DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM, marker.model_dump_json()
+    await prisma_client.db.execute_raw(
+        _ADVANCE_MARKER_SQL,
+        DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM,
+        max(days) if days else None,
+        scanned_at,
     )
     await invalidate_config_param(DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM)
-
-
-async def _stored_marker(prisma_client: "PrismaClient") -> ReconciledThrough | None:
-    """The marker as another pod may have just written it, bypassing this pod's config cache."""
-    param: Final = await ConfigRepository(prisma_client).get_param(DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM)
-    return None if param is None else _marker_from_param_value(param.param_value)
-
-
-async def _record_advanced(prisma_client: "PrismaClient", days: tuple[str, ...], *, scanned_at: str | None) -> None:
-    """Advance the stored marker by ``days``. Two runs can overlap (Redis unreachable, lock expired
-    on a long backfill), so the base is what is stored now, not the snapshot this run scanned from:
-    a slower run may then only add to the faster run's marker, never rewind it. Without a new scan
-    time the stored one is kept."""
-    stored: Final = await _stored_marker(prisma_client)
-    kept_scanned_at: Final = None if stored is None else stored.scanned_at
-    await _record_marker(
-        prisma_client, _advanced(stored, days, scanned_at=scanned_at if scanned_at is not None else kept_scanned_at)
-    )
 
 
 async def _db_now(prisma_client: "PrismaClient") -> _NowRow:
@@ -221,14 +218,8 @@ async def run_daily_global_spend_reconcile(prisma_client: "PrismaClient") -> Rec
         marker: Final = await reconciled_through(prisma_client)
         return ReconcileResult(days_reconciled=done, reconciled_through=marker, failed_day=scan.days[len(done)])
     if scan.marker is not None or done:
-        await _record_advanced(prisma_client, done, scanned_at=scan.scanned_at)
+        await _advance_marker(prisma_client, done, scanned_at=scan.scanned_at)
     return ReconcileResult(days_reconciled=done, reconciled_through=await reconciled_through(prisma_client))
-
-
-def _advanced(marker: ReconciledThrough | None, days: tuple[str, ...], *, scanned_at: str | None) -> ReconciledThrough:
-    """The marker after ``days`` were rewritten: a late old day never moves it back."""
-    through: Final = max((marker.reconciled_through if marker is not None else "", *days))
-    return ReconciledThrough(reconciled_through=through, scanned_at=scanned_at)
 
 
 async def _reconcile_until_failure(prisma_client: "PrismaClient", scan: _PendingScan) -> tuple[str, ...]:
@@ -242,7 +233,7 @@ async def _reconcile_and_record(prisma_client: "PrismaClient", done_with_this: t
     day: Final = done_with_this[-1]
     try:
         await reconcile_day(prisma_client, day)
-        await _record_advanced(prisma_client, done_with_this, scanned_at=None)
+        await _advance_marker(prisma_client, done_with_this, scanned_at=None)
     except Exception as exc:  # noqa: BLE001  # one bad day must not lose the days already done
         verbose_proxy_logger.exception("Daily global spend reconcile: day %s failed: %s", day, exc)
         return False
