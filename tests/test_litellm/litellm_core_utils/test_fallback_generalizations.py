@@ -859,6 +859,27 @@ def test_router_registration_does_not_shadow_shipped_rules(shipped_cost_map):
     assert litellm.supports_reasoning(model="claude-opus-9", custom_llm_provider="anthropic") is True
 
 
+def test_deployment_model_info_beats_the_seeded_rule_defaults(shipped_cost_map):
+    """Seeding a registration from the rules is a floor, not an override: an explicit
+    model_info on the deployment still wins, so a non-reasoning model can be configured
+    under a reasoning-first namespace."""
+    from litellm import Router
+
+    model = "wandb/some-org/NoThink-1"
+    Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {"model": model, "api_key": "fake"},
+                "model_info": {"supports_reasoning": False},
+            }
+        ]
+    )
+
+    assert litellm.model_cost[model]["supports_reasoning"] is False
+    assert litellm.supports_reasoning(model="some-org/NoThink-1", custom_llm_provider="wandb") is False
+
+
 def test_shipped_rules_flag_unmapped_openai_reasoning_families(shipped_cost_map):
     for model in (
         "gpt-5.7-nova",
