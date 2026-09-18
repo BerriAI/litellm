@@ -12,6 +12,7 @@ from starlette.datastructures import Headers
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
     UnloadableEntitlementError,
+    _agent_capped_servers,
     _is_mcp_admitted_user_subject,
 )
 from litellm.proxy._types import (
@@ -4169,6 +4170,27 @@ async def test_get_allowed_mcp_servers_for_key_prefers_in_memory_permission():
         global_mcp_server_manager.registry.pop("direct-server", None)
 
 
+@pytest.mark.parametrize(
+    ("agent_servers", "group_ceiling", "expected"),
+    [
+        ([], frozenset({"server_1"}), ("server_1",)),
+        ([], frozenset({"server_1", "server_2", "server_3"}), ("server_1", "server_2")),
+        ([], frozenset(), ()),
+        (["server_2"], frozenset({"server_1", "server_2"}), ("server_2",)),
+        (["server_1"], frozenset({"server_2"}), ()),
+        (["server_1"], None, ("server_1",)),
+    ],
+)
+def test_agent_capped_servers_intersects_agent_config_and_access_groups(agent_servers, group_ceiling, expected):
+    """The agent's attached access groups cap the key/team servers alongside its own
+    object_permission; groups naming no server deny all."""
+    assert _agent_capped_servers(["server_1", "server_2"], agent_servers, group_ceiling) == expected
+
+
+def test_agent_capped_servers_without_agent_restrictions_is_uncapped():
+    assert _agent_capped_servers(["server_1", "server_2"], [], None) is None
+
+
 @pytest.mark.asyncio
 class TestAgentMCPPermissions:
     """Test agent-level MCP server and tool permission intersection."""
@@ -4207,6 +4229,46 @@ class TestAgentMCPPermissions:
                     result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth=user_api_key_auth)
                     assert sorted(result) == ["server_1", "server_2"]
                     mock_agent.assert_called_once_with(user_api_key_auth)
+
+    async def test_agent_access_group_server_ceiling_expands_group_servers(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+        from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling
+        from litellm.types.mcp import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        asked: list[str] = []
+
+        async def resolve(agent_id: str) -> AgentAccessGroupCeiling | None:
+            asked.append(agent_id)
+            return AgentAccessGroupCeiling(
+                access_group_ids=("ag-1",),
+                models=frozenset(),
+                mcp_server_ids=frozenset({"aliased-server"}),
+                agent_ids=frozenset(),
+            )
+
+        global_mcp_server_manager.registry["ag-server-id"] = MCPServer(
+            server_id="ag-server-id",
+            name="ag-server",
+            server_name="ag-server",
+            alias="aliased-server",
+            url="https://ag-server.example.com",
+            transport=MCPTransport.http,
+        )
+        try:
+            result = await MCPRequestHandler._get_agent_access_group_server_ceiling(
+                UserAPIKeyAuth(api_key="test-key", agent_id="agent-ag"), resolve
+            )
+        finally:
+            global_mcp_server_manager.registry.pop("ag-server-id", None)
+
+        assert result == frozenset({"ag-server-id"})
+        assert asked == ["agent-ag"]
+        assert (
+            await MCPRequestHandler._get_agent_access_group_server_ceiling(UserAPIKeyAuth(api_key="k"), resolve)
+            is None
+        )
+        assert asked == ["agent-ag"]
 
     async def test_get_allowed_mcp_servers_key_team_agent_intersection(self):
         """Key allows [1, 2], agent allows [2, 3]. Result = [2]."""

@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypedDict
 
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELM_STRING
@@ -37,6 +38,7 @@ class AgentRecordDump(TypedDict):
     agent_card_params: dict[str, object]
     static_headers: dict[str, str] | None
     extra_headers: list[str] | None
+    access_group_ids: ReadOnly[Sequence[str] | None]
     object_permission: dict[str, object] | None
     spend: float
     tpm_limit: int | None
@@ -64,6 +66,9 @@ class AgentRecord(Protocol):
 
     @property
     def object_permission(self) -> AgentObjectPermissionRecord | None: ...
+
+    @property
+    def access_group_ids(self) -> Sequence[str] | None: ...
 
     @property
     def spend(self) -> float: ...
@@ -282,6 +287,12 @@ def _resolved_agent_param_value(
     if _AGENT_PARAMS_MASKER.is_sensitive_key(key):
         return existing.get(key, _MISSING_AGENT_PARAM)
     return _MISSING_AGENT_PARAM
+
+
+def _patched_access_group_ids(agent: PatchAgentRequest) -> Mapping[str, object]:
+    if "access_group_ids" not in agent:
+        return MappingProxyType({})
+    return MappingProxyType({"access_group_ids": tuple(dict.fromkeys(agent.get("access_group_ids") or ()))})
 
 
 def _restore_redacted_litellm_params(
@@ -516,6 +527,7 @@ class AgentRegistry:
             static_headers_val: Final[str | None] = safe_dumps(dict(static_headers_obj)) if static_headers_obj else None
 
             extra_headers_val: Final = agent.get("extra_headers")
+            access_group_ids_val: Final = agent.get("access_group_ids")
 
             create_data: Final[dict[str, object]] = {
                 "agent_name": agent_name,
@@ -532,6 +544,8 @@ class AgentRegistry:
                 create_data["static_headers"] = static_headers_val
             if extra_headers_val is not None:
                 create_data["extra_headers"] = extra_headers_val
+            if access_group_ids_val is not None:
+                create_data["access_group_ids"] = tuple(dict.fromkeys(access_group_ids_val))
             if object_permission_id is not None:
                 create_data["object_permission_id"] = object_permission_id
 
@@ -601,7 +615,7 @@ class AgentRegistry:
             existing_agent: Final[Mapping[str, object]] = dict(existing_record)
 
             augment_agent: Final = {**existing_agent, **agent}
-            update_data: Final[dict[str, object]] = {}
+            update_data: Final[dict[str, object]] = {**_patched_access_group_ids(agent)}
             if augment_agent.get("agent_name"):
                 update_data["agent_name"] = augment_agent.get("agent_name")
             if "litellm_params" in agent:
@@ -703,6 +717,7 @@ class AgentRegistry:
                 safe_dumps(dict(static_headers_obj_u)) if static_headers_obj_u is not None else safe_dumps({})
             )
             extra_headers_val_u: Final = agent.get("extra_headers") or []
+            access_group_ids_val_u: Final = tuple(dict.fromkeys(agent.get("access_group_ids") or ()))
 
             update_data: Final[dict[str, object]] = {
                 "agent_name": agent_name,
@@ -710,6 +725,7 @@ class AgentRegistry:
                 "agent_card_params": agent_card_params,
                 "static_headers": static_headers_val_u,
                 "extra_headers": extra_headers_val_u,
+                "access_group_ids": access_group_ids_val_u,
                 "updated_by": updated_by,
                 "updated_at": datetime.now(timezone.utc),
             }

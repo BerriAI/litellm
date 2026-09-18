@@ -4131,6 +4131,11 @@ class ProxyErrorTypes(str, enum.Enum):
     Project does not have access to the model
     """
 
+    agent_model_access_denied = "agent_model_access_denied"
+    """
+    The agent behind the key does not have access to the model
+    """
+
     model_cost_map_missing = "model_cost_map_missing"
 
     expired_key = "expired_key"
@@ -4205,7 +4210,7 @@ class ProxyErrorTypes(str, enum.Enum):
 
     @classmethod
     def get_model_access_error_type_for_object(
-        cls, object_type: Literal["key", "user", "team", "org", "project"]
+        cls, object_type: Literal["key", "user", "team", "org", "project", "agent"]
     ) -> "ProxyErrorTypes":
         """
         Get the model access error type for object_type
@@ -4220,6 +4225,8 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.org_model_access_denied
         elif object_type == "project":
             return cls.project_model_access_denied
+        elif object_type == "agent":
+            return cls.agent_model_access_denied
 
     @classmethod
     def get_vector_store_access_error_type_for_object(
