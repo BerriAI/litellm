@@ -1,7 +1,7 @@
 use std::ffi::CStr;
 
 use litellm_callbacks::event::{CallEvent, FailureOrigin, Timing};
-use litellm_host_python::{AdapterStep, CallbackAdapter, PublicValue};
+use litellm_host_python::{LifecycleStep, PublicValue, PythonLifecycle};
 use pyo3::exceptions::asyncio::CancelledError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -24,7 +24,7 @@ fn begin<'py>(
     py: Python<'py>,
     locals: &Bound<'py, PyDict>,
     asynchronous: bool,
-) -> (LegacyLogging, AdapterStep) {
+) -> (LegacyLogging, LifecycleStep) {
     let mut logging = legacy_call(py, locals, asynchronous);
     let kwargs = local(locals, "kwargs")
         .cast_into::<PyDict>()
@@ -34,15 +34,15 @@ fn begin<'py>(
     (logging, step)
 }
 
-fn arguments<'py>(py: Python<'py>, step: AdapterStep) -> Bound<'py, PyDict> {
-    let AdapterStep::Arguments(arguments) = step else {
+fn arguments<'py>(py: Python<'py>, step: LifecycleStep) -> Bound<'py, PyDict> {
+    let LifecycleStep::Arguments(arguments) = step else {
         panic!("expected the prepared arguments");
     };
     arguments.into_bound(py)
 }
 
-fn awaits_deployment_hook(step: &AdapterStep) -> bool {
-    matches!(step, AdapterStep::Await(_))
+fn awaits_deployment_hook(step: &LifecycleStep) -> bool {
+    matches!(step, LifecycleStep::Await(_))
 }
 
 #[rstest]
@@ -121,7 +121,7 @@ logger.hooks = {'pre': lambda kwargs: kwargs}
         let step = logging
             .resume(py, Ok(local(&locals, "replacement").unbind()))
             .unwrap();
-        let AdapterStep::Response(returned) = step else {
+        let LifecycleStep::Response(returned) = step else {
             panic!("expected the finalized response");
         };
         assert!(returned.bind(py).is(local(&locals, "replacement")));
@@ -195,7 +195,7 @@ fn failure_callbacks_run_after_the_failure_hook_however_it_ends(#[case] cancelle
         };
         assert!(matches!(
             logging.resume(py, hook_result).unwrap(),
-            AdapterStep::Await(_)
+            LifecycleStep::Await(_)
         ));
         run(
             py,
@@ -237,7 +237,7 @@ kwargs = {'logger': logger}
             .unwrap()
             .unbind();
         let result = logging.begin(py, kwargs, 0.0).and_then(|step| match step {
-            AdapterStep::Await(_) => logging.resume(py, Ok(local(&locals, "kwargs").unbind())),
+            LifecycleStep::Await(_) => logging.resume(py, Ok(local(&locals, "kwargs").unbind())),
             step => Ok(step),
         });
         let error = result.err().unwrap();

@@ -81,7 +81,7 @@ fn request_boundary_selects_mistral_and_rejects_unknown_providers() {
     let request = OcrWireRequest {
         model: "mistral/model".into(),
         document: json!({"type":"document_url","document_url":"https://example.com/doc.pdf"}),
-        api_key: Some("key".into()),
+        api_key: Some(litellm_auth::SecretValue::new("key")),
         api_base: None,
         custom_llm_provider: None,
         extra_headers: None,
@@ -97,7 +97,7 @@ fn request_boundary_selects_mistral_and_rejects_unknown_providers() {
         decode_request(OcrWireRequest {
             model: "model".into(),
             document: json!({"type":"document_url","document_url":"https://example.com/doc.pdf"}),
-            api_key: Some("key".into()),
+            api_key: Some(litellm_auth::SecretValue::new("key")),
             api_base: None,
             custom_llm_provider: Some("unknown".into()),
             extra_headers: None,
@@ -194,6 +194,7 @@ async fn facade_uses_the_injected_http_client() {
 
 fn event_name(event: &CallEvent) -> &'static str {
     match event {
+        CallEvent::Started { .. } => "started",
         CallEvent::ResponseReceived { .. } => "response",
         CallEvent::Succeeded { .. } => "success",
         CallEvent::Failed { .. } => "failure",
@@ -235,7 +236,7 @@ async fn lifecycle_sends_headers_returned_by_the_before_send_operation() {
 }
 
 #[tokio::test]
-async fn before_send_context_names_passthrough_fields_and_secrets() {
+async fn before_send_context_names_the_route_and_its_secrets() {
     let (base, _, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
     let observed = Arc::new(Mutex::new(None));
     let captured = observed.clone();
@@ -254,8 +255,6 @@ async fn before_send_context_names_passthrough_fields_and_secrets() {
     assert_eq!(context.custom_llm_provider, "mistral");
     assert_eq!(context.model, "model");
     assert_eq!(wire.body["pages"], json!([0]));
-    assert!(context.passthrough_fields.contains("pages"));
-    assert!(context.passthrough_fields.contains("document"));
     assert!(context.secret_fields.is_empty());
     assert_eq!(context.optional_params["req_format"], "native");
 
@@ -279,7 +278,6 @@ async fn before_send_context_names_passthrough_fields_and_secrets() {
     perform_ocr_with(host).await.unwrap();
     server.await.unwrap();
     let context = observed.lock().unwrap().take().unwrap();
-    assert!(!context.passthrough_fields.contains("document"));
     assert_eq!(context.secret_fields, ["client_secret"]);
 }
 
@@ -296,7 +294,7 @@ async fn lifecycle_orders_hooks_and_emits_one_success() {
     server.await.unwrap();
     assert_eq!(
         *events.lock().unwrap(),
-        ["before_send", "response", "success"]
+        ["started", "before_send", "response", "success"]
     );
     assert_eq!(seen.lock().unwrap().len(), 1);
 }
@@ -311,7 +309,10 @@ async fn lifecycle_blocking_prevents_execution_and_emits_one_failure() {
     );
     let error = perform_ocr_with(host).await.unwrap_err();
     assert!(matches!(error, OcrError::InvalidRequest(message) if message == "blocked"));
-    assert_eq!(*events.lock().unwrap(), ["before_send", "failure"]);
+    assert_eq!(
+        *events.lock().unwrap(),
+        ["started", "before_send", "failure"]
+    );
 }
 
 #[tokio::test]
@@ -330,7 +331,10 @@ async fn upstream_failure_emits_one_terminal_failure() {
     );
     assert!(perform_ocr_with(host).await.is_err());
     server.await.unwrap();
-    assert_eq!(*events.lock().unwrap(), ["before_send", "failure"]);
+    assert_eq!(
+        *events.lock().unwrap(),
+        ["started", "before_send", "failure"]
+    );
     assert_eq!(seen.lock().unwrap().len(), 1);
 }
 

@@ -6,24 +6,22 @@ registries it fans out to. It expires with that contract.
 
 from __future__ import annotations
 
+import contextvars
 import datetime
-import os
+import traceback
 import uuid
-from collections.abc import Mapping
+from collections.abc import Awaitable, Coroutine, Mapping
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Final,
-    Literal,
     Protocol,
-    TypeAlias,
     cast,  # noqa: TID251  # bounded compatibility calls into legacy Python integrations
 )
 
-from typing_extensions import assert_never
-
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import CredentialItem
 
 
 class MetadataUpdater(Protocol):
@@ -42,7 +40,6 @@ class MetadataUpdater(Protocol):
 class CallSetup:
     logger: Logging
     kwargs: dict[str, object]
-    bridge_owned: bool
 
 
 def setup(
@@ -61,9 +58,9 @@ def setup(
     }
     supplied: Final = arguments.get("litellm_logging_obj")
     if isinstance(supplied, Logging):
-        return CallSetup(supplied, arguments, bridge_owned=False)
+        return CallSetup(supplied, arguments)
     logger, prepared = function_setup(call_type, Rules(), start_time, *args, is_async_call=asynchronous, **arguments)
-    return CallSetup(logger, prepared, bridge_owned=True)
+    return CallSetup(logger, prepared)
 
 
 def check_limits(kwargs: Mapping[str, object]) -> None:
@@ -93,87 +90,219 @@ def finalize(
     update(response, logger, model if isinstance(model, str) else None, kwargs, start_time, end_time)
 
 
-def deployment_callbacks_needed() -> bool:
-    import litellm
-    from litellm.integrations.custom_logger import CustomLogger
+class LoggingSurface(Protocol):
+    def update_from_kwargs(
+        self,
+        kwargs: dict[str, object],
+        litellm_params: dict[str, object] | None = None,
+        optional_params: dict[str, object] | None = None,
+        model: str | None = None,
+        user: str | None = None,
+        **additional_params: object,
+    ) -> None: ...
 
-    return any(isinstance(callback, CustomLogger) for callback in litellm.callbacks)
+    def pre_call(
+        self, input: object, api_key: object, model: object = None, additional_args: dict[str, object] = ...
+    ) -> object: ...
+
+    def post_call(
+        self,
+        original_response: object,
+        input: object = None,
+        api_key: object = None,
+        additional_args: dict[str, object] = ...,
+    ) -> object: ...
+
+    def handle_sync_success_callbacks_for_async_calls(
+        self, result: object, start_time: datetime.datetime, end_time: datetime.datetime, cache_hit: object = None
+    ) -> None: ...
+
+    def failure_handler(
+        self,
+        exception: Exception,
+        traceback_exception: str,
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+    ) -> None: ...
+
+    def async_failure_handler(
+        self,
+        exception: Exception,
+        traceback_exception: str,
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+    ) -> Coroutine[object, object, None]: ...
+
+    def success_handler(
+        self,
+        result: object = None,
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+        cache_hit: bool | None = None,
+        **kwargs: object,
+    ) -> None: ...
+
+    def async_success_handler(
+        self,
+        result: object = None,
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+        cache_hit: bool | None = None,
+        **kwargs: object,
+    ) -> Coroutine[object, object, None]: ...
 
 
-Phase: TypeAlias = Literal[
-    "input", "sync_success", "sync_success_async", "async_success", "sync_failure", "async_failure", "payload"
-]
+if TYPE_CHECKING:
+    _LOGGING_CONFORMS: type[LoggingSurface] = Logging
 
 
-def callbacks_needed(logger: Logging, phase: Phase) -> bool:
-    import litellm
-    from litellm._logging import (
-        _is_debugging_on,  # pyright: ignore[reportPrivateUsage]  # use the same debug gate as Logging
+class LoggingWorker(Protocol):
+    def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, object, None]) -> None: ...
+
+
+class DeploymentHook(Protocol):
+    def __call__(self, kwargs: dict[str, object], call_type: str) -> Awaitable[object]: ...
+
+
+class DeploymentSuccessHook(Protocol):
+    def __call__(self, request_data: dict[str, object], response: object, call_type: object) -> Awaitable[object]: ...
+
+
+class DeploymentFailureHook(Protocol):
+    def __call__(self, request_data: Mapping[str, object], exception: Exception, call_type: str) -> Awaitable[None]: ...
+
+
+def update_logging(
+    logger: LoggingSurface,
+    kwargs: dict[str, object],
+    model: str,
+    optional_params: dict[str, object],
+    litellm_params: dict[str, object],
+    custom_llm_provider: str,
+) -> None:
+    logger.update_from_kwargs(
+        kwargs=kwargs,
+        model=model,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        custom_llm_provider=custom_llm_provider,
     )
 
-    if (
-        _is_debugging_on()
-        or getattr(logger, "litellm_request_debug", False)
-        or os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD")
-    ):
-        return True
-    input_needed: Final = bool(
-        litellm.input_callback
-        or litellm._async_input_callback  # pyright: ignore[reportPrivateUsage]  # live async registries have no public accessor
-        or logger.dynamic_input_callbacks
-        or callable(getattr(logger, "logger_fn", None))
-        or logger.log_raw_request_response
-        or litellm.log_raw_request_response
+
+def pre_call(logger: LoggingSurface, input: str, api_key: str | None, additional_args: dict[str, object]) -> None:
+    logger.pre_call(input=input, api_key=api_key, additional_args=additional_args)
+
+
+def post_call(
+    logger: LoggingSurface, original_response: str, api_key: str | None, additional_args: dict[str, object]
+) -> None:
+    logger.post_call(original_response=original_response, api_key=api_key, additional_args=additional_args)
+
+
+def defers_async_logging(logger: LoggingSurface) -> bool:
+    return bool(getattr(logger, "_defer_async_logging", False))
+
+
+def defer_success(logger: LoggingSurface, pending: object) -> None:
+    setattr(logger, "_native_pending_logging", pending)
+
+
+def sync_success_for_async_call(
+    logger: LoggingSurface, response: object, start: datetime.datetime, end: datetime.datetime
+) -> None:
+    logger.handle_sync_success_callbacks_for_async_calls(result=response, start_time=start, end_time=end)
+
+
+def failure_handler(
+    logger: LoggingSurface, error: Exception, start: datetime.datetime, end: datetime.datetime, asynchronous: bool
+) -> Coroutine[object, object, None] | None:
+    trace: Final = "".join(traceback.format_exception(error))
+    if asynchronous:
+        return logger.async_failure_handler(error, trace, start, end)
+    logger.failure_handler(error, trace, start, end)
+    return None
+
+
+def submit_success(logger: LoggingSurface, response: object, start: datetime.datetime, end: datetime.datetime) -> None:
+    from litellm.litellm_core_utils.litellm_logging import executor
+
+    executor.submit(contextvars.copy_context().run, logger.success_handler, response, start, end)
+
+
+def async_success_handler(
+    logger: LoggingSurface, response: object, start: datetime.datetime, end: datetime.datetime
+) -> Coroutine[object, object, None]:
+    return logger.async_success_handler(response, start, end)
+
+
+def enqueue_logging(coroutine: Coroutine[object, object, None]) -> None:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    worker: Final = cast(  # cast-ok: bounded adapter for the untyped logging worker
+        LoggingWorker, GLOBAL_LOGGING_WORKER
     )
-    match phase:
-        case "input":
-            return input_needed
-        case "sync_success":
-            return bool(litellm.success_callback or logger.dynamic_success_callbacks)
-        case "sync_success_async":
-            return bool(
-                (litellm.success_callback or logger.dynamic_success_callbacks)
-                and logger._should_run_sync_callbacks_for_async_calls()  # pyright: ignore[reportPrivateUsage]  # preserve async call filtering of sync callbacks
-            )
-        case "async_success":
-            return bool(litellm._async_success_callback or logger.dynamic_async_success_callbacks)  # pyright: ignore[reportPrivateUsage]  # live async registries have no public accessor
-        case "sync_failure":
-            return bool(litellm.failure_callback or logger.dynamic_failure_callbacks)
-        case "async_failure":
-            return bool(litellm._async_failure_callback or logger.dynamic_async_failure_callbacks)  # pyright: ignore[reportPrivateUsage]  # live async registries have no public accessor
-        case "payload":
-            return bool(
-                input_needed
-                or litellm.success_callback
-                or litellm.failure_callback
-                or litellm._async_success_callback  # pyright: ignore[reportPrivateUsage]  # live async registries have no public accessor
-                or litellm._async_failure_callback  # pyright: ignore[reportPrivateUsage]  # live async registries have no public accessor
-                or logger.dynamic_success_callbacks
-                or logger.dynamic_async_success_callbacks
-                or logger.dynamic_failure_callbacks
-                or logger.dynamic_async_failure_callbacks
-            )
-        case _:
-            assert_never(phase)
+    contextvars.copy_context().run(worker.ensure_initialized_and_enqueue, coroutine)
 
 
-def success_bookkeeping(
-    logger: Logging, response: object, start: datetime.datetime, end: datetime.datetime, asynchronous: bool
-) -> None:
-    phase: Final = "async_success" if asynchronous else "sync_success"
-    if logger.should_run_logging(phase):
-        logger._success_handler_helper_fn(  # pyright: ignore[reportPrivateUsage]  # retain success bookkeeping without constructing a callback payload
-            result=response, start_time=start, end_time=end, build_logging_payload=False
-        )
-        logger.has_run_logging(phase)
+def restore_context(logger: LoggingSurface) -> None:
+    from litellm.utils import (
+        _restore_correlation_context_if_supported,  # pyright: ignore[reportPrivateUsage]  # the @client wrapper restores the same correlation context
+    )
+
+    _restore_correlation_context_if_supported(logger)
 
 
-def failure_bookkeeping(
-    logger: Logging, error: BaseException, start: datetime.datetime, end: datetime.datetime, asynchronous: bool
-) -> None:
-    phase: Final = "async_failure" if asynchronous else "sync_failure"
-    if logger.should_run_logging(phase):
-        logger._failure_handler_helper_fn(  # pyright: ignore[reportPrivateUsage]  # retain failure accounting without formatting an unused traceback or payload
-            error, "", start, end, build_logging_payload=False
-        )
-        logger.has_run_logging(phase)
+def custom_pricing_fields() -> tuple[str, ...]:
+    from litellm.types.utils import CustomPricingLiteLLMParams
+
+    return tuple(CustomPricingLiteLLMParams.model_fields)
+
+
+def is_internal_call() -> bool:
+    from litellm._internal_context import is_internal_call as internal
+
+    return internal.get()
+
+
+def credential_list() -> list[CredentialItem]:
+    import litellm
+
+    return litellm.credential_list
+
+
+def warn_unknown_credential(name: str, loaded: int) -> None:
+    from litellm._logging import verbose_logger
+
+    verbose_logger.warning(
+        "litellm_credential_name=%s matched none of the %d loaded credentials; the request runs without it",
+        name,
+        loaded,
+    )
+
+
+def before_deployment_call(kwargs: dict[str, object], call_type: str) -> Awaitable[object]:
+    from litellm import utils
+
+    hook: Final = cast(  # cast-ok: bounded adapter for the untyped deployment hook
+        DeploymentHook, utils.async_pre_call_deployment_hook
+    )
+    return hook(kwargs, call_type)
+
+
+def after_deployment_success(kwargs: dict[str, object], response: object, call_type: str) -> Awaitable[object]:
+    from litellm import utils
+    from litellm.types.utils import CallTypes
+
+    hook: Final = cast(  # cast-ok: bounded adapter for the untyped deployment hook
+        DeploymentSuccessHook, utils.async_post_call_success_deployment_hook
+    )
+    return hook(kwargs, response, CallTypes(call_type))
+
+
+def after_deployment_failure(kwargs: dict[str, object], error: Exception, call_type: str) -> Awaitable[None]:
+    from litellm import utils
+
+    hook: Final = cast(  # cast-ok: bounded adapter for the untyped deployment hook
+        DeploymentFailureHook, utils.async_post_call_failure_deployment_hook
+    )
+    return hook(kwargs, error, call_type)

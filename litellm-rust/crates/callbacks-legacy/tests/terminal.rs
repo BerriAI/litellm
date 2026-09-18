@@ -1,7 +1,7 @@
 use std::ffi::CStr;
 
 use litellm_callbacks::event::{CallEvent, FailureOrigin, Timing};
-use litellm_host_python::{AdapterStep, CallbackAdapter, PublicValue};
+use litellm_host_python::{LifecycleStep, PublicValue, PythonLifecycle};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::exceptions::asyncio::CancelledError;
 use pyo3::prelude::*;
@@ -19,12 +19,16 @@ const TIMING: Timing = Timing {
 
 fn logged(py: Python<'_>, locals: &Bound<'_, PyDict>, asynchronous: bool) -> LegacyLogging {
     LegacyLogging {
-        logger: Some(PythonLogger::new(local(locals, "logger").unbind(), true)),
+        logger: Some(PythonLogger::new(local(locals, "logger").unbind())),
         ..legacy_call(py, locals, asynchronous)
     }
 }
 
-fn succeed(py: Python<'_>, locals: &Bound<'_, PyDict>, logging: &mut LegacyLogging) -> AdapterStep {
+fn succeed(
+    py: Python<'_>,
+    locals: &Bound<'_, PyDict>,
+    logging: &mut LegacyLogging,
+) -> LifecycleStep {
     let response = local(locals, "response").unbind();
     logging
         .emit(
@@ -35,7 +39,7 @@ fn succeed(py: Python<'_>, locals: &Bound<'_, PyDict>, logging: &mut LegacyLoggi
         .unwrap()
 }
 
-fn fail(py: Python<'_>, locals: &Bound<'_, PyDict>, logging: &mut LegacyLogging) -> AdapterStep {
+fn fail(py: Python<'_>, locals: &Bound<'_, PyDict>, logging: &mut LegacyLogging) -> LifecycleStep {
     let failure = PyErr::from_value(local(locals, "failure"));
     logging
         .emit(
@@ -51,20 +55,14 @@ fn fail(py: Python<'_>, locals: &Bound<'_, PyDict>, logging: &mut LegacyLogging)
 
 #[rstest]
 #[case::sync_listened(false, c"", &["submit"])]
-#[case::sync_unlistened(false, c"logger.needed = {'sync_success': False}", &["success_bookkeeping"])]
 #[case::async_listened(
     true,
     c"",
     &["async_success_handler", "enqueued", "sync_success_for_async_call"]
 )]
-#[case::async_unlistened(
-    true,
-    c"logger.needed = {'async_success': False, 'sync_success_async': False}",
-    &["success_bookkeeping"]
-)]
 #[case::async_deferred(true, c"logger._defer_async_logging = True", &["sync_success_for_async_call"])]
 #[case::async_with_fallbacks(true, c"kwargs = {'fallbacks': ['other']}", &["sync_success_for_async_call"])]
-fn success_reaches_only_the_callbacks_that_listen(
+fn success_reaches_the_logging_handlers(
     #[case] asynchronous: bool,
     #[case] script: &CStr,
     #[case] expected: &[&str],
@@ -76,7 +74,7 @@ fn success_reaches_only_the_callbacks_that_listen(
         let mut logging = logged(py, &locals, asynchronous);
         assert!(matches!(
             succeed(py, &locals, &mut logging),
-            AdapterStep::Done
+            LifecycleStep::Done
         ));
         let names: Vec<String> = local(&locals, "logger")
             .call_method0("names")
@@ -109,7 +107,10 @@ fn internal_calls_skip_failure_callbacks_only_when_asynchronous(
             internal: true,
             ..logged(py, &locals, asynchronous)
         };
-        assert!(matches!(fail(py, &locals, &mut logging), AdapterStep::Done));
+        assert!(matches!(
+            fail(py, &locals, &mut logging),
+            LifecycleStep::Done
+        ));
         let names: Vec<String> = local(&locals, "logger")
             .call_method0("names")
             .unwrap()
@@ -157,7 +158,7 @@ logger = FailingLogger()
         let mut logging = logged(py, &locals, true);
         assert!(matches!(
             succeed(py, &locals, &mut logging),
-            AdapterStep::Done
+            LifecycleStep::Done
         ));
         assert!(
             logging
@@ -173,14 +174,8 @@ logger = FailingLogger()
 
 #[rstest]
 #[case::sync_listened(false, c"", &["failure_handler"])]
-#[case::sync_unlistened(false, c"logger.needed = {'sync_failure': False}", &["failure_bookkeeping"])]
 #[case::async_listened(true, c"", &["failure_handler", "async_failure_handler"])]
-#[case::async_unlistened(
-    true,
-    c"logger.needed = {'sync_failure': False, 'async_failure': False}",
-    &["failure_bookkeeping", "failure_bookkeeping"]
-)]
-fn failure_reaches_only_the_callbacks_that_listen(
+fn failure_reaches_the_logging_handlers(
     #[case] asynchronous: bool,
     #[case] script: &CStr,
     #[case] expected: &[&str],
@@ -192,7 +187,10 @@ fn failure_reaches_only_the_callbacks_that_listen(
         let mut logging = logged(py, &locals, asynchronous);
         let step = fail(py, &locals, &mut logging);
         let awaits_async_handler = expected.contains(&"async_failure_handler");
-        assert_eq!(matches!(step, AdapterStep::Await(_)), awaits_async_handler);
+        assert_eq!(
+            matches!(step, LifecycleStep::Await(_)),
+            awaits_async_handler
+        );
         let names: Vec<String> = local(&locals, "logger")
             .call_method0("names")
             .unwrap()
@@ -227,7 +225,7 @@ logger = FailingLogger()
         let mut logging = logged(py, &locals, true);
         assert!(matches!(
             fail(py, &locals, &mut logging),
-            AdapterStep::Await(_)
+            LifecycleStep::Await(_)
         ));
         assert!(
             logging
@@ -265,7 +263,7 @@ fn the_async_failure_handler_ends_the_call_unless_it_was_cancelled(
         };
         let expected = result.as_ref().err().map(|error| error.value(py).clone());
         match logging.resume(py, result) {
-            Ok(step) => assert!(done && matches!(step, AdapterStep::Done)),
+            Ok(step) => assert!(done && matches!(step, LifecycleStep::Done)),
             Err(propagated) => {
                 assert!(!done);
                 assert!(propagated.value(py).is(expected.unwrap()));

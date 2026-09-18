@@ -69,7 +69,7 @@ async fn rejects_invalid_pages_features_and_format(
     let result = decode_request(OcrWireRequest {
         model: "azure_ai/doc-intelligence/prebuilt-read".into(),
         document: json!({"type":"document_url","document_url":"https://example.com/a.pdf"}),
-        api_key: Some("key".into()),
+        api_key: Some(litellm_auth::SecretValue::new("key")),
         api_base: Some(base),
         custom_llm_provider: None,
         extra_headers: None,
