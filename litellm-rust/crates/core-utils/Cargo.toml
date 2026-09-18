@@ -13,6 +13,3 @@ serde_path_to_error = "0.1"
 serde_with.workspace = true
 thiserror.workspace = true
 url.workspace = true
-
-[dev-dependencies]
-rstest.workspace = true

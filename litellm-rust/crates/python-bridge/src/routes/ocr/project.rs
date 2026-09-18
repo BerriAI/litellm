@@ -1,8 +1,9 @@
 use litellm_core::ocr::{
-    LiteLLMOcrRequest, OcrDocumentInput,
+    types::{LiteLLMOcrRequest, OcrDocumentInput},
     wire::{OcrWireRequest, consumed_optional_params, decode_document, decode_request_input},
 };
 use litellm_host_python::from_py;
+use litellm_llms::base_llm::ocr::error::Error;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde_json::{Map, Value};
 
@@ -86,7 +87,7 @@ impl ProjectedDocument {
                 if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py)
                     || error.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
                 {
-                    ocr_error_to_pyerr(litellm_core::ocr::Error::RequestField {
+                    ocr_error_to_pyerr(Error::RequestField {
                         path: "document.type".into(),
                     })
                 } else {
@@ -157,6 +158,7 @@ pub(super) fn project_request(
 
 #[cfg(test)]
 mod tests {
+    use litellm_llms::base_llm::ocr::transformation::OcrDocument;
     use pyo3::exceptions::PyValueError;
 
     use super::*;
@@ -181,7 +183,7 @@ mod tests {
     }
 
     fn url_document(url: &str) -> OcrDocumentInput {
-        litellm_core::ocr::OcrDocument::DocumentUrl {
+        OcrDocument::DocumentUrl {
             document_url: url.into(),
             extra_fields: Default::default(),
         }

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use bytes::Bytes;
-use litellm_core::ocr::{OcrDocumentInput, OcrFileContent};
+use litellm_core::ocr::types::{OcrDocumentInput, OcrFileContent};
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
     gc::{PyTraverseError, PyVisit},

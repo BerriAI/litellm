@@ -15,9 +15,9 @@ pub enum Error {
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
     #[error(transparent)]
-    Transport(#[from] crate::transport::Error),
+    Transport(#[from] litellm_llms::custom_httpx::transport::Error),
     #[error(transparent)]
-    Headers(#[from] crate::http_utils::HeaderError),
+    Headers(#[from] litellm_llms::custom_httpx::http_handler::HeaderError),
 }
 
 impl From<LlmError> for Error {

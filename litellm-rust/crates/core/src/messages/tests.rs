@@ -82,7 +82,7 @@ fn string_headers_rejects_non_string_values() {
     let err = string_headers(Some(headers)).expect_err("non-string header rejected");
     assert_eq!(
         err,
-        Error::Headers(crate::http_utils::HeaderError {
+        Error::Headers(litellm_llms::custom_httpx::http_handler::HeaderError {
             context: "messages",
             name: "x-count".to_string(),
             actual: "number",
@@ -432,7 +432,7 @@ async fn messages_maps_provider_error_status_to_http_error() {
 
     assert!(matches!(
         err,
-        Error::Transport(crate::transport::Error::Http { status: 401, .. })
+        Error::Transport(litellm_llms::custom_httpx::transport::Error::Http { status: 401, .. })
     ));
 }
 

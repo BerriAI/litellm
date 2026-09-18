@@ -4,12 +4,12 @@ use litellm_llms::{
         AudioTranscriptionAuth, BaseAudioTranscriptionConfig,
     },
     bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG,
+    custom_httpx::http_handler::{has_header, string_headers},
 };
 
 use super::Error;
-use crate::{
-    audio_transcription::types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest},
-    http_utils::{has_header, string_headers},
+use crate::audio_transcription::types::{
+    AudioTranscriptionRequest, ProviderAudioTranscriptionRequest,
 };
 
 fn provider_config(provider: &str) -> Option<&'static dyn BaseAudioTranscriptionConfig> {
