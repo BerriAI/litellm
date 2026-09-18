@@ -183,7 +183,7 @@ describe("UserEditView", () => {
     renderWithProviders(<UserEditView {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByRole("spinbutton", { name: /max budget/i })).toBeEnabled();
+      expect(screen.getByRole("spinbutton", { name: /^max budget/i })).toBeEnabled();
     });
 
     await userEvent.click(screen.getByText("Unlimited Budget"));
@@ -191,7 +191,7 @@ describe("UserEditView", () => {
     await waitFor(() => {
       expect(screen.getByRole("checkbox", { name: "Unlimited Budget" })).toBeChecked();
     });
-    expect(screen.getByRole("spinbutton", { name: /max budget/i })).toBeDisabled();
+    expect(screen.getByRole("spinbutton", { name: /^max budget/i })).toBeDisabled();
   });
 
   it("should set unlimited budget checkbox when max_budget is null", async () => {
@@ -223,7 +223,7 @@ describe("UserEditView", () => {
     renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithNullBudget} />);
 
     await waitFor(() => {
-      const budgetInput = screen.getByRole("spinbutton", { name: /max budget/i });
+      const budgetInput = screen.getByRole("spinbutton", { name: /^max budget/i });
       expect(budgetInput).toBeDisabled();
     });
   });
@@ -232,7 +232,7 @@ describe("UserEditView", () => {
     renderWithProviders(<UserEditView {...defaultProps} />);
 
     await waitFor(() => {
-      const budgetInput = screen.getByRole("spinbutton", { name: /max budget/i });
+      const budgetInput = screen.getByRole("spinbutton", { name: /^max budget/i });
       expect(budgetInput).toBeEnabled();
     });
   });
@@ -248,7 +248,7 @@ describe("UserEditView", () => {
     await userEvent.click(checkbox);
 
     await waitFor(() => {
-      const budgetInput = screen.getByRole("spinbutton", { name: /max budget/i });
+      const budgetInput = screen.getByRole("spinbutton", { name: /^max budget/i });
       expect(budgetInput).toHaveValue(null);
     });
   });
@@ -356,7 +356,7 @@ describe("UserEditView", () => {
       expect(screen.getByText("Max Budget (USD)")).toBeInTheDocument();
     });
 
-    const budgetInput = screen.getByRole("spinbutton", { name: /max budget/i });
+    const budgetInput = screen.getByRole("spinbutton", { name: /^max budget/i });
     await userEvent.clear(budgetInput);
 
     const checkbox = screen.getByRole("checkbox", { name: "Unlimited Budget" });
@@ -468,7 +468,7 @@ describe("UserEditView", () => {
       return onSubmit.mock.calls[0][0];
     };
 
-    it("should send exactly the ten keys an admin edit produces, with seeded types preserved", async () => {
+    it("should send exactly the eleven keys an admin edit produces, with seeded types preserved", async () => {
       const payload = await submittedPayload();
 
       expect(Object.keys(payload).sort()).toEqual([
@@ -478,6 +478,7 @@ describe("UserEditView", () => {
         "mcp_tool_permissions",
         "metadata",
         "models",
+        "rollover_max_budget",
         "user_alias",
         "user_email",
         "user_id",
@@ -491,6 +492,7 @@ describe("UserEditView", () => {
         models: ["gpt-4", "gpt-3.5-turbo"],
         max_budget: 100.5,
         budget_duration: "30d",
+        rollover_max_budget: null,
         metadata: { key1: "value1", key2: "value2" },
         mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
         mcp_tool_permissions: {},
@@ -506,6 +508,7 @@ describe("UserEditView", () => {
         "max_budget",
         "metadata",
         "models",
+        "rollover_max_budget",
         "user_alias",
         "user_role",
       ]);
@@ -519,6 +522,7 @@ describe("UserEditView", () => {
         "max_budget",
         "metadata",
         "models",
+        "rollover_max_budget",
         "user_alias",
         "user_email",
         "user_id",
@@ -530,7 +534,7 @@ describe("UserEditView", () => {
       const onSubmit = vi.fn();
       renderWithProviders(<UserEditView {...defaultProps} onSubmit={onSubmit} />);
 
-      const budgetInput = await screen.findByRole("spinbutton", { name: /max budget/i });
+      const budgetInput = await screen.findByRole("spinbutton", { name: /^max budget/i });
       await userEvent.clear(budgetInput);
       await userEvent.type(budgetInput, "42.57");
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
@@ -539,6 +543,35 @@ describe("UserEditView", () => {
         expect(onSubmit).toHaveBeenCalled();
       });
       expect(onSubmit.mock.calls[0][0].max_budget).toBe("42.57");
+    });
+
+    it("should send a typed rollover cap as a number and a cleared one as null", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(
+        <UserEditView
+          {...defaultProps}
+          onSubmit={onSubmit}
+          userData={{ ...MOCK_USER_DATA, user_info: { ...MOCK_USER_DATA.user_info, rollover_max_budget: 250 } }}
+        />,
+      );
+
+      const rolloverInput = await screen.findByRole("spinbutton", { name: /rollover max budget/i });
+      expect(rolloverInput).toHaveValue(250);
+      fireEvent.change(rolloverInput, { target: { value: "300.25" } });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0].rollover_max_budget).toBe(300.25);
+
+      fireEvent.change(rolloverInput, { target: { value: "" } });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledTimes(2);
+      });
+      expect(onSubmit.mock.calls[1][0].rollover_max_budget).toBeNull();
     });
 
     it("should still submit when the loaded user has null instead of missing optional fields", async () => {
@@ -580,7 +613,7 @@ describe("UserEditView", () => {
     it("should keep the budget input's native step constraint armed", async () => {
       renderWithProviders(<UserEditView {...defaultProps} />);
 
-      const budgetInput = await screen.findByRole("spinbutton", { name: /max budget/i });
+      const budgetInput = await screen.findByRole("spinbutton", { name: /^max budget/i });
       expect(budgetInput).toHaveAttribute("step", "0.01");
       expect(budgetInput).not.toHaveAttribute("min");
       expect(budgetInput.closest("form")).not.toHaveAttribute("novalidate");

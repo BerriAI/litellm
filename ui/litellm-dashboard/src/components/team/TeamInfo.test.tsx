@@ -2171,6 +2171,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     model_tpm_limit: {},
     model_rpm_limit: {},
     max_budget: 100,
+    rollover_max_budget: null,
     soft_budget: null,
     budget_duration: "1d",
     metadata: {
@@ -2330,6 +2331,41 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     };
     expect(payload).toStrictEqual(expected);
     expect(wireBody(payload)).toStrictEqual(expected);
+  });
+
+  it("round-trips stored rollover caps and sends a typed member cap as a number", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        models: ["gpt-4"],
+        rollover_max_budget: 250,
+        team_member_budget_table: {
+          max_budget: 42,
+          rollover_max_budget: 60,
+          budget_duration: "30d",
+          tpm_limit: 11,
+          rpm_limit: 22,
+        },
+      }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+
+    expect(screen.getByLabelText("Rollover Max Budget (USD)")).toHaveValue(250);
+    await user.click(screen.getByText("Team Member Settings"));
+    const memberRollover = await screen.findByLabelText("Default Rollover Max Budget (USD)");
+    expect(memberRollover).toHaveValue(60);
+    fireEvent.change(memberRollover, { target: { value: "75.5" } });
+
+    const payload = wireBody(await save(user));
+
+    expect(payload.rollover_max_budget).toBe(250);
+    expect(payload.team_member_rollover_max_budget).toBe(75.5);
   });
 
   it("carries every typed value to the update payload at the type and shape antd sends today", async () => {

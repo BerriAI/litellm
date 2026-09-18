@@ -55,6 +55,7 @@ class BudgetListItem(BaseModel):
 
     budget_id: str
     max_budget: float | None = None
+    rollover_max_budget: float | None = None
     soft_budget: float | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None

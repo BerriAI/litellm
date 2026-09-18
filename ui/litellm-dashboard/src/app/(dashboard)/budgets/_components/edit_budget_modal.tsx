@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 
 type EditBudgetFormValues = Pick<
   budgetItem,
-  "budget_id" | "tpm_limit" | "rpm_limit" | "tpd_limit" | "max_budget" | "budget_duration"
+  "budget_id" | "tpm_limit" | "rpm_limit" | "tpd_limit" | "max_budget" | "rollover_max_budget" | "budget_duration"
 >;
 
 const toFormValues = (budget: budgetItem): EditBudgetFormValues => ({
@@ -24,6 +24,7 @@ const toFormValues = (budget: budgetItem): EditBudgetFormValues => ({
   rpm_limit: budget.rpm_limit,
   tpd_limit: budget.tpd_limit,
   max_budget: budget.max_budget,
+  rollover_max_budget: budget.rollover_max_budget,
   budget_duration: budget.budget_duration,
 });
 
@@ -57,7 +58,9 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
       toast.info("Making API Call");
       await updateBudget.mutateAsync(
         applyBudgetPrecision(
-          optionalSettingsOpen ? formValues : { ...formValues, max_budget: undefined, budget_duration: undefined },
+          optionalSettingsOpen
+            ? formValues
+            : { ...formValues, max_budget: undefined, rollover_max_budget: undefined, budget_duration: undefined },
         ),
       );
       toast.success("Budget Updated");
@@ -144,6 +147,24 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
               </CollapsibleTrigger>
               <CollapsibleContent>
                 <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
+                  {({ ref, value, onChange, ...field }) => (
+                    <Input
+                      {...field}
+                      ref={ref}
+                      type="number"
+                      step={0.01}
+                      value={value ?? ""}
+                      onChange={(event) => onChange(event.target.value === "" ? null : event.target.valueAsNumber)}
+                    />
+                  )}
+                </FormField>
+                <FormField
+                  className="mt-8"
+                  control={form.control}
+                  name="rollover_max_budget"
+                  label="Rollover Max Budget (USD)"
+                  description="Cap on the budget that can accumulate when unused budget carries into the next period. Leave blank to disable rollover."
+                >
                   {({ ref, value, onChange, ...field }) => (
                     <Input
                       {...field}

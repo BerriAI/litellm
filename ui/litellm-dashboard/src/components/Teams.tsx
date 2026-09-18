@@ -75,6 +75,7 @@ const teamCreateFieldsSchema = z.object({
   organization_id: z.string().nullish(),
   models: z.array(z.string()).optional(),
   max_budget: numericInputSchema,
+  rollover_max_budget: z.number().optional(),
   budget_duration: z.string().nullish(),
   tpm_limit: numericInputSchema,
   rpm_limit: numericInputSchema,
@@ -82,6 +83,7 @@ const teamCreateFieldsSchema = z.object({
   metadata: metadataPairsSchema.optional(),
   team_id: z.string().optional(),
   team_member_budget: z.number().optional(),
+  team_member_rollover_max_budget: z.number().optional(),
   team_member_key_duration: z.string().optional(),
   team_member_rpm_limit: numericInputSchema,
   team_member_tpm_limit: numericInputSchema,
@@ -112,6 +114,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
   organization_id: null,
   models: [],
   max_budget: undefined,
+  rollover_max_budget: undefined,
   budget_duration: undefined,
   tpm_limit: undefined,
   rpm_limit: undefined,
@@ -119,6 +122,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
   metadata: [],
   team_id: undefined,
   team_member_budget: undefined,
+  team_member_rollover_max_budget: undefined,
   team_member_key_duration: undefined,
   team_member_rpm_limit: undefined,
   team_member_tpm_limit: undefined,
@@ -139,6 +143,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
 const ADDITIONAL_SETTINGS_FIELDS = [
   "team_id",
   "team_member_budget",
+  "team_member_rollover_max_budget",
   "team_member_key_duration",
   "team_member_rpm_limit",
   "team_member_tpm_limit",
@@ -809,6 +814,29 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} width={200} />
                     )}
                   </FormField>
+                  <FormField
+                    control={form.control}
+                    name="rollover_max_budget"
+                    className="mt-8"
+                    label={labelWithHint(
+                      "Rollover Max Budget (USD)",
+                      "Cap on the budget the team can accumulate when unused budget carries into the next period. Leave blank to disable rollover.",
+                    )}
+                  >
+                    {({ ref, value, onChange, ...field }) => (
+                      <NumericalInput
+                        {...field}
+                        ref={ref}
+                        value={value ?? ""}
+                        onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                          onChange(event.target.value ? Number(event.target.value) : undefined)
+                        }
+                        step={0.01}
+                        precision={2}
+                        width={200}
+                      />
+                    )}
+                  </FormField>
                   <FormField control={form.control} name="budget_duration" className="mt-8" label="Reset Budget">
                     {({ id, value, onChange }) => (
                       <BudgetDurationDropdown
@@ -889,6 +917,28 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                           label={labelWithHint(
                             "Team Member Budget (USD)",
                             "This is the individual budget for a user in the team.",
+                          )}
+                        >
+                          {({ ref, value, onChange, ...field }) => (
+                            <NumericalInput
+                              {...field}
+                              ref={ref}
+                              value={value ?? ""}
+                              onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                                onChange(event.target.value ? Number(event.target.value) : undefined)
+                              }
+                              step={0.01}
+                              precision={2}
+                              width={200}
+                            />
+                          )}
+                        </FormField>
+                        <FormField
+                          control={form.control}
+                          name="team_member_rollover_max_budget"
+                          label={labelWithHint(
+                            "Team Member Rollover Max Budget (USD)",
+                            "Cap on the budget each team member can accumulate when unused budget carries into the next period. Leave blank to disable rollover.",
                           )}
                         >
                           {({ ref, value, onChange, ...field }) => (

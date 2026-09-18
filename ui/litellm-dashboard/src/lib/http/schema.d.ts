@@ -24740,6 +24740,8 @@ export interface components {
             created_at: string;
             /** Max Budget */
             max_budget?: number | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -40551,6 +40553,8 @@ export interface components {
              */
             models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /**
              * Spend
              * @default 0

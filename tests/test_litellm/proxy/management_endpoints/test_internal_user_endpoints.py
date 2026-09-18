@@ -3171,6 +3171,7 @@ async def test_user_info_v2_response_shape(mocker):
         "user_role": "internal_user",
         "spend": 5.0,
         "max_budget": 50.0,
+        "rollover_max_budget": 120.0,
         "models": ["gpt-3.5-turbo"],
         "budget_duration": "7d",
         "budget_reset_at": datetime(2024, 7, 1, tzinfo=timezone.utc),
@@ -3214,6 +3215,7 @@ async def test_user_info_v2_response_shape(mocker):
         "user_role",
         "spend",
         "max_budget",
+        "rollover_max_budget",
         "models",
         "budget_duration",
         "budget_reset_at",
@@ -3227,6 +3229,7 @@ async def test_user_info_v2_response_shape(mocker):
         "model_max_budget_usage",
     }
     assert set(response_dict.keys()) == expected_fields
+    assert response_dict["rollover_max_budget"] == 120.0
 
     # The dashboard's user edit form hydrates its per-model budget rows from
     # these two, so dropping them makes a save replace the user's budgets.

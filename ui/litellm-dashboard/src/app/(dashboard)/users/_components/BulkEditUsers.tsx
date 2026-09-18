@@ -99,6 +99,10 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
         updatePayload.max_budget = formValues.max_budget;
       }
 
+      if (formValues.rollover_max_budget !== null && formValues.rollover_max_budget !== undefined) {
+        updatePayload.rollover_max_budget = formValues.rollover_max_budget;
+      }
+
       if (formValues.models && formValues.models.length > 0) {
         updatePayload.models = formValues.models;
       }

@@ -1086,6 +1086,7 @@ export interface UserInfoV2Response {
   user_role: string | null;
   spend: number;
   max_budget: number | null;
+  rollover_max_budget?: number | null;
   models: string[];
   budget_duration: string | null;
   budget_reset_at: string | null;

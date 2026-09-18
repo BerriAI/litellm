@@ -143,6 +143,19 @@ describe("UserInfoView", () => {
     expect(screen.getByText(/of \$3,000,000\.00/)).toBeInTheDocument();
   });
 
+  it("should show the rollover cap on the Details tab and a disabled label when it is unset", async () => {
+    mockUserGetInfoV2.mockResolvedValue({ ...MOCK_USER_DATA, rollover_max_budget: 250.5 });
+    const { unmount } = render(<UserInfoView {...defaultProps} initialTab={1} />);
+
+    expect(await screen.findByText("$250.5000")).toBeInTheDocument();
+    unmount();
+
+    mockUserGetInfoV2.mockResolvedValue({ ...MOCK_USER_DATA, rollover_max_budget: null });
+    render(<UserInfoView {...defaultProps} initialTab={1} />);
+
+    expect(await screen.findByText("Rollover disabled")).toBeInTheDocument();
+  });
+
   it("should render teams in a table with team names", async () => {
     render(<UserInfoView {...defaultProps} />);
 

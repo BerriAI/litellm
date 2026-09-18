@@ -52,6 +52,7 @@ const userEditShape = {
   user_role: z.string().nullish(),
   models: z.array(z.string()),
   budget_duration: z.string().nullish(),
+  rollover_max_budget: z.union([z.string(), z.number()]).nullish(),
   metadata: z.string().nullish(),
   mcp_servers_and_groups: MCP_SELECTION_SHAPE.optional(),
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
@@ -98,6 +99,7 @@ const toFormValues = (
     models: userData.user_info?.models || [],
     max_budget: isUnlimited ? "" : maxBudget,
     budget_duration: userData.user_info?.budget_duration,
+    rollover_max_budget: userData.user_info?.rollover_max_budget ?? "",
     metadata: userData.user_info?.metadata ? JSON.stringify(userData.user_info.metadata, null, 2) : undefined,
     ...(canEditMcpPermissions ? buildMcpFieldValues(objectPermission) : {}),
   };
@@ -178,6 +180,10 @@ export function UserEditView({
       ...(modelBudgets !== undefined && { model_max_budget: modelBudgets }),
       max_budget:
         unlimitedBudget || values.max_budget === "" || values.max_budget === undefined ? null : values.max_budget,
+      rollover_max_budget:
+        values.rollover_max_budget === "" || values.rollover_max_budget === undefined
+          ? null
+          : Number(values.rollover_max_budget),
     });
   };
 
@@ -291,6 +297,26 @@ export function UserEditView({
 
           <FormField control={form.control} name="budget_duration" label="Reset Budget">
             {({ id, value, onChange }) => <BudgetDurationDropdown id={id} value={value} onChange={onChange} />}
+          </FormField>
+
+          <FormField
+            control={form.control}
+            name="rollover_max_budget"
+            label="Rollover Max Budget (USD)"
+            description="Cap on the budget that can accumulate when unused budget carries into the next period. Leave blank to disable rollover."
+          >
+            {({ ref, value, onChange, ...control }) => (
+              <Input
+                {...control}
+                ref={ref}
+                type="number"
+                step={0.01}
+                value={value ?? ""}
+                onChange={(event) => onChange(event.target.value)}
+                onWheel={(event) => event.currentTarget.blur()}
+                placeholder="Leave blank to disable rollover"
+              />
+            )}
           </FormField>
 
           {/* Bulk edit forwards a fixed field list and has no single stored budget to

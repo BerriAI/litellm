@@ -59,6 +59,7 @@ def _row(budget_id: str, **overrides: Any) -> dict[str, Any]:
     return {
         "budget_id": budget_id,
         "max_budget": 10.0,
+        "rollover_max_budget": None,
         "soft_budget": None,
         "tpm_limit": None,
         "rpm_limit": None,
@@ -124,13 +125,25 @@ def test_returns_flat_rows_in_the_control_plane_envelope(query_raw, as_proxy_adm
 
 
 def test_serves_the_columns_the_budgets_page_renders(query_raw, as_proxy_admin):
-    _serve(query_raw, [_row("b-1", soft_budget=5.0, tpd_limit=250000, budget_reset_at="2026-08-01T00:00:00+00:00")])
+    _serve(
+        query_raw,
+        [
+            _row(
+                "b-1",
+                soft_budget=5.0,
+                rollover_max_budget=25.0,
+                tpd_limit=250000,
+                budget_reset_at="2026-08-01T00:00:00+00:00",
+            )
+        ],
+    )
 
     row = _get().json()["data"][0]
 
     assert set(row) == {
         "budget_id",
         "max_budget",
+        "rollover_max_budget",
         "soft_budget",
         "tpm_limit",
         "rpm_limit",
@@ -141,6 +154,7 @@ def test_serves_the_columns_the_budgets_page_renders(query_raw, as_proxy_admin):
         "updated_at",
     }
     assert row["soft_budget"] == 5.0
+    assert row["rollover_max_budget"] == 25.0
     assert row["tpd_limit"] == 250000
     assert row["budget_reset_at"].startswith("2026-08-01T00:00:00")
 

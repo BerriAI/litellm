@@ -281,6 +281,7 @@ export interface TeamData {
     rpm_limit: number | null;
     tpd_limit?: number | null;
     max_budget: number | null;
+    rollover_max_budget?: number | null;
     soft_budget?: number | null;
     budget_duration: string | null;
     model_max_budget?: StoredModelMaxBudget | null;
@@ -308,6 +309,7 @@ export interface TeamData {
     caller_edit_access?: CallerEditAccess;
     team_member_budget_table: {
       max_budget: number;
+      rollover_max_budget?: number | null;
       budget_duration: string | null;
       tpm_limit: number | null;
       rpm_limit: number | null;
@@ -337,10 +339,12 @@ const teamUpdateFieldsSchema = z.object({
   team_alias: z.string().min(1, "Please input a team name"),
   models: z.array(z.string()).optional(),
   max_budget: numericInputSchema,
+  rollover_max_budget: numericInputSchema,
   soft_budget: numericInputSchema,
   soft_budget_alerting_emails: z.union([z.string(), z.array(z.string())]).optional(),
   default_team_member_models: z.array(z.string()).optional(),
   team_member_budget: numericInputSchema,
+  team_member_rollover_max_budget: numericInputSchema,
   team_member_budget_duration: z.string().nullish(),
   team_member_key_duration: z.string().optional(),
   team_member_tpm_limit: numericInputSchema,
@@ -408,6 +412,7 @@ type TeamInfoRecord = TeamData["team_info"] & { team_member_key_duration?: strin
 const TEAM_MEMBER_SETTINGS_FIELDS = [
   "default_team_member_models",
   "team_member_budget",
+  "team_member_rollover_max_budget",
   "team_member_budget_duration",
   "team_member_key_duration",
   "team_member_tpm_limit",
@@ -419,10 +424,12 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   team_alias: "",
   models: [],
   max_budget: undefined,
+  rollover_max_budget: undefined,
   soft_budget: undefined,
   soft_budget_alerting_emails: "",
   default_team_member_models: [],
   team_member_budget: undefined,
+  team_member_rollover_max_budget: undefined,
   team_member_budget_duration: undefined,
   team_member_key_duration: undefined,
   team_member_tpm_limit: undefined,
@@ -467,12 +474,14 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   team_alias: info.team_alias,
   models: info.models,
   max_budget: info.max_budget,
+  rollover_max_budget: info.rollover_max_budget ?? undefined,
   soft_budget: info.soft_budget,
   soft_budget_alerting_emails: Array.isArray(info.metadata?.soft_budget_alerting_emails)
     ? info.metadata.soft_budget_alerting_emails.join(", ")
     : "",
   default_team_member_models: info.default_team_member_models || [],
   team_member_budget: info.team_member_budget_table?.max_budget,
+  team_member_rollover_max_budget: info.team_member_budget_table?.rollover_max_budget ?? undefined,
   team_member_budget_duration: info.team_member_budget_table?.budget_duration,
   team_member_key_duration: info.metadata?.team_member_key_duration,
   team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
@@ -986,10 +995,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       };
 
       updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
+      const rolloverCap = sanitizeNumeric(values.rollover_max_budget);
+      updateData.rollover_max_budget = rolloverCap === null ? null : Number(rolloverCap);
       updateData.team_member_budget_duration = values.team_member_budget_duration;
 
       if (values.team_member_budget !== undefined) {
         updateData.team_member_budget = Number(values.team_member_budget);
+      }
+
+      if (values.team_member_rollover_max_budget !== undefined) {
+        const memberRolloverCap = sanitizeNumeric(values.team_member_rollover_max_budget);
+        updateData.team_member_rollover_max_budget = memberRolloverCap === null ? null : Number(memberRolloverCap);
       }
 
       if (values.team_member_key_duration !== undefined) {
@@ -1203,10 +1219,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <h3 className="text-lg font-medium">${formatNumberWithCommas(info.spend, 2)}</h3>
               <p>of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 2)}`}</p>
               {info.budget_duration && <p className="text-muted-foreground">Reset: {info.budget_duration}</p>}
+              {info.rollover_max_budget != null && (
+                <p className="text-muted-foreground">
+                  Rollover Max Budget: ${formatNumberWithCommas(info.rollover_max_budget, 2)}
+                </p>
+              )}
               <br />
               {info.team_member_budget_table && (
                 <p className="text-muted-foreground">
                   Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 2)}
+                </p>
+              )}
+              {info.team_member_budget_table?.rollover_max_budget != null && (
+                <p className="text-muted-foreground">
+                  Team Member Rollover Max Budget: $
+                  {formatNumberWithCommas(info.team_member_budget_table.rollover_max_budget, 2)}
                 </p>
               )}
             </div>
@@ -1432,6 +1459,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     )}
                   </FormField>
 
+                  <FormField
+                    control={form.control}
+                    name="rollover_max_budget"
+                    label={labelWithHint(
+                      "Rollover Max Budget (USD)",
+                      "Cap on the budget the team can accumulate when unused budget carries into the next period. Leave blank to disable rollover.",
+                    )}
+                  >
+                    {({ ref, value, ...field }) => (
+                      <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
+                    )}
+                  </FormField>
+
                   <FormField control={form.control} name="soft_budget" label="Soft Budget (USD)">
                     {({ ref, value, ...field }) => (
                       <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
@@ -1497,6 +1537,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           label={labelWithHint(
                             "Default Budget (USD)",
                             "Default spend budget for each member in this team.",
+                          )}
+                        >
+                          {({ ref, value, ...field }) => (
+                            <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
+                          )}
+                        </FormField>
+                        <FormField
+                          control={form.control}
+                          name="team_member_rollover_max_budget"
+                          label={labelWithHint(
+                            "Default Rollover Max Budget (USD)",
+                            "Cap on the budget each member can accumulate when unused budget carries into the next period. Leave blank to disable rollover.",
                           )}
                         >
                           {({ ref, value, ...field }) => (

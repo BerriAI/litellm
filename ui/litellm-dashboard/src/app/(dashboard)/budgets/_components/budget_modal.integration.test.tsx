@@ -17,6 +17,7 @@ const FULL_PAYLOAD = {
   tpm_limit: 500.57,
   rpm_limit: 7,
   max_budget: 42.57,
+  rollover_max_budget: 60.12,
   budget_duration: "30d",
 };
 
@@ -63,6 +64,7 @@ describe("BudgetModal", () => {
 
     await openOptionalSettings(user);
     fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "42.567" } });
+    fireEvent.change(screen.getByLabelText("Rollover Max Budget (USD)"), { target: { value: "60.123" } });
 
     await chooseSelectOption(user, screen.getByRole("combobox"), "monthly");
 
@@ -70,6 +72,20 @@ describe("BudgetModal", () => {
 
     await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
     expect(createMock.mock.calls[0][0]).toEqual(FULL_PAYLOAD);
+  });
+
+  it("submits a blank rollover cap as null so rollover stays disabled", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    fireEvent.change(screen.getByLabelText("Budget ID"), { target: { value: "budget-alpha" } });
+    await openOptionalSettings(user);
+    fireEvent.change(screen.getByLabelText("Rollover Max Budget (USD)"), { target: { value: "5" } });
+    await user.clear(screen.getByLabelText("Rollover Max Budget (USD)"));
+    await create(user);
+
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+    expect(createMock.mock.calls[0][0]).toEqual({ budget_id: "budget-alpha", rollover_max_budget: null });
   });
 
   it("drops Optional Settings values again when the section is collapsed before submit", async () => {

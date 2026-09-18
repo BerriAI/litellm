@@ -1,4 +1,4 @@
-const PRECISION_FIELDS: ReadonlySet<string> = new Set(["tpm_limit", "rpm_limit", "max_budget"]);
+const PRECISION_FIELDS: ReadonlySet<string> = new Set(["tpm_limit", "rpm_limit", "max_budget", "rollover_max_budget"]);
 
 const roundToPrecision = (value: number): number => {
   const shifted = Number(`${Math.abs(value)}e2`);

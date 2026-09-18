@@ -19,6 +19,7 @@ const budgetShape = {
   rpm_limit: z.number().nullish(),
   tpd_limit: z.number().nullish(),
   max_budget: z.number().nullish(),
+  rollover_max_budget: z.number().nullish(),
   budget_duration: z.string().nullish(),
 };
 
@@ -51,7 +52,9 @@ const BudgetModal: React.FC<BudgetModalProps> = ({ isModalVisible, setIsModalVis
       toast.info("Making API Call");
       await createBudget.mutateAsync(
         applyBudgetPrecision(
-          optionalSettingsOpen ? formValues : { ...formValues, max_budget: undefined, budget_duration: undefined },
+          optionalSettingsOpen
+            ? formValues
+            : { ...formValues, max_budget: undefined, rollover_max_budget: undefined, budget_duration: undefined },
         ),
       );
       toast.success("Budget Created");
@@ -138,6 +141,24 @@ const BudgetModal: React.FC<BudgetModalProps> = ({ isModalVisible, setIsModalVis
               </CollapsibleTrigger>
               <CollapsibleContent>
                 <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
+                  {({ ref, value, onChange, ...field }) => (
+                    <Input
+                      {...field}
+                      ref={ref}
+                      type="number"
+                      step={0.01}
+                      value={value ?? ""}
+                      onChange={(event) => onChange(event.target.value === "" ? null : event.target.valueAsNumber)}
+                    />
+                  )}
+                </FormField>
+                <FormField
+                  className="mt-8"
+                  control={form.control}
+                  name="rollover_max_budget"
+                  label="Rollover Max Budget (USD)"
+                  description="Cap on the budget that can accumulate when unused budget carries into the next period. Leave blank to disable rollover."
+                >
                   {({ ref, value, onChange, ...field }) => (
                     <Input
                       {...field}

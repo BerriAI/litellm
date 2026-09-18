@@ -19,6 +19,7 @@ type BudgetItem = components["schemas"]["BudgetListItem"];
 const EXISTING_BUDGET: BudgetItem = {
   budget_id: "budget-alpha",
   max_budget: 100,
+  rollover_max_budget: 150,
   budget_duration: "7d",
   tpm_limit: 1000,
   rpm_limit: 10,
@@ -73,6 +74,9 @@ describe("EditBudgetModal", () => {
     await openOptionalSettings(user);
     await user.clear(screen.getByLabelText("Max Budget (USD)"));
     fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "42.567" } });
+    expect(screen.getByLabelText("Rollover Max Budget (USD)")).toHaveValue(150);
+    await user.clear(screen.getByLabelText("Rollover Max Budget (USD)"));
+    fireEvent.change(screen.getByLabelText("Rollover Max Budget (USD)"), { target: { value: "60.123" } });
 
     await chooseSelectOption(user, screen.getByRole("combobox"), "monthly");
 
@@ -84,6 +88,7 @@ describe("EditBudgetModal", () => {
       tpm_limit: 500.57,
       rpm_limit: 7,
       max_budget: 42.57,
+      rollover_max_budget: 60.12,
       budget_duration: "30d",
     };
 
@@ -108,5 +113,17 @@ describe("EditBudgetModal", () => {
 
     await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
     expect(updateMock.mock.calls[0][0]).toMatchObject({ max_budget: 99.25 });
+  });
+
+  it("clears the stored rollover cap as null when the field is emptied", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    await openOptionalSettings(user);
+    await user.clear(screen.getByLabelText("Rollover Max Budget (USD)"));
+    await save(user);
+
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    expect(updateMock.mock.calls[0][0]).toMatchObject({ rollover_max_budget: null });
   });
 });

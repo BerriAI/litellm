@@ -10,10 +10,14 @@ vi.mock("@/components/networking", () => ({
   teamBulkMemberAddCall: vi.fn(),
 }));
 
+const { editFormValues } = vi.hoisted(() => ({
+  editFormValues: { current: { user_role: "admin", max_budget: 100 } as Record<string, unknown> },
+}));
+
 vi.mock("./user_edit_view", () => ({
   UserEditView: ({ onSubmit, onCancel }: { onSubmit: (values: any) => void; onCancel: () => void }) => (
     <div data-testid="user-edit-view">
-      <button onClick={() => onSubmit({ user_role: "admin", max_budget: 100 })}>Submit</button>
+      <button onClick={() => onSubmit(editFormValues.current)}>Submit</button>
       <button onClick={onCancel}>Cancel</button>
     </div>
   ),
@@ -47,6 +51,7 @@ const defaultProps = {
 describe("BulkEditUserModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    editFormValues.current = { user_role: "admin", max_budget: 100 };
     mockUserBulkUpdateUserCall.mockResolvedValue({
       results: [],
       total_requested: 2,
@@ -198,6 +203,30 @@ describe("BulkEditUserModal", () => {
 
     await waitFor(() => {
       expect(mockUserBulkUpdateUserCall).toHaveBeenCalledWith("test-token", { user_role: "admin", max_budget: 100 }, [
+        "user1",
+        "user2",
+      ]);
+    });
+  });
+
+  it("forwards a set rollover cap and drops a blank one so bulk edits never clear rollover by accident", async () => {
+    const user = userEvent.setup();
+    editFormValues.current = { user_role: "admin", max_budget: 100, rollover_max_budget: 40 };
+    renderWithProviders(<BulkEditUserModal {...defaultProps} />);
+
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => {
+      expect(mockUserBulkUpdateUserCall).toHaveBeenCalledWith(
+        "test-token",
+        { user_role: "admin", max_budget: 100, rollover_max_budget: 40 },
+        ["user1", "user2"],
+      );
+    });
+
+    editFormValues.current = { user_role: "admin", max_budget: 100, rollover_max_budget: null };
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => {
+      expect(mockUserBulkUpdateUserCall).toHaveBeenLastCalledWith("test-token", { user_role: "admin", max_budget: 100 }, [
         "user1",
         "user2",
       ]);
