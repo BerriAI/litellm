@@ -1,16 +1,16 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use litellm_python_interop::panic_to_pyerr;
+use crate::panic_to_pyerr;
 use pyo3::exceptions::{PyBaseException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 
-pub(super) enum ExecutionStep {
+pub enum ExecutionStep {
     Return(Py<PyAny>),
     Await(Py<PyAny>),
 }
 
-pub(super) trait ExecutionBody: Send + Sync {
+pub trait ExecutionBody: Send + Sync {
     fn resume(&mut self, result: Option<PyResult<Py<PyAny>>>) -> PyResult<ExecutionStep>;
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError>;
 }
@@ -23,12 +23,12 @@ enum ExecutionState {
 }
 
 #[pyclass]
-pub(super) struct Execution {
+pub struct Execution {
     state: ExecutionState,
 }
 
 impl Execution {
-    pub(super) fn new(body: impl ExecutionBody + 'static) -> Self {
+    pub fn new(body: impl ExecutionBody + 'static) -> Self {
         Self {
             state: ExecutionState::Created(Box::new(body)),
         }

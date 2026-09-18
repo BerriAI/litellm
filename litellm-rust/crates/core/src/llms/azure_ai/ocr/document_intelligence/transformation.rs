@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::sync::Arc;
 use std::time::Duration;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -22,9 +21,9 @@ use crate::llms::base_llm::ocr::transformation::{
 use crate::ocr::OcrClient;
 use crate::ocr::client::read_json_response;
 use crate::ocr::document::InlineDocument;
-use crate::ocr::hooks::OcrHooks;
 use crate::ocr::json::DecodedOcrResponse;
 use crate::ocr::prepare::credential_env;
+use crate::ocr::route::OcrHost;
 use crate::ocr::types::{
     LiteLLMOcrResponse, OcrConnection, OcrCredentialInputs, OcrDocument, OcrPage,
     OcrPageDimensions, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest, ResolvedOcrCredentials,
@@ -235,7 +234,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
             context.headers,
             context.connection,
             context.request_format == OcrResponseFormat::Native,
-            context.hooks,
+            context.host,
         )
         .await?;
         Ok(LiteLLMOcrResponse {
@@ -439,13 +438,13 @@ async fn read_operation_response(
     headers: &[(String, String)],
     connection: &OcrConnection,
     native: bool,
-    hooks: &Arc<dyn OcrHooks>,
+    host: &OcrHost,
 ) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, crate::ocr::Error> {
     if response.status() != reqwest::StatusCode::ACCEPTED {
         let bytes =
             crate::ocr::client::read_response_bytes(response, connection.max_response_bytes)
                 .await?;
-        crate::ocr::handler::post_call(hooks, &bytes).await?;
+        crate::ocr::handler::post_call(host, &bytes).await?;
         return crate::ocr::json::decode_response(&bytes, native);
     }
     let location = response
@@ -464,8 +463,8 @@ async fn read_operation_response(
     }
     let bytes =
         crate::ocr::client::read_response_bytes(response, connection.max_response_bytes).await?;
-    crate::ocr::handler::post_call(hooks, &bytes).await?;
-    poll_operation(http_client, operation, headers, connection, native, hooks).await
+    crate::ocr::handler::post_call(host, &bytes).await?;
+    poll_operation(http_client, operation, headers, connection, native, host).await
 }
 
 async fn poll_operation(
@@ -474,7 +473,7 @@ async fn poll_operation(
     headers: &[(String, String)],
     connection: &OcrConnection,
     native: bool,
-    hooks: &Arc<dyn OcrHooks>,
+    host: &OcrHost,
 ) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, crate::ocr::Error> {
     let deadline = Instant::now()
         .checked_add(connection.poll_timeout)
@@ -516,7 +515,7 @@ async fn poll_operation(
         .map_err(|_| crate::ocr::Error::PollTimeout)??;
         match &decoded.data.status {
             Some(OperationStatus::Succeeded) => {
-                crate::ocr::handler::post_call(hooks, decoded.text.as_bytes()).await?;
+                crate::ocr::handler::post_call(host, decoded.text.as_bytes()).await?;
                 return Ok(decoded);
             }
             Some(OperationStatus::Running | OperationStatus::NotStarted) => {
@@ -807,7 +806,12 @@ mod tests {
 
     use std::sync::{Arc, Mutex};
 
-    use crate::ocr::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
+    use litellm_callbacks::event::CallEvent;
+
+    use crate::ocr::LocalOcrHost;
+    use crate::ocr::test_support::{
+        MockResponse, mock_server, perform_ocr, perform_ocr_with, wire_request,
+    };
 
     fn query_value(url: &str, key: &str) -> Option<String> {
         url::Url::parse(url)
@@ -981,26 +985,6 @@ mod tests {
         }
     }
 
-    struct SubmissionBoundary {
-        request_count: Arc<Mutex<Vec<String>>>,
-        post_calls: Arc<Mutex<Vec<(usize, Value)>>>,
-    }
-
-    impl crate::ocr::hooks::OcrHooks for SubmissionBoundary {
-        fn post_call(
-            &self,
-            request: crate::ocr::hooks::OcrPostCallRequest,
-        ) -> crate::ocr::hooks::OcrHookFuture<'_, crate::ocr::hooks::OcrPostCallRequest> {
-            Box::pin(async move {
-                self.post_calls.lock().unwrap().push((
-                    self.request_count.lock().unwrap().len(),
-                    request.original_response.clone(),
-                ));
-                Ok(request)
-            })
-        }
-    }
-
     #[tokio::test]
     async fn accepted_response_runs_post_call_for_submission_and_completed_poll() {
         let (base, seen, server) = mock_server(vec![
@@ -1013,22 +997,30 @@ mod tests {
         ])
         .await;
         let post_calls = Arc::new(Mutex::new(Vec::new()));
-        let request = crate::ocr::LiteLLMOcrRequest {
-            hooks: Arc::new(SubmissionBoundary {
-                request_count: seen.clone(),
-                post_calls: post_calls.clone(),
-            }),
-            ..wire_request("azure_ai/doc-intelligence/prebuilt-read", &base, json!({}))
-        };
+        let request_count = seen.clone();
+        let observed = post_calls.clone();
+        let host = LocalOcrHost::new(wire_request(
+            "azure_ai/doc-intelligence/prebuilt-read",
+            &base,
+            json!({}),
+        ))
+        .with_observer(move |event| {
+            if let CallEvent::ResponseReceived { raw } = event {
+                observed
+                    .lock()
+                    .unwrap()
+                    .push((request_count.lock().unwrap().len(), raw.body.clone()));
+            }
+        });
 
-        perform_ocr(request).await.unwrap();
+        perform_ocr_with(host).await.unwrap();
         server.await.unwrap();
         assert_eq!(seen.lock().unwrap().len(), 2);
         assert_eq!(
             *post_calls.lock().unwrap(),
             [
-                (1, json!(r#"{"submitted":true}"#)),
-                (2, json!(r#"{"status":"succeeded"}"#)),
+                (1, r#"{"submitted":true}"#.to_string()),
+                (2, r#"{"status":"succeeded"}"#.to_string()),
             ]
         );
     }
@@ -1216,46 +1208,5 @@ mod tests {
                 .unwrap_err();
             assert!(error.to_string().contains("dot segment"));
         }
-    }
-
-    #[tokio::test]
-    async fn pre_call_guardrail_receives_caller_pages_before_mapping() {
-        use std::sync::Arc;
-
-        use crate::ocr::hooks::{OcrHookFuture, OcrHooks, OcrPreCallRequest};
-
-        struct RewritePages;
-        impl OcrHooks for RewritePages {
-            fn intercepts_requests(&self) -> bool {
-                true
-            }
-
-            fn pre_call(&self, request: OcrPreCallRequest) -> OcrHookFuture<'_, OcrPreCallRequest> {
-                Box::pin(async move {
-                    assert_eq!(request.optional_params["pages"], json!([0, 2]));
-                    Ok(OcrPreCallRequest {
-                        optional_params: json!({"pages": [1]}),
-                        ..request
-                    })
-                })
-            }
-        }
-        let (base, seen, server) =
-            mock_server(vec![MockResponse::json(json!({"status": "succeeded"}))]).await;
-        let request = wire_request(
-            "azure_ai/doc-intelligence/prebuilt-read",
-            &base,
-            json!({"pages": [0, 2]}),
-        )
-        .with_host_hooks(Arc::new(RewritePages), None);
-        perform_ocr(request).await.unwrap();
-        server.await.unwrap();
-        let requests = seen.lock().unwrap();
-        let target = requests[0].split_whitespace().nth(1).unwrap();
-        assert_eq!(
-            query_value(&format!("{base}{target}"), "pages").as_deref(),
-            Some("2")
-        );
-        assert_eq!(requests.len(), 1);
     }
 }

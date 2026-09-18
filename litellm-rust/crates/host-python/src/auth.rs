@@ -5,35 +5,32 @@ use pyo3::prelude::*;
 use pyo3::types::PyString;
 
 #[derive(Clone, Copy)]
-pub(crate) struct TokenProviderContract {
+pub struct TokenProviderContract {
     callable_error: &'static str,
     token_type_error: &'static str,
     callback_error: &'static str,
 }
 
-pub(crate) const AZURE_AD_TOKEN_PROVIDER: TokenProviderContract = TokenProviderContract {
+pub const AZURE_AD_TOKEN_PROVIDER: TokenProviderContract = TokenProviderContract {
     callable_error: "Azure AD token provider must be callable",
     token_type_error: "Azure AD token must be a string, got {}",
     callback_error: "Failed to get Azure AD token: {}",
 };
 
-pub(crate) struct PythonTokenProvider {
+pub struct PythonTokenProvider {
     callback: Py<PyAny>,
     contract: TokenProviderContract,
 }
 
 impl PythonTokenProvider {
-    pub(crate) fn select(
-        provider: Bound<'_, PyAny>,
-        contract: TokenProviderContract,
-    ) -> Option<Self> {
+    pub fn select(provider: Bound<'_, PyAny>, contract: TokenProviderContract) -> Option<Self> {
         (provider.is_callable() && provider.is_truthy().unwrap_or(false)).then(|| Self {
             callback: provider.unbind(),
             contract,
         })
     }
 
-    pub(crate) fn acquire(&self, py: Python<'_>) -> PyResult<ResolvedCredential> {
+    pub fn acquire(&self, py: Python<'_>) -> PyResult<ResolvedCredential> {
         let provider = self.callback.bind(py);
         if !provider.is_callable() {
             return Err(PyTypeError::new_err(self.contract.callable_error));
@@ -72,7 +69,7 @@ impl PythonTokenProvider {
         })
     }
 
-    pub(crate) fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+    pub fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.callback)
     }
 }
@@ -86,7 +83,7 @@ mod tests {
 
     #[test]
     fn token_callback_preserves_exception_identity_and_explicit_chaining() {
-        Python::initialize();
+        crate::initialize_python();
         Python::attach(|py| {
             let locals = PyDict::new(py);
             py.run(
@@ -142,7 +139,7 @@ def provider(error):
 
     #[test]
     fn invalid_token_type_formatting_preserves_python_failure_semantics() {
-        Python::initialize();
+        crate::initialize_python();
         Python::attach(|py| {
             let locals = PyDict::new(py);
             py.run(
@@ -181,7 +178,7 @@ def provider():
 
     #[test]
     fn token_string_extraction_errors_are_not_wrapped_as_callback_failures() {
-        Python::initialize();
+        crate::initialize_python();
         Python::attach(|py| {
             let callback = py
                 .eval(pyo3::ffi::c_str!("lambda: '\\ud800'"), None, None)

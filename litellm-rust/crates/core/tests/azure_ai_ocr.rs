@@ -1,9 +1,7 @@
-use std::sync::Arc;
-
 use serde_json::{Value, json};
 
-use super::hooks::{OcrDuringCallRequest, OcrHookFuture, OcrHooks};
-use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
+use super::LocalOcrHost;
+use super::test_support::{MockResponse, mock_server, perform_ocr, perform_ocr_with, wire_request};
 
 #[tokio::test]
 async fn facade_executes_azure_mistral_with_prepared_auth() {
@@ -67,31 +65,16 @@ async fn facade_acquires_supplied_entra_token_for_final_request() {
     );
 }
 
-struct ReplaceBodyDocument;
-
-impl OcrHooks for ReplaceBodyDocument {
-    fn intercepts_requests(&self) -> bool {
-        true
-    }
-
-    fn during_call(
-        &self,
-        mut request: OcrDuringCallRequest,
-    ) -> OcrHookFuture<'_, OcrDuringCallRequest> {
-        Box::pin(async move {
-            request.body["document"] = json!({
-                "type":"document_url",
-                "document_url":"https://example.com/not-inline.pdf"
-            });
-            Ok(request)
-        })
-    }
-}
-
 #[tokio::test]
 async fn rejects_non_inline_body_after_guardrails() {
-    let mut request = wire_request("azure_ai/model", "http://127.0.0.1:1", json!({}));
-    request.hooks = Arc::new(ReplaceBodyDocument);
-    let error = perform_ocr(request).await.unwrap_err();
+    let request = wire_request("azure_ai/model", "http://127.0.0.1:1", json!({}));
+    let host = LocalOcrHost::new(request).with_before_send(|mut wire| {
+        wire.body["document"] = json!({
+            "type":"document_url",
+            "document_url":"https://example.com/not-inline.pdf"
+        });
+        Ok(wire)
+    });
+    let error = perform_ocr_with(host).await.unwrap_err();
     assert!(error.to_string().contains("data URI"));
 }

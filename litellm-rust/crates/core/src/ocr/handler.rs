@@ -1,52 +1,21 @@
-use std::sync::Arc;
+use litellm_callbacks::event::{CallEvent, RawResponse};
 
 use super::OcrClient;
-use super::hooks::{OcrHooks, OcrPostCallRequest};
+use super::route::OcrHost;
 use super::types::{LiteLLMOcrResponse, PreparedOcrRequest, ResolvedOcrRequest};
 use crate::llms::base_llm::ocr::transformation::OcrResponseContext;
-use litellm_callbacks::context::{CallContext, CallTiming};
 
 pub(crate) async fn perform_ocr_request(
     client: &OcrClient,
     request: ResolvedOcrRequest,
+    host: &OcrHost,
+    caller_document: bool,
 ) -> Result<LiteLLMOcrResponse, super::Error> {
     request.response_format()?;
-    let context = CallContext {
-        call_type: "ocr".into(),
-        model: request.model.clone(),
-        custom_llm_provider: request.provider_name().to_owned(),
-        litellm_call_id: request
-            .litellm_call_id
-            .clone()
-            .unwrap_or_else(|| format!("ocr-{:032x}", rand::random::<u128>())),
-    };
-    let hooks = request.hooks.clone();
-    let start_time = epoch_seconds();
-    let result = async {
-        let request =
-            super::hooks::pre_call(&*hooks, &context.custom_llm_provider, request).await?;
-        PreparedOcrCall::prepare(client.clone(), request)
-            .await?
-            .execute()
-            .await
-    }
-    .await;
-    let timing = CallTiming {
-        start_time,
-        end_time: epoch_seconds(),
-    };
-    match &result {
-        Ok(response) => hooks.success(&context, response, &timing).await,
-        Err(error) => hooks.failure(&context, error, &timing).await,
-    }
-    result
-}
-
-fn epoch_seconds() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs_f64())
-        .unwrap_or(0.0)
+    PreparedOcrCall::prepare(client.clone(), request, host, caller_document)
+        .await?
+        .execute()
+        .await
 }
 
 pub(crate) struct PreparedOcrCall {
@@ -59,8 +28,10 @@ impl PreparedOcrCall {
     pub(crate) async fn prepare(
         client: OcrClient,
         request: ResolvedOcrRequest,
+        host: &OcrHost,
+        caller_document: bool,
     ) -> Result<Self, super::Error> {
-        let request = super::prepare::prepare_request(request);
+        let request = super::prepare::prepare_request(request, host.clone(), caller_document);
         let http = request.config.prepare_request(&request, &client).await?;
         Ok(Self {
             client,
@@ -104,7 +75,7 @@ impl PreparedOcrCall {
         let context = OcrResponseContext {
             client: &self.client,
             connection: &self.request.connection,
-            hooks: &self.request.hooks,
+            host: &self.request.host,
             request_format: self.request.response_format()?,
             url: &url,
             headers: &headers,
@@ -131,10 +102,11 @@ fn request_headers(request: &reqwest::Request) -> Result<Vec<(String, String)>, 
         .collect()
 }
 
-pub(crate) async fn post_call(hooks: &Arc<dyn OcrHooks>, bytes: &[u8]) -> Result<(), super::Error> {
-    let original_response = serde_json::Value::String(String::from_utf8_lossy(bytes).into_owned());
-    hooks
-        .post_call(OcrPostCallRequest { original_response })
-        .await?;
-    Ok(())
+pub(crate) async fn post_call(host: &OcrHost, bytes: &[u8]) -> Result<(), super::Error> {
+    host.emit(CallEvent::ResponseReceived {
+        raw: RawResponse {
+            body: String::from_utf8_lossy(bytes).into_owned(),
+        },
+    })
+    .await
 }

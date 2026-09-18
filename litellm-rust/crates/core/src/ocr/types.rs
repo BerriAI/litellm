@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -9,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 
-use super::hooks::{NoopOcrHooks, OcrHooks};
 use super::provider_config::{OcrConfigKind, resolve_provider_config};
 use crate::call_arguments::CallArguments;
 use crate::constants::OCR_HTTP_TIMEOUT_SECS;
@@ -275,8 +273,6 @@ pub struct LiteLLMOcrRequest<D = OcrDocumentInput> {
     pub document: D,
     pub credentials: OcrCredentialInputs,
     pub transport: OcrTransportConfig,
-    pub hooks: Arc<dyn OcrHooks>,
-    pub litellm_call_id: Option<String>,
     pub optional_params: CallArguments,
     pub input_sources: BTreeMap<String, InputSource>,
     pub azure_ad_token_provider: Option<TokenProviderHandle>,
@@ -319,8 +315,6 @@ impl LiteLLMOcrRequest {
             document: document.into(),
             credentials: OcrCredentialInputs::default(),
             transport,
-            hooks: Arc::new(NoopOcrHooks),
-            litellm_call_id: None,
             optional_params,
             input_sources: BTreeMap::new(),
             azure_ad_token_provider: None,
@@ -339,8 +333,6 @@ impl<D> LiteLLMOcrRequest<D> {
             document: map(self.document)?,
             credentials: self.credentials,
             transport: self.transport,
-            hooks: self.hooks,
-            litellm_call_id: self.litellm_call_id,
             optional_params: self.optional_params,
             input_sources: self.input_sources,
             azure_ad_token_provider: self.azure_ad_token_provider,
@@ -354,8 +346,6 @@ impl<D> LiteLLMOcrRequest<D> {
             document,
             credentials: self.credentials,
             transport: self.transport,
-            hooks: self.hooks,
-            litellm_call_id: self.litellm_call_id,
             optional_params: self.optional_params,
             input_sources: self.input_sources,
             azure_ad_token_provider: self.azure_ad_token_provider,
@@ -376,18 +366,6 @@ impl<D> LiteLLMOcrRequest<D> {
 
     pub fn provider_name(&self) -> &'static str {
         self.config.provider().into()
-    }
-
-    pub fn with_host_hooks(
-        self,
-        hooks: Arc<dyn OcrHooks>,
-        litellm_call_id: Option<String>,
-    ) -> Self {
-        Self {
-            hooks,
-            litellm_call_id,
-            ..self
-        }
     }
 
     pub fn with_connection_inputs(
@@ -442,7 +420,10 @@ pub(crate) struct PreparedOcrRequest {
     pub model: String,
     pub document: OcrDocument,
     pub connection: OcrConnection,
-    pub hooks: Arc<dyn OcrHooks>,
+    pub host: super::route::OcrHost,
+    /// Whether the caller handed over the document as is, so the wire body's document
+    /// is the caller's own input rather than something the route prepared.
+    pub caller_document: bool,
     pub optional_params: CallArguments,
     pub input_sources: BTreeMap<String, InputSource>,
     pub azure_ad_token_provider: Option<TokenProviderHandle>,
@@ -450,14 +431,17 @@ pub(crate) struct PreparedOcrRequest {
 }
 
 impl PreparedOcrRequest {
-    pub(crate) fn new(request: ResolvedOcrRequest, connection: OcrConnection) -> Self {
+    pub(crate) fn new(
+        request: ResolvedOcrRequest,
+        connection: OcrConnection,
+        host: super::route::OcrHost,
+        caller_document: bool,
+    ) -> Self {
         let LiteLLMOcrRequest {
             model,
             document,
             credentials: _,
             transport: _,
-            hooks,
-            litellm_call_id: _,
             optional_params,
             input_sources,
             azure_ad_token_provider,
@@ -467,7 +451,8 @@ impl PreparedOcrRequest {
             model,
             document,
             connection,
-            hooks,
+            host,
+            caller_document,
             optional_params,
             input_sources,
             azure_ad_token_provider,

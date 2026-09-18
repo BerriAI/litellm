@@ -4,11 +4,10 @@ pub(crate) mod document;
 pub mod error;
 pub use error::Error;
 pub(crate) mod handler;
-pub mod hooks;
 pub(crate) mod json;
-mod lifecycle;
 pub(crate) mod prepare;
 mod provider_config;
+pub mod route;
 pub mod types;
 pub mod wire;
 
@@ -17,11 +16,8 @@ pub use arguments::{
 };
 pub use client::{OcrClient, ocr};
 pub use document::{encode_file_document, mime_type_for_name, read_path_document};
-pub use lifecycle::{
-    NativeOutcome, NativeResult, NoopOcrHost, OcrAdmission, OcrCall, OcrCallStep, OcrDecline,
-    OcrHookHost, OcrHost, OcrHostOperation, OcrHostResult,
-};
 pub use provider_config::{get_api_key_env_var, get_health_check_document};
+pub use route::{LocalOcrHost, Ocr, OcrHost, OcrMachine, OcrOp, OcrOpResult, ocr_machine};
 pub use types::{
     LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrConnectionInputs, OcrCredentialInputs,
     OcrDocument, OcrDocumentInput, OcrFileContent, OcrPage, OcrPageDimensions, OcrPageImage,

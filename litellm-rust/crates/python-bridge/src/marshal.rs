@@ -7,7 +7,7 @@ use pyo3::types::PyDict;
 use serde_json::{Map, Value};
 
 use litellm_auth::InputSource;
-use litellm_python_interop::from_py;
+use litellm_host_python::from_py;
 
 pub(crate) struct RouteOptions {
     pub(crate) model: String,

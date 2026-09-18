@@ -49,14 +49,14 @@ bridge_route! {
     inputs = MessagesInputs,
     required = {
         model: String,
-        #[pyo3(from_py_with = litellm_python_interop::from_py_argument)]
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)]
         body: serde_json::Value,
     },
     optional = {
         api_key: Option<String>,
         api_base: Option<String>,
         custom_llm_provider: Option<String>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py_argument)]
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)]
         extra_headers: Option<serde_json::Value>,
         timeout_seconds: Option<f64>,
     },

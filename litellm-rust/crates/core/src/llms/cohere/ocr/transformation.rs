@@ -353,7 +353,7 @@ mod tests {
             }))
             .unwrap(),
         );
-        let request = crate::ocr::prepare::prepare_request(request);
+        let request = crate::ocr::prepare::prepare_request_for_test(request);
         let http = CohereParseConfig
             .prepare_request(&request, &crate::ocr::test_support::ocr_client())
             .await
@@ -512,7 +512,7 @@ mod tests {
             request.response_format().unwrap(),
             crate::ocr::types::OcrResponseFormat::Litellm
         );
-        let request = crate::ocr::prepare::prepare_request(request);
+        let request = crate::ocr::prepare::prepare_request_for_test(request);
         let http = CohereParseConfig
             .prepare_request(&request, &crate::ocr::test_support::ocr_client())
             .await

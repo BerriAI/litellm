@@ -2,7 +2,7 @@ use pyo3::Python;
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 
-use litellm_python_interop::{from_py, release_count, release_gil, to_py};
+use litellm_host_python::{from_py, release_count, release_gil, to_py};
 
 struct InitializedPython;
 

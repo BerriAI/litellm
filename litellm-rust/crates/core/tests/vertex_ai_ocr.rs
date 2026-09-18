@@ -121,10 +121,12 @@ async fn adapters_build_complete_requests_and_share_mistral_normalization() {
         options.clone(),
     );
     let vertex = wire_request("vertex_ai/mistral-ocr-maas", "https://vertex.test", options);
-    let direct =
-        crate::ocr::prepare::prepare_request(super::test_support::resolved_request(direct));
-    let vertex =
-        crate::ocr::prepare::prepare_request(super::test_support::resolved_request(vertex));
+    let direct = crate::ocr::prepare::prepare_request_for_test(
+        super::test_support::resolved_request(direct),
+    );
+    let vertex = crate::ocr::prepare::prepare_request_for_test(
+        super::test_support::resolved_request(vertex),
+    );
     let direct_http = MistralOcrConfig
         .prepare_request(&direct, &client)
         .await

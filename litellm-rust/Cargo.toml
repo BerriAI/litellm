@@ -21,7 +21,7 @@ litellm-auth-gcp = { path = "crates/auth-gcp" }
 litellm-cache = { path = "crates/cache" }
 litellm-cache-memory = { path = "crates/cache-memory" }
 litellm-token-counter = { path = "crates/token-counter" }
-litellm-python-interop = { path = "crates/python-interop" }
+litellm-host-python = { path = "crates/host-python" }
 pyo3 = "0.29.2"
 pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
 pythonize = "0.29.0"

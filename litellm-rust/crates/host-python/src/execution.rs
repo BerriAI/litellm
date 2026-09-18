@@ -4,15 +4,15 @@ use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
+use crate::{Pythonized, panic_to_pyerr, release_gil};
 use futures_util::FutureExt;
-use litellm_python_interop::{Pythonized, panic_to_pyerr, release_gil};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use serde::Serialize;
 use tokio::runtime::{Handle, Runtime};
 use tokio::time::{self, MissedTickBehavior};
 
-pub(crate) fn run_sync<T, E, F>(
+pub fn run_sync<T, E, F>(
     py: Python<'_>,
     future: F,
     map_error: fn(E) -> PyErr,
@@ -30,7 +30,7 @@ where
     )
 }
 
-pub(crate) fn run_sync_value<T, F>(py: Python<'_>, future: F) -> PyResult<T>
+pub fn run_sync_value<T, F>(py: Python<'_>, future: F) -> PyResult<T>
 where
     T: Send + 'static,
     F: Future<Output = PyResult<T>> + Send + 'static,
@@ -73,7 +73,7 @@ where
     Pythonized(result).into_pyobject(py).map(Bound::unbind)
 }
 
-pub(crate) fn run_async<T, E, F>(
+pub fn run_async<T, E, F>(
     py: Python<'_>,
     future: F,
     map_error: fn(E) -> PyErr,
@@ -90,7 +90,7 @@ where
     })
 }
 
-pub(crate) fn run_async_value<T, F>(py: Python<'_>, future: F) -> PyResult<Bound<'_, PyAny>>
+pub fn run_async_value<T, F>(py: Python<'_>, future: F) -> PyResult<Bound<'_, PyAny>>
 where
     T: for<'py> IntoPyObject<'py> + Send + 'static,
     F: Future<Output = PyResult<T>> + Send + 'static,
@@ -98,7 +98,7 @@ where
     pyo3_async_runtimes::tokio::future_into_py(py, async move { catch_future_panic(future).await? })
 }
 
-pub(crate) fn poll_async_value<T, F>(py: Python<'_>, future: Pin<&mut F>) -> PyResult<Poll<T>>
+pub fn poll_async_value<T, F>(py: Python<'_>, future: Pin<&mut F>) -> PyResult<Poll<T>>
 where
     T: Send,
     F: Future<Output = PyResult<T>> + Send,
@@ -165,7 +165,6 @@ mod tests {
     use std::thread;
     use std::time::Instant;
 
-    use litellm_core::messages::Error;
     use pyo3::panic::PanicException;
     use pyo3::types::{PyDict, PyModule};
     use rstest::{fixture, rstest};
@@ -188,8 +187,17 @@ mod tests {
     #[fixture]
     #[once]
     fn initialized_python() -> InitializedPython {
-        Python::initialize();
+        crate::initialize_python();
         InitializedPython
+    }
+
+    #[derive(Debug)]
+    struct Error(String);
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str(&self.0)
+        }
     }
 
     fn runtime_error(error: Error) -> PyErr {
@@ -439,7 +447,7 @@ mod tests {
         python.attach(|py| {
             let error = run_sync::<bool, Error, _>(
                 py,
-                async { Err(Error::InvalidRequest("invalid".to_string())) },
+                async { Err(Error("invalid".to_string())) },
                 panicking_error_mapper,
             )
             .expect_err("panicked mapper should become a Python exception");

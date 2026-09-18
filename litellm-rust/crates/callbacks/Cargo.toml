@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+serde_json.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros"] }

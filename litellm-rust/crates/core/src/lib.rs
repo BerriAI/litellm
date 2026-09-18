@@ -6,6 +6,7 @@ pub mod error;
 pub mod http_utils;
 pub mod litellm_core_utils;
 pub mod llms;
+pub mod machine;
 mod media;
 pub mod messages;
 pub mod ocr;

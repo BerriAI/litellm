@@ -1,29 +1,23 @@
-use std::sync::Arc;
-
-use litellm_callbacks_legacy::OcrCallbackRetention;
 use litellm_core::ocr::wire::{
     OcrWireRequest, consumed_optional_params, decode_document, decode_request_input,
 };
-use litellm_core::ocr::{LiteLLMOcrRequest, NativeOutcome, OcrCall, OcrDocumentInput};
-use litellm_python_interop::from_py;
+use litellm_core::ocr::{LiteLLMOcrRequest, OcrDocumentInput};
+use litellm_host_python::auth::{AZURE_AD_TOKEN_PROVIDER, PythonTokenProvider};
+use litellm_host_python::from_py;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::{Map, Value};
 
 use super::document::{FileDocumentInput, PythonFileReader};
 use super::errors::to_pyerr as ocr_error_to_pyerr;
-use super::lifecycle::BridgeOcrHooks;
-use crate::auth::{AZURE_AD_TOKEN_PROVIDER, PythonTokenProvider};
-use crate::errors::RustBridgeDeclined;
 use crate::marshal::{project_optional_fields, python_timeout_seconds, request_input_sources};
 use crate::projection::Projection;
 
+/// The Python objects the route keeps for the rest of the call.
 pub(super) struct OcrRetained {
-    pub boundary_request: Py<PyAny>,
     pub reader: Option<PythonFileReader>,
     pub azure_ad_token_provider: Option<PythonTokenProvider>,
     pub provider: &'static str,
-    pub callbacks: OcrCallbackRetention,
 }
 
 struct OcrArguments<'a, 'py> {
@@ -78,7 +72,7 @@ impl<'py> OcrArguments<'_, 'py> {
 
 enum ProjectedDocument {
     File(FileDocumentInput),
-    Other { wire: Value, retained: Py<PyAny> },
+    Other(Value),
 }
 
 impl ProjectedDocument {
@@ -99,26 +93,16 @@ impl ProjectedDocument {
                 }
             })?;
         if kind != "file" {
-            return Ok(Self::Other {
-                wire: from_py(document)?,
-                retained: document.clone().unbind(),
-            });
+            return Ok(Self::Other(from_py(document)?));
         }
         Ok(Self::File(document.extract()?))
     }
 
-    fn into_parts(
-        self,
-    ) -> PyResult<(
-        OcrDocumentInput,
-        Option<Py<PyAny>>,
-        Option<PythonFileReader>,
-    )> {
+    fn into_parts(self) -> PyResult<(OcrDocumentInput, Option<PythonFileReader>)> {
         match self {
-            Self::File(FileDocumentInput { input, reader }) => Ok((input, None, reader)),
-            Self::Other { wire, retained } => Ok((
+            Self::File(FileDocumentInput { input, reader }) => Ok((input, reader)),
+            Self::Other(wire) => Ok((
                 decode_document(wire).map_err(ocr_error_to_pyerr)?.into(),
-                Some(retained),
                 None,
             )),
         }
@@ -129,7 +113,6 @@ pub(super) fn project_request(
     request: &Bound<'_, PyAny>,
     kwargs: &Bound<'_, PyDict>,
 ) -> PyResult<Projection<LiteLLMOcrRequest<OcrDocumentInput>, OcrRetained>> {
-    let boundary_request = request.clone().unbind();
     let arguments = OcrArguments { request, kwargs };
     let model = arguments.model()?;
     let custom_llm_provider = arguments.custom_llm_provider()?;
@@ -149,7 +132,7 @@ pub(super) fn project_request(
     let azure_ad_token_provider = kwargs
         .get_item("azure_ad_token_provider")?
         .and_then(|provider| PythonTokenProvider::select(provider, AZURE_AD_TOKEN_PROVIDER));
-    let (document, retained_document, reader) = document.into_parts()?;
+    let (document, reader) = document.into_parts()?;
     let wire = OcrWireRequest {
         model,
         document,
@@ -164,38 +147,17 @@ pub(super) fn project_request(
     let request = decode_request_input(wire).map_err(ocr_error_to_pyerr)?;
     let provider = request.provider_name();
     Ok(Projection {
-        native: request.with_host_hooks(Arc::new(BridgeOcrHooks), None),
+        native: request,
         retained: OcrRetained {
-            boundary_request,
             reader,
             azure_ad_token_provider,
             provider,
-            callbacks: OcrCallbackRetention::new(
-                retained_document,
-                api_key.unbind(),
-                specs
-                    .into_iter()
-                    .filter(|spec| spec.secret)
-                    .map(|spec| spec.name)
-                    .collect(),
-            ),
         },
     })
 }
 
-pub(super) fn admitted_call(outcome: NativeOutcome<OcrCall>) -> PyResult<OcrCall> {
-    match outcome {
-        NativeOutcome::Completed(call) => Ok(call),
-        NativeOutcome::Declined(reason) => Err(RustBridgeDeclined::new_err(format!(
-            "native OCR admission declined: {reason:?}"
-        ))),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use litellm_core::ocr::Error;
-    use litellm_core::ocr::OcrDecline;
     use pyo3::exceptions::PyValueError;
 
     use super::*;
@@ -215,11 +177,7 @@ mod tests {
 
     fn project_document(
         document: &Bound<'_, PyAny>,
-    ) -> PyResult<(
-        OcrDocumentInput,
-        Option<Py<PyAny>>,
-        Option<PythonFileReader>,
-    )> {
+    ) -> PyResult<(OcrDocumentInput, Option<PythonFileReader>)> {
         ProjectedDocument::project(document)?.into_parts()
     }
 
@@ -244,28 +202,6 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
 sys.modules['litellm.rust_bridge.timeouts'] = timeouts
 ",
         );
-    }
-
-    #[test]
-    fn typed_initial_decline_uses_bridge_decline_contract() {
-        Python::initialize();
-        Python::attach(|py| {
-            let Err(error) = admitted_call(NativeOutcome::Declined(OcrDecline::HostOperations))
-            else {
-                panic!("unsupported host operations should decline admission");
-            };
-            assert!(error.is_instance_of::<RustBridgeDeclined>(py));
-        });
-    }
-
-    #[test]
-    fn post_admission_error_does_not_use_bridge_decline_contract() {
-        Python::initialize();
-        Python::attach(|py| {
-            let error = ocr_error_to_pyerr(Error::InvalidRequest("callback result".into()));
-            assert!(error.is_instance_of::<PyValueError>(py));
-            assert!(!error.is_instance_of::<RustBridgeDeclined>(py));
-        });
     }
 
     #[test]
@@ -434,9 +370,8 @@ kwargs = {}
                 .unwrap();
             let arguments = arguments(&request, &kwargs);
             let document = arguments.document().unwrap();
-            let (input, retained, reader) = project_document(&document).unwrap();
+            let (input, reader) = project_document(&document).unwrap();
             assert_eq!(input, OcrDocumentInput::HostReader { mime_type: None });
-            assert!(retained.is_none());
             assert_eq!(arguments.api_base().unwrap().as_deref(), Some("original"));
             assert_eq!(arguments.timeout_seconds().unwrap(), Some(1.0));
             reader.unwrap().read(py).unwrap();
@@ -477,7 +412,7 @@ kwargs = {'api_key': key}
     }
 
     #[test]
-    fn file_documents_become_typed_inputs_and_other_documents_keep_the_python_object() {
+    fn file_documents_become_typed_inputs_and_other_documents_decode() {
         Python::initialize();
         Python::attach(|py| {
             let file = py
@@ -487,7 +422,7 @@ kwargs = {'api_key': key}
                     None,
                 )
                 .unwrap();
-            let (input, retained, reader) = project_document(&file).unwrap();
+            let (input, reader) = project_document(&file).unwrap();
             assert_eq!(
                 input,
                 OcrDocumentInput::Bytes {
@@ -496,7 +431,6 @@ kwargs = {'api_key': key}
                     mime_type: Some("application/pdf".into()),
                 }
             );
-            assert!(retained.is_none());
             assert!(reader.is_none());
 
             let original = py
@@ -506,9 +440,8 @@ kwargs = {'api_key': key}
                     None,
                 )
                 .unwrap();
-            let (input, retained, _) = project_document(&original).unwrap();
+            let (input, _) = project_document(&original).unwrap();
             assert_eq!(input, url_document("https://example.com/a.pdf"));
-            assert!(retained.unwrap().bind(py).is(&original));
         });
     }
 
@@ -583,9 +516,8 @@ document = Document()
 ",
             );
             let document = locals.get_item("document").unwrap().unwrap();
-            let (input, retained, _) = project_document(&document).unwrap();
+            let (input, _) = project_document(&document).unwrap();
             assert!(matches!(input, OcrDocumentInput::Bytes { .. }));
-            assert!(retained.is_none());
             let reads: Vec<String> = document.getattr("reads").unwrap().extract().unwrap();
             assert_eq!(reads, ["type", "mime_type", "file"]);
         });

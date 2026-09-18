@@ -1,5 +1,4 @@
 use std::future::Future;
-use std::sync::Arc;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -7,7 +6,7 @@ use serde_json::Value;
 
 use crate::call_arguments::CallArguments;
 use crate::ocr::OcrClient;
-use crate::ocr::hooks::OcrHooks;
+use crate::ocr::route::OcrHost;
 use crate::ocr::types::{
     LiteLLMOcrResponse, OcrConnection, OcrCredentialInputs, OcrDocument, OcrResponseFormat,
     PreparedOcrRequest, ResolvedOcrCredentials,
@@ -37,7 +36,7 @@ pub(crate) struct OcrRequestContext<'a> {
 pub(crate) struct OcrResponseContext<'a> {
     pub client: &'a OcrClient,
     pub connection: &'a OcrConnection,
-    pub hooks: &'a Arc<dyn OcrHooks>,
+    pub host: &'a OcrHost,
     pub request_format: OcrResponseFormat,
     pub url: &'a str,
     pub headers: &'a [(String, String)],
@@ -133,7 +132,7 @@ pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
                 context.connection.max_response_bytes,
             )
             .await?;
-            crate::ocr::handler::post_call(context.hooks, &bytes).await?;
+            crate::ocr::handler::post_call(context.host, &bytes).await?;
             self.transform_ocr_response(model, &bytes, context.request_format)
         }
     }

@@ -1,11 +1,15 @@
-mod call_state;
+//! The legacy callback contract: litellm's `Logging` object, the sync and async callback
+//! registries it fans out to, the deployment hooks and the deferred proxy release. All of
+//! it sits behind one [`CallbackAdapter`](litellm_host_python::CallbackAdapter), so the
+//! driver, the routes and core never learn which Python object is on the other end.
+
+mod adapter;
 mod callbacks;
+mod deferred;
 mod logger;
-mod ocr;
 mod preparation;
 
-pub use call_state::{PythonCallState, missing_state, now};
+pub use adapter::{LegacyLogging, LegacySurface};
 pub use callbacks::{LegacyCallbacks, is_internal_call};
 pub use logger::{DeploymentHooks, PythonLogger, SetupResult, finalize, setup};
-pub use ocr::{OcrCallbackRetention, OcrRequestFacts, OcrRequestPayload};
 pub use preparation::prepare;

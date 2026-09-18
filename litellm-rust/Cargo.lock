@@ -2005,6 +2005,7 @@ dependencies = [
 name = "litellm-callbacks"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "tokio",
 ]
 
@@ -2014,7 +2015,7 @@ version = "0.1.0"
 dependencies = [
  "litellm-auth",
  "litellm-callbacks",
- "litellm-python-interop",
+ "litellm-host-python",
  "pyo3",
  "serde",
  "serde_json",
@@ -2065,11 +2066,26 @@ dependencies = [
  "aws-smithy-eventstream",
  "aws-smithy-types",
  "bytes",
- "criterion",
  "futures-util",
  "rstest",
  "sse-stream",
  "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "litellm-host-python"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-auth",
+ "litellm-callbacks",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "pythonize",
+ "rstest",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
@@ -2081,10 +2097,9 @@ dependencies = [
  "criterion",
  "futures-util",
  "litellm-auth",
- "litellm-callbacks",
  "litellm-callbacks-legacy",
  "litellm-core",
- "litellm-python-interop",
+ "litellm-host-python",
  "litellm-token-counter",
  "pyo3",
  "pyo3-async-runtimes",
@@ -2093,17 +2108,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-tungstenite",
-]
-
-[[package]]
-name = "litellm-python-interop"
-version = "0.1.0"
-dependencies = [
- "pyo3",
- "pythonize",
- "rstest",
- "serde",
- "serde_json",
 ]
 
 [[package]]

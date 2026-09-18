@@ -348,10 +348,10 @@ mod tests {
             options.clone(),
         );
         let vertex = wire_request("vertex_ai/mistral-ocr-maas", "https://vertex.test", options);
-        let direct = crate::ocr::prepare::prepare_request(
+        let direct = crate::ocr::prepare::prepare_request_for_test(
             crate::ocr::test_support::resolved_request(direct),
         );
-        let vertex = crate::ocr::prepare::prepare_request(
+        let vertex = crate::ocr::prepare::prepare_request_for_test(
             crate::ocr::test_support::resolved_request(vertex),
         );
         let direct_http = MistralOcrConfig

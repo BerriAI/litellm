@@ -77,7 +77,7 @@ mod tests {
 
     #[test]
     fn pythonized_converts_on_the_attached_thread() {
-        Python::initialize();
+        crate::initialize_python();
         Python::attach(|py| {
             let value: Vec<i32> = Pythonized(vec![1, 2, 3])
                 .into_pyobject(py)
@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn pythonized_maps_serializer_panics_to_a_base_exception() {
-        Python::initialize();
+        crate::initialize_python();
         Python::attach(|py| {
             let error = Pythonized(PanickingSerializer)
                 .into_pyobject(py)
@@ -101,7 +101,7 @@ mod tests {
 
     #[test]
     fn depythonize_preserves_python_exception_identity_and_traceback() {
-        Python::initialize();
+        crate::initialize_python();
         Python::attach(|py| {
             let locals = pyo3::types::PyDict::new(py);
             py.run(

@@ -52,8 +52,8 @@ fn prepare_chat_completions(
 #[pyo3(signature = (model, messages, optional_params=None, custom_llm_provider=None))]
 fn chat_completions_decline(
     model: String,
-    #[pyo3(from_py_with = litellm_python_interop::from_py_argument)] messages: Value,
-    #[pyo3(from_py_with = litellm_python_interop::from_py_argument)] optional_params: Option<Value>,
+    #[pyo3(from_py_with = litellm_host_python::from_py_argument)] messages: Value,
+    #[pyo3(from_py_with = litellm_host_python::from_py_argument)] optional_params: Option<Value>,
     custom_llm_provider: Option<String>,
 ) -> PyResult<Option<String>> {
     let optional_params = object_or_empty("optional_params", optional_params)?;
@@ -72,16 +72,16 @@ bridge_route! {
     inputs = ChatCompletionsInputs,
     required = {
         model: String,
-        #[pyo3(from_py_with = litellm_python_interop::from_py_argument)]
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)]
         messages: serde_json::Value,
     },
     optional = {
-        #[pyo3(from_py_with = litellm_python_interop::from_py_argument)]
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)]
         optional_params: Option<serde_json::Value>,
         api_key: Option<String>,
         api_base: Option<String>,
         custom_llm_provider: Option<String>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py_argument)]
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)]
         extra_headers: Option<serde_json::Value>,
         timeout_seconds: Option<f64>,
     },

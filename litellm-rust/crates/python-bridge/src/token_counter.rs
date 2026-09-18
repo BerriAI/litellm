@@ -2,7 +2,7 @@ use std::num::NonZero;
 use std::sync::Arc;
 use std::thread::available_parallelism;
 
-use litellm_python_interop::release_gil;
+use litellm_host_python::release_gil;
 use litellm_token_counter::{
     CountableRequest, Error, InputTokenCount, TokenCounter as CoreTokenCounter,
 };
@@ -13,7 +13,7 @@ use tokio::sync::Semaphore;
 
 use crate::constants::TOKEN_COUNT_FALLBACK_PARALLELISM;
 use crate::errors::RustBridgeDeclined;
-use crate::execution::run_async;
+use litellm_host_python::run_async;
 
 /// Counts the input tokens of a raw request body off the Python event loop with
 /// the GIL released. Python owns which requests get here and what to do with

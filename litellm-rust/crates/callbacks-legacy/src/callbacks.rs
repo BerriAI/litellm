@@ -2,13 +2,47 @@
 //! the deferred and worker-submitted success paths, and the sync-callbacks-for-async-calls
 //! duplication. All of it expires with the legacy callback contract.
 
+use litellm_callbacks::event::WireRequest;
+use litellm_host_python::to_py;
 use pyo3::exceptions::PyBaseException;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use crate::logger::PythonLogger;
 
 pub trait LegacyCallbacks {
     fn callbacks_needed(&self, py: Python<'_>, phase: &str) -> PyResult<bool>;
+
+    /// `Logging.update_from_kwargs`: what the logger is told about the request it is
+    /// about to see, with consumed credentials redacted.
+    fn update_from_kwargs(
+        &self,
+        py: Python<'_>,
+        kwargs: &Py<PyDict>,
+        wire: &WireRequest,
+    ) -> PyResult<()>;
+
+    fn record_api_call_start(&self, py: Python<'_>) -> PyResult<()>;
+
+    /// `Logging.pre_call`, or its payload-free shortcut when no input callback listens.
+    fn pre_call(
+        &self,
+        py: Python<'_>,
+        input: &str,
+        api_key: Option<&Bound<'_, PyAny>>,
+        body: &Bound<'_, PyDict>,
+        headers: &Bound<'_, PyDict>,
+        url: &str,
+    ) -> PyResult<()>;
+
+    /// `Logging.post_call`, or its payload-free shortcut when no input callback listens.
+    fn post_call(
+        &self,
+        py: Python<'_>,
+        original_response: &str,
+        body: Option<&Py<PyDict>>,
+        headers: Option<&Py<PyDict>>,
+    ) -> PyResult<()>;
 
     fn defers_async_logging(&self, py: Python<'_>) -> bool;
 
@@ -61,6 +95,111 @@ impl LegacyCallbacks for PythonLogger {
             .getattr("callbacks_needed")?
             .call1((self.object(py), phase))?
             .extract()
+    }
+
+    fn update_from_kwargs(
+        &self,
+        py: Python<'_>,
+        kwargs: &Py<PyDict>,
+        wire: &WireRequest,
+    ) -> PyResult<()> {
+        let secret_fields: Vec<&str> = wire.secret_fields.iter().map(String::as_str).collect();
+        let update = PyDict::new(py);
+        update.set_item("kwargs", redact(py, kwargs.bind(py), &secret_fields)?)?;
+        update.set_item("model", &wire.model)?;
+        update.set_item(
+            "optional_params",
+            redact(
+                py,
+                &to_py(py, &wire.optional_params)?
+                    .into_bound(py)
+                    .cast_into::<PyDict>()?,
+                &secret_fields,
+            )?,
+        )?;
+        let params = PyDict::new(py);
+        params.set_item(
+            "litellm_call_id",
+            kwargs.bind(py).get_item("litellm_call_id")?,
+        )?;
+        params.set_item("api_base", &wire.url)?;
+        for name in ["logger_fn", "litellm_request_debug"] {
+            if let Some(value) = kwargs.bind(py).get_item(name)? {
+                params.set_item(name, value)?;
+            }
+        }
+        for name in custom_pricing_fields(py)? {
+            if let Some(value) = kwargs.bind(py).get_item(&name)?
+                && !value.is_none()
+            {
+                params.set_item(name, value)?;
+            }
+        }
+        update.set_item("litellm_params", params)?;
+        update.set_item("custom_llm_provider", &wire.custom_llm_provider)?;
+        self.object(py)
+            .call_method("update_from_kwargs", (), Some(&update))?;
+        Ok(())
+    }
+
+    fn record_api_call_start(&self, py: Python<'_>) -> PyResult<()> {
+        self.object(py).call_method0("record_api_call_start_time")?;
+        Ok(())
+    }
+
+    fn pre_call(
+        &self,
+        py: Python<'_>,
+        input: &str,
+        api_key: Option<&Bound<'_, PyAny>>,
+        body: &Bound<'_, PyDict>,
+        headers: &Bound<'_, PyDict>,
+        url: &str,
+    ) -> PyResult<()> {
+        let additional = PyDict::new(py);
+        additional.set_item("complete_input_dict", body)?;
+        additional.set_item("headers", headers)?;
+        additional.set_item("api_base", url)?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("input", input)?;
+        kwargs.set_item("api_key", api_key)?;
+        kwargs.set_item("additional_args", &additional)?;
+        if self.callbacks_needed(py, "input")? {
+            self.object(py).call_method("pre_call", (), Some(&kwargs))?;
+        } else {
+            self.object(py)
+                .call_method("_pre_call", (), Some(&kwargs))?;
+            self.record_api_call_start(py)?;
+        }
+        Ok(())
+    }
+
+    fn post_call(
+        &self,
+        py: Python<'_>,
+        original_response: &str,
+        body: Option<&Py<PyDict>>,
+        headers: Option<&Py<PyDict>>,
+    ) -> PyResult<()> {
+        let additional = PyDict::new(py);
+        additional.set_item("complete_input_dict", body)?;
+        additional.set_item("headers", headers)?;
+        if self.callbacks_needed(py, "input")? {
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("original_response", original_response)?;
+            kwargs.set_item("additional_args", &additional)?;
+            self.object(py)
+                .call_method("post_call", (), Some(&kwargs))?;
+        } else {
+            let response = py
+                .import("json")?
+                .call_method1("dumps", (original_response,))?;
+            self.object(py).call_method1(
+                "record_post_call",
+                (response, py.None(), py.None(), additional),
+            )?;
+        }
+        Ok(())
     }
     fn defers_async_logging(&self, py: Python<'_>) -> bool {
         self.object(py)
@@ -177,6 +316,37 @@ impl LegacyCallbacks for PythonLogger {
         }
         enqueue.map(|_| ())
     }
+}
+
+fn custom_pricing_fields(py: Python<'_>) -> PyResult<Vec<String>> {
+    py.import("litellm.types.utils")?
+        .getattr("CustomPricingLiteLLMParams")?
+        .getattr("model_fields")?
+        .cast_into::<PyDict>()?
+        .keys()
+        .iter()
+        .map(|name| name.extract::<String>())
+        .collect()
+}
+
+fn redact(
+    py: Python<'_>,
+    params: &Bound<'_, PyDict>,
+    secret_fields: &[&str],
+) -> PyResult<Py<PyDict>> {
+    let redacted = PyDict::new(py);
+    for (name, value) in params {
+        let name = name.extract::<String>()?;
+        if name == "proxy_server_request" {
+            continue;
+        }
+        if secret_fields.contains(&name.as_str()) {
+            redacted.set_item(name, "****")?;
+        } else {
+            redacted.set_item(name, value)?;
+        }
+    }
+    Ok(redacted.unbind())
 }
 
 /// Proxy-internal calls skip the legacy success fan-out.

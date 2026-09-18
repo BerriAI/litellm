@@ -18,12 +18,11 @@ panic-test = []
 [dependencies]
 bytes.workspace = true
 futures-util.workspace = true
-litellm-callbacks.workspace = true
-litellm-core.workspace = true
-litellm-callbacks-legacy.workspace = true
 litellm-auth.workspace = true
+litellm-callbacks-legacy.workspace = true
+litellm-core.workspace = true
+litellm-host-python.workspace = true
 litellm-token-counter.workspace = true
-litellm-python-interop.workspace = true
 pyo3.workspace = true
 pyo3-async-runtimes.workspace = true
 serde.workspace = true

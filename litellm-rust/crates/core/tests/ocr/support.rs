@@ -5,7 +5,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 use crate::ocr::wire::{OcrWireRequest, decode_request};
-use crate::ocr::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient};
+use crate::ocr::{LiteLLMOcrRequest, LiteLLMOcrResponse, LocalOcrHost, OcrClient, ocr_machine};
 
 pub(crate) fn ocr_client() -> OcrClient {
     let document_http = reqwest::Client::builder()
@@ -19,6 +19,12 @@ pub(crate) async fn perform_ocr(
     request: LiteLLMOcrRequest,
 ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
     ocr_client().perform(request).await
+}
+
+pub(crate) async fn perform_ocr_with(
+    host: LocalOcrHost,
+) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
+    litellm_callbacks::run::run(ocr_machine(ocr_client()), &host).await
 }
 
 pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> LiteLLMOcrRequest {
