@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Mapping, Sequence
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal
 
 import httpx
@@ -347,12 +346,10 @@ class TypeSafeGuardrail(CustomGuardrail):
         end_time: Final = time.monotonic()
         if response is None:
             self.add_standard_logging_guardrail_information_to_request_data(  # pyright: ignore[reportUnknownMemberType]  # untyped base helper
-                guardrail_json_response=MappingProxyType(
-                    {
-                        "error": "TypeSafe evaluation unavailable; request forwarded uncompacted",
-                        "model": self.jev_model,
-                    }
-                ),
+                guardrail_json_response={  # mutable-ok: must stay JSON-serializable for shared logging
+                    "error": "TypeSafe evaluation unavailable; request forwarded uncompacted",
+                    "model": self.jev_model,
+                },
                 request_data=request_data,
                 guardrail_status="guardrail_failed_to_respond",
                 guardrail_provider="typesafe",
@@ -395,14 +392,12 @@ class TypeSafeGuardrail(CustomGuardrail):
             chars_removed,
         )
         self.add_standard_logging_guardrail_information_to_request_data(  # pyright: ignore[reportUnknownMemberType]  # untyped base helper
-            guardrail_json_response=MappingProxyType(
-                {
-                    "exchanges_evaluated": len(candidates),
-                    "exchanges_dropped": exchanges_dropped,
-                    "chars_removed": chars_removed,
-                    "model": self.jev_model,
-                }
-            ),
+            guardrail_json_response={  # mutable-ok: must stay JSON-serializable for shared logging
+                "exchanges_evaluated": len(candidates),
+                "exchanges_dropped": exchanges_dropped,
+                "chars_removed": chars_removed,
+                "model": self.jev_model,
+            },
             request_data=request_data,
             guardrail_status="success",
             guardrail_provider="typesafe",
