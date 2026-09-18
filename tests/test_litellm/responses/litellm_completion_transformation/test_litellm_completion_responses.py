@@ -4909,7 +4909,7 @@ class TestStreamingSnapshotItemIds:
 
 
 def test_transform_chat_completion_response_incomplete_details():
-    from openai.types.responses.response import IncompleteDetails
+    from litellm.types.llms.openai import IncompleteDetails
 
     resp_length = ModelResponse(
         id="resp-length",

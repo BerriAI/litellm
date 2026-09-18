@@ -1348,6 +1348,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "TOO_MANY_TOOL_CALLS",
             "MALFORMED_RESPONSE",
             "NO_IMAGE",
+            "IMAGE_RECITATION",
+            "IMAGE_OTHER",
+            "ESCALATION",
+            "UNEXPECTED_TOOL_CALL",
+            "MISSING_THOUGHT_SIGNATURE",
         }
     )
 
@@ -2243,7 +2248,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             image_response: list[ImageURLListItem] | None = None
             chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
             chat_completion_logprobs: ChoiceLogprobs | None = None
-            tools: list[ChatCompletionToolCallChunk] | None = []
+            tools: list[ChatCompletionToolCallChunk] | None = None
             functions: ChatCompletionToolCallFunctionChunk | None = None
             thinking_blocks: list[ChatCompletionThinkingBlock] | None = None
             reasoning_content: str | None = None
@@ -2358,11 +2363,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 tool_invocation_fields["server_side_tool_invocations"] = server_side_tool_invocations
                 chat_completion_message["provider_specific_fields"] = tool_invocation_fields
 
-            if candidate.get("finishReason"):
-                finish_reason_fields = chat_completion_message.get("provider_specific_fields") or {}
-                finish_reason_fields["native_finish_reason"] = candidate.get("finishReason")
-                chat_completion_message["provider_specific_fields"] = finish_reason_fields
-
             if isinstance(model_response, ModelResponseStream):
                 choice = VertexGeminiConfig._create_streaming_choice(
                     chat_completion_message=chat_completion_message,
@@ -2375,15 +2375,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
                 model_response.choices.append(choice)
             elif isinstance(model_response, ModelResponse):
+                native_finish_reason = candidate.get("finishReason")
                 choice = litellm.Choices(
                     finish_reason=VertexGeminiConfig._check_finish_reason(
-                        chat_completion_message, candidate.get("finishReason")
+                        chat_completion_message, native_finish_reason
                     ),
                     index=candidate.get("index", idx),
                     message=chat_completion_message,
                     logprobs=chat_completion_logprobs,
                     enhancements=None,
-                    provider_specific_fields=chat_completion_message.get("provider_specific_fields"),
+                    provider_specific_fields=(
+                        {"native_finish_reason": native_finish_reason} if native_finish_reason is not None else None
+                    ),
                 )
                 model_response.choices.append(choice)
 
@@ -3181,12 +3184,10 @@ class ModelResponseIterator:
                     self.has_seen_tool_calls = True
                     break
 
-        # _process_candidates skips candidates without a "content" part, so a
-        # content-less chunk leaves choices empty and the downstream streaming
-        # handler hits IndexError on choices[0]. This covers the final chunk
-        # (finishReason, no content) and mid-stream metadata-only chunks
-        # (grounding/web-search/thought, no content and no finishReason — seen
-        # with web_search + reasoning) by emitting an empty-delta choice.
+        # _process_candidates skips candidates with neither "content" nor
+        # "finishReason", so a metadata-only chunk (grounding/web-search/thought,
+        # seen with web_search + reasoning) leaves choices empty and the downstream
+        # streaming handler hits IndexError on choices[0]. Emit an empty-delta choice.
         if not model_response.choices and _candidates:
             from litellm.types.utils import Delta, StreamingChoices
 
