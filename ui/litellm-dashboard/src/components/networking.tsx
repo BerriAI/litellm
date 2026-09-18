@@ -94,6 +94,7 @@ import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 import type { SkillRegisterRequest } from "./claude_code_plugins/types";
 import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelMaxBudgetEditor";
+import type { BudgetWindowEntry } from "./key_team_helpers/BudgetWindowsEditor";
 import type { ObjectPermission } from "./object_permission_types";
 import type { components } from "@/lib/http/schema";
 import { jsonFields } from "./common_components/check_openapi_schema";
@@ -1097,6 +1098,7 @@ export interface UserInfoV2Response {
   object_permission?: ObjectPermission | null;
   model_max_budget?: ModelMaxBudget | null;
   model_max_budget_usage?: Record<string, ModelBudgetUsage> | null;
+  budget_limits?: BudgetWindowEntry[] | null;
 }
 
 /**

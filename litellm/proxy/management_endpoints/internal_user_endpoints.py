@@ -15,7 +15,7 @@ These are members of a Team on LiteLLM
 import asyncio
 import json
 import traceback
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence, Set
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol, cast, overload
@@ -1131,6 +1131,7 @@ async def user_info_v2(
                 model_max_budget=user_data.get("model_max_budget"),
                 cache=model_max_budget_limiter.dual_cache,
             ),
+            budget_limits=user_data.get("budget_limits"),
         )
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_info_v2(): Exception occured - %s", e)
@@ -1263,6 +1264,13 @@ def _prepare_user_budget_limits(value: object) -> str:
     return json.dumps(initialized_windows)
 
 
+def _set_user_budget_limits_update(fields_set: Set[str], value: object, non_default_values: dict) -> None:
+    if "budget_limits" not in fields_set:
+        return
+    validate_budget_limits(value)
+    non_default_values["budget_limits"] = _prepare_user_budget_limits(value)
+
+
 def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
     non_default_values: Final = {}
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
@@ -1272,9 +1280,7 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
             if k in fields_set:
                 non_default_values[k] = v
         elif k == "budget_limits":
-            if k in fields_set:
-                validate_budget_limits(v)
-                non_default_values[k] = _prepare_user_budget_limits(v)
+            _set_user_budget_limits_update(fields_set=fields_set, value=v, non_default_values=non_default_values)
         elif k == "model_max_budget":
             if k in fields_set:
                 try:

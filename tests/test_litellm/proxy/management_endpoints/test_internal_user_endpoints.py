@@ -3225,6 +3225,7 @@ async def test_user_info_v2_response_shape(mocker):
         "object_permission",
         "model_max_budget",
         "model_max_budget_usage",
+        "budget_limits",
     }
     assert set(response_dict.keys()) == expected_fields
 
