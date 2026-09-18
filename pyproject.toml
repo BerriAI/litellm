@@ -129,6 +129,12 @@ grpc = [
     # Newest non-yanked release older than the 30-day cutoff.
     "grpcio==1.78.0",
 ]
+stt-vertex-chirp = [
+    # Google Cloud Speech-to-Text v2 streaming (gRPC) for Chirp models on
+    # /v1/realtime. Imported lazily inside the backend so litellm core stays
+    # usable without it.
+    "google-cloud-speech>=2.40.0,<3.0",
+]
 stt-nvidia-riva = [
     # NVIDIA Riva STT provider (gRPC). These are imported lazily inside the
     # provider handler so litellm core remains usable without them.
@@ -152,6 +158,7 @@ proxy-runtime = [
     # Keep these in a dedicated extra so uv-based images preserve the same
     # feature surface without forcing the base SDK install to grow.
     "google-cloud-aiplatform>=1.133.0,<2.0",
+    "google-cloud-speech>=2.40.0,<3.0",
     "google-genai>=1.37.0,<2.0",
     "anthropic[vertex]>=0.84.0,<1.0",
     "grpcio==1.78.0",
