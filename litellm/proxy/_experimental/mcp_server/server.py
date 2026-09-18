@@ -844,15 +844,12 @@ if MCP_AVAILABLE:
             from litellm.proxy._experimental.mcp_server.tool_search import (
                 get_mcp_proxy_tool_definitions,
                 get_virtual_tool_definitions,
+                resolve_mcp_tool_search_enabled,
             )
 
             if _mcp_proxy_mode.get():
                 return [Tool.model_validate(d) for d in get_mcp_proxy_tool_definitions()]  # mutable-ok: MCP SDK list
-            if getattr(
-                getattr(user_api_key_auth, "object_permission", None),
-                "mcp_tool_search_enabled",
-                False,
-            ):
+            if resolve_mcp_tool_search_enabled(user_api_key_auth):
                 return [Tool.model_validate(d) for d in get_virtual_tool_definitions()]
 
             # Get mcp_servers from context variable
@@ -998,6 +995,7 @@ if MCP_AVAILABLE:
             handle_mcp_tool_call,
             handle_mcp_tool_search,
             handle_skill_search,
+            resolve_mcp_tool_search_enabled,
         )
 
         if _mcp_proxy_mode.get() and name not in MCP_PROXY_TOOL_NAMES:
@@ -1075,11 +1073,7 @@ if MCP_AVAILABLE:
         if name not in VIRTUAL_TOOL_NAMES:
             return None
 
-        if not getattr(
-            getattr(user_api_key_auth, "object_permission", None),
-            "mcp_tool_search_enabled",
-            False,
-        ):
+        if not resolve_mcp_tool_search_enabled(user_api_key_auth):
             return CallToolResult(
                 content=[
                     TextContent(

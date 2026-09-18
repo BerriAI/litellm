@@ -13,6 +13,7 @@ import litellm
 
 from litellm.proxy._types import (
     DEFAULT_JWKS_STALE_TTL,
+    JWTAuthBuilderResult,
     JWTLiteLLMRoleMap,
     LiteLLM_JWTAuth,
     LiteLLM_ModelTable,
@@ -7144,3 +7145,51 @@ async def test_admin_jwt_team_header_only_provisions_during_admission(monkeypatc
     else:
         create_team.assert_not_awaited()
         assert result["team_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_jwt_user_api_key_auth_populates_team_and_user_object_permission():
+    """A JWT-authenticated request must carry both the team and user object permission rows so that
+    resolve_mcp_tool_search_enabled can apply key -> team -> user precedence."""
+    from litellm.proxy._experimental.mcp_server.tool_search import resolve_mcp_tool_search_enabled
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team_1",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="team_perm",
+            mcp_tool_search_enabled=False,
+        ),
+    )
+    user_object = LiteLLM_UserTable(
+        user_id="user_1",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="user_perm",
+            mcp_tool_search_enabled=True,
+        ),
+    )
+
+    result = JWTAuthBuilderResult(
+        is_proxy_admin=False,
+        team_object=team_object,
+        user_object=user_object,
+        end_user_object=None,
+        org_object=None,
+        token="jwt_token",
+        team_id=team_object.team_id,
+        user_id=user_object.user_id,
+        user_email=None,
+        end_user_id=None,
+        org_id=None,
+        team_membership=None,
+        jwt_claims={},
+        agent_id=None,
+    )
+
+    auth = JWTAuthManager.user_api_key_auth_from_result(result)
+
+    assert auth.team_object_permission is not None
+    assert auth.team_object_permission.mcp_tool_search_enabled is False
+    assert auth.user_object_permission is not None
+    assert auth.user_object_permission.mcp_tool_search_enabled is True
+    assert resolve_mcp_tool_search_enabled(auth) is False

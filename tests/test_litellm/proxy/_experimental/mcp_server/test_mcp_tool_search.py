@@ -30,6 +30,7 @@ from litellm.proxy._experimental.mcp_server.tool_search import (
     ToolSearchResult,
     coerce_top_k,
     get_virtual_tool_definitions,
+    resolve_mcp_tool_search_enabled,
     search_mcp_tools,
     search_tools,
 )
@@ -231,6 +232,47 @@ class TestCoerceTopK:
 
     def test_custom_default(self) -> None:
         assert coerce_top_k("nope", default=10) == 10
+
+
+class TestResolveMcpToolSearchEnabled:
+    @pytest.mark.parametrize(
+        (
+            "key_value",
+            "team_value",
+            "user_value",
+            "expected",
+        ),
+        [
+            pytest.param(True, False, None, True, id="key-true-beats-team-false"),
+            pytest.param(None, False, True, False, id="team-false-beats-user-true"),
+            pytest.param(False, True, True, False, id="key-false-beats-team-and-user-true"),
+            pytest.param(None, None, True, True, id="falls-through-to-user"),
+            pytest.param(None, None, None, None, id="all-unset-returns-none"),
+            pytest.param(None, None, False, False, id="user-false-explicit"),
+        ],
+    )
+    def test_precedence(
+        self,
+        key_value: bool | None,
+        team_value: bool | None,
+        user_value: bool | None,
+        expected: bool | None,
+    ) -> None:
+        uak = UserAPIKeyAuth(
+            api_key="k",
+            object_permission=_make_perm(mcp_tool_search_enabled=key_value) if key_value is not None else None,
+            team_object_permission=_make_perm(mcp_tool_search_enabled=team_value) if team_value is not None else None,
+            user_object_permission=_make_perm(mcp_tool_search_enabled=user_value) if user_value is not None else None,
+        )
+        assert resolve_mcp_tool_search_enabled(uak) is expected
+
+    def test_present_row_with_unset_field_is_transparent(self) -> None:
+        uak = UserAPIKeyAuth(
+            api_key="k",
+            object_permission=_make_perm(),
+            team_object_permission=_make_perm(mcp_tool_search_enabled=True),
+        )
+        assert resolve_mcp_tool_search_enabled(uak) is True
 
 
 class TestSearchTools:
@@ -921,6 +963,41 @@ class TestDispatchVirtualMcpTool:
         )
         assert result is not None
         assert result.isError is True
+
+    @pytest.mark.asyncio
+    async def test_rejects_when_team_flag_disabled(self) -> None:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _dispatch_virtual_mcp_tool,
+        )
+
+        uak = UserAPIKeyAuth(api_key="k", team_object_permission=_make_perm(mcp_tool_search_enabled=False))
+        result = await _dispatch_virtual_mcp_tool(
+            name=MCP_TOOL_SEARCH_TOOL_NAME,
+            arguments={"query": "x"},
+            user_api_key_auth=uak,
+            client_ip=None,
+        )
+        assert result is not None
+        assert result.isError is True
+
+    @pytest.mark.asyncio
+    async def test_routes_search_when_only_team_flag_enabled(self) -> None:
+        from litellm.proxy._experimental.mcp_server import server as srv
+
+        uak = UserAPIKeyAuth(api_key="k", team_object_permission=_make_perm(mcp_tool_search_enabled=True))
+        with patch(
+            "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_search",
+            new_callable=AsyncMock,
+            return_value="SEARCH_RESULT",
+        ):
+            result = await srv._dispatch_virtual_mcp_tool(
+                name=MCP_TOOL_SEARCH_TOOL_NAME,
+                arguments={"query": "q"},
+                user_api_key_auth=uak,
+                client_ip=None,
+            )
+
+        assert result == "SEARCH_RESULT"
 
     @pytest.mark.asyncio
     async def test_routes_search_with_client_ip(self) -> None:

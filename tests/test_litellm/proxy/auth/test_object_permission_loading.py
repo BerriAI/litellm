@@ -162,3 +162,56 @@ async def test_get_team_object_loads_object_permission():
         assert result.object_permission is not None
         assert result.object_permission.object_permission_id == "test_perm_id"
         assert result.object_permission.mcp_servers == ["team_server1"]
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_loads_object_permission():
+    """
+    Test that get_user_object automatically loads object_permission when object_permission_id exists.
+    """
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy.auth.auth_checks import get_user_object
+
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = AsyncMock()
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)  # Not in cache
+    mock_cache.async_set_cache = AsyncMock()
+
+    # Mock user data with object_permission_id but no object_permission loaded
+    mock_user = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        object_permission_id="test_perm_id",
+        object_permission=None,
+    )
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
+
+    # Mock the object_permission that should be loaded
+    mock_object_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="test_perm_id",
+        mcp_servers=["user_server1"],
+        mcp_tool_search_enabled=True,
+    )
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.get_object_permission",
+            AsyncMock(return_value=mock_object_permission),
+        ),
+        patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True),
+        patch("litellm.proxy.auth.auth_checks._update_last_db_access_time"),
+    ):
+        result = await get_user_object(
+            user_id="test_user",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=mock_cache,
+            user_id_upsert=False,
+        )
+
+        # Verify that object_permission was loaded
+        assert result is not None
+        assert result.object_permission is not None
+        assert result.object_permission.object_permission_id == "test_perm_id"
+        assert result.object_permission.mcp_tool_search_enabled is True

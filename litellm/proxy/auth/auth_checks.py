@@ -2529,7 +2529,7 @@ async def get_user_object(
 
         if should_check_db:
             response = await _user_table(UserRepository(prisma_client)).find_unique(
-                where={"user_id": user_id}, include={"organization_memberships": True}
+                where={"user_id": user_id}, include={"organization_memberships": True, "object_permission": True}
             )
 
             if response is None:
@@ -2568,7 +2568,7 @@ async def get_user_object(
 
                 response = await _user_table(UserRepository(prisma_client)).create(
                     data=new_user_params,
-                    include={"organization_memberships": True},
+                    include={"organization_memberships": True, "object_permission": True},
                 )
 
                 default_teams: Final = check_if_default_team_set()
@@ -2599,6 +2599,24 @@ async def get_user_object(
             response.organization_memberships = _dumped_memberships
 
         _response = LiteLLM_UserTable.model_validate(dict(response))
+
+        # Load object_permission if object_permission_id exists but object_permission is not loaded
+        if _response.object_permission_id and not _response.object_permission:
+            try:
+                _response.object_permission = await get_object_permission(
+                    object_permission_id=_response.object_permission_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Failed to load object_permission for user with object_permission_id=%s: %s",
+                    _response.object_permission_id,
+                    e,
+                )
+
         _response = await _backfill_null_user_email(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
