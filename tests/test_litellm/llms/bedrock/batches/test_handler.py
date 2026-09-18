@@ -213,7 +213,7 @@ def test_missing_error_count_maps_to_zero_failed(patched_boto3):
     [
         ("Submitted", "validating"),
         ("Validating", "validating"),
-        ("Scheduled", "validating"),
+        ("Scheduled", "in_progress"),
         ("InProgress", "in_progress"),
         ("Stopping", "cancelling"),
         ("Stopped", "cancelled"),
