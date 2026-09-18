@@ -3807,13 +3807,15 @@ async def test_ProxyConfig__update_general_settings_dispatches_every_side_effect
     for name, handler in handlers:
         monkeypatch.setattr(pc, name, handler)
 
-    await pc._apply_general_settings_side_effects({}, False, ())
+    await pc._apply_general_settings_side_effects({}, False, (), None)
 
     for name, handler in handlers:
         if name == "_apply_cache_size_setting":
             handler.assert_awaited_once_with({}, cache_size_was_db=False)
         elif name == "_apply_retention_settings":
             handler.assert_awaited_once_with({}, previous_retention_values=())
+        elif name == "_apply_pass_through_settings":
+            handler.assert_awaited_once_with({}, previous_endpoints=None)
         else:
             handler.assert_awaited_once_with({})
 
