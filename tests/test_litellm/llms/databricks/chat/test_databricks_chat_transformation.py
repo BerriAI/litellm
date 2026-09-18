@@ -808,3 +808,31 @@ def test_chunk_parser_surfaces_top_level_reasoning_delta(reasoning_key: str) -> 
 
     assert parsed.choices[0].delta.reasoning_content == "We need answer"
     assert parsed.choices[0].delta.content is None
+
+
+def test_get_optional_params_passes_service_tier_through() -> None:
+    optional_params = litellm.utils.get_optional_params(
+        model="databricks-claude-opus-5",
+        custom_llm_provider="databricks",
+        service_tier="priority",
+        drop_params=True,
+    )
+
+    assert optional_params["service_tier"] == "priority"
+
+
+def test_chunk_parser_carries_service_tier() -> None:
+    iterator = DatabricksChatResponseIterator(None, sync_stream=True)
+    chunk = {
+        "id": "1",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "lit-qa-deepseek-v4-flash",
+        "service_tier": "priority",
+        "choices": [],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+    parsed = iterator.chunk_parser(chunk)
+
+    assert parsed.service_tier == "priority"

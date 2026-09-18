@@ -30,13 +30,14 @@ def _registry_key(model: str) -> str:
     )
 
 
-def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
+def cost_per_token(model: str, usage: Usage, service_tier: str | None = None) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing anthropic caching information
+        - service_tier: str, the service tier used for the request (e.g. 'priority')
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -45,4 +46,5 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
         model=_registry_key(model),
         usage=usage,
         custom_llm_provider="databricks",
+        service_tier=service_tier,
     )

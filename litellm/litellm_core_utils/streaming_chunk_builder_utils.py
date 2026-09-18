@@ -379,6 +379,15 @@ class ChunkProcessor:
                 if chunk_finish_reason is not None:
                     finish_reason = chunk_finish_reason
 
+        service_tier: Final = next(
+            (
+                tier
+                for tier in (chunk.get("service_tier") for chunk in reversed(chunks))
+                if tier is not None
+            ),
+            None,
+        )
+
         # Initialize the response dictionary
         response = ModelResponse(
             **{
@@ -387,6 +396,7 @@ class ChunkProcessor:
                 "created": created,
                 "model": model,
                 "system_fingerprint": system_fingerprint,
+                "service_tier": service_tier,
                 "choices": [
                     {
                         "index": 0,

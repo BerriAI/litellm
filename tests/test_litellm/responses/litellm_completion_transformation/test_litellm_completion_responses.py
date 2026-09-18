@@ -4906,3 +4906,14 @@ class TestStreamingSnapshotItemIds:
         reasoning_items = _bridged_output_items(completed_event.response, "reasoning")
         assert len(reasoning_items) == 1
         assert reasoning_items[0].id == streamed_event.item_id
+
+
+def test_transform_request_reads_service_tier_from_responses_api_request() -> None:
+    result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="databricks/offline-tier-test",
+        input="hello",
+        responses_api_request={"service_tier": "priority"},
+        custom_llm_provider="databricks",
+    )
+
+    assert result["service_tier"] == "priority"

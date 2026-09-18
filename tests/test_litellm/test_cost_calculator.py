@@ -4206,3 +4206,40 @@ def test_completion_cost_prices_responses_websocket_turns_per_service_tier():
     assert ws_cost == pytest.approx(_http_cost(100, 40, "default") + _http_cost(60, 10, "priority"))
     assert ws_cost != pytest.approx(_http_cost(160, 50, "default"))
     assert ws_cost != pytest.approx(_http_cost(160, 50, "priority"))
+
+
+def test_completion_cost_response_service_tier_beats_requested(_local_model_cost_map):
+    """The tier the provider reports serving is what is billed, so it beats the requested tier."""
+    model = "databricks/offline-service-tier-precedence"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "databricks",
+                "mode": "chat",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "input_cost_per_token_priority": 2e-6,
+                "output_cost_per_token_priority": 4e-6,
+            },
+        },
+    )
+    response = ModelResponse(
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        model=model,
+    )
+    response.service_tier = "default"
+
+    standard = completion_cost(completion_response=response, model=model, custom_llm_provider="databricks")
+    overridden = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="databricks",
+        service_tier="priority",
+        optional_params={"service_tier": "priority"},
+    )
+
+    assert overridden == pytest.approx(standard)
+
+    response.service_tier = "priority"
+    priority = completion_cost(completion_response=response, model=model, custom_llm_provider="databricks")
+    assert priority == pytest.approx(standard * 2)
