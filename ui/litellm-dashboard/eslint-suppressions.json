@@ -566,9 +566,6 @@
   "src/app/(dashboard)/mcp-servers/_components/mcp_connect.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "react-hooks/static-components": {
-      "count": 4
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_connection_status.tsx": {
@@ -622,9 +619,6 @@
     },
     "no-nested-ternary": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_tool_configuration.tsx": {
@@ -634,9 +628,6 @@
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_tools.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "local/no-complex-jsx-arrow": {
       "count": 1
     },
     "no-nested-ternary": {

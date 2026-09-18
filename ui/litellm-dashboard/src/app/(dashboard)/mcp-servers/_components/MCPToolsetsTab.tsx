@@ -1,11 +1,10 @@
 import React, { useState, useCallback } from "react";
 import { z } from "zod/v4";
-import { SortingState } from "@tanstack/react-table";
 import { Inbox, Plus, X } from "lucide-react";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useQueryClient } from "@tanstack/react-query";
-import { DataTable } from "@/components/shared/DataTable";
+import { DataTable, useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 import {
   createMCPToolset,
   updateMCPToolset,
@@ -36,6 +35,14 @@ const toolsetSchema = z.object({
 });
 
 type ToolsetFormValues = z.infer<typeof toolsetSchema>;
+
+const TOOLSET_TABLE_STATE: UrlTableStateOptions<never> = {
+  sortFields: ["toolset_name", "created_at"],
+  defaultSort: { id: "created_at", desc: true },
+  defaultPageSize: 25,
+  filterColumns: [],
+  keyPrefix: "toolset_",
+};
 
 interface MCPToolListProps {
   serverId: string;
@@ -418,7 +425,7 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
     () => new Map(mcpServers.map((s) => [s.server_id, s.alias || s.server_name || s.server_id])),
     [mcpServers],
   );
-  const [sorting, setSorting] = useState<SortingState>([]);
+  const { sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(TOOLSET_TABLE_STATE);
   const columns = React.useMemo(() => {
     const deps = {
       isAdmin,
@@ -456,7 +463,9 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
         getRowId={(toolset, index) => toolset.toolset_id || String(index)}
         sortingMode="client"
         sorting={sorting}
-        onSortingChange={setSorting}
+        onSortingChange={onSortingChange}
+        pagination={pagination}
+        onPaginationChange={onPaginationChange}
         isLoading={isLoading}
         loadingMessage="Loading toolsets…"
         noDataMessage={<ToolsetsEmptyState />}

@@ -14,6 +14,7 @@ import MCPServerCostDisplay from "./mcp_server_cost_display";
 import { getMaskedAndFullUrl } from "./utils";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
+import { useMcpServerTab } from "./useMcpServersUrlState";
 
 interface MCPServerViewProps {
   mcpServer: MCPServer;
@@ -24,12 +25,8 @@ interface MCPServerViewProps {
   userRole: string | null;
   userID: string | null;
   availableAccessGroups: string[];
-  initialTabIndex?: number;
 }
 
-// True when this render is the return from the edit-settings OAuth redirect for this
-// server: the edit form wrote its UI-state snapshot before redirecting. Used to open
-// the editing Settings tab on first render instead of defaulting to Overview.
 function isReturningFromEditOAuth(isProxyAdmin: boolean, serverId: string): boolean {
   if (typeof window === "undefined" || !isProxyAdmin) {
     return false;
@@ -54,15 +51,13 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   userRole,
   userID,
   availableAccessGroups,
-  initialTabIndex = 0,
 }) => {
-  // Open the editing Settings tab on first render when returning from the edit OAuth
-  // redirect, so the "token fetched" feedback shows where the user left off (Settings=2).
-  const returningFromEditOAuth = isReturningFromEditOAuth(isProxyAdmin, mcpServer.server_id);
-  const [editing, setEditing] = useState(isEditing || returningFromEditOAuth);
+  const [editing, setEditing] = useState(
+    () => isEditing || isReturningFromEditOAuth(isProxyAdmin, mcpServer.server_id),
+  );
   const [showFullUrl, setShowFullUrl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : initialTabIndex);
+  const [serverTab, setServerTab] = useMcpServerTab(isProxyAdmin);
 
   const handleSuccess = (updated: MCPServer) => {
     setEditing(false);
@@ -129,23 +124,23 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         {mcpServer.description && <p className="mt-2 text-sm text-muted-foreground">{mcpServer.description}</p>}
       </div>
 
-      <Tabs value={String(selectedTabIndex)} onValueChange={(v: unknown) => setSelectedTabIndex(Number(v))}>
+      <Tabs value={serverTab} onValueChange={setServerTab}>
         <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
-          <TabsTrigger value="0" className="flex-none rounded-none px-4 py-2">
+          <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             Overview
           </TabsTrigger>
-          <TabsTrigger value="1" className="flex-none rounded-none px-4 py-2">
+          <TabsTrigger value="tools" className="flex-none rounded-none px-4 py-2">
             MCP Tools
           </TabsTrigger>
           {isProxyAdmin && (
-            <TabsTrigger value="2" className="flex-none rounded-none px-4 py-2">
+            <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
               Settings
             </TabsTrigger>
           )}
         </TabsList>
 
         {/* Overview Panel */}
-        <TabsContent value="0" keepMounted>
+        <TabsContent value="overview" keepMounted>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Card className="p-4">
               <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Transport</p>
@@ -192,7 +187,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         </TabsContent>
 
         {/* Tool Panel */}
-        <TabsContent value="1" keepMounted>
+        <TabsContent value="tools" keepMounted>
           <MCPToolsViewer
             serverId={mcpServer.server_id}
             accessToken={accessToken}
@@ -209,7 +204,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         </TabsContent>
 
         {/* Settings Panel */}
-        <TabsContent value="2" keepMounted>
+        <TabsContent value="settings" keepMounted>
           <Card className="p-6">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-medium">MCP Server Settings</h2>
