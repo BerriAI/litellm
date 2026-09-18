@@ -93,17 +93,56 @@ V3_BLOCK_DECISIONS: Final = frozenset({"block", "deny"})
 _V3_PROVIDER_BODY_KEYS: Final = frozenset(
     {
         # OpenAI chat completions
-        "model", "messages", "tools", "tool_choice", "functions", "function_call", "temperature",
-        "top_p", "n", "stream", "stream_options", "stop", "max_tokens", "max_completion_tokens",
-        "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed",
-        "logprobs", "top_logprobs", "parallel_tool_calls", "reasoning_effort", "modalities", "audio",
-        "prediction", "store", "service_tier", "web_search_options",
+        "model",
+        "messages",
+        "tools",
+        "tool_choice",
+        "functions",
+        "function_call",
+        "temperature",
+        "top_p",
+        "n",
+        "stream",
+        "stream_options",
+        "stop",
+        "max_tokens",
+        "max_completion_tokens",
+        "presence_penalty",
+        "frequency_penalty",
+        "logit_bias",
+        "user",
+        "response_format",
+        "seed",
+        "logprobs",
+        "top_logprobs",
+        "parallel_tool_calls",
+        "reasoning_effort",
+        "modalities",
+        "audio",
+        "prediction",
+        "store",
+        "service_tier",
+        "web_search_options",
         # Anthropic messages
-        "system", "stop_sequences", "top_k", "thinking", "container", "mcp_servers",
-        "context_management", "output_format",
+        "system",
+        "stop_sequences",
+        "top_k",
+        "thinking",
+        "container",
+        "mcp_servers",
+        "context_management",
+        "output_format",
         # OpenAI responses
-        "input", "instructions", "previous_response_id", "truncation", "text", "include",
-        "reasoning", "max_output_tokens", "background", "conversation",
+        "input",
+        "instructions",
+        "previous_response_id",
+        "truncation",
+        "text",
+        "include",
+        "reasoning",
+        "max_output_tokens",
+        "background",
+        "conversation",
         # Conversation grouping a client may state itself
         "session_id",
     }
@@ -426,7 +465,9 @@ def _v3_answer_json(
         return None
     assembled: Final = {
         "object": "chat.completion",
-        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "\n".join(texts)}}],
+        "choices": [
+            {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "\n".join(texts)}}
+        ],
     }
     return json.dumps(assembled)
 
@@ -824,7 +865,11 @@ class StraikerGuardrail(CustomGuardrail):
                 if resp.status_code == 200:
                     try:
                         body = resp.json()
-                        parsed = _v3_response(body) if self.api_version == "v3" else StraikerWebhookResponse.model_validate(body)
+                        parsed = (
+                            _v3_response(body)
+                            if self.api_version == "v3"
+                            else StraikerWebhookResponse.model_validate(body)
+                        )
                     except (ValidationError, json.JSONDecodeError) as ve:
                         return None, _WebhookFailure(f"invalid response schema: {ve}", is_unreachable=False)
                     if self.verbose:
