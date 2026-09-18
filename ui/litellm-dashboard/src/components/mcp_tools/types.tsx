@@ -560,3 +560,30 @@ export interface MCPSubmissionsSummary {
   rejected: number;
   items: MCPServer[];
 }
+
+export interface MCPGatewaySession {
+  session_id_prefix: string;
+  client_name: string | null;
+  client_version: string | null;
+  user_id: string | null;
+  user_email: string | null;
+  key_alias: string | null;
+  team_id: string | null;
+  team_alias: string | null;
+  client_ip: string | null;
+  idle_seconds: number;
+  in_flight_requests: number;
+}
+
+export interface MCPGatewaySessionGroupCount {
+  label: string | null;
+  count: number;
+}
+
+export interface MCPGatewaySessionsResponse {
+  worker_pid: number;
+  total_sessions: number;
+  by_client: MCPGatewaySessionGroupCount[];
+  by_user: MCPGatewaySessionGroupCount[];
+  sessions: MCPGatewaySession[];
+}
