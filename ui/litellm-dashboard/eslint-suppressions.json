@@ -1685,9 +1685,6 @@
   "src/components/key_team_helpers/key_list.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/components/key_team_helpers/transform_key_info.tsx": {
