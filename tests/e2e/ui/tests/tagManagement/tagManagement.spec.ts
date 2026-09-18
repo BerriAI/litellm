@@ -13,64 +13,80 @@ test.describe("Tag management", () => {
     const tagName = `e2e-tag-${uniqueSuffix()}`;
     const description = "synthetic tag description";
     const updatedDescription = `${description} updated`;
+    const cleanup = async (): Promise<boolean> => {
+      try {
+        const response = await page.request.post("/tag/delete", {
+          headers: {
+            Authorization: `Bearer ${masterKey()}`,
+            "Content-Type": "application/json",
+          },
+          data: { name: tagName },
+        });
+        return response.ok();
+      } catch {
+        return false;
+      }
+    };
+    const testOutcome = await (async () => {
+      try {
+        await navigateToPage(page, DashboardPage.TagManagement);
+        await page.getByRole("button", { name: "+ Create New Tag" }).click();
+        await expect(
+          page.getByRole("dialog", { name: "Create New Tag" }),
+        ).toBeVisible();
+        await page.getByLabel("Tag Name").fill(tagName);
+        await page.getByLabel("Description").fill(description);
+        await page.getByRole("button", { name: "Create Tag" }).click();
 
-    await navigateToPage(page, DashboardPage.TagManagement);
-    await page.getByRole("button", { name: "+ Create New Tag" }).click();
+        await expect
+          .poll(async () => {
+            const response = await readBack<
+              Record<string, Record<string, unknown>>
+            >(page, "/tag/list");
+            return Object.values(response).some((tag) => tag.name === tagName);
+          })
+          .toBe(true);
+        await expect(page.getByText(tagName, { exact: true })).toBeVisible();
+
+        await page.getByText(tagName, { exact: true }).click();
+        await expect(page.getByText("Tag Name:")).toBeVisible();
+        await page.getByRole("button", { name: "Edit Tag" }).click();
+        await page.getByLabel("Description").fill(updatedDescription);
+        const updateBody = await captureRequestBody(
+          page,
+          { method: "POST", urlIncludes: "/tag/update" },
+          () => page.getByRole("button", { name: "Save Changes" }).click(),
+        );
+        expect(updateBody).toMatchObject({
+          name: tagName,
+          description: updatedDescription,
+        });
+
+        await expect
+          .poll(async () => {
+            const infoResponse = await page.request.post("/tag/info", {
+              headers: { Authorization: `Bearer ${masterKey()}` },
+              data: { names: [tagName] },
+            });
+            expect(infoResponse.ok()).toBe(true);
+            const info = (await infoResponse.json()) as Record<
+              string,
+              { description?: string }
+            >;
+            return info[tagName]?.description;
+          })
+          .toBe(updatedDescription);
+        return { passed: true as const };
+      } catch (error) {
+        return { passed: false as const, error };
+      }
+    })();
 
     try {
-      await expect(
-        page.getByRole("dialog", { name: "Create New Tag" }),
-      ).toBeVisible();
-      await page.getByLabel("Tag Name").fill(tagName);
-      await page.getByLabel("Description").fill(description);
-      await page.getByRole("button", { name: "Create Tag" }).click();
-
-      await expect
-        .poll(async () => {
-          const response = await readBack<
-            Record<string, Record<string, unknown>>
-          >(page, "/tag/list");
-          return Object.values(response).some((tag) => tag.name === tagName);
-        })
-        .toBe(true);
-      await expect(page.getByText(tagName, { exact: true })).toBeVisible();
-
-      await page.getByText(tagName, { exact: true }).click();
-      await expect(page.getByText("Tag Name:")).toBeVisible();
-      await page.getByRole("button", { name: "Edit Tag" }).click();
-      await page.getByLabel("Description").fill(updatedDescription);
-      const updateBody = await captureRequestBody(
-        page,
-        { method: "POST", urlIncludes: "/tag/update" },
-        () => page.getByRole("button", { name: "Save Changes" }).click(),
-      );
-      expect(updateBody).toMatchObject({
-        name: tagName,
-        description: updatedDescription,
-      });
-
-      await expect
-        .poll(async () => {
-          const infoResponse = await page.request.post("/tag/info", {
-            headers: { Authorization: `Bearer ${masterKey()}` },
-            data: { names: [tagName] },
-          });
-          expect(infoResponse.ok()).toBe(true);
-          const info = (await infoResponse.json()) as Record<
-            string,
-            { description?: string }
-          >;
-          return info[tagName]?.description;
-        })
-        .toBe(updatedDescription);
+      if (!testOutcome.passed) throw testOutcome.error;
     } finally {
-      await page.request.post("/tag/delete", {
-        headers: {
-          Authorization: `Bearer ${masterKey()}`,
-          "Content-Type": "application/json",
-        },
-        data: { name: tagName },
-      });
+      const cleanupSucceeded = await cleanup();
+      if (testOutcome.passed) expect(cleanupSucceeded).toBe(true);
     }
   });
 });
