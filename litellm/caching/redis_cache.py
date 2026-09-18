@@ -102,6 +102,10 @@ _INCREMENT_WITH_FLOOR_LUA: Final = (
 
 _LUA_COUNT: Final = TypeAdapter(int)
 _OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
+_INCREMENT_IF_EXISTS_LUA: Final = (
+    "if redis.call('EXISTS', KEYS[1]) == 0 then return false end return redis.call('INCRBYFLOAT', KEYS[1], ARGV[1])"
+)
+_LUA_OPTIONAL_FLOAT: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 
 
 def _decoded_counts(values: Sequence[bytes | str | None]) -> tuple[int | None, ...]:
@@ -1408,6 +1412,14 @@ class RedisCache(BaseCache):
                 e,
             )
             raise e
+
+    @_redis_circuit_breaker_guard
+    async def async_increment_if_exists(self, key: str, value: float) -> float | None:
+        """Atomic INCRBYFLOAT that skips an unset ``key``. Returns the new value, or None when unset."""
+        _redis_client: Final = self._async_commands()
+        namespaced_key: Final = self.check_and_fix_namespace(key=key)
+        result: Final = await _redis_client.eval(_INCREMENT_IF_EXISTS_LUA, 1, namespaced_key, str(value))
+        return _LUA_OPTIONAL_FLOAT.validate_python(result.decode() if isinstance(result, bytes) else result)
 
     @_redis_circuit_breaker_guard
     async def async_set_max(

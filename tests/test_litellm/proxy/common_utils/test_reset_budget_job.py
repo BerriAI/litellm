@@ -1298,11 +1298,21 @@ def _make_counter_invalidation_job(monkeypatch):
 
     Both caches are looked up via ``from litellm.proxy.proxy_server import
     <name>`` inside the reset job, so we publish them on a fake module.
+
+    ``counters`` backs the in-memory get/set/delete so a test can seed a live
+    counter and read what the reset left in it.
     """
+    counters: dict[str, float] = {}
     spend_counter_cache = MagicMock()
-    spend_counter_cache.in_memory_cache.set_cache = MagicMock()
+    spend_counter_cache.counters = counters
+    spend_counter_cache.in_memory_cache.get_cache = MagicMock(side_effect=lambda key: counters.get(key))
+    spend_counter_cache.in_memory_cache.set_cache = MagicMock(
+        side_effect=lambda key, value: counters.__setitem__(key, value)
+    )
+    spend_counter_cache.in_memory_cache.delete_cache = MagicMock(side_effect=lambda key: counters.pop(key, None))
     spend_counter_cache.redis_cache = MagicMock()
     spend_counter_cache.redis_cache.async_set_cache = AsyncMock()
+    spend_counter_cache.redis_cache.async_increment_if_exists = AsyncMock()
     spend_counter_cache.redis_cache.async_delete_cache = AsyncMock()
 
     user_api_key_cache = MagicMock()
@@ -1855,8 +1865,9 @@ def test_budget_cascade_carries_access_group_overage_when_rollover_enabled(
 ):
     """A group 5 over the tier cap keeps a spend of 5 in the next window, the
     same way a tag or a team member does: over-cap rows are decremented by the
-    cap, the rest are zeroed, and the counter is seeded with the carried spend."""
+    cap, the rest are zeroed, and a live counter is decremented by the cap."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_cache.counters["spend:model_access_group:gpt-4-group"] = 15.0
     mock_prisma_client.data["budget"] = [_budget_row(budget_id="budget-roll", budget_duration="7d", max_budget=10.0)]
     mock_prisma_client.db.litellm_modelaccessgroupbudgettable.set_find_many_results(
         [_model_access_group_row(spend=15.0, budget_id="budget-roll")]
@@ -1879,7 +1890,7 @@ def test_budget_cascade_carries_access_group_overage_when_rollover_enabled(
     } in writes
     assert _replay_spend_writes(writes, 15.0) == 5.0
     assert _replay_spend_writes(writes, 8.0) == 0
-    counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:model_access_group:gpt-4-group", value=5.0)
+    assert counter_cache.counters["spend:model_access_group:gpt-4-group"] == 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -3188,8 +3199,10 @@ def test_direct_reset_carries_overage_when_rollover_enabled(
     rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch, run_phase, table, id_field, id_value, row_factory
 ):
     """spend=150 against max_budget=100 must decrement by the cap (leaving 50)
-    rather than zero the row, and the spend counter must be seeded with 50."""
+    rather than zero the row, and a live spend counter must drop by 100."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_prefix = {"key": "spend:key", "user": "spend:user", "team": "spend:team"}[table]
+    counter_cache.counters[f"{counter_prefix}:{id_value}"] = 150.0
     now = datetime.now(timezone.utc)
     mock_prisma_client.data[table] = [row_factory(now)]
 
@@ -3200,11 +3213,10 @@ def test_direct_reset_carries_overage_when_rollover_enabled(
     assert writes[0]["where"] == {id_field: id_value}
     assert writes[0]["data"]["spend"] == {"decrement": 100.0}
     assert writes[0]["data"]["budget_reset_at"] > now
-    counter_prefix = {"key": "spend:key", "user": "spend:user", "team": "spend:team"}[table]
     if table == "key":
         counter_cache.in_memory_cache.delete_cache.assert_any_call(key=f"{counter_prefix}:{id_value}")
     else:
-        counter_cache.in_memory_cache.set_cache.assert_any_call(key=f"{counter_prefix}:{id_value}", value=50.0)
+        assert counter_cache.counters[f"{counter_prefix}:{id_value}"] == 50.0
 
 
 def test_direct_reset_zeroes_under_budget_row_even_with_rollover(
@@ -3249,9 +3261,10 @@ def test_budget_cascade_carries_overage_per_tier_when_rollover_enabled(
     rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch
 ):
     """A team member 5 over the tier cap keeps a spend of 5 in the next window:
-    the cascade decrements over-cap rows by the cap, zeroes the rest, and seeds
-    the spend counter with the carried amount."""
+    the cascade decrements over-cap rows by the cap, zeroes the rest, and takes
+    the cap off a live spend counter."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_cache.counters["spend:team_member:member-1:team-1"] = 15.0
     budget = _budget_row(budget_id="budget-roll", budget_duration="7d", max_budget=10.0)
     mock_prisma_client.data["budget"] = [budget]
     membership = type(
@@ -3278,7 +3291,7 @@ def test_budget_cascade_carries_overage_per_tier_when_rollover_enabled(
             "data": {"spend": {"decrement": 10.0}},
         },
     ]
-    counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:team_member:member-1:team-1", value=5.0)
+    assert counter_cache.counters["spend:team_member:member-1:team-1"] == 5.0
 
 
 def test_budget_cascade_carries_enduser_overage_when_rollover_enabled(
@@ -3490,7 +3503,13 @@ _RACE_TABLES = [
         lambda now: type(
             "User",
             (),
-            {"spend": 5.0, "rollover_max_budget": None, "budget_duration": "7d", "budget_reset_at": now, "user_id": "user-race"},
+            {
+                "spend": 5.0,
+                "rollover_max_budget": None,
+                "budget_duration": "7d",
+                "budget_reset_at": now,
+                "user_id": "user-race",
+            },
         ),
     ),
     (
@@ -3501,7 +3520,13 @@ _RACE_TABLES = [
         lambda now: type(
             "Team",
             (),
-            {"spend": 5.0, "rollover_max_budget": None, "budget_duration": "1mo", "budget_reset_at": now, "team_id": "team-race"},
+            {
+                "spend": 5.0,
+                "rollover_max_budget": None,
+                "budget_duration": "1mo",
+                "budget_reset_at": now,
+                "team_id": "team-race",
+            },
         ),
     ),
 ]
@@ -3589,7 +3614,14 @@ def test_reset_deletes_spend_counter_instead_of_seeding(reset_budget_job, mock_p
         type(
             "User",
             (),
-            {"spend": 5.0, "rollover_max_budget": None, "budget_duration": "7d", "budget_reset_at": now, "id": "user-r", "user_id": "carol"},
+            {
+                "spend": 5.0,
+                "rollover_max_budget": None,
+                "budget_duration": "7d",
+                "budget_reset_at": now,
+                "id": "user-r",
+                "user_id": "carol",
+            },
         )
     ]
 
@@ -3659,9 +3691,11 @@ def test_direct_reset_carries_unused_allowance_as_negative_spend(
     reset_budget_job, mock_prisma_client, monkeypatch
 ):
     """max_budget 100, rollover_max_budget 600, spend 30: the write decrements
-    by the 100 allowance so the row lands at -70, and the spend counter is
-    invalidated."""
+    by the 100 allowance so the row lands at -70. A charge of 1 that landed
+    after the reset read the row must survive in the counter, which lands at
+    -69 instead of being overwritten with -70."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_cache.counters["spend:user:user-credit"] = 31.0
     now = datetime.now(timezone.utc)
     mock_prisma_client.data["user"] = [
         type(
@@ -3686,10 +3720,42 @@ def test_direct_reset_carries_unused_allowance_as_negative_spend(
     assert writes[0]["data"]["spend"] == {"decrement": 100.0}
     assert _replay_spend_writes([{"where": {}, "data": writes[0]["data"]}], 30.0) == -70.0
     assert writes[0]["data"]["budget_reset_at"] > now
-    counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:user:user-credit", value=-70.0)
-    counter_cache.redis_cache.async_set_cache.assert_any_await(key="spend:user:user-credit", value=-70.0)
+    assert counter_cache.counters["spend:user:user-credit"] == -69.0
+    counter_cache.redis_cache.async_increment_if_exists.assert_awaited_once_with(
+        key="spend:user:user-credit", value=-100.0
+    )
+    counter_cache.redis_cache.async_set_cache.assert_not_awaited()
     deleted_keys = {call.kwargs.get("key") for call in counter_cache.in_memory_cache.delete_cache.call_args_list}
     assert "spend:user:user-credit" not in deleted_keys
+
+
+def test_direct_reset_leaves_cold_credit_counter_for_db_reseed(reset_budget_job, mock_prisma_client, monkeypatch):
+    """No counter is live for the row, so the reset must not seed one: the next
+    read reseeds from the committed -70 row and a seed here would race it."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["user"] = [
+        type(
+            "LiteLLM_UserTable",
+            (),
+            {
+                "user_id": "user-cold",
+                "spend": 30.0,
+                "max_budget": 100.0,
+                "rollover_max_budget": 600.0,
+                "budget_duration": "7d",
+                "budget_reset_at": now,
+            },
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_users())
+
+    assert "spend:user:user-cold" not in counter_cache.counters
+    counter_cache.in_memory_cache.set_cache.assert_not_called()
+    counter_cache.redis_cache.async_increment_if_exists.assert_awaited_once_with(
+        key="spend:user:user-cold", value=-100.0
+    )
 
 
 def test_direct_reset_zeroes_spend_when_cap_does_not_exceed_max_budget(
@@ -3859,6 +3925,7 @@ def test_budget_cascade_invalidates_zero_spend_rows_on_banded_tiers(reset_budget
     """A zero-spend tag on a capped tier is DB-floored to credit, so it must be
     fetched despite the spend > 0 filter or its Redis counter stays stale."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_cache.counters["spend:tag:tenant-42"] = 0.0
     banded = _budget_row(
         budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0
     )
@@ -3877,15 +3944,17 @@ def test_budget_cascade_invalidates_zero_spend_rows_on_banded_tiers(reset_budget
         ]
     }
     assert mock_prisma_client.db.litellm_tagtable.find_many_calls == [{"where": expected_where}]
-    counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:tag:tenant-42", value=-100.0)
+    assert counter_cache.counters["spend:tag:tenant-42"] == -100.0
+    counter_cache.redis_cache.async_increment_if_exists.assert_any_await(key="spend:tag:tenant-42", value=-100.0)
 
 
 def test_budget_cascade_seeds_credit_counters_and_deletes_zeroed_ones(
     reset_budget_job, mock_prisma_client, monkeypatch
 ):
-    """Rows a banded tier carries into credit get the counter written to the
-    post-reset value; rows a plain tier zeroes keep the delete-then-reseed path."""
+    """Rows a banded tier carries into credit get the allowance taken off their
+    live counter; rows a plain tier zeroes keep the delete-then-reseed path."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_cache.counters["spend:team_member:m-1:t-1"] = 0.5
     banded = _budget_row(
         budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0
     )
@@ -3900,8 +3969,10 @@ def test_budget_cascade_seeds_credit_counters_and_deletes_zeroed_ones(
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
-    counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:team_member:m-1:t-1", value=-100.0)
-    counter_cache.redis_cache.async_set_cache.assert_any_await(key="spend:team_member:m-1:t-1", value=-100.0)
+    assert counter_cache.counters["spend:team_member:m-1:t-1"] == -99.5
+    counter_cache.redis_cache.async_increment_if_exists.assert_awaited_once_with(
+        key="spend:team_member:m-1:t-1", value=-100.0
+    )
     counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:team_member:m-2:t-2")
     deleted_keys = {call.kwargs.get("key") for call in counter_cache.in_memory_cache.delete_cache.call_args_list}
     assert "spend:team_member:m-1:t-1" not in deleted_keys

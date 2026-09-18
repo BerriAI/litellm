@@ -93,6 +93,36 @@ def test_delete_cache_applies_namespace(namespace, monkeypatch, redis_no_ping):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("namespace", [None, "litellm"])
+@pytest.mark.parametrize(
+    ("eval_result", "expected"),
+    [
+        pytest.param(None, None, id="missing_key_is_left_unset"),
+        pytest.param(b"-69.5", -69.5, id="bytes_reply"),
+        pytest.param("12", 12.0, id="str_reply"),
+    ],
+)
+async def test_async_increment_if_exists_guards_on_key_presence(
+    namespace, eval_result, expected, monkeypatch, redis_no_ping
+):
+    """The Lua script must bail before INCRBYFLOAT when the key is unset, so a
+    reset never seeds a counter that a concurrent DB reseed would then lose."""
+    from litellm.caching.redis_cache import _INCREMENT_IF_EXISTS_LUA
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.eval = AsyncMock(return_value=eval_result)
+
+    with patch.object(redis_cache, "init_async_client", return_value=mock_redis_instance):
+        result = await redis_cache.async_increment_if_exists(key="spend:user:u1", value=-100.0)
+
+    expected_key = "litellm:spend:user:u1" if namespace else "spend:user:u1"
+    mock_redis_instance.eval.assert_awaited_once_with(_INCREMENT_IF_EXISTS_LUA, 1, expected_key, "-100.0")
+    assert result == expected
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "redis_config",
     [

@@ -178,13 +178,19 @@ def _item_rollover_max_budget(
             assert_never(item_type)
 
 
-def _row_reset_spend(row: _BudgetLinkedRow, bands: Mapping[str, _ResetBand]) -> float:
-    if not bands:
-        return 0.0
-    band: Final = bands.get(row.budget_id) if row.budget_id is not None else None
+@dataclass(frozen=True, slots=True)
+class _CounterReset:
+    key: str
+    spend: float
+    decrement: float
+
+
+def _row_counter_reset(key: str, row: _BudgetLinkedRow, bands: Mapping[str, _ResetBand]) -> _CounterReset:
+    band: Final = bands.get(row.budget_id) if bands and row.budget_id is not None else None
     if band is None:
-        return 0.0
-    return _reset_spend(row.spend, band)
+        return _CounterReset(key=key, spend=0.0, decrement=0.0)
+    spend: Final = _reset_spend(row.spend, band)
+    return _CounterReset(key=key, spend=spend, decrement=float(row.spend or 0.0) - spend)
 
 
 def _team_membership_counter_key(row: _TeamMembershipRow) -> str:
@@ -379,7 +385,7 @@ class _BudgetCascade:
     budgets: tuple[LiteLLM_BudgetTableFull, ...] = ()
     budget_ids: tuple[str, ...] = ()
     budget_resets: tuple[tuple[str, datetime], ...] = ()
-    counter_resets: tuple[tuple[str, float], ...] = ()
+    counter_resets: tuple[_CounterReset, ...] = ()
     cache_keys: tuple[str, ...] = ()
     bands: Mapping[str, _ResetBand] = field(default_factory=lambda: MappingProxyType({}))
 
@@ -694,17 +700,25 @@ class ResetBudgetJob:
             verbose_proxy_logger.warning("Failed to reset spend counter %s: %s", counter_key, e)
 
     @staticmethod
-    async def _reset_spend_counter(counter_key: str, value: float) -> None:
-        if value == 0.0:
+    async def _reset_spend_counter(counter_key: str, spend: float, decrement: float) -> None:
+        if spend == 0.0:
             await ResetBudgetJob._invalidate_spend_counter(counter_key)
             return
+        await ResetBudgetJob._decrement_spend_counter(counter_key, decrement)
+
+    @staticmethod
+    async def _decrement_spend_counter(counter_key: str, decrement: float) -> None:
+        """Apply the reset delta to a live counter so a charge that landed after the
+        DB snapshot survives; an absent counter is left to reseed from the committed row."""
         try:
             from litellm.proxy.proxy_server import spend_counter_cache
 
-            spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=value)
+            cached: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+            if cached is not None:
+                spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=float(cached) - decrement)
             if spend_counter_cache.redis_cache is not None:
                 try:
-                    await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=value)
+                    await spend_counter_cache.redis_cache.async_increment_if_exists(key=counter_key, value=-decrement)
                 except Exception as redis_err:  # noqa: BLE001  # cache teardown must never fail the reset job
                     verbose_proxy_logger.warning(
                         "Failed to reset spend counter %s in Redis: %s. "
@@ -904,11 +918,11 @@ class ResetBudgetJob:
                 if b.budget_id is not None and b.budget_duration is not None
             ),
             counter_resets=(
-                *((_team_membership_counter_key(row), _row_reset_spend(row, bands)) for row in team_memberships),
-                *((_key_counter_key(row), _row_reset_spend(row, bands)) for row in keys),
-                *((_org_counter_key(row), _row_reset_spend(row, bands)) for row in orgs),
-                *((_tag_counter_key(row), _row_reset_spend(row, bands)) for row in tags),
-                *((_model_access_group_counter_key(row), _row_reset_spend(row, bands)) for row in model_access_groups),
+                *(_row_counter_reset(_team_membership_counter_key(row), row, bands) for row in team_memberships),
+                *(_row_counter_reset(_key_counter_key(row), row, bands) for row in keys),
+                *(_row_counter_reset(_org_counter_key(row), row, bands) for row in orgs),
+                *(_row_counter_reset(_tag_counter_key(row), row, bands) for row in tags),
+                *(_row_counter_reset(_model_access_group_counter_key(row), row, bands) for row in model_access_groups),
             ),
             bands=bands,
             cache_keys=(
@@ -949,12 +963,12 @@ class ResetBudgetJob:
 
     async def _invalidate_budget_cascade_caches(self, cascade: _BudgetCascade) -> None:
         await self._invalidate_caches(
-            counter_keys=tuple(counter_key for counter_key, value in cascade.counter_resets if value == 0.0),
+            counter_keys=tuple(reset.key for reset in cascade.counter_resets if reset.spend == 0.0),
             cache_keys=cascade.cache_keys,
         )
-        for counter_key, value in cascade.counter_resets:
-            if value != 0.0:
-                await self._reset_spend_counter(counter_key, value)
+        for reset in cascade.counter_resets:
+            if reset.spend != 0.0:
+                await self._decrement_spend_counter(reset.key, reset.decrement)
 
     async def _reset_expired_budget_cascade(self) -> _BudgetCascadeCommitted | _BudgetCascadeFailed:
         now: Final = datetime.now(timezone.utc)
@@ -1306,7 +1320,9 @@ class ResetBudgetJob:
                     for u in updated_users:
                         user_id = getattr(u.row, "user_id", None)
                         if user_id:
-                            await self._reset_spend_counter(f"spend:user:{user_id}", float(u.row.spend or 0.0))
+                            await self._reset_spend_counter(
+                                f"spend:user:{user_id}", spend=float(u.row.spend or 0.0), decrement=u.spend_decrement
+                            )
                         if user_id == LITELLM_PROXY_BUDGET_NAME:
                             await self._invalidate_global_proxy_spend_cache()
 
@@ -1421,7 +1437,9 @@ class ResetBudgetJob:
                     for t in updated_teams:
                         team_id = getattr(t.row, "team_id", None)
                         if team_id:
-                            await self._reset_spend_counter(f"spend:team:{team_id}", float(t.row.spend or 0.0))
+                            await self._reset_spend_counter(
+                                f"spend:team:{team_id}", spend=float(t.row.spend or 0.0), decrement=t.spend_decrement
+                            )
 
             end_time = time.time()
             outcome: Final = _ChunkOutcome(
