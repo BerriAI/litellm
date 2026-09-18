@@ -16716,3 +16716,76 @@ class TestMemberAutoRouterInference:
         monkeypatch.setitem(sys.modules, "fastapi", None)
         monkeypatch.delitem(sys.modules, "litellm.proxy.auth.auto_router_checks", raising=False)
         assert (await self._route(router, {"metadata": {"user_api_key_team_id": "router-team"}})).model == "restricted-model"
+
+
+class TestBlockedWildcardDeployments:
+    """An admin pause has to reach wildcard deployments too.
+
+    A request whose model is not a configured name (`zzz-test-9` against
+    `zzz-test-*`) is resolved by the pattern router and returned before the
+    blocked filter the exact-name path runs, so a paused wildcard deployment kept
+    serving traffic until the process restarted. See #41580.
+    """
+
+    @staticmethod
+    def _router(model_name: str, blocked: bool):
+        import litellm
+
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": model_name,
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+                    "model_info": {"id": "dep-wildcard", "blocked": blocked},
+                }
+            ]
+        )
+
+    def test_paused_wildcard_deployment_is_not_routable(self):
+        import litellm
+
+        router = self._router("zzz-test-*", blocked=True)
+
+        with pytest.raises(litellm.BadRequestError):
+            router._common_checks_available_deployment(
+                model="zzz-test-9",
+                messages=[{"role": "user", "content": "hi"}],
+                request_kwargs={},
+            )
+
+    def test_unpaused_wildcard_deployment_still_routes(self):
+        router = self._router("zzz-test-*", blocked=False)
+
+        _, healthy = router._common_checks_available_deployment(
+            model="zzz-test-9",
+            messages=[{"role": "user", "content": "hi"}],
+            request_kwargs={},
+        )
+
+        assert [deployment["model_info"]["id"] for deployment in healthy] == ["dep-wildcard"]
+
+    def test_pausing_a_live_wildcard_deployment_takes_effect_without_restart(self):
+        import litellm
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        router = self._router("zzz-test-*", blocked=False)
+        router._common_checks_available_deployment(
+            model="zzz-test-9",
+            messages=[{"role": "user", "content": "hi"}],
+            request_kwargs={},
+        )
+
+        router.upsert_deployment(
+            deployment=Deployment(
+                model_name="zzz-test-*",
+                litellm_params=LiteLLM_Params(model="openai/gpt-4o", api_key="sk-fake"),
+                model_info={"id": "dep-wildcard", "blocked": True},
+            )
+        )
+
+        with pytest.raises(litellm.BadRequestError):
+            router._common_checks_available_deployment(
+                model="zzz-test-9",
+                messages=[{"role": "user", "content": "hi"}],
+                request_kwargs={},
+            )

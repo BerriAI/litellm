@@ -12498,7 +12498,14 @@ class Router:
             if early is not None:
                 if not isinstance(early[1], list):
                     return early
-                return early[0], self._drop_strategy_markers(early[0], early[1])
+                # Wildcard and team-public names resolve here and return before the
+                # `_filter_blocked_deployments` call further down, so an admin pause has
+                # to be applied on this path too. When it removes every candidate, fall
+                # through rather than return an empty list: the normal path then reports
+                # "no healthy deployments" exactly as it does for an exact-name model.
+                routable_early: Final = self._filter_blocked_deployments(early[1])
+                if routable_early:
+                    return early[0], self._drop_strategy_markers(early[0], routable_early)
 
         ## get healthy deployments
         ### get all deployments
