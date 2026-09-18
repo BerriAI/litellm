@@ -55,8 +55,8 @@ class JevChoiceAnswer(BaseModel):
 class JevUsage(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    input_tokens: int = 0
-    output_tokens: int = 0
+    input_tokens: int = Field(default=0, ge=0, strict=True)
+    output_tokens: int = Field(default=0, ge=0, strict=True)
 
 
 class JevSystemOneResponse(BaseModel):
@@ -111,6 +111,11 @@ class HttpJevClassifierClient:
         request_kwargs: Mapping[str, object] | None,
         start_time: datetime,
     ) -> None:
+        try:
+            body: Final = TypeAdapter(dict[str, object]).validate_json(response.content)
+            _ = TypeAdapter(JevUsage | None).validate_python(body.get("usage"))
+        except ValidationError:
+            return
         end_time: Final = datetime.now(timezone.utc)
         parent: Final = request_kwargs or MappingProxyType({})
         parent_metadata: Final = {
@@ -144,10 +149,6 @@ class HttpJevClassifierClient:
             optional_params={},
             litellm_params=params,
         )
-        try:
-            body: Final = TypeAdapter(dict[str, object]).validate_json(response.content)
-        except ValidationError:
-            return
         normalized: Final = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
             httpx_response=response,
             response_body=body,
