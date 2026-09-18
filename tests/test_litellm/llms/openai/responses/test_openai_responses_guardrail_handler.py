@@ -3599,9 +3599,12 @@ class TestResponsesScopingFlags:
             "output": "TOOL SECRET [GUARDRAILED]",
         }
 
+    @pytest.mark.parametrize("output_type", ["custom_tool_call_output", "computer_call_output", "tool_result"])
     @pytest.mark.parametrize("scan_only_tool_results", [None, True])
     @pytest.mark.asyncio
-    async def test_custom_tool_output_is_scanned_and_rewritten_like_a_function_output(self, scan_only_tool_results):
+    async def test_every_tool_output_type_is_scanned_and_rewritten_like_a_function_output(
+        self, scan_only_tool_results, output_type
+    ):
         handler = OpenAIResponsesHandler()
         guardrail = MockGuardrail()
         guardrail.scan_only_tool_results = scan_only_tool_results
@@ -3610,19 +3613,37 @@ class TestResponsesScopingFlags:
             "input": [
                 {"role": "user", "content": "Run the shell tool"},
                 {"type": "custom_tool_call", "call_id": "call_c1", "name": "shell", "input": "ls"},
-                {"type": "custom_tool_call_output", "call_id": "call_c1", "output": "CUSTOM TOOL SECRET"},
+                {"type": output_type, "call_id": "call_c1", "output": "CUSTOM TOOL SECRET"},
             ],
         }
 
         result = await handler.process_input_messages(data=request, guardrail_to_apply=guardrail)
 
         assert result["input"][2] == {
-            "type": "custom_tool_call_output",
+            "type": output_type,
             "call_id": "call_c1",
             "output": "CUSTOM TOOL SECRET [GUARDRAILED]",
         }
         assert result["input"][1] == {"type": "custom_tool_call", "call_id": "call_c1", "name": "shell", "input": "ls"}
         assert (result["input"][0]["content"] == "Run the shell tool") is bool(scan_only_tool_results)
+
+    @pytest.mark.asyncio
+    async def test_screenshot_computer_output_passes_through_a_tool_only_scan_untouched(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = self._scoped_guardrail(scan_only_tool_results=True)
+        screenshot = {"type": "computer_screenshot", "image_url": "data:image/png;base64,QUJD"}
+        request = {
+            "model": "gpt-5.4",
+            "input": [
+                {"role": "user", "content": "Click the button"},
+                {"type": "computer_call_output", "call_id": "call_s1", "output": screenshot},
+            ],
+        }
+
+        result = await handler.process_input_messages(data=request, guardrail_to_apply=guardrail)
+
+        assert result["input"][1]["output"] == screenshot
+        assert guardrail.seen == []
 
     @pytest.mark.asyncio
     async def test_skip_tool_hides_custom_tool_output_items(self):
