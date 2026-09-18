@@ -166,6 +166,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   const [apiuser, setApiuser] = useState<boolean>(false);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [modelMaxBudget, setModelMaxBudget] = useState<ModelMaxBudget>({});
+  const [modelMaxBudgetKey, setModelMaxBudgetKey] = useState(0);
   const [isPersonalKeyOpen, setIsPersonalKeyOpen] = useState(false);
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
@@ -198,11 +199,16 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     fetchData();
   }, []);
 
+  const resetModelMaxBudget = () => {
+    setModelMaxBudget({});
+    setModelMaxBudgetKey((prev) => prev + 1);
+  };
+
   const handleCancel = () => {
     setIsModalVisible(false);
     setApiuser(false);
     form.reset(defaultValues);
-    setModelMaxBudget({});
+    resetModelMaxBudget();
   };
 
   const handleCreate = async (formValues: CreateUserFormValues) => {
@@ -223,7 +229,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
       if (onUserCreated && isEmbedded) {
         onUserCreated(user_id);
         form.reset(defaultValues);
-        setModelMaxBudget({});
+        resetModelMaxBudget();
         return;
       }
 
@@ -240,7 +246,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
 
       toast.success("API user Created");
       form.reset(defaultValues);
-      setModelMaxBudget({});
+      resetModelMaxBudget();
       localStorage.removeItem("userData" + userID);
     } catch (error: any) {
       const errorMessage = error.response?.data?.detail || error?.message || "Error creating the user";
@@ -290,6 +296,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
 
   const modelMaxBudgetField = (
     <ModelMaxBudgetField
+      key={`model-max-budget-${modelMaxBudgetKey}`}
       premiumUser={premiumUser}
       value={modelMaxBudget}
       onChange={setModelMaxBudget}
