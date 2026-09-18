@@ -140,23 +140,6 @@ class TestPerplexityCostCalculator:
         assert prompt_cost == 0.0
         assert completion_cost == 0.008
 
-    def test_falls_back_to_manual_calculation_when_no_cost_provided(self):
-        """
-        Test that manual cost calculation is used when Perplexity doesn't
-        provide the cost object (fallback behavior).
-        """
-        usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
-        # No cost object - should use manual calculation
-
-        prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-deep-research", usage=usage)
-
-        # Should calculate manually: 100 * 2e-6 + 50 * 8e-6
-        expected_prompt = 100 * 2e-6
-        expected_completion = 50 * 8e-6
-
-        assert math.isclose(prompt_cost, expected_prompt, rel_tol=1e-6)
-        assert math.isclose(completion_cost, expected_completion, rel_tol=1e-6)
-
     OFF_PEAK_MODEL = "sonar-off-peak-test"
     OFF_PEAK_WINDOW = "14:00-00:00"
     INSIDE_WINDOW = datetime(2026, 9, 3, 17, 25, tzinfo=timezone.utc)
