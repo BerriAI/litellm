@@ -3,10 +3,10 @@
 //! `@client` path makes them.
 
 use litellm_callbacks::event::{
-    CallEvent, FailureOrigin, RequestContext, Timing, WireRequest, epoch_seconds,
+    FailureOrigin, MachineEvent, RequestContext, Timing, WireRequest, epoch_seconds,
 };
 use litellm_host_python::{
-    LifecycleStep, PublicValue, PythonLifecycle, from_py, missing_state, to_py,
+    LifecycleEvent, LifecycleStep, PythonLifecycle, from_py, missing_state, to_py,
 };
 use pyo3::{
     exceptions::{PyBaseException, PyException},
@@ -346,28 +346,11 @@ impl PythonLifecycle for LegacyLogging {
     fn emit(
         &mut self,
         py: Python<'_>,
-        event: &CallEvent,
-        public: Option<PublicValue<'_>>,
+        event: LifecycleEvent<'_>,
     ) -> PyResult<LifecycleStep> {
-        match (event, public) {
-            (CallEvent::Started { .. }, _) => Ok(LifecycleStep::Done),
-            (CallEvent::Opened, _) => {
-                Streaming::Opened.call(py, (self.logger()?.object(py),))?;
-                self.stream = Some(DeliveredStream {
-                    chunks: PyList::empty(py).unbind(),
-                    first_chunk: None,
-                });
-                Ok(LifecycleStep::Done)
-            }
-            (CallEvent::Delivered, Some(PublicValue::Chunk(chunk))) => {
-                let stream = self.stream.as_mut().ok_or_else(missing_state)?;
-                if stream.first_chunk.is_none() {
-                    stream.first_chunk = Some(datetime(py, epoch_seconds())?);
-                }
-                stream.chunks.bind(py).append(chunk)?;
-                Ok(LifecycleStep::Done)
-            }
-            (CallEvent::ResponseReceived { raw }, _) => {
+        match event {
+            LifecycleEvent::Started { .. } => Ok(LifecycleStep::Done),
+            LifecycleEvent::Machine(MachineEvent::ResponseReceived { raw }) => {
                 let api_key = self
                     .context
                     .as_ref()
@@ -382,7 +365,7 @@ impl PythonLifecycle for LegacyLogging {
                 )?;
                 Ok(LifecycleStep::Done)
             }
-            (CallEvent::Succeeded { timing }, Some(PublicValue::Response(response))) => {
+            LifecycleEvent::Succeeded { timing, response } => {
                 self.end = Some(datetime(py, timing.end_time)?);
                 self.response = Some(response.clone_ref(py));
                 match &self.stream {
@@ -391,13 +374,17 @@ impl PythonLifecycle for LegacyLogging {
                 }
                 Ok(LifecycleStep::Done)
             }
-            (CallEvent::Failed { timing, origin }, Some(PublicValue::Error(error))) => {
+            LifecycleEvent::Failed {
+                timing,
+                origin,
+                error,
+            } => {
                 self.end = Some(datetime(py, timing.end_time)?);
                 self.error = Some(error.clone_ref(py).into_value(py));
                 if self.stream.is_some() {
                     return self.stream_failure(py);
                 }
-                if *origin == FailureOrigin::Call
+                if origin == FailureOrigin::Call
                     && self.logger.is_some()
                     && self.runs_deployment_hooks()
                 {
@@ -412,8 +399,24 @@ impl PythonLifecycle for LegacyLogging {
                 }
                 self.dispatch_failure(py)
             }
-            _ => Err(missing_state()),
         }
+    }
+
+    fn opened(&mut self, py: Python<'_>) -> PyResult<()> {
+        Streaming::Opened.call(py, (self.logger()?.object(py),))?;
+        self.stream = Some(DeliveredStream {
+            chunks: PyList::empty(py).unbind(),
+            first_chunk: None,
+        });
+        Ok(())
+    }
+
+    fn delivered(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()> {
+        let stream = self.stream.as_mut().ok_or_else(missing_state)?;
+        if stream.first_chunk.is_none() {
+            stream.first_chunk = Some(datetime(py, epoch_seconds())?);
+        }
+        stream.chunks.bind(py).append(chunk)
     }
 
     fn resume(&mut self, py: Python<'_>, result: PyResult<Py<PyAny>>) -> PyResult<LifecycleStep> {

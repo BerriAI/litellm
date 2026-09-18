@@ -8,7 +8,7 @@ use std::{future::Future, pin::Pin};
 
 pub use auth::{HostTokenProvider, TokenRoute};
 use litellm_callbacks::{
-    event::{CallEvent, RequestContext, WireRequest},
+    event::{MachineEvent, RequestContext, WireRequest},
     host::{Demand, HostOp, HostResult},
     machine::{HostFailure, Interrupted, Machine, MachineStep, Step},
     route::Route,
@@ -82,7 +82,7 @@ where
         }
     }
 
-    pub async fn emit(&self, event: CallEvent) -> Result<(), R::Error> {
+    pub async fn emit(&self, event: MachineEvent) -> Result<(), R::Error> {
         match self.invoke(HostOp::Emit(event)).await? {
             HostResult::Emitted => Ok(()),
             _ => Err(MachineFault::Mismatch.into()),

@@ -1,4 +1,4 @@
-use litellm_callbacks::event::{CallEvent, RequestContext, Timing, WireRequest};
+use litellm_callbacks::event::{FailureOrigin, MachineEvent, RequestContext, Timing, WireRequest};
 use litellm_callbacks::route::Route;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::gc::{PyTraverseError, PyVisit};
@@ -19,11 +19,22 @@ pub enum LifecycleStep {
     Done,
 }
 
-/// The host-typed value the driver attaches to a terminal event.
-pub enum PublicValue<'a> {
-    Response(&'a Py<PyAny>),
-    Error(&'a PyErr),
-    Chunk(&'a Py<PyAny>),
+/// What a lifecycle observes: the driver's start, the machine's own events, and one
+/// terminal event carrying the public value the caller receives.
+pub enum LifecycleEvent<'a> {
+    Started {
+        start_time: f64,
+    },
+    Machine(&'a MachineEvent),
+    Succeeded {
+        timing: Timing,
+        response: &'a Py<PyAny>,
+    },
+    Failed {
+        timing: Timing,
+        origin: FailureOrigin,
+        error: &'a PyErr,
+    },
 }
 
 /// One consumer of a call's lifecycle on the Python side. The driver calls the steps in
@@ -61,9 +72,15 @@ pub trait PythonLifecycle: Send + Sync {
     fn emit(
         &mut self,
         py: Python<'_>,
-        event: &CallEvent,
-        public: Option<PublicValue<'_>>,
+        event: LifecycleEvent<'_>,
     ) -> PyResult<LifecycleStep>;
+
+    /// The call streams and its stream was handed to the caller. The caller is not
+    /// inside an await here, so this step and `delivered` cannot suspend.
+    fn opened(&mut self, py: Python<'_>) -> PyResult<()>;
+
+    /// One chunk of an open stream is about to reach the caller.
+    fn delivered(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()>;
 
     fn resume(&mut self, py: Python<'_>, result: PyResult<Py<PyAny>>) -> PyResult<LifecycleStep>;
 

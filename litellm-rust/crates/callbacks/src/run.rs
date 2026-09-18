@@ -25,7 +25,10 @@ where
                 .before_send(*wire, &context)
                 .await
                 .map(|wire| HostResult::BeforeSend(Box::new(wire))),
-            HostOp::Emit(event) => host.emit(&event).await.map(|()| HostResult::Emitted),
+            HostOp::Emit(event) => host
+                .emit(&CallEvent::Machine(event))
+                .await
+                .map(|()| HostResult::Emitted),
             HostOp::Open(head) => host.open(head).await.map(HostResult::Demand),
             HostOp::Deliver(chunk) => host.deliver(chunk).await.map(HostResult::Demand),
         };

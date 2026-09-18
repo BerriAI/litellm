@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use crate::event::{CallEvent, RequestContext, WireRequest};
+use crate::event::{CallEvent, MachineEvent, RequestContext, WireRequest};
 use crate::route::Route;
 
 /// One suspension point of a native call, performed by the host.
@@ -10,7 +10,7 @@ pub enum HostOp<R: Route> {
         wire: Box<WireRequest>,
         context: Box<RequestContext>,
     },
-    Emit(CallEvent),
+    Emit(MachineEvent),
     /// The response streams: the host hands the caller a stream and answers once the
     /// caller asks for the first chunk or goes away.
     Open(R::StreamHead),

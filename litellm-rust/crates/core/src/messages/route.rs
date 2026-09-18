@@ -3,7 +3,7 @@ use std::{sync::Mutex, time::Duration};
 use bytes::Bytes;
 use litellm_auth::SecretValue;
 use litellm_callbacks::{
-    event::{CallEvent, RawResponse, RequestContext, WireRequest},
+    event::{MachineEvent, RawResponse, RequestContext, WireRequest},
     host::{Demand, Host},
     route::Route,
 };
@@ -172,7 +172,7 @@ async fn execute(host: MessagesHost) -> Result<MessagesOutput, Error> {
         return relay(&host, response).await;
     }
     let text = response.text().await.map_err(network)?;
-    host.emit(CallEvent::ResponseReceived {
+    host.emit(MachineEvent::ResponseReceived {
         raw: RawResponse { body: text.clone() },
     })
     .await?;
