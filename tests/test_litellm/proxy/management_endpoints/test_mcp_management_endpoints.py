@@ -24,6 +24,7 @@ from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LitellmUserRoles,
     MCPTransport,
+    MCPUserCredentialResponse,
     NewMCPServerRequest,
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
@@ -2360,7 +2361,7 @@ class TestTemporaryMCPSessionEndpoints:
             "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
             MagicMock(),
         ):
-            with pytest.raises(Exception, match='User does not have permission to create temporary mcp') as exc_info:
+            with pytest.raises(Exception, match="User does not have permission to create temporary mcp") as exc_info:
                 await add_session_mcp_server(
                     payload=payload,
                     user_api_key_dict=non_admin,
@@ -4093,8 +4094,11 @@ async def test_health_discovery_respects_route_restricted_key_grants(
     manager: Final = mcp_server_manager.MCPServerManager()
     manager.registry = {
         server_id: MCPServer(
-            server_id=server_id, name=server_id, transport=MCPTransport.http,
-            spec_path=f"https://93.184.216.34/{server_id}.json", auth_type=MCPAuth.none,
+            server_id=server_id,
+            name=server_id,
+            transport=MCPTransport.http,
+            spec_path=f"https://93.184.216.34/{server_id}.json",
+            auth_type=MCPAuth.none,
         )
         for server_id in ("server-x", "server-y")
     }
@@ -4107,18 +4111,24 @@ async def test_health_discovery_respects_route_restricted_key_grants(
         api_key="test-health-key",
         allowed_routes=["/v1/mcp/server", "/v1/mcp/server/health"] if restricted else [],
         object_permission=LiteLLM_ObjectPermissionTable(
-            object_permission_id="health-permissions", mcp_servers=list(grants),
+            object_permission_id="health-permissions",
+            mcp_servers=list(grants),
         ),
     )
     with (
         patch.object(  # test-quality-ok: TQ008 inject real registry into legacy route binding
-            mgmt_endpoints, "global_mcp_server_manager", manager,
+            mgmt_endpoints,
+            "global_mcp_server_manager",
+            manager,
         ),
         patch.object(  # test-quality-ok: TQ008 inject shared registry without mocking permission policy
-            mcp_server_manager, "global_mcp_server_manager", manager,
+            mcp_server_manager,
+            "global_mcp_server_manager",
+            manager,
         ),
         patch(  # test-quality-ok: TQ008 configure mode without mocking authorization
-            "litellm.proxy.proxy_server.general_settings", {"user_mcp_management_mode": mode},
+            "litellm.proxy.proxy_server.general_settings",
+            {"user_mcp_management_mode": mode},
         ),
     ):
         result: Final = await mgmt_endpoints.health_check_servers(
@@ -5125,6 +5135,266 @@ async def test_delete_mcp_oauth_user_credential_invalidates_when_record_already_
 
     invalidate_mock.assert_awaited_once_with(user_id, server_id)
     assert result.has_credential is False
+
+
+def _make_admin_auth(role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN) -> "UserAPIKeyAuth":
+    return UserAPIKeyAuth(api_key="sk-admin", user_id="admin-user", user_role=role)
+
+
+@pytest.mark.asyncio
+async def test_admin_revokes_another_users_byok_credential():
+    """A proxy admin naming user_id deletes and cache-invalidates that user's stored key, not their own."""
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_server
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        delete_mcp_user_credential,
+    )
+
+    delete_mock = AsyncMock(return_value=None)
+    invalidate_mock = AsyncMock()
+    with (
+        patch(  # test-quality-ok: endpoint test stubs the Prisma client lookup
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(  # test-quality-ok: endpoint test stubs the credential row delete
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            new=delete_mock,
+        ),
+        patch.object(  # test-quality-ok: the cache invalidator is module scoped; the suite's only seam
+            mcp_server, "_invalidate_byok_cred_cache", new=invalidate_mock
+        ),
+    ):
+        result = await delete_mcp_user_credential(
+            server_id="srv-byok-admin",
+            user_api_key_dict=_make_admin_auth(),
+            user_id="mallory",
+        )
+
+    delete_mock.assert_awaited_once()
+    assert delete_mock.await_args.args[1:] == ("mallory", "srv-byok-admin")
+    invalidate_mock.assert_awaited_once_with("mallory", "srv-byok-admin")
+    assert result.has_credential is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+async def test_non_full_admin_cannot_revoke_another_users_byok_credential(role):
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        delete_mcp_user_credential,
+    )
+
+    delete_mock = AsyncMock(return_value=None)
+    with (
+        patch(  # test-quality-ok: endpoint test stubs the Prisma client lookup
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(  # test-quality-ok: endpoint test stubs the credential row delete
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            new=delete_mock,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_mcp_user_credential(
+                server_id="srv-byok-forbidden",
+                user_api_key_dict=_make_admin_auth(role),
+                user_id="mallory",
+            )
+
+    assert exc_info.value.status_code == 403
+    delete_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_user_naming_themselves_still_deletes_own_byok_credential():
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_server
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        delete_mcp_user_credential,
+    )
+
+    deleted_rows: list[tuple[str, str]] = []  # mutable-ok: test-local recorder for the fake delete boundary
+
+    async def _fake_delete_user_credential(_prisma_client: object, user_id: str, server_id: str) -> None:
+        deleted_rows.append((user_id, server_id))
+
+    with (
+        patch(  # test-quality-ok: endpoint test stubs the Prisma client lookup
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(  # test-quality-ok: endpoint test stubs the credential row delete
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            new=_fake_delete_user_credential,
+        ),
+        patch.object(  # test-quality-ok: the cache invalidator is module scoped; the suite's only seam
+            mcp_server, "_invalidate_byok_cred_cache", new=AsyncMock()
+        ),
+    ):
+        result = await delete_mcp_user_credential(
+            server_id="srv-byok-self",
+            user_api_key_dict=_make_user_auth("user-self"),
+            user_id="user-self",
+        )
+
+    assert deleted_rows == [("user-self", "srv-byok-self")]
+    assert result == MCPUserCredentialResponse(server_id="srv-byok-self", has_credential=False)
+
+
+@pytest.mark.asyncio
+async def test_admin_revokes_another_users_oauth_credential():
+    """A proxy admin naming user_id reads, deletes, and cache-invalidates that user's OAuth token."""
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        delete_mcp_oauth_user_credential,
+    )
+
+    get_mock = AsyncMock(return_value={"type": "oauth2", "access_token": "mallory-tok"})
+    delete_mock = AsyncMock(return_value=None)
+    invalidate_mock = AsyncMock(return_value=None)
+    with (
+        patch(  # test-quality-ok: endpoint test stubs the Prisma client lookup
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(  # test-quality-ok: endpoint test stubs the stored OAuth token read
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_oauth_credential",
+            new=get_mock,
+        ),
+        patch(  # test-quality-ok: endpoint test stubs the credential row delete
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            new=delete_mock,
+        ),
+        patch.object(  # test-quality-ok: the OAuth cache lives on the global manager; the suite's only seam
+            manager_module.global_mcp_server_manager,
+            "invalidate_user_oauth_token_cache",
+            new=invalidate_mock,
+        ),
+    ):
+        result = await delete_mcp_oauth_user_credential(
+            server_id="srv-oauth-admin",
+            user_api_key_dict=_make_admin_auth(),
+            user_id="mallory",
+        )
+
+    assert get_mock.await_args.args[1:] == ("mallory", "srv-oauth-admin")
+    assert delete_mock.await_args.args[1:] == ("mallory", "srv-oauth-admin")
+    invalidate_mock.assert_awaited_once_with("mallory", "srv-oauth-admin")
+    assert result.has_credential is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+async def test_non_full_admin_cannot_revoke_another_users_oauth_credential(role):
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        delete_mcp_oauth_user_credential,
+    )
+
+    get_mock = AsyncMock(return_value={"type": "oauth2", "access_token": "mallory-tok"})
+    delete_mock = AsyncMock(return_value=None)
+    with (
+        patch(  # test-quality-ok: endpoint test stubs the Prisma client lookup
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(  # test-quality-ok: endpoint test stubs the stored OAuth token read
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_oauth_credential",
+            new=get_mock,
+        ),
+        patch(  # test-quality-ok: endpoint test stubs the credential row delete
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            new=delete_mock,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_mcp_oauth_user_credential(
+                server_id="srv-oauth-forbidden",
+                user_api_key_dict=_make_admin_auth(role),
+                user_id="mallory",
+            )
+
+    assert exc_info.value.status_code == 403
+    get_mock.assert_not_awaited()
+    delete_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+async def test_admin_lists_every_users_credential_for_a_server(role):
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy._types import MCPServerUserCredentialListItem
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        list_mcp_server_user_credentials,
+    )
+
+    items = (
+        MCPServerUserCredentialListItem(user_id="alice", credential_type="byok", updated_at="2026-01-01T00:00:00"),
+        MCPServerUserCredentialListItem(user_id="bob", credential_type="oauth2", updated_at="2026-01-02T00:00:00"),
+    )
+    list_mock = AsyncMock(return_value=items)
+    with (
+        patch(  # test-quality-ok: endpoint test stubs the Prisma client lookup
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(  # test-quality-ok: endpoint test stubs the credential row listing
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.list_server_user_credentials",
+            new=list_mock,
+        ),
+    ):
+        result = await list_mcp_server_user_credentials(
+            server_id="srv-list-admin",
+            user_api_key_dict=_make_admin_auth(role),
+        )
+
+    assert list_mock.await_args.args[1:] == ("srv-list-admin",)
+    assert [(item.user_id, item.credential_type) for item in result] == [("alice", "byok"), ("bob", "oauth2")]
+
+
+@pytest.mark.asyncio
+async def test_non_admin_cannot_list_a_servers_user_credentials():
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        list_mcp_server_user_credentials,
+    )
+
+    list_mock = AsyncMock(return_value=())
+    with (
+        patch(  # test-quality-ok: endpoint test stubs the Prisma client lookup
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(  # test-quality-ok: endpoint test stubs the credential row listing
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.list_server_user_credentials",
+            new=list_mock,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await list_mcp_server_user_credentials(
+                server_id="srv-list-forbidden",
+                user_api_key_dict=_make_user_auth("user-plain"),
+            )
+
+    assert exc_info.value.status_code == 403
+    list_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -7125,9 +7395,7 @@ class TestImportMCPServers:
             import_mcp_servers,
         )
 
-        payload = MCPConnectorImportRequest.model_validate(
-            {"mcpServers": {"srv": {"url": "https://x.example/mcp"}}}
-        )
+        payload = MCPConnectorImportRequest.model_validate({"mcpServers": {"srv": {"url": "https://x.example/mcp"}}})
         caller = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.INTERNAL_USER)
 
         with patch(  # test-quality-ok: endpoint takes collaborators from module scope, matching the suite's pattern
@@ -7263,3 +7531,197 @@ class TestImportMCPServers:
 
         assert [entry.name for entry in result.imported] == ["new-server"]
         mock_manager.reload_servers_from_database.assert_awaited_once()
+
+
+class TestGetMCPGatewaySessions:
+    @pytest.mark.asyncio
+    async def test_non_admin_forbidden(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            get_mcp_gateway_sessions,
+        )
+
+        non_admin = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.INTERNAL_USER)
+        with pytest.raises(HTTPException) as exc_info:
+            await get_mcp_gateway_sessions(user_api_key_dict=non_admin)
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+    async def test_admin_roles_receive_live_session_report(self, role):
+        from mcp.types import Implementation
+
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            get_mcp_gateway_sessions,
+        )
+        from litellm.types.mcp import MCPGatewaySessionsResponse
+
+        session_id = "gateway-sessions-endpoint-1"
+        auth_user = mcp_server.MCPAuthenticatedUser(
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-live-secret", user_id="alice"),
+        )
+        with (
+            patch.object(  # test-quality-ok: the transport registry is a module-level singleton; the suite's only seam
+                mcp_server.session_manager_stateful, "_server_instances", {session_id: MagicMock()}
+            ),
+            patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+                mcp_server._stateful_session_auth_contexts, {session_id: auth_user}, clear=True
+            ),
+            patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+                mcp_server._stateful_session_client_info,
+                {session_id: Implementation(name="cursor", version="0.50.0")},
+                clear=True,
+            ),
+        ):
+            result = await get_mcp_gateway_sessions(
+                user_api_key_dict=generate_mock_user_api_key_auth(user_role=role),
+            )
+
+        assert isinstance(result, MCPGatewaySessionsResponse)
+        assert result.total_sessions == 1
+        assert [(group.label, group.count) for group in result.by_client] == [("cursor", 1)]
+        assert [(group.label, group.count) for group in result.by_user] == [("alice", 1)]
+        assert "sk-live-secret" not in result.model_dump_json()
+
+
+class TestDeleteMCPGatewaySessions:
+    @pytest.fixture(autouse=True)
+    def _forget_admin_terminated_ids(self):
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+
+        yield
+        mcp_server._admin_terminated_session_ids.clear()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+    async def test_non_full_admin_forbidden_before_any_session_is_touched(self, role):
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            delete_mcp_gateway_sessions,
+        )
+
+        session_id = "gateway-terminate-forbidden-1"
+        transport = MagicMock(terminate=AsyncMock())
+        auth_user = mcp_server.MCPAuthenticatedUser(
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-live", user_id="alice"),
+        )
+        with (
+            patch.object(  # test-quality-ok: the transport registry is a module-level singleton; the suite's only seam
+                mcp_server.session_manager_stateful, "_server_instances", {session_id: transport}
+            ),
+            patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+                mcp_server._stateful_session_auth_contexts, {session_id: auth_user}, clear=True
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await delete_mcp_gateway_sessions(
+                    user_api_key_dict=generate_mock_user_api_key_auth(user_role=role),
+                    session_id_prefix=session_id,
+                    user_id=None,
+                )
+            assert exc_info.value.status_code == 403
+            transport.terminate.assert_not_awaited()
+            assert session_id in mcp_server._stateful_session_auth_contexts
+
+    @pytest.mark.asyncio
+    async def test_requires_a_selector(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            delete_mcp_gateway_sessions,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_mcp_gateway_sessions(
+                user_api_key_dict=generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                session_id_prefix=None,
+                user_id=None,
+            )
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_admin_terminates_only_the_selected_session(self):
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            delete_mcp_gateway_sessions,
+        )
+        from litellm.types.mcp import MCPGatewaySessionsTerminateResponse
+
+        target_id = "11111111-target-session"
+        other_id = "22222222-other-session"
+        target_transport = MagicMock(terminate=AsyncMock())
+        other_transport = MagicMock(terminate=AsyncMock())
+        transports = {target_id: target_transport, other_id: other_transport}
+        contexts = {
+            target_id: mcp_server.MCPAuthenticatedUser(
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-live-target", user_id="alice"),
+            ),
+            other_id: mcp_server.MCPAuthenticatedUser(
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-live-other", user_id="bob"),
+            ),
+        }
+        with (
+            patch.object(  # test-quality-ok: the transport registry is a module-level singleton; the suite's only seam
+                mcp_server.session_manager_stateful, "_server_instances", transports
+            ),
+            patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+                mcp_server._stateful_session_auth_contexts, contexts, clear=True
+            ),
+        ):
+            result = await delete_mcp_gateway_sessions(
+                user_api_key_dict=generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                session_id_prefix=target_id[:8],
+                user_id=None,
+            )
+            assert target_id not in transports
+            assert other_id in transports
+            assert target_id not in mcp_server._stateful_session_auth_contexts
+            assert other_id in mcp_server._stateful_session_auth_contexts
+
+        target_transport.terminate.assert_awaited_once()
+        other_transport.terminate.assert_not_awaited()
+        assert isinstance(result, MCPGatewaySessionsTerminateResponse)
+        assert result.terminated_sessions == 1
+        assert [(s.session_id_prefix, s.user_id) for s in result.sessions] == [(target_id[:8], "alice")]
+        assert target_id not in result.model_dump_json()
+        assert "sk-live-target" not in result.model_dump_json()
+
+    @pytest.mark.asyncio
+    async def test_admin_terminates_every_session_of_the_selected_user(self):
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            delete_mcp_gateway_sessions,
+        )
+
+        def auth_user(user_id: str):
+            return mcp_server.MCPAuthenticatedUser(
+                user_api_key_auth=UserAPIKeyAuth(api_key=f"sk-live-{user_id}", user_id=user_id),
+            )
+
+        transports = {
+            "bob-session-1": MagicMock(terminate=AsyncMock()),
+            "bob-session-2": MagicMock(terminate=AsyncMock()),
+            "alice-session-1": MagicMock(terminate=AsyncMock()),
+        }
+        contexts = {
+            "bob-session-1": auth_user("bob"),
+            "bob-session-2": auth_user("bob"),
+            "alice-session-1": auth_user("alice"),
+        }
+        with (
+            patch.object(  # test-quality-ok: the transport registry is a module-level singleton; the suite's only seam
+                mcp_server.session_manager_stateful, "_server_instances", transports
+            ),
+            patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+                mcp_server._stateful_session_auth_contexts, contexts, clear=True
+            ),
+        ):
+            result = await delete_mcp_gateway_sessions(
+                user_api_key_dict=generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                session_id_prefix=None,
+                user_id="bob",
+            )
+            assert set(transports) == {"alice-session-1"}
+            assert set(mcp_server._stateful_session_auth_contexts) == {"alice-session-1"}
+
+        assert result.terminated_sessions == 2
+        assert {s.user_id for s in result.sessions} == {"bob"}
+        assert "sk-live-bob" not in result.model_dump_json()

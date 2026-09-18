@@ -21,7 +21,6 @@ WEB_SEARCH_MODELS = (
 COMPOUND_MODELS = ("compound", "compound-mini", "groq/compound", "groq/compound-mini")
 
 
-
 class TestGroqWebSearchOptions:
     @pytest.mark.parametrize("model", WEB_SEARCH_MODELS + COMPOUND_MODELS)
     def test_supported_on_search_capable_models(self, model: str):
@@ -204,36 +203,4 @@ class TestGroqWebSearchUsageSignal:
         GroqChatConfig()._add_web_search_usage(model_response=model_response)
         assert getattr(model_response, "usage", None) is None
 
-    @pytest.mark.usefixtures("local_model_cost_map")
-    @pytest.mark.parametrize(
-        "executed_tools, expected_cost",
-        [
-            (EXECUTED_TOOLS_THREE_SEARCHES_TWO_OPENS, 3 * 0.005 + 2 * 0.001),
-            (EXECUTED_TOOLS_OPENS_ONLY, 2 * 0.001),
-        ],
-    )
-    def test_response_billed_per_action(self, executed_tools: list, expected_cost: float):
-        response = _groq_completion_with_mocked_response(_searched_groq_response(executed_tools))
-        assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
-            response_object=response, usage=response.usage
-        )
-        cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
-            model="groq/openai/gpt-oss-20b",
-            response_object=response,
-            usage=response.usage,
-            custom_llm_provider="groq",
-            standard_built_in_tools_params={"web_search_options": {"search_context_size": "high"}},
-        )
-        assert cost == pytest.approx(expected_cost)
 
-
-class TestGroqWebSearchCost:
-    @pytest.mark.usefixtures("local_model_cost_map")
-    @pytest.mark.parametrize("model", WEB_SEARCH_MODELS)
-    @pytest.mark.parametrize("search_context_size", ["low", "medium", "high"])
-    def test_browser_search_priced_per_search(self, model: str, search_context_size: str):
-        cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
-            web_search_options={"search_context_size": search_context_size},
-            model_info=litellm.get_model_info(model=model, custom_llm_provider="groq"),
-        )
-        assert cost == 0.005

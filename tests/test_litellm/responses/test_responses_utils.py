@@ -119,6 +119,63 @@ class TestResponsesAPIRequestUtils:
         assert result["max_output_tokens"] == 100
         assert result["prompt"] == {"id": "pmpt_456"}
 
+    def test_get_requested_response_api_optional_param_drops_nested_path(self):
+        """Nested additional_drop_params paths like reasoning.summary must be honored"""
+        params = {
+            "temperature": 0.1,
+            "reasoning": {"effort": "high", "summary": "auto"},
+            "additional_drop_params": ["reasoning.summary"],
+        }
+
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+
+        assert result["reasoning"] == {"effort": "high"}
+        assert result["temperature"] == 0.1
+
+    def test_get_requested_response_api_optional_param_drops_array_path(self):
+        """Array wildcard paths like tools[*].input_examples must be honored"""
+        params = {
+            "tools": [{"type": "function", "name": "t", "input_examples": ["x"]}],
+            "additional_drop_params": ["tools[*].input_examples"],
+        }
+
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+
+        assert result["tools"] == [{"type": "function", "name": "t"}]
+
+    def test_get_requested_response_api_optional_param_drops_top_level(self):
+        """Top-level additional_drop_params keys must still be honored"""
+        params = {
+            "reasoning": {"effort": "high", "summary": "auto"},
+            "additional_drop_params": ["reasoning"],
+        }
+
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+
+        assert "reasoning" not in result
+
+    def test_get_requested_response_api_optional_param_non_matching_nested_path(self):
+        """A nested path that does not match anything leaves params untouched"""
+        params = {
+            "reasoning": {"effort": "high", "summary": "auto"},
+            "additional_drop_params": ["reasoning.nope"],
+        }
+
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+
+        assert result["reasoning"] == {"effort": "high", "summary": "auto"}
+
+    def test_get_requested_response_api_optional_param_none_drop_params(self):
+        """additional_drop_params=None is a no-op"""
+        params = {
+            "reasoning": {"effort": "high", "summary": "auto"},
+            "additional_drop_params": None,
+        }
+
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+
+        assert result["reasoning"] == {"effort": "high", "summary": "auto"}
+
     def test_decode_previous_response_id_to_original_previous_response_id(self):
         """Test decoding a LiteLLM encoded previous_response_id to the original previous_response_id"""
         # Setup

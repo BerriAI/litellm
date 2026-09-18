@@ -1483,10 +1483,13 @@ _UI_SETTINGS_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 def apply_runtime_general_settings_flags(ui_settings: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
     """Copy the UI settings that gate runtime behavior into ``general_settings``. Returns what was applied."""
+    from litellm.proxy.config_resolvers import SettingsStore
     from litellm.proxy.proxy_server import general_settings
 
     flags: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
-    if flags:
+    if isinstance(general_settings, SettingsStore):
+        general_settings.apply_db_row("ui_settings", flags)
+    elif flags:
         general_settings.update(flags)
     return MappingProxyType(flags)
 
