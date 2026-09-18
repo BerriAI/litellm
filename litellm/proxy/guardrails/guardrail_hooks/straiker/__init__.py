@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 _OPTIONAL_INIT_FIELDS: Final = (
+    "api_version",
     "timeout",
     "max_retries",
     "initial_backoff",

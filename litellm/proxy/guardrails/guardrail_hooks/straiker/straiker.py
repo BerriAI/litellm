@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 from urllib.parse import urlsplit
@@ -29,6 +30,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy._types import SpecialProxyStrings
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.proxy.guardrails.guardrail_hooks.straiker import (
     STRAIKER_WEBHOOK_SCHEMA_VERSION,
@@ -54,6 +56,55 @@ DEFAULT_BLOCK_MESSAGE: Final = "Content violates policy"
 DEFAULT_API_BASE: Final = "https://api.prod.straiker.ai"
 DEFAULT_MAX_PAYLOAD_BYTES: Final = 524288
 WEBHOOK_PATH: Final = "/api/v1/detect/webhook"
+# The v3 platform exposes one detect route and it parses the gateway's own traffic:
+# the request phase relays the provider body LiteLLM received, the response phase wraps
+# the model's answer beside that request, and Straiker derives prompt, answer, agent and
+# archetype server-side (the same contract the unified Kong plugin speaks). There is no
+# v3 webhook envelope (/api/v3/detect/webhook is a 404).
+V3_DETECT_PATH: Final = "/api/v3/detect"
+# Integration keys minted by the v3 platform. A v1 collection key is a UUID; the prefix
+# never collides, so it can select the API when the config does not say.
+V3_KEY_PREFIX: Final = "sk_agt_"
+# `x-tool` names the ingress; Straiker reads the agent out of the body (cc_entrypoint).
+V3_INGRESS: Final = "litellm"
+V3_TOOL_HEADER: Final = "x-tool"
+V3_PHASE_HEADER: Final = "x-straiker-phase"
+V3_USER_HEADER: Final = "x-straiker-user"
+V3_SESSION_HEADER: Final = "x-claude-code-session-id"
+V3_RESPONSE_PHASE: Final = "response-sync"
+# A v3 verdict blocks on `permissionDecision` (gateway envelope) or `action` (flat body).
+V3_BLOCK_DECISIONS: Final = frozenset({"block", "deny"})
+# Provider body fields, for every surface the proxy fronts. An allowlist rather than a
+# denylist: the hook sees the client body merged with proxy state (`deployment` carries
+# the resolved credential, `proxy_server_request` the client's Authorization header), and
+# a field this list does not know is not relayed. Detection reads messages, system, tools,
+# input and instructions; the rest travels so Straiker records the turn as the client sent it.
+_V3_PROVIDER_BODY_KEYS: Final = frozenset(
+    {
+        # OpenAI chat completions
+        "model", "messages", "tools", "tool_choice", "functions", "function_call", "temperature",
+        "top_p", "n", "stream", "stream_options", "stop", "max_tokens", "max_completion_tokens",
+        "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed",
+        "logprobs", "top_logprobs", "parallel_tool_calls", "reasoning_effort", "modalities", "audio",
+        "prediction", "store", "service_tier", "web_search_options",
+        # Anthropic messages
+        "system", "stop_sequences", "top_k", "thinking", "container", "mcp_servers",
+        "context_management", "output_format",
+        # OpenAI responses
+        "input", "instructions", "previous_response_id", "truncation", "text", "include",
+        "reasoning", "max_output_tokens", "background", "conversation",
+        # Conversation grouping a client may state itself
+        "session_id",
+    }
+)
+# The identity fields Straiker's LiteLLM adapter reads from `metadata`, most specific first.
+_V3_IDENTITY_METADATA_KEYS: Final = (
+    "user_api_key_end_user_id",
+    "user_api_key_user_email",
+    "user_api_key_user_id",
+    "user_api_key_alias",
+    "user_api_key_team_id",
+)
 RETRY_STATUS: Final = frozenset({408, 429, 500, 502, 503, 504})
 UNREACHABLE_STATUS: Final = frozenset({502, 503, 504})
 _APPLICATION_METADATA_KEYS: Final = frozenset({"agent_id", "app_name"})
@@ -268,6 +319,229 @@ def _is_streamed_request(request_data: dict) -> bool:
     return body.get("stream") is True
 
 
+# What the proxy stamps on a master-key call in place of a person. Sent onward, either
+# would be recorded as an identity and every master-key turn filed under it.
+_PLACEHOLDER_IDENTITIES: Final = frozenset({SpecialProxyStrings.default_user_id.value, "litellm_proxy_master_key"})
+
+
+def _real_identity(value: object) -> str | None:
+    """LiteLLM's proxy-admin placeholders are not a person."""
+    identity = _as_optional_str(value)
+    return None if identity in _PLACEHOLDER_IDENTITIES else identity
+
+
+def _request_header(request_data: Mapping[str, object], name: str | None) -> str | None:
+    """A header from the inbound request, when LiteLLM kept it on the request data."""
+    if not name:
+        return None
+    proxy_request: Final = request_data.get("proxy_server_request")
+    headers: Final = proxy_request.get("headers") if isinstance(proxy_request, Mapping) else None
+    if not isinstance(headers, Mapping):
+        return None
+    wanted: Final = name.lower()
+    for key, value in headers.items():
+        if str(key).lower() == wanted and isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _v3_identity_metadata(request_data: Mapping[str, object]) -> dict[str, str]:
+    """The proxy-resolved identity fields, and only those, for the relayed body."""
+    merged: Final = _merged_metadata(dict(request_data))
+    identity: dict[str, str] = {}
+    for key in _V3_IDENTITY_METADATA_KEYS:
+        value = _real_identity(merged.get(key))
+        if value:
+            identity[key] = value
+    return identity
+
+
+def _v3_request_body(request_data: Mapping[str, object]) -> dict[str, object]:
+    """The provider body LiteLLM received, stripped of everything the proxy added.
+
+    The hook sees the client's request merged with proxy bookkeeping: logging objects,
+    the resolved key, the inbound headers. Only the provider body is Straiker's to read,
+    and the client's Authorization header must not travel. Identity survives as the
+    metadata subset the Straiker LiteLLM adapter reads.
+    """
+    body: dict[str, object] = {key: value for key, value in request_data.items() if key in _V3_PROVIDER_BODY_KEYS}
+    identity: Final = _v3_identity_metadata(request_data)
+    if identity:
+        body["metadata"] = identity
+    return body
+
+
+def _v3_answer_json(inputs: GenericGuardrailAPIInputs, request_data: Mapping[str, object]) -> str | None:
+    """The model's answer as the raw response body Straiker parses on the response phase.
+
+    The real response object carries tool calls, which a coding-agent turn is scored on,
+    so it is preferred. A streamed answer reaches the hook already assembled into texts,
+    and those become a minimal chat completion so the answer is still scored.
+    """
+    response: Final = _jsonable_dict(request_data.get("response"))
+    if response:
+        return json.dumps(response, default=str)
+    texts: Final = [t for t in (inputs.get("texts") or []) if isinstance(t, str) and t]
+    if not texts:
+        return None
+    assembled: Final = {
+        "object": "chat.completion",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "\n".join(texts)}}],
+    }
+    return json.dumps(assembled)
+
+
+def _last_user_text(messages: list[dict[str, object]] | None) -> str | None:
+    """Prompt text for a post_call envelope, whose request side carries structured
+    messages rather than the flattened texts the pre_call envelope has."""
+    for message in reversed(messages or []):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content:
+            return content
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
+                    if part["text"]:
+                        return str(part["text"])
+    return None
+
+
+def _v3_payload(
+    envelope: StraikerWebhookRequest,
+    inputs: GenericGuardrailAPIInputs,
+    request_data: Mapping[str, object],
+    input_type: Literal["request", "response"],
+) -> dict[str, object]:
+    """The /api/v3/detect body for one phase of a turn.
+
+    Request phase: the provider body itself. Response phase: the answer beside the request
+    it answers, which is how Straiker classifies a tool call the model just made. Both
+    also carry the flat `prompt` / `app_response` pair. A gateway-mode integration key
+    scores only the flat pair and an api-mode key only the relayed body; each ignores the
+    other, so one payload serves whichever key the console issued, and it is one turn.
+    """
+    context: Final = envelope.context
+    request_body: Final = _v3_request_body(request_data)
+
+    if input_type == "request":
+        payload: dict[str, object] = dict(request_body)
+    else:
+        payload = {
+            "straiker_phase": V3_RESPONSE_PHASE,
+            "model": context.model,
+            "request": request_body,
+        }
+        answer_json: Final = _v3_answer_json(inputs, request_data)
+        if answer_json is not None:
+            payload["sse"] = answer_json
+
+    payload["source"] = envelope.application.source
+    prompt: Final = "\n".join(t for t in envelope.request.texts if t) or _last_user_text(
+        envelope.request.structured_messages
+    )
+    if prompt:
+        payload["prompt"] = prompt
+    if envelope.response is not None:
+        answer_text: Final = "\n".join(t for t in envelope.response.texts if t)
+        if answer_text:
+            payload["app_response"] = answer_text
+
+    user: Final = _v3_user(envelope)
+    if user:
+        payload["user_name"] = user
+        # The identity shape the unified Kong plugin sends, so both gateways attribute alike.
+        payload["original"] = {"processed": {"Meta": {"user": user}}}
+    if context.session_id:
+        payload["session_id"] = context.session_id
+    return payload
+
+
+def _v3_user(envelope: StraikerWebhookRequest) -> str | None:
+    """Who is asking, most specific first, never a proxy placeholder.
+
+    A master-key call resolves to LiteLLM's `default_user_id`; sent as an identity it
+    would become one, and a session with a real end user on other turns would be filed
+    under the placeholder.
+    """
+    identity: Final = envelope.identity
+    for candidate in (identity.litellm_user_email, identity.end_user_id, identity.litellm_user_id):
+        real = _real_identity(candidate)
+        if real:
+            return real
+    return None
+
+
+def _v3_headers(
+    envelope: StraikerWebhookRequest,
+    request_data: Mapping[str, object],
+    input_type: Literal["request", "response"],
+) -> dict[str, str]:
+    """Per-call headers: which ingress this is, which phase, and who is asking."""
+    headers: dict[str, str] = {
+        V3_TOOL_HEADER: V3_INGRESS,
+        V3_PHASE_HEADER: input_type,
+    }
+    user: Final = _v3_user(envelope)
+    if user:
+        headers[V3_USER_HEADER] = user
+    # Claude Code names its session on the wire; forwarding it groups a coding session
+    # the way the native hook would.
+    session: Final = _request_header(request_data, V3_SESSION_HEADER)
+    if session:
+        headers[V3_SESSION_HEADER] = session
+    return headers
+
+
+def _v3_decision(body: Mapping[str, object]) -> tuple[str | None, Mapping[str, object]]:
+    """``(decision, verdict)``: the enforceable decision and the object carrying it.
+
+    Straiker answers a gateway in two envelopes. Under `x-tool` the verdict is the hook
+    contract, `hookSpecificOutput.permissionDecision`, with the flat fields nested under
+    `straiker`; a flat call answers `action` at the top level. Reading only one of them
+    would silently make block mode a no-op on the other.
+    """
+    nested: Final = body.get("straiker")
+    verdict: Final = nested if isinstance(nested, Mapping) else body
+    hook: Final = body.get("hookSpecificOutput")
+    if isinstance(hook, Mapping):
+        decision = hook.get("permissionDecision")
+        if isinstance(decision, str) and decision:
+            return decision.lower(), verdict
+    action: Final = verdict.get("action")
+    return (action.lower() if isinstance(action, str) and action else None), verdict
+
+
+def _v3_response(body: Mapping[str, object]) -> StraikerWebhookResponse:
+    """Map a v3 verdict onto the action the guardrail already acts on.
+
+    A detect-mode control fires into `controls` without changing the decision, so it
+    correctly reads NONE. `blocked_by` is the block-mode subset and is honoured even if a
+    build answers it without flipping the decision.
+    """
+    decision, verdict = _v3_decision(body)
+    raw_blocked_by: Final = verdict.get("blocked_by")
+    blocked_by: Final = tuple(sorted(str(c) for c in raw_blocked_by)) if isinstance(raw_blocked_by, list) else ()
+    blocked: Final = decision in V3_BLOCK_DECISIONS or bool(blocked_by)
+    reason: str | None = None
+    if blocked:
+        for key in ("block_message", "deny_reason", "stopReason"):
+            value = verdict.get(key) if key != "stopReason" else body.get(key)
+            if isinstance(value, str) and value.strip():
+                reason = value.strip()
+                break
+        if reason is None:
+            reason = f"Straiker blocked this turn: {', '.join(blocked_by) or 'policy'}"
+    return StraikerWebhookResponse.model_validate(
+        {
+            "action": "BLOCKED" if blocked else "NONE",
+            "blocked_reason": reason,
+            "turnId": verdict.get("turn_id") or body.get("turn_id"),
+        }
+    )
+
+
 class StraikerGuardrail(CustomGuardrail):
     @staticmethod
     def get_config_model() -> type[GuardrailConfigModel]:
@@ -284,6 +558,7 @@ class StraikerGuardrail(CustomGuardrail):
         self,
         api_key: str,
         api_base: str = DEFAULT_API_BASE,
+        api_version: Literal["v1", "v3"] | None = None,
         source: str = "LiteLLM Gateway",
         timeout: float = 5.0,
         max_retries: int = 2,
@@ -302,9 +577,16 @@ class StraikerGuardrail(CustomGuardrail):
             raise ValueError("api_key must be non-empty")
         if unreachable_fallback not in ("fail_open", "fail_closed"):
             raise ValueError(f"unreachable_fallback must be 'fail_open' or 'fail_closed'; got {unreachable_fallback!r}")
+        if api_version is None:
+            # The key names the platform: a v3 integration key cannot call v1 and a v1
+            # collection key cannot call v3, so an unset version follows the key.
+            api_version = "v3" if api_key.startswith(V3_KEY_PREFIX) else "v1"
+        if api_version not in ("v1", "v3"):
+            raise ValueError(f"api_version must be 'v1' or 'v3'; got {api_version!r}")
 
         self.api_key = api_key
         self.api_base = api_base.rstrip("/")
+        self.api_version = api_version
         self.source = source
         self.timeout = float(timeout)
         self.max_retries = max(0, int(max_retries))
@@ -330,17 +612,19 @@ class StraikerGuardrail(CustomGuardrail):
         self.configured_modes = _configured_modes(self.event_hook)
 
     def _webhook_url(self) -> str:
-        return f"{self.api_base}{WEBHOOK_PATH}"
+        return f"{self.api_base}{V3_DETECT_PATH if self.api_version == 'v3' else WEBHOOK_PATH}"
 
     def _headers(self) -> dict[str, str]:
         reserved: Final = {"authorization", "content-type", "x-straiker-webhook-format"}
         extra: Final = {k: v for k, v in self.custom_headers.items() if k.lower() not in reserved}
-        return {
+        headers: Final = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "X-Straiker-Webhook-Format": "litellm",
-            **extra,
         }
+        # v3 relays the provider body and has no envelope dialect to declare.
+        if self.api_version != "v3":
+            headers["X-Straiker-Webhook-Format"] = "litellm"
+        return {**headers, **extra}
 
     def _build_application(self, request_data: dict) -> StraikerWebhookApplication:
         meta: Final = _merged_metadata(request_data)
@@ -418,7 +702,9 @@ class StraikerGuardrail(CustomGuardrail):
             metadata=_build_webhook_metadata(request_data, self.default_metadata),
         )
 
-    async def _post_webhook(self, payload: dict) -> tuple[StraikerWebhookResponse | None, _WebhookFailure | None]:
+    async def _post_webhook(
+        self, payload: dict, headers: Mapping[str, str] | None = None
+    ) -> tuple[StraikerWebhookResponse | None, _WebhookFailure | None]:
         try:
             body = json.dumps(payload).encode("utf-8")
         except (TypeError, ValueError, OverflowError) as error:
@@ -431,7 +717,7 @@ class StraikerGuardrail(CustomGuardrail):
             )
 
         url: Final = self._webhook_url()
-        headers: Final = self._headers()
+        headers: Final = {**self._headers(), **(headers or {})}
         attempts: Final = self.max_retries + 1
         last_failure: _WebhookFailure | None = None
 
@@ -450,11 +736,31 @@ class StraikerGuardrail(CustomGuardrail):
 
         for attempt in range(attempts):
             try:
-                resp = await self.async_handler.post(url, content=body, headers=headers, timeout=self.timeout)
+                try:
+                    resp = await self.async_handler.post(url, content=body, headers=headers, timeout=self.timeout)
+                except httpx.HTTPStatusError as status_error:
+                    # LiteLLM's client raises on any non-2xx, so an error status never reaches
+                    # the branch below on its own. Treat it as the same failure a plain client
+                    # would have returned: retryable when the status says so, otherwise final.
+                    status: int = status_error.response.status_code
+                    text: str = ""
+                    try:
+                        text = status_error.response.text
+                    except Exception:  # noqa: BLE001 - masked responses may lack a body
+                        text = ""
+                    last_failure = _WebhookFailure(
+                        f"HTTP {status}: {text[:200]}", is_unreachable=status in UNREACHABLE_STATUS
+                    )
+                    if status not in RETRY_STATUS:
+                        return None, last_failure
+                    if attempt < attempts - 1:
+                        backoff = min(self.initial_backoff * (2**attempt), self.max_backoff)
+                        await asyncio.sleep(random.uniform(0, backoff))
+                    continue
                 if resp.status_code == 200:
                     try:
                         body = resp.json()
-                        parsed = StraikerWebhookResponse.model_validate(body)
+                        parsed = _v3_response(body) if self.api_version == "v3" else StraikerWebhookResponse.model_validate(body)
                     except (ValidationError, json.JSONDecodeError) as ve:
                         return None, _WebhookFailure(f"invalid response schema: {ve}", is_unreachable=False)
                     if self.verbose:
@@ -565,6 +871,60 @@ class StraikerGuardrail(CustomGuardrail):
             return_inputs["texts"] = parsed.texts
         return return_inputs
 
+    async def _apply_v3(
+        self,
+        *,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None,
+    ) -> GenericGuardrailAPIInputs:
+        """One phase of a turn against /api/v3/detect: relay, read the decision, enforce."""
+        try:
+            envelope: Final = self._build_envelope(
+                inputs=inputs,
+                request_data=request_data,
+                input_type=input_type,
+                logging_obj=logging_obj,
+            )
+            payload: Final = _v3_payload(envelope, inputs, request_data, input_type)
+            headers: Final = _v3_headers(envelope, request_data, input_type)
+        except (ValidationError, TypeError, ValueError) as error:
+            return self._fail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type=input_type,
+                error=str(error),
+                is_unreachable=False,
+            )
+
+        parsed, failure = await self._post_webhook(payload, headers)
+        if failure is not None:
+            return self._fail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type=input_type,
+                error=failure.message,
+                is_unreachable=failure.is_unreachable,
+            )
+        if parsed is None:
+            return self._fail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type=input_type,
+                error="empty response from Straiker",
+                is_unreachable=False,
+            )
+        self._record(request_data=request_data, logging_obj=logging_obj, parsed=parsed)
+        if parsed.action == "BLOCKED":
+            self._block(
+                request_data=request_data,
+                input_type=input_type,
+                message=parsed.blocked_reason or DEFAULT_BLOCK_MESSAGE,
+                blocked_content=True,
+            )
+        return inputs
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -573,6 +933,10 @@ class StraikerGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
+        if self.api_version == "v3":
+            return await self._apply_v3(
+                inputs=inputs, request_data=request_data, input_type=input_type, logging_obj=logging_obj
+            )
         try:
             envelope: Final = self._build_envelope(
                 inputs=inputs,

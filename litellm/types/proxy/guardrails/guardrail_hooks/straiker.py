@@ -125,6 +125,16 @@ class StraikerGuardrailConfigModelOptionalParams(BaseModel):
         gt=0,
         description="Maximum serialized webhook payload size sent to Straiker.",
     )
+    api_version: Literal["v1", "v3"] | None = Field(
+        default=None,
+        description=(
+            "Straiker detect API the gateway calls. 'v1' posts the structured webhook envelope "
+            "to /api/v1/detect/webhook (legacy Defend, UUID collection key). 'v3' relays the "
+            "provider request and response to /api/v3/detect, the v3 platform's only detect "
+            "route, which accepts only an sk_agt_ integration key. Unset: chosen from the key "
+            "prefix, so a v3 key needs no extra configuration."
+        ),
+    )
     custom_headers: dict[str, str] | None = Field(
         default=None,
         description="Additional HTTP headers sent to Straiker, excluding Authorization and the webhook-format header.",
