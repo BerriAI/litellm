@@ -883,6 +883,13 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
     assert any(isinstance(item, str) and item.startswith('data: {"error":') for item in out)
 
 
+_UPSTREAM_BODY: Final = {
+    "code": "cyber_policy",
+    "message": "Upstream rejected request: flagged for possible cybersecurity risk",
+    "type": None,
+}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "terminal,upstream_error,expected_code",
@@ -905,6 +912,13 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
                 body={"code": {"reason": "overloaded"}, "type": {"unexpected": "object"}},
             ),
             "server_error", id="structured_provider_error_fields",
+        ),
+        pytest.param(
+            "upstream_failure",
+            litellm.InternalServerError(
+                message="Upstream rejected request", llm_provider="openai", model="gpt-6-astra", body=_UPSTREAM_BODY
+            ),
+            "cyber_policy", id="upstream_body_code_and_message",
         ),
         *(
             pytest.param(
@@ -995,6 +1009,8 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
             assert "serialize" in failure.response.error["message"].lower()
         else:
             assert "Upstream rejected request" in failure.response.error["message"]
+            if isinstance(upstream_error, litellm.InternalServerError):
+                assert failure.response.error["message"] == _UPSTREAM_BODY["message"]
             if isinstance(upstream_error, (HTTPException, litellm.AuthenticationError)):
                 assert upstream_error.status_code == original_status
         assert payloads[-1]["sequence_number"] > payloads[1]["sequence_number"]
