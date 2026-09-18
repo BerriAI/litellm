@@ -1,5 +1,5 @@
 - Target invariants, not completion claims
-- Keep this crate the whole legacy `Logging` contract and nothing else: `function_setup`, the deployment hooks, `pre_call`/`post_call`, the sync and async success and failure fan-out, the deferred proxy release, and the argument sharing those callbacks rely on
+- Keep this crate the legacy `@client` wrapper as the native call sees it, and nothing else: the `Logging` contract (`function_setup`, the deployment hooks, `pre_call`/`post_call`, the sync and async success and failure fan-out, the deferred proxy release, the argument sharing those callbacks rely on) plus the kwargs rewrites the wrapper makes on the way in (credential-name inheritance, the budget and retry-count limits)
   - The driver in `litellm-host-python`, the routes and core see one `CallbackAdapter`; they never learn which Python objects consume a call
   - `PublicCall` is the caller's call as `Logging` sees it: the positional arguments, the keyword view as the legacy path rewrites it (setup, deployment hook, prepare) and the bound request object whose attributes back keywords the caller omitted; routes hand it over through `run_legacy_call` and keep no copy
 - Callbacks receive the caller's own objects and may mutate them; this crate alone carries that obligation

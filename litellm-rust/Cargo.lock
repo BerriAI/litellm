@@ -2030,12 +2030,9 @@ dependencies = [
 name = "litellm-callbacks-legacy"
 version = "0.1.0"
 dependencies = [
- "litellm-auth",
  "litellm-callbacks",
  "litellm-host-python",
  "pyo3",
- "serde",
- "serde_json",
 ]
 
 [[package]]

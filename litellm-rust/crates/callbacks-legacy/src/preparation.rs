@@ -1,4 +1,3 @@
-use litellm_auth::{credential_default_fields, credential_index};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
@@ -49,7 +48,7 @@ fn inherit_credentials(
         .iter()
         .map(|credential| CredentialEntry(credential).name())
         .collect::<PyResult<Vec<_>>>()?;
-    let Some(index) = credential_index(&requested, &names) else {
+    let Some(index) = names.iter().position(|name| *name == requested) else {
         py.import("litellm._logging")?.getattr("verbose_logger")?.call_method1(
             "warning",
             ("litellm_credential_name=%s matched none of the %d loaded credentials; the request runs without it", requested, names.len()),
@@ -60,9 +59,9 @@ fn inherit_credentials(
     let values = selected.values()?;
     let supplied: Vec<String> = arguments.keys().extract()?;
     let fields: Vec<String> = values.keys().extract()?;
-    for name in credential_default_fields(&supplied, &fields) {
-        if let Some(value) = values.get_item(name)? {
-            arguments.set_item(name, value)?;
+    for name in fields.iter().filter(|name| !supplied.contains(name)) {
+        if let Some(value) = values.get_item(name.as_str())? {
+            arguments.set_item(name.as_str(), value)?;
         }
     }
     Ok(())

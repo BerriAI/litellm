@@ -6,10 +6,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-litellm-auth.workspace = true
 litellm-callbacks.workspace = true
 litellm-host-python.workspace = true
 pyo3.workspace = true
-
-serde.workspace = true
-serde_json.workspace = true

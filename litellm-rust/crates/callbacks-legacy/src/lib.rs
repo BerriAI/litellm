@@ -1,7 +1,9 @@
-//! The legacy callback contract: litellm's `Logging` object, the sync and async callback
-//! registries it fans out to, the deployment hooks and the deferred proxy release. All of
-//! it sits behind one [`CallbackAdapter`](litellm_host_python::CallbackAdapter), so the
-//! driver, the routes and core never learn which Python object is on the other end.
+//! The legacy `@client` wrapper as the native call sees it: litellm's `Logging` object, the
+//! sync and async callback registries it fans out to, the deployment hooks, the deferred
+//! proxy release, and the kwargs rewrites the wrapper makes on the way in (credential-name
+//! inheritance, budget and retry-count limits). All of it sits behind one
+//! [`CallbackAdapter`](litellm_host_python::CallbackAdapter), so the driver, the routes and
+//! core never learn which Python object is on the other end.
 //!
 //! Legacy callbacks receive the caller's own objects and may mutate them. [`PublicCall`]
 //! is where those objects live, and [`run_legacy_call`] is how a route hands them over
@@ -14,8 +16,10 @@ mod deferred;
 mod logger;
 mod preparation;
 
-pub use adapter::{LegacyLogging, LegacySurface};
+pub use adapter::LegacySurface;
 pub use call::{PublicCall, lookup, run_legacy_call};
-pub use callbacks::{LegacyCallbacks, is_internal_call};
-pub use logger::{DeploymentHooks, PythonLogger, SetupResult, finalize, setup};
-pub use preparation::prepare;
+
+pub(crate) use adapter::LegacyLogging;
+pub(crate) use callbacks::{LegacyCallbacks, is_internal_call};
+pub(crate) use logger::{DeploymentHooks, PythonLogger, finalize, setup};
+pub(crate) use preparation::prepare;
