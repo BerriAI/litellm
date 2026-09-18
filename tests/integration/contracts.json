@@ -21,6 +21,9 @@
       "mcp",
       "observability",
       "compatibility"
+    ],
+    "sdk": [
+      "sdk"
     ]
   },
   "tests": {
@@ -204,6 +207,12 @@
     ],
     "tests/integration/management/test_project_lifecycle.py::test_project_delete_with_attached_key_refuses_and_preserves_state": [
       "mgmt.project.delete.attached_key_refusal_preserves_state"
+    ],
+    "tests/integration/sdk/test_http2_wire.py::test_async_handler_negotiates_http2_only_when_enabled": [
+      "other.sdk_wire.http2.async_handler_negotiates_h2_only_when_enabled"
+    ],
+    "tests/integration/sdk/test_http2_wire.py::test_sync_handler_negotiates_http2_only_when_enabled": [
+      "other.sdk_wire.http2.sync_handler_negotiates_h2_only_when_enabled"
     ]
   },
   "browser": {

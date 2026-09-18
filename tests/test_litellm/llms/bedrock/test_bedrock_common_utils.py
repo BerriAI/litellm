@@ -2,7 +2,6 @@
 import pytest
 
 
-
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
 # --------------------------------------------------------------------------- #

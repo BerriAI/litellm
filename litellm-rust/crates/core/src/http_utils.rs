@@ -131,8 +131,9 @@ pub fn json_type_name(value: &serde_json::Value) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[rstest::rstest]
     #[case(HeaderPolicy::All, true, true)]

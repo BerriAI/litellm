@@ -1,10 +1,11 @@
+use litellm_providers::base_llm::chat::transformation::ChatCompletionsAuth;
 use serde_json::{Map, Value, json};
 
-use super::Error;
-
-use super::prepare::{prepare_provider_request, resolve_request};
-use super::transformation::ChatCompletionsAuth;
-use super::types::{ChatCompletionsRequest, ProviderChatCompletionsRequest};
+use super::{
+    Error,
+    prepare::{prepare_provider_request, resolve_request},
+    types::{ChatCompletionsRequest, ProviderChatCompletionsRequest},
+};
 
 fn prepare_chat_completions_call(
     request: ChatCompletionsRequest<'_>,
@@ -588,10 +589,12 @@ fn the_gate_agrees_with_prepare_on_every_case_it_accepts() {
 }
 
 mod round_trip {
-    use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::{TcpListener, TcpStream};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+    };
 
+    use super::*;
     use crate::chat_completions::chat_completions;
 
     async fn read_http_request(socket: &mut TcpStream) -> String {
