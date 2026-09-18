@@ -8,6 +8,7 @@ from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from functools import cache
 from itertools import chain
 from types import MappingProxyType
@@ -66,6 +67,8 @@ from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError, merge_bedrock_aws_request_params, resolve_s3_encryption_key_id
 
 S3_SIGNED_REQUEST_HEADERS_PARAM: Final = "_s3_signed_request_headers"
+
+RETRIEVE_FILE_ID_PARAM: Final = "_s3_retrieve_file_id"
 
 LIST_FILES_PURPOSE_PARAM: Final = "_s3_list_files_purpose"
 
@@ -351,6 +354,15 @@ def _listed_object_created_at(entry: ET.Element) -> int:
     if not last_modified:
         return 0
     return int(datetime.fromisoformat(last_modified.replace("Z", "+00:00")).timestamp())
+
+
+def _last_modified_created_at(last_modified: object) -> int:
+    if not isinstance(last_modified, str):
+        return int(time.time())
+    try:
+        return int(parsedate_to_datetime(last_modified).timestamp())
+    except (TypeError, ValueError, OverflowError):
+        return int(time.time())
 
 
 def _listed_managed_file(
@@ -1313,7 +1325,14 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        raise NotImplementedError("BedrockFilesConfig does not support file retrieval")
+        litellm_params[RETRIEVE_FILE_ID_PARAM] = file_id
+        return self._transform_s3_file_request(
+            file_id=file_id,
+            method="GET",
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            extra_headers={"Range": "bytes=0-0"},
+        )
 
     def transform_retrieve_file_response(
         self,
@@ -1321,7 +1340,35 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> OpenAIFileObject:
-        raise NotImplementedError("BedrockFilesConfig does not support file retrieval")
+        if raw_response.status_code >= 400:
+            raise BedrockError(
+                status_code=raw_response.status_code,
+                message=raw_response.text,
+                headers=raw_response.headers,
+                response=raw_response,
+            )
+
+        file_id: Final = litellm_params.get(RETRIEVE_FILE_ID_PARAM)
+        if not isinstance(file_id, str):
+            raise ValueError("file id is required for Bedrock file retrieval response")
+        _, object_key = _resolve_managed_s3_object(file_id=file_id, litellm_params=litellm_params)
+        content_range: Final = raw_response.headers.get("Content-Range", "")
+        total_size: Final = (
+            int(content_range.rsplit("/", 1)[-1])
+            if "/" in content_range and content_range.rsplit("/", 1)[-1].isdigit()
+            else int(raw_response.headers.get("Content-Length", "0"))
+        )
+        last_modified: Final = raw_response.headers.get("Last-Modified")
+        created_at: Final = _last_modified_created_at(last_modified)
+        return OpenAIFileObject(
+            bytes=total_size,
+            created_at=created_at,
+            filename=posixpath.basename(object_key),
+            id=file_id,
+            object="file",
+            purpose="batch_output" if object_key.endswith((".out", ".jsonl.out")) else "batch",
+            status="processed",
+        )
 
     def transform_delete_file_request(
         self,
@@ -1460,6 +1507,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         method: Literal["GET", "DELETE"],
         optional_params: Mapping[str, object],
         litellm_params: MutableMapping[str, object],
+        extra_headers: Mapping[str, str] = MappingProxyType({}),
     ) -> tuple[str, dict[str, str]]:
         bucket_name, object_key = _resolve_managed_s3_object(file_id=file_id, litellm_params=litellm_params)
         target: Final = self._s3_request_target(optional_params=optional_params, litellm_params=litellm_params)
@@ -1469,6 +1517,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             api_base=url,
             aws_region_name=target.aws_region_name,
             request_params=target.request_params,
+            extra_headers=extra_headers,
         )
         litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM] = signed_headers  # rebind-ok: handed to validate_environment
         return url, {}  # mutable-ok: the base files contract returns the query as a dict
@@ -1504,6 +1553,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         api_base: str,
         aws_region_name: str,
         request_params: _BedrockS3RequestParams,
+        *,
+        extra_headers: Mapping[str, str] = MappingProxyType({}),
     ) -> Mapping[str, str]:
         """
         SigV4-sign a bodiless S3 request (GetObject, DeleteObject, ListObjectsV2),
@@ -1534,7 +1585,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         aws_request: Final = AWSRequest(  # any-ok: botocore AWSRequest is untyped
             method=method,
             url=api_base,
-            headers={"x-amz-content-sha256": empty_body_hash},  # mutable-ok: botocore AWSRequest takes a dict
+            headers={"x-amz-content-sha256": empty_body_hash, **extra_headers},
         )
         auth: Final = S3SigV4Auth(credentials, "s3", aws_region_name)  # any-ok: botocore untyped
         auth.add_auth(aws_request)  # any-ok: botocore request mutation is untyped
