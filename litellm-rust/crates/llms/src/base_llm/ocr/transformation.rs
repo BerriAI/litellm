@@ -21,7 +21,6 @@ use crate::{
 
 pub const OCR_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
 pub const OCR_HTTP_TIMEOUT_SECS: u64 = 600;
-pub const OCR_CONNECT_TIMEOUT_SECS: u64 = 10;
 pub const OCR_INLINE_MAX_BYTES: usize = 50 * 1024 * 1024;
 pub const OCR_DOWNLOAD_MAX_BYTES: u64 = 50 * 1024 * 1024;
 pub const OCR_MAX_FETCH_REDIRECTS: usize = 10;

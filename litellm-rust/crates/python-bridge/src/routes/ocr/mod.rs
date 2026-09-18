@@ -12,6 +12,8 @@ use pyo3::{
     types::{PyDict, PyTuple},
 };
 
+use crate::{errors::RustBridgeDeclined, http};
+
 const SURFACE: LegacySurface = LegacySurface {
     call_type: "ocr",
     input_description: "OCR document processing",
@@ -29,7 +31,9 @@ fn run_ocr(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    let client = OcrClient::shared().map_err(errors::to_pyerr)?;
+    let config = http::call_config(py, &kwargs)?;
+    let client = OcrClient::new(http::pool(), &config)
+        .map_err(|error| RustBridgeDeclined::new_err(error.to_string()))?;
     run_legacy_call(
         py,
         if asynchronous { ASYNC_SURFACE } else { SURFACE },

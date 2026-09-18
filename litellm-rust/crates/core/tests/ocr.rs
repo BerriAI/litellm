@@ -5,6 +5,7 @@ use litellm_callbacks::{
     host::{Host, HostOp, HostResult},
     machine::{HostFailure, Machine, MachineStep},
 };
+use litellm_http::{HttpClientConfig, HttpClientPool, HttpSettings, Verify};
 use litellm_llms::{
     base_llm::ocr::{
         error::Error as OcrError,
@@ -171,25 +172,44 @@ async fn facade_retains_native_response_when_requested() {
 }
 
 #[tokio::test]
-async fn facade_uses_the_injected_http_client() {
+async fn facade_uses_the_injected_http_pool_configuration() {
     let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
-    let mut default_headers = reqwest::header::HeaderMap::new();
-    default_headers.insert(
-        "x-transport-owner",
-        reqwest::header::HeaderValue::from_static("host"),
-    );
-    let provider_http = reqwest::Client::builder()
-        .default_headers(default_headers)
-        .build()
-        .unwrap();
-    crate::ocr::client::perform(
-        &OcrClient::new(provider_http).unwrap(),
+    let settings = HttpSettings {
+        user_agent: Some("host-owned/1".into()),
+        ..HttpSettings::default()
+    };
+    let config = HttpClientConfig::resolve(&settings, None).unwrap();
+    crate::ocr::client::ocr(
+        &HttpClientPool::new(),
+        &config,
         wire_request("mistral/model", &base, json!({})),
     )
     .await
     .unwrap();
     server.await.unwrap();
-    assert!(seen.lock().unwrap()[0].contains("x-transport-owner: host"));
+    assert!(seen.lock().unwrap()[0].contains("user-agent: host-owned/1"));
+}
+
+#[tokio::test]
+async fn unbuildable_http_configuration_fails_before_dispatch() {
+    let (base, _seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
+    let config = HttpClientConfig {
+        verify: Verify::CaBundle(std::env::temp_dir().join("litellm-ocr-missing-bundle.pem")),
+        ..HttpClientConfig::resolve(&HttpSettings::default(), None).unwrap()
+    };
+    let error = crate::ocr::client::ocr(
+        &HttpClientPool::new(),
+        &config,
+        wire_request("mistral/model", &base, json!({})),
+    )
+    .await
+    .unwrap_err();
+    server.abort();
+    assert!(matches!(
+        error,
+        OcrError::Transport(litellm_llms::custom_httpx::transport::Error::Connect(_))
+    ));
+    assert!(error.to_string().contains("litellm-ocr-missing-bundle.pem"));
 }
 
 fn event_name(event: &CallEvent) -> &'static str {

@@ -7,12 +7,11 @@ use std::{
     time::Duration,
 };
 
+use litellm_http::{ClientVariant, HttpClientConfig, HttpClientPool};
 use reqwest::{
     Url,
     dns::{Addrs, Name, Resolve, Resolving},
 };
-
-const MEDIA_CONNECT_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -63,23 +62,30 @@ pub struct DownloadedMedia {
 }
 
 impl MediaFetcher {
-    pub fn new() -> Result<Self, reqwest::Error> {
-        Self::with_resolvers(Arc::new(PublicDnsResolver), Arc::new(SystemAddressResolver))
+    pub fn new(
+        pool: &HttpClientPool,
+        config: &HttpClientConfig,
+    ) -> Result<Self, litellm_http::Error> {
+        Self::with_resolvers(
+            pool,
+            config,
+            Arc::new(PublicDnsResolver),
+            Arc::new(SystemAddressResolver),
+        )
     }
 
     fn with_resolvers<R>(
+        pool: &HttpClientPool,
+        config: &HttpClientConfig,
         transport_resolver: Arc<R>,
         address_resolver: Arc<dyn AddressResolver>,
-    ) -> Result<Self, reqwest::Error>
+    ) -> Result<Self, litellm_http::Error>
     where
         R: Resolve + 'static,
     {
-        let client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(MEDIA_CONNECT_TIMEOUT_SECS))
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .dns_resolver(transport_resolver)
-            .build()?;
+        let client = pool.client_with(config, ClientVariant::Media, |builder| {
+            builder.dns_resolver(transport_resolver)
+        })?;
         Ok(Self {
             client,
             address_resolver,
@@ -281,6 +287,7 @@ impl Resolve for PublicDnsResolver {
 mod tests {
     use std::collections::HashSet;
 
+    use litellm_http::HttpSettings;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -365,6 +372,8 @@ mod tests {
         blocked_hosts: HashSet<&'static str>,
     ) -> MediaFetcher {
         MediaFetcher::with_resolvers(
+            &HttpClientPool::new(),
+            &HttpClientConfig::resolve(&HttpSettings::default(), None).unwrap(),
             Arc::new(LoopbackDnsResolver(address)),
             Arc::new(TestAddressResolver { blocked_hosts }),
         )
@@ -542,7 +551,12 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_url_credentials_before_network_access() {
-        let fetcher = MediaFetcher::new().expect("media fetcher builds");
+        let fetcher = MediaFetcher::new(
+            &HttpClientPool::new(),
+            &HttpClientConfig::resolve(&litellm_http::HttpSettings::default(), None)
+                .expect("default settings resolve"),
+        )
+        .expect("media fetcher builds");
         let url =
             Url::parse("https://user:password@8.8.8.8/document").expect("credentialed URL parses");
         assert!(matches!(
