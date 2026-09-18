@@ -805,7 +805,7 @@ class CheckBatchCost:
                             file_object=_batch_output_file_object(
                                 unified_file_id=_unified_file_id,
                                 raw_file_id=_raw_file_id,
-                                size_bytes=len(content_bytes) if _file_attr == "output_file_id" else 0,
+                                size_bytes=len(content_bytes or b"") if _file_attr == "output_file_id" else 0,
                             ),
                             litellm_parent_otel_span=None,
                             model_mappings={model_id: _raw_file_id},
