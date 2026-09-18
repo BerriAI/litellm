@@ -1,24 +1,29 @@
-use std::collections::HashMap;
-use std::io;
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    io,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use futures_util::{SinkExt, StreamExt};
 use rustls::{ClientConfig, RootCertStore};
-use tokio::net::TcpStream;
-use tokio::sync::Mutex;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::error::TlsError;
-use tokio_tungstenite::tungstenite::handshake::client::Response;
-use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
+use tokio::{net::TcpStream, sync::Mutex};
 use tokio_tungstenite::{
     Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config,
+    tungstenite::{
+        Message,
+        client::IntoClientRequest,
+        error::TlsError,
+        handshake::client::Response,
+        http::{HeaderName, HeaderValue},
+    },
 };
 
 use super::Error;
-use crate::constants::{OPENAI_RESPONSES_DEFAULT_API_BASE, OPENAI_RESPONSES_PATH};
-use crate::responses::types::{ResponsesWsEvent, ResponsesWsEventType, ResponsesWsTransformResult};
+use crate::{
+    constants::{OPENAI_RESPONSES_DEFAULT_API_BASE, OPENAI_RESPONSES_PATH},
+    responses::types::{ResponsesWsEvent, ResponsesWsEventType, ResponsesWsTransformResult},
+};
 
 pub trait ResponsesWebSocketProviderConfig: Sync {
     fn supports_native_websocket(&self) -> bool {
