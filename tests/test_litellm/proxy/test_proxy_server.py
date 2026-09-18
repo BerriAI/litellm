@@ -13034,11 +13034,14 @@ async def test_team_window_spend_row_is_enqueued():
 
 @pytest.mark.asyncio
 async def test_user_window_spend_row_is_enqueued():
+    from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy.proxy_server import increment_spend_counters
 
     reset_at = datetime.now(timezone.utc) + timedelta(days=3)
-    user_obj = MagicMock()
-    user_obj.budget_limits = [{"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}]
+    user_obj = LiteLLM_UserTable(
+        user_id="user-1",
+        budget_limits=[{"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}],
+    )
 
     with _window_spend_enqueue_env({"user-1": user_obj}) as queue:
         await increment_spend_counters(token=None, team_id=None, user_id="user-1", response_cost=1.5)

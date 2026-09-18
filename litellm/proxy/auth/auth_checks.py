@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.models.project import LiteLLM_ProjectTable
+from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import (
     RBAC_ROLES,
     CallInfo,
@@ -5599,7 +5600,7 @@ async def _team_multi_budget_check(
 async def _user_multi_budget_check(
     valid_token: UserAPIKeyAuth | None,
     team_object: LiteLLM_TeamTable | None,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
 ):
     """
     Raises BudgetExceededError if any budget window in valid_token.user_budget_limits is exceeded.
@@ -5617,30 +5618,26 @@ async def _user_multi_budget_check(
 
     from litellm.proxy.proxy_server import get_current_spend
 
-    windows: Final[tuple[dict, ...]] = tuple(
-        window if isinstance(window, dict) else window.model_dump() for window in valid_token.user_budget_limits
-    )
-    bind_spend_counter_keys(
-        frozenset(f"spend:user:{valid_token.user_id}:window:{w['budget_duration']}" for w in windows)
-    )
+    windows: Final[tuple[BudgetLimitEntry, ...]] = tuple(valid_token.user_budget_limits)
+    bind_spend_counter_keys(frozenset(f"spend:user:{valid_token.user_id}:window:{w.budget_duration}" for w in windows))
     for w in windows:
-        counter_key = f"spend:user:{valid_token.user_id}:window:{w['budget_duration']}"
+        counter_key = f"spend:user:{valid_token.user_id}:window:{w.budget_duration}"
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
-            max_budget=w["max_budget"],
+            max_budget=w.max_budget,
             window_entity_type="User",
             window_entity_id=valid_token.user_id,
-            window_duration=str(w["budget_duration"]),
+            window_duration=str(w.budget_duration),
             window_start=get_budget_window_start(w),
         )
-        if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
+        if math.isfinite(w.max_budget) and window_spend >= w.max_budget:
             raise litellm.BudgetExceededError(
                 current_cost=window_spend,
-                max_budget=w["max_budget"],
+                max_budget=w.max_budget,
                 message=(
-                    f"ExceededBudget: User={valid_token.user_id} over {w['budget_duration']} budget. "
-                    f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
+                    f"ExceededBudget: User={valid_token.user_id} over {w.budget_duration} budget. "
+                    f"Spend=${window_spend:.4f}, Limit=${w.max_budget:.2f}"
                 ),
                 entity_type=Litellm_EntityType.USER.value,
                 entity_id=valid_token.user_id,

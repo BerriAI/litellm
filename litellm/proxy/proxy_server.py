@@ -3061,15 +3061,11 @@ async def _increment_spend_counters_batched(
             )
         )
 
-        async def _user_window_increment(window: object) -> PendingSpendIncrement | None:
-            duration = (
-                window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
-            )
-            user_window_reset_at = (
-                window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
-            )
+        async def _user_window_increment(window: BudgetLimitEntry) -> PendingSpendIncrement | None:
+            duration: Final = window.budget_duration
+            user_window_reset_at: Final = window.reset_at
             user_window_counter: Final = f"spend:user:{scope_user_id}:window:{duration}"
-            user_window_start = get_budget_window_start(window)
+            user_window_start: Final = get_budget_window_start(window)
             pending_window: Final = (
                 await _prepare_window_spend_counter_increment(
                     counter_key=user_window_counter,
@@ -3380,16 +3376,11 @@ async def _enqueue_window_spend_row_update(
         )
 
 
-def _cached_user_budget_limits(cached_user: object) -> tuple[object, ...]:
-    if cached_user is None:
+def _cached_user_budget_limits(cached_user: object) -> tuple[BudgetLimitEntry, ...]:
+    user: Final = CacheCodec.deserialize(cached_user, LiteLLM_UserTable)
+    if user is None or user.budget_limits is None:
         return ()
-    raw: Final[object] = (
-        cached_user.get("budget_limits")
-        if isinstance(cached_user, dict)
-        else getattr(cached_user, "budget_limits", None)
-    )
-    parsed: Final[object] = json.loads(raw) if isinstance(raw, str) else raw
-    return tuple(parsed) if isinstance(parsed, list) else ()
+    return tuple(user.budget_limits)
 
 
 async def _prepare_window_spend_counter_increment(

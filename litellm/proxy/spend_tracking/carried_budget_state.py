@@ -66,7 +66,7 @@ def carried_budget_metadata(valid_token: UserAPIKeyAuth) -> Mapping[str, object]
     )
 
 
-def carried_user_budget_limits_metadata(valid_token: UserAPIKeyAuth) -> tuple[dict[str, object], ...] | None:
+def carried_user_budget_limits_metadata(valid_token: UserAPIKeyAuth) -> tuple[Mapping[str, object], ...] | None:
     if valid_token.user_budget_limits is None:
         return None
     try:
