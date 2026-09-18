@@ -2,7 +2,9 @@
 //! raises is answered with the same `Logging` calls, in the same order, as the Python
 //! `@client` path makes them.
 
-use litellm_callbacks::event::{CallEvent, FailureOrigin, RequestContext, Timing, WireRequest};
+use litellm_callbacks::event::{
+    CallEvent, FailureOrigin, RequestContext, Timing, WireRequest, epoch_seconds,
+};
 use litellm_host_python::{
     LifecycleStep, PublicValue, PythonLifecycle, from_py, missing_state, to_py,
 };
@@ -10,14 +12,16 @@ use pyo3::{
     exceptions::{PyBaseException, PyException},
     gc::{PyTraverseError, PyVisit},
     prelude::*,
-    types::PyDict,
+    types::{PyDict, PyList},
 };
 use serde_json::Value;
 
 use crate::{
     DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger,
     deferred::{PendingLogging, PendingSuccess},
-    finalize, is_internal_call, prepare, setup,
+    finalize, is_internal_call,
+    legacy_python::Streaming,
+    prepare, setup,
 };
 
 /// What the legacy contract needs to know about the route it is logging.
@@ -26,6 +30,12 @@ pub struct LegacySurface {
     pub call_type: &'static str,
     /// What `Logging.pre_call` is told the input was.
     pub input_description: &'static str,
+}
+
+/// What the Messages stream iterator keeps for its end-of-stream billing.
+struct DeliveredStream {
+    chunks: Py<PyList>,
+    first_chunk: Option<Py<PyAny>>,
 }
 
 enum Pending {
@@ -46,6 +56,7 @@ pub struct LegacyLogging {
     body: Option<Py<PyDict>>,
     headers: Option<Py<PyDict>>,
     context: Option<RequestContext>,
+    stream: Option<DeliveredStream>,
     asynchronous: bool,
     internal: bool,
     pending: Option<Pending>,
@@ -80,6 +91,7 @@ impl LegacyLogging {
             body: None,
             headers: None,
             context: None,
+            stream: None,
             asynchronous,
             internal: false,
             pending: None,
@@ -161,6 +173,49 @@ impl LegacyLogging {
             }
         }
         logger.sync_success_for_async_call(py, &self.response, &self.start, &self.end)
+    }
+
+    fn stream_success(&self, py: Python<'_>, stream: &DeliveredStream) -> PyResult<()> {
+        let logger = self.logger()?;
+        let billed = Streaming::Success.call(
+            py,
+            (
+                logger.object(py),
+                &self.body,
+                &stream.chunks,
+                &self.start,
+                &self.end,
+                &stream.first_chunk,
+            ),
+        );
+        match billed {
+            Err(error) if error.is_instance_of::<PyException>(py) => {
+                error.write_unraisable(py, Some(logger.object(py)));
+                Ok(())
+            }
+            result => result.map(|_| ()),
+        }
+    }
+
+    /// A failure after the stream reached the caller bills the delivered chunks as
+    /// partial usage. The sync path has no loop to schedule that on, so it falls back to
+    /// the plain failure handler.
+    fn stream_failure(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
+        let (Some(logger), Some(error), Some(stream)) = (&self.logger, &self.error, &self.stream)
+        else {
+            return Ok(LifecycleStep::Done);
+        };
+        if !self.asynchronous {
+            return self.dispatch_failure(py);
+        }
+        match Streaming::Failure.call(py, (logger.object(py), &self.body, &stream.chunks, error)) {
+            Ok(awaitable) => {
+                self.pending = Some(Pending::AsyncFailure);
+                Ok(LifecycleStep::Await(awaitable.unbind()))
+            }
+            Err(failure) if is_cancellation(py, &failure) => Err(failure),
+            Err(_) => Ok(LifecycleStep::Done),
+        }
     }
 
     /// The sync failure handler, then the async one for async calls. Ordinary handler
@@ -296,6 +351,22 @@ impl PythonLifecycle for LegacyLogging {
     ) -> PyResult<LifecycleStep> {
         match (event, public) {
             (CallEvent::Started { .. }, _) => Ok(LifecycleStep::Done),
+            (CallEvent::Opened, _) => {
+                Streaming::Opened.call(py, (self.logger()?.object(py),))?;
+                self.stream = Some(DeliveredStream {
+                    chunks: PyList::empty(py).unbind(),
+                    first_chunk: None,
+                });
+                Ok(LifecycleStep::Done)
+            }
+            (CallEvent::Delivered, Some(PublicValue::Chunk(chunk))) => {
+                let stream = self.stream.as_mut().ok_or_else(missing_state)?;
+                if stream.first_chunk.is_none() {
+                    stream.first_chunk = Some(datetime(py, epoch_seconds())?);
+                }
+                stream.chunks.bind(py).append(chunk)?;
+                Ok(LifecycleStep::Done)
+            }
             (CallEvent::ResponseReceived { raw }, _) => {
                 let api_key = self
                     .context
@@ -314,12 +385,18 @@ impl PythonLifecycle for LegacyLogging {
             (CallEvent::Succeeded { timing }, Some(PublicValue::Response(response))) => {
                 self.end = Some(datetime(py, timing.end_time)?);
                 self.response = Some(response.clone_ref(py));
-                self.dispatch_success(py)?;
+                match &self.stream {
+                    Some(stream) => self.stream_success(py, stream)?,
+                    None => self.dispatch_success(py)?,
+                }
                 Ok(LifecycleStep::Done)
             }
             (CallEvent::Failed { timing, origin }, Some(PublicValue::Error(error))) => {
                 self.end = Some(datetime(py, timing.end_time)?);
                 self.error = Some(error.clone_ref(py).into_value(py));
+                if self.stream.is_some() {
+                    return self.stream_failure(py);
+                }
                 if *origin == FailureOrigin::Call
                     && self.logger.is_some()
                     && self.runs_deployment_hooks()
@@ -366,6 +443,7 @@ impl PythonLifecycle for LegacyLogging {
         }
         self.body = None;
         self.context = None;
+        self.stream = None;
     }
 
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
@@ -377,6 +455,10 @@ impl PythonLifecycle for LegacyLogging {
         visit.call(&self.end)?;
         visit.call(&self.response)?;
         visit.call(&self.error)?;
+        if let Some(stream) = &self.stream {
+            visit.call(&stream.chunks)?;
+            visit.call(&stream.first_chunk)?;
+        }
         visit.call(&self.body)
     }
 }

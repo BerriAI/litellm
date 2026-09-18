@@ -9,7 +9,7 @@ use std::{future::Future, pin::Pin};
 pub use auth::{HostTokenProvider, TokenRoute};
 use litellm_callbacks::{
     event::{CallEvent, RequestContext, WireRequest},
-    host::{HostOp, HostResult},
+    host::{Demand, HostOp, HostResult},
     machine::{HostFailure, Interrupted, Machine, MachineStep, Step},
     route::Route,
 };
@@ -85,6 +85,21 @@ where
     pub async fn emit(&self, event: CallEvent) -> Result<(), R::Error> {
         match self.invoke(HostOp::Emit(event)).await? {
             HostResult::Emitted => Ok(()),
+            _ => Err(MachineFault::Mismatch.into()),
+        }
+    }
+
+    pub async fn open(&self, head: R::StreamHead) -> Result<Demand, R::Error> {
+        self.demand(HostOp::Open(head)).await
+    }
+
+    pub async fn deliver(&self, chunk: R::Chunk) -> Result<Demand, R::Error> {
+        self.demand(HostOp::Deliver(chunk)).await
+    }
+
+    async fn demand(&self, op: HostOp<R>) -> Result<Demand, R::Error> {
+        match self.invoke(op).await? {
+            HostResult::Demand(demand) => Ok(demand),
             _ => Err(MachineFault::Mismatch.into()),
         }
     }

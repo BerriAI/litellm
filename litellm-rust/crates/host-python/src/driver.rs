@@ -3,7 +3,7 @@ use std::task::Poll;
 
 use futures_util::future::{AbortHandle, Abortable};
 use litellm_callbacks::event::{CallEvent, FailureOrigin, Timing, epoch_seconds};
-use litellm_callbacks::host::{HostOp, HostResult, HostStep};
+use litellm_callbacks::host::{Demand, HostOp, HostResult, HostStep};
 use litellm_callbacks::machine::{HostFailure, Machine, MachineStep};
 use litellm_callbacks::route::Route;
 use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};
@@ -38,6 +38,7 @@ struct MachineState<M: Machine> {
 enum Stage {
     Begin,
     Call,
+    Streaming,
     AfterSuccess,
     Succeeded(Py<PyAny>),
     Failed(Py<PyBaseException>),
@@ -56,6 +57,8 @@ enum Expect {
 enum Pending {
     Native,
     Adapter(Expect),
+    /// The stream handed to the caller waits for its next read or its close.
+    Consumer,
 }
 
 enum Next<H: RouteHost> {
@@ -121,7 +124,14 @@ where
     }
     match driver.resume(None)? {
         ExecutionStep::Return(value) => Ok(value),
-        ExecutionStep::Await(_) => Err(PyRuntimeError::new_err("sync call suspended")),
+        ExecutionStep::Open => py
+            .import("litellm.rust_bridge.lifecycle")?
+            .getattr("SyncStream")?
+            .call1((Py::new(py, Execution::suspended(driver))?,))
+            .map(Bound::unbind),
+        ExecutionStep::Await(_) | ExecutionStep::Yield(_) => {
+            Err(PyRuntimeError::new_err("sync call suspended"))
+        }
     }
 }
 
@@ -162,6 +172,14 @@ where
                 self.run_steps(py, HostStep::Ready(result))
             }
             (Some(Pending::Native), Some(Err(error))) => self.interrupt(py, error),
+            (Some(Pending::Consumer), Some(read)) => {
+                let demand = if read.is_ok() {
+                    Demand::More
+                } else {
+                    Demand::Detached
+                };
+                self.resume_machine(py, Some(Ok(HostResult::Demand(demand))))
+            }
             (Some(Pending::Adapter(expect)), Some(result)) => {
                 match self.adapter.resume(py, result) {
                     Ok(step) => self.on_adapter(py, step, expect),
@@ -216,7 +234,7 @@ where
     fn adapter_failed(&mut self, py: Python<'_>, error: PyErr) -> PyResult<ExecutionStep> {
         match self.stage {
             Stage::Begin | Stage::AfterSuccess => self.failure(py, error, FailureOrigin::Host),
-            Stage::Call => self.interrupt(py, error),
+            Stage::Call | Stage::Streaming => self.interrupt(py, error),
             Stage::Succeeded(_) | Stage::Failed(_) => Err(error),
         }
     }
@@ -283,6 +301,8 @@ where
                     Err(error) => Err(error),
                 }
             }
+            HostOp::Open(_) => return self.opened(py).map(Next::Return),
+            HostOp::Deliver(chunk) => return self.delivered(py, chunk).map(Next::Return),
             HostOp::Emit(event) => match self.adapter.emit(py, &event, None) {
                 Ok(LifecycleStep::Done) => Ok(HostResult::Emitted),
                 Ok(LifecycleStep::Await(awaitable)) => {
@@ -296,6 +316,40 @@ where
         match answer {
             Ok(answer) => self.resume_core(py, Some(Ok(answer))).map(Next::Continue),
             Err(error) => self.interrupt(py, error).map(Next::Return),
+        }
+    }
+
+    fn opened(&mut self, py: Python<'_>) -> PyResult<ExecutionStep> {
+        self.stage = Stage::Streaming;
+        match self.adapter.emit(py, &CallEvent::Opened, None) {
+            Ok(LifecycleStep::Done) => {
+                self.pending = Some(Pending::Consumer);
+                Ok(ExecutionStep::Open)
+            }
+            Ok(_) => Err(missing_state()),
+            Err(error) => self.interrupt(py, error),
+        }
+    }
+
+    fn delivered(
+        &mut self,
+        py: Python<'_>,
+        chunk: <RouteOf<H> as Route>::Chunk,
+    ) -> PyResult<ExecutionStep> {
+        let chunk = match self.route.chunk(py, chunk) {
+            Ok(chunk) => chunk,
+            Err(error) => return self.interrupt(py, error),
+        };
+        let observed =
+            self.adapter
+                .emit(py, &CallEvent::Delivered, Some(PublicValue::Chunk(&chunk)));
+        match observed {
+            Ok(LifecycleStep::Done) => {
+                self.pending = Some(Pending::Consumer);
+                Ok(ExecutionStep::Yield(chunk))
+            }
+            Ok(_) => Err(missing_state()),
+            Err(error) => self.interrupt(py, error),
         }
     }
 
@@ -369,6 +423,9 @@ where
             Ok(public) => public,
             Err(error) => return self.failure(py, error, FailureOrigin::Call),
         };
+        if let Stage::Streaming = self.stage {
+            return self.succeeded(py, public);
+        }
         self.stage = Stage::AfterSuccess;
         match self.adapter.after_success(py, public, self.timing()) {
             Ok(step) => self.on_adapter(py, step, Expect::Response),
@@ -536,6 +593,8 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         type Error = Error;
         type Op = &'static str;
         type OpResult = String;
+        type Chunk = std::convert::Infallible;
+        type StreamHead = std::convert::Infallible;
     }
 
     /// Yields the scripted ops in order, then completes or fails as scripted.
@@ -574,6 +633,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                         HostResult::Route(value) => value,
                         HostResult::BeforeSend(wire) => wire.url,
                         HostResult::Emitted => "emitted".into(),
+                        HostResult::Demand(demand) => format!("{demand:?}"),
                     });
                 }
                 if !self.ops.is_empty() {
@@ -646,6 +706,10 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 OpScript::RaisePython => Err(PyValueError::new_err("op failed").into()),
                 OpScript::RejectNatively => Err(HostOpError::Native(Error("op rejected".into()))),
             }
+        }
+
+        fn chunk(&mut self, _: Python<'_>, chunk: std::convert::Infallible) -> PyResult<Py<PyAny>> {
+            match chunk {}
         }
 
         fn complete(&mut self, py: Python<'_>, response: String) -> PyResult<Py<PyAny>> {
@@ -1137,6 +1201,13 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                             .unwrap(),
                     )
                     .into())
+                }
+                fn chunk(
+                    &mut self,
+                    _: Python<'_>,
+                    chunk: std::convert::Infallible,
+                ) -> PyResult<Py<PyAny>> {
+                    match chunk {}
                 }
                 fn complete(&mut self, _: Python<'_>, _: String) -> PyResult<Py<PyAny>> {
                     Err(missing_state())

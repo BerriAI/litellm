@@ -6,6 +6,7 @@ registries it fans out to. It expires with that contract.
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import datetime
 import traceback
@@ -160,6 +161,21 @@ class LoggingWorker(Protocol):
     def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, object, None]) -> None: ...
 
 
+class StreamingLogBuilder(Protocol):
+    def __call__(
+        self,
+        *,
+        litellm_logging_obj: Logging,
+        passthrough_success_handler_obj: object,
+        url_route: str,
+        request_body: dict[str, object],
+        endpoint_type: object,
+        start_time: datetime.datetime,
+        raw_bytes: list[bytes],
+        end_time: datetime.datetime,
+    ) -> Coroutine[object, object, None]: ...
+
+
 class DeploymentHook(Protocol):
     def __call__(self, kwargs: dict[str, object], call_type: str) -> Awaitable[object]: ...
 
@@ -306,3 +322,67 @@ def after_deployment_failure(kwargs: dict[str, object], error: Exception, call_t
         DeploymentFailureHook, utils.async_post_call_failure_deployment_hook
     )
     return hook(kwargs, error, call_type)
+
+
+def stream_opened(logger: Logging) -> None:
+    logger.stream = True
+    logger.model_call_details["stream"] = True
+
+
+def stream_success(
+    logger: Logging,
+    request_body: dict[str, object],
+    chunks: list[bytes],
+    start: datetime.datetime,
+    end: datetime.datetime,
+    first_chunk: datetime.datetime | None,
+) -> None:
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
+    )
+    from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+
+    if first_chunk is not None:
+        logger.completion_start_time = first_chunk
+        logger.model_call_details["completion_start_time"] = first_chunk
+    build: Final = cast(  # cast-ok: bounded adapter for the untyped pass-through logging builder
+        StreamingLogBuilder,
+        PassThroughStreamingHandler._route_streaming_logging_to_handler,  # pyright: ignore[reportPrivateUsage]  # the Messages stream iterator bills through the same builder
+    )
+    coroutine: Final = build(
+        litellm_logging_obj=logger,
+        passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
+        url_route="/v1/messages",
+        request_body=request_body,
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=start,
+        raw_bytes=chunks,
+        end_time=end,
+    )
+    if getattr(logger, "_on_deferred_stream_complete", None) is not None:
+        logger._deferred_stream_complete_args = (coroutine,)  # pyright: ignore[reportAttributeAccessIssue]  # the proxy's deferred stream release reads this slot
+        return
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        from litellm.litellm_core_utils.litellm_logging import executor
+
+        executor.submit(contextvars.copy_context().run, asyncio.run, coroutine)
+        return
+    enqueue_logging(coroutine)
+
+
+def stream_failure(
+    logger: Logging, request_body: dict[str, object], chunks: list[bytes], error: Exception
+) -> Coroutine[object, object, None]:
+    from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+
+    return PassThroughStreamingHandler.schedule_stream_failure_logging(
+        litellm_logging_obj=logger,
+        endpoint_type=EndpointType.ANTHROPIC,
+        request_body=request_body,
+        raw_bytes=chunks,
+        exception=error,
+    )

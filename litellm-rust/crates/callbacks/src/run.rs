@@ -26,6 +26,8 @@ where
                 .await
                 .map(|wire| HostResult::BeforeSend(Box::new(wire))),
             HostOp::Emit(event) => host.emit(&event).await.map(|()| HostResult::Emitted),
+            HostOp::Open(head) => host.open(head).await.map(HostResult::Demand),
+            HostOp::Deliver(chunk) => host.deliver(chunk).await.map(HostResult::Demand),
         };
         match answer {
             Ok(answer) => result = Some(answer),
@@ -61,6 +63,8 @@ mod tests {
         type Error = &'static str;
         type Op = &'static str;
         type OpResult = ();
+        type Chunk = std::convert::Infallible;
+        type StreamHead = std::convert::Infallible;
     }
 
     struct Scripted {

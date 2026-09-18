@@ -94,5 +94,22 @@
     "kwargs",
     "error",
     "call_type"
+  ],
+  "stream_opened": [
+    "logger"
+  ],
+  "stream_success": [
+    "logger",
+    "request_body",
+    "chunks",
+    "start",
+    "end",
+    "first_chunk"
+  ],
+  "stream_failure": [
+    "logger",
+    "request_body",
+    "chunks",
+    "error"
   ]
 }
