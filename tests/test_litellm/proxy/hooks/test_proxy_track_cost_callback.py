@@ -94,7 +94,9 @@ def test_async_post_call_failure_hook_audio_speech() -> None:
     import litellm
 
     async def _test() -> None:
-        logger: Final = _ProxyDBLogger()
+        mock_writer: Final = MagicMock()
+        mock_writer.update_database = AsyncMock()
+        logger: Final = _ProxyDBLogger(spend_writer=lambda: mock_writer)
         user_api_key_dict: Final = UserAPIKeyAuth(
             api_key="test_api_key",
             key_alias="test_alias",
@@ -118,24 +120,20 @@ def test_async_post_call_failure_hook_audio_speech() -> None:
             model="tts-1",
             llm_provider="openai",
         )
-        with patch(
-            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
-            new_callable=AsyncMock,
-        ) as mock_update:
-            await logger.async_post_call_failure_hook(
-                request_data=request_data,
-                original_exception=exc,
-                user_api_key_dict=user_api_key_dict,
-            )
-            mock_update.assert_called_once()
-            call_args: Final = mock_update.call_args.kwargs
-            assert call_args["token"] == "test_api_key"
-            assert call_args["response_cost"] == 0.0
-            assert call_args["completion_response"] == exc
-            litellm_params: Final = call_args["kwargs"].get("litellm_params", {})
-            metadata: Final = litellm_params.get("metadata", {})
-            assert metadata["status"] == "failure"
-            assert metadata["error_information"]["error_class"] == "BadRequestError"
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=exc,
+            user_api_key_dict=user_api_key_dict,
+        )
+        mock_writer.update_database.assert_called_once()
+        call_args: Final = mock_writer.update_database.call_args.kwargs
+        assert call_args["token"] == "test_api_key"
+        assert call_args["response_cost"] == 0.0
+        assert call_args["completion_response"] == exc
+        litellm_params: Final = call_args["kwargs"].get("litellm_params", {})
+        metadata: Final = litellm_params.get("metadata", {})
+        assert metadata["status"] == "failure"
+        assert metadata["error_information"]["error_class"] == "BadRequestError"
 
     asyncio.run(_test())
 
