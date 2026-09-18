@@ -10424,11 +10424,15 @@ def test_build_mcp_server_table_carries_oauth2_flow():
         transport=MCPTransport.http,
         auth_type=MCPAuth.oauth2,
         oauth2_flow="client_credentials",
+        client_id="client-123",
+        client_secret="secret-xyz",
+        scopes=["scope:a", "scope:b"],
     )
 
     table = manager._build_mcp_server_table(server)
 
     assert table.oauth2_flow == "client_credentials"
+    assert table.credentials == {"scopes": ["scope:a", "scope:b"]}
 
 
 def test_build_mcp_server_table_carries_null_oauth2_flow():

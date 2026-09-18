@@ -849,7 +849,9 @@ if MCP_AVAILABLE:
         if not credentials:
             return False
         as_dict: Final[dict[str, object]] = dict(credentials)
-        return any(value for key, value in as_dict.items() if key not in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS)
+        return any(
+            value for key, value in as_dict.items() if key not in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS and key != "scopes"
+        )
 
     def _inherit_credentials_from_existing_server(
         payload: NewMCPServerRequest,
