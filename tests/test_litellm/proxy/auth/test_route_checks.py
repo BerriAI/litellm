@@ -3993,8 +3993,10 @@ def test_team_service_account_key_allowed_key_management_routes(route):
     assert result is None
 
 
-def test_team_service_account_key_rejected_for_non_key_management_route():
-    """The service account carve-out does not extend past key-management routes."""
+@pytest.mark.parametrize("route", ["/team/new", "/spend/logs", "/key/delete", "/key/regenerate"])
+def test_team_service_account_key_rejected_outside_generate_and_update(route):
+    """The service account carve-out covers only /key/generate and /key/update; other
+    key-management routes lack team scoping for a userless caller and stay denied."""
     valid_token = UserAPIKeyAuth(
         api_key="sk",
         team_id="t1",
@@ -4008,7 +4010,7 @@ def test_team_service_account_key_rejected_for_non_key_management_route():
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=None,
             _user_role=None,
-            route="/team/new",
+            route=route,
             request=request,
             valid_token=valid_token,
             request_data={},

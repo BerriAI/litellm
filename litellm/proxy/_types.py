@@ -660,6 +660,11 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.AUTO_ROUTER_MANAGE.value,
     ]
 
+    team_service_account_key_routes = [
+        KeyManagementRoutes.KEY_GENERATE.value,
+        KeyManagementRoutes.KEY_UPDATE.value,
+    ]
+
     management_routes = (
         [
             # user
