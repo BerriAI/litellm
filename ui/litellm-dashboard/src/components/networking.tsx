@@ -1097,6 +1097,7 @@ export interface UserInfoV2Response {
   object_permission?: ObjectPermission | null;
   model_max_budget?: ModelMaxBudget | null;
   model_max_budget_usage?: Record<string, ModelBudgetUsage> | null;
+  budget_fallbacks?: Record<string, string[]> | null;
 }
 
 /**

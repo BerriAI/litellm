@@ -15,7 +15,7 @@ These are members of a Team on LiteLLM
 import asyncio
 import json
 import traceback
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence, Set
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol, cast, overload
@@ -1130,6 +1130,7 @@ async def user_info_v2(
                 model_max_budget=user_data.get("model_max_budget"),
                 cache=model_max_budget_limiter.dual_cache,
             ),
+            budget_fallbacks=user_data.get("budget_fallbacks"),
         )
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_info_v2(): Exception occured - %s", e)
@@ -1249,6 +1250,16 @@ def _process_keys_for_user_info(
     return returned_keys
 
 
+def _set_user_budget_fallbacks_update(fields_set: Set[str], value: object, non_default_values: dict) -> None:
+    if "budget_fallbacks" not in fields_set:
+        return
+    try:
+        _BUDGET_FALLBACKS_ADAPTER.validate_python({} if value is None else value)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    non_default_values["budget_fallbacks"] = {} if value is None else value
+
+
 def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
     non_default_values: Final = {}
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
@@ -1265,12 +1276,7 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
                 non_default_values[k] = {} if v is None else v
         elif k == "budget_fallbacks":
-            if k in fields_set:
-                try:
-                    _BUDGET_FALLBACKS_ADAPTER.validate_python({} if v is None else v)
-                except ValidationError as exc:
-                    raise HTTPException(status_code=400, detail=str(exc)) from exc
-                non_default_values[k] = {} if v is None else v
+            _set_user_budget_fallbacks_update(fields_set=fields_set, value=v, non_default_values=non_default_values)
         elif (
             v is not None
             and v
