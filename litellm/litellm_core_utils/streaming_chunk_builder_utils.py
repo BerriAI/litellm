@@ -380,11 +380,7 @@ class ChunkProcessor:
                     finish_reason = chunk_finish_reason
 
         service_tier: Final = next(
-            (
-                tier
-                for tier in (chunk.get("service_tier") for chunk in reversed(chunks))
-                if tier is not None
-            ),
+            (tier for tier in (chunk.get("service_tier") for chunk in reversed(chunks)) if tier is not None),
             None,
         )
 
