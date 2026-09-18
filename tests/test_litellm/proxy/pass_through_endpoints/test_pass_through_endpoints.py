@@ -4418,6 +4418,65 @@ async def test_pass_through_request_propagates_active_trace_context(span_source:
     assert propagated.get_span_context().span_id == span.get_span_context().span_id
 
 
+async def _relay_with_trace_headers(inbound_headers: dict[str, str], forward_headers: bool):
+    from opentelemetry.sdk.trace import TracerProvider
+
+    captured: dict[str, httpx.Headers] = {}
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        captured["headers"] = upstream_request.headers
+        return httpx.Response(200, json={"ok": True}, request=upstream_request)
+
+    fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(transport_handler), timeout=None)
+    tracer = TracerProvider().get_tracer("test")
+    try:
+        with ExitStack() as stack:
+            _enter_relay_logging_mocks(stack, {})
+            span = tracer.start_span("litellm_request")
+            stack.callback(span.end)
+            request = _relay_client_request(method="POST")
+            request.headers = Headers(inbound_headers)
+            response = await pass_through_request(
+                request=request,
+                target="http://internal-api.test/v1/generate",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", parent_otel_span=span),
+                forward_headers=forward_headers,
+            )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+    assert response.status_code == 200
+    return captured["headers"], span
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forward_headers", [False, True])
+async def test_pass_through_request_keeps_x_pass_trace_headers_when_otel_span_is_active(forward_headers: bool):
+    caller_traceparent = "00-11111111111111111111111111111111-2222222222222222-01"
+
+    upstream_headers, span = await _relay_with_trace_headers(
+        {"x-pass-traceparent": caller_traceparent, "x-pass-tracestate": "vendor=caller"},
+        forward_headers=forward_headers,
+    )
+
+    assert upstream_headers["traceparent"] == caller_traceparent
+    assert upstream_headers["tracestate"] == "vendor=caller"
+    assert format(span.get_span_context().trace_id, "032x") not in upstream_headers["traceparent"]
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_without_caller_trace_headers_still_propagates_proxy_span():
+    from opentelemetry.trace import get_current_span
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+    upstream_headers, span = await _relay_with_trace_headers({"x-pass-anthropic-beta": "beta-1"}, forward_headers=False)
+
+    propagated = get_current_span(TraceContextTextMapPropagator().extract(upstream_headers))
+    assert propagated.get_span_context().span_id == span.get_span_context().span_id
+    assert upstream_headers["anthropic-beta"] == "beta-1"
+
+
 @pytest.mark.asyncio
 async def test_pass_through_request_relays_non_json_body_without_buffering():
     """

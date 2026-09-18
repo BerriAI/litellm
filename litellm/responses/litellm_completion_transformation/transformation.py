@@ -61,6 +61,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
     GenericChatCompletionMessage,
+    IncompleteDetails,
     InputTokensDetails,
     OpenAIChatCompletionTextObject,
     OpenAIMcpServerTool,
@@ -114,6 +115,9 @@ NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS: Final = frozenset({"function", "custom"}
 RESPONSES_TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
 RESPONSES_TOOL_CALL_OUTPUT_ITEM_TYPES: Final = frozenset(
     {"function_call_output", "custom_tool_call_output", "computer_call_output", "tool_result"}
+)
+_INCOMPLETE_REASON_BY_FINISH_REASON: Final[Mapping[str, Literal["max_output_tokens", "content_filter"]]] = (
+    MappingProxyType({"length": "max_output_tokens", "content_filter": "content_filter", "refusal": "content_filter"})
 )
 
 
@@ -2302,6 +2306,18 @@ class LiteLLMCompletionResponsesConfig:
             return "completed"
 
     @staticmethod
+    def _incomplete_details_for_finish_reason(
+        finish_reason: str | None,
+        existing: IncompleteDetails | None,
+    ) -> IncompleteDetails | None:
+        if existing is not None:
+            return existing
+        if finish_reason is None:
+            return None
+        reason: Final = _INCOMPLETE_REASON_BY_FINISH_REASON.get(finish_reason)
+        return IncompleteDetails(reason=reason) if reason is not None else None
+
+    @staticmethod
     def _tool_call_id_from_responses_item(item_id: str | None, call_id: str | None) -> str:
         """Bedrock Mantle returns a non-unique, index-based ``call_id`` (``call_0``,
         ``call_1``, ... that resets every response) alongside a unique ``id``
@@ -2417,13 +2433,18 @@ class LiteLLMCompletionResponsesConfig:
         if choices and len(choices) > 0:
             finish_reason = choices[0].finish_reason
 
+        incomplete_details: Final = LiteLLMCompletionResponsesConfig._incomplete_details_for_finish_reason(
+            finish_reason=finish_reason,
+            existing=getattr(chat_completion_response, "incomplete_details", None),
+        )
+
         responses_api_response: Final[ResponsesAPIResponse] = ResponsesAPIResponse(
             id=chat_completion_response.id,
             created_at=chat_completion_response.created,
             model=chat_completion_response.model,
             object="response",
             error=getattr(chat_completion_response, "error", None),
-            incomplete_details=getattr(chat_completion_response, "incomplete_details", None),
+            incomplete_details=incomplete_details,
             instructions=getattr(chat_completion_response, "instructions", None),
             metadata=getattr(chat_completion_response, "metadata", {}),
             output=LiteLLMCompletionResponsesConfig._transform_chat_completion_choices_to_responses_output(
