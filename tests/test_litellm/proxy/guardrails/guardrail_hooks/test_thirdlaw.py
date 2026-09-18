@@ -359,6 +359,82 @@ def test_every_credential_param_litellm_declares_is_withheld():
     assert set(CredentialLiteLLMParams.model_fields) <= set(_BODY_STRIP_KEYS)
 
 
+async def test_modify_request_cannot_restore_protected_root_controls():
+    """add_litellm_data_to_request strips these from caller input; the guardrail decision lands
+    after that strip, so a compromised or hostile service must not be able to put them back."""
+    g = _make_guardrail(
+        decisions=[
+            _decision_response(
+                {
+                    "action": "modify_request",
+                    "request_body": {
+                        "messages": [{"role": "user", "content": "scrubbed"}],
+                        "max_agentic_loops": 500,
+                        "_code_interpreter_interception_active": True,
+                        "_code_interpreter_interception_sandbox_key": "sk-sandbox",
+                        "mock_response": "free lunch",
+                        "callbacks": ["attacker_callback"],
+                    },
+                }
+            )
+        ]
+    )
+    out = await _run_pre_call(g, _request_data())
+    assert out["messages"] == [{"role": "user", "content": "scrubbed"}]
+    for key in (
+        "max_agentic_loops",
+        "_code_interpreter_interception_active",
+        "_code_interpreter_interception_sandbox_key",
+        "mock_response",
+        "callbacks",
+    ):
+        assert key not in out, key
+
+
+async def test_modify_request_cannot_redirect_routing_or_credentials():
+    """custom_llm_provider and litellm_credential_name pick which provider and which stored
+    credential the call runs against, both authorized before this hook ever runs."""
+    g = _make_guardrail(
+        decisions=[
+            _decision_response(
+                {
+                    "action": "modify_request",
+                    "request_body": {
+                        "custom_llm_provider": "attacker_provider",
+                        "litellm_credential_name": "someone-elses-credential",
+                    },
+                }
+            )
+        ]
+    )
+    data = _request_data()
+    out = await _run_pre_call(g, data)
+    assert "custom_llm_provider" not in out
+    assert "litellm_credential_name" not in out
+    assert out["model"] == data["model"]
+
+
+async def test_modify_response_cannot_rename_a_non_streaming_response_id():
+    """litellm hands out an encrypted response id carrying the deployment the turn routed to, and
+    the client chains the next turn off it, so no response shape may have it rewritten."""
+    g = _make_guardrail(
+        decisions=[
+            _decision_response(
+                {
+                    "action": "modify_response",
+                    "response_body": {"id": "resp_attacker_supplied", "choices": []},
+                }
+            )
+        ]
+    )
+    response = _model_response()
+    original_id = response.id
+    out = await g.async_post_call_success_hook(
+        data=_request_data(), user_api_key_dict=UserAPIKeyAuth(), response=response
+    )
+    assert out.id == original_id
+
+
 async def test_modify_request_cannot_inject_a_provider_credential():
     g = _make_guardrail(
         decisions=[
@@ -1521,7 +1597,7 @@ async def test_a_responses_stream_is_posted_as_chunks_beside_the_body():
     survives the trip."""
     chunks = _responses_stream_chunks()
     chunks[1].__dict__["sequence_number"] = 4
-    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    g = _make_guardrail(send_stream_chunks=True, decisions=[_decision_response({"action": "allow"})])
     await _collect(
         g.async_post_call_streaming_iterator_hook(
             user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
@@ -1541,7 +1617,7 @@ async def test_a_responses_stream_is_posted_as_chunks_beside_the_body():
 
 async def test_a_messages_stream_is_posted_as_the_raw_sse_text_beside_the_body():
     frames = _anthropic_sse_frames()
-    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    g = _make_guardrail(send_stream_chunks=True, decisions=[_decision_response({"action": "allow"})])
     await _collect(
         g.async_post_call_streaming_iterator_hook(
             user_api_key_dict=UserAPIKeyAuth(), response=_aiter(frames), request_data=_request_data()
@@ -1555,7 +1631,7 @@ async def test_a_messages_stream_is_posted_as_the_raw_sse_text_beside_the_body()
 
 async def test_a_chat_stream_is_posted_as_chunks_beside_the_body():
     chunks = _stream_chunks()
-    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    g = _make_guardrail(send_stream_chunks=True, decisions=[_decision_response({"action": "allow"})])
     await _collect(
         g.async_post_call_streaming_iterator_hook(
             user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
@@ -1587,6 +1663,7 @@ async def test_only_the_final_scan_carries_the_stream_not_the_interim_ones():
     """An interim scan sees a partial stream with no terminal event, which folds to nothing on the
     service side, so the chunks ride only on the end-of-stream post."""
     g = _make_guardrail(
+        send_stream_chunks=True,
         streaming_buffer_until_moderated=False,
         streaming_end_of_stream_only=False,
         streaming_sampling_rate=1,
@@ -1604,19 +1681,26 @@ async def test_only_the_final_scan_carries_the_stream_not_the_interim_ones():
     assert len(posts[-1]["response_chunks"]) == len(chunks)
 
 
-def test_the_initializer_turns_stream_chunks_off_only_on_an_explicit_false():
-    on = initialize_guardrail(
+def test_the_initializer_sends_stream_chunks_only_on_an_explicit_true():
+    """An operator who never sets send_stream_chunks must not have the whole buffered stream
+    posted out: the config schema documents the default as False, so an omitted value is off."""
+    omitted = initialize_guardrail(
         LitellmParams(guardrail="thirdlaw", mode="post_call", api_base=_API_BASE, api_key="k"),
-        {"guardrail_name": "thirdlaw-on"},
+        {"guardrail_name": "thirdlaw-omitted"},
     )
-    off = initialize_guardrail(
+    explicit_off = initialize_guardrail(
         LitellmParams(
             guardrail="thirdlaw", mode="post_call", api_base=_API_BASE, api_key="k", send_stream_chunks=False
         ),
         {"guardrail_name": "thirdlaw-off"},
     )
-    assert on.send_stream_chunks is True
-    assert off.send_stream_chunks is False
+    explicit_on = initialize_guardrail(
+        LitellmParams(guardrail="thirdlaw", mode="post_call", api_base=_API_BASE, api_key="k", send_stream_chunks=True),
+        {"guardrail_name": "thirdlaw-on"},
+    )
+    assert omitted.send_stream_chunks is False
+    assert explicit_off.send_stream_chunks is False
+    assert explicit_on.send_stream_chunks is True
 
 
 @pytest.mark.parametrize("typo", ["fail_close", "failopen", "FAIL_OPEN", ""])

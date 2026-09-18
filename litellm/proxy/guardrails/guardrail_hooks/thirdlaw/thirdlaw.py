@@ -49,6 +49,7 @@ from litellm.proxy.guardrails.stream_surface import (
 )
 from litellm.proxy.litellm_pre_call_utils import (
     _UNTRUSTED_METADATA_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # shared list
+    _UNTRUSTED_ROOT_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # shared list
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks
@@ -131,9 +132,21 @@ _BODY_STRIP_KEYS: Final = _credential_keys() | frozenset(
     }
 )
 
+# Deployment selectors: either one redirects the call to different credentials or a different
+# provider than the key/team was authorized against.
+_ROUTING_SELECTOR_KEYS: Final = frozenset({"custom_llm_provider", "litellm_credential_name"})
+
 # Never writable by modify_request: ``guardrails`` gates which guardrails run, ``model`` was
 # authorized against the key/team before this hook, ``stream`` changes the wire protocol mid-request.
-_WRITE_BACK_DENY_KEYS: Final = _BODY_STRIP_KEYS | frozenset({"model", "policies", "stream", "user"})
+# ``_UNTRUSTED_ROOT_CONTROL_FIELDS`` is litellm's own list of root controls stripped from caller
+# input by add_litellm_data_to_request; a guardrail response arrives after that strip, so without
+# this it could put back agentic-loop and sandbox-interception state the caller was denied.
+_WRITE_BACK_DENY_KEYS: Final = (
+    _BODY_STRIP_KEYS
+    | _ROUTING_SELECTOR_KEYS
+    | frozenset(_UNTRUSTED_ROOT_CONTROL_FIELDS)
+    | frozenset({"model", "policies", "stream", "user"})
+)
 
 _USER_METADATA_FIELDS: Final = (
     "user_api_key_hash",
@@ -451,7 +464,7 @@ class ThirdlawGuardrail(CustomGuardrail):
         streaming_sampling_rate: int = 5,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         unscannable_stream_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
-        send_stream_chunks: bool = True,
+        send_stream_chunks: bool = False,
         additional_provider_specific_params: Mapping[str, object] | None = None,
         headers: Mapping[str, str] | None = None,
         extra_headers: Sequence[str] | None = None,
@@ -692,8 +705,26 @@ class ThirdlawGuardrail(CustomGuardrail):
         if hidden_params is not None:
             setattr(target, "_hidden_params", hidden_params)  # target's concrete type varies by call site
 
+    def _without_response_id(self, replacement: Mapping[str, object]) -> Mapping[str, object]:
+        """Drop ``id`` from a modify_response write-back.
+
+        litellm hands out an encrypted response id that the client sends back as
+        previous_response_id and that carries the deployment the turn was routed to, so a
+        rewrite that renames it breaks both continuation and routing.
+        """
+        if not _RESPONSE_WRITE_BACK_DENY_KEYS & replacement.keys():
+            return replacement
+        verbose_proxy_logger.warning(
+            "ThirdLaw guardrail: ignoring %s in a modify_response; the response id is encrypted "
+            "and the client chains the next turn off it",
+            sorted(_RESPONSE_WRITE_BACK_DENY_KEYS & replacement.keys()),
+        )
+        return MappingProxyType(
+            {key: value for key, value in replacement.items() if key not in _RESPONSE_WRITE_BACK_DENY_KEYS}
+        )
+
     def _modified_response(self, *, response: object, replacement: Mapping[str, object]) -> object:
-        # LiteLLM's normalized chat-completion response type (e.g. Chat Completions).
+        replacement = self._without_response_id(replacement)  # rebind-ok: one guard for every shape below
         if isinstance(response, ModelResponse):
             # ModelResponse validation coerces a non-list ``choices`` into a single
             # empty choice instead of raising, which would silently blank the response.
@@ -715,12 +746,9 @@ class ThirdlawGuardrail(CustomGuardrail):
                 ) from error
             self._carry_hidden_params(source=response, target=validated)
             return validated
-        # Provider response bodies that arrive as a plain dict (e.g. a TypedDict response,
-        # which is a real dict at runtime).
         response_dict: Final = _dict_of(response)
         if response_dict is not None:
             return {**response_dict, **replacement}  # mutable-ok: the proxy owns the replaced response dict
-        # Any other Pydantic response model (e.g. ResponsesAPIResponse).
         if isinstance(response, BaseModel):
             merged_body: Final = {  # mutable-ok: one-shot overlay consumed immediately by model_validate
                 **_JSON_DICT_ADAPTER.validate_python(response.model_dump(mode="json")),
@@ -1156,18 +1184,7 @@ class ThirdlawGuardrail(CustomGuardrail):
             build_synthetic_response_events,
         )
 
-        # A rewrite that renamed the response would break the client's previous_response_id chain,
-        # since litellm hands out an encrypted id the next turn is expected to send back verbatim.
-        safe_replacement: Final = MappingProxyType(
-            {key: value for key, value in replacement.items() if key not in _RESPONSE_WRITE_BACK_DENY_KEYS}
-        )
-        if len(safe_replacement) != len(replacement):
-            verbose_proxy_logger.warning(
-                "ThirdLaw guardrail: ignoring %s in a /v1/responses modify_response; the response id "
-                "is encrypted and the client chains the next turn off it",
-                sorted(frozenset(replacement) - frozenset(safe_replacement)),
-            )
-        modified: Final = self._modified_response(response=assembled, replacement=safe_replacement)
+        modified: Final = self._modified_response(response=assembled, replacement=replacement)
         if not isinstance(modified, ResponsesAPIResponse):
             raise self._streaming_block_error(f"{self.guardrail_name}: modified streamed response failed validation")
         for event in build_synthetic_response_events(
