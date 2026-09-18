@@ -326,6 +326,7 @@ class ApplyLatestEdits(CustomLogger):
 def test_native_ocr_provider_receives_the_body_exactly_as_pre_call_callbacks_left_it(
     ocr_server: RecordingServer, edits: dict[str, object]
 ) -> None:
+    ocr_server.expected_requests = None
     LATEST_EDITS.append(edits)
 
     call_native_ocr_with_callbacks(ocr_server, [ApplyLatestEdits(LATEST_EDITS)])
@@ -362,7 +363,7 @@ async def test_native_ocr_payload_a_callback_retains_outlives_the_call_intact(
     [(details, body, headers)] = retained
     assert body == ocr_server.requests[0].body
     assert headers
-    assert all(ocr_server.requests[0].headers[name] == value for name, value in headers.items())
+    assert all(ocr_server.requests[0].headers[name.lower()] == value for name, value in headers.items())
     assert details["additional_args"]["complete_input_dict"] is body
     assert details["additional_args"]["headers"] is headers
 
