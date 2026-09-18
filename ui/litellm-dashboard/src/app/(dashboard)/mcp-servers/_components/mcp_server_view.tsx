@@ -25,6 +25,7 @@ interface MCPServerViewProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+  isViewOnly?: boolean;
   availableAccessGroups: string[];
   initialTabIndex?: number;
 }
@@ -55,6 +56,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   accessToken,
   userRole,
   userID,
+  isViewOnly = false,
   availableAccessGroups,
   initialTabIndex = 0,
 }) => {
@@ -66,7 +68,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : initialTabIndex);
   const canViewUserCredentials = userRole !== null && isProxyAdminTierRole(userRole);
-  const canRevokeUserCredentials = userRole !== null && isProxyAdminRole(userRole);
+  const canRevokeUserCredentials = userRole !== null && isProxyAdminRole(userRole) && !isViewOnly;
 
   const handleSuccess = (updated: MCPServer) => {
     setEditing(false);
