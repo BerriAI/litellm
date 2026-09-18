@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import MCPNetworkSettings from "./MCPNetworkSettings";
@@ -128,7 +128,7 @@ describe("MCPNetworkSettings", () => {
     expect(updateConfigFieldSetting).not.toHaveBeenCalled();
   });
 
-  it("renders the stored allowed client names once settings load", async () => {
+  it("renders the stored allowed client IDs once settings load", async () => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([
       { field_name: "mcp_allowed_clients", field_value: ["antigravity-cli", "codex-mcp-client"] },
     ]);
@@ -139,9 +139,9 @@ describe("MCPNetworkSettings", () => {
     expect(screen.getByText("codex-mcp-client")).toBeInTheDocument();
   });
 
-  it("adds typed client names on Enter and saves them under mcp_allowed_clients", async () => {
+  it("adds typed client IDs on Enter and saves them under mcp_allowed_clients", async () => {
     renderSettings();
-    const input = await screen.findByRole("textbox", { name: "Allowed client names" });
+    const input = await screen.findByRole("textbox", { name: "Allowed client IDs" });
 
     await userEvent.type(input, "antigravity-cli, codex-mcp-client{Enter}");
 
@@ -160,7 +160,7 @@ describe("MCPNetworkSettings", () => {
     expect(deleteConfigFieldSetting).not.toHaveBeenCalledWith("tok", "mcp_allowed_clients");
   });
 
-  it("removes a client name and clears the setting when the list becomes empty", async () => {
+  it("removes a client ID and clears the setting when the list becomes empty", async () => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([
       { field_name: "mcp_allowed_clients", field_value: ["claude-code"] },
     ]);
@@ -199,6 +199,69 @@ describe("MCPNetworkSettings", () => {
     expect(screen.queryByText(/every client is denied/)).not.toBeInTheDocument();
   });
 
+  it("explains that JWT callers are identified by the configured claim and others by the opt-in header", async () => {
+    renderSettings();
+
+    expect(await screen.findByText(/litellm_jwtauth\.mcp_client_id_jwt_field/)).toBeVisible();
+    expect(screen.getByText(/Clients pick this value themselves, so it is a policy control/)).toBeVisible();
+    expect(screen.queryByText(/clientInfo/)).not.toBeInTheDocument();
+  });
+
+  it("renders the stored client identity header once settings load", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      { field_name: "mcp_client_id_header", field_value: "x-mcp-client" },
+    ]);
+
+    renderSettings();
+
+    expect(await screen.findByRole("textbox", { name: "Client identity header" })).toHaveValue("x-mcp-client");
+  });
+
+  it("saves a newly typed client identity header under mcp_client_id_header", async () => {
+    renderSettings();
+    fireEvent.change(await screen.findByRole("textbox", { name: "Client identity header" }), {
+      target: { value: " x-mcp-client " },
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() =>
+      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_client_id_header", "x-mcp-client"),
+    );
+    expect(updateConfigFieldSetting).not.toHaveBeenCalledWith("tok", "mcp_allowed_clients", expect.anything());
+    expect(deleteConfigFieldSetting).not.toHaveBeenCalled();
+  });
+
+  it("clears a stored client identity header when the field is emptied, so only JWT identity is trusted", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      { field_name: "mcp_client_id_header", field_value: "x-mcp-client" },
+    ]);
+
+    renderSettings();
+    fireEvent.change(await screen.findByRole("textbox", { name: "Client identity header" }), {
+      target: { value: "" },
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() => expect(deleteConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_client_id_header"));
+    expect(updateConfigFieldSetting).not.toHaveBeenCalled();
+  });
+
+  it("does not rewrite an unchanged client identity header on save", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      { field_name: "mcp_client_id_header", field_value: "x-mcp-client" },
+    ]);
+
+    renderSettings();
+    await screen.findByRole("textbox", { name: "Client identity header" });
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(updateConfigFieldSetting).not.toHaveBeenCalled();
+    expect(deleteConfigFieldSetting).not.toHaveBeenCalled();
+  });
+
   it("keeps the private ranges and the allowed clients as independent settings on save", async () => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([
       { field_name: "mcp_internal_ip_ranges", field_value: ["10.0.0.0/8"] },
@@ -206,10 +269,7 @@ describe("MCPNetworkSettings", () => {
     ]);
 
     renderSettings();
-    await userEvent.type(
-      await screen.findByRole("textbox", { name: "Allowed client names" }),
-      "codex-mcp-client{Enter}",
-    );
+    await userEvent.type(await screen.findByRole("textbox", { name: "Allowed client IDs" }), "codex-mcp-client{Enter}");
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
 
     await waitFor(() =>
@@ -231,7 +291,7 @@ describe("MCPNetworkSettings", () => {
 
     renderSettings();
     await userEvent.click(await screen.findByRole("button", { name: "Remove 10.0.0.0/8" }));
-    await userEvent.type(screen.getByRole("textbox", { name: "Allowed client names" }), "codex-mcp-client{Enter}");
+    await userEvent.type(screen.getByRole("textbox", { name: "Allowed client IDs" }), "codex-mcp-client{Enter}");
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
 
     await waitFor(() =>
@@ -257,7 +317,7 @@ describe("MCPNetworkSettings", () => {
 
     renderSettings();
     await userEvent.click(await screen.findByText("203.0.113.0/24"));
-    await userEvent.type(screen.getByRole("textbox", { name: "Allowed client names" }), "codex-mcp-client{Enter}");
+    await userEvent.type(screen.getByRole("textbox", { name: "Allowed client IDs" }), "codex-mcp-client{Enter}");
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
 
     await waitFor(() =>

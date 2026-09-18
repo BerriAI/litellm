@@ -1,35 +1,31 @@
 """
-Gateway-level allowlist of MCP client applications, matched against the
-``clientInfo.name`` a client sends in its JSON-RPC ``initialize`` request. The
-name is client-supplied, so this is a policy control and not a security boundary.
+Gateway-level allowlist of MCP client applications (``general_settings.mcp_allowed_clients``).
+
+A caller that authenticated with a JWT is identified by the claim named in
+``litellm_jwtauth.mcp_client_id_jwt_field``, a value asserted by the identity provider.
+Every other caller is identified by the header named in ``general_settings.mcp_client_id_header``,
+which the client picks itself, so that source is a policy control rather than a security boundary.
+While the allowlist is set, a caller with no usable identity source is rejected.
 """
 
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final, Literal
 
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.constants import MCP_ALLOWLIST_PEEK_MAX_BYTES
+from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 
 MCP_ALLOWED_CLIENTS_SETTING: Final = "mcp_allowed_clients"
+MCP_CLIENT_ID_HEADER_SETTING: Final = "mcp_client_id_header"
+MCP_CLIENT_ID_JWT_FIELD_SETTING: Final = "mcp_client_id_jwt_field"
+_JWT_AUTH_SETTING: Final = "litellm_jwtauth"
 
-_ALLOWED_CLIENTS_ADAPTER: Final = TypeAdapter(list[str])
-_GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-
-
-class _ClientInfo(BaseModel):
-    name: str | None = None
-
-
-class _InitializeParams(BaseModel):
-    clientInfo: _ClientInfo | None = None
-
-
-class _InitializeRequest(BaseModel):
-    params: _InitializeParams | None = None
+_ALLOWED_CLIENTS_ADAPTER: Final[TypeAdapter[list[str]]] = TypeAdapter(list[str])
+_OPTIONAL_NAME_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+_OPTIONAL_MAPPING_ADAPTER: Final[TypeAdapter[dict[str, object] | None]] = TypeAdapter(dict[str, object] | None)
 
 
 class MCPClientForbiddenBody(TypedDict):
@@ -37,23 +33,27 @@ class MCPClientForbiddenBody(TypedDict):
     details: ReadOnly[str]
 
 
-class MCPSessionNotFoundBody(TypedDict):
-    error: ReadOnly[Literal["Not Found"]]
-    details: ReadOnly[str]
+@dataclass(frozen=True, slots=True)
+class MCPClientAllowlist:
+    allowed_clients: frozenset[str]
+    jwt_field: str | None
+    header: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class MCPClientIdentity:
+    client_id: str
+    source: Literal["jwt", "header"]
+    source_name: str
+
+    @property
+    def description(self) -> str:
+        return f"'{self.client_id}' (from {'JWT claim' if self.source == 'jwt' else 'header'} '{self.source_name}')"
 
 
 @dataclass(frozen=True, slots=True)
 class MCPClientRejection:
-    client_name: str | None
-
-    @property
-    def details(self) -> str:
-        if self.client_name is None:
-            return (
-                "MCP initialize request did not identify the client application (clientInfo.name). "
-                f"This gateway only admits clients listed in {MCP_ALLOWED_CLIENTS_SETTING}."
-            )
-        return f"MCP client '{self.client_name}' is not listed in this gateway's {MCP_ALLOWED_CLIENTS_SETTING}."
+    details: str
 
     @property
     def response_body(self) -> MCPClientForbiddenBody:
@@ -61,38 +61,10 @@ class MCPClientRejection:
         return body
 
 
-def oversized_unidentified_request_body() -> MCPClientForbiddenBody:
-    body: Final[MCPClientForbiddenBody] = {
-        "error": "Forbidden",
-        "details": (
-            f"While {MCP_ALLOWED_CLIENTS_SETTING} is set, this gateway reads at most "
-            f"{MCP_ALLOWLIST_PEEK_MAX_BYTES} bytes of an MCP POST to find clientInfo.name before routing it; "
-            "this request was larger than that and could not be identified."
-        ),
-    }
-    return body
-
-
-def unidentified_sessionless_request_body() -> MCPClientForbiddenBody:
-    body: Final[MCPClientForbiddenBody] = {
-        "error": "Forbidden",
-        "details": (
-            f"While {MCP_ALLOWED_CLIENTS_SETTING} is set, an MCP POST without a live mcp-session-id must be an "
-            "initialize request; open a session with initialize from a listed client application first."
-        ),
-    }
-    return body
-
-
-def unknown_session_request_body(session_id: str) -> MCPSessionNotFoundBody:
-    body: Final[MCPSessionNotFoundBody] = {
-        "error": "Not Found",
-        "details": (
-            f"mcp-session-id '{session_id}' is not known to this gateway worker. While {MCP_ALLOWED_CLIENTS_SETTING} "
-            "is set the request cannot fall back to a sessionless call; start a new session with initialize."
-        ),
-    }
-    return body
+def _unidentified_rejection(reason: str) -> MCPClientRejection:
+    return MCPClientRejection(
+        details=f"{reason} This gateway only admits client applications listed in {MCP_ALLOWED_CLIENTS_SETTING}."
+    )
 
 
 def parse_allowed_mcp_clients(raw_setting: object) -> frozenset[str] | None:
@@ -110,26 +82,80 @@ def parse_allowed_mcp_clients(raw_setting: object) -> frozenset[str] | None:
         return frozenset()
 
 
-def allowed_mcp_clients_from_general_settings(general_settings: object) -> frozenset[str] | None:
-    return parse_allowed_mcp_clients(
-        _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings).get(MCP_ALLOWED_CLIENTS_SETTING)
+def _parse_optional_name(setting_name: str, raw_setting: object) -> str | None:
+    try:
+        name: Final = _OPTIONAL_NAME_ADAPTER.validate_python(raw_setting)
+    except ValidationError:
+        verbose_logger.warning("%s is not a string (%r); ignoring it", setting_name, raw_setting)
+        return None
+    return name or None
+
+
+def _jwt_field_from_general_settings(general_settings: Mapping[str, object]) -> str | None:
+    try:
+        jwt_auth: Final = _OPTIONAL_MAPPING_ADAPTER.validate_python(general_settings.get(_JWT_AUTH_SETTING))
+    except ValidationError:
+        return None
+    if jwt_auth is None:
+        return None
+    return _parse_optional_name(
+        f"{_JWT_AUTH_SETTING}.{MCP_CLIENT_ID_JWT_FIELD_SETTING}", jwt_auth.get(MCP_CLIENT_ID_JWT_FIELD_SETTING)
     )
 
 
-def extract_mcp_client_name(body: bytes) -> str | None:
-    try:
-        request: Final = _InitializeRequest.model_validate_json(body)
-    except ValidationError:
-        return None
-    client_info: Final = request.params.clientInfo if request.params is not None else None
-    name: Final = client_info.name if client_info is not None else None
-    return name if name else None
-
-
-def check_mcp_client_allowed(body: bytes, allowed_clients: frozenset[str] | None) -> MCPClientRejection | None:
+def load_mcp_client_allowlist(general_settings: Mapping[str, object]) -> MCPClientAllowlist | None:
+    """None when ``mcp_allowed_clients`` is unset, which admits every client."""
+    allowed_clients: Final = parse_allowed_mcp_clients(general_settings.get(MCP_ALLOWED_CLIENTS_SETTING))
     if allowed_clients is None:
         return None
-    client_name: Final = extract_mcp_client_name(body)
-    if client_name is not None and client_name in allowed_clients:
+    header: Final = _parse_optional_name(
+        MCP_CLIENT_ID_HEADER_SETTING, general_settings.get(MCP_CLIENT_ID_HEADER_SETTING)
+    )
+    return MCPClientAllowlist(
+        allowed_clients=allowed_clients,
+        jwt_field=_jwt_field_from_general_settings(general_settings),
+        header=header.lower() if header is not None else None,
+    )
+
+
+def resolve_mcp_client_identity(
+    allowlist: MCPClientAllowlist,
+    jwt_claims: Mapping[str, object] | None,
+    headers: Mapping[str, str],
+) -> MCPClientIdentity | MCPClientRejection:
+    """A JWT caller is identified by its configured claim alone, so a header can never override the IdP."""
+    if jwt_claims and allowlist.jwt_field is not None:
+        claim: Final[object] = get_nested_value(data=jwt_claims, key_path=allowlist.jwt_field)
+        if isinstance(claim, str) and claim:
+            return MCPClientIdentity(client_id=claim, source="jwt", source_name=allowlist.jwt_field)
+        return _unidentified_rejection(
+            f"The JWT presented has no '{allowlist.jwt_field}' claim naming the client application."
+        )
+    if allowlist.header is None:
+        configured: Final = (
+            f"litellm_jwtauth.{MCP_CLIENT_ID_JWT_FIELD_SETTING} for JWT callers or {MCP_CLIENT_ID_HEADER_SETTING}"
+        )
+        return _unidentified_rejection(
+            f"No client identity source is configured for this request; set {configured} in general_settings."
+        )
+    header_value: Final = headers.get(allowlist.header)
+    if header_value:
+        return MCPClientIdentity(client_id=header_value, source="header", source_name=allowlist.header)
+    return _unidentified_rejection(f"The request has no '{allowlist.header}' header naming the client application.")
+
+
+def check_mcp_client_allowed(
+    allowlist: MCPClientAllowlist | None,
+    jwt_claims: Mapping[str, object] | None,
+    headers: Mapping[str, str],
+) -> MCPClientRejection | None:
+    if allowlist is None:
         return None
-    return MCPClientRejection(client_name=client_name)
+    identity: Final = resolve_mcp_client_identity(allowlist, jwt_claims, headers)
+    if isinstance(identity, MCPClientRejection):
+        return identity
+    if identity.client_id in allowlist.allowed_clients:
+        return None
+    return MCPClientRejection(
+        details=f"MCP client {identity.description} is not listed in this gateway's {MCP_ALLOWED_CLIENTS_SETTING}."
+    )

@@ -38,6 +38,11 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
     _is_mcp_admitted_user_subject,
 )
+from litellm.proxy._experimental.mcp_server.client_allowlist import (
+    MCPClientAllowlist,
+    check_mcp_client_allowed,
+    load_mcp_client_allowlist,
+)
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
 )
@@ -3713,6 +3718,22 @@ if MCP_AVAILABLE:
                         mcp_servers_from_path = [servers_and_path]
         return mcp_servers_from_path
 
+    def _load_mcp_client_allowlist() -> MCPClientAllowlist | None:
+        from litellm.proxy.proxy_server import general_settings
+
+        return load_mcp_client_allowlist(general_settings)
+
+    def _reject_disallowed_mcp_client(scope: Scope, user_api_key_auth: UserAPIKeyAuth | None) -> None:
+        rejection: Final = check_mcp_client_allowed(
+            allowlist=_load_mcp_client_allowlist(),
+            jwt_claims=user_api_key_auth.jwt_claims if user_api_key_auth is not None else None,
+            headers=StarletteRequest(scope).headers,
+        )
+        if rejection is None:
+            return
+        verbose_logger.warning("Rejected MCP request from a disallowed client application: %s", rejection.details)
+        raise HTTPException(status_code=403, detail=rejection.response_body)
+
     async def extract_mcp_auth_context(scope, path):
         """
         Extracts mcp_servers from the path and processes the MCP request for auth context.
@@ -4472,6 +4493,7 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
+            _reject_disallowed_mcp_client(scope, user_api_key_auth)
             scoped_server_endpoint: Final = len(_get_mcp_servers_in_path(path) or []) == 1
 
             # Extract client IP for MCP access control
@@ -4800,6 +4822,7 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
+            _reject_disallowed_mcp_client(scope, user_api_key_auth)
             scoped_server_endpoint: Final = len(_get_mcp_servers_in_path(path) or []) == 1
 
             # Extract client IP for MCP access control

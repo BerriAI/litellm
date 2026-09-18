@@ -32,13 +32,18 @@ const sameList = (a: string[], b: string[]) => a.length === b.length && a.every(
 const unchangedSinceLoad = (value: string[], stored: string[] | null) =>
   stored === null ? value.length === 0 : value.length > 0 && sameList(value, stored);
 
+const headerUnchangedSinceLoad = (value: string, stored: string | null) =>
+  stored === null ? value === "" : value !== "" && value === stored;
+
 const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [privateRanges, setPrivateRanges] = useState<string[]>([]);
   const [allowedClients, setAllowedClients] = useState<string[]>([]);
+  const [clientIdHeader, setClientIdHeader] = useState("");
   const [storedRanges, setStoredRanges] = useState<string[] | null>(null);
   const [storedClients, setStoredClients] = useState<string[] | null>(null);
+  const [storedClientIdHeader, setStoredClientIdHeader] = useState<string | null>(null);
   const [currentIp, setCurrentIp] = useState<string | null>(null);
   const [rangeDraft, setRangeDraft] = useState("");
   const [clientDraft, setClientDraft] = useState("");
@@ -61,6 +66,10 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
         if (field.field_name === "mcp_allowed_clients" && Array.isArray(field.field_value)) {
           setAllowedClients(field.field_value);
           setStoredClients(field.field_value);
+        }
+        if (field.field_name === "mcp_client_id_header" && typeof field.field_value === "string") {
+          setClientIdHeader(field.field_value);
+          setStoredClientIdHeader(field.field_value);
         }
       }
     } catch (error) {
@@ -97,6 +106,18 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
     setStored(null);
   };
 
+  const persistClientIdHeader = async (token: string) => {
+    const value = clientIdHeader.trim();
+    if (headerUnchangedSinceLoad(value, storedClientIdHeader)) return;
+    if (value !== "") {
+      await updateConfigFieldSetting(token, "mcp_client_id_header", value);
+      setStoredClientIdHeader(value);
+      return;
+    }
+    await deleteConfigFieldSetting(token, "mcp_client_id_header");
+    setStoredClientIdHeader(null);
+  };
+
   const handleSave = async () => {
     if (!accessToken) return;
     setSaving(true);
@@ -114,8 +135,9 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
         setStored: setStoredClients,
       }),
     ]);
+    const [headerResult] = await Promise.allSettled([persistClientIdHeader(accessToken)]);
     setSaving(false);
-    const failures = [rangeResult, clientResult].filter(
+    const failures = [rangeResult, clientResult, headerResult].filter(
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );
     if (failures.length === 0) {
@@ -239,16 +261,16 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
       <div>
         <p className="text-lg font-semibold">Allowed Client Applications</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Only the MCP client applications listed here can connect to the gateway. Names are matched exactly against the
-          clientInfo.name each client sends in its MCP initialize request (for example claude-code or codex-mcp-client).
-          Leave empty to allow every client. Clients choose the name they send, so treat this as a policy control rather
-          than a security boundary.
+          Only the MCP client applications listed here can use the gateway. Leave empty to allow every client. A client
+          that authenticates with a JWT is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field in
+          your proxy config (for example azp or client_id), which your identity provider asserts and the client cannot
+          change. Any other client is identified by the request header configured below, if you enable one.
         </p>
       </div>
 
       <Card className="p-6">
         <div className="mb-2 flex items-center">
-          <p className="text-sm font-medium">Allowed Client Names</p>
+          <p className="text-sm font-medium">Allowed Client IDs</p>
         </div>
         {storedAllowlistDeniesEveryone && (
           <p className="mb-2 text-sm text-destructive">
@@ -274,9 +296,9 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
           </div>
         )}
         <Input
-          aria-label="Allowed client names"
+          aria-label="Allowed client IDs"
           value={clientDraft}
-          placeholder="Leave empty to allow every client, e.g. claude-code, codex-mcp-client"
+          placeholder="Leave empty to allow every client, e.g. mcp-client-prod, claude-code"
           onChange={(e) => setClientDraft(e.target.value)}
           onBlur={commitClientDraft}
           onKeyDown={(e) => {
@@ -287,8 +309,23 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
           }}
         />
         <p className="mt-2 text-xs text-muted-foreground">
-          Enter the clientInfo.name values to admit. Any other client, or one that does not identify itself, gets a 403
-          on its MCP initialize request.
+          Enter the exact JWT claim or header values to admit. Every MCP request from any other client, or from one with
+          no resolvable identity, gets a 403.
+        </p>
+
+        <div className="mt-6 mb-2 flex items-center">
+          <p className="text-sm font-medium">Client Identity Header (less secure)</p>
+        </div>
+        <Input
+          aria-label="Client identity header"
+          value={clientIdHeader}
+          placeholder="Leave empty to identify clients by JWT only, e.g. x-mcp-client"
+          onChange={(e) => setClientIdHeader(e.target.value)}
+        />
+        <p className="mt-2 text-xs text-muted-foreground">
+          Optional header whose value names the client for callers without a JWT identity. Clients pick this value
+          themselves, so it is a policy control rather than a security boundary. Without it, callers that do not carry
+          the JWT claim are rejected while the allowlist is set.
         </p>
       </Card>
 

@@ -14072,47 +14072,23 @@ async def test_update_general_settings_keeps_yaml_openai_websocket_passthrough()
         assert ps.general_settings["enable_openai_websocket_passthrough"] is False
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "db_general_settings, expected",
-    [
-        ({"mcp_allowed_clients": ["antigravity-cli"]}, ["antigravity-cli"]),
-        ({"mcp_allowed_clients": []}, []),
-        ({}, None),
-    ],
-)
-async def test_update_general_settings_propagates_mcp_allowed_clients(
-    db_general_settings: dict[str, list[str]], expected: list[str] | None
-) -> None:
+def test_settings_store_exposes_dashboard_saved_mcp_client_allowlist_to_the_mcp_gateway() -> None:
+    from litellm.proxy._experimental.mcp_server.client_allowlist import MCPClientAllowlist, load_mcp_client_allowlist
     from litellm.proxy.proxy_server import ProxyConfig
 
-    proxy_config = ProxyConfig()
+    settings: Final = ProxyConfig().settings
+    settings.load_yaml({"litellm_jwtauth": {"mcp_client_id_jwt_field": "azp"}})
+    assert load_mcp_client_allowlist(settings) is None
 
-    with patch(  # test-quality-ok: the method writes this module global; no injection seam
-        "litellm.proxy.proxy_server.general_settings", {"mcp_allowed_clients": ["claude-code"]}
-    ):
-        await proxy_config._update_general_settings(db_general_settings=db_general_settings)
+    settings.apply_db_row(
+        "general_settings", {"mcp_allowed_clients": ["antigravity-cli"], "mcp_client_id_header": "X-MCP-Client"}
+    )
+    assert load_mcp_client_allowlist(settings) == MCPClientAllowlist(
+        allowed_clients=frozenset({"antigravity-cli"}), jwt_field="azp", header="x-mcp-client"
+    )
 
-        import litellm.proxy.proxy_server as ps
-
-        assert ps.general_settings["mcp_allowed_clients"] == expected
-
-
-@pytest.mark.asyncio
-async def test_update_general_settings_keeps_yaml_mcp_allowed_clients() -> None:
-    from litellm.proxy.proxy_server import ProxyConfig
-
-    proxy_config = ProxyConfig()
-    proxy_config._yaml_general_settings_keys = {"mcp_allowed_clients"}
-
-    with patch(  # test-quality-ok: the method writes this module global; no injection seam
-        "litellm.proxy.proxy_server.general_settings", {"mcp_allowed_clients": ["claude-code"]}
-    ):
-        await proxy_config._update_general_settings(db_general_settings={"mcp_allowed_clients": ["codex-mcp-client"]})
-
-        import litellm.proxy.proxy_server as ps
-
-        assert ps.general_settings["mcp_allowed_clients"] == ["claude-code"]
+    settings.apply_db_row("general_settings", {"mcp_client_id_header": "X-MCP-Client"})
+    assert load_mcp_client_allowlist(settings) is None
 
 
 async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_count(monkeypatch):
