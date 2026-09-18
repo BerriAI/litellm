@@ -196,12 +196,16 @@ async def test_get_user_object_loads_object_permission():
     )
 
     with (
-        patch(
+        patch(  # test-quality-ok: lazy load seam lives at module scope; no injection point
             "litellm.proxy.auth.auth_checks.get_object_permission",
             AsyncMock(return_value=mock_object_permission),
         ),
-        patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True),
-        patch("litellm.proxy.auth.auth_checks._update_last_db_access_time"),
+        patch(  # test-quality-ok: db freshness gate is a module-level hook
+            "litellm.proxy.auth.auth_checks._should_check_db", return_value=True
+        ),
+        patch(  # test-quality-ok: write-back hook is a module-level seam
+            "litellm.proxy.auth.auth_checks._update_last_db_access_time"
+        ),
     ):
         result = await get_user_object(
             user_id="test_user",
