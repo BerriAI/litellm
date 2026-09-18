@@ -7,6 +7,7 @@ import KeyInfoView from "./key_info_view";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import type { Organization } from "../networking";
 
 // IMPORTANT: do not mock `@/utils/dataUtils` here. We want to exercise the
@@ -25,6 +26,9 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({ useOr
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
   useProjects: vi.fn().mockReturnValue({ data: [], isLoading: false }),
+}));
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys", () => ({
+  useApplyUserBudgetToTeamKeys: vi.fn(() => false),
 }));
 vi.mock("@/app/(dashboard)/hooks/keys/useResetKeySpend", () => ({
   useResetKeySpend: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
@@ -114,6 +118,26 @@ const baseAuthorized = {
   isAuthorized: true,
 };
 
+const TEST_BUDGET_TEAM_FIELDS = {
+  team_id: "team-123",
+  team_alias: "Test Budget",
+  max_budget: 1200,
+  budget_duration: "30d",
+};
+
+const TEAM_KEY_WITH_BUDGETED_OWNER = {
+  ...MOCK_KEY_DATA,
+  max_budget: null,
+  team_id: "team-123",
+  user: {
+    user_id: "user-1",
+    user_email: "owner@example.com",
+    user_alias: "Budget Owner",
+    max_budget: 1500,
+    budget_duration: "1mo",
+  },
+} as unknown as KeyResponse;
+
 const makeTeam = (overrides: Partial<Team>): Team => ({
   team_id: "team-default",
   team_alias: "Default Team",
@@ -158,6 +182,7 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     vi.mocked(useTeams).mockReturnValue({ teams: [], setTeams: vi.fn() });
     vi.mocked(useAuthorized).mockReturnValue(baseAuthorized);
     mockOrganizations([]);
+    vi.mocked(useApplyUserBudgetToTeamKeys).mockReturnValue(false);
   });
 
   it("renders a sub-dollar max_budget ($0.10) with 2-decimal precision in the overview Spend card", async () => {
@@ -214,7 +239,7 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
 
   it("never pairs key spend with the team budget: shows Unlimited plus an inherited-budget hint", async () => {
     vi.mocked(useTeams).mockReturnValue({
-      teams: [makeTeam({ team_id: "team-123", team_alias: "Test Budget", max_budget: 1200, budget_duration: "30d" })],
+      teams: [makeTeam(TEST_BUDGET_TEAM_FIELDS)],
       setTeams: vi.fn(),
     });
     renderWithProviders(
@@ -288,27 +313,14 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("User Budget Owner: $1,500.00 / 1mo");
   });
 
-  it("omits the owner's user budget from the hint for a team key", async () => {
+  it("omits the owner's user budget from the hint for a team key when apply_user_budget_to_team_keys is off", async () => {
     vi.mocked(useTeams).mockReturnValue({
-      teams: [makeTeam({ team_id: "team-123", team_alias: "Test Budget", max_budget: 1200, budget_duration: "30d" })],
+      teams: [makeTeam(TEST_BUDGET_TEAM_FIELDS)],
       setTeams: vi.fn(),
     });
     renderWithProviders(
       <KeyInfoView
-        keyData={
-          {
-            ...MOCK_KEY_DATA,
-            max_budget: null,
-            team_id: "team-123",
-            user: {
-              user_id: "user-1",
-              user_email: "owner@example.com",
-              user_alias: "Budget Owner",
-              max_budget: 1500,
-              budget_duration: "1mo",
-            },
-          } as unknown as KeyResponse
-        }
+        keyData={TEAM_KEY_WITH_BUDGETED_OWNER}
         onClose={() => {}}
         keyId={"test-key-id"}
         onKeyDataUpdate={() => {}}
@@ -321,6 +333,29 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     await userEvent.setup().hover(screen.getByLabelText("question-circle"));
     expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("Team Test Budget: $1,200.00 / 30d");
     expect(screen.getByTestId("inherited-budget-hint")).not.toHaveTextContent("User Budget Owner");
+  });
+
+  it("lists the owner's user budget in the hint for a team key when apply_user_budget_to_team_keys is on", async () => {
+    vi.mocked(useApplyUserBudgetToTeamKeys).mockReturnValue(true);
+    vi.mocked(useTeams).mockReturnValue({
+      teams: [makeTeam(TEST_BUDGET_TEAM_FIELDS)],
+      setTeams: vi.fn(),
+    });
+    renderWithProviders(
+      <KeyInfoView
+        keyData={TEAM_KEY_WITH_BUDGETED_OWNER}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
+    });
+    await userEvent.setup().hover(screen.getByLabelText("question-circle"));
+    expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("Team Test Budget: $1,200.00 / 30d");
+    expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("User Budget Owner: $1,500.00 / 1mo");
   });
 
   it("renders 'Unlimited' with no hint when neither key, team, nor org has a budget", async () => {

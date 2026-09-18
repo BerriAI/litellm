@@ -4,7 +4,7 @@ import { Info } from "lucide-react";
 import { ColumnDef } from "@tanstack/react-table";
 
 import { DataTableMultiSortHeader, DataTableSortHeader, type DataTableSortField } from "@/components/shared/DataTable";
-import { inheritedBudgetGates } from "@/components/shared/InheritedBudgetHint";
+import { inheritedBudgetGates, keyOwnerBudgetSource } from "@/components/shared/InheritedBudgetHint";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -86,12 +86,14 @@ interface KeyTableColumnsDeps {
   allTeams: Team[];
   organizations: Organization[];
   onSelectKey: (key: KeyResponse) => void;
+  applyUserBudgetToTeamKeys: boolean;
 }
 
 export const getKeyTableColumns = ({
   allTeams,
   organizations,
   onSelectKey,
+  applyUserBudgetToTeamKeys,
 }: KeyTableColumnsDeps): ColumnDef<KeyResponse>[] => [
   {
     id: "key_alias",
@@ -279,7 +281,7 @@ export const getKeyTableColumns = ({
           maxBudget={row.original.max_budget}
           inheritedGates={
             row.original.max_budget == null
-              ? inheritedBudgetGates(team, organization, row.original.team_id ? null : row.original.user)
+              ? inheritedBudgetGates(team, organization, keyOwnerBudgetSource(row.original, applyUserBudgetToTeamKeys))
               : []
           }
         />

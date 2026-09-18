@@ -63,6 +63,11 @@ export const inheritedBudgetGates = (
 ): readonly InheritedBudgetGate[] =>
   [teamGate(team), organizationGate(organization), userGate(user)].filter((gate) => gate !== null);
 
+export const keyOwnerBudgetSource = (
+  key: { team_id?: string | null; user?: UserBudgetSource | null },
+  applyUserBudgetToTeamKeys: boolean,
+): UserBudgetSource | null => (!key.team_id || applyUserBudgetToTeamKeys ? key.user ?? null : null);
+
 const formatGate = (gate: InheritedBudgetGate): string =>
   `${gate.scope} ${gate.alias}: $${formatNumberWithCommas(gate.maxBudget, 2)}${gate.budgetDuration ? ` / ${gate.budgetDuration}` : ""}`;
 

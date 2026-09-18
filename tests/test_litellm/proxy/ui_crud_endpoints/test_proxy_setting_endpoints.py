@@ -3268,6 +3268,68 @@ class TestPtuCostAttributionUISetting:
         assert not mock_prisma.db.litellm_uisettings.upsert.called
 
 
+class TestApplyUserBudgetToTeamKeysUISetting:
+    """``apply_user_budget_to_team_keys`` mirrors general_settings on every GET.
+
+    The proxy enforces the key owner's user budget on team keys only when
+    ``general_settings.apply_user_budget_to_team_keys`` is on, so the dashboard
+    shows the owner's budget gate on a team key iff this derived value is true.
+    Like the other derived settings it is read-only and never persisted.
+    """
+
+    @staticmethod
+    def _mock_prisma(monkeypatch, stored=None):
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_prisma = MagicMock()
+        mock_record = None
+        if stored is not None:
+            mock_record = MagicMock()
+            mock_record.ui_settings = stored
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=mock_record)
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+        return mock_prisma
+
+    def test_reported_false_when_general_settings_lacks_the_flag(self, mock_auth, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        self._mock_prisma(monkeypatch)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["apply_user_budget_to_team_keys"] is False
+
+    def test_reported_true_when_general_settings_enables_the_flag(self, mock_auth, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"apply_user_budget_to_team_keys": True},
+        )
+        self._mock_prisma(monkeypatch)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["apply_user_budget_to_team_keys"] is True
+
+    def test_a_persisted_true_cannot_forge_the_derived_value(self, mock_auth, monkeypatch):
+        """A row written before the allowlist existed must not be able to turn the feature on."""
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        self._mock_prisma(monkeypatch, stored={"apply_user_budget_to_team_keys": True})
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["apply_user_budget_to_team_keys"] is False
+
+    def test_is_not_an_allowlisted_persisted_setting(self):
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            ALLOWED_UI_SETTINGS_FIELDS,
+        )
+
+        assert "apply_user_budget_to_team_keys" not in ALLOWED_UI_SETTINGS_FIELDS
+
+
 class TestTeamAdminEditableTeamFieldsSetting:
     """team_admin_editable_team_fields: the proxy-wide allow-list update_team applies to team admins."""
 

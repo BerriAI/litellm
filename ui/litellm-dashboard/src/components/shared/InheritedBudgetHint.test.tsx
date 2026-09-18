@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
-import { InheritedBudgetHint, inheritedBudgetGates } from "./InheritedBudgetHint";
+import { InheritedBudgetHint, inheritedBudgetGates, keyOwnerBudgetSource } from "./InheritedBudgetHint";
 
 const team = { team_id: "team-1", team_alias: "Platform", max_budget: 1200, budget_duration: "30d" };
 const organization = {
@@ -72,6 +72,21 @@ describe("inheritedBudgetGates", () => {
       "Organization",
       "User",
     ]);
+  });
+});
+
+describe("keyOwnerBudgetSource", () => {
+  it("returns the owner on a personal key regardless of the flag", () => {
+    expect(keyOwnerBudgetSource({ team_id: null, user }, false)).toBe(user);
+    expect(keyOwnerBudgetSource({ team_id: null, user }, true)).toBe(user);
+  });
+
+  it("hides the owner on a team key when the flag is off", () => {
+    expect(keyOwnerBudgetSource({ team_id: "team-1", user }, false)).toBeNull();
+  });
+
+  it("returns the owner on a team key when the flag is on", () => {
+    expect(keyOwnerBudgetSource({ team_id: "team-1", user }, true)).toBe(user);
   });
 });
 

@@ -349,11 +349,21 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
 }
 
 ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: Final = "enable_ptu_cost_attribution"
+APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING: Final = "apply_user_budget_to_team_keys"
 
 # UI settings derived from the deployment environment. Deliberately kept out of
 # ALLOWED_UI_SETTINGS_FIELDS: they are read-only, never persisted, and PATCH
 # rejects them so an admin cannot flip an env-gated feature at runtime.
-_DERIVED_UI_SETTINGS_FIELDS: Final[frozenset[str]] = frozenset({ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING})
+_DERIVED_UI_SETTINGS_FIELDS: Final[frozenset[str]] = frozenset(
+    {ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING, APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING}
+)
+
+
+def _apply_user_budget_to_team_keys_enabled() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    settings: Final = _UI_SETTINGS_OBJECT.validate_python(general_settings)
+    return settings.get("apply_user_budget_to_team_keys") is True
 
 
 def _derived_ui_setting_value(key: str) -> object:
@@ -366,6 +376,8 @@ def _derived_ui_setting_value(key: str) -> object:
     """
     if key == ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING:
         return is_ptu_cost_attribution_enabled()
+    if key == APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING:
+        return _apply_user_budget_to_team_keys_enabled()
     return None
 
 
@@ -1564,6 +1576,7 @@ async def get_ui_settings():
         values={
             **settings["values"],
             ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: is_ptu_cost_attribution_enabled(),
+            APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING: _apply_user_budget_to_team_keys_enabled(),
         },
         field_schema=settings["field_schema"],
     )
