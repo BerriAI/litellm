@@ -4,10 +4,10 @@ from types import TracebackType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-
 import pytest
 
 import litellm
+from litellm.models.credentials import CredentialItem
 from litellm.realtime_api import main as realtime_main
 from litellm.realtime_api.main import _with_resolved_session_model
 
@@ -153,6 +153,33 @@ async def test_vertex_credential_resolution_bounds_a_thread_offloaded_refresh():
 
 
 @pytest.mark.asyncio
+async def test_meta_realtime_dispatches_to_base_handler_with_meta_config(monkeypatch: pytest.MonkeyPatch):
+    from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
+
+    captured: dict[str, object] = {}
+
+    def mock_get_llm_provider(model, api_base, api_key):
+        return model.removeprefix("meta/"), "meta", None, api_base
+
+    async def mock_async_realtime(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
+    monkeypatch.setattr(realtime_main.base_llm_http_handler, "async_realtime", mock_async_realtime)
+
+    await realtime_main._arealtime.__wrapped__(
+        model="meta/muse-voice-transcribe-1.0",
+        websocket=MagicMock(),
+        litellm_logging_obj=FakeLogging(),
+        query_params={"model": "meta/muse-voice-transcribe-1.0", "intent": "transcription"},
+    )
+
+    assert isinstance(captured["provider_config"], MetaRealtimeConfig)
+    assert captured["model"] == "muse-voice-transcribe-1.0"
+    assert captured["query_params"] == {"model": "muse-voice-transcribe-1.0", "intent": "transcription"}
+
+
+@pytest.mark.asyncio
 async def test_arealtime_vertex_branch_resolves_credentials_under_a_bound(monkeypatch):
     """The wiring half of the regression: the vertex branch of _arealtime must
     go through the bounded resolver, so a hung token refresh surfaces as a
@@ -198,9 +225,11 @@ def test_client_secret_forwards_nested_transcription_model_untouched(monkeypatch
 class _CapturingConnect:
     def __init__(self) -> None:
         self.url: str | None = None
+        self.kwargs: dict[str, object] = {}
 
     def __call__(self, url: str, **kwargs: object) -> "_CapturingConnect":
         self.url = url
+        self.kwargs = kwargs
         return self
 
     async def __aenter__(self) -> MagicMock:
@@ -213,6 +242,72 @@ class _CapturingConnect:
         tb: TracebackType | None,
     ) -> None:
         return None
+
+
+@pytest.mark.asyncio
+async def test_azure_health_check_resolves_stored_credentials(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="azure-rt",
+                credential_values={
+                    "api_key": "sk-from-credential",
+                    "api_base": "https://example.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                },
+                credential_info={},
+            )
+        ],
+    )
+    connect = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="gpt-realtime",
+            custom_llm_provider="azure",
+            api_key=None,
+            realtime_protocol="beta",
+            model_params={"model": "azure/gpt-realtime", "litellm_credential_name": "azure-rt"},
+        )
+    assert connect.kwargs["additional_headers"] == {"api-key": "sk-from-credential"}
+    assert connect.url is not None
+    assert connect.url.startswith("wss://example.openai.azure.com")
+    assert "api-version=2025-04-01-preview" in connect.url
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model", "expected_url"),
+    [
+        ("xai", "grok-voice-latest", "wss://api.x.ai/v1/realtime?model=grok-voice-latest"),
+        ("openai", "gpt-realtime", "wss://api.openai.com/v1/realtime?model=gpt-realtime"),
+    ],
+)
+async def test_bearer_health_check_sends_stored_credential_as_bearer_token(
+    monkeypatch, custom_llm_provider: str, model: str, expected_url: str
+):
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="voice-key",
+                credential_values={"api_key": "sk-from-credential"},
+                credential_info={},
+            )
+        ],
+    )
+    connect = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_key=None,
+            model_params={"model": f"{custom_llm_provider}/{model}", "litellm_credential_name": "voice-key"},
+        )
+    assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer sk-from-credential"}
+    assert connect.url == expected_url
 
 
 @pytest.mark.asyncio

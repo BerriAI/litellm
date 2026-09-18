@@ -65,8 +65,6 @@ class VertexEmbedding(VertexBase):
                 litellm_params=litellm_params,
             )
 
-        should_use_v1beta1_features: Final = self.is_using_v1beta1_features(optional_params=optional_params)
-
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -85,7 +83,6 @@ class VertexEmbedding(VertexBase):
             stream=False,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
-            should_use_v1beta1_features=should_use_v1beta1_features,
             mode="embedding",
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
@@ -160,7 +157,6 @@ class VertexEmbedding(VertexBase):
         """
         Async embedding implementation
         """
-        should_use_v1beta1_features: Final = self.is_using_v1beta1_features(optional_params=optional_params)
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -179,7 +175,6 @@ class VertexEmbedding(VertexBase):
             stream=False,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
-            should_use_v1beta1_features=should_use_v1beta1_features,
             mode="embedding",
             use_psc_endpoint_format=use_psc_endpoint_format,
         )

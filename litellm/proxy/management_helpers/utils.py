@@ -3,6 +3,7 @@
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from datetime import datetime
 from functools import wraps
+from types import MappingProxyType
 from typing import Any, Final, Protocol
 
 from fastapi import HTTPException, Request
@@ -180,6 +181,7 @@ async def handle_budget_for_entity(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
     litellm_proxy_admin_name: str,
+    budget_duration_cleared: bool = False,
 ) -> str | None:
     """
     Common helper to handle budget creation/updates for entities (organizations, tags, etc).
@@ -208,7 +210,14 @@ async def handle_budget_for_entity(
 
     # Extract budget fields from data
     _json_data: Final = data.model_dump(exclude_none=True) if hasattr(data, "model_dump") else data
-    _budget_data: Final = {k: v for k, v in _json_data.items() if k in budget_params}
+    _budget_data: Final = MappingProxyType(
+        {
+            k: _json_data.get(k)
+            for k in budget_params
+            if k in _json_data
+            or (k == "budget_duration" and existing_budget_id is not None and budget_duration_cleared)
+        }
+    )
 
     # Check if budget_id is explicitly provided in the data
     data_budget_id: Final[str | None] = getattr(data, "budget_id", None)

@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 
@@ -692,6 +693,7 @@ def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
         "/anthropic/v1/count_tokens",
         "/gemini/v1/models",
         "/gemini/countTokens",
+        "/nvidia_nim/nim-page-elements/v1/infer",
     ],
 )
 def test_virtual_key_llm_api_route_includes_passthrough_prefix(route):
@@ -2890,45 +2892,49 @@ def test_team_update_gate_allows_org_admin_with_resolved_org():
     )
 
 
-def test_team_update_gate_rejects_without_org_context():
-    """Without organization_id (i.e. resolution found no org, or a non-org-admin),
-    the gate still rejects /team/update — the fix adds no blanket allow. Guards
-    against re-widening the route (e.g. dropping it into self_managed_routes)."""
+def test_team_update_gate_admits_internal_user_without_org_context():  # test-quality-ok: the gate's only success signal is not raising; the handler's team-admin 403s are pinned in test_team_endpoints
+    """/team/update is self-managed (LIT-5722): the coarse gate admits any authenticated
+    caller and update_team resolves proxy, org or team admin itself, then filters team admins
+    through the team_admin_editable_team_fields setting. Before that the gate 401'd every
+    team admin, which left the handler's team-admin branch unreachable."""
+    user_obj = LiteLLM_UserTable(
+        user_id="team-admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        organization_memberships=None,
+    )
+    valid_token = UserAPIKeyAuth(user_id="team-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route="/team/update",
+        request=request,
+        valid_token=valid_token,
+        request_data={"team_id": "team-1", "max_budget": 42},
+    )
+
+
+def test_team_update_gate_defers_cross_org_admin_to_the_handler():  # test-quality-ok: the gate's only success signal is not raising; the handler's 403 it defers to is pinned in test_team_endpoints
+    """An org admin of a DIFFERENT org clears the coarse gate like any internal user;
+    update_team's _resolve_team_access finds no role on the team and 403s (pinned in
+    test_team_endpoints), so there is still no cross-org escalation."""
     user_obj = _make_org_admin_user("org-1")
     valid_token = UserAPIKeyAuth(user_id="org-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value)
     request = MagicMock(spec=Request)
     request.method = "POST"
     request.query_params = {}
 
-    with pytest.raises(Exception, match="Only proxy admin can be used to generate"):
-        RouteChecks.non_proxy_admin_allowed_routes_check(
-            user_obj=user_obj,
-            _user_role=LitellmUserRoles.INTERNAL_USER.value,
-            route="/team/update",
-            request=request,
-            valid_token=valid_token,
-            request_data={"team_id": "team-1", "max_budget": 42},
-        )
-
-
-def test_team_update_gate_rejects_cross_org_admin_with_resolved_org():
-    """Even after the target team's org is resolved, an org admin of a DIFFERENT
-    org is rejected at the gate (no cross-org escalation)."""
-    user_obj = _make_org_admin_user("org-1")
-    valid_token = UserAPIKeyAuth(user_id="org-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value)
-    request = MagicMock(spec=Request)
-    request.method = "POST"
-    request.query_params = {}
-
-    with pytest.raises(Exception, match="Only proxy admin can be used to generate"):
-        RouteChecks.non_proxy_admin_allowed_routes_check(
-            user_obj=user_obj,
-            _user_role=LitellmUserRoles.INTERNAL_USER.value,
-            route="/team/update",
-            request=request,
-            valid_token=valid_token,
-            request_data={"team_id": "team-1", "organization_id": "org-2"},
-        )
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route="/team/update",
+        request=request,
+        valid_token=valid_token,
+        request_data={"team_id": "team-1", "organization_id": "org-2"},
+    )
 
 
 # ── PATCH /team/{team_id}: same org-context + role reach as POST /team/update ──
@@ -2989,23 +2995,6 @@ async def test_add_team_org_context_noop_for_static_team_route():
         route_template="/team/new",
     )
     assert out == body
-
-
-def test_patch_team_route_has_same_reach_as_team_update():
-    """/team/{team_id} is reachable by org admins (in org_admin_allowed_routes) but
-    NOT by regular internal users or the role-agnostic self_managed_routes — the
-    latter would open /team/new (the collision footgun) to any authenticated user."""
-    from litellm.proxy._types import LiteLLMRoutes
-
-    assert RouteChecks.check_route_access(
-        route="/team/abc-123", allowed_routes=LiteLLMRoutes.org_admin_allowed_routes.value
-    )
-    assert not RouteChecks.check_route_access(
-        route="/team/abc-123", allowed_routes=LiteLLMRoutes.internal_user_routes.value
-    )
-    assert not RouteChecks.check_route_access(
-        route="/team/abc-123", allowed_routes=LiteLLMRoutes.self_managed_routes.value
-    )
 
 
 def _patch_team_request() -> MagicMock:
@@ -3895,7 +3884,6 @@ def test_team_disable_logging_stays_proxy_admin_only():
     "route",
     [
         "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112",
-        "/team/update",
         "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/model/add",
     ],
 )
@@ -3919,10 +3907,15 @@ def test_claude_code_marketplace_routes_open_to_internal_users(route):
 
 
 @pytest.mark.parametrize("user_role", [None, LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value])
-def test_auto_router_session_is_reachable_by_any_key_but_benchmarks_stays_admin_only(user_role):
-    valid_token = UserAPIKeyAuth(api_key="hash-of-caller", user_role=user_role)
-    request = MagicMock(spec=Request)
-    request.query_params = {"session_id": "sess-1"}
+@pytest.mark.parametrize("allowed_routes", [None, ["llm_api_routes"]])
+def test_auto_router_session_is_reachable_by_any_key_but_benchmarks_stays_admin_only(
+    user_role: str | None, allowed_routes: list[str] | None
+) -> None:
+    valid_token: Final = UserAPIKeyAuth(api_key="hash-of-caller", user_role=user_role, allowed_routes=allowed_routes)
+    request: Final = Request({"type": "http", "method": "GET", "query_string": b"session_id=sess-1"})
+
+    assert RouteChecks.should_call_route("/auto_router/session", valid_token, request) is True
+    assert RouteChecks.is_llm_api_route("/auto_router/session") is False
 
     RouteChecks.non_proxy_admin_allowed_routes_check(
         user_obj=None,
@@ -3937,6 +3930,110 @@ def test_auto_router_session_is_reachable_by_any_key_but_benchmarks_stays_admin_
             user_obj=None,
             _user_role=user_role,
             route="/auto_router/benchmarks",
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+
+@pytest.mark.parametrize(
+    "route,method,allowed_routes",
+    [
+        ("/auto_router/session", method, ["llm_api_routes"])
+        for method in ("POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", None)
+    ]
+    + [
+        (route, "GET", ["llm_api_routes"])
+        for route in (
+            "/auto_router/benchmarks",
+            "/auto_router/test_routing",
+            "/auto_router/validate_complexity_router_config",
+            "/auto_router/session/other",
+            "/auto_router/sessions",
+        )
+    ]
+    + [
+        ("/auto_router/session", "GET", allowed_routes)
+        for allowed_routes in (["/v1/messages"], ["info_routes"], ["openai_routes"])
+    ],
+)
+def test_auto_router_session_read_grant_rejects_other_methods_paths_and_scopes(
+    route: str, method: str | None, allowed_routes: list[str]
+) -> None:
+    valid_token: Final = UserAPIKeyAuth(api_key="hash-of-caller", allowed_routes=allowed_routes)
+    request: Final = Request({"type": "http", "method": method}) if method is not None else None
+
+    with pytest.raises(HTTPException) as error:
+        RouteChecks.should_call_route(route, valid_token, request)
+
+    assert error.value.status_code == 403
+
+
+@pytest.mark.parametrize("route", ["/key/generate", "/key/update"])
+def test_team_service_account_key_allowed_key_management_routes(route):
+    """A service account key (user_id=None, team_id set, metadata.service_account_id)
+    can reach key-management routes; team scoping is enforced in the handlers."""
+    valid_token = UserAPIKeyAuth(
+        api_key="sk",
+        team_id="t1",
+        user_id=None,
+        metadata={"service_account_id": "ci"},
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    result = RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=None,
+        _user_role=None,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+    assert result is None
+
+
+@pytest.mark.parametrize("route", ["/team/new", "/spend/logs", "/key/delete", "/key/regenerate"])
+def test_team_service_account_key_rejected_outside_generate_and_update(route):
+    """The service account carve-out covers only /key/generate and /key/update; other
+    key-management routes lack team scoping for a userless caller and stay denied."""
+    valid_token = UserAPIKeyAuth(
+        api_key="sk",
+        team_id="t1",
+        user_id=None,
+        metadata={"service_account_id": "ci"},
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate, delete, update"):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=None,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+
+def test_team_key_without_service_account_marker_still_rejected():
+    """A team key without metadata.service_account_id is not a service account
+    and still cannot reach key-management routes."""
+    valid_token = UserAPIKeyAuth(
+        api_key="sk",
+        team_id="t1",
+        user_id=None,
+        metadata={},
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate, delete, update"):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=None,
+            route="/key/generate",
             request=request,
             valid_token=valid_token,
             request_data={},

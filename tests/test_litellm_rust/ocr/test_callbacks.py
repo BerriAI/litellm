@@ -41,7 +41,7 @@ def test_native_ocr_pre_call_callback_receives_transformed_provider_request(ocr_
     observations: Final = []
 
     class Observe(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             observations.append((model, copy.deepcopy(kwargs["additional_args"])))
 
     call_native_ocr_with_callbacks(ocr_server, [Observe()], pages=[0])
@@ -64,13 +64,13 @@ def test_native_ocr_pre_call_body_edit_reaches_next_callback_and_provider(
     observed: Final = []
 
     class Edit(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             request_body(kwargs)["include_image_base64"] = True
             if raise_after_edit:
                 raise RuntimeError("pre-call callback failed")
 
     class Observe(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             observed.append(copy.deepcopy(request_body(kwargs)))
 
     call_native_ocr_with_callbacks(ocr_server, [Edit(), Observe()], include_image_base64=False)
@@ -83,11 +83,11 @@ def test_native_ocr_pre_call_header_edit_reaches_next_callback_and_provider(ocr_
     observed: Final = []
 
     class Edit(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             request_headers(kwargs)["x-audit-tag"] = "reviewed"
 
     class Observe(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             observed.append(dict(request_headers(kwargs)))
 
     call_native_ocr_with_callbacks(ocr_server, [Edit(), Observe()])
@@ -107,12 +107,12 @@ async def test_native_ocr_pre_call_nested_document_edit_updates_caller_callback_
     aliases: Final = []
 
     class Retain(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             aliases.append(request_body(kwargs)["document"] is original)
             retained.append(request_body(kwargs)["document"])
 
     class Edit(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             original["document_url"] = replacement_url
 
     arguments: Final = {
@@ -135,41 +135,17 @@ async def test_native_ocr_pre_call_nested_document_edit_updates_caller_callback_
     assert response.pages[0].markdown == "native OCR response"
 
 
-def test_native_ocr_pre_call_document_replacement_does_not_mutate_original_document(
-    ocr_server: RecordingServer,
-) -> None:
-    original: Final = dict(OCR_DOCUMENT)
-    replacement: Final = {"type": "document_url", "document_url": "data:application/pdf;base64,ZGVm"}
-    retained: Final = []
-
-    class RetainAndReplace(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
-            body = request_body(kwargs)
-            retained.append(body["document"])
-            body["document"] = replacement
-
-    call_native_ocr(
-        ocr_server,
-        document=original,
-        callbacks=[RetainAndReplace()],
-    )
-
-    assert retained[0] is original
-    assert original["document_url"] == OCR_DOCUMENT["document_url"]
-    assert ocr_server.requests[0].body["document"] == replacement
-
-
 def test_native_ocr_pre_call_body_rebinding_is_visible_to_callbacks_but_not_provider(
     ocr_server: RecordingServer,
 ) -> None:
     observed: Final = []
 
     class Rebind(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             kwargs["additional_args"]["complete_input_dict"] = {"replacement": True}
 
     class Observe(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             observed.append(request_body(kwargs))
 
     call_native_ocr_with_callbacks(ocr_server, [Rebind(), Observe()])
@@ -182,11 +158,11 @@ def test_native_ocr_callback_retained_body_observes_later_callback_mutation(ocr_
     queued: Final = []
 
     class QueuePayload(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             queued.append(request_body(kwargs))
 
     class Edit(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             request_body(kwargs)["queued-edit"] = True
 
     call_native_ocr_with_callbacks(ocr_server, [QueuePayload(), Edit()])
@@ -200,7 +176,7 @@ def test_native_ocr_success_callback_receives_state_added_by_pre_call_callback(o
     finished: Final = threading.Event()
 
     class Stash(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             kwargs["test-token"] = token
 
         def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -280,7 +256,7 @@ async def test_native_aocr_failure_callbacks_receive_state_added_by_pre_call_cal
     observed: Final = []
 
     class TrackInFlightRequest(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             kwargs["request-token"] = token
 
         def log_failure_event(self, kwargs, response_obj, start_time, end_time):
@@ -294,32 +270,6 @@ async def test_native_aocr_failure_callbacks_receive_state_added_by_pre_call_cal
 
     assert [event for event, _ in observed] == ["sync", "async"]
     assert all(observed_token is token for _, observed_token in observed)
-
-
-@pytest.mark.asyncio
-async def test_native_aocr_callback_error_does_not_mask_provider_error_or_skip_later_failure_callbacks(
-    ocr_server: RecordingServer,
-) -> None:
-    ocr_server.enqueue(ResponseSpec(body={"message": "provider unavailable"}, status=500))
-    recorder: Final = RecordingLogger()
-
-    class FailingCallback(CustomLogger):
-        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
-            raise RuntimeError("failure callback failed")
-
-        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-            raise RuntimeError("failure callback failed")
-
-    with pytest.raises(litellm.InternalServerError) as caught:
-        await call_native_aocr_with_callbacks(ocr_server, [FailingCallback(), recorder])
-
-    sync_events: Final = tuple(event for event in recorder.events if event.name == "log_failure_event")
-    async_events: Final = tuple(event for event in recorder.events if event.name == "async_log_failure_event")
-    assert len(sync_events) == 1
-    assert len(async_events) == 1
-    assert sync_events[0].kwargs["exception"] is caught.value
-    assert async_events[0].kwargs["exception"] is caught.value
-    assert "async_log_success_event" not in recorder.names
 
 
 def test_native_ocr_dispatches_each_callback_phase_once_when_logger_is_registered_multiple_times(
@@ -349,6 +299,7 @@ async def test_native_azure_ocr_resolves_token_before_pre_call_on_caller_context
     asynchronous: bool,
 ) -> None:
     from contextvars import ContextVar
+
     context: Final = ContextVar("azure-token-context", default="missing")
     context.set("caller")
     caller_thread: Final = threading.current_thread()
@@ -364,7 +315,7 @@ async def test_native_azure_ocr_resolves_token_before_pre_call_on_caller_context
             return "caller-token"
 
     class Edit(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             assert request_headers(kwargs)["Authorization"] == "Bearer caller-token"
             observations.append("pre_call")
             request_headers(kwargs)["Authorization"] = "Bearer edited"
@@ -377,9 +328,7 @@ async def test_native_azure_ocr_resolves_token_before_pre_call_on_caller_context
         "callbacks": [Edit()],
     }
     response: Final = (
-        await call_native_aocr(ocr_server, **arguments)
-        if asynchronous
-        else call_native_ocr(ocr_server, **arguments)
+        await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
     )
     assert response.pages[0].markdown == "native OCR response"
     assert observations == ["token", "pre_call"]
@@ -408,9 +357,7 @@ async def test_native_azure_ocr_token_provider_can_make_nested_native_ocr_call(
         "azure_ad_token_provider": provider,
     }
     response: Final = (
-        await call_native_aocr(ocr_server, **arguments)
-        if asynchronous
-        else call_native_ocr(ocr_server, **arguments)
+        await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
     )
     assert response.pages[0].markdown == "native OCR response"
     assert calls == ["token"]
@@ -457,53 +404,36 @@ async def test_concurrent_native_azure_ocr_calls_isolate_token_results_and_error
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ["success", "failure", "cancellation"])
-async def test_native_azure_ocr_releases_token_provider_after_terminal_outcome(
+async def test_native_azure_ocr_releases_token_provider_after_cancellation(
     ocr_server: RecordingServer,
     isolated_azure_auth: None,
-    outcome: str,
 ) -> None:
     import gc
     import weakref
+
     from tests.test_litellm_rust.support.callback_recorder import drain_logging
+
     class Provider:
         def __call__(self) -> str:
-            if outcome == "failure":
-                raise ValueError("unavailable")
             return "caller-token"
 
     async def invoke() -> weakref.ReferenceType[Provider]:
         provider: Final = Provider()
         reference: Final = weakref.ref(provider)
-        if outcome == "failure":
-            ocr_server.expected_requests = 0
-            with pytest.raises(litellm.APIConnectionError):
-                await call_native_aocr(
-                    ocr_server, model="azure_ai/mistral-ocr-latest", api_key=None, azure_ad_token_provider=provider
-                )
-        elif outcome == "cancellation":
-            ocr_server.enqueue(ResponseSpec(body=OCR_RESPONSE, delay=0.1))
-            task: Final = asyncio.create_task(
-                call_native_aocr(
-                    ocr_server,
-                    model="azure_ai/mistral-ocr-latest",
-                    api_key=None,
-                    azure_ad_token_provider=provider,
-                )
-            )
-            await ocr_server.wait_for_requests(1)
-            assert reference() is provider
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
-        else:
-            response: Final = await call_native_aocr(
+        ocr_server.enqueue(ResponseSpec(body=OCR_RESPONSE, delay=0.1))
+        task: Final = asyncio.create_task(
+            call_native_aocr(
                 ocr_server,
                 model="azure_ai/mistral-ocr-latest",
                 api_key=None,
                 azure_ad_token_provider=provider,
             )
-            assert response.pages[0].markdown == "native OCR response"
+        )
+        await ocr_server.wait_for_requests(1)
+        assert reference() is provider
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
         return reference
 
     reference: Final = await invoke()

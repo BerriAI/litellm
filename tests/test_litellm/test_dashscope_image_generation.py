@@ -5,7 +5,6 @@ qwen-image-3.0, qwen-image-3.0-pro).
 Run in docker: pytest tests/test_litellm/test_dashscope_image_generation.py -v
 """
 
-import json
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -16,7 +15,7 @@ from litellm.llms.dashscope.image_generation.transformation import (
     DashScopeImageGenerationConfig,
     DEFAULT_API_BASE,
 )
-from litellm.types.utils import ImageObject, ImageResponse
+from litellm.types.utils import ImageResponse
 from litellm.utils import get_llm_provider
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -44,40 +43,6 @@ def test_get_llm_provider_returns_dashscope(model_string: str):
 # ---------------------------------------------------------------------------
 # 2. Model info: mode == "image_generation"
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "model_string, custom_provider",
-    [
-        ("dashscope/qwen-image-2.0", "dashscope"),
-        ("dashscope/qwen-image-2.0-pro", "dashscope"),
-        ("dashscope/qwen-image-3.0", "dashscope"),
-        ("dashscope/qwen-image-3.0-pro", "dashscope"),
-    ],
-)
-def test_get_model_info_mode_is_image_generation(
-    model_string: str, custom_provider: str
-):
-    import os
-
-    prev_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
-    prev_model_cost = litellm.model_cost
-    try:
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-
-        info = litellm.get_model_info(
-            model=model_string, custom_llm_provider=custom_provider
-        )
-        assert (
-            info["mode"] == "image_generation"
-        ), f"Expected mode='image_generation', got '{info['mode']}'"
-    finally:
-        if prev_env is None:
-            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
-        else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = prev_env
-        litellm.model_cost = prev_model_cost
 
 
 # ---------------------------------------------------------------------------

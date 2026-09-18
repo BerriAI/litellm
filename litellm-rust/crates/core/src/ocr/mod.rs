@@ -1,17 +1,12 @@
-mod adapters;
+pub mod arguments;
 pub mod client;
-mod codecs;
-mod document;
-pub mod error;
-mod handler;
-pub mod hooks;
-mod prepare;
-mod registry;
+pub mod document;
+pub(crate) mod handler;
+pub(crate) mod prepare;
+pub mod provider_config;
+pub mod route;
 pub mod types;
 pub mod wire;
-
-pub use client::{OcrClient, ocr};
-pub use types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument};
 
 #[cfg(test)]
 #[path = "../../tests/azure_ai_ocr.rs"]
@@ -20,8 +15,14 @@ mod azure_ai_tests;
 #[path = "../../tests/azure_document_intelligence_ocr.rs"]
 mod azure_document_intelligence_tests;
 #[cfg(test)]
+#[path = "../../tests/cohere_ocr.rs"]
+mod cohere_tests;
+#[cfg(test)]
 #[path = "../../tests/deepseek_ocr.rs"]
 mod deepseek_tests;
+#[cfg(test)]
+#[path = "../../tests/ocr/passthrough.rs"]
+mod passthrough_tests;
 #[cfg(test)]
 #[path = "../../tests/reducto_ocr.rs"]
 mod reducto_tests;
