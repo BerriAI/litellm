@@ -2421,14 +2421,14 @@ def test_proxy_server_request_payload_excludes_secret_fields(mock_should_store):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("redact", [False, True], ids=["stored", "redacted"])
-@patch(
-    "litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs",
-    return_value=True,
-)
-async def test_websocket_snapshot_spend_serialization_preserves_transport(_mock_should_store, redact):
+async def test_websocket_snapshot_spend_serialization_preserves_transport(
+    monkeypatch: pytest.MonkeyPatch, redact: bool
+) -> None:
     from starlette.websockets import WebSocket
 
     from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
 
     class AppTraversalTrap:
         @property
