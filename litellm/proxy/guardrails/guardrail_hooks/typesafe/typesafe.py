@@ -3,13 +3,7 @@
 Instead of summarizing tool output, the guardrail asks TypeSafe's Jev model
 one yes/no question per completed tool exchange ("is this result still needed
 for the current task?") over ``POST {api_base}/v1/systemone`` and blanks the
-tool results Jev judges no longer relevant. The assistant tool-call rows stay
-intact, so the conversation remains well-formed while the dead context stops
-consuming input tokens.
-
-Exchanges follow litellm's own compression protection policy: system rows, the
-last user row, and the last assistant row (which, expanded over its tool
-exchange, covers the most recent exchange) are never evaluated or rewritten.
+tool results Jev judges no longer relevant.
 """
 
 from __future__ import annotations
@@ -24,7 +18,6 @@ from fastapi import HTTPException
 from httpx import Response as HttpxResponse
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.compression.compress import get_protected_indices
 from litellm.integrations.custom_guardrail import (
@@ -56,8 +49,6 @@ DEFAULT_RELEVANCE_THRESHOLD: Final = 0.2
 DEFAULT_MIN_CHARS_TO_EVALUATE: Final = 200
 DEFAULT_MAX_RESULT_CHARS_IN_STATE: Final = 4000
 _MAX_EXCHANGES_EVALUATED: Final = 200
-# The shared GuardrailCallback client carries no per-call bound; an on-request
-# guardrail must not hold the caller's request for the client's pooled timeout.
 _JEV_TIMEOUT_SECONDS: Final = 30.0
 DROPPED_RESULT_TEXT: Final = (
     "[Tool result removed by TypeSafe compaction: judged no longer relevant to the current task]"
@@ -72,9 +63,11 @@ def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isin
     return isinstance(value, list)
 
 
-def _safe_response_text(response: object, limit: int = 500) -> str:
+def _safe_response_text(response: HttpxResponse | None, limit: int = 500) -> str:
+    if response is None:
+        return ""
     try:
-        text: Final = getattr(response, "text", "")
+        text: Final = response.text
     except httpx.DecodingError:
         return "<undecodable response body>"
     return (text or "")[:limit]
@@ -120,13 +113,7 @@ def _tool_call_entries(assistant_message: Mapping[str, object]) -> list[dict[str
 
 
 def _protected_indices(messages: Sequence[Mapping[str, object]]) -> frozenset[int]:
-    """Rows typesafe must not rewrite, expanded over whole tool exchanges.
-
-    ``get_protected_indices`` covers system rows, the last user row, the last
-    assistant row, and cache_control prefixes. Expanding over exchanges keeps an
-    exchange atomic: the last assistant row protects its own tool results too,
-    so the most recent exchange is never evaluated.
-    """
+    """``get_protected_indices`` expanded over whole tool exchanges, so the most recent exchange is never evaluated."""
     protected: Final = frozenset(get_protected_indices(messages))
     return protected | frozenset(
         index
@@ -180,8 +167,7 @@ class TypeSafeGuardrail(CustomGuardrail):
         )
 
     def _handle_failure(self, error: str, log_detail: dict[str, object]) -> None:
-        """fail_open logs and the caller forwards uncompacted; fail_closed raises.
-        Upstream bodies go to server logs only; the raised HTTPException is generic."""
+        """fail_open logs and returns; fail_closed raises a generic 502 (upstream bodies stay in server logs)."""
         if self.unreachable_fallback == "fail_open":
             verbose_proxy_logger.warning(
                 "TypeSafe: %s; fail_open configured, forwarding request uncompacted. detail=%s",
@@ -190,16 +176,10 @@ class TypeSafeGuardrail(CustomGuardrail):
             )
             return
         verbose_proxy_logger.error("TypeSafe: %s. detail=%s", error, log_detail)
-        raise HTTPException(status_code=500, detail={"error": error})
+        raise HTTPException(status_code=502, detail={"error": error})
 
     def _candidate_exchanges(self, messages: list[dict[str, object]]) -> list[tuple[int, ...]]:
-        """Message-index groups eligible for relevance evaluation, oldest first.
-
-        A candidate is a completed tool exchange: an assistant row that made
-        tool calls plus at least one ``tool``/``function`` row answering it,
-        with no member protected, and enough combined tool-result text to be
-        worth an evaluation call.
-        """
+        """Completed tool exchanges eligible for evaluation: unprotected, and long enough to be worth a call."""
         protected: Final = _protected_indices(messages)
         candidates: Final[list[tuple[int, ...]]] = []
         for group in group_tool_exchanges(messages):
@@ -245,8 +225,7 @@ class TypeSafeGuardrail(CustomGuardrail):
         return {"task": task, "system": system, "tool_exchanges": tool_exchanges}
 
     async def _call_systemone(self, state: dict[str, object], question_ids: list[str]) -> _JevSystemOneResponse | None:
-        """Evaluate each exchange. Returns the response, or None when the service
-        failed and fail_open applies."""
+        """Returns the response, or None when the service failed and fail_open applies."""
         payload: Final[dict[str, object]] = {
             "model": self.jev_model,
             "state": state,
@@ -267,18 +246,18 @@ class TypeSafeGuardrail(CustomGuardrail):
             )
         except asyncio.CancelledError:
             raise
-        except httpx.HTTPStatusError as e:
-            resp: Final = getattr(e, "response", None)
-            self._handle_failure(
-                "TypeSafe evaluation service returned an error",
-                {"status_code": getattr(resp, "status_code", None), "body": _safe_response_text(resp)},
-            )
-            return None
-        except (httpx.RequestError, litellm.Timeout) as e:
-            self._handle_failure("TypeSafe evaluation service request failed", {"detail": str(e)})
-            return None
         except Exception as e:
-            self._handle_failure("TypeSafe evaluation service request failed", {"detail": str(e)})
+            detail: Final[dict[str, object]] = (
+                {
+                    "error_type": type(e).__name__,
+                    "detail": str(e),
+                    "status_code": e.response.status_code,
+                    "body": _safe_response_text(e.response),
+                }
+                if isinstance(e, httpx.HTTPStatusError)
+                else {"error_type": type(e).__name__, "detail": str(e)}
+            )
+            self._handle_failure("TypeSafe evaluation service request failed", detail)
             return None
         if not 200 <= raw_response.status_code < 300:
             self._handle_failure(

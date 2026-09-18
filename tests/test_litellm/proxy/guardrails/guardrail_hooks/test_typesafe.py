@@ -227,8 +227,9 @@ async def test_fail_closed_raises_http_exception():
     handler.post = AsyncMock(side_effect=Exception("connection refused"))
     guardrail = _make_guardrail(handler, unreachable_fallback="fail_closed")
     inputs = _inputs(_messages(tail=[*_exchange("call_1", TOOL_OUTPUT_LONG), {"role": "assistant", "content": "x"}]))
-    with pytest.raises(HTTPException):
+    with pytest.raises(HTTPException) as exc_info:
         await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+    assert exc_info.value.status_code == 502
 
 
 @pytest.mark.asyncio
