@@ -333,7 +333,7 @@ def normalize_custom_field_on_tools(request_body: dict) -> None:
 _JSON_SCHEMA_TYPE_CARRYING_KEYWORDS: Final = frozenset(("enum", "const", "anyOf", "oneOf", "allOf", "not", "$ref"))
 
 
-def _infer_json_schema_type(node: dict) -> str | None:
+def _infer_json_schema_type(node: Mapping[str, object]) -> str | None:
     """
     Type to backfill on a JSON Schema node that has no ``type``: ``object`` for
     ``properties``, ``array`` for ``items``, ``object`` for an untyped free-form node
@@ -382,11 +382,12 @@ def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
         addl = node.get("additionalProperties")
         if isinstance(addl, dict):
             stack.append(addl)
-        props = node.get("properties")
-        if isinstance(props, dict):
-            for sub in props.values():
-                if isinstance(sub, dict):
-                    stack.append(sub)
+        for mapping_key in ("properties", "$defs", "definitions"):
+            subs = node.get(mapping_key)
+            if isinstance(subs, dict):
+                for sub in subs.values():
+                    if isinstance(sub, dict):
+                        stack.append(sub)
         for combiner in ("allOf", "anyOf", "oneOf"):
             arr = node.get(combiner)
             if isinstance(arr, list):
