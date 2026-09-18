@@ -90,6 +90,15 @@ class TestBudget:
         assert LiteLLM_BudgetTable(max_budget=100.0).effective_max_budget(now=now) == 100.0
         assert LiteLLM_BudgetTable(max_budget=None, temp_budget_increase=50.0).effective_max_budget(now=now) is None
 
+    def test_active_temp_budget_increase_is_independent_of_max_budget(self):
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        bare = LiteLLM_BudgetTable(max_budget=None, temp_budget_increase=50.0, temp_budget_expiry=datetime(2100, 1, 1))
+        assert bare.active_temp_budget_increase(now=now) == 50.0
+        assert bare.effective_max_budget(now=now) is None
+        expired = LiteLLM_BudgetTable(max_budget=None, temp_budget_increase=50.0, temp_budget_expiry=now)
+        assert expired.active_temp_budget_increase(now=now) == 0.0
+        assert LiteLLM_BudgetTable(max_budget=None).active_temp_budget_increase(now=now) == 0.0
+
 
 class TestCredentials:
     def test_credentials_creation(self):
