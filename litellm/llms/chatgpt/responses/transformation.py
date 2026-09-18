@@ -24,8 +24,10 @@ from ..common_utils import (
     CHATGPT_API_BASE,
     GetAccessTokenError,
     ensure_chatgpt_session_id,
+    get_chatgpt_client_credential,
     get_chatgpt_default_headers,
     get_chatgpt_default_instructions,
+    strip_chatgpt_client_credential_headers,
 )
 
 if TYPE_CHECKING:
@@ -33,9 +35,9 @@ if TYPE_CHECKING:
 
 
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
-    def __init__(self) -> None:
+    def __init__(self, authenticator: Authenticator | None = None) -> None:
         super().__init__()
-        self.authenticator = Authenticator()
+        self.authenticator = authenticator if authenticator is not None else Authenticator()
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -47,6 +49,19 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         model: str,
         litellm_params: GenericLiteLLMParams | None,
     ) -> dict:
+        session_id: Final = ensure_chatgpt_session_id(litellm_params)
+        client_credential: Final = get_chatgpt_client_credential(headers)
+        if client_credential is not None:
+            return {  # mutable-ok: validate_environment returns the request header dict
+                **get_chatgpt_default_headers(client_credential.access_token, client_credential.account_id, session_id),
+                **strip_chatgpt_client_credential_headers(headers),
+            }
+        configured_api_key: Final = litellm_params.api_key if litellm_params is not None else None
+        if configured_api_key:
+            return {  # mutable-ok: validate_environment returns the request header dict
+                **get_chatgpt_default_headers(configured_api_key, None, session_id),
+                **headers,
+            }
         try:
             access_token: Final = self.authenticator.get_access_token()
         except GetAccessTokenError as e:
@@ -57,7 +72,6 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             )
 
         account_id: Final = self.authenticator.get_account_id()
-        session_id: Final = ensure_chatgpt_session_id(litellm_params)
         default_headers: Final = get_chatgpt_default_headers(access_token, account_id, session_id)
         return {**default_headers, **headers}
 

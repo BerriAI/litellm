@@ -3,7 +3,7 @@ from typing import Final
 import litellm
 from litellm import verbose_logger
 
-from ...litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from ...litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, get_llm_provider
 from ...types.router import LiteLLM_Params
 
 
@@ -37,11 +37,15 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
         return None
     # get llm provider
 
-    if _optional_params.api_base is not None:
-        return _optional_params.api_base
-
     if litellm.model_alias_map and model in litellm.model_alias_map:
         model = litellm.model_alias_map[model]
+
+    if (
+        _optional_params.api_base is not None
+        or declared_authenticating_provider(model, _optional_params.custom_llm_provider) is not None
+    ):
+        return _optional_params.api_base
+
     try:
         (
             model,

@@ -3707,3 +3707,48 @@ def test_image_edit_handler_keeps_the_sync_transform():
     assert config.transform_calls == ["sync"]
     assert captured["body"] == {"transformed_by": "sync"}
     assert response.data[0].b64_json == "sync"
+
+
+def test_responses_handler_lets_provider_see_client_extra_headers_before_choosing_credentials():
+    """Providers pick between a client credential and their own login inside validate_environment,
+    so the request's extra_headers must be visible there, and the final headers must not carry
+    two case variants of the same header."""
+    from unittest.mock import MagicMock
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    provider_config = MagicMock()
+    provider_config.validate_environment.side_effect = lambda headers, model, litellm_params: {
+        "Authorization": headers["authorization"].replace("client", "chosen"),
+        "ChatGPT-Account-Id": headers["chatgpt-account-id"],
+        "content-type": "application/json",
+    }
+    provider_config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
+    provider_config.transform_responses_api_request.return_value = {"input": "hi"}
+    provider_config.should_fake_stream.return_value = False
+    provider_config.sign_request.side_effect = lambda headers, **_: (headers, None)
+
+    mock_client = MagicMock(spec=HTTPHandler)
+    mock_client.post.return_value = MagicMock()
+
+    BaseLLMHTTPHandler().response_api_handler(
+        model="gpt-5.4",
+        input="hi",
+        responses_api_provider_config=provider_config,
+        response_api_optional_request_params={"extra_headers": {"originator": "codex_cli_rs"}},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=MagicMock(),
+        extra_headers={"authorization": "Bearer client-token", "chatgpt-account-id": "acct-alice"},
+        client=mock_client,
+        _is_async=False,
+    )
+
+    seen = provider_config.validate_environment.call_args.kwargs["headers"]
+    assert seen["originator"] == "codex_cli_rs"
+    assert seen["authorization"] == "Bearer client-token"
+
+    sent = mock_client.post.call_args.kwargs["headers"]
+    assert [sent[name] for name in sent if name.lower() == "authorization"] == ["Bearer client-token"]
+    assert [sent[name] for name in sent if name.lower() == "chatgpt-account-id"] == ["acct-alice"]
+    assert sent["content-type"] == "application/json"

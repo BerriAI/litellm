@@ -1225,6 +1225,13 @@ def responses(
             local_vars=local_vars,
         )
 
+        extra_headers = ResponsesAPIRequestUtils.merge_provider_specific_headers(
+            extra_headers=extra_headers,
+            provider_specific_header=kwargs.get("provider_specific_header"),
+            custom_llm_provider=custom_llm_provider,
+        )
+        local_vars["extra_headers"] = extra_headers
+
         #########################################################
         # Update input and tools with provider-specific file IDs if managed files are used
         #########################################################
