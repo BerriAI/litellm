@@ -3150,7 +3150,7 @@ def _validate_member_user_id_provisioning(
     )
 
 
-def _members_audit_value(members: Sequence[Member]) -> str:
+def _members_audit_value(team_alias: str | None, members: Sequence[Member]) -> str:
     """Serialize a team's member list for an audit-log value.
 
     The audit-log columns hold a JSON object, so the member list is nested
@@ -3158,13 +3158,15 @@ def _members_audit_value(members: Sequence[Member]) -> str:
     """
     return safe_dumps(
         {  # mutable-ok: the audit-log JSON column rejects a top-level array, so this value must be an object
-            "members_with_roles": tuple(member.model_dump() for member in members)
+            "team_alias": team_alias,
+            "members_with_roles": tuple(member.model_dump() for member in members),
         }
     )
 
 
 async def _create_team_membership_audit_log(
     team_id: str,
+    team_alias: str | None,
     before_members: Sequence[Member],
     after_members: Sequence[Member],
     user_api_key_dict: UserAPIKeyAuth,
@@ -3179,13 +3181,14 @@ async def _create_team_membership_audit_log(
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name=litellm_proxy_admin_name,
         table_name=LitellmTableNames.TEAM_TABLE_NAME,
-        before_value=_members_audit_value(before_members),
-        after_value=_members_audit_value(after_members),
+        before_value=_members_audit_value(team_alias, before_members),
+        after_value=_members_audit_value(team_alias, after_members),
     )
 
 
 async def _create_team_member_add_audit_logs(
     team_id: str,
+    team_alias: str | None,
     updated_users: Sequence[LiteLLM_UserTable],
     existing_user_ids: frozenset[str],
     before_members: Sequence[Member],
@@ -3217,6 +3220,7 @@ async def _create_team_member_add_audit_logs(
 
     membership_entry: Final = _create_team_membership_audit_log(
         team_id=team_id,
+        team_alias=team_alias,
         before_members=before_members,
         after_members=after_members,
         user_api_key_dict=user_api_key_dict,
@@ -3460,6 +3464,7 @@ async def team_member_add(
 
     await _create_team_member_add_audit_logs(
         team_id=data.team_id,
+        team_alias=complete_team_data.team_alias,
         updated_users=updated_users,
         existing_user_ids=pre_existing_user_ids,
         before_members=members_before_add,
@@ -3538,6 +3543,7 @@ async def team_member_delete(
     if before_members != after_members:
         await _create_team_membership_audit_log(
             team_id=existing_team_row.team_id,
+            team_alias=existing_team_row.team_alias,
             before_members=before_members,
             after_members=after_members,
             user_api_key_dict=user_api_key_dict,
@@ -3879,6 +3885,7 @@ async def team_member_update(
         if members_before_role_update != tuple(team_members):
             await _create_team_membership_audit_log(
                 team_id=data.team_id,
+                team_alias=team_table.team_alias,
                 before_members=members_before_role_update,
                 after_members=team_members,
                 user_api_key_dict=user_api_key_dict,

@@ -13245,9 +13245,12 @@ def test_members_audit_value_serializes_to_a_json_object():
     """The audit-log columns hold a JSON object; a top-level array is rejected by the DB."""
     from litellm.proxy.management_endpoints.team_endpoints import _members_audit_value
 
-    payload = json.loads(_members_audit_value([Member(user_id="u1", role="admin"), Member(user_id="u2", role="user")]))
+    payload = json.loads(
+        _members_audit_value("my-team", [Member(user_id="u1", role="admin"), Member(user_id="u2", role="user")])
+    )
 
     assert isinstance(payload, dict)
+    assert payload["team_alias"] == "my-team"
     assert [m["user_id"] for m in payload["members_with_roles"]] == ["u1", "u2"]
 
 
@@ -13272,7 +13275,7 @@ async def test_team_member_add_audits_a_user_created_from_a_list_payload(monkeyp
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id")
 
-    team_row = LiteLLM_TeamTable(team_id=team_id, members_with_roles=[])
+    team_row = LiteLLM_TeamTable(team_id=team_id, team_alias="list-audit", members_with_roles=[])
     created_user = LiteLLM_UserTable(
         user_id=created_user_id, user_email="invitee@example.com", max_budget=None, spend=0.0, models=[]
     )
@@ -13319,6 +13322,7 @@ async def test_team_member_add_audits_a_user_created_from_a_list_payload(monkeyp
 
     mock_audit.assert_called_once()
     assert created_user_id not in mock_audit.call_args.kwargs["existing_user_ids"]
+    assert mock_audit.call_args.kwargs["team_alias"] == "list-audit"
 
 
 class _RecordingAuditLogger(CustomLogger):
@@ -13345,13 +13349,20 @@ async def _settle_audit_log_tasks() -> None:
 
 def _team_roster_events(audit_logger: _RecordingAuditLogger, action: str) -> list[StandardAuditLogPayload]:
     return [
-        p for p in audit_logger.payloads if p["table_name"] == LitellmTableNames.TEAM_TABLE_NAME and p["action"] == action
+        p
+        for p in audit_logger.payloads
+        if p["table_name"] == LitellmTableNames.TEAM_TABLE_NAME and p["action"] == action
     ]
 
 
 def _roster_user_roles(members_json: str | None) -> dict[str, str]:
     assert members_json is not None
     return {m["user_id"]: m["role"] for m in json.loads(members_json)["members_with_roles"]}
+
+
+def _roster_team_alias(members_json: str | None) -> str | None:
+    assert members_json is not None
+    return json.loads(members_json)["team_alias"]
 
 
 @pytest.mark.asyncio
@@ -13426,6 +13437,7 @@ async def test_team_member_delete_emits_a_roster_audit_event(monkeypatch, mock_d
     team_row = MagicMock()
     team_row.model_dump.return_value = {
         "team_id": "team-del-audit",
+        "team_alias": "del-audit",
         "members_with_roles": [
             {"user_id": "alice", "user_email": None, "role": "admin"},
             {"user_id": "bob", "user_email": None, "role": "user"},
@@ -13459,6 +13471,8 @@ async def test_team_member_delete_emits_a_roster_audit_event(monkeypatch, mock_d
     assert [e["object_id"] for e in updated_events] == ["team-del-audit"]
     assert _roster_user_roles(updated_events[0]["before_value"]) == {"alice": "admin", "bob": "user"}
     assert _roster_user_roles(updated_events[0]["updated_values"]) == {"alice": "admin"}
+    assert _roster_team_alias(updated_events[0]["before_value"]) == "del-audit"
+    assert _roster_team_alias(updated_events[0]["updated_values"]) == "del-audit"
 
     stale_user_row = MagicMock()
     stale_user_row.user_id = "carol"
@@ -13483,6 +13497,7 @@ async def test_team_member_update_role_change_emits_a_roster_audit_event(monkeyp
     mock_prisma_client = MagicMock()
     team_row = LiteLLM_TeamTable(
         team_id="team-role-audit",
+        team_alias="role-audit",
         metadata={},
         members_with_roles=[Member(user_id="alice", role="admin"), Member(user_id="bob", role="user")],
     )
@@ -13491,6 +13506,7 @@ async def test_team_member_update_role_change_emits_a_roster_audit_event(monkeyp
         return {
             "team_info": TeamInfoResponseObjectTeamTable(
                 team_id="team-role-audit",
+                team_alias="role-audit",
                 metadata={},
                 members_with_roles=(
                     TeamInfoMember(user_id="alice", role="admin", user_alias="Alice"),
@@ -13531,6 +13547,7 @@ async def test_team_member_update_role_change_emits_a_roster_audit_event(monkeyp
         assert [e["object_id"] for e in updated_events] == ["team-role-audit"]
         assert _roster_user_roles(updated_events[0]["before_value"]) == {"alice": "admin", "bob": "user"}
         assert _roster_user_roles(updated_events[0]["updated_values"]) == {"alice": "admin", "bob": "admin"}
+        assert _roster_team_alias(updated_events[0]["updated_values"]) == "role-audit"
 
         await team_member_update(
             data=TeamMemberUpdateRequest(team_id="team-role-audit", user_id="bob", role="admin"),
