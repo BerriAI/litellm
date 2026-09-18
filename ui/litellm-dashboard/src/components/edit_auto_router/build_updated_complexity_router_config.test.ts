@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { transitionClassifierType } from "../add_model/classifier_type_transition";
+import { effectiveClassifierType } from "../add_model/ComplexityRouterConfig";
 
 import {
   MANAGED_COMPLEXITY_ROUTER_KEYS,
@@ -46,6 +48,62 @@ const hydratedState: KeywordMatchingState = {
 };
 
 describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
+  it("hydrates nullable JEV instructions without resetting the server configuration", () => {
+    const stored = {
+      classifier_type: "jev" as const,
+      jev_classifier_config: {
+        model: "jev-configured",
+        timeout_ms: 6100,
+        instructions: null,
+        circuit_breaker_enabled: false,
+      },
+      tiers: FORM_VALUE.tiers,
+    };
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrateComplexityRouterConfig(stored, undefined));
+    expect(saved.jev_classifier_config).toEqual({
+      model: "jev-configured",
+      timeout_ms: 6100,
+      circuit_breaker_enabled: false,
+    });
+  });
+  it.each([false, true])("round trips JEV settings and preserves unmanaged fields, custom: %s", (custom) => {
+    const stored = {
+      ...(custom ? storedCustomConfig() : STORED),
+      classifier_llm_config: { model: "stale-judge", timeout_ms: 3000 },
+      classifier_type: "jev" as const,
+      jev_classifier_config: {
+        model: "jev-test",
+        timeout_ms: 4100,
+        instructions: "Judge the request",
+        circuit_breaker_enabled: false,
+        circuit_breaker_cooldown_seconds: 10.5,
+      },
+      classifier_context_window_size: 7,
+      classifier_context_budget_chars: 9000,
+      classifier_context_include_assistant_turns: true,
+      some_future_backend_key: { nested: true },
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    expect(effectiveClassifierType(hydrated)).toBe("jev");
+    expect(hydrated.classifier_llm_config).toBeUndefined();
+    expect(hydrated.jev_classifier_config).toEqual(stored.jev_classifier_config);
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
+    expect(saved).toMatchObject({
+      classifier_type: "jev",
+      jev_classifier_config: stored.jev_classifier_config,
+      classifier_context_window_size: 7,
+      classifier_context_budget_chars: 9000,
+      classifier_context_include_assistant_turns: true,
+      some_future_backend_key: { nested: true },
+    });
+    expect(saved).not.toHaveProperty("classifier_llm_config");
+    const reloaded = hydrateComplexityRouterConfig(saved, undefined);
+    expect(reloaded.jev_classifier_config).toEqual(hydrated.jev_classifier_config);
+    expect(effectiveClassifierType(reloaded)).toBe("jev");
+    const llm = buildUpdatedComplexityRouterConfig(saved, transitionClassifierType(reloaded, "llm"));
+    expect(llm).not.toHaveProperty("jev_classifier_config");
+  });
+
   it.each(["capability", "llm_v2", "heuristic"] as const)(
     "handles enabled stored overrides when editing %s with or without keyword form state",
     (classifier_type) => {
@@ -700,7 +758,12 @@ describe("managed keys survive an untouched open-and-save", () => {
   // tier_definitions and fallback_tier cannot sit beside heuristic_first, which this fixture uses,
   // and hybrid_boundary_margin belongs to the sibling hybrid type, so no single stored config can
   // hold every managed key. Each gets its own round trip below.
-  const KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS = new Set(["tier_definitions", "fallback_tier", "hybrid_boundary_margin"]);
+  const KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS = new Set([
+    "tier_definitions",
+    "fallback_tier",
+    "hybrid_boundary_margin",
+    "jev_classifier_config",
+  ]);
 
   // The stall keys are rejected beside the session pinning and user-turn classification this
   // fixture sets, so they get their own round trip below rather than widening this one.
