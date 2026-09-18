@@ -4530,20 +4530,24 @@ async def test_new_user_forwards_budget_limits_into_user_persistence(mocker):
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.count = mocker.AsyncMock(return_value=5)
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    mocker.patch(
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    )
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
         "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
         new=mocker.AsyncMock(),
     )
-    mocker.patch(
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
         "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
         new=mocker.AsyncMock(),
     )
     mock_license = mocker.MagicMock()
     mock_license.is_over_limit.return_value = False
-    mocker.patch("litellm.proxy.proxy_server._license_check", mock_license)
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
+        "litellm.proxy.proxy_server._license_check", mock_license
+    )
 
-    helper = mocker.patch(
+    helper = mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
         "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
         new=mocker.AsyncMock(return_value={"user_id": "u-1", "key": "sk-1", "expires": None}),
     )
@@ -4574,8 +4578,10 @@ async def test_new_user_rejects_malformed_budget_limits(mocker, windows):
     from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 
     mock_prisma_client = mocker.MagicMock()
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    duplicate_check = mocker.patch(
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    )
+    duplicate_check = mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
         "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
         new=mocker.AsyncMock(),
     )

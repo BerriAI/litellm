@@ -43,7 +43,7 @@ async def test_under_budget_passes():
             {"budget_duration": "30d", "max_budget": 100.0, "reset_at": None},
         ]
     )
-    with patch(
+    with patch(  # test-quality-ok: get_current_spend is a lazy module import inside the check; no injection seam
         "litellm.proxy.proxy_server.get_current_spend",
         new_callable=AsyncMock,
         return_value=1.0,  # well under both windows
@@ -71,7 +71,9 @@ async def test_over_first_window_raises():
         call_count += 1
         return val
 
-    with patch("litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend):
+    with patch(  # test-quality-ok: get_current_spend is a lazy module import inside the check
+        "litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend
+    ):
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
             await _virtual_key_multi_budget_check(valid_token=token)
 
@@ -101,7 +103,9 @@ async def test_over_second_window_raises():
         call_count += 1
         return val
 
-    with patch("litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend):
+    with patch(  # test-quality-ok: get_current_spend is a lazy module import inside the check
+        "litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend
+    ):
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
             await _virtual_key_multi_budget_check(valid_token=token)
 
@@ -127,7 +131,7 @@ async def test_budget_limit_entry_objects_coerced():
         [BudgetLimitEntry(budget_duration="24h", max_budget=10.0)],
     )
 
-    with patch(
+    with patch(  # test-quality-ok: get_current_spend is a lazy module import inside the check; no injection seam
         "litellm.proxy.proxy_server.get_current_spend",
         new_callable=AsyncMock,
         return_value=1.0,
@@ -148,7 +152,7 @@ def _make_user_token(**kwargs) -> UserAPIKeyAuth:
 
 @pytest.mark.asyncio
 async def test_user_with_no_windows_passes():
-    await _user_multi_budget_check(valid_token=_make_user_token(), team_object=None, general_settings={})
+    assert await _user_multi_budget_check(valid_token=_make_user_token(), team_object=None, general_settings={}) is None
 
 
 @pytest.mark.asyncio
@@ -159,7 +163,7 @@ async def test_user_under_all_windows_passes():
             {"budget_duration": "30d", "max_budget": 100.0, "reset_at": None},
         ]
     )
-    with patch(
+    with patch(  # test-quality-ok: get_current_spend is a lazy module import inside the check; no injection seam
         "litellm.proxy.proxy_server.get_current_spend",
         new_callable=AsyncMock,
         return_value=1.0,
@@ -192,7 +196,9 @@ async def test_user_over_any_window_raises():
         call_count += 1
         return val
 
-    with patch("litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend):
+    with patch(  # test-quality-ok: get_current_spend is a lazy module import inside the check
+        "litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend
+    ):
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
             await _user_multi_budget_check(valid_token=token, team_object=None, general_settings={})
 
@@ -214,7 +220,7 @@ async def test_jwt_built_token_carries_user_budget_limits_and_is_blocked():
     )
     assert token.user_budget_limits[0].max_budget == 2.0
 
-    with patch(
+    with patch(  # test-quality-ok: get_current_spend is a lazy module import inside the check; no injection seam
         "litellm.proxy.proxy_server.get_current_spend",
         new_callable=AsyncMock,
         return_value=5.0,
@@ -234,7 +240,7 @@ async def test_user_windows_skipped_for_team_key_unless_flag_set():
     token = _make_user_token(user_budget_limits=[{"budget_duration": "1d", "max_budget": 2.0, "reset_at": None}])
     team = LiteLLM_TeamTable(team_id="team-1")
 
-    with patch(
+    with patch(  # test-quality-ok: get_current_spend is a lazy module import inside the check; no injection seam
         "litellm.proxy.proxy_server.get_current_spend",
         new_callable=AsyncMock,
         return_value=100.0,
@@ -242,7 +248,7 @@ async def test_user_windows_skipped_for_team_key_unless_flag_set():
         await _user_multi_budget_check(valid_token=token, team_object=team, general_settings={})
     spend_mock.assert_not_awaited()
 
-    with patch(
+    with patch(  # test-quality-ok: get_current_spend is a lazy module import inside the check; no injection seam
         "litellm.proxy.proxy_server.get_current_spend",
         new_callable=AsyncMock,
         return_value=100.0,
