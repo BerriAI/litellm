@@ -319,7 +319,11 @@ class _ProxyDBLogger(CustomLogger):
             user_id: Final = cast(str | None, metadata.get("user_api_key_user_id", None))
             team_id: Final = cast(str | None, metadata.get("user_api_key_team_id", None))
             org_id: Final = cast(str | None, metadata.get("user_api_key_org_id", None))
-            project_id: Final = cast(str | None, metadata.get("user_api_key_project_id", None))
+            project_id: Final = (
+                project_id_value
+                if isinstance(project_id_value := metadata.get("user_api_key_project_id"), str)
+                else None
+            )
             key_alias: Final = cast(str | None, metadata.get("user_api_key_alias", None))
             end_user_max_budget: Final = metadata.get("user_api_end_user_max_budget", None)
             sl_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)

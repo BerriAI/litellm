@@ -7559,15 +7559,19 @@ def _project_with_budget(spend: float, max_budget: float):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "counter_spend, db_spend, blocks",
+    "counter_spend, db_spend, max_budget, blocks",
     [
-        pytest.param(5.0, 0.0, True, id="counter-at-budget-blocks-despite-stale-db-row"),
-        pytest.param(4.99, 0.0, False, id="counter-under-budget-admits"),
-        pytest.param(None, 5.0, True, id="no-counter-falls-back-to-persisted-spend"),
-        pytest.param(None, 0.0, False, id="no-counter-and-no-persisted-spend-admits"),
+        pytest.param(5.0, 0.0, 5.0, True, id="counter-at-budget-blocks-despite-stale-db-row"),
+        pytest.param(4.99, 0.0, 5.0, False, id="counter-under-budget-admits"),
+        pytest.param(None, 5.0, 5.0, True, id="no-counter-falls-back-to-persisted-spend"),
+        pytest.param(None, 0.0, 5.0, False, id="no-counter-and-no-persisted-spend-admits"),
+        pytest.param(12.5, 12.5, 0.0, False, id="zero-budget-is-unbudgeted"),
+        pytest.param(12.5, 12.5, -1.0, False, id="negative-budget-is-unbudgeted"),
     ],
 )
-async def test_project_max_budget_check_reads_live_spend_counter(counter_spend, db_spend, blocks):
+async def test_project_max_budget_check_blocks_only_when_live_spend_reaches_a_positive_budget(
+    counter_spend, db_spend, max_budget, blocks
+):
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.auth.auth_checks import _project_max_budget_check
 
@@ -7583,14 +7587,16 @@ async def test_project_max_budget_check_reads_live_spend_counter(counter_spend, 
     ):
         if not blocks:
             await _project_max_budget_check(
-                project_object=_project_with_budget(spend=db_spend, max_budget=5.0),
+                project_object=_project_with_budget(spend=db_spend, max_budget=max_budget),
                 valid_token=valid_token,
                 proxy_logging_obj=proxy_logging_obj,
             )
+            await asyncio.sleep(0)
+            proxy_logging_obj.budget_alerts.assert_not_awaited()
             return
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
             await _project_max_budget_check(
-                project_object=_project_with_budget(spend=db_spend, max_budget=5.0),
+                project_object=_project_with_budget(spend=db_spend, max_budget=max_budget),
                 valid_token=valid_token,
                 proxy_logging_obj=proxy_logging_obj,
             )
@@ -7601,29 +7607,6 @@ async def test_project_max_budget_check_reads_live_spend_counter(counter_spend, 
     assert exc_info.value.current_cost == 5.0
     proxy_logging_obj.budget_alerts.assert_awaited_once()
     assert proxy_logging_obj.budget_alerts.await_args.kwargs["type"] == "project_budget"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("max_budget", [0.0, -1.0])
-async def test_project_max_budget_check_treats_non_positive_budget_as_unbudgeted(max_budget):
-    from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.auth.auth_checks import _project_max_budget_check
-
-    real_spend_counter_cache = DualCache()
-    real_spend_counter_cache.in_memory_cache.set_cache(key="spend:project:p-budget", value=12.5)
-    proxy_logging_obj = MagicMock()
-    proxy_logging_obj.budget_alerts = AsyncMock()
-
-    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
-        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
-    ):
-        await _project_max_budget_check(
-            project_object=_project_with_budget(spend=12.5, max_budget=max_budget),
-            valid_token=UserAPIKeyAuth(api_key="hashed-key", project_id="p-budget"),
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-    proxy_logging_obj.budget_alerts.assert_not_awaited()
 
 
 def test_is_user_proxy_admin_rejects_view_only_admin():
