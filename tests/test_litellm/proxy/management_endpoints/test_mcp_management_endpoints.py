@@ -4583,20 +4583,17 @@ class TestMCPApprovalWorkflow:
         assert result.pending_review == 1
 
     @pytest.mark.asyncio
-    async def test_get_submissions_sanitizes_for_view_only_admin(self):
-        """PROXY_ADMIN_VIEW_ONLY reviewing the submission queue must go through
-        the non-admin sanitizer that fetch/list endpoints use: url,
-        static_headers, env, env_vars, and credentials are all dropped. A
-        mutation swapping the gate back to the old partial-blank pattern (which
-        left url/static_headers/env and env-var names intact) would fail this."""
+    @pytest.mark.parametrize("allowed_routes", [[], ["llm_api_routes"], ["mcp_routes"]])
+    async def test_get_submissions_sanitizes_for_view_only_admin(self, allowed_routes: list[str]) -> None:
         from litellm.proxy._types import MCPSubmissionsSummary
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             get_mcp_server_submissions,
         )
 
-        item = _leaky_list_server()
-        item.approval_status = "pending_review"
-        summary = MCPSubmissionsSummary(total=1, pending_review=1, active=0, rejected=0, items=[item])
+        item: Final = _leaky_list_server().model_copy(
+            update={"approval_status": "pending_review", "spec_path": "https://example.com/spec?key=secret"}
+        )
+        summary: Final = MCPSubmissionsSummary(total=1, pending_review=1, active=0, rejected=0, items=[item])
 
         with (
             patch(
@@ -4608,12 +4605,15 @@ class TestMCPApprovalWorkflow:
                 AsyncMock(return_value=summary),
             ),
         ):
-            result = await get_mcp_server_submissions(
-                user_api_key_dict=generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
+            result: Final = await get_mcp_server_submissions(
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, allowed_routes=allowed_routes
+                ),
             )
 
         assert len(result.items) == 1
-        sanitized = result.items[0]
+        sanitized: Final = result.items[0]
+        assert sanitized.spec_path is None
         assert sanitized.url is None
         assert sanitized.static_headers is None
         assert sanitized.env == {}
