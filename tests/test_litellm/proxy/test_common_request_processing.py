@@ -40,9 +40,12 @@ from litellm.proxy.common_request_processing import (
     _parse_event_data_for_error,
     _resolve_per_request_model_group_alias,
     _should_return_raw_model_name,
+    _sse_error_frames,
     _UpstreamClosingStreamingResponse,
     create_response,
+    sse_error_payload,
 )
+from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
@@ -9064,6 +9067,60 @@ class TestStreamingResponseHeadersFollowFallback:
         assert result.headers["llm_provider-x-request-id"] == "req-SERVED"
         assert "llm_provider-stale-marker" not in result.headers
         assert result.headers["x-callback-header"] == "kept"
+
+    @pytest.mark.asyncio
+    async def test_streaming_block_headers_name_the_blocking_guardrail(self, monkeypatch):
+        processor_data: dict[str, object] = {"model": "oa", "stream": True, "metadata": {}}
+
+        def select_data_generator(**kwargs):
+            async def generator():
+                add_guardrail_to_applied_guardrails_header(processor_data, "stream-blocker")
+                _, error_obj = sse_error_payload(HTTPException(status_code=400, detail="blocked"))
+                for frame in _sse_error_frames(error_obj):
+                    yield frame
+
+            return generator()
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "lit-7144-call"
+        logging_obj._defer_async_logging = False
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj.cost_breakdown = None
+        processor_data["litellm_logging_obj"] = logging_obj
+        processor = ProxyBaseLLMRequestProcessing(data=processor_data)
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_success_hook = AsyncMock(
+            side_effect=lambda data, user_api_key_dict, response: response
+        )
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        async def fake_route_request(**kwargs):
+            async def call():
+                return SimpleNamespace(_hidden_params={}, fallback_headers_adopted=False)
+
+            return call()
+
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "route_request", fake_route_request)
+
+        result = await processor.base_process_llm_request(
+            request=Request(scope={"type": "http", "headers": []}),
+            fastapi_response=Response(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            route_type="acompletion",
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=select_data_generator,
+            is_streaming_request=True,
+            skip_pre_call_logic=True,
+        )
+
+        assert isinstance(result, JSONResponse)
+        assert result.status_code == 400
+        assert result.headers["x-litellm-applied-guardrails"] == "stream-blocker"
 
 
 class _MessagesFallbackStream:
