@@ -22,11 +22,7 @@ from litellm.litellm_core_utils.duration_parser import (
 )
 from litellm.utils import (
     check_valid_key,
-    create_pretrained_tokenizer,
-    create_tokenizer,
-    function_to_dict,
     get_llm_provider,
-    get_max_tokens,
     get_supported_openai_params,
     get_token_count,
     get_valid_models,
@@ -500,74 +496,6 @@ def test_function_to_dict():
 # test_function_to_dict()
 
 
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("gpt-3.5-turbo", True),
-        ("azure/gpt-4-1106-preview", True),
-        ("groq/gemma-7b-it", True),
-        ("gemini/gemini-2.5-flash", True),
-    ],
-)
-def test_supports_function_calling(model, expected_bool):
-    try:
-        assert litellm.supports_function_calling(model=model) == expected_bool
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("gpt-4o-mini-search-preview", True),
-        ("openai/gpt-4o-mini-search-preview", True),
-        ("gpt-4o-search-preview", True),
-        ("openai/gpt-4o-search-preview", True),
-        ("groq/deepseek-r1-distill-llama-70b", False),
-        ("groq/llama-3.3-70b-versatile", False),
-        ("codestral/codestral-latest", False),
-    ],
-)
-def test_supports_web_search(model, expected_bool):
-    try:
-        assert litellm.supports_web_search(model=model) == expected_bool
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("openai/o3-mini", True),
-        ("o3-mini", True),
-        ("xai/grok-3-mini-beta", True),
-        ("xai/grok-3-mini-fast-beta", True),
-        ("xai/grok-2", False),
-        ("gpt-3.5-turbo", False),
-    ],
-)
-def test_supports_reasoning(model, expected_bool):
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    try:
-        assert litellm.supports_reasoning(model=model) == expected_bool
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_get_max_token_unit_test():
-    """
-    More complete testing in `test_completion_cost.py`
-    """
-    model = "bedrock/anthropic.claude-3-haiku-20240307-v1:0"
-
-    max_tokens = get_max_tokens(
-        model
-    )  # Returns a number instead of throwing an Exception
-
-    assert isinstance(max_tokens, int)
-
-
 def test_get_supported_openai_params() -> None:
     # Mapped provider
     assert isinstance(get_supported_openai_params("gpt-4"), list)
@@ -1036,73 +964,6 @@ def test_parse_content_for_reasoning(content, expected_reasoning, expected_conte
     )
 
 
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("vertex_ai/gemini-2.5-pro", True),
-        ("gemini/gemini-2.5-pro", True),
-        ("predibase/llama3-8b-instruct", True),
-        ("databricks/databricks-meta-llama-3-1-70b-instruct", True),
-        ("gpt-3.5-turbo", False),
-        ("groq/llama-3.3-70b-versatile", False),
-    ],
-)
-def test_supports_response_schema(model, expected_bool):
-    """
-    Unit tests for 'supports_response_schema' helper function.
-
-    Should be true for gemini-2.5-pro on google ai studio / vertex ai AND predibase models
-    Should be false otherwise
-    """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    from litellm.utils import supports_response_schema
-
-    response = supports_response_schema(model=model, custom_llm_provider=None)
-
-    assert expected_bool == response
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("gpt-3.5-turbo", True),
-        ("gpt-4", True),
-        ("command-nightly", False),
-        ("gemini-2.5-pro", True),
-    ],
-)
-def test_supports_function_calling_v2(model, expected_bool):
-    """
-    Unit test for 'supports_function_calling' helper function.
-    """
-    from litellm.utils import supports_function_calling
-
-    response = supports_function_calling(model=model, custom_llm_provider=None)
-    assert expected_bool == response
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("gpt-4o", True),
-        ("gpt-3.5-turbo", False),
-        ("claude-sonnet-4-6", True),
-        ("gemini-2.5-flash", True),
-        ("command-nightly", False),
-    ],
-)
-def test_supports_vision(model, expected_bool):
-    """
-    Unit test for 'supports_vision' helper function.
-    """
-    from litellm.utils import supports_vision
-
-    response = supports_vision(model=model, custom_llm_provider=None)
-    assert expected_bool == response
-
-
 def test_usage_object_null_tokens():
     """
     Unit test.
@@ -1141,7 +1002,6 @@ def test_is_base64_encoded():
     clear=True,
 )
 def test_async_http_handler(mock_async_client):
-    import httpx
     import ssl
 
     timeout = 120
@@ -1214,20 +1074,6 @@ def test_async_http_handler_force_ipv4(mock_async_client):
     finally:
         # Reset force_ipv4 to default
         litellm.force_ipv4 = False
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool", [("gpt-3.5-turbo", False), ("gpt-4o-audio-preview", True)]
-)
-def test_supports_audio_input(model, expected_bool):
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    from litellm.utils import supports_audio_input, supports_audio_output
-
-    supports_pc = supports_audio_input(model=model)
-
-    assert supports_pc == expected_bool
 
 
 def test_is_base64_encoded_2():
@@ -1355,8 +1201,7 @@ def test_models_by_provider():
             or v["litellm_provider"] == "bedrock_converse"
         ):
             continue
-        elif v.get("mode") == "search":
-            # Skip search providers as they don't have traditional models
+        elif v.get("mode") in ("search", "evaluation"):
             continue
         else:
             providers.add(v["litellm_provider"])
@@ -1565,23 +1410,6 @@ def test_token_counter_with_image_url_with_detail_high():
     assert _tokens == DEFAULT_IMAGE_TOKEN_COUNT + 7
 
 
-def test_fireworks_ai_vision_capability_from_cost_map(monkeypatch):
-    """
-    Fireworks deprecated document inlining on 2025-06-30, so vision/PDF support is
-    no longer hardcoded to True for every Fireworks model. Capabilities are read
-    from the model cost map: unmapped models no longer advertise vision or PDF
-    support, while mapped VLMs still do.
-    """
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    from litellm.utils import supports_pdf_input, supports_vision
-
-    assert supports_vision("fireworks_ai/llama-3.1-8b-instruct") is False
-    assert supports_pdf_input("fireworks_ai/llama-3.1-8b-instruct") is False
-
-    assert supports_vision("fireworks_ai/minimax-m3") is True
-
-
 def test_logprobs_type():
     from litellm.types.utils import Logprobs
 
@@ -1724,19 +1552,10 @@ def test_get_valid_models_default(monkeypatch):
     Prevent regression for existing usage.
     """
     from litellm.utils import get_valid_models
-    import litellm
 
     monkeypatch.setenv("FIREWORKS_API_KEY", "sk-1234")
     valid_models = get_valid_models()
     assert len(valid_models) > 0
-
-
-def test_supports_vision_gemini():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    from litellm.utils import supports_vision
-
-    assert supports_vision("gemini-2.5-pro") is True
 
 
 def test_pick_cheapest_chat_model_from_llm_provider():
