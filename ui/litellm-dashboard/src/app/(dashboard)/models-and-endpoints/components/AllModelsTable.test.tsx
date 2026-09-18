@@ -11,8 +11,8 @@ const makeModel = (overrides: Partial<ModelData> = {}): ModelData =>
     model_name: "gpt-4-public",
     litellm_model_name: "openai/gpt-4",
     provider: "openai",
-    input_cost: 30 as unknown as number,
-    output_cost: 60 as unknown as number,
+    input_cost: "30",
+    output_cost: "60",
     max_tokens: 8192,
     max_input_tokens: 8192,
     litellm_params: { model: "openai/gpt-4" },
@@ -178,7 +178,7 @@ describe("AllModelsTable", () => {
     rerender(
       <AllModelsTable
         {...baseProps}
-        data={[makeModel({ input_cost: null as unknown as number, output_cost: null as unknown as number })]}
+        data={[makeModel({ input_cost: null, output_cost: null })]}
       />,
     );
     expect(screen.queryByText(/^\$/)).not.toBeInTheDocument();
@@ -190,8 +190,8 @@ describe("AllModelsTable", () => {
         {...baseProps}
         data={[
           makeModel({
-            input_cost: "0.00" as unknown as number,
-            output_cost: "0.00" as unknown as number,
+            input_cost: "0.00",
+            output_cost: "0.00",
             output_cost_per_second: 0.4,
           }),
         ]}
@@ -205,8 +205,8 @@ describe("AllModelsTable", () => {
         {...baseProps}
         data={[
           makeModel({
-            input_cost: "0.60" as unknown as number,
-            output_cost: "0.00" as unknown as number,
+            input_cost: "0.60",
+            output_cost: "0.00",
             output_cost_per_second: 0.015,
           }),
         ]}
