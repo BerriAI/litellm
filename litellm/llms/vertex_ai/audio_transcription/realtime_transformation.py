@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Final
 
@@ -6,7 +6,7 @@ from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.audio_utils.utils import normalize_transcription_language_to_bcp47
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -73,7 +73,7 @@ class ChirpProtocolError(RealtimeTranscriptionProtocolError):
 class SpeechStreamingTarget:
     api_endpoint: str
     recognizer: str
-    access_token: str
+    resolve_access_token: Callable[[], Awaitable[str]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,16 +249,14 @@ class ChirpEventTransformer:
         finals: Final = tuple(
             result.transcript.strip() for result in frame.results if result.is_final and result.transcript.strip()
         )
-        begin_events: Final = self._begin() if frame.speech_event == "begin" or interim or finals else ()
-        interim_events: Final = self._hypothesis(interim) if interim else ()
+        begin_events: Final = self._begin() if frame.speech_event == "begin" else ()
         final_events: Final = tuple(event for final in finals for event in self._final(final))
+        interim_events: Final = self._hypothesis(interim) if interim else ()
         end_events: Final = self._stop() if frame.speech_event == "end" else ()
-        return (*begin_events, *interim_events, *final_events, *end_events)
+        return (*begin_events, *final_events, *interim_events, *end_events)
 
     def _begin(self) -> tuple[OpenAIRealtimeEvents, ...]:
-        if self._turn is None:
-            self._turn = _Turn(item_id=self._new_item_id())
-        turn: Final = self._turn
+        turn: Final = self._require_turn()
         if turn.started_emitted or not self._require_config().server_vad:
             return ()
         self._turn = replace(turn, started_emitted=True)
@@ -272,21 +270,23 @@ class ChirpEventTransformer:
         return (speech_event("input_audio_buffer.speech_stopped", turn.item_id),)
 
     def _hypothesis(self, text: str) -> tuple[OpenAIRealtimeEvents, ...]:
+        begin_events: Final = self._begin()
         turn: Final = self._require_turn()
         hypothesis: Final = _join_transcript(turn.committed, text)
         delta: Final = new_words(turn.preview, hypothesis)
         self._turn = replace(turn, preview=hypothesis)
-        return (delta_event(turn.item_id, delta),) if delta else ()
+        return (*begin_events, delta_event(turn.item_id, delta)) if delta else begin_events
 
     def _final(self, text: str) -> tuple[OpenAIRealtimeEvents, ...]:
+        begin_events: Final = self._begin()
         turn: Final = self._require_turn()
         committed: Final = _join_transcript(turn.committed, text)
         delta: Final = new_words(turn.preview, committed)
         self._turn = replace(turn, committed=committed, preview=committed)
         delta_events: Final[tuple[OpenAIRealtimeEvents, ...]] = (delta_event(turn.item_id, delta),) if delta else ()
         if not self._require_config().server_vad:
-            return delta_events
-        return (*delta_events, *self._complete())
+            return (*begin_events, *delta_events)
+        return (*begin_events, *delta_events, *self._complete())
 
     def _finish_turn(self) -> tuple[OpenAIRealtimeEvents, ...]:
         if self._turn is None:
@@ -326,12 +326,12 @@ class VertexChirpRealtimeConfig(BaseRealtimeConfig):
     def __init__(
         self,
         *,
-        access_token: str,
+        resolve_access_token: Callable[[], Awaitable[str]],
         project: str,
         location: str | None,
         backend_factory: Callable[[SpeechStreamingTarget], RealtimeBackend] = _default_backend_factory,
     ) -> None:
-        self._access_token: Final = access_token
+        self._resolve_access_token: Final = resolve_access_token
         self._project: Final = validate_vertex_transcription_project_id(project)
         self._location: Final = validate_vertex_transcription_location(location, DEFAULT_SPEECH_TO_TEXT_LOCATION)
         self._backend_factory: Final = backend_factory
@@ -357,7 +357,7 @@ class VertexChirpRealtimeConfig(BaseRealtimeConfig):
             SpeechStreamingTarget(
                 api_endpoint=url,
                 recognizer=f"projects/{self._project}/locations/{self._location}/recognizers/_",
-                access_token=self._access_token,
+                resolve_access_token=self._resolve_access_token,
             )
         )
 

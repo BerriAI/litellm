@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import replace
 from datetime import timedelta
 from typing import Final
 
@@ -17,10 +18,15 @@ from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 from litellm.llms.vertex_ai.audio_transcription.realtime_backend import REQUEST_QUEUE_SIZE, SpeechStreamingBackend
 from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import SpeechStreamingTarget
 
+
+async def _static_token() -> str:
+    return "token"
+
+
 TARGET: Final = SpeechStreamingTarget(
     api_endpoint="us-speech.googleapis.com",
     recognizer="projects/proj-1/locations/us/recognizers/_",
-    access_token="token",
+    resolve_access_token=_static_token,
 )
 CONFIGURE: Final = json.dumps(
     {"kind": "configure", "model": "chirp_3", "language_codes": ["en-US"], "sample_rate_hertz": 16_000}
@@ -101,7 +107,7 @@ class _FakeSpeechClient:
 
 
 def _backend(client: _FakeSpeechClient, **kwargs: object) -> SpeechStreamingBackend:
-    return SpeechStreamingBackend(TARGET, client_factory=lambda target: client, **kwargs)
+    return SpeechStreamingBackend(TARGET, client_factory=lambda target, access_token: client, **kwargs)
 
 
 async def _recv(backend: SpeechStreamingBackend) -> dict[str, object]:
@@ -344,6 +350,64 @@ async def test_rotation_is_forced_at_the_deadline_during_continuous_speech():
         await backend.send(b"\x03\x03")
         assert await _transcript(backend) == "cut off"
     assert [_audio(stream) for stream in client.streams] == [[b"\x01\x01", b"\x02\x02"], [b"\x03\x03"]]
+
+
+@pytest.mark.asyncio
+async def test_every_stream_opens_its_own_client_with_a_freshly_resolved_token():
+    now = [0.0]
+    tokens = iter(("token-1", "token-2"))
+    seen_tokens: list[str] = []
+    clients = [_FakeSpeechClient([_response("first")]), _FakeSpeechClient([_response("second")])]
+    unopened = iter(clients)
+
+    async def resolve_access_token() -> str:
+        return next(tokens)
+
+    def open_client(target: SpeechStreamingTarget, access_token: str) -> _FakeSpeechClient:
+        seen_tokens.append(access_token)
+        return next(unopened)
+
+    backend = SpeechStreamingBackend(
+        replace(TARGET, resolve_access_token=resolve_access_token),
+        client_factory=open_client,
+        clock=lambda: now[0],
+        rotation_seconds=240.0,
+    )
+    async with backend:
+        await _configure(backend)
+        await backend.send(b"\x01\x01")
+        assert await _transcript(backend) == "first"
+        now[0] = 240.0
+        await backend.send(b"\x02\x02")
+        assert await _transcript(backend) == "second"
+        assert clients[0].transport.closed
+        assert not clients[1].transport.closed
+    assert seen_tokens == ["token-1", "token-2"]
+    assert [len(client.streams) for client in clients] == [1, 1]
+    assert clients[1].transport.closed
+
+
+@pytest.mark.asyncio
+async def test_close_releases_a_rotated_stream_that_never_started_relaying():
+    now = [0.0]
+    hold = asyncio.Event()
+    clients = [_FakeSpeechClient([_response("first"), hold]), _FakeSpeechClient([_response("never")])]
+    unopened = iter(clients)
+    backend = SpeechStreamingBackend(
+        TARGET,
+        client_factory=lambda target, access_token: next(unopened),
+        clock=lambda: now[0],
+        rotation_seconds=240.0,
+    )
+    await _configure(backend)
+    await backend.send(b"\x01\x01")
+    assert await _transcript(backend) == "first"
+    now[0] = 240.0
+    await backend.send(b"\x02\x02")
+    await asyncio.sleep(0)
+    assert clients[1].streams == []
+    await backend.close()
+    assert [client.transport.closed for client in clients] == [True, True]
 
 
 @pytest.mark.asyncio

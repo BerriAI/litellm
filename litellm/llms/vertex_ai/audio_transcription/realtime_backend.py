@@ -80,7 +80,7 @@ class _Closed:
     pass
 
 
-def open_speech_client(target: SpeechStreamingTarget) -> SpeechStreamingClient:
+def open_speech_client(target: SpeechStreamingTarget, access_token: str) -> SpeechStreamingClient:
     try:
         from google.api_core.client_options import ClientOptions
         from google.cloud.speech_v2 import SpeechAsyncClient
@@ -88,7 +88,7 @@ def open_speech_client(target: SpeechStreamingTarget) -> SpeechStreamingClient:
     except ImportError as e:
         raise ImportError(SPEECH_SDK_INSTALL_HINT) from e
     return SpeechAsyncClient(
-        credentials=Credentials(token=target.access_token),
+        credentials=Credentials(token=access_token),
         transport="grpc_asyncio",
         client_options=ClientOptions(api_endpoint=target.api_endpoint),
     )
@@ -157,6 +157,7 @@ class _RecognizeStream:
         self.speech_active: bool = False
         self.billed_seconds: float = 0.0
         self._cancelled: bool = False
+        self._closed: bool = False
         self._task: asyncio.Task[None] | None = None
 
     async def send_audio(self, audio: bytes) -> None:
@@ -170,8 +171,15 @@ class _RecognizeStream:
         if self._task is not None:
             self._task.cancel()
 
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        await self._client.transport.close()
+
     async def relay(self, outbox: "asyncio.Queue[str | _StreamFailure | _Closed]", billed_before: float) -> float:
         if self._cancelled:
+            await self.close()
             return 0.0
         task: Final = asyncio.create_task(self._forward(outbox, billed_before))
         self._task = task
@@ -181,6 +189,8 @@ class _RecognizeStream:
             task.cancel()
             await asyncio.wait((task,))
             raise
+        finally:
+            await self.close()
         return self.billed_seconds
 
     async def _forward(self, outbox: "asyncio.Queue[str | _StreamFailure | _Closed]", billed_before: float) -> None:
@@ -209,7 +219,7 @@ class SpeechStreamingBackend:
         self,
         target: SpeechStreamingTarget,
         *,
-        client_factory: Callable[[SpeechStreamingTarget], SpeechStreamingClient] = open_speech_client,
+        client_factory: Callable[[SpeechStreamingTarget, str], SpeechStreamingClient] = open_speech_client,
         clock: Callable[[], float] = time.monotonic,
         rotation_seconds: float = STREAM_ROTATION_SECONDS,
         rotation_deadline_seconds: float = STREAM_ROTATION_DEADLINE_SECONDS,
@@ -222,7 +232,6 @@ class SpeechStreamingBackend:
         self._outbox: Final[asyncio.Queue[str | _StreamFailure | _Closed]] = asyncio.Queue(maxsize=OUTBOX_SIZE)
         self._links: Final[asyncio.Queue[_RecognizeStream | str]] = asyncio.Queue(maxsize=_LINK_QUEUE_SIZE)
         self._pump: asyncio.Task[None] | None = None
-        self._client: SpeechStreamingClient | None = None
         self._config: StreamingRecognitionConfig | None = None
         self._turn: tuple[_RecognizeStream, ...] = ()
         self._billed_before: float = 0.0
@@ -282,12 +291,15 @@ class SpeechStreamingBackend:
         if pump is not None:
             pump.cancel()
             await asyncio.wait((pump,))
-        client: Final = self._client
-        self._client = None
-        if client is not None:
-            await client.transport.close()
+        await self._close_unrelayed_streams()
         if not self._outbox.full():
             self._outbox.put_nowait(_Closed())
+
+    async def _close_unrelayed_streams(self) -> None:
+        unrelayed: Final = tuple(self._links.get_nowait() for _ in range(self._links.qsize()))
+        for link in unrelayed:
+            if isinstance(link, _RecognizeStream):
+                await link.close()
 
     async def _link(self, item: _RecognizeStream | str) -> None:
         if self._pump is None:
@@ -333,10 +345,9 @@ class SpeechStreamingBackend:
         config: Final = self._config
         if config is None:
             raise RuntimeError("audio was sent before the Speech-to-Text stream was configured")
-        if self._client is None:
-            self._client = self._client_factory(self._target)
+        access_token: Final = await self._target.resolve_access_token()
         stream: Final = _RecognizeStream(
-            client=self._client,
+            client=self._client_factory(self._target, access_token),
             request_type=StreamingRecognizeRequest,
             first_request=StreamingRecognizeRequest(recognizer=self._target.recognizer, streaming_config=config),
             opened_at=self._clock(),

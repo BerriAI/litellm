@@ -63,8 +63,12 @@ def _ga_session_update(
     )
 
 
+async def _token() -> str:
+    return "token"
+
+
 def _config(location: str | None = "us") -> VertexChirpRealtimeConfig:
-    return VertexChirpRealtimeConfig(access_token="token", project="proj-1", location=location)
+    return VertexChirpRealtimeConfig(resolve_access_token=_token, project="proj-1", location=location)
 
 
 def _configured(
@@ -261,6 +265,41 @@ def test_server_vad_turn_streams_new_words_then_completes_with_usage():
     assert _backend_events(config, _response(speech_event="end")) == []
 
 
+def test_server_vad_final_result_completes_before_the_interim_that_follows_it():
+    config = _configured()
+    _backend_events(config, _response(speech_event="begin"))
+    events = _backend_events(config, _response(("four score", True), ("and seven", False)))
+    assert _types(events) == [
+        DELTA,
+        "input_audio_buffer.speech_stopped",
+        COMPLETED,
+        "input_audio_buffer.speech_started",
+        DELTA,
+    ]
+    assert events[2]["transcript"] == "four score"
+    assert events[4]["delta"] == "and seven"
+    assert events[4]["item_id"] != events[2]["item_id"]
+    assert events[4]["item_id"] == events[3]["item_id"]
+    finished = _backend_events(config, _response(("and seven years", True)))
+    assert [(event["type"], event.get("delta", event.get("transcript"))) for event in finished] == [
+        (DELTA, " years"),
+        ("input_audio_buffer.speech_stopped", None),
+        (COMPLETED, "and seven years"),
+    ]
+    assert {event["item_id"] for event in finished} == {events[4]["item_id"]}
+
+
+def test_manual_turn_keeps_the_interim_that_follows_a_final_in_the_same_frame():
+    config = _configured(turn_detection=None)
+    first = _backend_events(config, _response(("four score", True), ("and seven", False)))
+    assert [(event["type"], event["delta"]) for event in first] == [(DELTA, "four score"), (DELTA, " and seven")]
+    second = _backend_events(config, _response(("and seven years", True)))
+    assert [event["delta"] for event in second] == [" years"]
+    completed = _backend_events(config, VertexSpeechStreamingTurnFinished())
+    assert [(event["type"], event["transcript"]) for event in completed] == [(COMPLETED, "four score and seven years")]
+    assert {event["item_id"] for event in (*first, *second, *completed)} == {first[0]["item_id"]}
+
+
 def test_manual_turns_complete_on_commit_without_speech_events():
     config = _configured(turn_detection=None)
     assert _backend_events(config, _response(speech_event="begin")) == []
@@ -322,7 +361,9 @@ async def test_open_backend_targets_the_regional_speech_endpoint():
         targets.append(target)
         return _NullBackend()
 
-    config = VertexChirpRealtimeConfig(access_token="token", project="proj-1", location=None, backend_factory=factory)
+    config = VertexChirpRealtimeConfig(
+        resolve_access_token=_token, project="proj-1", location=None, backend_factory=factory
+    )
     url = config.get_complete_url(None, "vertex_ai/chirp_3")
     assert url == "us-speech.googleapis.com"
     assert config.validate_environment({}, MODEL, "https://" + url) == {}
@@ -332,9 +373,10 @@ async def test_open_backend_targets_the_regional_speech_endpoint():
         SpeechStreamingTarget(
             api_endpoint="us-speech.googleapis.com",
             recognizer="projects/proj-1/locations/us/recognizers/_",
-            access_token="token",
+            resolve_access_token=_token,
         )
     ]
+    assert await targets[0].resolve_access_token() == "token"
 
 
 @pytest.mark.parametrize(

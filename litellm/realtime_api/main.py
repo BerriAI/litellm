@@ -38,11 +38,8 @@ from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_pr
 from ..llms.bedrock.realtime.handler import BedrockRealtime
 from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..llms.openai.realtime.handler import OpenAIRealtime
-from ..llms.vertex_ai.audio_transcription.realtime_transformation import (
-    VertexChirpRealtimeConfig,
-    is_vertex_speech_to_text_model,
-)
-from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
+from ..llms.vertex_ai.audio_transcription.realtime_transformation import is_vertex_speech_to_text_model
+from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig, vertex_realtime_config
 from ..llms.vertex_ai.vertex_llm_base import VertexBase
 from ..llms.xai.realtime.handler import XAIRealtime
 from ..utils import client as wrapper_client
@@ -555,9 +552,19 @@ async def _arealtime(
             timeout_seconds=REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
         )
 
-        vertex_realtime_config: Final = _vertex_realtime_config(
-            model=model,
+        async def resolve_vertex_access_token() -> str:
+            refreshed_token, _ = await _resolve_vertex_access_token_bounded(
+                credentials=vertex_credentials,
+                project_id=resolved_project,
+                resolver=vertex_access_token_resolver,
+                timeout_seconds=REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
+            )
+            return refreshed_token
+
+        vertex_provider_config: Final = vertex_realtime_config(
+            model,
             access_token=access_token,
+            resolve_access_token=resolve_vertex_access_token,
             project=resolved_project,
             location=vertex_location,
         )
@@ -566,7 +573,7 @@ async def _arealtime(
             model=model,
             websocket=websocket,
             logging_obj=litellm_logging_obj,
-            provider_config=vertex_realtime_config,
+            provider_config=vertex_provider_config,
             api_base=dynamic_api_base or litellm_params.api_base,
             api_key=None,
             client=client,
@@ -578,18 +585,6 @@ async def _arealtime(
         )
     else:
         raise ValueError(f"Unsupported model: {model}")
-
-
-def _vertex_realtime_config(
-    model: str, access_token: str, project: str, location: str | None
-) -> VertexAIRealtimeConfig | VertexChirpRealtimeConfig:
-    if is_vertex_speech_to_text_model(model):
-        return VertexChirpRealtimeConfig(access_token=access_token, project=project, location=location)
-    return VertexAIRealtimeConfig(
-        access_token=access_token,
-        project=project,
-        location=vertex_llm_base.get_vertex_region(vertex_region=location, model=model),
-    )
 
 
 def _is_transcription_only_realtime_model(model: str, custom_llm_provider: str) -> bool:
