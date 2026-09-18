@@ -107,6 +107,7 @@ BEDROCK_COMPUTER_USE_TOOLS: Final = [
     "bash_",
     "text_editor_",
 ]
+BEDROCK_OPENAI_GPT_MIN_MAX_TOKENS: Final = 16
 
 # Beta header patterns that are not supported by Bedrock Converse API
 # These will be filtered out to prevent errors
@@ -376,6 +377,12 @@ class AmazonConverseConfig(BaseConfig):
     @staticmethod
     def _is_openai_gpt_reasoning_model(model: str) -> bool:
         return re.search(r"openai\.gpt-\d", model) is not None
+
+    @staticmethod
+    def _enforce_min_max_tokens(max_tokens: object) -> object:
+        if isinstance(max_tokens, int) and max_tokens < BEDROCK_OPENAI_GPT_MIN_MAX_TOKENS:
+            return BEDROCK_OPENAI_GPT_MIN_MAX_TOKENS
+        return max_tokens
 
     def _is_nova_2_model(self, model: str) -> bool:
         """
@@ -999,7 +1006,11 @@ class AmazonConverseConfig(BaseConfig):
                     is_thinking_enabled=is_thinking_enabled,
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
-                optional_params["maxTokens"] = value
+                optional_params["maxTokens"] = (
+                    self._enforce_min_max_tokens(cast(object, value))
+                    if self._is_openai_gpt_reasoning_model(model)
+                    else value
+                )
             if param == "stream":
                 optional_params["stream"] = value
             if param == "stop":
