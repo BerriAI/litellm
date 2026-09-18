@@ -30,7 +30,7 @@ from litellm.types.llms.vertex_ai import VertexPartnerProvider
 _GEMMA_MODEL_COST_ENTRY = {
     "vertex_ai/google/gemma-4-26b-a4b-it-maas": {
         "litellm_provider": "vertex_ai-openai_models",
-        "max_input_tokens": 256000,
+        "max_input_tokens": 262144,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
@@ -178,6 +178,16 @@ class TestCreateVertexURLGemma:
 # ---------------------------------------------------------------------------
 # Capability-flag tests: verify get_model_info surfaces the advertised flags
 # ---------------------------------------------------------------------------
+
+
+def test_gemma_maas_context_window_matches_google(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    info = litellm.get_model_info("vertex_ai/google/gemma-4-26b-a4b-it-maas")
+
+    assert info["max_input_tokens"] == 262144
+    assert info["max_output_tokens"] == 128000
 
 
 # ---------------------------------------------------------------------------
