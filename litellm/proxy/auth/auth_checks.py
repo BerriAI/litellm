@@ -173,7 +173,7 @@ class _PrismaVectorStoreRow(Protocol):
     def __iter__(self) -> Iterator[tuple[str, object]]: ...
 
 
-class _PrismaUserRow(_PrismaModelDumpRow, Protocol):
+class _PrismaUserRow(Protocol):
     user_id: str
 
     @property
@@ -181,6 +181,9 @@ class _PrismaUserRow(_PrismaModelDumpRow, Protocol):
 
     @organization_memberships.setter
     def organization_memberships(self, value: Sequence[_PrismaModelDumpRow] | None) -> None: ...
+
+    @property
+    def object_permission(self) -> _PrismaModelDumpRow | None: ...
 
     def __iter__(self) -> Iterator[tuple[str, object]]: ...
 
@@ -2652,7 +2655,12 @@ async def get_user_object(
             ]
             response.organization_memberships = _dumped_memberships
 
-        _response = LiteLLM_UserTable.model_validate(response.model_dump())
+        _object_permission: Final = (
+            LiteLLM_ObjectPermissionTable.model_validate(response.object_permission.model_dump())
+            if response.object_permission is not None
+            else None
+        )
+        _response = LiteLLM_UserTable.model_validate({**dict(response), "object_permission": _object_permission})
         _response = await _backfill_null_user_email(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,

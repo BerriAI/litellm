@@ -21,6 +21,14 @@ class _PrismaObjectPermissionStub(BaseModel):
     mcp_tool_search_enabled: bool
 
 
+class _PrismaUserRowStub(BaseModel):
+    user_id: str
+    user_email: str | None = None
+    object_permission_id: str | None = None
+    object_permission: _PrismaObjectPermissionStub | None = None
+    organization_memberships: list[object] | None = None
+
+
 @pytest.mark.asyncio
 async def test_get_key_object_loads_object_permission():
     """
@@ -175,7 +183,6 @@ async def test_get_user_object_loads_object_permission():
     """
     Test that get_user_object automatically loads object_permission when object_permission_id exists.
     """
-    from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy.auth.auth_checks import get_user_object
 
     mock_prisma_client = MagicMock()
@@ -184,16 +191,14 @@ async def test_get_user_object_loads_object_permission():
     mock_cache.async_get_cache = AsyncMock(return_value=None)
     mock_cache.async_set_cache = AsyncMock()
 
-    mock_user = LiteLLM_UserTable(
+    mock_user = _PrismaUserRowStub(
         user_id="test_user",
         user_email="test@example.com",
         object_permission_id="test_perm_id",
-        object_permission=None,
-    )
-    setattr(
-        mock_user,
-        "object_permission",
-        _PrismaObjectPermissionStub(object_permission_id="test_perm_id", mcp_tool_search_enabled=True),
+        object_permission=_PrismaObjectPermissionStub(
+            object_permission_id="test_perm_id",
+            mcp_tool_search_enabled=True,
+        ),
     )
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
 
