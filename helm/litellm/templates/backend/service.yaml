@@ -10,9 +10,12 @@ spec:
   type: {{ .Values.backend.service.type }}
   ports:
     - port: {{ .Values.backend.service.port }}
-      targetPort: http
+      targetPort: {{ .Values.backend.service.portName | default "http" }}
       protocol: TCP
-      name: http
+      name: {{ .Values.backend.service.portName | default "http" }}
+      {{- with .Values.backend.service.appProtocol }}
+      appProtocol: {{ . }}
+      {{- end }}
   selector:
     {{- include "litellm.backend.selectorLabels" . | nindent 4 }}
 {{- end }}

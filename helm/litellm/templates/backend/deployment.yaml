@@ -50,8 +50,8 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           ports:
-            - name: http
-              containerPort: 4001
+            - name: {{ .Values.backend.service.portName | default "http" }}
+              containerPort: {{ .Values.backend.service.containerPort | default .Values.backend.service.port }}
               protocol: TCP
           env:
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.backend) | nindent 12 }}
