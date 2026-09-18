@@ -4471,8 +4471,9 @@ class Router:
                     prompt_management_logger = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(
                         prompt=prompt_spec
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                # Prompt registry resolution is best-effort; fall back to router prompt management lookup
+                verbose_router_logger.debug("Prompt registry resolution in router prompt management failed: %s", e)
 
         if not is_litellm_agent_model and (prompt_id is None or not isinstance(prompt_id, str)):
             raise ValueError(f"Prompt ID is not set or not a string. Got={prompt_id}, type={type(prompt_id)}")

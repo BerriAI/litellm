@@ -1113,8 +1113,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 if cb is not None:
                     self.model_call_details["prompt_integration"] = cb.__class__.__name__
                     return cb
-        except Exception:
-            pass
+        except Exception as e:
+            # Prompt registry lookup is best-effort; fall back to litellm.callbacks if unavailable
+            verbose_logger.debug("Prompt registry lookup failed in _auto_detect_prompt_management_logger: %s", e)
 
         prompt_management_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
             callback_type=CustomPromptManagement
