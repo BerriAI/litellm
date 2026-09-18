@@ -1755,6 +1755,20 @@ class TestCustomGuardrailSpendLogMatchRedaction:
 class TestGuardrailInterventionClassification:
     """A routing decision is a deliberate guardrail intervention, not a failure."""
 
+    def test_http_exception_classification_returns_false_without_fastapi(self, monkeypatch):
+        import builtins
+
+        real_import = builtins.__import__
+
+        def import_without_fastapi(name, *args, **kwargs):
+            if name == "fastapi.exceptions":
+                raise ImportError("fastapi is unavailable")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", import_without_fastapi)
+
+        assert CustomGuardrail._is_guardrail_intervention(Exception("not an intervention")) is False
+
     def test_sensitive_data_route_exception_is_intervention(self):
         from litellm.exceptions import SensitiveDataRouteException
 
