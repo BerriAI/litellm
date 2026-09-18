@@ -152,7 +152,7 @@ def deepgram_listen_audio_seconds(websocket_messages: Sequence[Mapping[str, obje
         duration
         for frame in websocket_messages
         if frame.get("type") == "Metadata"
-        if (duration := _seconds(frame.get("duration"))) is not None
+        if (duration := _seconds(frame.get("duration"))) is not None and duration > 0
     )
     if metadata_durations:
         return metadata_durations[-1]
