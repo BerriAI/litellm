@@ -328,7 +328,9 @@ class RouteChecks:
             pass  # authN/authZ handled by api itself
         elif RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token) or (
             valid_token.is_team_service_account
-            and RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.key_management_routes.value)
+            and RouteChecks.check_route_access(
+                route=route, allowed_routes=LiteLLMRoutes.team_service_account_key_routes.value
+            )
         ):
             pass
         elif valid_token.allowed_routes is not None:
