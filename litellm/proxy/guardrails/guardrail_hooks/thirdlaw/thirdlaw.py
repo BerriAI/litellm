@@ -365,6 +365,31 @@ def _is_unreachable_error(error: Exception) -> bool:
     return isinstance(error, (httpx.RequestError, LitellmTimeout))
 
 
+def _service_error_message(error: Exception) -> str:
+    """Prefer ThirdLaw's own explanation over httpx's generic status text.
+
+    ThirdLaw returns ``{"detail": {"error", "reason", "message"}}`` on a fail-closed
+    response. Anything else (an ingress 502, a non-JSON body, an older service version)
+    falls back to the status line.
+    """
+    if not isinstance(error, httpx.HTTPStatusError):
+        return str(error)
+    try:
+        detail: Final[object] = error.response.json().get("detail")
+    except Exception:  # noqa: BLE001  # non-JSON or non-object error body: keep the status line
+        return str(error)
+    if isinstance(detail, str) and detail:
+        return detail
+    detail_fields: Final = _dict_of(detail)
+    if detail_fields is None:
+        return str(error)
+    message: Final = detail_fields.get("message")
+    if not isinstance(message, str) or not message:
+        return str(error)
+    reason: Final = detail_fields.get("reason")
+    return f"{message} (reason={reason})" if isinstance(reason, str) and reason else message
+
+
 def _decision_trace(decision: ThirdlawGuardrailResponse) -> Mapping[str, object]:
     return MappingProxyType(
         {
@@ -521,7 +546,7 @@ class ThirdlawGuardrail(CustomGuardrail):
             return
         raise GuardrailRaisedException(
             guardrail_name=self.guardrail_name,
-            message=f"ThirdLaw guardrail request failed: {error}",
+            message=f"ThirdLaw guardrail request failed: {_service_error_message(error)}",
         ) from error
 
     async def _run_thirdlaw(
@@ -565,7 +590,7 @@ class ThirdlawGuardrail(CustomGuardrail):
                 event_type=event_type,
                 status="guardrail_failed_to_respond",
                 started_at=started_at,
-                trace={"error": str(error)},  # mutable-ok: one-shot trace payload
+                trace={"error": _service_error_message(error)},  # mutable-ok: one-shot trace payload
             )
             self._handle_call_failure(error=error, wire_event=wire_event)
             return None
@@ -945,7 +970,9 @@ class ThirdlawGuardrail(CustomGuardrail):
             )
         except Exception as error:  # noqa: BLE001  # after keepalive flush a raise cannot reach the client; send a frame
             flushed_frames: Final = (
-                self._stream_error_items(f"ThirdLaw guardrail request failed: {error}", surface, collected)
+                self._stream_error_items(
+                    f"ThirdLaw guardrail request failed: {_service_error_message(error)}", surface, collected
+                )
                 if self._sse_headers_flushed(started)
                 else None
             )

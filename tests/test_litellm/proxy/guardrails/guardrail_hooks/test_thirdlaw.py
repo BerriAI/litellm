@@ -695,6 +695,86 @@ async def test_http_503_respects_fail_open():
     assert await _run_pre_call(g, data) is data
 
 
+_EVALUATION_TIMEOUT_MESSAGE = (
+    "ThirdLaw did not finish evaluating this request within 10 seconds, so the request was not evaluated."
+)
+
+
+def _fail_closed_detail(reason: str = "evaluation_timeout") -> JsonDict:
+    return {
+        "detail": {
+            "error": "evaluation_unavailable",
+            "reason": reason,
+            "message": _EVALUATION_TIMEOUT_MESSAGE,
+        }
+    }
+
+
+def _html_error_response(status_code: int = 503) -> httpx.Response:
+    return httpx.Response(
+        status_code=status_code,
+        content=b"<html><body>503 Service Temporarily Unavailable</body></html>",
+        headers={"content-type": "text/html"},
+        request=httpx.Request("POST", _ENDPOINT),
+    )
+
+
+async def _raised_message(g: ThirdlawGuardrail) -> str:
+    with pytest.raises(GuardrailRaisedException) as exc_info:
+        await _run_pre_call(g, _request_data())
+    return exc_info.value.message
+
+
+async def test_fail_closed_503_surfaces_the_service_reason_not_the_status_line():
+    g = _make_guardrail(decisions=[_decision_response(_fail_closed_detail(), status_code=503)])
+    message = await _raised_message(g)
+    assert _EVALUATION_TIMEOUT_MESSAGE in message
+    assert "reason=evaluation_timeout" in message
+    assert "Service Unavailable" not in message
+
+
+async def test_fail_closed_503_records_the_service_reason_on_the_guardrail_trace():
+    g = _make_guardrail(decisions=[_decision_response(_fail_closed_detail(), status_code=503)])
+    data = _request_data()
+    with pytest.raises(GuardrailRaisedException):
+        await _run_pre_call(g, data)
+    traces = data["metadata"]["standard_logging_guardrail_information"]
+    assert traces[0]["guardrail_status"] == "guardrail_failed_to_respond"
+    assert traces[0]["guardrail_response"]["error"] == f"{_EVALUATION_TIMEOUT_MESSAGE} (reason=evaluation_timeout)"
+
+
+async def test_non_json_503_body_falls_back_to_the_status_line():
+    g = _make_guardrail()
+    g.async_handler.post.return_value = _html_error_response()
+    assert "503 Service Unavailable" in await _raised_message(g)
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({"error": "evaluation_unavailable"}, "503 Service Unavailable"),
+        ({"detail": {"error": "evaluation_unavailable"}}, "503 Service Unavailable"),
+        ({"detail": {"message": ""}}, "503 Service Unavailable"),
+        ({"detail": "policy engine is draining"}, "policy engine is draining"),
+    ],
+)
+async def test_503_detail_shapes_a_service_may_send(body: JsonDict, expected: str):
+    g = _make_guardrail(decisions=[_decision_response(body, status_code=503)])
+    assert expected in await _raised_message(g)
+
+
+async def test_structured_503_passes_through_under_fail_open_and_still_records_the_reason():
+    g = _make_guardrail(
+        unreachable_fallback="fail_open",
+        decisions=[_decision_response(_fail_closed_detail(reason="evaluation_capacity_exceeded"), status_code=503)],
+    )
+    data = _request_data()
+    assert await _run_pre_call(g, data) is data
+    traces = data["metadata"]["standard_logging_guardrail_information"]
+    assert traces[0]["guardrail_status"] == "guardrail_failed_to_respond"
+    assert "reason=evaluation_capacity_exceeded" in traces[0]["guardrail_response"]["error"]
+
+
 def _stream_chunks() -> list[ModelResponseStream]:
     return [
         ModelResponseStream(
