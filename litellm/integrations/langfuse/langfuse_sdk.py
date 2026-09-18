@@ -5,14 +5,13 @@ import re
 import threading
 from base64 import b64encode
 from collections.abc import Iterable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor, wait
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
 from importlib.metadata import version
 from itertools import chain
-from time import sleep
+from time import monotonic, sleep
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -605,6 +604,19 @@ def acquire_langfuse_tracing(
         return created
 
 
+class _FlushWorker(threading.Thread):
+    """Daemon, so a channel still blocked at the deadline cannot hold up interpreter exit."""
+
+    def __init__(self, channel: LangfuseTracing, timeout_millis: int) -> None:
+        super().__init__(name="langfuse-flush", daemon=True)
+        self.channel: Final = channel
+        self.timeout_millis: Final = timeout_millis
+        self.flushed = False
+
+    def run(self) -> None:
+        self.flushed = self.channel.flush(self.timeout_millis)
+
+
 def flush_langfuse_tracing(timeout_millis: int = 30_000) -> bool:
     """Force-flush every export channel this process acquired, all within one ``timeout_millis`` deadline.
 
@@ -613,13 +625,13 @@ def flush_langfuse_tracing(timeout_millis: int = 30_000) -> bool:
     """
     with _TRACING_LOCK:
         channels: Final = tuple(_TRACING.values())
-    if not channels:
-        return True
-    pool: Final = ThreadPoolExecutor(max_workers=len(channels), thread_name_prefix="langfuse-flush")
-    futures: Final = tuple(pool.submit(channel.flush, timeout_millis) for channel in channels)
-    done, pending = wait(futures, timeout=timeout_millis / 1000)
-    pool.shutdown(wait=False)
-    return not pending and all(future.result() for future in done)
+    workers: Final = tuple(_FlushWorker(channel, timeout_millis) for channel in channels)
+    deadline: Final = monotonic() + timeout_millis / 1000
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(max(0.0, deadline - monotonic()))
+    return all(not worker.is_alive() and worker.flushed for worker in workers)
 
 
 def build_langfuse_tracing(

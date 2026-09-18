@@ -19,7 +19,7 @@ import opentelemetry.trace as otel_trace
 import pytest
 from langfuse import LangfuseOtelSpanAttributes as A
 from langfuse.api import UnauthorizedError
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
@@ -556,6 +556,26 @@ def test_flush_langfuse_tracing_flushes_channels_concurrently_under_one_deadline
 
     assert flush_langfuse_tracing(timeout_millis=2_000) is True
     assert second_exported.is_set()
+
+
+def test_flush_langfuse_tracing_leaves_an_overrunning_channel_on_a_daemon_thread():
+    """A channel whose flush outlives the deadline is reported as failed and must not be able to
+    hold up interpreter exit, so the thread still flushing it has to be a daemon."""
+    release = threading.Event()
+
+    class BlocksUntilReleased(SpanProcessor):
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            return release.wait(timeout=10.0)
+
+    _acquire(public_key="pk-overrunning-flush", mock_mode=True, flush_interval=600.0).provider.add_span_processor(
+        BlocksUntilReleased()
+    )
+    try:
+        assert flush_langfuse_tracing(timeout_millis=200) is False
+        stuck = [thread for thread in threading.enumerate() if thread.name.startswith("langfuse-flush")]
+        assert stuck and all(thread.daemon for thread in stuck)
+    finally:
+        release.set()
 
 
 def test_a_changed_sample_rate_rebuilds_the_channel(monkeypatch: pytest.MonkeyPatch):
