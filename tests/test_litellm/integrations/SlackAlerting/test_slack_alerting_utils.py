@@ -87,6 +87,31 @@ async def test_langfuse_trace_url_when_callback_registered_as_logger_instance(mo
 
 
 @pytest.mark.asyncio
+async def test_langfuse_trace_url_when_prompt_management_is_the_registered_callback(monkeypatch):
+    """Prompt management registers a LangFuseLogger subclass; the alert must read its host, not crash."""
+    from litellm.integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
+
+    prompt_callback = LangfusePromptManagement(
+        langfuse_public_key="pk-slack-prompt",
+        langfuse_secret="sk-slack-prompt",
+        langfuse_host="http://127.0.0.1:2",
+    )
+    monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [prompt_callback])
+    monkeypatch.setenv("LANGFUSE_HOST", "http://env-host.invalid")
+    logging_obj = MagicMock()
+    logging_obj._get_trace_id.return_value = "trace-from-prompt-callback"
+    logging_obj.standard_callback_dynamic_params = {}
+
+    result = await _add_langfuse_trace_id_to_alert({"litellm_logging_obj": logging_obj})
+
+    assert result == "http://127.0.0.1:2/trace/trace-from-prompt-callback"
+
+
+@pytest.mark.asyncio
 async def test_langfuse_trace_url_absent_when_trace_id_never_arrives(monkeypatch):
     monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
     monkeypatch.setattr("litellm.integrations.SlackAlerting.utils.asyncio.sleep", AsyncMock())

@@ -163,15 +163,15 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             langfuse_host=langfuse_host,
             flush_interval=flush_interval,
         )
-        public_key, secret_key, host = resolve_langfuse_credentials(
+        self.public_key, self.secret_key, self.langfuse_host = resolve_langfuse_credentials(
             langfuse_public_key=langfuse_public_key,
             langfuse_secret=langfuse_secret,
             langfuse_host=langfuse_host,
         )
         self.tracing = acquire_langfuse_tracing(
-            public_key=str(public_key),
-            secret_key=str(secret_key),
-            base_url=host,
+            public_key=str(self.public_key),
+            secret_key=str(self.secret_key),
+            base_url=self.langfuse_host,
             environment=LangFuseLogger.resolve_deployment_environment(),
             release=os.getenv("LANGFUSE_RELEASE"),
             flush_interval=LangFuseLogger._get_langfuse_flush_interval(flush_interval),  # pyright: ignore[reportPrivateUsage]  # shared env-fallback helper, not part of the logger's API
