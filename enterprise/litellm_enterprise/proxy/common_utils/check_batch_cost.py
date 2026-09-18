@@ -2,6 +2,7 @@
 Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if the cost has been tracked.
 """
 
+import time
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
@@ -13,6 +14,7 @@ from litellm.constants import (
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
 )
+from litellm.types.llms.openai import OpenAIFileObject
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -39,6 +41,19 @@ TERMINAL_MANAGED_OBJECT_STATUSES: Final[Tuple[str, ...]] = (
     *PROVIDER_TERMINAL_BATCH_STATUSES,
     "stale_expired",
 )
+
+
+def _batch_output_file_object(unified_file_id: str, raw_file_id: str, size_bytes: int) -> OpenAIFileObject:
+    filename: Final = raw_file_id.rsplit("/", 1)[-1] or raw_file_id
+    return OpenAIFileObject(
+        id=unified_file_id,
+        object="file",
+        purpose="batch_output",
+        filename=filename,
+        created_at=int(time.time()),
+        bytes=size_bytes,
+        status="processed",
+    )
 
 
 class CheckBatchCost:
@@ -787,7 +802,11 @@ class CheckBatchCost:
                         )
                         await managed_files_hook.store_unified_file_id(
                             file_id=_unified_file_id,
-                            file_object=None,
+                            file_object=_batch_output_file_object(
+                                unified_file_id=_unified_file_id,
+                                raw_file_id=_raw_file_id,
+                                size_bytes=len(content_bytes) if _file_attr == "output_file_id" else 0,
+                            ),
                             litellm_parent_otel_span=None,
                             model_mappings={model_id: _raw_file_id},
                             user_api_key_dict=_minimal_auth,
