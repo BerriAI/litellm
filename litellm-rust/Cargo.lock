@@ -2025,8 +2025,6 @@ dependencies = [
 name = "litellm-core"
 version = "0.1.0"
 dependencies = [
- "aws-smithy-eventstream",
- "aws-smithy-types",
  "base64 0.22.1",
  "bytes",
  "data-url",
@@ -2037,8 +2035,7 @@ dependencies = [
  "litellm-auth-gcp",
  "litellm-callbacks",
  "litellm-core-utils",
- "litellm-framing",
- "litellm-providers",
+ "litellm-llms",
  "litellm-types",
  "mime_guess",
  "moka",
@@ -2107,17 +2104,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-providers"
+name = "litellm-llms"
 version = "0.1.0"
 dependencies = [
+ "aws-smithy-eventstream",
+ "aws-smithy-types",
+ "base64 0.22.1",
+ "bytes",
+ "futures-util",
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-core-utils",
+ "litellm-framing",
  "litellm-types",
  "rstest",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "url",
 ]
 
 [[package]]

@@ -6,11 +6,13 @@ use litellm_types::{
 };
 use serde_json::Value;
 
-use super::super::experimental_pass_through::messages::streaming::{
-    AnthropicContentBlock, AnthropicContentBlockDelta, AnthropicMessagesStreamEvent,
-    AnthropicStreamUsage,
+use crate::{
+    anthropic::experimental_pass_through::messages::streaming_iterator::{
+        AnthropicContentBlock, AnthropicContentBlockDelta, AnthropicMessagesStreamEvent,
+        AnthropicStreamUsage,
+    },
+    base_llm::{base_model_iterator::StreamTransformer, chat::transformation::Error},
 };
-use crate::chat_completions::{Error, streaming::StreamTransformer};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AnthropicJsonChunkType {

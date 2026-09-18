@@ -1,4 +1,4 @@
-use litellm_providers::base_llm::chat::transformation::Error as LlmError;
+use litellm_llms::base_llm::chat::transformation::Error as LlmError;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
@@ -18,16 +18,6 @@ pub enum Error {
     Transport(#[from] crate::transport::Error),
     #[error(transparent)]
     Headers(#[from] crate::http_utils::HeaderError),
-    #[error("stream framing failed: {0}")]
-    StreamFraming(String),
-    #[error("Anthropic SSE frame has no data")]
-    MissingStreamData,
-    #[error("Anthropic stream event is invalid: {0}")]
-    InvalidStreamEvent(String),
-    #[error("Bedrock event payload is invalid: {0}")]
-    InvalidBedrockPayload(String),
-    #[error("Bedrock event payload has invalid base64: {0}")]
-    InvalidBedrockBase64(String),
 }
 
 impl From<LlmError> for Error {
@@ -57,14 +47,6 @@ impl Error {
     }
 
     pub fn is_response(&self) -> bool {
-        matches!(
-            self,
-            Self::InvalidResponse(_)
-                | Self::StreamFraming(_)
-                | Self::MissingStreamData
-                | Self::InvalidStreamEvent(_)
-                | Self::InvalidBedrockPayload(_)
-                | Self::InvalidBedrockBase64(_)
-        )
+        matches!(self, Self::InvalidResponse(_))
     }
 }

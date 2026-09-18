@@ -9,7 +9,19 @@ use litellm_framing::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::messages::Error;
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    #[error("stream framing failed: {0}")]
+    StreamFraming(String),
+    #[error("Anthropic SSE frame has no data")]
+    MissingStreamData,
+    #[error("Anthropic stream event is invalid: {0}")]
+    InvalidStreamEvent(String),
+    #[error("Bedrock event payload is invalid: {0}")]
+    InvalidBedrockPayload(String),
+    #[error("Bedrock event payload has invalid base64: {0}")]
+    InvalidBedrockBase64(String),
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AnthropicStreamUsage {

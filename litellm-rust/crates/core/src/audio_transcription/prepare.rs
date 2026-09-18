@@ -1,5 +1,5 @@
 use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
-use litellm_providers::{
+use litellm_llms::{
     base_llm::audio_transcription::transformation::{
         AudioTranscriptionAuth, BaseAudioTranscriptionConfig,
     },

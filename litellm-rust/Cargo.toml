@@ -17,7 +17,7 @@ litellm-auth = { path = "crates/auth" }
 litellm-auth-aws = { path = "crates/auth-aws" }
 litellm-auth-azure = { path = "crates/auth-azure" }
 litellm-auth-gcp = { path = "crates/auth-gcp" }
-litellm-providers = { path = "crates/providers" }
+litellm-llms = { path = "crates/llms" }
 litellm-types = { path = "crates/types" }
 litellm-core-utils = { path = "crates/core-utils" }
 litellm-cache = { path = "crates/cache" }

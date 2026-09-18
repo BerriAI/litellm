@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_providers::base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig;
+use litellm_llms::base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig;
 use serde_json::{Map, Value};
 
 pub struct MessagesRequest<'a> {

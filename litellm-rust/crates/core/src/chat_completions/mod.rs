@@ -13,7 +13,6 @@ mod client;
 mod common_utils;
 pub(crate) mod handler;
 mod prepare;
-pub mod streaming;
 use handler::execute_chat_completions_provider_call;
 use litellm_types::utils::ChatCompletionsResponse;
 use prepare::{parse_messages, resolve_provider_config, resolve_request};

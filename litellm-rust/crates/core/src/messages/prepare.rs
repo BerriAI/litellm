@@ -1,5 +1,5 @@
 use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
-use litellm_providers::base_llm::anthropic_messages::transformation::{
+use litellm_llms::base_llm::anthropic_messages::transformation::{
     BaseAnthropicMessagesConfig, MessagesAuthStrategy,
 };
 use serde_json::{Map, Value};
