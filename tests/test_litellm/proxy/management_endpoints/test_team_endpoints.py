@@ -13387,7 +13387,7 @@ async def test_new_team_created_audit_event_carries_the_final_roster(monkeypatch
     mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=user_row)
     membership_row = MagicMock()
     membership_row.model_dump.return_value = {"team_id": "team-audit-roster", "user_id": "alice", "budget_id": None}
-    mock_prisma.db.litellm_teammembership.create = AsyncMock(return_value=membership_row)
+    mock_prisma.db.litellm_teammembership.upsert = AsyncMock(return_value=membership_row)
     mock_prisma.db.litellm_auditlog.create = AsyncMock()
     _wire_team_create_tx(mock_prisma)
 
