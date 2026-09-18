@@ -140,7 +140,9 @@ jobs:
           python -m pytest tests/mcp_dependency_tests/test_runner.py \
           --cov=tests/mcp_dependency_tests \
           --cov=tests/base_sdk_tests --cov-append --cov-branch \
-          --cov-report=xml:mcp-dependency-coverage.xml
+          --cov-report=
+        uv run --isolated --no-project --python 3.12 --with 'coverage==7.14.0' \
+          coverage xml --rcfile=tests/mcp_dependency_tests/coverage.ini -o mcp-dependency-coverage.xml
     - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
       with:
         name: mcp-dependency-reports-${{ matrix.python }}
