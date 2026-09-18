@@ -2626,10 +2626,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         model_response.choices[0].message = _message
         model_response._hidden_params["original_response"] = completion_response["content"]
-        model_response.choices[0].finish_reason = cast(
+        _finish_reason: Final = cast(
             OpenAIChatCompletionFinishReason,
             map_finish_reason(completion_response["stop_reason"]),
         )
+        model_response.choices[0].finish_reason = _finish_reason
+        if completion_response["stop_reason"] and completion_response["stop_reason"] != _finish_reason:
+            _choice = model_response.choices[0]
+            setattr(
+                _choice,
+                "provider_specific_fields",
+                {
+                    **(getattr(_choice, "provider_specific_fields", None) or {}),
+                    "native_finish_reason": completion_response["stop_reason"],
+                },
+            )
 
         usage: Final = self.calculate_usage(
             usage_object=completion_response["usage"],

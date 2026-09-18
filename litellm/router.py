@@ -2576,16 +2576,13 @@ class Router:
 
             ## CHECK MAPPED FINISH REASON ERROR ##
             if isinstance(response, ModelResponse):
-                if self._should_raise_mapped_finish_reason_error(model=model, response=response, kwargs=kwargs):
-                    raise self._finish_reason_failure_error(
-                        model=model, reason=self._get_mapped_finish_reason(response)
+                _mapped_reason = self._get_mapped_finish_reason(response)
+                if _mapped_reason is not None:
+                    self._account_mapped_finish_reason_failure(
+                        model=model, deployment=deployment, reason=_mapped_reason, kwargs=kwargs
                     )
-                self._account_mapped_finish_reason_failure(
-                    model=model,
-                    deployment=deployment,
-                    reason=self._get_mapped_finish_reason(response),
-                    kwargs=kwargs,
-                )
+                    if self._should_raise_mapped_finish_reason_error(model=model, response=response, kwargs=kwargs):
+                        raise self._finish_reason_failure_error(model=model, reason=_mapped_reason)
 
             if (
                 isinstance(response, CustomStreamWrapper)
@@ -3713,16 +3710,15 @@ class Router:
 
                 ## CHECK MAPPED FINISH REASON ERROR ##
                 if isinstance(response, ModelResponse):
-                    if self._should_raise_mapped_finish_reason_error(model=model, response=response, kwargs=kwargs):
-                        raise self._finish_reason_failure_error(
-                            model=model, reason=self._get_mapped_finish_reason(response)
+                    _mapped_reason = self._get_mapped_finish_reason(response)
+                    if _mapped_reason is not None:
+                        self._account_mapped_finish_reason_failure(
+                            model=model, deployment=deployment, reason=_mapped_reason, kwargs=kwargs
                         )
-                    self._account_mapped_finish_reason_failure(
-                        model=model,
-                        deployment=deployment,
-                        reason=self._get_mapped_finish_reason(response),
-                        kwargs=kwargs,
-                    )
+                        if self._should_raise_mapped_finish_reason_error(
+                            model=model, response=response, kwargs=kwargs
+                        ):
+                            raise self._finish_reason_failure_error(model=model, reason=_mapped_reason)
 
                 if (
                     isinstance(response, CustomStreamWrapper)
@@ -5446,11 +5442,11 @@ class Router:
             ):
                 stop_reason: Final = response.get("stop_reason")
                 if stop_reason in (self.treat_finish_reason_as_failure or {}):
-                    if self._finish_reason_failure_fallback_available(model, kwargs):
-                        raise self._finish_reason_failure_error(model=model, reason=stop_reason)
                     self._account_mapped_finish_reason_failure(
                         model=model, deployment=deployment, reason=stop_reason, kwargs=kwargs
                     )
+                    if self._finish_reason_failure_fallback_available(model, kwargs):
+                        raise self._finish_reason_failure_error(model=model, reason=stop_reason)
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("ageneric_api_call_with_fallbacks(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -8667,7 +8663,7 @@ class Router:
         choice: Final = response.choices[0]
         if choice.finish_reason in self.treat_finish_reason_as_failure:
             return choice.finish_reason
-        native_reason: Final = (choice.provider_specific_fields or {}).get("native_finish_reason")
+        native_reason: Final = (getattr(choice, "provider_specific_fields", None) or {}).get("native_finish_reason")
         if native_reason in self.treat_finish_reason_as_failure:
             return native_reason
         return None
@@ -8713,9 +8709,9 @@ class Router:
 
     def _account_mapped_finish_reason_failure(self, model: str, deployment: dict, reason: str, kwargs: dict) -> None:
         """
-        Count and park a mapped finish-reason failure when nothing is raised (no fallback can
-        serve the retry): increment the per-minute failure counter and set the cooldown the way a
-        raised exception would. In the raising branch the normal exception flow does the accounting.
+        Count and park a mapped finish-reason failure: increment the per-minute failure counter
+        and set the cooldown. The raise sites call this too, because the router raises after the
+        200 came back, so litellm's failure callbacks never fire for this exception.
         """
         if reason is None:
             return
