@@ -1007,8 +1007,8 @@ class AmazonConverseConfig(BaseConfig):
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["maxTokens"] = (
-                    self._enforce_min_max_tokens(cast(object, value))
-                    if self._is_openai_gpt_reasoning_model(model)
+                    self._enforce_min_max_tokens(value)
+                    if self._is_openai_gpt_reasoning_model(model) and isinstance(value, int)
                     else value
                 )
             if param == "stream":
