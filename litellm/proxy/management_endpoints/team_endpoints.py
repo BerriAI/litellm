@@ -99,6 +99,7 @@ from litellm.proxy.auth.auth_checks import (
     can_org_access_model,
     delete_cache_key_objects,
     delete_cache_team_object,
+    get_jwt_key_mapping_cache_keys_for_tokens,
     get_org_object,
     get_team_membership,
     get_team_object,
@@ -110,6 +111,7 @@ from litellm.proxy.auth.auth_utils import (
     enforce_output_token_estimates_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -2902,10 +2904,15 @@ async def _process_team_members(
     if member_allowed_models is None and team_default_member_models:
         member_allowed_models = team_default_member_models
 
-    if isinstance(data.member, Member):
+    requested_members: Final[Sequence[Member]] = (
+        (data.member,) if isinstance(data.member, Member) else tuple(data.member)
+    )
+    for m in requested_members:
+        if _member_already_in_team(m, complete_team_data):
+            continue
         try:
             updated_user, updated_tm = await add_new_member(
-                new_member=data.member,
+                new_member=m,
                 max_budget_in_team=data.max_budget_in_team,
                 prisma_client=prisma_client,
                 user_api_key_dict=user_api_key_dict,
@@ -2919,34 +2926,11 @@ async def _process_team_members(
         except Exception as e:
             raise HTTPException(
                 status_code=500,
-                detail={"error": f"Unable to add user - {data.member}, to team - {data.team_id}, for reason - {e}"},
+                detail={"error": f"Unable to add user - {m}, to team - {data.team_id}, for reason - {e}"},
             )
         updated_users.append(updated_user)
         if updated_tm is not None:
             updated_team_memberships.append(updated_tm)
-    elif isinstance(data.member, list):
-        for m in data.member:
-            try:
-                updated_user, updated_tm = await add_new_member(
-                    new_member=m,
-                    max_budget_in_team=data.max_budget_in_team,
-                    prisma_client=prisma_client,
-                    user_api_key_dict=user_api_key_dict,
-                    litellm_proxy_admin_name=litellm_proxy_admin_name,
-                    team_id=data.team_id,
-                    default_team_budget_id=default_team_budget_id,
-                    allowed_models=member_allowed_models,
-                    budget_duration=data.budget_duration,
-                    tx=tx,
-                )
-            except Exception as e:
-                raise HTTPException(
-                    status_code=500,
-                    detail={"error": f"Unable to add user - {m}, to team - {data.team_id}, for reason - {e}"},
-                )
-            updated_users.append(updated_user)
-            if updated_tm is not None:
-                updated_team_memberships.append(updated_tm)
 
     return updated_users, updated_team_memberships
 
@@ -3524,7 +3508,6 @@ async def team_member_delete(
     }'
     ```
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
     if prisma_client is None:
@@ -3626,6 +3609,10 @@ async def team_member_delete(
                 "team_id": data.team_id,
             }
         )
+        jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_tokens(
+            hashed_tokens=tuple(key.token for key in keys_to_delete),
+            prisma_client=prisma_client,
+        )
 
         if removed_team_members:
             await _team_tx_db(tx).update(
@@ -3674,6 +3661,7 @@ async def team_member_delete(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
+    await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
     await evict_and_broadcast(cache_keys=tuple(sorted(user_ids_to_delete)), user_api_key_cache=user_api_key_cache)
     for user_id in sorted(user_ids_to_delete):
         await invalidate_team_member_spend_state(
@@ -3842,6 +3830,8 @@ async def team_member_update(
         rpm_limit=data.rpm_limit,
         budget_duration=data.budget_duration,
         allowed_models=data.allowed_models,
+        temp_budget_increase=data.temp_budget_increase,
+        temp_budget_expiry=data.temp_budget_expiry,
     )
 
 
@@ -4264,6 +4254,10 @@ async def delete_team(
     )
 
     keys_to_delete: Final = await _tokens_db(prisma_client).find_many(where={"team_id": {"in": data.team_ids}})
+    jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_tokens(
+        hashed_tokens=tuple(key.token for key in keys_to_delete),
+        prisma_client=prisma_client,
+    )
 
     if keys_to_delete:
         await _persist_deleted_verification_tokens(
@@ -4280,6 +4274,7 @@ async def delete_team(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
+    await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
 
     ## DELETE ASSOCIATED BYOK MODELS
     # Runs before the team rows are deleted so a mid-flight failure never leaves

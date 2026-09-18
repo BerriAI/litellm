@@ -325,7 +325,7 @@ async def test_pass_through_request_stream_param_override(
             "POST",
             httpx.URL("https://api.anthropic.com/v1/messages"),
             json=request_body,
-            params={},
+            params=None,
             headers={"Authorization": "Bearer test-key"},
         )
 
@@ -424,7 +424,7 @@ async def test_pass_through_request_stream_param_no_override(
             "POST",
             httpx.URL("https://api.anthropic.com/v1/messages"),
             headers={"Authorization": "Bearer test-key"},
-            params={},
+            params=None,
             json=request_body,
         )
         mock_async_client.send.assert_called_once()

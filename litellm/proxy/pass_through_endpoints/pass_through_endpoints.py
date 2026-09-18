@@ -9,6 +9,7 @@ from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequenc
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import groupby
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 from urllib.parse import urlencode, urlparse
 
@@ -52,6 +53,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.managed_resources.utils import (
@@ -991,7 +993,7 @@ async def pass_through_request(
         )
         upstream_headers: Final = _with_trace_context(headers, parent_span=user_api_key_dict.parent_otel_span)
 
-        requested_query_params: dict | None = query_params or dict(request.query_params)
+        requested_query_params: dict | None = query_params or dict(request.query_params) or None
 
         endpoint_type: Final[EndpointType] = HttpPassThroughEndpointHelpers.get_endpoint_type(str(url))
 
@@ -1023,7 +1025,7 @@ async def pass_through_request(
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
-            upstream_headers,
+            _get_masked_values(upstream_headers),
             _parsed_body,
         )
 
@@ -1193,7 +1195,7 @@ async def pass_through_request(
                 query=urlencode(
                     HttpPassThroughEndpointHelpers.get_merged_query_parameters(
                         existing_url=url,
-                        request_query_params=requested_query_params,
+                        request_query_params=requested_query_params or MappingProxyType({}),
                         default_query_params=default_query_params,
                     )
                 ).encode("ascii")
@@ -2668,17 +2670,22 @@ def _should_buffer_passthrough_response(response: httpx.Response) -> bool:
     """
     Decide from the response headers whether the body must be read into memory.
 
-    JSON bodies (and upstream errors) stay buffered: spend logging, guardrails and
-    managed-id rewriting inspect them, and they are small in practice. Everything
-    else (jsonl batch results, octet-stream files, ...) is relayed to the client
-    chunk by chunk so a large body is never resident in full (LIT-4009). A missing
-    content-type is buffered because the body cannot be classified.
+    JSON bodies (including the AWS JSON protocol media types) and upstream errors
+    stay buffered: spend logging, guardrails and managed-id rewriting inspect them,
+    and they are small in practice. Everything else (jsonl batch results,
+    octet-stream files, ...) is relayed to the client chunk by chunk so a large
+    body is never resident in full (LIT-4009). A missing content-type is buffered
+    because the body cannot be classified.
     """
     if response.status_code >= 400:
         return True
     content_type_header: Final[str] = response.headers.get("content-type", "")
     media_type: Final = content_type_header.split(";")[0].strip().lower()
-    return media_type in ("", "application/json") or media_type.endswith("+json")
+    return (
+        media_type in ("", "application/json")
+        or media_type.endswith("+json")
+        or media_type.startswith("application/x-amz-json")
+    )
 
 
 async def _relay_passthrough_response_bytes(

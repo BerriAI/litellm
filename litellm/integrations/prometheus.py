@@ -995,23 +995,6 @@ class PrometheusLogger(CustomLogger):
 
         return label_filters
 
-    def _validate_configured_metric_labels(self, metric_name: str, labels: list[str]):
-        """
-        Ensure that all the configured labels are valid for the metric
-
-        Raises ValueError if the metric labels are invalid and pretty prints the error
-        """
-        label_error: Final = self._validate_single_metric_labels(metric_name, labels)
-        if label_error:
-            self._pretty_print_invalid_labels_error(
-                metric_name=label_error.metric_name,
-                invalid_labels=label_error.invalid_labels,
-                valid_labels=label_error.valid_labels,
-            )
-            raise ValueError(label_error.message)
-
-        return True
-
     #########################################################
     # Pretty print functions
     #########################################################
@@ -1090,107 +1073,9 @@ class PrometheusLogger(CustomLogger):
             for label_error in validation_results.label_errors:
                 verbose_logger.error(label_error.message)
 
-    def _pretty_print_invalid_labels_error(
-        self, metric_name: str, invalid_labels: list[str], valid_labels: list[str]
-    ) -> None:
-        """Pretty print error message for invalid labels using rich"""
-        try:
-            from rich.console import Console
-            from rich.panel import Panel
-            from rich.table import Table
-            from rich.text import Text
-
-            console: Final = Console()
-
-            # Create error panel title
-            title: Final = Text(
-                f"🚨🚨 Invalid Labels for Metric: '{metric_name}'\nInvalid labels: {', '.join(invalid_labels)}\nPlease specify only valid labels below",
-                style="bold red",
-            )
-
-            # Create valid labels table
-            labels_table: Final = Table(
-                title="🏷️ Valid Labels for this Metric",
-                show_header=True,
-                header_style="bold green",
-                title_justify="left",
-                border_style="green",
-            )
-            labels_table.add_column("Valid Labels", style="cyan", no_wrap=True)
-
-            for label in sorted(valid_labels):
-                labels_table.add_row(label)
-
-            # Print everything in a nice panel
-            console.print("\n")
-            console.print(Panel(title, border_style="red"))
-            console.print(labels_table)
-            console.print("\n")
-
-        except ImportError:
-            # Fallback to simple logging if rich is not available
-            verbose_logger.error(
-                "Invalid labels for metric '%s': %s. Valid labels: %s",
-                metric_name,
-                invalid_labels,
-                sorted(valid_labels),
-            )
-
-    def _pretty_print_invalid_metric_error(self, invalid_metric_name: str, valid_metrics: tuple) -> None:
-        """Pretty print error message for invalid metric name using rich"""
-        try:
-            from rich.console import Console
-            from rich.panel import Panel
-            from rich.table import Table
-            from rich.text import Text
-
-            console: Final = Console()
-
-            # Create error panel title
-            title: Final = Text(
-                f"🚨🚨 Invalid Metric Name: '{invalid_metric_name}'\nPlease specify one of the allowed metrics below",
-                style="bold red",
-            )
-
-            # Create valid metrics table
-            metrics_table: Final = Table(
-                title="📊 Valid Metric Names",
-                show_header=True,
-                header_style="bold green",
-                title_justify="left",
-                border_style="green",
-            )
-            metrics_table.add_column("Available Metrics", style="cyan", no_wrap=True)
-
-            for metric in sorted(valid_metrics):
-                metrics_table.add_row(metric)
-
-            # Print everything in a nice panel
-            console.print("\n")
-            console.print(Panel(title, border_style="red"))
-            console.print(metrics_table)
-            console.print("\n")
-
-        except ImportError:
-            # Fallback to simple logging if rich is not available
-            verbose_logger.error(
-                "Invalid metric name: %s. Valid metrics: %s", invalid_metric_name, sorted(valid_metrics)
-            )
-
     #########################################################
     # End of pretty print functions
     #########################################################
-
-    def _valid_metric_name(self, metric_name: str):
-        """
-        Raises ValueError if the metric name is invalid and pretty prints the error
-        """
-        error: Final = self._validate_single_metric_name(metric_name)
-        if error:
-            self._pretty_print_invalid_metric_error(
-                invalid_metric_name=error.metric_name, valid_metrics=error.valid_metrics
-            )
-            raise ValueError(error.message)
 
     def _pretty_print_prometheus_config(self, label_filters: dict[str, list[str]]) -> None:
         """Pretty print the processed prometheus configuration using rich"""
