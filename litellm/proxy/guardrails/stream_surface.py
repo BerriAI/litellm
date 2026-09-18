@@ -72,8 +72,7 @@ def classify_stream(all_chunks: Sequence[object]) -> StreamSurface:
     if is_raw_sse_stream(all_chunks):
         return StreamSurface.ANTHROPIC_MESSAGES if is_anthropic_sse_stream(all_chunks) else StreamSurface.OPAQUE_SSE
     if any(
-        (event_type := _stream_item_type(chunk)) is not None
-        and event_type.startswith(_RESPONSES_EVENT_TYPE_PREFIX)
+        (event_type := _stream_item_type(chunk)) is not None and event_type.startswith(_RESPONSES_EVENT_TYPE_PREFIX)
         for chunk in all_chunks
     ):
         return StreamSurface.RESPONSES
@@ -134,9 +133,7 @@ def responses_deltas_absent_from_body(all_chunks: Sequence[object], body: Respon
     """
     encoded_body: Final = json.dumps(body.model_dump(mode="json"), default=str)
     return tuple(
-        text
-        for text in responses_delta_field_texts(all_chunks)
-        if text and json.dumps(text)[1:-1] not in encoded_body
+        text for text in responses_delta_field_texts(all_chunks) if text and json.dumps(text)[1:-1] not in encoded_body
     )
 
 

@@ -109,7 +109,6 @@ class ThirdlawGuardrailConfigModelOptionalParams(BaseModel):
     )
 
 
-
 class ThirdlawGuardrailConfigModel(GuardrailConfigModel[ThirdlawGuardrailConfigModelOptionalParams]):
     api_base: str | None = Field(
         default=None,
