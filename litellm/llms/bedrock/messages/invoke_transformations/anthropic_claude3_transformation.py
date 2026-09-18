@@ -39,6 +39,7 @@ from litellm.llms.bedrock.common_utils import (
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     strip_unsupported_bedrock_invoke_output_config_keys,
+    tools_without_eager_input_streaming,
 )
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -46,6 +47,7 @@ from litellm.llms.bedrock.request_metadata import (
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
+    ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
 )
 from litellm.types.llms.bedrock import BedrockInvokeAnthropicMessagesRequest
@@ -525,6 +527,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         if injected_thinking_for_clear_thinking:
             beta_set.add("interleaved-thinking-2025-05-14")
 
+        if anthropic_model_info.is_eager_input_streaming_used(tools):
+            beta_set.add(ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER)
+
         self._filter_context_management_for_bedrock_invoke(
             anthropic_messages_request=anthropic_messages_request,
             beta_set=beta_set,
@@ -718,6 +723,10 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
+
+        outbound_tools: Final = tools_without_eager_input_streaming(anthropic_messages_request)
+        if outbound_tools is not None:
+            anthropic_messages_request["tools"] = outbound_tools
 
         remaining_output_config: Final = anthropic_messages_request.get("output_config")
         if (

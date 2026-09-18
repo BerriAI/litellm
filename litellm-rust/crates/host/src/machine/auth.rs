@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
-use litellm_auth::{Error, ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
-use litellm_callbacks::route::Route;
-
 use super::{HostChannel, MachineFault};
+use crate::route::Route;
+use litellm_auth::{Error, ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
 
 /// A route whose host can mint credentials on the call's behalf.
 pub trait TokenRoute: Route {

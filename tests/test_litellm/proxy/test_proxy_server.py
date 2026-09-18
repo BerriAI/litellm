@@ -7625,14 +7625,11 @@ async def test_deleting_the_stored_pass_through_row_takes_the_route_out_of_servi
             route for route in InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes() if path in route
         }
 
-    settings: Final = patch(
-        "litellm.proxy.proxy_server.general_settings", {}
-    )  # test-quality-ok: the method reads this module global; no injection seam
-    yaml_endpoints: Final = patch(
-        "litellm.proxy.proxy_server.config_passthrough_endpoints", None
-    )  # test-quality-ok: module global holding the YAML endpoints; this case has none
+    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {})  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", None)  # test-quality-ok: module global holding the YAML endpoints; this case has none
+    app_routes: Final = patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.SafeRouteAdder.add_api_route_if_not_exists")  # test-quality-ok: the registry is the observable; a real route would stay on the shared FastAPI app for the rest of the xdist worker
     try:
-        with settings, yaml_endpoints:
+        with settings, yaml_endpoints, app_routes:
             pc = ProxyConfig()
             await pc._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
             assert live_routes(), "the stored endpoint should be serving before the row is deleted"
@@ -7670,14 +7667,11 @@ async def test_a_stored_pass_through_row_never_disturbs_the_config_declared_rout
         registered: Final = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
         return {path for path in (config_path, db_path) if any(path in route for route in registered)}
 
-    settings: Final = patch(
-        "litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [config_endpoint]}
-    )  # test-quality-ok: the method reads this module global; no injection seam
-    yaml_endpoints: Final = patch(
-        "litellm.proxy.proxy_server.config_passthrough_endpoints", [config_endpoint]
-    )  # test-quality-ok: module global holding the YAML endpoints the reload merges in
+    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [config_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [config_endpoint])  # test-quality-ok: module global holding the YAML endpoints the reload merges in
+    app_routes: Final = patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.SafeRouteAdder.add_api_route_if_not_exists")  # test-quality-ok: the registry is the observable; a real route would stay on the shared FastAPI app for the rest of the xdist worker
     try:
-        with settings, yaml_endpoints:
+        with settings, yaml_endpoints, app_routes:
             await initialize_pass_through_endpoints(pass_through_endpoints=[config_endpoint])
             assert live_paths() == {config_path}
 

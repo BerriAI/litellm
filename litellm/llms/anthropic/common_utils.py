@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import Any, Final, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, StrictBool, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import (
@@ -19,6 +19,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
     is_encrypted_reasoning_block,
@@ -231,6 +232,27 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
     return headers, api_key
 
 
+class _EagerInputStreamingFunction(BaseModel):
+    eager_input_streaming: StrictBool | None = None
+
+
+class _EagerInputStreamingTool(BaseModel):
+    eager_input_streaming: StrictBool | None = None
+    function: _EagerInputStreamingFunction | None = None
+
+
+def eager_input_streaming_flag(tool: object) -> bool | None:
+    try:
+        parsed: Final = _EagerInputStreamingTool.model_validate(tool)
+    except ValidationError as error:
+        if isinstance(tool, Mapping):
+            raise UnsupportedParamsError(message="eager_input_streaming must be a boolean") from error
+        return None
+    if parsed.eager_input_streaming is not None:
+        return parsed.eager_input_streaming
+    return parsed.function.eager_input_streaming if parsed.function is not None else None
+
+
 class AnthropicError(BaseLLMException):
     def __init__(
         self,
@@ -372,6 +394,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                     return True
 
         return False
+
+    def is_eager_input_streaming_used(self, tools: Sequence[object] | None) -> bool:
+        return any(eager_input_streaming_flag(tool) is True for tool in tools or ())
 
     @staticmethod
     def _supports_sampling_params(model: str) -> bool:
