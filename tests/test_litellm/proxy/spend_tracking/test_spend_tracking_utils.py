@@ -164,7 +164,6 @@ _TRACE_ONLY_STANDARD_LOGGING: Final = cast(
 
 
 def _trace_only_session_id(omit_when_missing: bool) -> str | None:
-    """get_litellm_params copies metadata.trace_id into litellm_trace_id, so the payload trace id echoes it."""
     return _get_session_id_for_spend_log(
         kwargs={"litellm_trace_id": "trace-abc", "litellm_params": {"litellm_trace_id": "trace-abc"}},
         metadata={"trace_id": "trace-abc"},
@@ -209,8 +208,6 @@ def test_legacy_policy_keeps_trace_id_fallback():
 
 
 def test_legacy_policy_never_records_client_metadata_trace_id_as_the_session():
-    """A client sending only `metadata.trace_id` is correlating a trace, not opening a session; the logs UI must
-    not show that value under Session ID."""
     session_id: Final = _trace_only_session_id(omit_when_missing=False)
     assert session_id != "trace-abc"
     assert len(str(session_id)) == 36
