@@ -1,0 +1,12 @@
+{
+  "kind": {
+    "type": "timeout",
+    "status": null
+  },
+  "message": "MistralException - timeout_without_status",
+  "model": "ocr-model",
+  "llm_provider": "mistral",
+  "litellm_debug_info": null,
+  "litellm_response_headers": null,
+  "print_banner": false
+}

@@ -1,0 +1,28 @@
+{
+  "kind": {
+    "type": "status",
+    "status_class": "unsupported_params",
+    "response": {
+      "type": "upstream",
+      "status": 400,
+      "body": "{\"message\": \"rejected\"}",
+      "headers": [
+        [
+          "retry-after",
+          "7"
+        ]
+      ]
+    }
+  },
+  "message": "MistralException - status_unsupported_params",
+  "model": "ocr-model",
+  "llm_provider": "mistral",
+  "litellm_debug_info": "\nModel: ocr-model",
+  "litellm_response_headers": [
+    [
+      "retry-after",
+      "7"
+    ]
+  ],
+  "print_banner": false
+}

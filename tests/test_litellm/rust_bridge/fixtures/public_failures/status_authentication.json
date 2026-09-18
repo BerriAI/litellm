@@ -1,0 +1,13 @@
+{
+  "kind": {
+    "type": "status",
+    "status_class": "authentication",
+    "response": null
+  },
+  "message": "MistralException - status_authentication",
+  "model": "ocr-model",
+  "llm_provider": "mistral",
+  "litellm_debug_info": "\nModel: ocr-model",
+  "litellm_response_headers": null,
+  "print_banner": false
+}

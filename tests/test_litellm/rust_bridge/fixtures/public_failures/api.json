@@ -1,0 +1,13 @@
+{
+  "kind": {
+    "type": "api",
+    "status": 409,
+    "request_url": "https://docs.litellm.ai/docs"
+  },
+  "message": "MistralException - api",
+  "model": "ocr-model",
+  "llm_provider": "mistral",
+  "litellm_debug_info": "\nModel: ocr-model",
+  "litellm_response_headers": null,
+  "print_banner": false
+}
