@@ -5,6 +5,7 @@ import os
 import sys
 from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
+from datetime import datetime
 from io import BytesIO
 from types import SimpleNamespace
 from typing import Final
@@ -26,6 +27,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
+    _build_passthrough_failure_request_payload,
     _registered_pass_through_routes,
     chat_completion_pass_through_endpoint,
     create_pass_through_route,
@@ -44,8 +46,41 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
+from litellm.types.utils import CallTypes
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
+
+
+def test_build_passthrough_failure_request_payload_carries_masked_api_base():
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.pass_through.value,
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+    logging_obj.pre_call(
+        input={},
+        api_key="",
+        additional_args={
+            "complete_input_dict": {},
+            "api_base": "http://upstream.example/search?api-version=1",
+            "headers": {},
+        },
+    )
+    kwargs = {"litellm_params": {"metadata": {}}}
+
+    payload = _build_passthrough_failure_request_payload(
+        parsed_body={},
+        kwargs=kwargs,
+        logging_obj=logging_obj,
+        custom_llm_provider=None,
+    )
+
+    assert payload["litellm_params"]["api_base"] == logging_obj.model_call_details["litellm_params"]["api_base"]
+    assert "api_base" not in kwargs["litellm_params"]
 
 
 def test_with_trace_context_without_opentelemetry(monkeypatch: pytest.MonkeyPatch):
