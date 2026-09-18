@@ -4552,43 +4552,24 @@ async def test_new_user_rejects_invalid_rollover_max_budget(mocker, bad_cap):
     duplicate_check.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_new_user_response_echoes_rollover_max_budget(mocker):
+def test_new_user_response_echoes_rollover_max_budget():
     """/user/new returns the rollover cap it persisted instead of dropping it from the response."""
-    from unittest.mock import AsyncMock, MagicMock
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _new_user_response
 
-    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
-
-    mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_usertable.count = AsyncMock(return_value=1)
-    mock_license_check = MagicMock()
-    mock_license_check.is_over_limit.return_value = False
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    mocker.patch("litellm.proxy.proxy_server._license_check", mock_license_check)
-    mocker.patch(
-        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
-        new=AsyncMock(),
-    )
-
-    async def stub_helper(**_kwargs):
-        return {
+    result = _new_user_response(
+        response={
             "user_id": "rollover-user",
             "token": "sk-rollover",
+            "token_id": "hashed",
             "expires": None,
             "max_budget": 100.0,
             "rollover_max_budget": 250.0,
-        }
-
-    mocker.patch(
-        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
-        stub_helper,
-    )
-    admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
-
-    result = await new_user(
-        data=NewUserRequest(user_id="rollover-user", max_budget=100.0, rollover_max_budget=250.0),
-        user_api_key_dict=admin,
+        },
+        attached_team_ids=("team-1",),
     )
 
     assert result.max_budget == 100.0
     assert result.rollover_max_budget == 250.0
+    assert result.key == "sk-rollover"
+    assert result.teams == ["team-1"]
+    assert result.token_id is None

@@ -17,6 +17,7 @@ import json
 import traceback
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
+from itertools import chain
 from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol, cast, overload
 
@@ -439,6 +440,21 @@ async def _fetch_user_team_ids(user_id: str, prisma_client: "PrismaClient") -> t
     return tuple(user_row.teams) if user_row is not None else ()
 
 
+_NEW_USER_SECRET_KEYS: Final = frozenset({"token", "token_id"})
+
+
+def _new_user_response(response: Mapping[str, object], attached_team_ids: Sequence[str] | None) -> NewUserResponse:
+    echoed: Final = (
+        (key, value)
+        for key, value in response.items()
+        if key in NewUserResponse.model_fields and key not in _NEW_USER_SECRET_KEYS
+    )
+    overrides: Final = (("key", response.get("token", "")),) + (
+        (("teams", tuple(attached_team_ids)),) if attached_team_ids is not None else ()
+    )
+    return NewUserResponse.model_validate(MappingProxyType(dict(chain(echoed, overrides))))
+
+
 @router.post(
     "/user/new",
     tags=["Internal User management"],
@@ -608,17 +624,7 @@ async def new_user(
                 user_api_key_dict=user_api_key_dict,
             )
 
-        special_keys: Final = ["token", "token_id"]
-        response_dict: Final = {}
-        for key, value in response.items():
-            if key in NewUserResponse.model_fields and key not in special_keys:
-                response_dict[key] = value
-
-        response_dict["key"] = response.get("token", "")
-        if attached_team_ids is not None:
-            response_dict["teams"] = list(attached_team_ids)
-
-        new_user_response: Final = NewUserResponse.model_validate(response_dict)
+        new_user_response: Final = _new_user_response(response=response, attached_team_ids=attached_team_ids)
 
         #########################################################
         ########## USER CREATED HOOK ################
