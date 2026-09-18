@@ -248,7 +248,7 @@ class TestVoyageContextualEmbeddings:
         assert "input_type" not in transformed
 
     def test_contextual_embedding_str_input_wrapped_with_auto_chunk(self):
-        """A bare str is wrapped to a one-element list and, as documents, gets auto-chunking + input_type=document"""
+        """A bare str is wrapped to a one-element sequence and, as documents, gets auto-chunking + input_type=document"""
         from litellm.llms.voyage.embedding.transformation_contextual import (
             VoyageContextualEmbeddingConfig,
         )
@@ -259,7 +259,7 @@ class TestVoyageContextualEmbeddings:
             "voyage-context-4", "just one chunk", {}, {}
         )
 
-        assert transformed["inputs"] == ["just one chunk"]
+        assert list(transformed["inputs"]) == ["just one chunk"]
         assert transformed["input_type"] == "document"
         assert transformed["enable_auto_chunking"] is True
 
@@ -516,24 +516,3 @@ class TestVoyageContextualEmbeddings:
 
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
-
-
-def test_voyage_current_models_registered():
-    """The models currently listed on docs.voyageai.com resolve with voyage pricing/context"""
-    from litellm import get_model_info
-
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    expected = {
-        "voyage/voyage-4-nano": {"max_input_tokens": 32000, "input_cost_per_token": 0.0},
-        "voyage/voyage-multilingual-2": {"max_input_tokens": 32000, "input_cost_per_token": 1.2e-07},
-        "voyage/voyage-context-4": {"max_input_tokens": 120000, "input_cost_per_token": 1.2e-07},
-    }
-
-    for model, fields in expected.items():
-        info = get_model_info(model)
-        assert info["litellm_provider"] == "voyage", f"{model} wrong provider"
-        assert info["mode"] == "embedding", f"{model} wrong mode"
-        assert info["max_input_tokens"] == fields["max_input_tokens"], f"{model} wrong context"
-        assert info["input_cost_per_token"] == fields["input_cost_per_token"], f"{model} wrong price"

@@ -266,11 +266,10 @@ class TestVoyageRerankTransform:
         assert "top_n" in supported_params
         assert "return_documents" in supported_params
 
-    @patch("litellm.llms.voyage.rerank.transformation.get_secret_str")
-    def test_validate_environment_missing_api_key(self, mock_get_secret_str):
+    def test_validate_environment_missing_api_key(self, monkeypatch):
         """Test that validate_environment raises error when API key is missing."""
-        # Mock get_secret_str to return None for both environment variables
-        mock_get_secret_str.return_value = None
+        for env_var in ("VOYAGE_API_KEY", "VOYAGE_AI_API_KEY", "VOYAGE_AI_TOKEN"):
+            monkeypatch.delenv(env_var, raising=False)
         with pytest.raises(ValueError, match="Voyage AI API key is required"):
             self.config.validate_environment(
                 headers={},

@@ -3,6 +3,8 @@ This module is used to transform the request and response for the Voyage context
 This would be used for all the contextualized embeddings models in Voyage.
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -10,9 +12,14 @@ import httpx
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.secret_managers.main import get_secret_str
+from litellm.llms.voyage.common_utils import get_default_base_url, get_voyage_api_key
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
+
+NO_CONTEXTUAL_DEFAULTS: Final[Mapping[str, str | bool]] = MappingProxyType({})
+AUTO_CHUNK_DEFAULTS: Final[Mapping[str, str | bool]] = MappingProxyType(
+    {"input_type": "document", "enable_auto_chunking": True}
+)
 
 
 class VoyageError(BaseLLMException):
@@ -54,7 +61,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
             if not api_base.endswith("/contextualizedembeddings"):
                 api_base = f"{api_base}/contextualizedembeddings"
             return api_base
-        return "https://api.voyageai.com/v1/contextualizedembeddings"
+        return f"{get_default_base_url(api_key)}/contextualizedembeddings"
 
     def get_supported_openai_params(self, model: str) -> list:
         return ["encoding_format", "dimensions"]
@@ -87,14 +94,8 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        if api_key is None:
-            api_key = (
-                get_secret_str("VOYAGE_API_KEY")
-                or get_secret_str("VOYAGE_AI_API_KEY")
-                or get_secret_str("VOYAGE_AI_TOKEN")
-            )
         return {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {get_voyage_api_key(api_key)}",
         }
 
     def transform_embedding_request(
@@ -104,41 +105,23 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        inputs, contextual_params = self._prepare_contextual_inputs(input, optional_params)
-        return {
-            "inputs": inputs,
-            "model": model,
-            **optional_params,
-            **contextual_params,
-        }
-
-    @staticmethod
-    def _prepare_contextual_inputs(
-        input: AllEmbeddingInputValues | list[list[str]],
-        optional_params: dict,
-    ) -> tuple[AllEmbeddingInputValues | list[list[str]], dict[str, str | bool]]:
         """
-        Shape ``inputs`` and the auto-chunking params to match Voyage's
-        contextualized embeddings contract.
-
-        - ``list[list[str]]`` (pre-chunked documents) is always valid and passes through.
-        - A flat ``list[str]`` or bare ``str`` is only valid as documents when
-          ``enable_auto_chunking=True`` with ``input_type="document"``, or as
-          queries with ``input_type="query"``. So a non-query flat input is sent
-          with those two params defaulted (caller-set values win).
+        Shape ``inputs`` and the auto-chunking params to match Voyage's contextualized
+        embeddings contract: ``list[list[str]]`` (pre-chunked documents) is always
+        valid, while a flat ``list[str]`` or bare ``str`` is valid only as queries
+        (``input_type="query"``) or as documents with ``enable_auto_chunking=True``
+        and ``input_type="document"``. Caller-set params win.
 
         Reference: https://docs.voyageai.com/docs/contextualized-chunk-embeddings
         """
-        if isinstance(input, list) and len(input) > 0 and isinstance(input[0], list):
-            return input, {}
-        flat: Final = [input] if isinstance(input, str) else input
-        if optional_params.get("input_type") == "query":
-            return flat, {}
-        contextual_params: Final = {
-            **({"input_type": "document"} if "input_type" not in optional_params else {}),
-            **({"enable_auto_chunking": True} if "enable_auto_chunking" not in optional_params else {}),
+        is_prechunked: Final = isinstance(input, list) and len(input) > 0 and isinstance(input[0], list)
+        is_query: Final = optional_params.get("input_type") == "query"
+        return {
+            "inputs": (input,) if isinstance(input, str) else input,
+            "model": model,
+            **(NO_CONTEXTUAL_DEFAULTS if is_prechunked or is_query else AUTO_CHUNK_DEFAULTS),
+            **optional_params,
         }
-        return flat, contextual_params
 
     def transform_embedding_response(
         self,

@@ -11,7 +11,7 @@ import httpx
 
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
-from litellm.secret_managers.main import get_secret_str
+from litellm.llms.voyage.common_utils import get_default_base_url, get_voyage_api_key
 from litellm.types.rerank import (
     RerankBilledUnits,
     RerankResponse,
@@ -59,7 +59,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         optional_params: dict | None = None,
     ) -> str:
         if api_base is None:
-            return "https://api.voyageai.com/v1/rerank"
+            return f"{get_default_base_url()}/rerank"
         api_base = api_base.rstrip("/")
         if not api_base.endswith("/v1/rerank"):
             if api_base.endswith("/v1"):
@@ -140,12 +140,11 @@ class VoyageRerankConfig(BaseRerankConfig):
         optional_params: dict | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
-        if api_key is None:
-            api_key = get_secret_str("VOYAGE_API_KEY") or get_secret_str("VOYAGE_AI_API_KEY")
-        if api_key is None:
+        resolved_api_key: Final = get_voyage_api_key(api_key)
+        if resolved_api_key is None:
             raise ValueError("Voyage AI API key is required. Set via `api_key` parameter or `VOYAGE_API_KEY` env var.")
         return {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {resolved_api_key}",
             "content-type": "application/json",
         }
 
