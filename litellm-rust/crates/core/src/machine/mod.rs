@@ -37,7 +37,7 @@ struct PendingOp<R: Route> {
 
 /// The provider side of the machine: how the in-flight call reaches its host.
 pub struct HostChannel<R: Route> {
-    ops: Option<mpsc::UnboundedSender<PendingOp<R>>>,
+    ops: mpsc::UnboundedSender<PendingOp<R>>,
 }
 
 impl<R: Route> Clone for HostChannel<R> {
@@ -48,24 +48,14 @@ impl<R: Route> Clone for HostChannel<R> {
     }
 }
 
-impl<R: Route> HostChannel<R> {
-    /// A channel with no host behind it: the wire request goes out unchanged, events go
-    /// nowhere, and route operations fail. For tests that prepare a request without
-    /// driving it.
-    #[cfg(test)]
-    pub(crate) fn detached() -> Self {
-        Self { ops: None }
-    }
-}
-
 impl<R: Route> HostChannel<R>
 where
     R::Error: From<MachineFault>,
 {
     async fn invoke(&self, op: HostOp<R>) -> Result<HostResult<R>, R::Error> {
-        let ops = self.ops.as_ref().ok_or(MachineFault::Abandoned)?;
         let (reply, answer) = oneshot::channel();
-        ops.send(PendingOp { op, reply })
+        self.ops
+            .send(PendingOp { op, reply })
             .map_err(|_| MachineFault::Abandoned)?;
         answer.await.map_err(|_| MachineFault::Abandoned.into())
     }
@@ -82,9 +72,6 @@ where
         wire: WireRequest,
         context: RequestContext,
     ) -> Result<WireRequest, R::Error> {
-        if self.ops.is_none() {
-            return Ok(wire);
-        }
         let op = HostOp::BeforeSend {
             wire: Box::new(wire),
             context: Box::new(context),
@@ -96,9 +83,6 @@ where
     }
 
     pub async fn emit(&self, event: CallEvent) -> Result<(), R::Error> {
-        if self.ops.is_none() {
-            return Ok(());
-        }
         match self.invoke(HostOp::Emit(event)).await? {
             HostResult::Emitted => Ok(()),
             _ => Err(MachineFault::Mismatch.into()),
@@ -128,7 +112,7 @@ where
         Self {
             execution: Execution::Unstarted(Box::new(execute)),
             ops,
-            channel: HostChannel { ops: Some(ops_tx) },
+            channel: HostChannel { ops: ops_tx },
             reply: None,
         }
     }

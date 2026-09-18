@@ -1,6 +1,5 @@
 use litellm_host_python::release_count;
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::{prelude::*, types::PyDict};
 
 #[pyfunction]
 pub(crate) fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {

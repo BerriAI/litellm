@@ -1,16 +1,14 @@
-use litellm_providers::base_llm::chat::transformation::ChatCompletionsAuth;
+use litellm_llms::{
+    base_llm::chat::transformation::{ChatCompletionsAuth, ProviderChatResponseData},
+    custom_httpx::http_handler::{http_request, truncate_error_body},
+};
+use litellm_types::utils::ChatCompletionsResponse;
 use serde_json::Value;
 
-use super::{
-    Error,
-    client::http_client,
-    prepare::prepare_provider_request,
-    types::{
-        ChatCompletionsResponse, ProviderChatCompletionsRequest, ProviderChatResponseData,
-        ResolvedChatCompletionsRequest,
-    },
+use super::{Error, client::http_client, prepare::prepare_provider_request};
+use crate::chat_completions::types::{
+    ProviderChatCompletionsRequest, ResolvedChatCompletionsRequest,
 };
-use crate::http_utils::{http_request, truncate_error_body};
 
 pub(super) async fn execute_chat_completions_provider_call(
     request: ResolvedChatCompletionsRequest<'_>,
@@ -36,23 +34,30 @@ pub(super) async fn execute_chat_completions_provider_call(
         // so the host can still serve it. Everything else here, a timeout
         // above all, may have reached the provider and been answered.
         if err.is_connect() || err.is_builder() {
-            Error::Transport(crate::transport::Error::Connect(err.to_string()))
+            Error::Transport(litellm_llms::custom_httpx::transport::Error::Connect(
+                err.to_string(),
+            ))
         } else {
-            Error::Transport(crate::transport::Error::Network(err.to_string()))
+            Error::Transport(litellm_llms::custom_httpx::transport::Error::Network(
+                err.to_string(),
+            ))
         }
     })?;
 
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|err| Error::Transport(crate::transport::Error::Network(err.to_string())))?;
+    let text = response.text().await.map_err(|err| {
+        Error::Transport(litellm_llms::custom_httpx::transport::Error::Network(
+            err.to_string(),
+        ))
+    })?;
 
     if !status.is_success() {
-        return Err(Error::Transport(crate::transport::Error::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
-        }));
+        return Err(Error::Transport(
+            litellm_llms::custom_httpx::transport::Error::Http {
+                status: status.as_u16(),
+                body: truncate_error_body(&text),
+            },
+        ));
     }
 
     let body: Value = serde_json::from_str(&text).map_err(|err| {
@@ -77,7 +82,9 @@ pub(super) async fn execute_chat_completions_provider_call(
 pub(super) fn as_response_error(err: Error) -> Error {
     match err {
         already @ (Error::InvalidResponse(_)
-        | Error::Transport(crate::transport::Error::Http { .. })) => already,
+        | Error::Transport(litellm_llms::custom_httpx::transport::Error::Http {
+            ..
+        })) => already,
         other => Error::InvalidResponse(other.to_string()),
     }
 }

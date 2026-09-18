@@ -1,16 +1,12 @@
+use litellm_llms::{
+    base_llm::ocr::transformation::{BaseOcrConfig, OcrDocument},
+    vertex_ai::ocr::deepseek_transformation::{
+        DeepSeekOcrParams, DeepSeekOcrResponse, VertexAIDeepSeekOCRConfig,
+        normalize_response as transform_ocr_response,
+    },
+};
 use rstest::rstest;
 use serde_json::{Value, json};
-
-use crate::{
-    llms::{
-        base_llm::ocr::transformation::BaseOcrConfig,
-        vertex_ai::ocr::deepseek_transformation::{
-            DeepSeekOcrParams, DeepSeekOcrResponse, VertexAIDeepSeekOCRConfig,
-            normalize_response as transform_ocr_response,
-        },
-    },
-    ocr::types::OcrDocument,
-};
 
 fn document() -> OcrDocument {
     serde_json::from_value(json!({"type":"image_url","image_url":"gs://bucket/a.png"})).unwrap()
