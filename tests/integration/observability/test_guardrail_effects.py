@@ -177,7 +177,7 @@ def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway:
         permission = {"mcp_servers": [identity], "mcp_tool_search_enabled": True}
         key = scenario.key(object_permission=permission)
         key_selected = scenario.key(object_permission=permission, guardrails=[guardrail])
-        team = scenario.team(guardrails=[guardrail])
+        team = scenario.team(guardrails=[guardrail], object_permission={"mcp_servers": [identity]})
         team_selected = scenario.key(team_id=team, object_permission=permission)
         catalog_key = scenario.key(object_permission={"mcp_servers": [identity]})
         names = tool_names(candidate, catalog_key, identity)
