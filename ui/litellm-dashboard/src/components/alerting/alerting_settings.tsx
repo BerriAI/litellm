@@ -55,15 +55,15 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
       return;
     }
 
-    const initialFormValues: Record<string, any> = {};
-
+    const configuredAlertingArgs: Record<string, unknown> = {};
     alertingSettings.forEach((setting) => {
-      initialFormValues[setting.field_name] = setting.field_value;
+      if (setting.field_name !== "slack_alerting" && setting.field_value != null) {
+        configuredAlertingArgs[setting.field_name] = setting.field_value;
+      }
     });
 
-    // Merge initialFormValues with actual formValues
-    const mergedFormValues = { ...formValues, ...initialFormValues };
-    const { slack_alerting, ...alertingArgs } = mergedFormValues;
+    const { slack_alerting, ...updatedAlertingArgs } = formValues;
+    const alertingArgs = { ...configuredAlertingArgs, ...updatedAlertingArgs };
     try {
       await updateConfigFieldSetting(accessToken, "alerting_args", alertingArgs);
       if (typeof slack_alerting === "boolean") {

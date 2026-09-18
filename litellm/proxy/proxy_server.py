@@ -15862,6 +15862,8 @@ async def alerting_settings(
 
     for field_name, field_info in SlackAlertingArgs.model_fields.items():
         if field_name in allowed_args:
+            field_value: Final
+            _stored_in_db: Final
             if field_name in alerting_args_dict:
                 field_value = alerting_args_dict[field_name]
                 _stored_in_db = True
