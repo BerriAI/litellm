@@ -26,12 +26,16 @@ def carry_team_and_user_budget_state(
             max_budget=team_object.max_budget,
         )
         valid_token.team_model_max_budget = team_object.model_max_budget  # rebind-ok: caller keeps this object
+        valid_token.team_budget_fallbacks = team_object.budget_fallbacks  # rebind-ok: caller keeps this object
     if user_object is not None:
         valid_token.user_budget_snapshot = UserBudgetSnapshot(  # rebind-ok: same object the caller keeps using
             budget_reset_at=user_object.budget_reset_at,
             max_budget=user_object.max_budget,
             user_alias=user_object.user_alias,
         )
+        valid_token.user_budget_fallbacks = (
+            user_object.budget_fallbacks
+        )  # rebind-ok: same object the caller keeps using
 
 
 def carry_organization_budget_state(valid_token: UserAPIKeyAuth, org_table: LiteLLM_OrganizationTable) -> None:

@@ -100,6 +100,7 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
+_BUDGET_FALLBACKS_ADAPTER: Final = TypeAdapter(dict[str, list[str]])
 _USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
 
 
@@ -1263,6 +1264,13 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
                 except ValidationError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
                 non_default_values[k] = {} if v is None else v
+        elif k == "budget_fallbacks":
+            if k in fields_set:
+                try:
+                    _BUDGET_FALLBACKS_ADAPTER.validate_python({} if v is None else v)
+                except ValidationError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                non_default_values[k] = {} if v is None else v
         elif (
             v is not None
             and v
@@ -1477,7 +1485,14 @@ async def _update_single_user_helper(
         # because `_update_internal_user_params` drops empty values, and `object_permission: {}` is
         # precisely the clear-my-own-ceiling case this must refuse.
         _sent_fields: Final = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
-        _protected_fields: Final = ("max_budget", "model_max_budget", "soft_budget", "spend", "object_permission")
+        _protected_fields: Final = (
+            "max_budget",
+            "model_max_budget",
+            "budget_fallbacks",
+            "soft_budget",
+            "spend",
+            "object_permission",
+        )
         for _field in _protected_fields:
             if _field in non_default_values or _field in _sent_fields:
                 raise HTTPException(
@@ -1561,7 +1576,7 @@ async def _update_single_user_helper(
 
         await _invalidate_user_spend_counter_if_changed(non_default_values)
 
-        if "model_max_budget" in non_default_values:
+        if "model_max_budget" in non_default_values or "budget_fallbacks" in non_default_values:
             await evict_and_broadcast(
                 cache_keys=(non_default_values["user_id"],),
                 user_api_key_cache=user_api_key_cache,
@@ -1886,9 +1901,14 @@ async def bulk_user_update(
             await UserRepository(prisma_client).table.update_many(
                 where={},
                 data=(
-                    {**non_default_values, "model_max_budget": json.dumps(non_default_values["model_max_budget"])}
-                    if "model_max_budget" in non_default_values
-                    else non_default_values
+                    {
+                        **non_default_values,
+                        **{
+                            column: json.dumps(non_default_values[column])
+                            for column in ("model_max_budget", "budget_fallbacks")
+                            if column in non_default_values
+                        },
+                    }
                 ),
             )
 
