@@ -1175,6 +1175,20 @@ def test_resolve_llm_passthrough_timeout_stream_timeout_precedence():
     )
 
 
+@pytest.mark.parametrize(
+    "stream, expected",
+    [(None, 90.0), (0, 90.0), ("", 90.0), (1, 1800.0), ("yes", 1800.0)],
+)
+def test_resolve_llm_passthrough_timeout_reads_stream_by_truthiness(stream: object, expected: float):
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"stream": stream},
+            litellm_params={"stream_timeout": 1800, "timeout": 90},
+        )
+        == expected
+    )
+
+
 @pytest.mark.asyncio
 async def test_pass_through_request_uses_resolved_timeout():
     with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:

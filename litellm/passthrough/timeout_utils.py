@@ -10,7 +10,6 @@ DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS: Final = 600.0
 class _TimeoutFields(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    stream: bool = False
     stream_timeout: float | None = None
     timeout: float | None = None
     request_timeout: float | None = None
@@ -61,10 +60,11 @@ def resolve_llm_passthrough_timeout(
     kwargs stream_timeout -> litellm_params stream_timeout -> router_stream_timeout, then the
     non-streaming chain above.
     """
+    streaming: Final = bool((kwargs or {}).get("stream"))
     request: Final = _TimeoutFields.model_validate(kwargs or {})
     deployment: Final = _TimeoutFields.model_validate(litellm_params or {})
     stream_candidates: Final = (
-        (request.stream_timeout, deployment.stream_timeout, router_stream_timeout) if request.stream else ()
+        (request.stream_timeout, deployment.stream_timeout, router_stream_timeout) if streaming else ()
     )
     candidates: Final = (
         *stream_candidates,
