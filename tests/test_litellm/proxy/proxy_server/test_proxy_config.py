@@ -13,8 +13,11 @@ import json
 import logging
 import os
 import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import datetime
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -35,7 +38,7 @@ from litellm.proxy.proxy_server import (
 )
 
 from .conftest import normalize
-from pydantic import ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 # ---------------------------------------------------------------------------
 # _is_remote_module_url
@@ -853,6 +856,314 @@ async def test_ProxyConfig__process_includes_terminates_on_a_cycle(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+_CONFIG_VALUE: Final = TypeAdapter(dict[str, JsonValue])
+
+
+@dataclass(frozen=True, slots=True)
+class _ConfigRow:
+    param_value: dict[str, JsonValue] | str
+
+
+class _ConfigTable:
+    def __init__(self, rows: Mapping[str, Mapping[str, JsonValue] | str]) -> None:
+        self.rows = {
+            param_name: value if isinstance(value, str) else _CONFIG_VALUE.validate_python(value)
+            for param_name, value in rows.items()
+        }
+        self.upserted_param_names: list[str] = []
+        self._section_lock = asyncio.Lock()
+
+    async def find_first(self, *, where: Mapping[str, str]) -> _ConfigRow | None:
+        value: Final = self.rows.get(where["param_name"])
+        await asyncio.sleep(0)
+        return _ConfigRow(param_value=value) if value is not None else None
+
+    async def upsert(
+        self, *, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]
+    ) -> _ConfigRow:
+        param_name: Final = where["param_name"]
+        value: Final = _CONFIG_VALUE.validate_json(data["update"]["param_value"])
+        self.rows[param_name] = value
+        self.upserted_param_names.append(param_name)
+        return _ConfigRow(param_value=value)
+
+
+class _ConfigTransaction:
+    def __init__(self, table: _ConfigTable) -> None:
+        self.litellm_config: Final = table
+        self._section_lock: Final = table._section_lock
+        self._locked = False
+
+    async def __aenter__(self) -> _ConfigTransaction:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        if self._locked:
+            self._section_lock.release()
+
+    async def query_raw(self, _: str, __: str) -> None:
+        await self._section_lock.acquire()
+        self._locked = True
+
+
+@dataclass(frozen=True, slots=True)
+class _ConfigDb:
+    litellm_config: _ConfigTable
+
+    def tx(self) -> _ConfigTransaction:
+        return _ConfigTransaction(self.litellm_config)
+
+
+@dataclass(frozen=True, slots=True)
+class _ConfigPrisma:
+    db: _ConfigDb
+
+    def tx(self) -> _ConfigTransaction:
+        return self.db.tx()
+
+    async def insert_data(self, *, data: Mapping[str, object], table_name: str) -> None:
+        if table_name != "config":
+            raise AssertionError(f"Expected config write, got {table_name}")
+        for param_name, value in data.items():
+            self.db.litellm_config.rows[param_name] = _CONFIG_VALUE.validate_python(value)
+            self.db.litellm_config.upserted_param_names.append(param_name)
+
+
+def _db_backed_proxy_config(monkeypatch, rows: Mapping[str, Mapping[str, JsonValue]]) -> tuple[ProxyConfig, _ConfigTable]:
+    table: Final = _ConfigTable(rows)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _ConfigPrisma(db=_ConfigDb(litellm_config=table)))
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"store_model_in_db": True})
+    monkeypatch.setattr("litellm.proxy.proxy_server.invalidate_config_param", AsyncMock())
+    return ProxyConfig(), table
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_merges_changed_keys_without_copying_file_settings(monkeypatch):
+    proxy_config, table = _db_backed_proxy_config(monkeypatch, {"general_settings": {"db_only": "stored"}})
+    baseline: Final = {
+        "model_list": [],
+        "general_settings": {"max_parallel_requests": 5, "file_only": "yaml", "allowed_ips": []},
+        "router_settings": {"num_retries": 1},
+        "litellm_settings": {"drop_params": True},
+    }
+    proxy_config.update_config_state(config=baseline)
+    changed: Final = {
+        **baseline,
+        "general_settings": {**baseline["general_settings"], "allowed_ips": ["127.0.0.1"]},
+    }
+
+    await proxy_config.save_config(changed)
+
+    assert table.rows == {"general_settings": {"db_only": "stored", "allowed_ips": ["127.0.0.1"]}}
+    assert table.upserted_param_names == ["general_settings"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_skips_unchanged_config(monkeypatch):
+    proxy_config, table = _db_backed_proxy_config(monkeypatch, {"general_settings": {"db_only": "stored"}})
+    baseline: Final = {
+        "model_list": [],
+        "general_settings": {"max_parallel_requests": 5},
+        "router_settings": {"num_retries": 1},
+        "litellm_settings": {"drop_params": True},
+    }
+    proxy_config.update_config_state(config=baseline)
+
+    await proxy_config.save_config(baseline)
+
+    assert table.rows == {"general_settings": {"db_only": "stored"}}
+    assert table.upserted_param_names == []
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_skips_unchanged_unmanaged_values(monkeypatch):
+    proxy_config, table = _db_backed_proxy_config(monkeypatch, {})
+    baseline: Final = {"general_settings": {}, "guardrails": {"enabled": True}}
+    proxy_config.update_config_state(config=baseline)
+
+    await proxy_config.save_config(baseline)
+
+    assert table.rows == {}
+    assert table.upserted_param_names == []
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_leaves_omitted_sections_unchanged(monkeypatch):
+    proxy_config, table = _db_backed_proxy_config(
+        monkeypatch,
+        {"general_settings": {"allowed_ips": ["10.0.0.1"], "db_only": "stored"}},
+    )
+    proxy_config.update_config_state(
+        config={"general_settings": {"allowed_ips": ["10.0.0.1"]}, "router_settings": {"num_retries": 1}}
+    )
+
+    await proxy_config.save_config({"router_settings": {"num_retries": 2}})
+
+    assert table.rows == {
+        "general_settings": {"allowed_ips": ["10.0.0.1"], "db_only": "stored"},
+        "router_settings": {"num_retries": 2},
+    }
+    assert table.upserted_param_names == ["router_settings"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_decodes_a_serialized_config_row(monkeypatch):
+    proxy_config, table = _db_backed_proxy_config(monkeypatch, {"general_settings": '{"db_only":"stored"}'})
+    proxy_config.update_config_state(config={"general_settings": {"allowed_ips": []}})
+
+    await proxy_config.save_config({"general_settings": {"allowed_ips": ["127.0.0.1"]}})
+
+    assert table.rows == {"general_settings": {"db_only": "stored", "allowed_ips": ["127.0.0.1"]}}
+    assert table.upserted_param_names == ["general_settings"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_serializes_concurrent_changes_to_one_section(monkeypatch):
+    first, table = _db_backed_proxy_config(monkeypatch, {"general_settings": {"a": 0, "b": 0}})
+    second: Final = ProxyConfig()
+    baseline: Final = {"general_settings": {"a": 0, "b": 0}}
+    first.update_config_state(config=baseline)
+    second.update_config_state(config=baseline)
+
+    await asyncio.gather(
+        first.save_config({"general_settings": {"a": 1, "b": 0}}),
+        second.save_config({"general_settings": {"a": 0, "b": 1}}),
+    )
+
+    assert table.rows == {"general_settings": {"a": 1, "b": 1}}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_updates_the_baseline_after_a_save(monkeypatch):
+    proxy_config, table = _db_backed_proxy_config(monkeypatch, {})
+    proxy_config.update_config_state(config={"general_settings": {}})
+
+    await proxy_config.save_config({"general_settings": {"removed_key": True}})
+    await proxy_config.save_config({"general_settings": {}})
+
+    assert table.rows == {"general_settings": {}}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_keeps_omitted_sections_in_its_next_baseline(monkeypatch):
+    proxy_config, table = _db_backed_proxy_config(monkeypatch, {"general_settings": {"allowed_ips": ["10.0.0.1"]}})
+    proxy_config.update_config_state(
+        config={"general_settings": {"allowed_ips": ["10.0.0.1"]}, "router_settings": {"num_retries": 1}}
+    )
+
+    await proxy_config.save_config({"router_settings": {"num_retries": 2}})
+    await proxy_config.save_config({"general_settings": {}})
+
+    assert table.rows == {"general_settings": {}, "router_settings": {"num_retries": 2}}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_uses_the_baseline_from_the_loaded_config(tmp_path, monkeypatch):
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text("general_settings:\n  yaml_only: true\n")
+    proxy_config: Final = ProxyConfig()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    first: Final = await proxy_config.get_config(config_file_path=str(config_file))
+    second: Final = await proxy_config.get_config(config_file_path=str(config_file))
+    table: Final = _ConfigTable({})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _ConfigPrisma(db=_ConfigDb(litellm_config=table)))
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"store_model_in_db": True})
+    monkeypatch.setattr("litellm.proxy.proxy_server.invalidate_config_param", AsyncMock())
+    first["general_settings"]["first"] = True
+    second["general_settings"]["second"] = True
+
+    await proxy_config.save_config(second)
+    await proxy_config.save_config(first)
+
+    assert table.rows == {"general_settings": {"second": True, "first": True}}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_accepts_non_json_model_metadata(monkeypatch):
+    proxy_config, table = _db_backed_proxy_config(monkeypatch, {})
+    proxy_config.update_config_state(config={"general_settings": {"allowed_ips": []}})
+    config: Final = {
+        "model_list": [{"model_name": "date-model", "model_info": {"created_at": datetime(2026, 1, 1)}}],
+        "general_settings": {"allowed_ips": ["127.0.0.1"]},
+    }
+
+    await proxy_config.save_config(config)
+
+    assert table.rows == {"general_settings": {"allowed_ips": ["127.0.0.1"]}}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_writes_only_changed_router_settings(monkeypatch):
+    proxy_config, table = _db_backed_proxy_config(monkeypatch, {"router_settings": {"db_only": "stored"}})
+    baseline: Final = {
+        "model_list": [],
+        "general_settings": {"max_parallel_requests": 5},
+        "router_settings": {"num_retries": 1},
+        "litellm_settings": {"drop_params": True},
+    }
+    proxy_config.update_config_state(config=baseline)
+    changed: Final = {**baseline, "router_settings": {"num_retries": 2}}
+
+    await proxy_config.save_config(changed)
+
+    assert table.rows == {"router_settings": {"db_only": "stored", "num_retries": 2}}
+    assert table.upserted_param_names == ["router_settings"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_removes_a_key_only_when_the_db_has_it(monkeypatch):
+    proxy_config, table = _db_backed_proxy_config(
+        monkeypatch, {"general_settings": {"removed_key": "db", "db_only": "stored"}}
+    )
+    baseline: Final = {"general_settings": {"removed_key": "yaml", "file_only": "yaml"}}
+    proxy_config.update_config_state(config=baseline)
+    changed: Final = {"general_settings": {"file_only": "yaml"}}
+
+    await proxy_config.save_config(changed)
+
+    assert table.rows == {"general_settings": {"db_only": "stored"}}
+    assert table.upserted_param_names == ["general_settings"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_keeps_an_unstored_removed_key_as_a_noop(monkeypatch):
+    proxy_config, table = _db_backed_proxy_config(monkeypatch, {"general_settings": {"db_only": "stored"}})
+    baseline: Final = {"general_settings": {"file_only": "yaml"}}
+    proxy_config.update_config_state(config=baseline)
+
+    await proxy_config.save_config({"general_settings": {}})
+
+    assert table.rows == {"general_settings": {"db_only": "stored"}}
+    assert table.upserted_param_names == []
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_config_keeps_state_separate_from_returned_config(tmp_path, monkeypatch):
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text("general_settings:\n  max_parallel_requests: 5\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_config_file_path", str(config_file))
+
+    proxy_config: Final = ProxyConfig()
+    loaded: Final = await proxy_config.get_config(config_file_path=str(config_file))
+    loaded["general_settings"]["max_parallel_requests"] = 6
+
+    assert proxy_config.get_config_state()["general_settings"]["max_parallel_requests"] == 5
+
+
+def test_ProxyConfig_update_config_state_keeps_a_copy_of_its_input():
+    source: Final = {"general_settings": {"max_parallel_requests": 5}}
+    proxy_config: Final = ProxyConfig()
+    proxy_config.update_config_state(config=source)
+    source["general_settings"]["max_parallel_requests"] = 6
+
+    assert proxy_config.get_config_state()["general_settings"]["max_parallel_requests"] == 5
+
+
 @pytest.mark.asyncio
 async def test_ProxyConfig_save_config_writes_yaml_when_no_db(tmp_path, monkeypatch):
     target = tmp_path / "out.yaml"
@@ -867,6 +1178,25 @@ async def test_ProxyConfig_save_config_writes_yaml_when_no_db(tmp_path, monkeypa
 
     loaded = _yaml.safe_load(target.read_text())
     assert loaded == cfg
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_writes_a_loadable_yaml_for_a_loaded_config(tmp_path, monkeypatch):
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text("general_settings:\n  max_parallel_requests: 5\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_config_file_path", str(config_file))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    proxy_config: Final = ProxyConfig()
+    loaded_config: Final = await proxy_config.get_config(config_file_path=str(config_file))
+    loaded_config["general_settings"]["max_parallel_requests"] = 6
+
+    await proxy_config.save_config(loaded_config)
+
+    import yaml as _yaml
+
+    assert _yaml.safe_load(config_file.read_text()) == {"general_settings": {"max_parallel_requests": 6}}
 
 
 @pytest.mark.asyncio
@@ -885,58 +1215,54 @@ async def test_ProxyConfig_save_config_invalid_path_raises(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ProxyConfig_save_config_db_omits_environment_variables_by_default(monkeypatch):
-    """A save_config after get_config() (which resolves os.environ/ placeholders
-    to plaintext and merges the environment_variables section) must not snapshot
-    those env vars into the DB config row. Persisting them would make a stale DB
-    row shadow YAML/container env on every subsequent restart."""
-    mock_prisma = MagicMock()
-    mock_prisma.insert_data = AsyncMock()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
-    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
-    # a valid salt so the env-var encryption path (reached only if the pop
-    # regresses) runs cleanly, making this fail on the assertion below rather
-    # than on an incidental encryption crash
-    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-salt-key")
-
-    pc = ProxyConfig()
-    cfg = {
+    proxy_config, table = _db_backed_proxy_config(monkeypatch, {})
+    baseline: Final = {"model_list": [], "litellm_settings": {}}
+    proxy_config.update_config_state(config=baseline)
+    config: Final = {
         "model_list": [{"model_name": "gpt-4o"}],
         "litellm_settings": {"success_callback": ["langfuse"]},
         "environment_variables": {"OPENAI_API_KEY": "sk-from-yaml"},
     }
-    await pc.save_config(cfg)
 
-    mock_prisma.insert_data.assert_awaited_once()
-    written = mock_prisma.insert_data.await_args.kwargs["data"]
-    assert "environment_variables" not in written
-    # unrelated sections are still persisted; model_list is stripped as before
-    assert written["litellm_settings"] == {"success_callback": ["langfuse"]}
-    assert "model_list" not in written
-    # the caller's dict is not mutated (save_config works on a copy)
-    assert cfg["environment_variables"] == {"OPENAI_API_KEY": "sk-from-yaml"}
+    await proxy_config.save_config(config)
+
+    assert table.rows == {"litellm_settings": {"success_callback": ["langfuse"]}}
+    assert table.upserted_param_names == ["litellm_settings"]
+    assert config["environment_variables"] == {"OPENAI_API_KEY": "sk-from-yaml"}
 
 
 @pytest.mark.asyncio
 async def test_ProxyConfig_save_config_db_persists_environment_variables_when_opted_in(monkeypatch):
-    """The explicit opt-in path (include_env_vars=True) still persists env vars,
-    encrypted, so the dedicated config-update flow can write them."""
-    mock_prisma = MagicMock()
-    mock_prisma.insert_data = AsyncMock()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
-    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    proxy_config, table = _db_backed_proxy_config(monkeypatch, {})
+    proxy_config.update_config_state(config={"litellm_settings": {}})
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-salt-key")
+    config: Final = {"litellm_settings": {}, "environment_variables": {"OPENAI_API_KEY": "sk-explicit"}}
+
+    await proxy_config.save_config(config, include_env_vars=True)
+
+    assert set(table.rows["environment_variables"]) == {"OPENAI_API_KEY"}
+    assert table.rows["environment_variables"]["OPENAI_API_KEY"] != "sk-explicit"
+    assert table.upserted_param_names == ["environment_variables"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_persists_unchanged_environment_variables_when_opted_in(monkeypatch):
+    proxy_config, table = _db_backed_proxy_config(monkeypatch, {})
+    config: Final = {
+        "litellm_settings": {},
+        "environment_variables": {"OPENAI_API_KEY": "sk-explicit"},
+    }
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-salt-key")
 
-    pc = ProxyConfig()
-    cfg = {"litellm_settings": {}, "environment_variables": {"OPENAI_API_KEY": "sk-explicit"}}
-    await pc.save_config(cfg, include_env_vars=True)
+    await proxy_config.save_config(config)
 
-    mock_prisma.insert_data.assert_awaited_once()
-    written = mock_prisma.insert_data.await_args.kwargs["data"]
-    assert set(written["environment_variables"].keys()) == {"OPENAI_API_KEY"}
-    # value is encrypted at rest, not the plaintext it came in as
-    assert written["environment_variables"]["OPENAI_API_KEY"] != "sk-explicit"
+    assert table.rows == {}
+    assert table.upserted_param_names == []
+
+    await proxy_config.save_config(config, include_env_vars=True)
+
+    assert set(table.rows["environment_variables"]) == {"OPENAI_API_KEY"}
+    assert table.upserted_param_names == ["environment_variables"]
 
 
 def _install_fake_config_repo(monkeypatch, existing_row):

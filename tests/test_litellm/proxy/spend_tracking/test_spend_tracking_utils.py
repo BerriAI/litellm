@@ -4850,3 +4850,58 @@ def test_spend_log_request_id_is_the_response_id_a_bridged_messages_caller_recei
         )
         == "resp_01Lit6806Bridged"
     )
+
+
+def test_azure_spillover_stamped_from_response_headers():
+    """Raw provider response headers on the logging kwargs mark the request as spilled."""
+    kwargs: Final = {
+        **_routed_call_kwargs({"id": "mi-1"}),
+        "response_headers": {
+            "x-ms-is-spilled-over": "true",
+            "x-ms-spillover-from-deployment": "my-ptu",
+        },
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=litellm.ModelResponse(id="chatcmpl-spill-raw", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["azure_spillover"] == {"from_deployment": "my-ptu"}
+
+
+def test_azure_spillover_stamped_from_standard_logging_additional_headers():
+    """Streaming requests carry the processed llm_provider- headers on the standard payload."""
+    kwargs: Final = {
+        **_routed_call_kwargs({"id": "mi-1"}),
+        "standard_logging_object": {
+            "hidden_params": {
+                "additional_headers": {
+                    "llm_provider-x-ms-is-spilled-over": "true",
+                    "llm_provider-x-ms-spillover-from-deployment": "my-ptu",
+                }
+            },
+            "metadata": {},
+            "model_map_information": None,
+        },
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=litellm.ModelResponse(id="chatcmpl-spill-sl", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["azure_spillover"] == {"from_deployment": "my-ptu"}
+
+
+def test_azure_spillover_absent_without_spillover_headers():
+    payload = get_logging_payload(
+        kwargs=_routed_call_kwargs({"id": "mi-1"}),
+        response_obj=litellm.ModelResponse(id="chatcmpl-no-spill", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["azure_spillover"] is None
