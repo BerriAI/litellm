@@ -41,7 +41,7 @@ import re
 import subprocess
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
@@ -167,6 +167,11 @@ _DROP_INDEX_NAME: Final = re.compile(
     r'\bDROP\s+INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+EXISTS\s+)?"?(?P<index>\w+)"?', re.IGNORECASE
 )
 _QUOTED_IDENTIFIER: Final = re.compile(r'"(?P<name>\w+)"')
+_BARE_WORD: Final = re.compile(r"\b(?P<name>[A-Za-z_]\w*)\b")
+_ADDED_COLUMN_NAME: Final = re.compile(r'\bADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?"?(?P<column>\w+)"?', re.IGNORECASE)
+_INDEX_NAME: Final = re.compile(
+    r'\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"?(?P<index>\w+)"?', re.IGNORECASE
+)
 
 _MODEL_BLOCK: Final = re.compile(r"^\s*model\s+(?P<model>\w+)\s*\{(?P<body>.*?)^\s*\}", re.MULTILINE | re.DOTALL)
 _ENUM_NAME: Final = re.compile(r"^\s*enum\s+(?P<name>\w+)", re.MULTILINE)
@@ -215,6 +220,10 @@ class UpgradeContext:
     star_reads: tuple[StarRead, ...]
     schema: Schema | None
     dropped_indexes: frozenset[str] = frozenset()
+    # (table, column) added by this upgrade with a DEFAULT: the old pods write that default on every insert.
+    defaulted_columns: frozenset[tuple[str, str]] = frozenset()
+    # Unique indexes that exist at the base, by name: what a dropped-and-recreated key used to cover.
+    base_unique_indexes: dict[str, tuple[str, tuple[str, ...]]] = field(default_factory=dict)
 
     def column(self, table: str, column: str) -> Column | None:
         return None if self.schema is None else self.schema.get(table, {}).get(column)
@@ -225,6 +234,19 @@ class UpgradeContext:
     def knows_column(self, table: str, column: str) -> bool:
         """Whether the old client selects or writes this column. Without a schema, assume it does."""
         return self.schema is None or self.column(table, column) is not None
+
+    def writes(self, table: str, column: str) -> bool:
+        """Whether rows the old pods insert carry a value here: a column they know, or a default they get."""
+        return self.knows_column(table, column) or (table, column) in self.defaulted_columns
+
+    def replaced_key(self, table: str, columns: Sequence[str]) -> bool:
+        """Whether a dropped unique index on this table covered a subset of `columns`: the new key then rejects
+        nothing the old key did not already reject."""
+        for name in self.dropped_indexes:
+            found: Final = self.base_unique_indexes.get(name)
+            if found is not None and found[0] == table and set(found[1]) <= set(columns):
+                return True
+        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,13 +369,13 @@ def parse_prisma_schema(text: str) -> Schema:
         table_map: Final = _TABLE_MAP.search(body)
         table: Final = table_map.group("name") if table_map is not None else block.group("model")
         columns: Final[dict[str, Column]] = {}
-        for field in _PRISMA_FIELD.finditer(body):
-            prisma_type: Final = field.group("type")
+        for declared in _PRISMA_FIELD.finditer(body):
+            prisma_type: Final = declared.group("type")
             if prisma_type not in PRISMA_SCALARS and prisma_type not in enums:
                 continue
-            field_map: Final = _FIELD_MAP.search(field.group("rest"))
-            name: Final = field_map.group("name") if field_map is not None else field.group("name")
-            columns[name] = Column(required=field.group("optional") is None, prisma_type=prisma_type)
+            field_map: Final = _FIELD_MAP.search(declared.group("rest"))
+            name: Final = field_map.group("name") if field_map is not None else declared.group("name")
+            columns[name] = Column(required=declared.group("optional") is None, prisma_type=prisma_type)
         schema[table] = columns
     return schema
 
@@ -369,11 +391,41 @@ def load_base_schema(repo: Path, ref: str) -> Schema | None:
 
 
 def _identifiers(fragment: str) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(match.group("name") for match in _QUOTED_IDENTIFIER.finditer(fragment)))
+    """Every name in the fragment, quoted or bare. Bare words include keywords and literals, so callers keep
+    only the ones that are columns of the table at hand."""
+    quoted: Final = [match.group("name") for match in _QUOTED_IDENTIFIER.finditer(fragment)]
+    unquoted: Final = _QUOTED_IDENTIFIER.sub(" ", re.sub(r"'[^']*'", " ", fragment))
+    bare: Final = [match.group("name") for match in _BARE_WORD.finditer(unquoted)]
+    return tuple(dict.fromkeys(quoted + bare))
+
+
+def _defaulted_columns(statements: Sequence[str]) -> frozenset[tuple[str, str]]:
+    """(table, column) pairs these statements add with a DEFAULT."""
+    found: Final[set[tuple[str, str]]] = set()
+    for statement in statements:
+        table: Final = statement_table(statement)
+        for clause in _CLAUSE_SPLIT.split(statement):
+            added: Final = _ADDED_COLUMN_NAME.search(clause)
+            if added is not None and _DEFAULT.search(clause) is not None:
+                found.add((table, added.group("column")))
+    return frozenset(found)
+
+
+def unique_indexes_at(repo: Path, ref: str) -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Every unique index some migration at `ref` creates, by name: its table and columns."""
+    listing: Final = _git_or_none(
+        repo, "grep", "-h", "-i", "--fixed-strings", "CREATE UNIQUE INDEX", ref, "--", f"{MIGRATIONS_DIR}/"
+    )
+    indexes: Final[dict[str, tuple[str, tuple[str, ...]]]] = {}
+    for line in (listing or "").splitlines():
+        named: Final = _INDEX_NAME.search(line)
+        if named is not None:
+            indexes[named.group("index")] = (statement_table(line), _index_columns(line))
+    return indexes
 
 
 def _constraint_columns(statement: str) -> tuple[str, ...]:
-    """The columns of this table that a new constraint checks on every write."""
+    """Names a new constraint mentions: the listed columns, and every name inside a CHECK expression."""
     listed: Final = [
         name for match in _CONSTRAINT_COLUMNS.finditer(statement) for name in _identifiers(match.group("columns"))
     ]
@@ -574,7 +626,15 @@ def _rule_type_change(site: _Site) -> Finding | None:
 
 def _rule_constraint(site: _Site) -> Finding | None:
     if _ADD_CONSTRAINT.search(site.statement) is not None:
-        checked: Final = [column for column in _constraint_columns(site.statement) if site.knows(column)]
+        if site.context.schema is None:
+            return site.rate(
+                WRITE_REJECT,
+                "Adds a rule the previous version never enforced. Rows it writes that violate the rule are now "
+                "rejected; whether any do depends on the data.",
+            )
+        checked: Final = [
+            column for column in _constraint_columns(site.statement) if site.context.writes(site.table, column)
+        ]
         if checked:
             return site.rate(
                 WRITE_REJECT,
@@ -589,14 +649,15 @@ def _rule_constraint(site: _Site) -> Finding | None:
     if _UNIQUE_INDEX.search(site.statement) is None:
         return None
     covered: Final = _index_columns(site.statement)
-    replaces: Final = any(name.startswith(f"{site.table}_") for name in site.context.dropped_indexes)
-    if covered and all(site.knows(column) for column in covered) and not replaces:
-        return site.rate(
-            WRITE_REJECT,
-            f"Makes `{'`, `'.join(covered)}` unique, which the previous version never enforced. Duplicate rows it "
-            "writes are now rejected; whether any are depends on the data.",
-        )
-    return None
+    if not covered or not all(site.context.writes(site.table, column) for column in covered):
+        return None
+    if site.context.replaced_key(site.table, covered):
+        return None  # the key it replaces already rejected everything this one does
+    return site.rate(
+        WRITE_REJECT,
+        f"Makes `{'`, `'.join(covered)}` unique, which the previous version never enforced. Duplicate rows it "
+        "writes are now rejected; whether any are depends on the data.",
+    )
 
 
 def _rule_whole_row_read(site: _Site) -> Finding | None:
@@ -686,14 +747,16 @@ def build_report(repo: Path, base: str, head: str) -> Report:
     # A re-declared `CREATE TABLE IF NOT EXISTS` of a table the old pods already use is not a new table.
     fresh_tables: Final = created_here - tables_created_before(repo, base)
     schema: Final = load_base_schema(repo, base)
+    statements_by_migration: Final = {name: split_statements(sql) for name, sql in sql_by_migration.items()}
+    defaulted: Final = _defaulted_columns([s for statements in statements_by_migration.values() for s in statements])
+    base_unique: Final = unique_indexes_at(repo, base)
 
     findings: Final[list[Finding]] = []
-    for name, sql in sql_by_migration.items():
-        statements: Final = split_statements(sql)
+    for name, statements in statements_by_migration.items():
         dropped: Final = frozenset(
             match.group("index") for statement in statements if (match := _DROP_INDEX_NAME.search(statement))
         )
-        context: Final = UpgradeContext(fresh_tables, star_reads, schema, dropped)
+        context: Final = UpgradeContext(fresh_tables, star_reads, schema, dropped, defaulted, base_unique)
         findings.extend(classify(name, statement, context) for statement in statements)
 
     ranked: Final = sorted(findings, key=lambda finding: (SEVERITY_ORDER.index(finding.severity), finding.migration))

@@ -114,8 +114,10 @@ def _context(
     reads: tuple[object, ...] = (),
     schema: object = None,
     dropped: frozenset[str] = frozenset(),
+    defaulted: frozenset[tuple[str, str]] = frozenset(),
+    base_unique: dict[str, tuple[str, tuple[str, ...]]] | None = None,
 ) -> object:
-    return impact.UpgradeContext(fresh, reads, schema, dropped)
+    return impact.UpgradeContext(fresh, reads, schema, dropped, defaulted, base_unique or {})
 
 
 def _classify(
@@ -124,8 +126,11 @@ def _classify(
     reads: tuple[object, ...] = (),
     schema: object = None,
     dropped: frozenset[str] = frozenset(),
+    defaulted: frozenset[tuple[str, str]] = frozenset(),
+    base_unique: dict[str, tuple[str, tuple[str, ...]]] | None = None,
 ) -> object:
-    return impact.classify("20260713230852_add_key_type", statement, _context(fresh, reads, schema, dropped))
+    context = _context(fresh, reads, schema, dropped, defaulted, base_unique)
+    return impact.classify("20260713230852_add_key_type", statement, context)
 
 
 def _base_schema() -> object:
@@ -426,7 +431,8 @@ def _two_version_repo(tmp_path: Path) -> Path:
         repo,
         "20250101000000_baseline",
         'CREATE TABLE "LiteLLM_VerificationToken" ("token" TEXT PRIMARY KEY);\n'
-        'CREATE TABLE "LiteLLM_TeamTable" ("team_id" TEXT PRIMARY KEY);\n',
+        'CREATE TABLE "LiteLLM_TeamTable" ("team_id" TEXT PRIMARY KEY);\n'
+        'CREATE UNIQUE INDEX "LiteLLM_VerificationToken_key_name_key" ON "LiteLLM_VerificationToken"("key_name");\n',
     )
     (repo / impact.MIGRATIONS_DIR / "migration_lock.toml").write_text('provider = "postgresql"\n', encoding="utf-8")
     _git(repo, "add", ".")
@@ -447,6 +453,15 @@ def _two_version_repo(tmp_path: Path) -> Path:
         # A column it does declare: the old client selects it on every read.
         'ALTER TABLE "LiteLLM_VerificationToken" DROP COLUMN "key_name";\n',
     )
+    _write_migration(
+        repo,
+        "20250202000000_scope_key_name_by_issuer",
+        # The jwt_issuer pattern: drop the old key, add a defaulted column, recreate the key wider.
+        'DROP INDEX IF EXISTS "LiteLLM_VerificationToken_key_name_key";\n'
+        'ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN IF NOT EXISTS "issuer" TEXT NOT NULL DEFAULT \'\';\n'
+        'CREATE UNIQUE INDEX "LiteLLM_VerificationToken_issuer_key_name_key" ON "LiteLLM_VerificationToken"'
+        '("issuer", "key_name");\n',
+    )
     _git(repo, "add", ".")
     _git(repo, "commit", "-q", "-m", "head")
     _git(repo, "tag", "v1.1.0")
@@ -457,7 +472,7 @@ def test_report_rates_migrations_against_the_queries_the_old_pods_run(tmp_path: 
     repo = _two_version_repo(tmp_path)
     report = impact.build_report(repo, "v1.0.0", "v1.1.0")
 
-    assert report.migrations == ("20250201000000_add_key_type",)
+    assert report.migrations == ("20250201000000_add_key_type", "20250202000000_scope_key_name_by_issuer")
     # The whole-row read exists only at v1.0.0; that is the version whose plans go stale.
     assert [read.table for read in report.star_reads] == ["LiteLLM_VerificationToken"]
     assert report.star_reads[0].location.startswith("litellm/proxy/utils.py:")
@@ -471,6 +486,11 @@ def test_report_rates_migrations_against_the_queries_the_old_pods_run(tmp_path: 
     assert unknown_drop.severity == impact.INFO
     known_drop = by_statement['ALTER TABLE "LiteLLM_VerificationToken" DROP COLUMN "key_name"']
     assert known_drop.severity == impact.BREAKING
+    widened_key = by_statement[
+        'CREATE UNIQUE INDEX "LiteLLM_VerificationToken_issuer_key_name_key" ON "LiteLLM_VerificationToken"'
+        '("issuer", "key_name")'
+    ]
+    assert widened_key.severity == impact.LOCK  # widens the key it drops, so nothing new is rejected
     assert report.schema_tables == 4
     assert report.worst == impact.BREAKING
 
@@ -542,15 +562,66 @@ def test_unique_index_on_columns_the_old_client_writes_can_reject_duplicates() -
     assert finding.severity == impact.WRITE_REJECT
 
 
-def test_unique_index_that_replaces_a_dropped_one_is_only_a_lock() -> None:
-    # The Daily*Spend migrations drop the old unique key and create a wider one in the same file.
+TOKEN_KEY_NAME_KEY: Final = {"LiteLLM_VerificationToken_key_name_key": ("LiteLLM_VerificationToken", ("key_name",))}
+
+
+def test_unique_index_that_widens_a_dropped_key_is_only_a_lock() -> None:
+    # The Daily*Spend migrations drop the old unique key and create a wider one in the same file: every
+    # duplicate the new key rejects, the old key already rejected.
     finding = _classify(
         'CREATE UNIQUE INDEX "LiteLLM_VerificationToken_key_name_team_id_key" ON "LiteLLM_VerificationToken"'
         '("key_name", "team_id")',
         schema=_base_schema(),
         dropped=frozenset({"LiteLLM_VerificationToken_key_name_key"}),
+        base_unique=TOKEN_KEY_NAME_KEY,
     )
     assert finding.severity == impact.LOCK
+
+
+def test_unique_index_that_narrows_a_dropped_key_can_reject_writes() -> None:
+    # Dropping (key_name, team_id) for (key_name) is stricter: rows that only differed by team now collide.
+    finding = _classify(
+        'CREATE UNIQUE INDEX "LiteLLM_VerificationToken_key_name_key" ON "LiteLLM_VerificationToken"("key_name")',
+        schema=_base_schema(),
+        dropped=frozenset({"LiteLLM_VerificationToken_key_name_team_id_key"}),
+        base_unique={
+            "LiteLLM_VerificationToken_key_name_team_id_key": ("LiteLLM_VerificationToken", ("key_name", "team_id"))
+        },
+    )
+    assert finding.severity == impact.WRITE_REJECT
+
+
+def test_unique_index_over_a_new_defaulted_column_still_binds_the_old_pods() -> None:
+    # Old pods insert the default, so the new column does not make their rows distinct.
+    finding = _classify(
+        'CREATE UNIQUE INDEX "idx" ON "LiteLLM_VerificationToken"("key_name", "jwt_issuer")',
+        schema=_base_schema(),
+        defaulted=frozenset({("LiteLLM_VerificationToken", "jwt_issuer")}),
+    )
+    assert finding.severity == impact.WRITE_REJECT
+
+
+def test_check_constraint_with_unquoted_columns_is_matched_against_the_schema() -> None:
+    finding = _classify(
+        'ALTER TABLE "LiteLLM_VerificationToken" ADD CONSTRAINT "chk" CHECK (key_name <> \'active\') NOT VALID',
+        schema=_base_schema(),
+    )
+    assert finding.severity == impact.WRITE_REJECT
+    assert "`key_name`" in finding.effect
+    assert "active" not in finding.effect  # a string literal is not a column
+
+
+def test_constraint_without_a_schema_to_check_against_is_write_reject() -> None:
+    finding = _classify('ALTER TABLE "LiteLLM_VerificationToken" ADD CONSTRAINT "chk" CHECK (status = \'active\')')
+    assert finding.severity == impact.WRITE_REJECT
+
+
+def test_defaulted_columns_are_collected_per_clause() -> None:
+    statements = [
+        'ALTER TABLE "T" ADD COLUMN "a" TEXT NOT NULL DEFAULT \'\', ADD COLUMN "b" TEXT',
+        'ALTER TABLE "U" ADD COLUMN IF NOT EXISTS "c" INT DEFAULT 0',
+    ]
+    assert impact._defaulted_columns(statements) == frozenset({("T", "a"), ("U", "c")})
 
 
 def test_unique_index_on_a_new_column_is_only_a_lock() -> None:
