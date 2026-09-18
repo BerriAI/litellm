@@ -4944,14 +4944,7 @@ class ProxyConfig:
                 await prisma_client.insert_data(data=unmanaged_config, table_name="config")
 
             environment_variables: Final = new_config.get("environment_variables")
-            if (
-                include_env_vars
-                and environment_variables is not None
-                and (
-                    "environment_variables" not in baseline
-                    or baseline["environment_variables"] != environment_variables
-                )
-            ):
+            if include_env_vars and environment_variables is not None:
                 encrypted_environment_variables: Final = (
                     self._encrypt_env_variables_for_db(environment_variables=environment_variables)
                     if isinstance(environment_variables, dict) and environment_variables
