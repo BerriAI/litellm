@@ -1306,8 +1306,6 @@ async def test_update_user_success(mocker):
 
 @pytest.mark.asyncio
 async def test_update_user_put_with_valueless_entitlements_deactivates_user(scim_test_client, mocker):
-    """A suspend PUT whose entitlements entries carry no `value` member (an IdP-specific shape)
-    must not be rejected by body validation: the user is deactivated and the entries are stored as sent"""
     existing_user = mocker.MagicMock()
     existing_user.teams = []
     existing_user.metadata = {"scim_active": True}
