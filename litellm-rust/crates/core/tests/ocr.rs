@@ -5,16 +5,23 @@ use litellm_callbacks::{
     host::{Host, HostOp, HostResult},
     machine::{HostFailure, Machine, MachineStep},
 };
+use litellm_llms::{
+    base_llm::ocr::{
+        error::Error as OcrError,
+        transformation::{LiteLLMOcrResponse, OCR_RESPONSE_MAX_BYTES, OcrTransportConfig},
+    },
+    custom_httpx::llm_http_handler::OcrClient,
+};
 use rstest::rstest;
 use serde_json::{Value, json};
 
 use super::{
-    LocalOcrHost, OcrClient, OcrOp, OcrOpResult, ocr_machine,
     test_support::{
         MockResponse, mock_server, ocr_client, perform_ocr, perform_ocr_with, wire_request,
     },
     wire::{OcrWireRequest, decode_request},
 };
+use crate::ocr::route::{LocalOcrHost, OcrOp, OcrOpResult, ocr_machine};
 
 #[rstest]
 #[case::mistral("mistral/model", json!({}))]
@@ -41,7 +48,7 @@ async fn ocr_contract_upstream_error_preserves_status_body_and_headers(
         .unwrap_err();
     server.await.unwrap();
     assert_eq!(seen.lock().unwrap().len(), 1);
-    let super::Error::Provider {
+    let OcrError::Provider {
         status,
         body,
         headers,
@@ -175,11 +182,12 @@ async fn facade_uses_the_injected_http_client() {
         .default_headers(default_headers)
         .build()
         .unwrap();
-    OcrClient::new(provider_http)
-        .unwrap()
-        .perform(wire_request("mistral/model", &base, json!({})))
-        .await
-        .unwrap();
+    crate::ocr::client::perform(
+        &OcrClient::new(provider_http).unwrap(),
+        wire_request("mistral/model", &base, json!({})),
+    )
+    .await
+    .unwrap();
     server.await.unwrap();
     assert!(seen.lock().unwrap()[0].contains("x-transport-owner: host"));
 }
@@ -193,7 +201,7 @@ fn event_name(event: &CallEvent) -> &'static str {
 }
 
 fn recording_host(
-    request: super::LiteLLMOcrRequest,
+    request: crate::ocr::types::LiteLLMOcrRequest,
     events: Arc<Mutex<Vec<&'static str>>>,
     block: bool,
 ) -> LocalOcrHost {
@@ -202,7 +210,7 @@ fn recording_host(
         .with_before_send(move |wire, _| {
             before_send_events.lock().unwrap().push("before_send");
             if block {
-                return Err(crate::ocr::Error::InvalidRequest("blocked".into()));
+                return Err(OcrError::InvalidRequest("blocked".into()));
             }
             Ok(wire)
         })
@@ -259,7 +267,7 @@ async fn before_send_context_names_passthrough_fields_and_secrets() {
         &base,
         json!({"client_secret": "shh", "tenant_id": "t"}),
     );
-    let request = request.with_document(super::OcrDocumentInput::Bytes {
+    let request = request.with_document(crate::ocr::types::OcrDocumentInput::Bytes {
         bytes: b"abc".as_slice().into(),
         file_name: None,
         mime_type: Some("application/pdf".into()),
@@ -302,7 +310,7 @@ async fn lifecycle_blocking_prevents_execution_and_emits_one_failure() {
         true,
     );
     let error = perform_ocr_with(host).await.unwrap_err();
-    assert!(matches!(error, crate::ocr::Error::InvalidRequest(message) if message == "blocked"));
+    assert!(matches!(error, OcrError::InvalidRequest(message) if message == "blocked"));
     assert_eq!(*events.lock().unwrap(), ["before_send", "failure"]);
 }
 
@@ -331,11 +339,11 @@ async fn upstream_failure_emits_one_terminal_failure() {
 async fn drive_until(
     client: OcrClient,
     host: &LocalOcrHost,
-    mut intercept: impl FnMut(WireRequest) -> Result<WireRequest, HostFailure<crate::ocr::Error>>,
+    mut intercept: impl FnMut(WireRequest) -> Result<WireRequest, HostFailure<OcrError>>,
 ) -> (
-    Result<super::LiteLLMOcrResponse, crate::ocr::Error>,
+    Result<LiteLLMOcrResponse, OcrError>,
     Vec<&'static str>,
-    super::OcrMachine,
+    crate::ocr::route::OcrMachine,
 ) {
     let mut machine = ocr_machine(client);
     let mut result = None;
@@ -386,13 +394,13 @@ async fn failed_before_send_does_not_replay_or_reach_transport() {
         json!({}),
     ));
     let (outcome, ops, mut machine) = drive_until(ocr_client(), &host, |_| {
-        Err(HostFailure::Error(crate::ocr::Error::InvalidRequest(
+        Err(HostFailure::Error(OcrError::InvalidRequest(
             "before_send failed".into(),
         )))
     })
     .await;
     assert!(
-        matches!(outcome, Err(crate::ocr::Error::InvalidRequest(message)) if message == "before_send failed")
+        matches!(outcome, Err(OcrError::InvalidRequest(message)) if message == "before_send failed")
     );
     assert_eq!(ops, ["ProjectRequest", "BeforeSend"]);
     assert!(machine.resume(None).await.is_err());
@@ -413,7 +421,7 @@ async fn invalid_provider_response_emits_response_received_before_normalization_
     );
     let error = perform_ocr_with(host).await.unwrap_err();
     server.await.unwrap();
-    assert!(matches!(error, crate::ocr::Error::ResponseField { .. }));
+    assert!(matches!(error, OcrError::ResponseField { .. }));
     assert_eq!(seen.lock().unwrap().len(), 1);
     assert_eq!(
         *responses_received.lock().unwrap(),
@@ -435,14 +443,14 @@ async fn direct_native_host_drives_the_same_state_machine() {
     assert_eq!(ops, ["ProjectRequest", "BeforeSend", "response"]);
     assert!(matches!(
         machine.resume(None).await,
-        Err(crate::ocr::Error::InvalidRequest(_))
+        Err(OcrError::InvalidRequest(_))
     ));
 }
 
 async fn drive_native_file_call(
-    request: super::LiteLLMOcrRequest<super::OcrDocumentInput>,
-    content: Result<super::OcrFileContent, crate::ocr::Error>,
-) -> (Result<super::LiteLLMOcrResponse, crate::ocr::Error>, usize) {
+    request: crate::ocr::types::LiteLLMOcrRequest<crate::ocr::types::OcrDocumentInput>,
+    content: Result<crate::ocr::types::OcrFileContent, OcrError>,
+) -> (Result<LiteLLMOcrResponse, OcrError>, usize) {
     let reads = Arc::new(Mutex::new(0));
     let counted = reads.clone();
     let content = Mutex::new(Some(content));
@@ -462,13 +470,13 @@ async fn host_reader_documents_are_read_once_at_the_core_selected_point_and_enco
     }))])
     .await;
     let request = wire_request("mistral/model", &base, json!({})).with_document(
-        super::OcrDocumentInput::HostReader {
+        crate::ocr::types::OcrDocumentInput::HostReader {
             mime_type: Some("application/pdf".into()),
         },
     );
     let (response, reads) = drive_native_file_call(
         request,
-        Ok(super::OcrFileContent {
+        Ok(crate::ocr::types::OcrFileContent {
             bytes: b"abc".as_slice().into(),
             file_name: Some("scan.png".into()),
         }),
@@ -484,30 +492,27 @@ async fn host_reader_documents_are_read_once_at_the_core_selected_point_and_enco
 async fn host_reader_failures_and_empty_files_fail_before_the_provider_is_called() {
     let (base, seen, _server) = mock_server(vec![]).await;
     let request = wire_request("mistral/model", &base, json!({}));
-    let failure = crate::ocr::Error::InvalidRequest("reader exploded".into());
+    let failure = OcrError::InvalidRequest("reader exploded".into());
     let (response, reads) = drive_native_file_call(
-        request.with_document(super::OcrDocumentInput::HostReader { mime_type: None }),
+        request.with_document(crate::ocr::types::OcrDocumentInput::HostReader { mime_type: None }),
         Err(failure.clone()),
     )
     .await;
     assert!(
-        matches!(response.unwrap_err(), crate::ocr::Error::InvalidRequest(message) if message == "reader exploded")
+        matches!(response.unwrap_err(), OcrError::InvalidRequest(message) if message == "reader exploded")
     );
     assert_eq!(reads, 1);
 
     let request = wire_request("mistral/model", &base, json!({}));
     let (response, _) = drive_native_file_call(
-        request.with_document(super::OcrDocumentInput::HostReader { mime_type: None }),
-        Ok(super::OcrFileContent {
+        request.with_document(crate::ocr::types::OcrDocumentInput::HostReader { mime_type: None }),
+        Ok(crate::ocr::types::OcrFileContent {
             bytes: Default::default(),
             file_name: None,
         }),
     )
     .await;
-    assert!(matches!(
-        response.unwrap_err(),
-        crate::ocr::Error::EmptyFile
-    ));
+    assert!(matches!(response.unwrap_err(), OcrError::EmptyFile));
     assert!(seen.lock().unwrap().is_empty());
 }
 
@@ -522,16 +527,13 @@ async fn path_documents_are_read_by_core_without_a_host_operation() {
     let path = dir.join("scan.png");
     std::fs::write(&path, b"abc").unwrap();
     let request = wire_request("mistral/model", &base, json!({})).with_document(
-        super::OcrDocumentInput::Path {
+        crate::ocr::types::OcrDocumentInput::Path {
             path: path.clone(),
             mime_type: None,
         },
     );
-    let (response, reads) = drive_native_file_call(
-        request,
-        Err(crate::ocr::Error::InvalidRequest("unused".into())),
-    )
-    .await;
+    let (response, reads) =
+        drive_native_file_call(request, Err(OcrError::InvalidRequest("unused".into()))).await;
     server.await.unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(response.unwrap().pages[0].markdown, "path");
@@ -541,16 +543,16 @@ async fn path_documents_are_read_by_core_without_a_host_operation() {
     let (base, seen, _server) = mock_server(vec![]).await;
     let request = wire_request("mistral/model", &base, json!({}));
     let (response, _) = drive_native_file_call(
-        request.with_document(super::OcrDocumentInput::Path {
+        request.with_document(crate::ocr::types::OcrDocumentInput::Path {
             path: path.clone(),
             mime_type: None,
         }),
-        Err(crate::ocr::Error::InvalidRequest("unused".into())),
+        Err(OcrError::InvalidRequest("unused".into())),
     )
     .await;
     assert!(matches!(
         response.unwrap_err(),
-        crate::ocr::Error::FileRead { path: failed, source } if failed == path && source.kind() == std::io::ErrorKind::NotFound
+        OcrError::FileRead { path: failed, source } if failed == path && source.kind() == std::io::ErrorKind::NotFound
     ));
     assert!(seen.lock().unwrap().is_empty());
 }
@@ -563,14 +565,12 @@ async fn cancellation_at_before_send_prevents_execution_and_further_resumption()
         json!({}),
     ));
     let (outcome, ops, mut machine) = drive_until(ocr_client(), &host, |_| {
-        Err(HostFailure::Cancelled(crate::ocr::Error::InvalidRequest(
+        Err(HostFailure::Cancelled(OcrError::InvalidRequest(
             "cancelled".into(),
         )))
     })
     .await;
-    assert!(
-        matches!(outcome, Err(crate::ocr::Error::InvalidRequest(message)) if message == "cancelled")
-    );
+    assert!(matches!(outcome, Err(OcrError::InvalidRequest(message)) if message == "cancelled"));
     assert_eq!(ops, ["ProjectRequest", "BeforeSend"]);
     assert!(machine.resume(Some(HostResult::Emitted)).await.is_err());
 }
@@ -596,10 +596,7 @@ async fn missing_host_result_preserves_pending_operation() {
     ));
 }
 
-async fn read_bounded_response(
-    response: Vec<u8>,
-    limit: usize,
-) -> Result<bytes::Bytes, super::Error> {
+async fn read_bounded_response(response: Vec<u8>, limit: usize) -> Result<bytes::Bytes, OcrError> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -618,7 +615,7 @@ async fn read_bounded_response(
         .unwrap();
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        super::client::read_response_bytes(response, limit),
+        litellm_llms::custom_httpx::llm_http_handler::read_response_bytes(response, limit),
     )
     .await;
     server.abort();
@@ -628,7 +625,7 @@ async fn read_bounded_response(
 
 #[tokio::test]
 async fn response_limit_accepts_exact_size_and_rejects_declared_and_chunked_overflow() {
-    use super::Error;
+    use litellm_llms::base_llm::ocr::error::Error;
 
     for response in [
         "HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nabcdefgh",
@@ -670,7 +667,10 @@ async fn oversized_error_retains_http_status_and_bounded_diagnostics_without_dra
         .await
         .unwrap_err();
     match error {
-        super::Error::Transport(crate::transport::Error::Http { status, body }) => {
+        OcrError::Transport(litellm_llms::custom_httpx::transport::Error::Http {
+            status,
+            body,
+        }) => {
             assert_eq!(status, 429);
             assert_eq!(body, prefix);
         }
@@ -693,7 +693,7 @@ fn response_limit_is_validated_and_not_forwarded_to_the_provider() {
         json!(true),
         json!("123"),
         json!(1.5),
-        json!(crate::constants::OCR_RESPONSE_MAX_BYTES + 1),
+        json!(OCR_RESPONSE_MAX_BYTES + 1),
         Value::Null,
     ] {
         let wire = serde_json::from_value(json!({
@@ -738,8 +738,8 @@ async fn interrupt_drops_provider_captures_before_returning() {
     let entered = Arc::new(tokio::sync::Notify::new());
     let dropped = Arc::new(AtomicBool::new(false));
     let request = wire_request("azure_ai/mistral-ocr", "https://example.invalid", json!({}));
-    let request = super::LiteLLMOcrRequest {
-        transport: super::OcrTransportConfig {
+    let request = crate::ocr::types::LiteLLMOcrRequest {
+        transport: OcrTransportConfig {
             extra_headers: vec![("authorization".into(), "Bearer test-key".into())],
             ..request.transport
         },
@@ -774,24 +774,24 @@ async fn interrupt_drops_provider_captures_before_returning() {
     .await
     .unwrap();
     assert!(!dropped.load(Ordering::SeqCst));
-    let selected = crate::ocr::Error::InvalidRequest("cancelled".into());
+    let selected = OcrError::InvalidRequest("cancelled".into());
     let acknowledgement = machine.interrupt(HostFailure::Cancelled(selected.clone()));
     assert!(
         dropped.load(Ordering::SeqCst),
         "interrupt returned while provider captures were still alive"
     );
     assert!(
-        matches!(acknowledgement.await, Err(crate::ocr::Error::InvalidRequest(message)) if message == "cancelled")
+        matches!(acknowledgement.await, Err(OcrError::InvalidRequest(message)) if message == "cancelled")
     );
 }
 
 struct CallerTokenHost {
-    request: Mutex<Option<super::LiteLLMOcrRequest>>,
+    request: Mutex<Option<crate::ocr::types::LiteLLMOcrRequest>>,
     trace: Mutex<Vec<String>>,
 }
 
-impl Host<super::Ocr> for CallerTokenHost {
-    async fn route(&self, op: OcrOp) -> Result<OcrOpResult, crate::ocr::Error> {
+impl Host<crate::ocr::route::Ocr> for CallerTokenHost {
+    async fn route(&self, op: OcrOp) -> Result<OcrOpResult, OcrError> {
         match op {
             OcrOp::ProjectRequest => {
                 self.trace.lock().unwrap().push("project".into());
@@ -808,7 +808,7 @@ impl Host<super::Ocr> for CallerTokenHost {
                     )),
                 ))
             }
-            OcrOp::ReadDocument => Err(crate::ocr::Error::InvalidRequest("no reader".into())),
+            OcrOp::ReadDocument => Err(OcrError::InvalidRequest("no reader".into())),
         }
     }
 
@@ -816,7 +816,7 @@ impl Host<super::Ocr> for CallerTokenHost {
         &self,
         wire: WireRequest,
         _: &litellm_callbacks::event::RequestContext,
-    ) -> Result<WireRequest, crate::ocr::Error> {
+    ) -> Result<WireRequest, OcrError> {
         let is_authorization = |name: &str| name.eq_ignore_ascii_case("authorization");
         let authorization = wire
             .headers
@@ -910,7 +910,7 @@ async fn interrupting_an_in_flight_provider_request_closes_its_connection() {
     .await
     .unwrap();
 
-    let cancelled = crate::ocr::Error::InvalidRequest("cancelled".into());
+    let cancelled = OcrError::InvalidRequest("cancelled".into());
     assert!(
         machine
             .interrupt(HostFailure::Cancelled(cancelled))

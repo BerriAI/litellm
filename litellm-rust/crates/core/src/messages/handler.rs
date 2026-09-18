@@ -1,11 +1,11 @@
+use litellm_llms::custom_httpx::http_handler::http_request;
+use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
+
 use super::{
-    Error,
-    client::http_client,
-    common_utils::truncate_error_body,
+    Error, client::http_client, common_utils::truncate_error_body,
     prepare::prepare_provider_request,
-    types::{AnthropicMessagesResponse, MessagesRequest},
 };
-use crate::{constants::ANTHROPIC_MESSAGES_PROVIDER, http_utils::http_request};
+use crate::{constants::ANTHROPIC_MESSAGES_PROVIDER, messages::types::MessagesRequest};
 
 pub(super) async fn execute_messages_provider_call(
     request: MessagesRequest<'_>,
@@ -19,21 +19,26 @@ pub(super) async fn execute_messages_provider_call(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = http_request(request_builder)
-        .await
-        .map_err(|err| Error::Transport(crate::transport::Error::Network(err.to_string())))?;
+    let response = http_request(request_builder).await.map_err(|err| {
+        Error::Transport(litellm_llms::custom_httpx::transport::Error::Network(
+            err.to_string(),
+        ))
+    })?;
 
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|err| Error::Transport(crate::transport::Error::Network(err.to_string())))?;
+    let text = response.text().await.map_err(|err| {
+        Error::Transport(litellm_llms::custom_httpx::transport::Error::Network(
+            err.to_string(),
+        ))
+    })?;
 
     if !status.is_success() {
-        return Err(Error::Transport(crate::transport::Error::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
-        }));
+        return Err(Error::Transport(
+            litellm_llms::custom_httpx::transport::Error::Http {
+                status: status.as_u16(),
+                body: truncate_error_body(&text),
+            },
+        ));
     }
 
     let response = serde_json::from_str(&text)
@@ -60,19 +65,24 @@ pub(super) async fn execute_messages_provider_stream(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = http_request(request_builder)
-        .await
-        .map_err(|err| Error::Transport(crate::transport::Error::Network(err.to_string())))?;
+    let response = http_request(request_builder).await.map_err(|err| {
+        Error::Transport(litellm_llms::custom_httpx::transport::Error::Network(
+            err.to_string(),
+        ))
+    })?;
     let status = response.status();
     if !status.is_success() {
-        let text = response
-            .text()
-            .await
-            .map_err(|err| Error::Transport(crate::transport::Error::Network(err.to_string())))?;
-        return Err(Error::Transport(crate::transport::Error::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
-        }));
+        let text = response.text().await.map_err(|err| {
+            Error::Transport(litellm_llms::custom_httpx::transport::Error::Network(
+                err.to_string(),
+            ))
+        })?;
+        return Err(Error::Transport(
+            litellm_llms::custom_httpx::transport::Error::Http {
+                status: status.as_u16(),
+                body: truncate_error_body(&text),
+            },
+        ));
     }
     Ok(response)
 }
