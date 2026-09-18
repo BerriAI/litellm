@@ -108,6 +108,7 @@ from litellm.proxy.guardrails.tool_name_extraction import (
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.carried_budget_state import carry_organization_budget_state
+from litellm.proxy.spend_tracking.spend_counter_batch import bind_spend_counter_keys
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
@@ -5616,8 +5617,13 @@ async def _user_multi_budget_check(
 
     from litellm.proxy.proxy_server import get_current_spend
 
-    for window in valid_token.user_budget_limits:
-        w: dict = window if isinstance(window, dict) else window.model_dump()
+    windows: Final[tuple[dict, ...]] = tuple(
+        window if isinstance(window, dict) else window.model_dump() for window in valid_token.user_budget_limits
+    )
+    bind_spend_counter_keys(
+        frozenset(f"spend:user:{valid_token.user_id}:window:{w['budget_duration']}" for w in windows)
+    )
+    for w in windows:
         counter_key = f"spend:user:{valid_token.user_id}:window:{w['budget_duration']}"
         window_spend = await get_current_spend(
             counter_key=counter_key,

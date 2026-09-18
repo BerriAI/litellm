@@ -2,7 +2,7 @@
 Unit tests for multi-budget-window enforcement on API keys.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -176,6 +176,37 @@ async def test_user_under_all_windows_passes():
         "spend:user:user-1:window:30d",
     ]
     assert all(call.kwargs["window_entity_type"] == "User" for call in spend_mock.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_user_windows_share_one_redis_batch_read(monkeypatch):
+    import litellm.proxy.proxy_server as ps
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.spend_tracking.spend_counter_batch import spend_counter_batch_scope
+
+    token = _make_user_token(
+        user_budget_limits=[
+            {"budget_duration": "24h", "max_budget": 10.0, "reset_at": None},
+            {"budget_duration": "30d", "max_budget": 100.0, "reset_at": None},
+        ]
+    )
+    redis = MagicMock()
+    redis.async_batch_get_cache = AsyncMock(
+        return_value={"spend:user:user-1:window:24h": 1.0, "spend:user:user-1:window:30d": 2.0}
+    )
+    redis.async_get_cache = AsyncMock(return_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", DualCache(redis_cache=redis))
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    with spend_counter_batch_scope(redis):
+        await _user_multi_budget_check(valid_token=token, team_object=None, general_settings={})
+
+    assert redis.async_batch_get_cache.await_count == 1
+    assert sorted(redis.async_batch_get_cache.await_args.kwargs["key_list"]) == [
+        "spend:user:user-1:window:24h",
+        "spend:user:user-1:window:30d",
+    ]
+    assert redis.async_get_cache.await_count == 0
 
 
 @pytest.mark.asyncio
