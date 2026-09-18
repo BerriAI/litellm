@@ -991,6 +991,46 @@ async def test_create__uses_acreate_batch_route_type(harness, openai_env_creds):
     assert harness.pre_call.call_args.kwargs["route_type"] == "acreate_batch"
 
 
+@pytest.mark.asyncio
+async def test_create__forwards_openai_project_header(harness, openai_env_creds):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    await call_create(harness, headers={"openai-project": "proj-request"})
+
+    assert harness.acreate_kwargs()["extra_headers"] == {"OpenAI-Project": "proj-request"}
+
+
+@pytest.mark.asyncio
+async def test_create__model_project_overrides_request_header(harness):
+    harness.creds_resolver.side_effect = lambda *, model_id: {
+        "custom_llm_provider": "openai",
+        "api_key": "sk-test-openai",
+        "project": "proj-config",
+    }
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "model": "openai-model",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    await call_create(harness, headers={"openai-project": "proj-request"})
+
+    kwargs = harness.acreate_kwargs()
+    assert kwargs["extra_headers"] == {"OpenAI-Project": "proj-config"}
+    assert "project" not in kwargs
+
+
 def install_managed_files_hook(harness: Harness) -> AsyncMock:
     prisma_client = AsyncMock()
     managed_files = _PROXY_LiteLLMManagedFiles(MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client)
@@ -2772,8 +2812,6 @@ async def test_cancel__unified_batch_id_allowed_when_managed_files_required(canc
         await call_cancel(cancel_harness, _unified_batch_id())
 
     assert cancel_harness.router_acancel.call_count == 1
-
-
 
 
 @pytest.mark.asyncio

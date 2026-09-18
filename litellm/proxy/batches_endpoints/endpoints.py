@@ -33,6 +33,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
     _is_base64_encoded_unified_file_id,
     add_internal_model_credentials,
+    add_openai_project_header,
     apply_team_provider_credentials,
     batch_cost_poller_is_active,
     decode_model_from_file_id,
@@ -236,6 +237,10 @@ async def create_batch(
                 credentials=credentials,
             )
 
+            add_openai_project_header(
+                cast(dict[str, object], _create_batch_data), request, cast(str, credentials["custom_llm_provider"])
+            )
+
             # Create batch using model credentials
             response = await litellm.acreate_batch(
                 custom_llm_provider=credentials["custom_llm_provider"],
@@ -326,6 +331,10 @@ async def create_batch(
                     credentials=credentials,
                 )
 
+                add_openai_project_header(
+                    cast(dict[str, object], _create_batch_data), request, cast(str, credentials["custom_llm_provider"])
+                )
+
                 # Create batch using model credentials
                 response = await litellm.acreate_batch(
                     custom_llm_provider=credentials["custom_llm_provider"],
@@ -342,6 +351,9 @@ async def create_batch(
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                     custom_llm_provider=custom_llm_provider,
+                )
+                add_openai_project_header(
+                    cast(dict[str, object], _create_batch_data), request, cast(str, custom_llm_provider)
                 )
                 _raise_not_found_when_openai_fallback_unservable(
                     requested_provider=requested_provider,

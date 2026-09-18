@@ -66,6 +66,7 @@ from litellm.proxy.openai_files_endpoints.batch_guardrails import (
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     add_internal_model_credentials,
+    add_openai_project_header,
     apply_team_provider_credentials,
     encode_file_id_with_model,
     extract_file_creation_params,
@@ -232,6 +233,7 @@ async def route_create_file(
     custom_llm_provider: str,
     model: str | None = None,
     target_storage: str | None = "default",
+    request: Request | None = None,
 ) -> OpenAIFileObject:
     """
     Route file creation request to the appropriate provider.
@@ -282,6 +284,11 @@ async def route_create_file(
             data=_create_file_request,
             credentials=credentials,
         )
+
+        if request is not None:
+            add_openai_project_header(
+                cast(dict[str, object], _create_file_request), request, cast(str, credentials["custom_llm_provider"])
+            )
 
         # Create the file with model credentials
         response = await litellm.acreate_file(
@@ -351,6 +358,8 @@ async def route_create_file(
             # add llm_provider_config to data
             _create_file_request.update(llm_provider_config)
         _create_file_request.pop("custom_llm_provider", None)
+        if request is not None:
+            add_openai_project_header(cast(dict[str, object], _create_file_request), request, custom_llm_provider)
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)
 
@@ -666,6 +675,10 @@ async def create_file(
             **data,
         )
 
+        project_in_body = cast(dict[str, object], request_body).get("project")
+        if isinstance(project_in_body, str):
+            cast(dict[str, object], _create_file_request)["project"] = project_in_body
+
         response = await route_create_file(
             llm_router=llm_router,
             _create_file_request=_create_file_request,
@@ -678,6 +691,7 @@ async def create_file(
             custom_llm_provider=custom_llm_provider,
             model=model_param,
             target_storage=target_storage,
+            request=request,
         )
 
         if response is None:
