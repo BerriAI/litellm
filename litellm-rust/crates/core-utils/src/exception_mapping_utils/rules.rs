@@ -4,106 +4,29 @@ use fancy_regex::Regex;
 use serde_json::Value;
 
 use super::Mapping;
-use super::public::{HttpStub, PublicFailure, PublicKind, ResponseArg, StatusClass};
+use super::public::PublicError;
 
-const GITHUB_URL: &str = "https://github.com/BerriAI/litellm";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ResponseChoice {
-    Omitted,
-    Provider,
-    Stub { status: u16, url: &'static str },
-    InternalServerStub,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ApiStatus {
-    Fixed(u16),
-    Original,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Kind {
-    Status {
-        class: StatusClass,
-        response: ResponseChoice,
-    },
-    Timeout(Option<u16>),
-    ApiConnection,
-    Api {
-        status: ApiStatus,
-        request_url: &'static str,
-    },
-}
-
-/// One branch of a Python `_map_*_exception` function: when it applies, the class it
-/// raises, the message it builds, and whether it passes `litellm_debug_info`.
+/// One text branch of a Python `_map_*_exception` function: when it applies, the class it
+/// raises, and any help text appended to the message.
 pub(super) struct Rule {
-    pub(super) when: fn(&Mapping<'_>) -> bool,
-    pub(super) kind: Kind,
-    pub(super) message: fn(&Mapping<'_>) -> String,
-    pub(super) debug: bool,
-}
-
-/// The first rule that applies decides the failure, as the `if`/`elif` chain does in Python.
-pub(super) fn apply(rules: &[Rule], mapping: &Mapping<'_>) -> Option<PublicFailure> {
-    rules
-        .iter()
-        .find(|rule| (rule.when)(mapping))
-        .map(|rule| rule.build(mapping))
+    pub(super) when: fn(&Mapping) -> bool,
+    pub(super) error: PublicError,
+    pub(super) hint: &'static str,
 }
 
 impl Rule {
-    fn build(&self, mapping: &Mapping<'_>) -> PublicFailure {
-        let kind = match self.kind {
-            Kind::Status { class, response } => PublicKind::Status {
-                status_class: class,
-                response: response.resolve(mapping),
-            },
-            Kind::Timeout(status) => PublicKind::Timeout { status },
-            Kind::ApiConnection => PublicKind::ApiConnection,
-            Kind::Api {
-                status,
-                request_url,
-            } => PublicKind::Api {
-                status: match status {
-                    ApiStatus::Fixed(status) => status,
-                    ApiStatus::Original => mapping.original.status.unwrap_or(500),
-                },
-                request_url,
-            },
-        };
-        PublicFailure {
-            kind,
-            message: (self.message)(mapping),
-            model: mapping.context.model.clone(),
-            llm_provider: mapping.context.custom_llm_provider.clone(),
-            litellm_debug_info: self.debug.then(|| mapping.extra_information.clone()),
-            litellm_response_headers: None,
-            print_banner: false,
+    pub(super) const fn new(when: fn(&Mapping) -> bool, error: PublicError) -> Self {
+        Self {
+            when,
+            error,
+            hint: "",
         }
     }
 }
 
-impl ResponseChoice {
-    fn resolve(self, mapping: &Mapping<'_>) -> Option<ResponseArg> {
-        match self {
-            Self::Omitted => None,
-            Self::Provider => mapping.original.response.clone().map(ResponseArg::Upstream),
-            Self::Stub { status, url } => Some(ResponseArg::Stub(HttpStub {
-                status,
-                method: "POST",
-                url,
-                content: None,
-            })),
-            Self::InternalServerStub => Some(ResponseArg::Stub(HttpStub {
-                status: 500,
-                method: "completion",
-                url: GITHUB_URL,
-                content: Some(mapping.original.message.clone()),
-            })),
-        }
-    }
+/// The first rule that applies decides the class, as the `if`/`elif` chain does in Python.
+pub(super) fn first_match<'r>(rules: &'r [Rule], mapping: &Mapping) -> Option<&'r Rule> {
+    rules.iter().find(|rule| (rule.when)(mapping))
 }
 
 pub(super) fn contains_any(text: &str, markers: &[&str]) -> bool {
@@ -117,7 +40,7 @@ static RATE_LIMIT_PHRASE: LazyLock<Regex> =
 
 /// `ExceptionCheckers.is_error_str_rate_limit`.
 pub(super) fn is_rate_limit(error_str: &str, status: Option<u16>) -> bool {
-    if STANDALONE_429.is_match(error_str).unwrap_or(false) && status == Some(429) {
+    if STANDALONE_429.is_match(error_str).unwrap_or(false) && matches!(status, None | Some(429)) {
         return true;
     }
     let lower = error_str.to_lowercase();
@@ -169,184 +92,34 @@ pub(super) fn body_error_code(error_str: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::testing::{context, failure, http};
-    use super::super::{ExceptionFamily, OriginalException, UpstreamResponse};
+    use super::super::testing::mapping;
     use super::*;
 
-    fn first_marker(mapping: &Mapping<'_>) -> bool {
-        mapping.error_str.contains("first")
-    }
-
-    fn always(_: &Mapping<'_>) -> bool {
-        true
-    }
-
-    fn text(mapping: &Mapping<'_>) -> String {
-        format!("seen {}", mapping.error_str)
-    }
-
     const ORDERED: &[Rule] = &[
-        Rule {
-            when: first_marker,
-            kind: Kind::Status {
-                class: StatusClass::NotFound,
-                response: ResponseChoice::Omitted,
-            },
-            message: text,
-            debug: false,
-        },
-        Rule {
-            when: always,
-            kind: Kind::ApiConnection,
-            message: text,
-            debug: true,
-        },
+        Rule::new(
+            |mapping| mapping.error_str.contains("first"),
+            PublicError::NotFound,
+        ),
+        Rule::new(|_| true, PublicError::ApiConnection),
     ];
 
-    fn apply_one(kind: Kind, debug: bool, original: &OriginalException) -> Option<PublicFailure> {
-        let context = context("mistral", ExceptionFamily::OpenAiCompatible);
-        let mapping = Mapping::new(&context, original);
-        apply(
-            &[Rule {
-                when: always,
-                kind,
-                message: text,
-                debug,
-            }],
-            &mapping,
-        )
-    }
-
     #[rstest::rstest]
-    #[case::earlier_rule_wins("first and second", failure(
-        PublicKind::Status { status_class: StatusClass::NotFound, response: None },
-        "seen first and second",
-        "mistral",
-    ))]
-    #[case::later_rule_when_the_earlier_does_not_apply("second", PublicFailure {
-        litellm_debug_info: Some("\nModel: ocr-model".into()),
-        ..failure(PublicKind::ApiConnection, "seen second", "mistral")
-    })]
-    fn the_first_applicable_rule_decides(#[case] body: &str, #[case] expected: PublicFailure) {
-        let context = context("mistral", ExceptionFamily::OpenAiCompatible);
-        let original = http(400, body);
-        assert_eq!(
-            apply(ORDERED, &Mapping::new(&context, &original)),
-            Some(expected)
-        );
+    #[case::earlier_rule_wins("first and second", PublicError::NotFound)]
+    #[case::later_rule_when_the_earlier_does_not_apply("second", PublicError::ApiConnection)]
+    fn the_first_applicable_rule_decides(#[case] text: &str, #[case] expected: PublicError) {
+        let rule = first_match(ORDERED, &mapping(Some(400), text));
+        assert_eq!(rule.map(|rule| rule.error), Some(expected));
     }
 
     #[test]
     fn no_applicable_rule_leaves_the_failure_to_the_caller() {
-        let context = context("mistral", ExceptionFamily::OpenAiCompatible);
-        let original = http(400, "second");
-        assert_eq!(
-            apply(&ORDERED[..1], &Mapping::new(&context, &original)),
-            None
-        );
-    }
-
-    #[rstest::rstest]
-    #[case::omitted(ResponseChoice::Omitted, None)]
-    #[case::provider(ResponseChoice::Provider, Some(ResponseArg::Upstream(UpstreamResponse {
-        status: 400,
-        body: "body".into(),
-        headers: vec![("retry-after".into(), "7".into())],
-    })))]
-    #[case::stub(
-        ResponseChoice::Stub { status: 429, url: "https://stub.test" },
-        Some(ResponseArg::Stub(HttpStub { status: 429, method: "POST", url: "https://stub.test", content: None }))
-    )]
-    #[case::internal_server_stub(
-        ResponseChoice::InternalServerStub,
-        Some(ResponseArg::Stub(HttpStub {
-            status: 500,
-            method: "completion",
-            url: GITHUB_URL,
-            content: Some("body".into()),
-        }))
-    )]
-    fn response_choices_resolve_against_the_original(
-        #[case] response: ResponseChoice,
-        #[case] expected: Option<ResponseArg>,
-    ) {
-        let built = apply_one(
-            Kind::Status {
-                class: StatusClass::BadRequest,
-                response,
-            },
-            false,
-            &http(400, "body"),
-        )
-        .unwrap();
-        assert_eq!(
-            built.kind,
-            PublicKind::Status {
-                status_class: StatusClass::BadRequest,
-                response: expected,
-            }
-        );
-    }
-
-    #[rstest::rstest]
-    #[case::fixed(ApiStatus::Fixed(500), http(409, "body"), 500)]
-    #[case::original(ApiStatus::Original, http(409, "body"), 409)]
-    #[case::original_without_a_status(
-        ApiStatus::Original,
-        OriginalException::Response { message: "body".into() },
-        500
-    )]
-    fn api_status_is_fixed_or_the_originals(
-        #[case] status: ApiStatus,
-        #[case] original: OriginalException,
-        #[case] expected: u16,
-    ) {
-        let built = apply_one(
-            Kind::Api {
-                status,
-                request_url: "https://api.test",
-            },
-            false,
-            &original,
-        )
-        .unwrap();
-        assert_eq!(
-            built,
-            failure(
-                PublicKind::Api {
-                    status: expected,
-                    request_url: "https://api.test"
-                },
-                "seen body",
-                "mistral"
-            )
-        );
-    }
-
-    #[rstest::rstest]
-    #[case::with_debug(true, Some("\nModel: ocr-model"))]
-    #[case::without_debug(false, None)]
-    fn debug_rules_carry_the_extra_information(
-        #[case] debug: bool,
-        #[case] expected: Option<&str>,
-    ) {
-        let built = apply_one(Kind::Timeout(Some(504)), debug, &http(504, "body")).unwrap();
-        assert_eq!(
-            built,
-            PublicFailure {
-                litellm_debug_info: expected.map(str::to_string),
-                ..failure(
-                    PublicKind::Timeout { status: Some(504) },
-                    "seen body",
-                    "mistral"
-                )
-            }
-        );
+        assert!(first_match(&ORDERED[..1], &mapping(Some(400), "second")).is_none());
     }
 
     #[rstest::rstest]
     #[case::standalone_429_with_429_status("got 429 back", Some(429), true)]
     #[case::standalone_429_with_other_status("got 429 back", Some(400), false)]
+    #[case::standalone_429_with_unknown_status("got 429 back", None, true)]
     #[case::embedded_429("token4290", Some(429), false)]
     #[case::phrase_spaced("Rate Limit reached", None, true)]
     #[case::phrase_underscored("rate_limit", None, true)]

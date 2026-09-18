@@ -2092,7 +2092,6 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_with",
- "strum",
  "thiserror 2.0.19",
  "url",
 ]

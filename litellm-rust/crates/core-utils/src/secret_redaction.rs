@@ -1,5 +1,3 @@
-use std::sync::LazyLock;
-
 use fancy_regex::Regex;
 
 pub const REDACTED: &str = "REDACTED";
@@ -51,21 +49,32 @@ fn secret_patterns(minimum_custom_key_length: usize) -> String {
     .join("|")
 }
 
-static SECRET_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(
-        "(?i){}",
-        secret_patterns(minimum_custom_key_length())
-    ))
-    .expect("secret redaction patterns compile")
-});
-
-pub fn redact_string(value: &str) -> String {
-    SECRET_RE.replace_all(value, REDACTED).into_owned()
+/// Python's `_ENABLE_SECRET_REDACTION` pattern set, compiled once per configuration.
+#[derive(Clone, Debug)]
+pub struct SecretRedactor {
+    pattern: Regex,
 }
 
-pub fn secret_redaction_enabled() -> bool {
-    !std::env::var("LITELLM_DISABLE_REDACT_SECRETS")
-        .is_ok_and(|value| value.eq_ignore_ascii_case("true"))
+impl SecretRedactor {
+    pub fn new(minimum_custom_key_length: usize) -> Self {
+        let pattern = Regex::new(&format!(
+            "(?i){}",
+            secret_patterns(minimum_custom_key_length)
+        ))
+        .expect("secret redaction patterns compile");
+        Self { pattern }
+    }
+
+    /// `None` when `LITELLM_DISABLE_REDACT_SECRETS` turns redaction off.
+    pub fn from_env() -> Option<Self> {
+        let disabled = std::env::var("LITELLM_DISABLE_REDACT_SECRETS")
+            .is_ok_and(|value| value.eq_ignore_ascii_case("true"));
+        (!disabled).then(|| Self::new(minimum_custom_key_length()))
+    }
+
+    pub fn redact(&self, value: &str) -> String {
+        self.pattern.replace_all(value, REDACTED).into_owned()
+    }
 }
 
 #[cfg(test)]
@@ -85,13 +94,16 @@ mod tests {
     #[case::password_needs_word_boundary("db_password=hunter2", "REDACTED")]
     #[case::plain_text_is_kept(r#"{"message": "rejected"}"#, r#"{"message": "rejected"}"#)]
     fn redacts_the_same_spans_as_the_python_patterns(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(redact_string(input), expected);
+        assert_eq!(
+            SecretRedactor::new(DEFAULT_MINIMUM_CUSTOM_KEY_LENGTH).redact(input),
+            expected
+        );
     }
 
     #[test]
     fn sk_threshold_follows_the_minimum_custom_key_length() {
-        let patterns = Regex::new(&format!("(?i){}", secret_patterns(8))).unwrap();
-        assert_eq!(patterns.replace_all("sk-abcde", REDACTED), REDACTED);
-        assert_eq!(patterns.replace_all("sk-abcd", REDACTED), "sk-abcd");
+        let redactor = SecretRedactor::new(8);
+        assert_eq!(redactor.redact("sk-abcde"), REDACTED);
+        assert_eq!(redactor.redact("sk-abcd"), "sk-abcd");
     }
 }

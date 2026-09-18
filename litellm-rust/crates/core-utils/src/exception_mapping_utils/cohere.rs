@@ -1,232 +1,115 @@
-use super::Mapping;
-use super::public::{PublicFailure, StatusClass};
-use super::rules::{Kind, ResponseChoice, Rule, apply, contains_any};
+use super::public::PublicError;
+use super::rules::{Rule, contains_any};
 
-const fn with_response(class: StatusClass) -> Kind {
-    Kind::Status {
-        class,
-        response: ResponseChoice::Provider,
-    }
-}
-
-fn original(mapping: &Mapping<'_>) -> String {
-    format!("CohereException - {}", mapping.original.message)
-}
-
-fn status_is(mapping: &Mapping<'_>, statuses: &[u16]) -> bool {
-    mapping
-        .original
-        .status
-        .is_some_and(|status| statuses.contains(&status))
-}
-
-/// `_map_cohere_exception`, in its branch order. A failure no rule claims falls through to
-/// the status table.
-const RULES: &[Rule] = &[
-    Rule {
-        when: |mapping| {
+/// The text branches of `_map_cohere_exception`, in its order.
+pub(super) const RULES: &[Rule] = &[
+    Rule::new(
+        |mapping| {
             contains_any(
                 &mapping.error_str,
                 &["invalid api token", "No API key provided."],
             )
         },
-        kind: with_response(StatusClass::Authentication),
-        message: original,
-        debug: false,
-    },
-    Rule {
-        when: |mapping| mapping.error_str.contains("invalid type: parameter"),
-        kind: with_response(StatusClass::BadRequest),
-        message: original,
-        debug: false,
-    },
-    Rule {
-        when: |mapping| mapping.error_str.contains("too many tokens"),
-        kind: with_response(StatusClass::ContextWindowExceeded),
-        message: original,
-        debug: false,
-    },
-    Rule {
-        when: |mapping| {
+        PublicError::Authentication,
+    ),
+    Rule::new(
+        |mapping| mapping.error_str.contains("invalid type: parameter"),
+        PublicError::BadRequest,
+    ),
+    Rule::new(
+        |mapping| mapping.error_str.contains("too many tokens"),
+        PublicError::ContextWindowExceeded,
+    ),
+    Rule::new(
+        |mapping| {
             mapping
                 .error_str
                 .to_lowercase()
                 .contains("internal server error")
         },
-        kind: with_response(StatusClass::InternalServer),
-        message: |mapping| format!("CohereException - {}", mapping.error_str),
-        debug: false,
-    },
-    Rule {
-        when: |mapping| status_is(mapping, &[400, 498]),
-        kind: with_response(StatusClass::BadRequest),
-        message: original,
-        debug: false,
-    },
-    Rule {
-        when: |mapping| status_is(mapping, &[408]),
-        kind: Kind::Timeout(None),
-        message: original,
-        debug: false,
-    },
-    Rule {
-        when: |mapping| status_is(mapping, &[500]),
-        kind: with_response(StatusClass::InternalServer),
-        message: original,
-        debug: false,
-    },
+        PublicError::InternalServer,
+    ),
+    Rule::new(
+        |mapping| mapping.status.is_none() && mapping.error_str.contains("invalid type:"),
+        PublicError::BadRequest,
+    ),
+    Rule::new(
+        |mapping| mapping.status.is_none() && mapping.error_str.contains("Unexpected server error"),
+        PublicError::InternalServer,
+    ),
 ];
-
-pub(super) fn map(mapping: &Mapping<'_>) -> Option<PublicFailure> {
-    apply(RULES, mapping).map(|failure| PublicFailure {
-        llm_provider: Some("cohere".to_string()),
-        ..failure
-    })
-}
 
 #[cfg(test)]
 mod tests {
-    use super::super::testing::{context, failure, http, status, upstream};
-    use super::super::{ExceptionFamily, OriginalException, PublicKind};
+    use super::super::rules::first_match;
+    use super::super::testing::mapping;
     use super::*;
 
-    fn mapped(provider: &str, original: &OriginalException) -> Option<PublicFailure> {
-        let context = context(provider, ExceptionFamily::Cohere);
-        map(&Mapping::new(&context, original))
+    fn classified(text: &str) -> Option<PublicError> {
+        classified_with(Some(400), text)
     }
 
-    fn cohere(class: StatusClass, status_code: u16, body: &str, message: &str) -> PublicFailure {
-        failure(
-            status(class, upstream(status_code, body)),
-            message,
-            "cohere",
-        )
+    fn classified_with(status: Option<u16>, text: &str) -> Option<PublicError> {
+        first_match(RULES, &mapping(status, text)).map(|rule| rule.error)
     }
 
     #[rstest::rstest]
-    #[case::invalid_token(
-        500,
-        "invalid api token",
-        cohere(
-            StatusClass::Authentication,
-            500,
-            "invalid api token",
-            "CohereException - invalid api token"
-        )
-    )]
-    #[case::no_api_key(
-        500,
-        "No API key provided.",
-        cohere(
-            StatusClass::Authentication,
-            500,
-            "No API key provided.",
-            "CohereException - No API key provided."
-        )
-    )]
-    #[case::invalid_parameter(
-        500,
-        "invalid type: parameter x",
-        cohere(
-            StatusClass::BadRequest,
-            500,
-            "invalid type: parameter x",
-            "CohereException - invalid type: parameter x"
-        )
-    )]
-    #[case::too_many_tokens(
-        500,
-        "too many tokens",
-        cohere(
-            StatusClass::ContextWindowExceeded,
-            500,
-            "too many tokens",
-            "CohereException - too many tokens"
-        )
-    )]
-    #[case::internal_server_text(
-        400,
-        "Internal Server Error",
-        cohere(
-            StatusClass::InternalServer,
-            400,
-            "Internal Server Error",
-            "CohereException - Internal Server Error"
-        )
-    )]
-    #[case::bad_request(
-        400,
-        "rejected",
-        cohere(StatusClass::BadRequest, 400, "rejected", "CohereException - rejected")
-    )]
-    #[case::invalid_token_status(
-        498,
-        "rejected",
-        cohere(StatusClass::BadRequest, 498, "rejected", "CohereException - rejected")
-    )]
-    #[case::request_timeout(408, "rejected", failure(PublicKind::Timeout { status: None }, "CohereException - rejected", "cohere"))]
-    #[case::internal_server(
-        500,
-        "rejected",
-        cohere(
-            StatusClass::InternalServer,
-            500,
-            "rejected",
-            "CohereException - rejected"
-        )
-    )]
-    fn each_rule_maps_and_reports_cohere(
-        #[case] status_code: u16,
-        #[case] body: &str,
-        #[case] expected: PublicFailure,
-    ) {
-        assert_eq!(mapped("azure_ai", &http(status_code, body)), Some(expected));
-    }
-
-    #[rstest::rstest]
-    #[case::unmapped_status(409)]
-    #[case::unauthorized(401)]
-    fn statuses_without_a_rule_fall_through(#[case] status_code: u16) {
-        assert_eq!(mapped("cohere", &http(status_code, "rejected")), None);
-    }
-
-    #[test]
-    fn the_internal_server_rule_uses_the_redacted_text() {
-        let body = "internal server error Bearer abcdefghijklmnop";
-        assert_eq!(
-            mapped("cohere", &http(400, body)),
-            Some(cohere(
-                StatusClass::InternalServer,
-                400,
-                body,
-                "CohereException - internal server error REDACTED"
-            ))
-        );
+    #[case::invalid_token("invalid api token", PublicError::Authentication)]
+    #[case::no_api_key("No API key provided.", PublicError::Authentication)]
+    #[case::invalid_parameter("invalid type: parameter x", PublicError::BadRequest)]
+    #[case::too_many_tokens("too many tokens", PublicError::ContextWindowExceeded)]
+    #[case::internal_server_text("Internal Server Error", PublicError::InternalServer)]
+    #[case::internal_server_any_case("INTERNAL server ERROR", PublicError::InternalServer)]
+    fn each_text_rule_claims_its_marker(#[case] text: &str, #[case] expected: PublicError) {
+        assert_eq!(classified(text), Some(expected));
     }
 
     #[rstest::rstest]
     #[case::token_before_parameter(
         "invalid api token invalid type: parameter",
-        StatusClass::Authentication
+        PublicError::Authentication
     )]
     #[case::parameter_before_tokens(
         "invalid type: parameter too many tokens",
-        StatusClass::BadRequest
+        PublicError::BadRequest
     )]
     #[case::tokens_before_internal(
         "too many tokens Internal Server Error",
-        StatusClass::ContextWindowExceeded
+        PublicError::ContextWindowExceeded
     )]
-    #[case::internal_before_status("Internal Server Error", StatusClass::InternalServer)]
-    fn the_earlier_rule_wins_when_two_apply(#[case] body: &str, #[case] class: StatusClass) {
-        assert_eq!(
-            mapped("cohere", &http(400, body)),
-            Some(cohere(
-                class,
-                400,
-                body,
-                &format!("CohereException - {body}")
-            ))
-        );
+    fn the_earlier_rule_wins_when_two_apply(#[case] text: &str, #[case] expected: PublicError) {
+        assert_eq!(classified(text), Some(expected));
+    }
+
+    #[rstest::rstest]
+    #[case::invalid_type(None, "invalid type: x", Some(PublicError::BadRequest))]
+    #[case::unexpected_server_error(
+        None,
+        "Unexpected server error",
+        Some(PublicError::InternalServer)
+    )]
+    #[case::invalid_type_before_unexpected(
+        None,
+        "invalid type: x Unexpected server error",
+        Some(PublicError::BadRequest)
+    )]
+    #[case::internal_before_invalid_type(
+        None,
+        "internal server error invalid type: x",
+        Some(PublicError::InternalServer)
+    )]
+    #[case::invalid_type_with_a_status(Some(500), "invalid type: x", None)]
+    #[case::unexpected_with_a_status(Some(400), "Unexpected server error", None)]
+    fn the_trailing_rules_only_claim_failures_without_a_status(
+        #[case] status: Option<u16>,
+        #[case] text: &str,
+        #[case] expected: Option<PublicError>,
+    ) {
+        assert_eq!(classified_with(status, text), expected);
+    }
+
+    #[test]
+    fn text_without_a_marker_is_left_to_the_status_table() {
+        assert_eq!(classified("rejected"), None);
     }
 }
