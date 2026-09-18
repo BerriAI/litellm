@@ -1509,6 +1509,11 @@ describe("ModelInfoView", () => {
       expect(await screen.findByRole("button", { name: /save changes/i })).toBeInTheDocument();
     };
 
+    const openSelect = async (user: ReturnType<typeof userEvent.setup>, triggerText: string) => {
+      await user.click(await screen.findByText(triggerText));
+      await screen.findByRole("combobox", { expanded: true });
+    };
+
     const save = async (user: ReturnType<typeof userEvent.setup>) => {
       await user.click(screen.getByRole("button", { name: /save changes/i }));
       await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalled());
@@ -1642,6 +1647,97 @@ describe("ModelInfoView", () => {
       expect(payload.model_info).toMatchObject({ team_id: "team-7" });
     });
 
+    it("sends the team picked in the Team ID selector", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [
+          { team_id: "team-1", team_alias: "alpha" },
+          { team_id: "team-2", team_alias: "beta" },
+        ],
+        isLoading: false,
+        error: null,
+      });
+      const teamModel = {
+        ...defaultModelData,
+        model_info: { ...defaultModelData.model_info, team_id: "team-1" },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openSelect(user, "alpha (team-1)");
+      await user.click(await screen.findByText("beta (team-2)"));
+
+      const payload = await save(user);
+
+      expect(payload.model_info.team_id).toBe("team-2");
+    });
+
+    it("shows the picked team in read mode right after saving", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [
+          { team_id: "team-1", team_alias: "alpha" },
+          { team_id: "team-2", team_alias: "beta" },
+        ],
+        isLoading: false,
+        error: null,
+      });
+      const teamModel = {
+        ...defaultModelData,
+        model_info: { ...defaultModelData.model_info, team_id: "team-1" },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openSelect(user, "alpha (team-1)");
+      await user.click(await screen.findByText("beta (team-2)"));
+      await save(user);
+
+      expect(await screen.findByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      expect(screen.getByText("beta (team-2)")).toBeInTheDocument();
+      expect(screen.queryByText("alpha (team-1)")).not.toBeInTheDocument();
+    });
+
+    it("shows the Team ID placeholder for a model with no team", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [{ team_id: "team-1", team_alias: "alpha" }],
+        isLoading: false,
+        error: null,
+      });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      expect(screen.getByText("Select a team")).toBeInTheDocument();
+    });
+
+    it.each(["Internal User", "Org Admin"])("only offers a %s the teams they administer", async (userRole) => {
+      mockUseTeams.mockReturnValue({
+        data: [
+          { team_id: "team-1", team_alias: "alpha", members_with_roles: [{ user_id: "123", role: "admin" }] },
+          { team_id: "team-2", team_alias: "beta", members_with_roles: [{ user_id: "123", role: "user" }] },
+          { team_id: "team-3", team_alias: "gamma", members_with_roles: [{ user_id: "123", role: "admin" }] },
+        ],
+        isLoading: false,
+        error: null,
+      });
+      const teamModel = {
+        ...defaultModelData,
+        model_info: { ...defaultModelData.model_info, team_id: "team-1" },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole={userRole} />, { wrapper });
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      await user.click(await screen.findByText("alpha (team-1)"));
+
+      expect(await screen.findByRole("option", { name: "gamma (team-3)" })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "beta (team-2)" })).not.toBeInTheDocument();
+    });
+
     it("sends the edited LiteLLM extra params", async () => {
       const user = userEvent.setup();
       await enterEditMode(user);
@@ -1670,7 +1766,7 @@ describe("ModelInfoView", () => {
       const user = userEvent.setup();
       await enterEditMode(user);
 
-      await user.click(await screen.findByText("selected-credential"));
+      await openSelect(user, "selected-credential");
       await user.click(await screen.findByText("other-credential"));
 
       const payload = await save(user);
@@ -1706,7 +1802,7 @@ describe("ModelInfoView", () => {
       const user = userEvent.setup();
       await enterEditMode(user);
 
-      await user.click(screen.getByText("Select existing health check model"));
+      await openSelect(user, "Select existing health check model");
       await user.click(await screen.findByText("openai/gpt-4o"));
 
       const payload = await save(user);
