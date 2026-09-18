@@ -90,6 +90,7 @@ from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages_async,
 )
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
+from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
@@ -573,7 +574,6 @@ class Logging(LiteLLMLoggingBaseClass):
         self.streaming_chunks: list[Any] = []  # for generating complete stream response
         self.sync_streaming_chunks: list[Any] = []  # for generating complete stream response
         self.log_raw_request_response = log_raw_request_response
-        self._native_callback_fast_path: bool = False
         self._litellm_internal_model_credentials: Mapping[str, object] | None = None
 
         # Initialize dynamic callbacks
@@ -1747,8 +1747,14 @@ class Logging(LiteLLMLoggingBaseClass):
         if transformed_result is not None:
             result = transformed_result
 
+        result_hidden_params: Final = getattr(result, "_hidden_params", None) or MappingProxyType({})
+        result_additional_headers: Final = (
+            result_hidden_params.get("additional_headers")
+            if isinstance(result_hidden_params, dict)
+            else getattr(result_hidden_params, "additional_headers", None)
+        )
         if isinstance(result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(result, "_hidden_params"):
-            hidden_params: Final = getattr(result, "_hidden_params", {})
+            hidden_params: Final = result_hidden_params
             if (
                 "response_cost" in hidden_params and hidden_params["response_cost"] is not None
             ):  # use cost if already calculated
@@ -1763,8 +1769,17 @@ class Logging(LiteLLMLoggingBaseClass):
             router_model_id = self.get_router_model_id()
 
         ## RESPONSE COST ##
-        custom_pricing: Final = use_custom_pricing_for_model(
-            litellm_params=(self.litellm_params if hasattr(self, "litellm_params") else None)
+        spilled_over: Final = is_spilled_over_ptu_request(
+            model_info=_deployment_model_info(self.litellm_params if hasattr(self, "litellm_params") else None),
+            response_headers=self.model_call_details.get("response_headers"),
+            additional_headers=result_additional_headers,
+        )
+        custom_pricing: Final = (
+            False
+            if spilled_over
+            else use_custom_pricing_for_model(
+                litellm_params=(self.litellm_params if hasattr(self, "litellm_params") else None)
+            )
         )
 
         prompt = self._prompt_for_cost_calculation()
@@ -5268,6 +5283,18 @@ def _get_custom_logger_settings_from_proxy_server(callback_name: str) -> dict:
     if litellm.callback_settings:
         return dict(litellm.callback_settings.get(callback_name, {}))
     return {}
+
+
+def _deployment_model_info(litellm_params: dict | None) -> Mapping[str, object]:
+    """The router-stamped deployment model_info from whichever metadata field carries it."""
+    if litellm_params is None:
+        return MappingProxyType({})
+    for metadata_key in ("metadata", "litellm_metadata"):
+        if not isinstance(metadata := litellm_params.get(metadata_key), Mapping):
+            continue
+        if model_info := metadata.get("model_info"):
+            return model_info
+    return MappingProxyType({})
 
 
 def use_custom_pricing_for_model(litellm_params: dict | None) -> bool:

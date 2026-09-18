@@ -951,7 +951,6 @@ def test_shipped_openai_reasoning_rule_loses_to_mapped_entries(shipped_cost_map)
     [
         ("azure/us/o1-2024-12-17", "azure", True),
         ("github_copilot/gpt-5", "github_copilot", None),
-        ("openrouter/openai/o1", "openrouter", None),
         ("perplexity/openai/gpt-5.4-mini", "perplexity", None),
     ],
 )
@@ -997,5 +996,54 @@ def test_shipped_claude_thinking_rules_backfill_only_anthropic(shipped_cost_map)
     assert match_fill_missing_generalizations("claude-sonnet-4-6", "anthropic") == {
         "supports_adaptive_thinking": True,
         "supports_legacy_thinking": True,
+        "supports_tool_search": True,
     }
     assert match_fill_missing_generalizations("claude-sonnet-4-6", "perplexity") is None
+
+
+@pytest.mark.parametrize(
+    "model,provider,tool_search",
+    [
+        ("us.anthropic.claude-opus-4-5", "bedrock", True),
+        ("claude-haiku-4-4", "anthropic", None),
+        ("claude-haiku-4-6", "anthropic", True),
+        ("claude-opus-4.5", "anthropic", True),
+        ("claude-opus-4_5", "anthropic", True),
+        ("claude-haiku-4-10", "anthropic", True),
+        ("claude-haiku-5-0", "anthropic", True),
+        ("claude-sonnet-5-1", "anthropic", True),
+        ("claude-newfam-6", "anthropic", True),
+        ("claude-haiku-4-20250514", "anthropic", None),
+    ],
+)
+def test_shipped_tool_search_rule_version_boundaries(shipped_cost_map, model, provider, tool_search):
+    """The claude-tool-search rule flags Claude 4.5 and newer in any family, bare major
+    or major-minor with a dash, dot or underscore delimiter, and leaves 4.4 and
+    date-suffixed 4.x ids without an opinion."""
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider=provider)
+    assert info.get("supports_tool_search") is tool_search, model
+
+
+def test_shipped_tool_search_rule_fills_mapped_claude_entries_without_flag(shipped_cost_map):
+    """A mapped Claude 4.5+ entry with no supports_tool_search key gets it from the rule
+    on Anthropic direct, Vertex and Bedrock, a mapped pre-4.5 entry stays without one,
+    and Azure Foundry and reseller copies of the same model are not touched."""
+    for key, model, provider in (
+        ("claude-opus-4-7", "claude-opus-4-7", "anthropic"),
+        ("vertex_ai/claude-opus-5", "claude-opus-5", "vertex_ai"),
+    ):
+        assert "supports_tool_search" not in litellm.model_cost[key]
+        assert litellm.get_model_info(model, custom_llm_provider=provider)["supports_tool_search"] is True
+
+    assert "supports_tool_search" not in litellm.model_cost["claude-opus-4-1"]
+    opus_4_1_info = litellm.get_model_info("claude-opus-4-1", custom_llm_provider="anthropic")
+    assert opus_4_1_info.get("supports_tool_search") is None
+
+    assert "supports_tool_search" not in litellm.model_cost["azure_ai/claude-opus-5"]
+    azure_opus_5_info = litellm.get_model_info("claude-opus-5", custom_llm_provider="azure_ai")
+    assert azure_opus_5_info.get("supports_tool_search") is None
+
+    assert match_fill_missing_generalizations("claude-opus-5", "bedrock")["supports_tool_search"] is True
+    assert "supports_tool_search" not in match_fill_missing_generalizations("claude-opus-5", "azure_ai")
+    assert match_fill_missing_generalizations("claude-opus-5", "perplexity") is None

@@ -7,8 +7,9 @@ use pyo3::types::PyDict;
 use serde_json::{Map, Value};
 
 use litellm_auth::InputSource;
-use litellm_python_interop::from_py_preserving_errors as from_py;
+use litellm_host_python::{from_py, from_py_argument};
 
+/// The keyword arguments every value route shares, validated at the Python boundary.
 pub(crate) struct RouteOptions {
     pub(crate) model: String,
     pub(crate) api_key: Option<String>,
@@ -18,57 +19,44 @@ pub(crate) struct RouteOptions {
     pub(crate) timeout: Option<Duration>,
 }
 
-pub(crate) struct RouteOptionsInputs {
-    pub(crate) model: String,
-    pub(crate) api_key: Option<String>,
-    pub(crate) api_base: Option<String>,
-    pub(crate) custom_llm_provider: Option<String>,
-    pub(crate) extra_headers: Option<Value>,
-    pub(crate) timeout_seconds: Option<f64>,
+pub(crate) fn body_argument(value: &Bound<'_, PyAny>) -> PyResult<Map<String, Value>> {
+    required_object("body", from_py_argument(value)?)
 }
 
-impl RouteOptions {
-    pub(crate) fn from_python(inputs: RouteOptionsInputs) -> PyResult<Self> {
-        Ok(Self {
-            model: inputs.model,
-            api_key: inputs.api_key,
-            api_base: inputs.api_base,
-            custom_llm_provider: inputs.custom_llm_provider,
-            extra_headers: optional_object("extra_headers", inputs.extra_headers)?,
-            timeout: optional_timeout(inputs.timeout_seconds),
-        })
-    }
-}
-
-pub(crate) fn required_array(name: &'static str, value: Value) -> PyResult<Vec<Value>> {
-    match value {
+pub(crate) fn messages_argument(value: &Bound<'_, PyAny>) -> PyResult<Vec<Value>> {
+    match from_py_argument(value)? {
         Value::Array(values) => Ok(values),
-        _ => Err(PyValueError::new_err(format!("{name} must be a list"))),
+        _ => Err(PyValueError::new_err("messages must be a list")),
     }
 }
 
-pub(crate) fn required_object(name: &'static str, value: Value) -> PyResult<Map<String, Value>> {
+pub(crate) fn optional_params_argument(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Option<Map<String, Value>>> {
+    optional_object("optional_params", value)
+}
+
+pub(crate) fn extra_headers_argument(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Option<Map<String, Value>>> {
+    optional_object("extra_headers", value)
+}
+
+fn required_object(name: &'static str, value: Value) -> PyResult<Map<String, Value>> {
     match value {
         Value::Object(values) => Ok(values),
         _ => Err(PyValueError::new_err(format!("{name} must be a dict"))),
     }
 }
 
-pub(crate) fn object_or_empty(
-    name: &'static str,
-    value: Option<Value>,
-) -> PyResult<Map<String, Value>> {
-    match value {
-        Some(value) => required_object(name, value),
-        None => Ok(Map::new()),
-    }
-}
-
 fn optional_object(
     name: &'static str,
-    value: Option<Value>,
+    value: &Bound<'_, PyAny>,
 ) -> PyResult<Option<Map<String, Value>>> {
-    value.map(|value| required_object(name, value)).transpose()
+    if value.is_none() {
+        return Ok(None);
+    }
+    required_object(name, from_py_argument(value)?).map(Some)
 }
 
 pub(crate) fn optional_timeout(timeout_seconds: Option<f64>) -> Option<Duration> {
@@ -189,42 +177,47 @@ mod tests {
     }
 
     #[test]
-    fn required_shapes_preserve_nested_values_and_existing_errors() {
+    fn argument_converters_keep_nested_values_and_accept_explicit_none() {
         Python::initialize();
-        let nested = json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}]);
-        assert_eq!(
-            Value::Array(required_array("messages", nested.clone()).unwrap()),
-            nested
-        );
+        Python::attach(|py| {
+            let messages = py
+                .eval(
+                    c"[{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}]",
+                    None,
+                    None,
+                )
+                .unwrap();
+            assert_eq!(
+                Value::Array(messages_argument(&messages).unwrap()),
+                json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}])
+            );
 
-        let body = json!({"model": "claude", "metadata": {"user": "1"}});
-        assert_eq!(
-            Value::Object(required_object("body", body.clone()).unwrap()),
-            body
-        );
+            let body = py
+                .eval(
+                    c"{'model': 'claude', 'metadata': {'user': '1'}}",
+                    None,
+                    None,
+                )
+                .unwrap();
+            assert_eq!(
+                Value::Object(body_argument(&body).unwrap()),
+                json!({"model": "claude", "metadata": {"user": "1"}})
+            );
 
-        assert_eq!(
-            required_array("messages", json!({"role": "user"}))
-                .unwrap_err()
-                .to_string(),
-            "ValueError: messages must be a list"
-        );
-        assert_eq!(
-            required_object("body", json!([])).unwrap_err().to_string(),
-            "ValueError: body must be a dict"
-        );
-    }
-
-    #[test]
-    fn optional_parameters_treat_missing_as_empty() {
-        assert_eq!(
-            object_or_empty("optional_params", None).unwrap(),
-            Map::new()
-        );
-        assert_eq!(
-            object_or_empty("optional_params", Some(json!({"temperature": 0.2}))).unwrap(),
-            required_object("optional_params", json!({"temperature": 0.2})).unwrap()
-        );
+            let params = py.eval(c"{'temperature': 0.2}", None, None).unwrap();
+            assert_eq!(
+                optional_params_argument(&params).unwrap(),
+                Some(required_object("optional_params", json!({"temperature": 0.2})).unwrap())
+            );
+            assert_eq!(
+                optional_params_argument(&py.None().into_bound(py)).unwrap(),
+                None
+            );
+            assert_eq!(
+                extra_headers_argument(&py.None().into_bound(py)).unwrap(),
+                None
+            );
+        });
     }
 
     #[test]
