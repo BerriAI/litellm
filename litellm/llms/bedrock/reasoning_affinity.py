@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import Final, cast
+from typing import Final, cast  # noqa: TID251  # narrows the untyped Responses payload
 
 from litellm.llms.bedrock.common_utils import get_bedrock_openai_model
 from litellm.responses.utils import ResponsesAPIRequestUtils
