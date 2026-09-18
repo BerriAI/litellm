@@ -124,7 +124,7 @@ def resolve_mcp_client_identity(
     headers: Mapping[str, str],
 ) -> MCPClientIdentity | MCPClientRejection:
     """A JWT caller is identified by its configured claim alone, so a header can never override the IdP."""
-    if jwt_claims and allowlist.jwt_field is not None:
+    if jwt_claims is not None and allowlist.jwt_field is not None:
         claim: Final[object] = get_nested_value(data=jwt_claims, key_path=allowlist.jwt_field)
         if isinstance(claim, str) and claim:
             return MCPClientIdentity(client_id=claim, source="jwt", source_name=allowlist.jwt_field)
