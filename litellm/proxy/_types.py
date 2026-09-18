@@ -2755,16 +2755,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     max_failed_login_attempts_per_source: int | None = Field(
         None,
         ge=1,
-        description="Failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`. One more blocks that address for `failed_login_block_seconds`. Only enforced when `trusted_proxy_ranges` is set: to the proxies in front of LiteLLM, or to an empty list when clients connect directly. Left unset, the peer address may be a shared ingress and this limit is off. IPv6 addresses are grouped by /64. Set under `general_settings` in config.yaml. Defaults to 10",
+        description="Failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`. One more blocks that address for `failed_login_block_seconds`. Half this value, rounded up, is the allowance for one username from that address; one more blocks that address for that username only, and its further failures stop counting toward the address limit, so a script stuck on one account does not block everyone behind a shared address. The per-address limit is only enforced when `trusted_proxy_ranges` is set: to the proxies in front of LiteLLM, or to an empty list when clients connect directly. Left unset, the peer address may be a shared ingress and only the per-username half runs. IPv6 addresses are grouped by /64. Set under `general_settings` in config.yaml. Defaults to 10",
     )
     max_failed_login_attempts_per_source_overrides: dict[str, int] | None = Field(
         None,
-        description="Per-address overrides of `max_failed_login_attempts_per_source`, keyed by IP address or CIDR range, e.g. {'1.2.3.4': 200, '5.6.0.0/24': 500}. The most specific matching range wins. Set under `general_settings` in config.yaml",
-    )
-    max_failed_login_attempts_per_user: int | None = Field(
-        None,
-        ge=1,
-        description="Failed Admin UI sign-in attempts allowed from one source address for one username within `failed_login_window_seconds`. One more blocks that address for that username for `failed_login_block_seconds`, and its further failures stop counting against `max_failed_login_attempts_per_source`, so a script stuck on one account does not block everyone behind the same address. Set under `general_settings` in config.yaml. Defaults to 5",
+        description="Per-address overrides of `max_failed_login_attempts_per_source`, keyed by IP address or CIDR range, e.g. {'1.2.3.4': 200, '5.6.0.0/24': 500}. The most specific matching range wins, and the per-username allowance for that address follows as half the override. A very large value opts the address out of both limits. Set under `general_settings` in config.yaml",
     )
     failed_login_window_seconds: int | None = Field(
         None,

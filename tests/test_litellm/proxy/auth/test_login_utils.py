@@ -1471,7 +1471,6 @@ def test_settings_that_arrive_as_environment_strings_are_honored():
         general_settings={
             "trusted_proxy_ranges": "10.0.0.0/8",
             "max_failed_login_attempts_per_source": " 70 ",
-            "max_failed_login_attempts_per_user": "7",
             "failed_login_window_seconds": "not-a-number",
             "failed_login_block_seconds": "-5",
         },
@@ -1479,7 +1478,7 @@ def test_settings_that_arrive_as_environment_strings_are_honored():
     )
 
     assert throttle.source_limit == 70
-    assert throttle.user_limit == 7
+    assert throttle.user_limit == 35, "the per-username allowance is half the address allowance"
     assert throttle.window_seconds == 60, "garbage falls back to the default"
     assert throttle.block_seconds == 300, "a value below one would block nothing or forever"
 
@@ -1501,6 +1500,59 @@ def test_the_defaults_are_the_agreed_ones():
         60,
         300,
     )
+
+
+@pytest.mark.parametrize(
+    ("source_limit", "expected_user_limit"),
+    [(1, 1), (2, 1), (3, 2), (10, 5), (1_000_000, 500_000)],
+    ids=["one-stays-one", "two-halves-to-one", "odd-rounds-up", "default", "opt-out"],
+)
+def test_the_per_username_allowance_is_half_the_address_allowance_rounded_up(source_limit, expected_user_limit):
+    from litellm.proxy.auth.login_throttle import user_limit_for
+
+    assert user_limit_for(source_limit) == expected_user_limit
+
+
+def test_a_per_address_override_also_raises_that_address_per_username_allowance():
+    """One override opts an address out of both limits, so operators need no second override table."""
+    from litellm.proxy.auth.login_throttle import LoginThrottle
+
+    settings = {
+        "trusted_proxy_ranges": ["10.0.0.0/8"],
+        "max_failed_login_attempts_per_source": 10,
+        "max_failed_login_attempts_per_source_overrides": {"203.0.113.0/24": 1_000_000},
+    }
+
+    def _from(client_ip: str) -> LoginThrottle:
+        request = MagicMock()
+        request.headers = {"x-forwarded-for": client_ip}
+        request.client = MagicMock()
+        request.client.host = "10.0.0.1"
+        return LoginThrottle.from_request(request, general_settings=settings, redis_cache=None)
+
+    exempt = _from("203.0.113.9")
+    assert (exempt.source_limit, exempt.user_limit) == (1_000_000, 500_000)
+
+    ordinary = _from("198.51.100.4")
+    assert (ordinary.source_limit, ordinary.user_limit) == (10, 5)
+
+
+def test_the_per_username_allowance_follows_the_peer_override_when_the_source_scope_is_off():
+    """Without trusted_proxy_ranges the address is not blocked, but its override still sizes the pair limit."""
+    from litellm.proxy.auth.login_throttle import LoginThrottle
+
+    request = MagicMock()
+    request.headers = {}
+    request.client = MagicMock()
+    request.client.host = "192.0.2.8"
+    throttle = LoginThrottle.from_request(
+        request,
+        general_settings={"max_failed_login_attempts_per_source_overrides": {"192.0.2.8": 40}},
+        redis_cache=None,
+    )
+
+    assert throttle.source_limit is None
+    assert throttle.user_limit == 20
 
 
 def test_the_disable_flag_is_read_once_not_per_login_attempt(monkeypatch):

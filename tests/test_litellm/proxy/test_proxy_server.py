@@ -13519,13 +13519,11 @@ async def test_login_throttle_settings_are_not_hot_applied_from_the_database():
         ps.general_settings.clear()
         await ProxyConfig()._update_general_settings(
             db_general_settings={
-                "max_failed_login_attempts_per_user": 999,
                 "max_failed_login_attempts_per_source": 999,
                 "failed_login_window_seconds": 1,
                 "failed_login_block_seconds": 1,
             }
         )
-        assert "max_failed_login_attempts_per_user" not in ps.general_settings
         assert "max_failed_login_attempts_per_source" not in ps.general_settings
         assert "failed_login_window_seconds" not in ps.general_settings
         assert "failed_login_block_seconds" not in ps.general_settings
