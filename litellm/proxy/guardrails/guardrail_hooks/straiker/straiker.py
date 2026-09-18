@@ -71,6 +71,12 @@ V3_TOOL_HEADER: Final = "x-tool"
 V3_PHASE_HEADER: Final = "x-straiker-phase"
 V3_USER_HEADER: Final = "x-straiker-user"
 V3_SESSION_HEADER: Final = "x-claude-code-session-id"
+# Which agent this turn belongs to, when one gateway fronts several applications. A name for
+# ONE agent, never a kind of agent: Straiker keys per-agent state on it, so a value shared by
+# several applications merges them into one. Forwarded from the client when it sends one, else
+# the `agent_ref` config value. The same header the Kong plugin sends, so a tenant's agents
+# enumerate identically whichever gateway the traffic came through.
+V3_AGENT_HEADER: Final = "x-s6r-agent"
 V3_RESPONSE_PHASE: Final = "response-sync"
 # A v3 verdict blocks on `permissionDecision` (gateway envelope) or `action` (flat body).
 V3_BLOCK_DECISIONS: Final = frozenset({"block", "deny"})
@@ -477,6 +483,7 @@ def _v3_headers(
     envelope: StraikerWebhookRequest,
     request_data: Mapping[str, object],
     input_type: Literal["request", "response"],
+    agent_ref: str | None = None,
 ) -> dict[str, str]:
     """Per-call headers: which ingress this is, which phase, and who is asking."""
     headers: dict[str, str] = {
@@ -491,6 +498,9 @@ def _v3_headers(
     session: Final = _request_header(request_data, V3_SESSION_HEADER)
     if session:
         headers[V3_SESSION_HEADER] = session
+    agent: Final = _request_header(request_data, V3_AGENT_HEADER) or agent_ref
+    if agent:
+        headers[V3_AGENT_HEADER] = agent
     return headers
 
 
@@ -559,6 +569,7 @@ class StraikerGuardrail(CustomGuardrail):
         api_key: str,
         api_base: str = DEFAULT_API_BASE,
         api_version: Literal["v1", "v3"] | None = None,
+        agent_ref: str | None = None,
         source: str = "LiteLLM Gateway",
         timeout: float = 5.0,
         max_retries: int = 2,
@@ -587,6 +598,7 @@ class StraikerGuardrail(CustomGuardrail):
         self.api_key = api_key
         self.api_base = api_base.rstrip("/")
         self.api_version = api_version
+        self.agent_ref = _as_optional_str(agent_ref)
         self.source = source
         self.timeout = float(timeout)
         self.max_retries = max(0, int(max_retries))
@@ -888,7 +900,7 @@ class StraikerGuardrail(CustomGuardrail):
                 logging_obj=logging_obj,
             )
             payload: Final = _v3_payload(envelope, inputs, request_data, input_type)
-            headers: Final = _v3_headers(envelope, request_data, input_type)
+            headers: Final = _v3_headers(envelope, request_data, input_type, self.agent_ref)
         except (ValidationError, TypeError, ValueError) as error:
             return self._fail(
                 inputs=inputs,

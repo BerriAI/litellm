@@ -1360,3 +1360,42 @@ async def test_v1_path_is_unchanged_for_a_collection_key():
     payload = _posted_payload(g)
     assert payload["schema_version"] == "1" and payload["event"]["type"] == "pre_call"
     assert "straiker_phase" not in payload
+
+
+@pytest.mark.asyncio
+async def test_v3_agent_hint_enumerates_per_app_and_the_client_wins():
+    """One key, several applications. The agent name goes in x-s6r-agent, the same header the
+    Kong plugin sends, so agents enumerate identically whichever gateway the traffic came
+    through. Verified live on tenant 123: three distinct values minted three observed agents."""
+    g = _make_guardrail(api_key=V3_KEY, agent_ref="billing-bot")
+    g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+    # config value applies when the client names nothing
+    data = _v3_request_data()
+    data["proxy_server_request"] = {"headers": {"authorization": "Bearer sk-1234"}}
+    await g.apply_guardrail(inputs={"texts": ["hi"]}, request_data=data, input_type="request", logging_obj=_logging_obj())
+    assert _posted_headers(g)["x-s6r-agent"] == "billing-bot"
+
+    # a client that names its own application wins over the route default
+    data2 = _v3_request_data()
+    data2["proxy_server_request"]["headers"]["x-s6r-agent"] = "checkout-bot"
+    await g.apply_guardrail(inputs={"texts": ["hi"]}, request_data=data2, input_type="request", logging_obj=_logging_obj())
+    assert _posted_headers(g)["x-s6r-agent"] == "checkout-bot"
+
+    # unset on both: no header, so the platform derives the agent from the traffic itself
+    plain = _make_guardrail(api_key=V3_KEY)
+    plain.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+    data3 = _v3_request_data()
+    data3["proxy_server_request"] = {"headers": {}}
+    await plain.apply_guardrail(inputs={"texts": ["hi"]}, request_data=data3, input_type="request", logging_obj=_logging_obj())
+    assert "x-s6r-agent" not in _posted_headers(plain)
+
+
+def test_v3_agent_ref_is_read_from_config():
+    from litellm.types.guardrails import Guardrail, LitellmParams
+
+    g = initialize_guardrail(
+        LitellmParams(guardrail="straiker", mode="pre_call", api_key=V3_KEY, agent_ref="support-bot"),
+        Guardrail(guardrail_name="straiker", litellm_params={"guardrail": "straiker", "mode": "pre_call"}),
+    )
+    assert g.agent_ref == "support-bot"
+    assert "agent_ref" in StraikerGuardrailConfigModelOptionalParams.model_fields
