@@ -87,6 +87,12 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         )
         self._deleted_runtime_keys = self._deleted_runtime_keys | frozenset((key,))
 
+    def clear(self) -> None:
+        self._deleted_runtime_keys = frozenset(key for key in self._keys() if not self.owned_by_config(key))
+        self._runtime_values = MappingProxyType(
+            {key: value for key, value in self._runtime_values.items() if self.owned_by_config(key)}
+        )
+
     def __iter__(self) -> Iterator[str]:
         return iter(
             key
@@ -97,10 +103,6 @@ class SettingsStore(MutableMapping[str, JsonValue]):
 
     def __len__(self) -> int:
         return sum(1 for _ in self)
-
-    def clear(self) -> None:
-        self._runtime_values = _EMPTY_VALUES
-        self._deleted_runtime_keys = frozenset(key for key in self._keys() if not self.owned_by_config(key))
 
     def _clear_runtime(self) -> None:
         self._runtime_values = _EMPTY_VALUES
