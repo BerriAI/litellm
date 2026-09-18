@@ -1,9 +1,10 @@
 use litellm_core::responses::websocket::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
+use litellm_core::timeout;
 use pyo3::prelude::*;
 use serde_json::Value;
 
 use crate::errors::responses_error_to_pyerr;
-use crate::marshal::{marshal_headers, optional_timeout};
+use crate::marshal::marshal_headers;
 
 #[pyclass]
 pub(crate) struct ResponsesWebSocketConnection {
@@ -22,7 +23,7 @@ impl ResponsesWebSocketConnection {
         timeout_seconds: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let headers = marshal_headers(headers)?;
-        let timeout = optional_timeout(timeout_seconds);
+        let timeout = timeout::from_seconds(timeout_seconds);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
                 .await

@@ -1,40 +1,11 @@
-use litellm_core::audio_transcription::{
-    AudioTranscriptionRequest, Error, audio_transcription as run_audio_transcription,
-};
+use litellm_core::audio_transcription::{AudioTranscriptionRequest, audio_transcription};
+use litellm_core::timeout;
 use litellm_host_python::{from_py_argument, run_async, run_sync};
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
 use crate::errors::audio_transcription_error_to_pyerr;
-use crate::marshal::{
-    RouteOptions, extra_headers_argument, optional_params_argument, optional_timeout,
-};
-
-async fn execute(
-    audio: Value,
-    optional_params: Map<String, Value>,
-    options: RouteOptions,
-) -> Result<Value, Error> {
-    let RouteOptions {
-        model,
-        api_key,
-        api_base,
-        custom_llm_provider,
-        extra_headers,
-        timeout,
-    } = options;
-    run_audio_transcription(AudioTranscriptionRequest {
-        model: &model,
-        audio,
-        api_key: api_key.as_deref(),
-        api_base: api_base.as_deref(),
-        custom_llm_provider: custom_llm_provider.as_deref(),
-        extra_headers,
-        optional_params,
-        timeout,
-    })
-    .await
-}
+use crate::marshal::{extra_headers_argument, optional_params_argument};
 
 #[pyfunction]
 #[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
@@ -53,17 +24,19 @@ pub(crate) fn transcription(
     #[pyo3(from_py_with = optional_params_argument)] optional_params: Option<Map<String, Value>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<Py<PyAny>> {
-    let options = RouteOptions {
+    let request = AudioTranscriptionRequest {
         model,
+        audio,
         api_key,
         api_base,
         custom_llm_provider,
         extra_headers,
-        timeout: optional_timeout(timeout_seconds),
+        optional_params: optional_params.unwrap_or_default(),
+        timeout: timeout::from_seconds(timeout_seconds),
     };
     run_sync(
         py,
-        execute(audio, optional_params.unwrap_or_default(), options),
+        audio_transcription(request),
         audio_transcription_error_to_pyerr,
     )
 }
@@ -85,17 +58,19 @@ pub(crate) fn atranscription<'py>(
     #[pyo3(from_py_with = optional_params_argument)] optional_params: Option<Map<String, Value>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let options = RouteOptions {
+    let request = AudioTranscriptionRequest {
         model,
+        audio,
         api_key,
         api_base,
         custom_llm_provider,
         extra_headers,
-        timeout: optional_timeout(timeout_seconds),
+        optional_params: optional_params.unwrap_or_default(),
+        timeout: timeout::from_seconds(timeout_seconds),
     };
     run_async(
         py,
-        execute(audio, optional_params.unwrap_or_default(), options),
+        audio_transcription(request),
         audio_transcription_error_to_pyerr,
     )
 }

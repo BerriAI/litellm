@@ -7,12 +7,12 @@ use crate::llms::base_llm::audio_transcription::transformation::{
     AudioTranscriptionAuth, BaseAudioTranscriptionConfig,
 };
 
-pub struct AudioTranscriptionRequest<'a> {
-    pub model: &'a str,
+pub struct AudioTranscriptionRequest {
+    pub model: String,
     pub audio: Value,
-    pub api_key: Option<&'a str>,
-    pub api_base: Option<&'a str>,
-    pub custom_llm_provider: Option<&'a str>,
+    pub api_key: Option<String>,
+    pub api_base: Option<String>,
+    pub custom_llm_provider: Option<String>,
     pub extra_headers: Option<Map<String, Value>>,
     pub optional_params: Map<String, Value>,
     pub timeout: Option<Duration>,

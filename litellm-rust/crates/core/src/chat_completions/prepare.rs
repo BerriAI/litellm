@@ -39,9 +39,10 @@ pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error>
 }
 
 pub(super) fn resolve_request(
-    request: ChatCompletionsRequest<'_>,
-) -> Result<ResolvedChatCompletionsRequest<'_>, Error> {
-    let (model, config) = resolve_provider_config(request.model, request.custom_llm_provider)?;
+    request: ChatCompletionsRequest,
+) -> Result<ResolvedChatCompletionsRequest, Error> {
+    let (model, config) =
+        resolve_provider_config(&request.model, request.custom_llm_provider.as_deref())?;
     let messages = parse_messages(request.messages)?;
     if messages.is_empty() {
         return Err(Error::InvalidRequest(
@@ -64,14 +65,14 @@ pub(super) fn resolve_request(
 }
 
 fn validate_environment(
-    request: &ResolvedChatCompletionsRequest<'_>,
+    request: &ResolvedChatCompletionsRequest,
     model: &str,
     config: &dyn BaseConfig,
 ) -> Result<(Vec<(String, String)>, ChatCompletionsAuth), Error> {
     let env_lookup = |key: &str| std::env::var(key).ok();
     let mut headers = string_headers(request.extra_headers.clone())?;
     let auth = config.auth(
-        request.api_key,
+        request.api_key.as_deref(),
         model,
         &request.optional_params,
         &env_lookup,
@@ -117,14 +118,14 @@ fn validate_environment(
 }
 
 pub(super) fn prepare_provider_request(
-    request: ResolvedChatCompletionsRequest<'_>,
+    request: ResolvedChatCompletionsRequest,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
     let (headers, auth) = validate_environment(&request, &request.model, request.config)?;
     let model = request.model;
     let config = request.config;
     let env_lookup = |key: &str| std::env::var(key).ok();
     let url = config.get_complete_url(
-        request.api_base,
+        request.api_base.as_deref(),
         &model,
         &request.optional_params,
         &env_lookup,

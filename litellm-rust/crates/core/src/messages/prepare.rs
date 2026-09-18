@@ -11,22 +11,24 @@ use crate::llms::base_llm::anthropic_messages::transformation::{
 };
 
 pub(super) fn prepare_provider_request(
-    request: MessagesRequest<'_>,
+    request: MessagesRequest,
 ) -> Result<ProviderMessagesRequest, Error> {
-    let provider_info = get_custom_llm_provider(request.model, request.custom_llm_provider)
-        .or_else(|| {
-            request
-                .custom_llm_provider
-                .map(|provider| CustomLlmProvider {
-                    model: request.model,
-                    custom_llm_provider: provider,
-                })
-        })
-        .ok_or_else(|| {
-            Error::InvalidProvider(
-                "unable to resolve custom_llm_provider for messages request".to_string(),
-            )
-        })?;
+    let provider_info =
+        get_custom_llm_provider(&request.model, request.custom_llm_provider.as_deref())
+            .or_else(|| {
+                request
+                    .custom_llm_provider
+                    .as_deref()
+                    .map(|provider| CustomLlmProvider {
+                        model: &request.model,
+                        custom_llm_provider: provider,
+                    })
+            })
+            .ok_or_else(|| {
+                Error::InvalidProvider(
+                    "unable to resolve custom_llm_provider for messages request".to_string(),
+                )
+            })?;
     let model = provider_info.model.to_string();
     let provider = provider_info.custom_llm_provider;
 
@@ -34,8 +36,12 @@ pub(super) fn prepare_provider_request(
         .ok_or_else(|| Error::InvalidProvider(provider.to_string()))?;
     let env_lookup = |key: &str| std::env::var(key).ok();
 
-    let headers =
-        validate_environment(config, request.extra_headers, request.api_key, &env_lookup)?;
+    let headers = validate_environment(
+        config,
+        request.extra_headers,
+        request.api_key.as_deref(),
+        &env_lookup,
+    )?;
 
     let typed_request = serde_json::from_value(request.body).map_err(|err| {
         Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
@@ -47,7 +53,7 @@ pub(super) fn prepare_provider_request(
         ))
     })?;
 
-    let url = config.get_complete_url(request.api_base, &model, &env_lookup)?;
+    let url = config.get_complete_url(request.api_base.as_deref(), &model, &env_lookup)?;
 
     Ok(ProviderMessagesRequest {
         provider: provider.to_string(),

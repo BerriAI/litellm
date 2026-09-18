@@ -13,6 +13,7 @@ pub mod ocr;
 pub mod params;
 pub mod responses;
 mod serde_compat;
+pub mod timeout;
 pub mod transport;
 mod url_utils;
 

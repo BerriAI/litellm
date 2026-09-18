@@ -18,11 +18,11 @@ pub mod types;
 use handler::{execute_messages_provider_call, execute_messages_provider_stream};
 use types::{AnthropicMessagesResponse, MessagesRequest};
 
-pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesResponse, Error> {
+pub async fn messages(request: MessagesRequest) -> Result<AnthropicMessagesResponse, Error> {
     execute_messages_provider_call(request).await
 }
 
-pub async fn messages_stream(request: MessagesRequest<'_>) -> Result<reqwest::Response, Error> {
+pub async fn messages_stream(request: MessagesRequest) -> Result<reqwest::Response, Error> {
     execute_messages_provider_stream(request).await
 }
 
