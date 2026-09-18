@@ -5701,7 +5701,7 @@ def test_get_model_info_gemini(monkeypatch):
         ("openai/gpt-oss-120b-maas", False),
     ],
 )
-def test_vertex_generate_content_config_follows_model_route(model, expects_native_config):
+def test_vertex_generate_content_config_follows_model_route(model: str, expects_native_config: bool):
     from litellm.llms.vertex_ai.google_genai.transformation import VertexAIGoogleGenAIConfig
 
     config: Final = ProviderConfigManager.get_provider_google_genai_generate_content_config(
