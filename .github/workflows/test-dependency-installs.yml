@@ -1,0 +1,175 @@
+name: Dependency Installations
+
+on:
+  pull_request:
+    branches: [main, litellm_internal_staging, litellm_oss_staging, "litellm_**"]
+  push:
+    branches: [main, litellm_internal_staging]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-wheel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+      - run: rustup toolchain install --no-self-update
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: litellm-rust
+          cache-on-failure: true
+      - run: |
+          uv build --wheel --out-dir dist
+          uv build --wheel --package litellm-enterprise --out-dir dist
+          uv build --wheel --package litellm-proxy-extras --out-dir dist
+      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+        with:
+          name: dependency-wheels
+          path: dist/*.whl
+          if-no-files-found: error
+
+  base-sdk-install:
+    needs: dependency-wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        resolution: [lowest-direct]
+        include:
+          - python: "3.12"
+            resolution: highest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: dependency-wheels
+          path: dist
+      - name: Install the wheel and check the base SDK
+        env:
+          TEST_PYTHON: ${{ matrix.python }}
+          RESOLUTION: ${{ matrix.resolution }}
+        run: |
+          uv venv /tmp/base-sdk --python "$TEST_PYTHON"
+          uv pip install --python /tmp/base-sdk/bin/python \
+            --resolution "$RESOLUTION" --no-sources -r pyproject.toml dist/litellm-[0-9]*.whl
+          /tmp/base-sdk/bin/python -I tests/base_sdk_tests/check_base_sdk_install.py
+
+  mcp-dependency-gate:
+    needs: dependency-wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+        - '3.10'
+        - '3.11'
+        - '3.12'
+        - '3.13'
+        - '3.14'
+    steps:
+    - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      with:
+        persist-credentials: false
+    - uses: ./.github/actions/setup-uv-with-retries
+      with:
+        version: 0.10.9
+    - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+      with:
+        name: dependency-wheels
+        path: dist
+    - name: Verify minimum and locked installations
+      env:
+        TEST_PYTHON: ${{ matrix.python }}
+      run: |
+        set -euo pipefail
+        wheel=(dist/litellm-[0-9]*.whl)
+        mkdir -p /tmp/mcp-gate-reports
+        for profile in core mcp proxy; do
+          for mode in minimum locked; do
+            uv run --no-project --python 3.12 --with 'packaging==26.0' --with 'coverage==7.14.0' \
+              coverage run --append --branch --source=tests/mcp_dependency_tests,tests/base_sdk_tests \
+              tests/mcp_dependency_tests/runner.py check \
+              --wheel "${wheel[0]}" --profile "$profile" --mode "$mode" \
+              --python "$TEST_PYTHON" \
+              --environment "/tmp/mcp-gate/${profile}-${mode}"
+            cp "/tmp/mcp-gate/${profile}-${mode}/report.json" "/tmp/mcp-gate-reports/${profile}-${mode}.json"
+          done
+        done
+        git diff --exit-code -- pyproject.toml uv.lock
+    - name: Test dependency runner behavior
+      if: matrix.python == '3.12'
+      run: |
+        set -euo pipefail
+        for profile in core mcp; do
+          instrumented="/tmp/mcp-gate-coverage-${profile}"
+          cp -a "/tmp/mcp-gate/${profile}-locked" "$instrumented"
+          uv pip install --python "$instrumented/bin/python" 'coverage==7.14.0'
+          "$instrumented/bin/python" -m coverage run --append --branch \
+            --source=tests/mcp_dependency_tests,tests/base_sdk_tests \
+            tests/mcp_dependency_tests/check_environment.py "$profile" "$instrumented"
+          if [ "$profile" = core ]; then
+            "$instrumented/bin/python" -m coverage run --append --branch \
+              --source=tests/mcp_dependency_tests,tests/base_sdk_tests \
+              tests/base_sdk_tests/check_base_sdk_install.py
+          fi
+        done
+        uv run --no-project --python 3.12 --with 'packaging==26.0' \
+          --with 'pytest==9.0.3' --with 'pytest-cov==5.0.0' --with 'coverage==7.14.0' \
+          pytest tests/mcp_dependency_tests/test_runner.py \
+          --cov=tests/mcp_dependency_tests \
+          --cov=tests/base_sdk_tests --cov-append --cov-branch \
+          --cov-report=xml:mcp-dependency-coverage.xml
+    - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+      with:
+        name: mcp-dependency-reports-${{ matrix.python }}
+        path: /tmp/mcp-gate-reports/*.json
+        if-no-files-found: error
+    - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+      if: matrix.python == '3.12'
+      with:
+        name: mcp-dependency-coverage
+        path: mcp-dependency-coverage.xml
+        if-no-files-found: error
+  mcp-dependency-coverage:
+    needs: mcp-dependency-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+    - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      with:
+        persist-credentials: false
+    - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+      with:
+        name: mcp-dependency-coverage
+        path: coverage-reports
+    - uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe
+      with:
+        use_oidc: true
+        directory: coverage-reports
+        flags: mcp-dependencies
+        fail_ci_if_error: true
