@@ -1,3 +1,4 @@
+import importlib.metadata
 from pathlib import Path
 import subprocess
 import sys
@@ -6,7 +7,7 @@ import zipfile
 
 import pytest
 
-from tests.mcp_dependency_tests import runner
+from tests.mcp_dependency_tests import check_environment, runner
 
 
 def wheel(tmp_path: Path, name: str = "litellm") -> Path:
@@ -201,3 +202,13 @@ def test_proxy_rejects_missing_or_ambiguous_companions(tmp_path: Path, ambiguous
         companion.unlink()
     with pytest.raises(ValueError, match="exactly one enterprise"):
         runner.project_text(path, "proxy")
+
+
+@pytest.mark.parametrize("name", ["Foo.Bar", "Foo__BAR", "foo--bar", "foo-bar"])
+def test_inventory_accepts_equivalent_distribution_names(tmp_path: Path, name: str) -> None:
+    metadata = tmp_path / "foo_bar-1.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: 1\n")
+    installed = check_environment.installed_versions(importlib.metadata.distributions(path=[str(tmp_path)]))
+    runner.verify_inventory("foo-bar==1\n", {"environment": {}, "installed": installed}, {})
+    assert installed == {"foo-bar": "1"}
