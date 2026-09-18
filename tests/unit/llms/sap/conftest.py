@@ -8,6 +8,7 @@ import pytest
 import respx
 
 import litellm
+import litellm.llms.sap.deployment as _depl
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +26,8 @@ class MockAICore:
 
 @pytest.fixture
 def aicore(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> MockAICore:
+    _depl._deployment_url_cache.clear()
+
     for var in (
         "AICORE_CLIENT_ID",
         "AICORE_CLIENT_SECRET",
@@ -36,6 +39,7 @@ def aicore(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> Moc
         "VCAP_SERVICES",
     ):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.delenv("AICORE_ORCHESTRATION_DEPLOYMENT_URL", raising=False)
     monkeypatch.setenv("AICORE_HOME", "notexist")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
@@ -55,6 +59,7 @@ def aicore(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> Moc
             "resources": [
                 {
                     "configurationId": "orchestration-config",
+                    "configurationName": "orchestration",
                     "scenarioId": "orchestration",
                     "deploymentUrl": deployment_url,
                     "createdAt": "2026-01-01T00:00:00Z",
@@ -62,7 +67,6 @@ def aicore(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> Moc
             ]
         }
     )
-    respx_mock.get(f"{base_url}/lm/configurations/orchestration-config").respond(json={"executableId": "orchestration"})
     return MockAICore(
         deployment_url=deployment_url,
         token=respx_mock.post(f"{host}/auth/oauth/token"),

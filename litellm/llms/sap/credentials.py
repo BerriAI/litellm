@@ -39,6 +39,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 class AICoreDeployment(TypedDict):
     configurationId: ReadOnly[str]
+    configurationName: ReadOnly[str]
     scenarioId: ReadOnly[str]
     deploymentUrl: ReadOnly[str]
     createdAt: ReadOnly[str]
