@@ -109,3 +109,37 @@ def test_chunk_parser_carries_service_tier() -> None:
     parsed = iterator.chunk_parser(chunk)
 
     assert parsed.service_tier == "priority"
+
+
+def test_transform_response_carries_service_tier() -> None:
+    config = DatabricksConfig()
+    raw_response = MagicMock()
+    raw_response.json.return_value = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "dbrx",
+        "service_tier": "priority",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+    result = config.transform_response(
+        model="databricks/dbrx",
+        raw_response=raw_response,
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.service_tier == "priority"
