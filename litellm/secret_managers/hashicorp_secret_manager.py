@@ -86,6 +86,10 @@ def _json_object_body(response: _JsonObjectSource) -> dict[str, object]:
     return response.json()
 
 
+def _as_json_object(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, Mapping) else None
+
+
 class HashicorpSecretManager(BaseSecretManager):
     def __init__(self):
         from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
@@ -687,7 +691,9 @@ class HashicorpSecretManager(BaseSecretManager):
             verbose_logger.exception("Error deleting secret from Hashicorp Vault: %s", e)
             return {"status": "error", "message": str(e)}
 
-    def _get_secret_value_from_json_response(self, json_resp: dict | None, data_key: str = "key") -> str | None:
+    def _get_secret_value_from_json_response(
+        self, json_resp: Mapping[str, object] | None, data_key: str = "key"
+    ) -> str | None:
         """
         Get the secret value from the JSON response
 
@@ -713,4 +719,11 @@ class HashicorpSecretManager(BaseSecretManager):
         """
         if json_resp is None:
             return None
-        return json_resp.get("data", {}).get("data", {}).get(data_key, None)
+        outer: Final = _as_json_object(json_resp.get("data"))
+        if outer is None:
+            return None
+        inner: Final = _as_json_object(outer.get("data"))
+        if inner is None:
+            return None
+        value: Final = inner.get(data_key)
+        return value if isinstance(value, str) else None
