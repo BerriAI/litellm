@@ -42,9 +42,6 @@ def cost_calculator(
         if input_cost_per_pixel:
             from litellm.cost_calculator import default_image_cost_calculator
 
-            cost_model: Final = (
-                model if model.startswith(f"{litellm.LlmProviders.AZURE_AI.value}/") else f"azure_ai/{model}"
-            )
             width: Final = optional_params.get("width") if optional_params else None
             height: Final = optional_params.get("height") if optional_params else None
             pixel_size: Final = (
@@ -53,7 +50,7 @@ def cost_calculator(
                 else size or image_response.size
             )
             return default_image_cost_calculator(
-                model=cost_model,
+                model=_model_info["key"],
                 custom_llm_provider=litellm.LlmProviders.AZURE_AI.value,
                 size=pixel_size,
                 n=num_images,
