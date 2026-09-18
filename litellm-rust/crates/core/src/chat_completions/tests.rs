@@ -1,4 +1,4 @@
-use litellm_providers::base_llm::chat::transformation::ChatCompletionsAuth;
+use litellm_llms::base_llm::chat::transformation::ChatCompletionsAuth;
 use serde_json::{Map, Value, json};
 
 use super::{

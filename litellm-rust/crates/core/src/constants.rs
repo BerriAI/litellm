@@ -1,6 +1,4 @@
 pub const OPENAI_DEFAULT_API_BASE: &str = "https://api.openai.com";
-pub const OPENAI_RESPONSES_DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
-pub const OPENAI_RESPONSES_PATH: &str = "/responses";
 
 /// Full-request timeout ceiling for Anthropic Messages provider calls, in
 /// seconds. Mirrors the Python Anthropic Messages default. The per-request
@@ -17,11 +15,6 @@ pub(crate) const UPSTREAM_ERROR_BODY_MAX_CHARS: usize = 256;
 /// Provider name used for Anthropic Messages when a deployment's provider model
 /// does not carry an explicit provider prefix.
 pub const ANTHROPIC_MESSAGES_PROVIDER: &str = "anthropic";
-
-/// Prefix identifying an Anthropic OAuth token. Mirrors Python's
-/// `ANTHROPIC_OAUTH_TOKEN_PREFIX`, which is what makes `validate_environment`
-/// authenticate with `authorization` and drop `x-api-key` entirely.
-pub(crate) const ANTHROPIC_OAUTH_TOKEN_PREFIX: &str = "sk-ant-oat";
 
 /// Full-request timeout ceiling for chat completions provider calls, in
 /// seconds. Mirrors the Python chat completions default.

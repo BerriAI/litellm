@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_providers::base_llm::chat::transformation::{BaseConfig, ChatCompletionsAuth};
+use litellm_llms::base_llm::chat::transformation::{BaseConfig, ChatCompletionsAuth};
 use litellm_types::llms::openai::ChatMessage;
 use serde_json::{Map, Value};
 

@@ -1,4 +1,4 @@
-use litellm_providers::{
+use litellm_llms::{
     anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
     base_llm::chat::transformation::BaseConfig,
 };
@@ -13,7 +13,7 @@ pub(super) fn chat_completions_provider_config(provider: &str) -> Option<&'stati
     match provider {
         "anthropic" => Some(&ANTHROPIC_CHAT_COMPLETIONS_CONFIG),
         "bedrock" => Some(
-            &litellm_providers::bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
+            &litellm_llms::bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
         ),
         _ => None,
     }

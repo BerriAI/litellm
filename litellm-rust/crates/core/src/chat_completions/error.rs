@@ -1,4 +1,4 @@
-use litellm_providers::base_llm::chat::transformation::Error as LlmError;
+use litellm_llms::base_llm::chat::transformation::Error as LlmError;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {

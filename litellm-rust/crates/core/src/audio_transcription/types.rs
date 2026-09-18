@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_providers::base_llm::audio_transcription::transformation::{
+use litellm_llms::base_llm::audio_transcription::transformation::{
     AudioTranscriptionAuth, BaseAudioTranscriptionConfig,
 };
 use serde_json::{Map, Value};

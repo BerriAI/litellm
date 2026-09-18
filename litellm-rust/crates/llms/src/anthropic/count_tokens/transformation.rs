@@ -2,7 +2,7 @@ use litellm_types::llms::anthropic_messages::anthropic_request::{AnthropicMessag
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{constants::ANTHROPIC_OAUTH_TOKEN_PREFIX, messages::Error};
+use crate::{anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX, base_llm::chat::transformation::Error};
 
 const COUNT_TOKENS_ENDPOINT: &str = "https://api.anthropic.com/v1/messages/count_tokens";
 const TOKEN_COUNTING_BETA: &str = "token-counting-2024-11-01";
