@@ -120,11 +120,12 @@ def test_jev_classifier_cost_uses_registry_pricing(monkeypatch: pytest.MonkeyPat
 
 
 def test_jev_classifier_cost_is_none_without_registry_pricing() -> None:
+    assert "typesafe/jev-unpriced" not in litellm.model_cost
     response: Final = JevSystemOneResponse(
         answers={"tier": _answer()},
         usage=JevUsage(input_tokens=3, output_tokens=4),
     )
-    assert jev_classifier_cost(response, "jev-latest") is None
+    assert jev_classifier_cost(response, "jev-unpriced") is None
 
 
 @pytest.mark.asyncio
