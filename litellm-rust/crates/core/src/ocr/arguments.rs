@@ -47,6 +47,17 @@ pub fn consumed_optional_param_names(
         .collect())
 }
 
+pub(crate) fn is_secret_param(name: &str) -> bool {
+    matches!(
+        name,
+        "azure_ad_token"
+            | "client_secret"
+            | "azure_federated_token_file"
+            | "vertex_credentials"
+            | "vertex_ai_credentials"
+    )
+}
+
 pub fn consumed_optional_params(
     model: &str,
     custom_llm_provider: Option<&str>,
@@ -56,14 +67,7 @@ pub fn consumed_optional_params(
             .into_iter()
             .map(|name| ArgumentSpec {
                 name,
-                secret: matches!(
-                    name,
-                    "azure_ad_token"
-                        | "client_secret"
-                        | "azure_federated_token_file"
-                        | "vertex_credentials"
-                        | "vertex_ai_credentials"
-                ),
+                secret: is_secret_param(name),
             })
             .collect()
     })

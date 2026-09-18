@@ -2,18 +2,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 
-use crate::call_arguments::{CallArguments, parse_options};
-use crate::constants::{COHERE_API_KEY_ENV, COHERE_PARSE_API_BASE};
-use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, decode_and_normalize_response};
-use crate::ocr::OcrClient;
-use crate::ocr::document::InlineDocument;
-use crate::ocr::prepare::credential_env;
-use crate::ocr::types::{
-    LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrPageImage, OcrResponseFormat,
-    OcrUsageInfo, PreparedOcrRequest,
+use crate::{
+    call_arguments::{CallArguments, parse_options},
+    constants::{COHERE_API_KEY_ENV, COHERE_PARSE_API_BASE},
+    llms::base_llm::ocr::transformation::{BaseOcrConfig, decode_and_normalize_response},
+    ocr::{
+        OcrClient,
+        document::InlineDocument,
+        prepare::credential_env,
+        types::{
+            LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrPageImage,
+            OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        },
+    },
+    serde_compat::LaxI64,
+    url_utils::ApiUrl,
 };
-use crate::serde_compat::LaxI64;
-use crate::url_utils::ApiUrl;
 
 const COHERE_PARSE_HEALTH_CHECK_IMAGE_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC";
 
@@ -339,7 +343,7 @@ mod tests {
             "cohere/parse",
             "https://example.com",
             json!({
-                "output_format":"markdown", "metadata":{"host":true},
+                "output_format":"markdown", "timeout":30,
                 "extra_body":{
                     "output_format": {"future":true},
                     "document":{"type":"image_url","image_url":"https://example.com/a.png",
@@ -353,7 +357,7 @@ mod tests {
             }))
             .unwrap(),
         );
-        let request = crate::ocr::prepare::prepare_request(request);
+        let request = crate::ocr::prepare::prepare_request_for_test(request);
         let http = CohereParseConfig
             .prepare_request(&request, &crate::ocr::test_support::ocr_client())
             .await
@@ -512,7 +516,7 @@ mod tests {
             request.response_format().unwrap(),
             crate::ocr::types::OcrResponseFormat::Litellm
         );
-        let request = crate::ocr::prepare::prepare_request(request);
+        let request = crate::ocr::prepare::prepare_request_for_test(request);
         let http = CohereParseConfig
             .prepare_request(&request, &crate::ocr::test_support::ocr_client())
             .await
@@ -747,15 +751,19 @@ mod tests {
     }
 
     #[rstest]
-    #[case::base("")]
-    #[case::version("/v2")]
-    #[case::complete("/v2/parse")]
-    fn completes_provider_urls_without_duplicate_paths_and_preserves_queries(#[case] suffix: &str) {
+    #[case::base("", "/v2/parse")]
+    #[case::version("/v2", "/v2/parse")]
+    #[case::complete("/v2/parse", "/v2/parse")]
+    #[case::proxy_prefix("/cohere/", "/cohere/v2/parse")]
+    fn completes_provider_urls_without_duplicate_paths_and_preserves_queries(
+        #[case] suffix: &str,
+        #[case] path: &str,
+    ) {
         assert_eq!(
             CohereParseConfig
                 .build_ocr_url(&format!("https://example.com{suffix}?tenant=a"))
                 .unwrap(),
-            "https://example.com/v2/parse?tenant=a"
+            format!("https://example.com{path}?tenant=a")
         );
     }
 
@@ -778,5 +786,85 @@ mod tests {
             ),
             Err(crate::ocr::Error::Auth(_))
         ));
+    }
+
+    #[test]
+    fn environment_key_becomes_the_bearer() {
+        let headers = CohereParseConfig
+            .resolve_headers(&OcrConnection::default(), &|name| {
+                (name == COHERE_API_KEY_ENV).then(|| "env-key".to_string())
+            })
+            .unwrap();
+
+        assert_eq!(
+            headers,
+            [("Authorization".to_string(), "Bearer env-key".to_string())]
+        );
+    }
+
+    #[test]
+    fn missing_key_names_the_environment_variable() {
+        let error = CohereParseConfig
+            .resolve_headers(&OcrConnection::default(), &|_| None)
+            .unwrap_err();
+
+        assert!(error.to_string().contains(COHERE_API_KEY_ENV), "{error}");
+    }
+
+    #[rstest]
+    #[case::cohere("cohere/parse-v5.0", "POST /v2/parse ")]
+    #[case::azure_ai("azure_ai/Cohere-parse-v5.0", "POST /providers/cohere/v2/parse ")]
+    #[tokio::test]
+    async fn route_sends_image_to_its_parse_endpoint_with_the_bearer_key(
+        #[case] model: &str,
+        #[case] request_line: &str,
+    ) {
+        use crate::ocr::test_support::{MockResponse, header, mock_server, perform_ocr};
+
+        let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
+        let request = crate::ocr::test_support::wire_request(model, &base, json!({}))
+            .with_document(
+                serde_json::from_value::<OcrDocument>(
+                    json!({"type":"image_url","image_url":"data:image/png;base64,YWJj"}),
+                )
+                .unwrap()
+                .into(),
+            );
+
+        perform_ocr(request).await.unwrap();
+        server.await.unwrap();
+
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with(request_line), "{}", requests[0]);
+        assert_eq!(
+            header(&requests[0], "authorization"),
+            Some("Bearer test-key")
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn route_rejects_non_image_document_without_a_request(
+        #[values("cohere/parse-v5.0", "azure_ai/Cohere-parse-v5.0")] model: &str,
+    ) {
+        use crate::ocr::test_support::{MockResponse, mock_server, perform_ocr};
+
+        let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
+
+        let error = perform_ocr(crate::ocr::test_support::wire_request(
+            model,
+            &base,
+            json!({}),
+        ))
+        .await
+        .unwrap_err();
+        server.abort();
+
+        assert!(
+            matches!(error, crate::ocr::Error::CohereImageOnly),
+            "{error:?}"
+        );
+        assert!(seen.lock().unwrap().is_empty());
     }
 }

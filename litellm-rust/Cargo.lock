@@ -2002,6 +2002,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-callbacks"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "litellm-callbacks-legacy"
+version = "0.1.0"
+dependencies = [
+ "litellm-callbacks",
+ "litellm-host-python",
+ "pyo3",
+ "rstest",
+ "serde_json",
+]
+
+[[package]]
 name = "litellm-core"
 version = "0.1.0"
 dependencies = [
@@ -2015,6 +2035,7 @@ dependencies = [
  "litellm-auth-aws",
  "litellm-auth-azure",
  "litellm-auth-gcp",
+ "litellm-callbacks",
  "litellm-framing",
  "litellm-providers",
  "mime_guess",
@@ -2022,6 +2043,7 @@ dependencies = [
  "rand 0.8.7",
  "reqwest 0.12.28",
  "rstest",
+ "rstest_reuse",
  "rustls 0.23.42",
  "rustls-native-certs",
  "serde",
@@ -2054,6 +2076,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-host-python"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-callbacks",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "pythonize",
+ "rstest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "litellm-providers"
 version = "0.1.0"
 dependencies = [
@@ -2073,27 +2110,16 @@ dependencies = [
  "criterion",
  "futures-util",
  "litellm-auth",
+ "litellm-callbacks-legacy",
  "litellm-core",
- "litellm-python-interop",
+ "litellm-host-python",
  "litellm-token-counter",
  "pyo3",
  "pyo3-async-runtimes",
  "rstest",
- "serde",
  "serde_json",
  "tokio",
  "tokio-tungstenite",
-]
-
-[[package]]
-name = "litellm-python-interop"
-version = "0.1.0"
-dependencies = [
- "pyo3",
- "pythonize",
- "rstest",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -3007,6 +3033,17 @@ dependencies = [
  "rustc_version",
  "syn 2.0.119",
  "unicode-ident",
+]
+
+[[package]]
+name = "rstest_reuse"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3a8fb4672e840a587a66fc577a5491375df51ddb88f2a2c2a792598c326fe14"
+dependencies = [
+ "quote",
+ "rand 0.8.7",
+ "syn 2.0.119",
 ]
 
 [[package]]
