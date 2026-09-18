@@ -1,7 +1,7 @@
 from types import MappingProxyType
 from typing import Final
 
-from litellm.rust_bridge.messages.callbacks import arguments, response
+from litellm.rust_bridge.messages.route_host import arguments, response
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
 
 

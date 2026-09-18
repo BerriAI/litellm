@@ -4,7 +4,7 @@ from typing import Final
 import pytest
 from pydantic import ValidationError
 
-from litellm.rust_bridge.responses.callbacks import arguments, response
+from litellm.rust_bridge.responses.route_host import arguments, response
 from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
 from litellm.types.llms.openai import ResponsesAPIResponse
 

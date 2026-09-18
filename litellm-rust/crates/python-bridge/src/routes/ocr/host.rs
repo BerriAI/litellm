@@ -84,7 +84,7 @@ impl RouteHost for OcrRouteHost {
     }
 
     fn complete(&mut self, py: Python<'_>, response: LiteLLMOcrResponse) -> PyResult<Py<PyAny>> {
-        py.import("litellm.rust_bridge.ocr.callbacks")?
+        py.import("litellm.rust_bridge.ocr.route_host")?
             .getattr("response")?
             .call1((to_py(py, &response)?,))
             .map(Bound::unbind)
@@ -104,7 +104,7 @@ impl RouteHost for OcrRouteHost {
             _ => "",
         };
         let mapped: Py<PyBaseException> = py
-            .import("litellm.rust_bridge.ocr.callbacks")?
+            .import("litellm.rust_bridge.ocr.route_host")?
             .getattr("map_failure")?
             .call1((error.value(py), self.request.bind(py), provider))?
             .extract()?;

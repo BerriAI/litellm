@@ -3,8 +3,8 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.rust_bridge.ocr.callbacks import UpstreamFailure, map_failure
-from litellm.rust_bridge.ocr.callbacks import response as build_ocr_response
+from litellm.rust_bridge.ocr.route_host import UpstreamFailure, map_failure
+from litellm.rust_bridge.ocr.route_host import response as build_ocr_response
 from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
 
 REQUEST: Final = LiteLLMOcrRequest(

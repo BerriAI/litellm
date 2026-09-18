@@ -47,17 +47,12 @@ impl PublicCall {
         self.kwargs = kwargs;
     }
 
-    /// The caller's own object for a public argument: the keyword if given, even an
-    /// explicit `None`, else the bound request's attribute.
     pub(crate) fn lookup<'py>(
         &self,
         py: Python<'py>,
         name: &str,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        if let Some(value) = self.kwargs.bind(py).get_item(name)? {
-            return Ok(Some(value));
-        }
-        self.request.bind(py).getattr_opt(name)
+        lookup(self.kwargs.bind(py), self.request.bind(py), name)
     }
 
     pub(crate) fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
@@ -65,6 +60,21 @@ impl PublicCall {
         visit.call(&self.kwargs)?;
         visit.call(&self.request)
     }
+}
+
+/// The caller's own object for a public argument, as every legacy reader resolves it: the
+/// keyword if given, even an explicit `None`, else the bound request's attribute. A route
+/// host projecting from the prepared keyword view uses the same rule, so the callbacks
+/// and the provider see one object per argument.
+pub fn lookup<'py>(
+    kwargs: &Bound<'py, PyDict>,
+    request: &Bound<'py, PyAny>,
+    name: &str,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    if let Some(value) = kwargs.get_item(name)? {
+        return Ok(Some(value));
+    }
+    request.getattr_opt(name)
 }
 
 /// Runs one native call under the legacy `Logging` contract: the route host projects from

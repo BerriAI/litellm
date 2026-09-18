@@ -1,7 +1,7 @@
 from types import MappingProxyType
 from typing import Final
 
-from litellm.rust_bridge.chat_completions.callbacks import arguments, response
+from litellm.rust_bridge.chat_completions.route_host import arguments, response
 from litellm.rust_bridge.chat_completions.entrypoints import LiteLLMChatCompletionsRequest
 from litellm.types.utils import ModelResponse
 

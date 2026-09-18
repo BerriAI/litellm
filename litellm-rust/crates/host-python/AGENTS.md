@@ -2,6 +2,7 @@
 - Keep this crate the CPython runtime adapter and nothing more: Serde marshalling, interpreter detachment, tokio/asyncio glue, the `Execution` handle, the call driver and the `CallbackAdapter`/`RouteHost` traits
   - No LiteLLM domain dependencies beyond `litellm-callbacks`: no route types, no `Logging` policy, no public API registration, no cdylib build features
   - The driver emits `Succeeded` or `Failed` exactly once and never dispatches after a cancellation; which Python objects consume those events is the adapter's business
+  - `RouteHost::invoke` receives the keyword view the adapter's `begin` returned, not the caller's dict; a route host that projects from it inherits that adapter's rewrites (for the legacy adapter: setup, deployment hooks, credential inheritance)
   - A failure that surfaces inside the call, including a host op the call asked for, is mapped through the route's `map_failure`; a failure in `begin` or `after_success` is raised as is
 - Use standard PyO3 ownership and conversion APIs
   - Prefer `Bound<'py, T>` for attached operations/results, `Py<T>` for retention; binding/unbinding does not copy payloads

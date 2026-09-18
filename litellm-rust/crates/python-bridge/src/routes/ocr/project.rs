@@ -3,6 +3,7 @@ use litellm_core::ocr::wire::{
 };
 use litellm_core::ocr::{LiteLLMOcrRequest, OcrDocumentInput};
 use litellm_host_python::from_py;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::{Map, Value};
@@ -27,10 +28,8 @@ struct OcrArguments<'a, 'py> {
 
 impl<'py> OcrArguments<'_, 'py> {
     fn lookup(&self, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        match self.kwargs.get_item(name)? {
-            Some(value) => Ok(value),
-            None => self.request.getattr(name),
-        }
+        litellm_callbacks_legacy::lookup(self.kwargs, self.request, name)?
+            .ok_or_else(|| PyValueError::new_err(format!("missing argument: {name}")))
     }
 
     fn model(&self) -> PyResult<String> {

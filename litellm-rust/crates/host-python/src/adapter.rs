@@ -76,6 +76,9 @@ pub trait CallbackAdapter: Send + Sync {
 pub trait RouteHost: Send + Sync {
     type Route: Route;
 
+    /// `arguments` is the keyword view the callback adapter's `begin` produced, not the
+    /// caller's own dict. A route host that projects from it inherits whatever that
+    /// adapter rewrote.
     fn invoke(
         &mut self,
         py: Python<'_>,

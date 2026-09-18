@@ -15,7 +15,7 @@ mod logger;
 mod preparation;
 
 pub use adapter::{LegacyLogging, LegacySurface};
-pub use call::{PublicCall, run_legacy_call};
+pub use call::{PublicCall, lookup, run_legacy_call};
 pub use callbacks::{LegacyCallbacks, is_internal_call};
 pub use logger::{DeploymentHooks, PythonLogger, SetupResult, finalize, setup};
 pub use preparation::prepare;
