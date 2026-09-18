@@ -7,8 +7,10 @@ import httpx
 import pytest
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, rule, run_state_machine_as_test
+from integration._support.client import Gateway, eventually, object_value
+from pydantic import JsonValue, TypeAdapter
 
-from integration._support.client import Gateway, eventually
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 from integration._support.database import read_rows
 from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
 
@@ -158,6 +160,55 @@ def test_repeated_hits_keep_response_identity_and_create_distinct_zero_cost_rows
                 assert row["request_id"].startswith(results[0]["id"] + "_cache_hit")
             else:
                 assert row["request_id"] == results[0]["id"] and float(row["spend"]) == pytest.approx(0.06)
+
+
+@pytest.mark.covers("quota_management.response_cache.embedding_full_and_partial_hits")
+def test_embedding_cache_reuses_complete_entries_and_requests_only_partial_misses(gateway: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model()
+        key: Final = scenario.key(models=[model])
+        cached_input: Final = f"cached-{uuid.uuid4().hex}"
+        initial_input: Final = f"initial-{uuid.uuid4().hex}"
+        novel_input: Final = f"novel-{uuid.uuid4().hex}"
+
+        upstream.get("/__observations").raise_for_status()
+        first: Final = gateway.post("/v1/embeddings", {"model": model, "input": [cached_input, initial_input]}, key=key)
+        first_data: Final = first["data"]
+        assert isinstance(first_data, list) and len(first_data) == 2
+        assert tuple(object_value(item)["index"] for item in first_data) == (0, 1)
+        assert all(
+            isinstance(object_value(item)["embedding"], list) and object_value(item)["embedding"] for item in first_data
+        )
+        first_observations: Final = _JSON_OBJECT.validate_json(upstream.get("/__observations").content)["requests"]
+        assert isinstance(first_observations, list) and len(first_observations) == 1
+        assert object_value(object_value(first_observations[0])["body"])["input"] == [cached_input, initial_input]
+
+        complete_hit: Final = gateway.post(
+            "/v1/embeddings", {"model": model, "input": [cached_input, initial_input]}, key=key
+        )
+        assert complete_hit == first
+        assert _JSON_OBJECT.validate_json(upstream.get("/__observations").content)["requests"] == []
+
+        partial_hit: Final = gateway.post(
+            "/v1/embeddings", {"model": model, "input": [cached_input, novel_input]}, key=key
+        )
+        partial_data: Final = partial_hit["data"]
+        assert isinstance(partial_data, list) and len(partial_data) == 2
+        assert tuple(object_value(item)["index"] for item in partial_data) == (0, 1)
+        assert object_value(partial_data[0])["embedding"] == object_value(first_data[0])["embedding"]
+        assert isinstance(object_value(partial_data[1])["embedding"], list)
+        partial_observations: Final = _JSON_OBJECT.validate_json(upstream.get("/__observations").content)["requests"]
+        assert isinstance(partial_observations, list) and len(partial_observations) == 1
+        assert object_value(object_value(partial_observations[0])["body"])["input"] == [novel_input]
+
+        partial_replay: Final = gateway.post(
+            "/v1/embeddings", {"model": model, "input": [cached_input, novel_input]}, key=key
+        )
+        assert partial_replay == partial_hit
+        assert _JSON_OBJECT.validate_json(upstream.get("/__observations").content)["requests"] == []
 
 
 @pytest.mark.covers("quota_management.budget.key.boundary_blocks_before_provider_and_reset_restores")

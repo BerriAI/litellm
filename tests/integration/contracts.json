@@ -107,6 +107,9 @@
     "tests/integration/spend/test_cache_and_quota.py::test_repeated_hits_keep_response_identity_and_create_distinct_zero_cost_rows": [
       "quota_management.response_cache.repeated_hits_preserve_identity_and_single_charge"
     ],
+    "tests/integration/spend/test_cache_and_quota.py::test_embedding_cache_reuses_complete_entries_and_requests_only_partial_misses": [
+      "quota_management.response_cache.embedding_full_and_partial_hits"
+    ],
     "tests/integration/providers/test_s3_wire.py::test_sigv4_verifier_matches_published_put_and_rejects_corruption": [
       "other.provider_wire.s3.verifier_known_answer_and_negative_controls"
     ],

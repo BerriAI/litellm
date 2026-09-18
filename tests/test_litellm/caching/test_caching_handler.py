@@ -1,6 +1,9 @@
 import asyncio
 import json
 import time
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -47,6 +50,56 @@ async def test_process_async_embedding_cached_response():
 
     print(f"response: {response}")
     assert len(response.data) == 1
+
+
+@pytest.mark.asyncio
+async def test_s3_embedding_cache_uses_serial_write(monkeypatch):
+    import litellm
+    from litellm.caching.s3_cache import S3Cache
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    @dataclass(frozen=True, slots=True)
+    class S3CacheForEmbeddings:
+        cache: S3Cache
+        writes: asyncio.Queue[tuple[str, object | None, Mapping[str, object]]]
+        supported_call_types: tuple[str, ...] = ("aembedding",)
+
+        async def async_add_cache(
+            self, result: str, dynamic_cache_object: object | None = None, **kwargs: object
+        ) -> None:
+            await self.writes.put((result, dynamic_cache_object, kwargs))
+
+        async def async_add_cache_pipeline(
+            self, result: object, dynamic_cache_object: object | None = None, **kwargs: object
+        ) -> None:
+            raise AssertionError("S3 embedding cache must not use the bulk-write path")
+
+    async def aembedding(**kwargs: object) -> None:
+        return None
+
+    with patch("boto3.client", return_value=MagicMock()):
+        writes: Final = asyncio.Queue[tuple[str, object | None, Mapping[str, object]]]()
+        cache: Final = S3CacheForEmbeddings(cache=S3Cache("test-bucket"), writes=writes)
+        monkeypatch.setattr(litellm, "cache", cache)
+        handler: Final = LLMCachingHandler(
+            original_function=aembedding,
+            request_kwargs={},
+            start_time=datetime.now(),
+        )
+        result: Final = EmbeddingResponse(
+            model="text-embedding-3-small",
+            data=[Embedding(embedding=[0.1], index=0, object="embedding")],
+        )
+        await handler.async_set_cache(
+            result=result,
+            original_function=aembedding,
+            kwargs={"model": "text-embedding-3-small", "input": ["cache-test"]},
+        )
+
+    stored, dynamic_cache_object, kwargs = await asyncio.wait_for(writes.get(), timeout=1)
+    assert stored == result.model_dump_json()
+    assert dynamic_cache_object is None
+    assert kwargs["input"] == ["cache-test"]
 
 
 @pytest.mark.asyncio
