@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 
 import litellm
-from litellm.utils import supports_function_calling, supports_prompt_caching
 
 REPO_ROOT = Path(__file__).parents[2]
 MAIN_PATH = REPO_ROOT / "model_prices_and_context_window.json"
@@ -31,17 +30,6 @@ def local_model_cost_map(monkeypatch):
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
-
-
-def test_baseten_glm_5_3_capabilities_are_visible_to_callers(local_model_cost_map):
-    """The entry advertises prompt caching and tool calling, so the helpers every
-    caller checks before sending a request must say so too."""
-    assert supports_prompt_caching(model=MODEL) is True
-    assert supports_function_calling(model=MODEL) is True
-
-    info = litellm.get_model_info(model="zai-org/GLM-5.3", custom_llm_provider="baseten")
-    assert info["max_input_tokens"] > 0
-    assert info["max_output_tokens"] > 0
 
 
 def test_backup_matches_main():

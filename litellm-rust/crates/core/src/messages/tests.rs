@@ -1,16 +1,19 @@
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-
-use super::Error;
-
-use super::common_utils::{
-    has_bearer_auth, has_header, messages_provider_config, string_headers, truncate_error_body,
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
 };
-use super::messages;
-use super::types::MessagesRequest;
+
+use super::{
+    Error,
+    common_utils::{
+        has_bearer_auth, has_header, messages_provider_config, string_headers, truncate_error_body,
+    },
+    messages,
+    types::MessagesRequest,
+};
 
 async fn read_http_request(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();

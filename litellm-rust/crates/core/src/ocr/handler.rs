@@ -1,60 +1,40 @@
-use super::OcrClient;
-use super::adapters::OcrAdapter;
-use super::hooks::{OcrHooks, OcrLifecycleHooks, OcrPostCallRequest};
-use super::registry::OcrAdapterKind;
-use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
-use crate::call_lifecycle::{CallLifecycle, CallLifecycleContext};
-use crate::ocr::Error;
-use std::sync::Arc;
+use litellm_callbacks::event::{CallEvent, RawResponse};
+
+use super::{
+    OcrClient,
+    route::OcrHost,
+    types::{LiteLLMOcrResponse, PreparedOcrRequest, ResolvedOcrRequest},
+};
+use crate::llms::base_llm::ocr::transformation::OcrResponseContext;
 
 pub(crate) async fn perform_ocr_request(
     client: &OcrClient,
-    request: LiteLLMOcrRequest,
-) -> Result<LiteLLMOcrResponse, Error> {
+    request: ResolvedOcrRequest,
+    host: &OcrHost,
+    caller_document: bool,
+) -> Result<LiteLLMOcrResponse, super::Error> {
     request.response_format()?;
-    let context = CallLifecycleContext::new(
-        "ocr",
-        request.model.clone(),
-        request.adapter.provider().as_str(),
-        request
-            .litellm_call_id
-            .clone()
-            .unwrap_or_else(|| format!("ocr-{:032x}", rand::random::<u128>())),
-    );
-    let hooks = OcrLifecycleHooks {
-        hooks: request.hooks.clone(),
-        provider_name: context.custom_llm_provider.clone(),
-    };
-    CallLifecycle::default()
-        .run(context, request, &hooks, |request| async move {
-            PreparedOcrCall::prepare(client.clone(), request)
-                .await?
-                .execute()
-                .await?
-                .normalize()
-        })
+    PreparedOcrCall::prepare(client.clone(), request, host, caller_document)
+        .await?
+        .execute()
         .await
 }
 
 pub(crate) struct PreparedOcrCall {
     client: OcrClient,
-    request: LiteLLMOcrRequest,
+    request: PreparedOcrRequest,
     http: reqwest::Request,
 }
 
 impl PreparedOcrCall {
     pub(crate) async fn prepare(
         client: OcrClient,
-        request: LiteLLMOcrRequest,
-    ) -> Result<Self, Error> {
-        macro_rules! prepare_adapter {
-            ($( $variant:ident, $adapter:ty, $instance:expr, $provider:ident; )+) => {
-                match request.adapter {
-                    $( OcrAdapterKind::$variant => $instance.prepare_request(&request, &client).await?, )+
-                }
-            };
-        }
-        let http = super::adapters::for_each_ocr_adapter!(prepare_adapter);
+        request: ResolvedOcrRequest,
+        host: &OcrHost,
+        caller_document: bool,
+    ) -> Result<Self, super::Error> {
+        let request = super::prepare::prepare_request(request, host.clone(), caller_document);
+        let http = request.config.prepare_request(&request, &client).await?;
         Ok(Self {
             client,
             request,
@@ -62,33 +42,54 @@ impl PreparedOcrCall {
         })
     }
 
-    pub(crate) async fn execute(self) -> Result<OcrProviderResponse, Error> {
+    pub(crate) async fn execute(self) -> Result<LiteLLMOcrResponse, super::Error> {
         let url = self.http.url().to_string();
         let headers = request_headers(&self.http)?;
-        let response = crate::http_utils::http_request(reqwest::RequestBuilder::from_parts(
-            self.client.provider_http().clone(),
-            self.http,
-        ))
-        .await
-        .map_err(super::client::transport_error)?;
-        macro_rules! read_adapter {
-            ($( $variant:ident, $adapter:ty, $instance:expr, $provider:ident; )+) => {
-                match self.request.adapter {
-                    $( OcrAdapterKind::$variant => {
-                        let decoded = $instance.read_response(&self.client, response, &url, &headers, &self.request).await?;
-                        Ok(OcrProviderResponse {
-                            request: self.request,
-                            data: OcrProviderData::$variant(decoded),
-                        })
-                    }, )+
+        let response =
+            crate::http_utils::execute_http_request(self.client.provider_http(), self.http)
+                .await
+                .map_err(super::client::transport_error)?;
+        if !response.status().is_success() {
+            let headers = response
+                .headers()
+                .iter()
+                .filter_map(|(name, value)| {
+                    value
+                        .to_str()
+                        .ok()
+                        .map(|value| (name.to_string(), value.to_string()))
+                })
+                .collect();
+            return match super::client::read_response_bytes(
+                response,
+                self.request.connection.max_response_bytes,
+            )
+            .await
+            {
+                Err(super::Error::Transport(crate::transport::Error::Http { status, body })) => {
+                    Err(self.request.config.get_error_class(body, status, headers))
                 }
+                Err(error) => Err(error),
+                Ok(_) => unreachable!("non-success response produces an HTTP error"),
             };
         }
-        super::adapters::for_each_ocr_adapter!(read_adapter)
+        let model = &self.request.model;
+        let context = OcrResponseContext {
+            client: &self.client,
+            connection: &self.request.connection,
+            host: &self.request.host,
+            request_format: self.request.response_format()?,
+            url: &url,
+            headers: &headers,
+        };
+        self.request
+            .config
+            .async_transform_ocr_response(model, response, context)
+            .await
     }
 }
 
-fn request_headers(request: &reqwest::Request) -> Result<Vec<(String, String)>, Error> {
+fn request_headers(request: &reqwest::Request) -> Result<Vec<(String, String)>, super::Error> {
     request
         .headers()
         .iter()
@@ -96,44 +97,21 @@ fn request_headers(request: &reqwest::Request) -> Result<Vec<(String, String)>, 
             value
                 .to_str()
                 .map(|value| (name.to_string(), value.to_string()))
-                .map_err(|_| super::error::OcrRequestError::RequestField {
+                .map_err(|_| super::Error::RequestField {
                     path: "headers".into(),
                 })
-                .map_err(Error::from)
         })
         .collect()
 }
 
-macro_rules! provider_data {
-    ($( $variant:ident, $adapter:ty, $instance:expr, $provider:ident; )+) => {
-        enum OcrProviderData {
-            $( $variant(super::wire::DecodedOcrResponse<<$adapter as OcrAdapter>::ProviderResponse>), )+
-        }
-
-        impl OcrProviderResponse {
-            pub(crate) fn normalize(self) -> Result<LiteLLMOcrResponse, Error> {
-                match self.data {
-                    $( OcrProviderData::$variant(decoded) => {
-                        let response = $instance.transform_ocr_response(&self.request, decoded.data)?;
-                        Ok(LiteLLMOcrResponse { provider_native_response: decoded.native, ..response })
-                    }, )+
-                }
-            }
-        }
-    };
+pub(crate) async fn emit_response_received(
+    host: &OcrHost,
+    bytes: &[u8],
+) -> Result<(), super::Error> {
+    host.emit(CallEvent::ResponseReceived {
+        raw: RawResponse {
+            body: String::from_utf8_lossy(bytes).into_owned(),
+        },
+    })
+    .await
 }
-
-pub(crate) struct OcrProviderResponse {
-    request: LiteLLMOcrRequest,
-    data: OcrProviderData,
-}
-
-pub(crate) async fn post_call(hooks: &Arc<dyn OcrHooks>, bytes: &[u8]) -> Result<(), Error> {
-    let original_response = serde_json::Value::String(String::from_utf8_lossy(bytes).into_owned());
-    hooks
-        .post_call(OcrPostCallRequest { original_response })
-        .await?;
-    Ok(())
-}
-
-super::adapters::for_each_ocr_adapter!(provider_data);
