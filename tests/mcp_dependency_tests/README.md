@@ -13,7 +13,7 @@ uv build --wheel --package litellm-proxy-extras --out-dir /tmp/mcp-wheels
 Use the root wheel's exact filename in this command. The environment path must not already exist:
 
 ```bash
-uv run --no-project --python 3.12 tests/mcp_dependency_tests/runner.py check \
+uv run --isolated --no-project --python 3.12 tests/mcp_dependency_tests/runner.py check \
   --wheel /tmp/mcp-wheels/litellm-1.103.0-cp310-abi3-linux_x86_64.whl \
   --profile mcp --mode locked --python 3.12 --environment /tmp/mcp2-dev
 ```
@@ -39,7 +39,7 @@ CI measures runner coverage during actual installs. It measures isolated wheel c
 Use CI's uv version (0.10.9). Set an absolute cutoff in `candidate.toml` consistent with the root dependency-age policy, review advisories, then run `lock` for each profile/mode with the newly built wheel:
 
 ```bash
-uv run --no-project --python 3.12 tests/mcp_dependency_tests/runner.py lock \
+uv run --isolated --no-project --python 3.12 tests/mcp_dependency_tests/runner.py lock \
   --wheel /tmp/mcp-wheels/litellm-1.103.0-cp310-abi3-linux_x86_64.whl \
   --profile mcp --mode locked
 ```
