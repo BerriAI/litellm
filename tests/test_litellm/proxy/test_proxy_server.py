@@ -4919,8 +4919,8 @@ async def test_add_router_settings_from_db_config_merge_logic():
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
     # Call the method under test
+    proxy_config.router_settings.load_yaml(config_data["router_settings"])
     await proxy_config._add_router_settings_from_db_config(
-        config_data=config_data,
         llm_router=mock_router,
         prisma_client=mock_prisma_client,
     )
@@ -4980,8 +4980,8 @@ async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
+    proxy_config.router_settings.load_yaml(config_data["router_settings"])
     await proxy_config._add_router_settings_from_db_config(
-        config_data=config_data,
         llm_router=mock_router,
         prisma_client=mock_prisma_client,
     )
@@ -5017,8 +5017,8 @@ async def test_add_router_settings_from_db_config_empty_db_list_still_clears_unc
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
+    proxy_config.router_settings.load_yaml(config_data["router_settings"])
     await proxy_config._add_router_settings_from_db_config(
-        config_data=config_data,
         llm_router=mock_router,
         prisma_client=mock_prisma_client,
     )
@@ -5042,8 +5042,8 @@ async def test_add_router_settings_from_db_config_edge_cases():
     mock_router.update_settings = MagicMock()
 
     # Test Case 1: No router provided
+    proxy_config.router_settings.load_yaml({"test": "value"})
     await proxy_config._add_router_settings_from_db_config(
-        config_data={"router_settings": {"test": "value"}},
         llm_router=None,
         prisma_client=MagicMock(),
     )
@@ -5051,8 +5051,8 @@ async def test_add_router_settings_from_db_config_edge_cases():
     mock_router.update_settings.assert_not_called()
 
     # Test Case 2: No prisma client provided
+    proxy_config.router_settings.load_yaml({"test": "value"})
     await proxy_config._add_router_settings_from_db_config(
-        config_data={"router_settings": {"test": "value"}},
         llm_router=mock_router,
         prisma_client=None,
     )
@@ -5065,8 +5065,8 @@ async def test_add_router_settings_from_db_config_edge_cases():
 
     config_data = {"router_settings": {"routing_strategy": "usage-based"}}
 
+    proxy_config.router_settings.load_yaml(config_data["router_settings"])
     await proxy_config._add_router_settings_from_db_config(
-        config_data=config_data,
         llm_router=mock_router,
         prisma_client=mock_prisma_client,
     )
@@ -5080,8 +5080,8 @@ async def test_add_router_settings_from_db_config_edge_cases():
     mock_db_config.param_value = {"db_setting": "db_value"}
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
+    proxy_config.router_settings.load_yaml({})
     await proxy_config._add_router_settings_from_db_config(
-        config_data={},  # No router_settings in config
         llm_router=mock_router,
         prisma_client=mock_prisma_client,
     )
@@ -5093,9 +5093,8 @@ async def test_add_router_settings_from_db_config_edge_cases():
     # Test Case 5: Both config and DB router_settings are None/empty
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
 
-    await proxy_config._add_router_settings_from_db_config(
-        config_data={}, llm_router=mock_router, prisma_client=mock_prisma_client
-    )
+    proxy_config.router_settings.load_yaml({})
+    await proxy_config._add_router_settings_from_db_config(llm_router=mock_router, prisma_client=mock_prisma_client)
 
     # Should not call update_settings when no settings exist
     mock_router.update_settings.assert_not_called()
@@ -5107,8 +5106,8 @@ async def test_add_router_settings_from_db_config_edge_cases():
 
     config_data = {"router_settings": {"config_setting": "config_value"}}
 
+    proxy_config.router_settings.load_yaml(config_data["router_settings"])
     await proxy_config._add_router_settings_from_db_config(
-        config_data=config_data,
         llm_router=mock_router,
         prisma_client=mock_prisma_client,
     )
@@ -5157,8 +5156,8 @@ async def test_add_router_settings_shallow_merge_behavior():
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
+    proxy_config.router_settings.load_yaml(config_data["router_settings"])
     await proxy_config._add_router_settings_from_db_config(
-        config_data=config_data,
         llm_router=mock_router,
         prisma_client=mock_prisma_client,
     )
@@ -5178,6 +5177,36 @@ async def test_add_router_settings_shallow_merge_behavior():
 
     assert merged_settings["nested_setting"] == config_data["router_settings"]["nested_setting"]
     assert merged_settings["top_level"] == "config_top"
+
+
+@pytest.mark.asyncio
+async def test_router_settings_reload_keeps_db_values_writable(tmp_path, monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump({"model_list": [], "router_settings": {"disable_cooldowns": True}}))
+    db_row: Final = types.SimpleNamespace(param_value={"num_retries": 0})
+
+    async def read_config_row(_prisma_client, param_name):
+        return db_row if param_name == "router_settings" else None
+
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=db_row)
+    mock_router: Final = MagicMock()
+    monkeypatch.setattr(proxy_server_module, "get_config_param", read_config_row)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", mock_prisma_client)
+    monkeypatch.setattr(proxy_server_module, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server_module, "user_config_file_path", None)
+    proxy_config: Final = ProxyConfig()
+
+    for _ in range(2):
+        await proxy_config.get_config(config_file_path=str(config_path))
+        await proxy_config._add_router_settings_from_db_config(llm_router=mock_router, prisma_client=mock_prisma_client)
+
+    assert mock_router.update_settings.call_args.kwargs == {"disable_cooldowns": True, "num_retries": 0}
+    assert proxy_config.router_settings.source("num_retries") == "db"
+    assert proxy_config.router_settings.rejected_writes({"num_retries": 3}) == ()
+    assert proxy_config.router_settings.rejected_writes({"disable_cooldowns": False}) == ("disable_cooldowns",)
 
 
 @pytest.mark.asyncio
