@@ -10,7 +10,12 @@ from unittest.mock import patch
 import pytest
 
 import litellm
-from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
+from litellm.llms.azure_ai.common_utils import (
+    get_azure_ai_agent_entra_token,
+    get_azure_ai_auth_headers,
+    has_azure_entra_params,
+    resolve_azure_ai_agent_auth_header,
+)
 from litellm.llms.azure_ai.ocr.transformation import AzureAIOCRConfig
 
 ENTRA_PARAMS = {"azure_ad_token": "entra-token"}
@@ -152,3 +157,148 @@ def test_image_generation_still_uses_api_key_header():
     headers = mock_image_generation.call_args.kwargs["headers"]
     assert headers["api-key"] == "my-key"
     assert "Authorization" not in headers
+
+
+def test_agents_without_entra_credentials_are_not_treated_as_entra_agents():
+    """Only a credential-bearing field opts an agent into Entra auth: scope or identity fields alone
+    must never make the proxy mint a bearer for that agent's URL."""
+    assert has_azure_entra_params({"api_key": "static", "headers": {"x": "y"}}) is False
+    assert has_azure_entra_params(None) is False
+    assert has_azure_entra_params({"azure_scope": "https://ai.azure.com/.default"}) is False
+    assert has_azure_entra_params({"tenant_id": "t", "client_id": "c"}) is False
+    assert has_azure_entra_params({"azure_ad_token": "entra-token"}) is True
+    assert has_azure_entra_params({"tenant_id": "t", "client_id": "c", "client_secret": "s"}) is True
+    assert has_azure_entra_params({"client_id": "c", "azure_username": "u", "azure_password": "p"}) is True
+
+
+def test_agent_entra_token_ignores_the_process_wide_azure_credentials(monkeypatch):
+    """The azure provider's token helper falls back to AZURE_* env vars. An agent's bearer must come
+    from that agent's own litellm_params only, or the host's service principal would authenticate to
+    whatever URL an agent registers."""
+    monkeypatch.setenv("AZURE_TENANT_ID", "host-tenant")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "host-client")
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "host-secret")
+    monkeypatch.setenv("AZURE_AD_TOKEN", "host-token")
+
+    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id") as mock_entra_id:  # test-quality-ok: stubs the Entra token fetch so a host-credential leak would show up as a call instead of a network round trip
+        mock_entra_id.return_value = lambda: "host-sp-token"
+
+        with pytest.raises(ValueError, match="client_secret"):
+            get_azure_ai_agent_entra_token({"azure_scope": "https://ai.azure.com/.default"})
+        assert get_azure_ai_agent_entra_token({"azure_ad_token": "agent-token"}) == "agent-token"
+
+    mock_entra_id.assert_not_called()
+
+
+def test_agent_service_principal_fields_resolve_os_environ_references(monkeypatch):
+    monkeypatch.setenv("FOUNDRY_AGENT_TENANT_ID", "tenant-from-env")
+    monkeypatch.setenv("FOUNDRY_AGENT_CLIENT_ID", "client-from-env")
+    monkeypatch.setenv("FOUNDRY_AGENT_CLIENT_SECRET", "secret-from-env")
+
+    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id") as mock_entra_id:  # test-quality-ok: stubs the Entra token fetch to assert the resolved secret values reach the credential; live SP path proven by the PR's Azure Foundry e2e QA
+        mock_entra_id.return_value = lambda: "sp-token"
+
+        token = get_azure_ai_agent_entra_token(
+            {
+                "tenant_id": "os.environ/FOUNDRY_AGENT_TENANT_ID",
+                "client_id": "os.environ/FOUNDRY_AGENT_CLIENT_ID",
+                "client_secret": "os.environ/FOUNDRY_AGENT_CLIENT_SECRET",
+            }
+        )
+
+    mock_entra_id.assert_called_once_with(
+        tenant_id="tenant-from-env",
+        client_id="client-from-env",
+        client_secret="secret-from-env",
+        scope="https://ai.azure.com/.default",
+    )
+    assert token == "sp-token"
+
+
+def test_agent_service_principal_wins_over_a_static_token_on_the_same_agent():
+    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id") as mock_entra_id:  # test-quality-ok: stubs the Entra token fetch to pin the precedence between a refreshing credential and a static token
+        mock_entra_id.return_value = lambda: "sp-token"
+
+        token = get_azure_ai_agent_entra_token(
+            {"tenant_id": "tenant", "client_id": "client", "client_secret": "secret", "azure_ad_token": "stale-token"}
+        )
+
+    assert token == "sp-token"
+
+
+def test_agent_service_principal_token_defaults_to_the_foundry_agents_scope():
+    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id") as mock_entra_id:  # test-quality-ok: stubs the Entra token fetch to assert the scope Foundry agents require reaches the credential; live SP path proven by the PR's Azure Foundry e2e QA
+        mock_entra_id.return_value = lambda: "sp-token"
+
+        token = get_azure_ai_agent_entra_token({"tenant_id": "tenant", "client_id": "client", "client_secret": "secret"})
+
+    mock_entra_id.assert_called_once_with(
+        tenant_id="tenant",
+        client_id="client",
+        client_secret="secret",
+        scope="https://ai.azure.com/.default",
+    )
+    assert token == "sp-token"
+
+
+def test_agent_azure_scope_overrides_the_foundry_agents_default():
+    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id") as mock_entra_id:  # test-quality-ok: stubs the Entra token fetch to assert an explicit azure_scope wins over the agents default; live SP path proven by the PR's Azure Foundry e2e QA
+        mock_entra_id.return_value = lambda: "sp-token"
+
+        get_azure_ai_agent_entra_token(
+            {"tenant_id": "tenant", "client_id": "client", "client_secret": "secret", "azure_scope": "custom/.default"}
+        )
+
+    assert mock_entra_id.call_args.kwargs["scope"] == "custom/.default"
+
+
+def test_agent_entra_values_resolve_os_environ_references(monkeypatch):
+    monkeypatch.setenv("FOUNDRY_AGENT_AD_TOKEN", "token-from-env")
+
+    assert get_azure_ai_agent_entra_token({"azure_ad_token": "os.environ/FOUNDRY_AGENT_AD_TOKEN"}) == "token-from-env"
+
+
+def test_agent_entra_token_failure_names_the_credential_fields():
+    with pytest.raises(ValueError, match="client_secret"):
+        get_azure_ai_agent_entra_token({"azure_scope": "https://ai.azure.com/.default"})
+
+
+def test_agent_oidc_token_without_agent_ids_never_borrows_the_host_identity(monkeypatch):
+    """The shared OIDC helper fills a missing client and tenant id from AZURE_CLIENT_ID and AZURE_TENANT_ID,
+    which would exchange the host's federated token for the host's identity at that agent's URL."""
+    monkeypatch.setenv("AZURE_TENANT_ID", "host-tenant")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "host-client")
+
+    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_oidc") as mock_oidc:  # test-quality-ok: stubs the OIDC exchange so a host-identity leak would show up as a call instead of a network round trip
+        mock_oidc.return_value = "host-minted-token"
+
+        with pytest.raises(ValueError, match="oidc/"):
+            get_azure_ai_agent_entra_token({"azure_ad_token": "oidc/github"})
+        with pytest.raises(ValueError, match="oidc/"):
+            get_azure_ai_agent_entra_token({"azure_ad_token": "oidc/github", "tenant_id": "agent-tenant"})
+
+    mock_oidc.assert_not_called()
+
+
+def test_agent_oidc_token_exchanges_with_the_agent_ids_and_scope():
+    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_oidc") as mock_oidc:  # test-quality-ok: stubs the OIDC exchange to assert the agent's own ids and the Foundry scope reach it
+        mock_oidc.return_value = "agent-minted-token"
+
+        token = get_azure_ai_agent_entra_token(
+            {"azure_ad_token": "oidc/github", "tenant_id": "agent-tenant", "client_id": "agent-client"}
+        )
+
+    assert token == "agent-minted-token"
+    mock_oidc.assert_called_once_with(
+        azure_ad_token="oidc/github",
+        azure_client_id="agent-client",
+        azure_tenant_id="agent-tenant",
+        scope="https://ai.azure.com/.default",
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_auth_header_is_the_entra_bearer():
+    headers = await resolve_azure_ai_agent_auth_header({"azure_ad_token": "entra-token"})
+
+    assert headers == {"Authorization": "Bearer entra-token"}
