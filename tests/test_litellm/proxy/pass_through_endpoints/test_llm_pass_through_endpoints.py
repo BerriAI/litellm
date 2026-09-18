@@ -29,6 +29,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
     _join_url_paths,
+    _proxy_general_settings,
     anthropic_proxy_route,
     azure_proxy_route,
     bedrock_llm_proxy_route,
@@ -5292,6 +5293,9 @@ def transcribe_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setitem(
         app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual", user_id="user-a")
     )
+    monkeypatch.setitem(
+        app.dependency_overrides, _proxy_general_settings, lambda: {"transcribe_media_buckets": ["bucket"]}
+    )
     yield TestClient(app)
 
 
@@ -5332,6 +5336,46 @@ class TestTranscribeProxyRoute:
         assert sent.headers["authorization"].startswith("AWS4-HMAC-SHA256 Credential=test-access-key/")
         assert "/us-west-2/transcribe/aws4_request" in sent.headers["authorization"]
         assert "x-amz-date" in sent.headers
+
+    @pytest.mark.parametrize(
+        "body, member",
+        [
+            ({"Media": {"MediaFileUri": "s3://other-tenant/audio.wav"}}, "Media.MediaFileUri"),
+            ({"OutputBucketName": "other-tenant"}, "OutputBucketName"),
+            ({"DataAccessRoleArn": "arn:aws:iam::123456789012:role/reader"}, "DataAccessRoleArn"),
+        ],
+    )
+    def test_storage_outside_the_listed_buckets_is_refused_before_signing(
+        self, transcribe_client: TestClient, body: dict[str, object], member: str
+    ) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post("/transcribe/StartTranscriptionJob", json={**dict(self.START_JOB_BODY), **body})
+
+        assert response.status_code == 403
+        assert member in response.json()["detail"]
+        assert not route.called
+
+    def test_start_needs_a_bucket_list_unless_the_caller_is_a_proxy_admin(
+        self, transcribe_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.proxy_server import app
+
+        monkeypatch.setitem(app.dependency_overrides, _proxy_general_settings, lambda: {})
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(200, json=_owned_job("admin")))
+            refused = transcribe_client.post("/transcribe/StartTranscriptionJob", json=dict(self.START_JOB_BODY))
+            monkeypatch.setitem(
+                app.dependency_overrides,
+                user_api_key_auth,
+                lambda: UserAPIKeyAuth(api_key="sk-admin", user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+            allowed = transcribe_client.post("/transcribe/StartTranscriptionJob", json=dict(self.START_JOB_BODY))
+
+        assert refused.status_code == 403
+        assert "transcribe_media_buckets" in refused.json()["detail"]
+        assert allowed.status_code == 200
+        assert route.calls[0].request.headers["x-amz-target"] == "Transcribe.StartTranscriptionJob"
 
     def test_the_caller_cannot_forge_the_owner_tag(self, transcribe_client: TestClient) -> None:
         with respx.mock(assert_all_called=False) as upstream:

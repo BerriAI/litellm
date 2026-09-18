@@ -1235,6 +1235,12 @@ async def bedrock_proxy_route(
 COMPREHEND_MEDICAL_TARGET_PREFIX: Final = "ComprehendMedical_20181030"
 
 
+def _proxy_general_settings() -> Mapping[str, object]:
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings
+
+
 def _resolve_aws_passthrough_region() -> str | None:
     region_candidates: Final = (
         get_secret_str(secret_name="AWS_REGION_NAME"),
@@ -1361,13 +1367,16 @@ async def transcribe_proxy_route(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    general_settings: Annotated[Mapping[str, object], Depends(_proxy_general_settings)],
 ):
     """
     Pass-through for the Amazon Transcribe API, e.g. `POST /transcribe/StartTranscriptionJob`.
 
     The request body is forwarded to the AWS JSON 1.1 API and signed with SigV4 using the
     proxy's AWS credentials. Standard jobs are tagged with the calling key's owner so that
-    only that owner (or a proxy admin) can read or delete them; account-wide operations
+    only that owner (or a proxy admin) can read or delete them, and keys other than proxy
+    admins may only read media from and write transcripts to the S3 buckets listed in
+    `general_settings.transcribe_media_buckets`; account-wide operations
     such as ListTranscriptionJobs are limited to proxy admins. Streaming transcription
     (`transcribestreaming`) uses a separate HTTP/2 event-stream protocol and is not served
     by this route.
@@ -1384,7 +1393,9 @@ async def transcribe_proxy_route(
         transcribe_cost_per_second,
         transcribe_job_access_refusal,
         transcribe_job_lookup,
+        transcribe_media_buckets,
         transcribe_owned_start_request,
+        transcribe_storage_refusal,
         transcribe_supported_operations,
         transcribe_unpriceable_request_reason,
     )
@@ -1420,6 +1431,13 @@ async def transcribe_proxy_route(
     admin_only_refusal: Final = transcribe_admin_only_refusal(operation, user_api_key_dict)
     if admin_only_refusal is not None:
         raise HTTPException(status_code=admin_only_refusal.status_code, detail=admin_only_refusal.detail)
+    storage_refusal: Final = (
+        transcribe_storage_refusal(data, transcribe_media_buckets(general_settings), user_api_key_dict)
+        if operation == TRANSCRIBE_PRICED_OPERATION
+        else None
+    )
+    if storage_refusal is not None:
+        raise HTTPException(status_code=storage_refusal.status_code, detail=storage_refusal.detail)
     request_body: Final = (
         transcribe_owned_start_request(data, user_api_key_dict) if operation == TRANSCRIBE_PRICED_OPERATION else data
     )
@@ -1472,6 +1490,7 @@ async def transcribe_sdk_proxy_route(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    general_settings: Annotated[Mapping[str, object], Depends(_proxy_general_settings)],
 ):
     """
     AWS-SDK-shaped pass-through for Amazon Transcribe: point the SDK's `endpoint_url`
@@ -1496,6 +1515,7 @@ async def transcribe_sdk_proxy_route(
         request=request,
         fastapi_response=fastapi_response,
         user_api_key_dict=user_api_key_dict,
+        general_settings=general_settings,
     )
 
 
@@ -2768,12 +2788,6 @@ class _OpenAIWebsocketRelay(Protocol):
         endpoint: str,
         accept_websocket: bool,
     ) -> None: ...
-
-
-def _proxy_general_settings() -> Mapping[str, object]:
-    from litellm.proxy.proxy_server import general_settings
-
-    return general_settings
 
 
 def _openai_websocket_relay() -> _OpenAIWebsocketRelay:
