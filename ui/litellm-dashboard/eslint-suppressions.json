@@ -437,16 +437,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/hooks/projects/useDeleteProject.test.ts": {
-    "react/display-name": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/projects/useDeleteProject.ts": {
-    "no-restricted-syntax": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/hooks/projects/useProjectDetails.test.ts": {
     "react/display-name": {
       "count": 1
