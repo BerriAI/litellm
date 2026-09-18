@@ -864,11 +864,14 @@ def image_edit(
             additional_drop_params=kwargs.get("additional_drop_params"),
         )
 
-        if image_edit_provider_config.use_multipart_form_data() and (
-            custom_llm_provider == "openai"
-            or custom_llm_provider == "azure"
-            or custom_llm_provider in litellm.openai_compatible_providers
-        ):
+        if (
+            image_edit_provider_config.use_multipart_form_data()
+            and (
+                custom_llm_provider == "openai"
+                or custom_llm_provider == "azure"
+                or custom_llm_provider in litellm.openai_compatible_providers
+            )
+        ) or custom_llm_provider == litellm.LlmProviders.CHATGPT:
             image_edit_request_params.update(
                 flatten_form_field_values(
                     non_default_params,

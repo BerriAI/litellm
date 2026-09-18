@@ -2916,7 +2916,9 @@ def _live_duration_seconds(event: Mapping[str, object]) -> float | None:
         usage: Final = LiveSessionUsageEvent.model_validate(event).usage
     except ValidationError:
         return None
-    raw_usage: Final = cast(Mapping[str, object], event.get("usage"))
+    raw_usage: Final = cast(  # cast-ok: LiveSessionUsageEvent validated the usage mapping above
+        Mapping[str, object], event.get("usage")
+    )
     return usage.duration / (1 if "seconds" in raw_usage else 1000)
 
 
