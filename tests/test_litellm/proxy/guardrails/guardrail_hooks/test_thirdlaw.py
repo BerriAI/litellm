@@ -799,6 +799,177 @@ async def test_post_call_malformed_modified_response_fails_closed():
         )
 
 
+async def test_modify_request_without_a_body_leaves_the_request_alone():
+    """A decision that says modify but carries nothing must not be read as "replace with empty"."""
+    g = _make_guardrail(decisions=[_decision_response({"action": "modify_request"})])
+    data = _request_data()
+    out = await _run_pre_call(g, data)
+    assert out["messages"] == data["messages"]
+    assert out["tools"] == data["tools"]
+
+
+async def test_modify_response_on_pre_call_is_ignored():
+    """The response does not exist yet on pre_call, so the decision has nothing to apply to and
+    must not be mistaken for a request rewrite."""
+    g = _make_guardrail(
+        decisions=[
+            _decision_response(
+                {
+                    "action": "modify_response",
+                    "response_body": {"choices": []},
+                    "request_body": {"messages": [{"role": "user", "content": "smuggled"}]},
+                }
+            )
+        ]
+    )
+    data = _request_data()
+    original_messages = list(data["messages"])
+    out = await _run_pre_call(g, data)
+    assert out["messages"] == original_messages
+
+
+async def test_modify_request_on_during_call_is_ignored():
+    """during_call runs beside the LLM call, so the request has already gone out."""
+    g = _make_guardrail(
+        decisions=[
+            _decision_response(
+                {"action": "modify_request", "request_body": {"messages": [{"role": "user", "content": "late"}]}}
+            )
+        ]
+    )
+    data = _request_data()
+    out = await g.async_moderation_hook(data=data, user_api_key_dict=UserAPIKeyAuth(), call_type="completion")
+    assert out["messages"] == data["messages"]
+
+
+async def test_post_call_skips_a_response_shape_it_cannot_serialize():
+    """An unscannable response type must not raise and take down the call."""
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    response = object()
+    out = await g.async_post_call_success_hook(
+        data=_request_data(), user_api_key_dict=UserAPIKeyAuth(), response=response
+    )
+    assert out is response
+    assert g.async_handler.post.await_count == 0
+
+
+async def test_modify_response_on_an_unsupported_shape_returns_the_original():
+    """The scan ran and the service asked for a rewrite, but there is no way to apply it to this
+    shape, so the original is returned rather than a half-applied one."""
+
+    class _Unsupported:
+        def model_dump(self, *args: object, **kwargs: object) -> list[int]:
+            return [1, 2, 3]
+
+    g = _make_guardrail(decisions=[_decision_response({"action": "modify_response", "response_body": {"choices": []}})])
+    response = _Unsupported()
+    out = await g.async_post_call_success_hook(
+        data=_request_data(), user_api_key_dict=UserAPIKeyAuth(), response=response
+    )
+    assert out is response
+
+
+async def test_a_rewrite_that_fails_validation_fails_closed():
+    """A malformed rewrite must block rather than reach the client half-applied."""
+    g = _make_guardrail(
+        decisions=[
+            _decision_response({"action": "modify_response", "response_body": {"choices": [{"index": "not-an-int"}]}})
+        ]
+    )
+    with pytest.raises(GuardrailRaisedException) as exc_info:
+        await g.async_post_call_success_hook(
+            data=_request_data(), user_api_key_dict=UserAPIKeyAuth(), response=_model_response()
+        )
+    assert "malformed modified response" in exc_info.value.message
+
+
+async def test_a_responses_rewrite_that_fails_validation_fails_closed():
+    g = _make_guardrail(
+        decisions=[_decision_response({"action": "modify_response", "response_body": {"created_at": "nonsense"}})]
+    )
+    with pytest.raises(GuardrailRaisedException) as exc_info:
+        await g.async_post_call_success_hook(
+            data=_request_data(), user_api_key_dict=UserAPIKeyAuth(), response=_responses_api_response()
+        )
+    assert "malformed modified response" in exc_info.value.message
+
+
+async def test_headers_fall_back_to_metadata_when_there_is_no_proxy_server_request():
+    """Non-proxy call paths carry the inbound headers on metadata instead."""
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    data = _request_data()
+    del data["proxy_server_request"]
+    data["metadata"]["headers"] = {"x-demo-trace": "trace-42"}
+    await _run_pre_call(g, data)
+    assert _sent_payload(g)["request_headers"]["x-demo-trace"] == "trace-42"
+
+
+async def test_an_unserializable_request_body_is_posted_as_absent_not_raised():
+    """A body the guardrail cannot serialize must not fail live traffic; the scan still runs."""
+
+    class _Unserializable:
+        def __repr__(self) -> str:
+            raise RuntimeError("no repr for you")
+
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    data = _request_data()
+    data["messages"] = _Unserializable()
+    out = await _run_pre_call(g, data)
+    assert out is data
+    assert "request_body" not in _sent_payload(g)
+
+
+class _DictDumping:
+    """Serializes for the scan but is not a shape the rewrite knows how to rebuild."""
+
+    def model_dump(self, *args: object, **kwargs: object) -> JsonDict:
+        return {"choices": [{"message": {"content": "hi"}}]}
+
+
+async def test_a_rewrite_for_a_shape_it_cannot_rebuild_returns_the_original():
+    """The scan runs because the response serializes, but there is no constructor for this shape,
+    so the original is returned rather than a dict standing in for a typed response."""
+    g = _make_guardrail(
+        decisions=[
+            _decision_response(
+                {"action": "modify_response", "response_body": {"choices": [{"message": {"content": "nope"}}]}}
+            )
+        ]
+    )
+    response = _DictDumping()
+    out = await g.async_post_call_success_hook(
+        data=_request_data(), user_api_key_dict=UserAPIKeyAuth(), response=response
+    )
+    assert out is response
+
+
+async def test_a_response_that_cannot_be_serialized_skips_the_scan():
+    """A response whose dump raises must not take the call down with it."""
+
+    class _Exploding:
+        def model_dump(self, *args: object, **kwargs: object) -> JsonDict:
+            raise RuntimeError("cannot dump")
+
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    response = _Exploding()
+    out = await g.async_post_call_success_hook(
+        data=_request_data(), user_api_key_dict=UserAPIKeyAuth(), response=response
+    )
+    assert out is response
+    assert g.async_handler.post.await_count == 0
+
+
+def test_the_guardrail_advertises_its_config_model():
+    """The proxy reads the config schema off the class to render and validate the guardrail, so a
+    missing model silently drops every documented default."""
+    model = ThirdlawGuardrail.get_config_model()
+    assert model is not None
+    assert model.ui_friendly_name() == "ThirdLaw"
+    optional_params_model = model.model_fields["optional_params"].annotation
+    assert ThirdlawGuardrailConfigModelOptionalParams in getattr(optional_params_model, "__args__", ())
+    assert ThirdlawGuardrailConfigModelOptionalParams().send_stream_chunks is False
+
+
 def _connect_error() -> httpx.ConnectError:
     return httpx.ConnectError("connection refused", request=httpx.Request("POST", _ENDPOINT))
 
@@ -1334,6 +1505,114 @@ async def test_an_opaque_sse_stream_is_not_refused_in_anthropic_frames():
             )
         )
     assert g.async_handler.post.await_count == 0
+
+
+async def test_modify_request_on_a_stream_is_ignored():
+    """The request is long gone by the time a stream finishes, so a request rewrite has nothing
+    to apply to and the original chunks are released."""
+    g = _make_guardrail(
+        decisions=[
+            _decision_response(
+                {"action": "modify_request", "request_body": {"messages": [{"role": "user", "content": "late"}]}}
+            )
+        ]
+    )
+    chunks = _stream_chunks()
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
+        )
+    )
+    assert out == chunks
+
+
+async def test_a_chat_stream_rewrite_that_fails_validation_blocks_the_stream():
+    """A rewrite the assembler cannot turn back into a response must not reach the client."""
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
+    g = _make_guardrail(
+        decisions=[
+            _decision_response({"action": "modify_response", "response_body": {"choices": [{"index": "not-an-int"}]}})
+        ]
+    )
+    with pytest.raises((StreamingCallbackError, GuardrailRaisedException)):
+        await _collect(
+            g.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_aiter(_stream_chunks()),
+                request_data=_request_data(),
+            )
+        )
+
+
+async def test_a_messages_stream_rewrite_answered_with_choices_is_refused():
+    """The Messages body carries its text in "content"; answering with "choices" means the service
+    replied in the wrong body shape, which would silently blank the response."""
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
+    g = _make_guardrail(decisions=[_decision_response({"action": "modify_response", "response_body": {"choices": []}})])
+    with pytest.raises(StreamingCallbackError, match="carries its text in"):
+        await _collect(
+            g.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_aiter(_anthropic_sse_frames()),
+                request_data=_request_data(),
+            )
+        )
+
+
+async def test_an_opaque_sse_stream_posts_no_buffered_stream_beside_the_body():
+    """There is no chunk shape to post for a surface with no assembler, so the stream fields stay
+    off the payload instead of carrying a half-understood blob."""
+    google_frames = [b'data: {"candidates": [{"content": {"parts": [{"text": "hi"}]}}]}\n\n']
+    g = _make_guardrail(send_stream_chunks=True, unscannable_stream_fallback="fail_open", decisions=[])
+    await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter(google_frames),
+            request_data=_request_data(),
+        )
+    )
+    assert g.async_handler.post.await_count == 0
+
+
+async def test_a_sampled_stream_blocks_on_the_final_decision():
+    """The interim checks passed but the assembled response did not, so the terminal decision has
+    to stop the stream even though chunks already went out."""
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
+    g = _make_guardrail(
+        streaming_buffer_until_moderated=False,
+        streaming_end_of_stream_only=False,
+        streaming_sampling_rate=100,
+        decisions=[_decision_response({"action": "block", "message": "final says no"})],
+    )
+    with pytest.raises(StreamingCallbackError, match="final says no"):
+        await _collect(
+            g.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_aiter(_stream_chunks()),
+                request_data=_request_data(),
+            )
+        )
+
+
+async def test_a_sampled_stream_cannot_apply_a_late_modify_response():
+    """Chunks were already delivered, so a rewrite arriving at end of stream is dropped with a
+    warning rather than silently appearing to have been applied."""
+    g = _make_guardrail(
+        streaming_buffer_until_moderated=False,
+        streaming_end_of_stream_only=False,
+        streaming_sampling_rate=100,
+        decisions=[_redacting_modify_decision()],
+    )
+    chunks = _stream_chunks()
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
+        )
+    )
+    assert out == chunks
 
 
 async def test_an_earlier_guardrails_refusal_is_passed_through_not_replaced():
