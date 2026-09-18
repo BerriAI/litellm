@@ -2163,8 +2163,11 @@ class KeyedOAuthGrantStore:
         }
         return await self._table.update_many(where=where, data=data) == 1
 
-    async def revoke(self, grant_id: str) -> None:
-        where: Final[prisma_db_types.LiteLLM_MCPKeyedOAuthGrantWhereInput] = {"id": grant_id}
+    async def revoke(self, grant_id: str, *, expected_status: KeyedGrantStatus | None = None) -> None:
+        where: Final[prisma_db_types.LiteLLM_MCPKeyedOAuthGrantWhereInput] = {
+            "id": grant_id,
+            **({"status": expected_status} if expected_status else {}),
+        }
         data: Final[prisma_db_types.LiteLLM_MCPKeyedOAuthGrantUpdateManyMutationInput] = {
             "status": "revoked",
             "refresh_hash": None,

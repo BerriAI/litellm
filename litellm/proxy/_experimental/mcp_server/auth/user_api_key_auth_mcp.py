@@ -543,7 +543,33 @@ class MCPRequestHandler:
 
         from litellm.proxy._experimental.mcp_server.keyed_oauth_flow import validate_keyed_bearer
 
-        validated_user_api_key_auth = await validate_keyed_bearer(request, validated_user_api_key_auth)
+        try:
+            validated_user_api_key_auth = await validate_keyed_bearer(request, validated_user_api_key_auth)
+        except HTTPException as exc:
+            if (
+                exc.status_code == 401
+                and validated_user_api_key_auth.via_virtual_key
+                and request_route.rstrip("/") == "/mcp"
+            ):
+                from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+                from litellm.proxy._experimental.mcp_server.server import (
+                    _raise_preemptive_401_for_unauthenticated_servers,  # pyright: ignore[reportPrivateUsage]  # reuse the authorized MCP discovery challenge
+                )
+
+                allowed_for_recovery: Final = await global_mcp_server_manager.get_allowed_mcp_servers(
+                    validated_user_api_key_auth
+                )
+                await _raise_preemptive_401_for_unauthenticated_servers(
+                    scope=scope,
+                    mcp_servers=mcp_servers,
+                    oauth2_headers=None,
+                    mcp_server_auth_headers=None,
+                    user_api_key_auth=validated_user_api_key_auth,
+                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
+                    allowed_server_ids=frozenset(allowed_for_recovery),
+                    force_keyed_authorization=True,
+                )
+            raise
 
         # Leak-defense (single chokepoint): a gateway admission credential (session bearer or bridge
         # envelope) is NEVER a valid upstream token. Scrub it from EVERY egress context so no

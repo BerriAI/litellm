@@ -13,7 +13,7 @@ import time
 import traceback
 import types
 import uuid
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol
 from urllib.parse import urlencode
@@ -4021,8 +4021,9 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         user_api_key_auth: UserAPIKeyAuth | None,
         client_ip: str | None,
-        allowed_server_ids: set[str] | None = None,
+        allowed_server_ids: Collection[str] | None = None,
         raw_headers: Mapping[str, str] | None = None,
+        force_keyed_authorization: bool = False,
     ) -> None:
         """Fail fast with HTTP 401 for MCP servers that need user auth but
         didn't receive it on this request. Covers both gateway-managed OAuth2
@@ -4077,7 +4078,9 @@ if MCP_AVAILABLE:
                     # authorization server is the gateway itself, vaulting via the
                     # authorize interlude); the per-server relay advertised below
                     # cannot vault without a litellm key on its token request.
-                    if await global_mcp_server_manager.has_user_oauth_token(server, user_api_key_auth):
+                    if not force_keyed_authorization and await global_mcp_server_manager.has_user_oauth_token(
+                        server, user_api_key_auth
+                    ):
                         continue
 
                     if _is_mcp_admitted_user_subject(user_api_key_auth):

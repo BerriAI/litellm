@@ -246,7 +246,7 @@ async def test_headerless_token_exchange_retains_original_key(monkeypatch: pytes
         assert response.status_code == 400
         stored.assert_not_awaited()
         if fault == "replayed":
-            store.revoke.assert_awaited_once_with(flow.jti)
+            store.revoke.assert_awaited_once_with(flow.jti, expected_status="active")
 
 
 @pytest.fixture
@@ -775,3 +775,87 @@ async def test_cached_discovery_outlives_initiation_without_reopening_authorizat
             flow.resource,
         )
     assert rejected.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_parallel_code_redemption_preserves_in_flight_winner(monkeypatch, active_grant) -> None:
+    import asyncio
+    import base64
+    import hashlib
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from fastapi.responses import JSONResponse
+    from litellm.proxy._experimental.mcp_server import keyed_oauth_flow, discoverable_endpoints, mcp_server_manager
+
+    original, row, store = active_grant
+    verifier: Final = "v" * 43
+    binding: Final = original.model_copy(
+        update={
+            "code_challenge": base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        }
+    )
+    row.binding_b64 = _seal(keyed_oauth_flow.KEYED_BINDING_PREFIX, binding)
+    row.status = "code"
+
+    async def transition(grant_id, previous, following, expiry, **kwargs):
+        if row.status != previous:
+            return False
+        row.status = following
+        return True
+
+    async def revoke(grant_id, *, expected_status=None):
+        if expected_status is None or row.status == expected_status:
+            row.status = "revoked"
+
+    store.transition = transition
+    store.revoke = revoke
+    monkeypatch.setattr(keyed_oauth_flow, "_active_key", AsyncMock(return_value=UserAPIKeyAuth(user_id="owner")))
+    server: Final = SimpleNamespace(
+        server_id=binding.flow.server_id,
+        client_id="configured-app",
+        is_gateway_managed_oauth2=True,
+        needs_user_oauth_token=True,
+    )
+    monkeypatch.setattr(mcp_server_manager.global_mcp_server_manager, "get_mcp_server_by_id", lambda _: server)
+    exchanging: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+
+    async def upstream(**kwargs):
+        exchanging.set()
+        await release.wait()
+        return JSONResponse({"access_token": "vaulted-upstream-token"})
+
+    exchange: Final = AsyncMock(side_effect=upstream)
+    monkeypatch.setattr(discoverable_endpoints, "exchange_token_with_server", exchange)
+    code: Final = _seal(
+        keyed_oauth_flow.KEYED_CODE_PREFIX,
+        keyed_oauth_flow.KeyedCode(
+            grant_id=binding.flow.jti, upstream_code="upstream-code", exp=int(time.time()) + 120
+        ),
+    )
+
+    async def redeem():
+        return await keyed_oauth_flow.exchange_keyed_token(
+            _request(key=None),
+            "authorization_code",
+            code,
+            binding.redirect_uri,
+            binding.client_id,
+            verifier,
+            None,
+            binding.flow.resource,
+            None,
+        )
+
+    winner: Final = asyncio.create_task(redeem())
+    try:
+        await asyncio.wait_for(exchanging.wait(), timeout=5)
+        loser: Final = await redeem()
+        assert loser.status_code == 400
+        assert row.status == "exchanging"
+    finally:
+        release.set()
+        completed = await winner
+    assert completed.status_code == 200
+    assert row.status == "active"
+    exchange.assert_awaited_once()

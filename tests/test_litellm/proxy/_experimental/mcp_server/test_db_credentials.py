@@ -1802,3 +1802,14 @@ async def test_keyed_grant_never_trusts_stale_replica_after_revocation(writer_do
     else:
         assert await store.get("revoked-grant") is authoritative
     reader_table.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_code_replay_revokes_only_previously_issued_tokens() -> None:
+    from litellm.proxy._experimental.mcp_server.db import KeyedOAuthGrantStore
+
+    table: Final = SimpleNamespace(update_many=AsyncMock(return_value=0))
+    store: Final = KeyedOAuthGrantStore(SimpleNamespace(db=SimpleNamespace(litellm_mcpkeyedoauthgrant=table)))
+    await store.revoke("grant", expected_status="active")
+    assert table.update_many.call_args.kwargs["where"] == {"id": "grant", "status": "active"}
+    assert table.update_many.call_args.kwargs["data"] == {"status": "revoked", "refresh_hash": None}

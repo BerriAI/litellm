@@ -433,7 +433,7 @@ async def exchange_keyed_token(
             if not await store.transition(
                 grant_id, "code", "exchanging", _expires(120), expected_hash=hash_token(code or "")
             ):
-                await store.revoke(grant_id)
+                await store.revoke(grant_id, expected_status="active")
                 return _oauth_error(400, "invalid_grant", "Authorization code already used or expired")
             upstream: Final = await exchange_token_with_server(
                 request=request,

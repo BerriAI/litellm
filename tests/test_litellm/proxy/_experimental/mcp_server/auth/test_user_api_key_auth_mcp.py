@@ -9431,3 +9431,83 @@ class TestScopedSessionAdmission:
     def test_scope_field_cannot_be_forged_through_construction(self):
         forged = UserAPIKeyAuth(user_id="u1", mcp_session_resource_server_id="any-server")
         assert forged.mcp_session_resource_server_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ("revoked", "expired", "malformed", "database", "denied"))
+async def test_rejected_keyed_bearer_restarts_original_key_flow_without_sso(monkeypatch, fault):
+    import time
+    from types import SimpleNamespace
+    from urllib.parse import parse_qs, urlsplit
+    from starlette.requests import Request
+    from litellm.proxy._experimental.mcp_server import keyed_oauth_flow, mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.auth import user_api_key_auth_mcp
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "keyed-recovery-test-salt")
+    monkeypatch.setenv("PROXY_BASE_URL", "http://localhost:4000")
+    server = MCPServer(
+        server_id="recovery-server",
+        alias="interactive",
+        name="interactive",
+        transport="http",
+        auth_type="oauth2",
+        oauth2_flow="authorization_code",
+        client_id="configured-app",
+        authorization_url="https://upstream.example/authorize",
+        token_url="https://upstream.example/token",
+    )
+    manager = mcp_server_manager.global_mcp_server_manager
+    monkeypatch.setitem(manager.registry, server.server_id, server)
+    allowed = AsyncMock(return_value=[] if fault == "denied" else [server.server_id])
+    monkeypatch.setattr(manager, "get_allowed_mcp_servers", allowed)
+    monkeypatch.setattr(manager, "has_user_oauth_token", AsyncMock(return_value=True))
+    original = UserAPIKeyAuth(user_id="owner", models=["restricted-model"])
+    original.via_virtual_key = True
+    monkeypatch.setattr(user_api_key_auth_mcp, "user_api_key_auth", AsyncMock(return_value=original))
+    store = SimpleNamespace(
+        get=AsyncMock(
+            return_value=SimpleNamespace(status="revoked"),
+            side_effect=RuntimeError("private-db-detail") if fault == "database" else None,
+        )
+    )
+    monkeypatch.setattr(keyed_oauth_flow, "_store", lambda: store)
+    token = keyed_oauth_flow._seal(
+        keyed_oauth_flow.KEYED_ACCESS_PREFIX,
+        keyed_oauth_flow.KeyedToken(
+            kind="access", grant_id="grant", jti="access", exp=0 if fault == "expired" else int(time.time()) + 600
+        ),
+    )
+    if fault == "malformed":
+        token = "llm_kaccess_invalid"
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/mcp",
+        "headers": [
+            (b"host", b"localhost:4000"),
+            (b"x-litellm-api-key", b"Bearer sk-owned"),
+            (b"x-mcp-servers", b"interactive"),
+            (b"authorization", f"Bearer {token}".encode()),
+        ],
+    }
+    with pytest.raises(HTTPException) as rejected:
+        await MCPRequestHandler.process_mcp_request(scope)
+    if fault == "database":
+        assert rejected.value.status_code == 503
+        assert "private-db-detail" not in str(rejected.value.detail)
+        allowed.assert_not_awaited()
+    elif fault == "denied":
+        assert rejected.value.status_code == 401
+        assert not rejected.value.headers
+    else:
+        assert rejected.value.status_code == 401
+        assert rejected.value.headers and "www-authenticate" in rejected.value.headers
+        metadata = rejected.value.headers["www-authenticate"].split('resource_metadata="')[1].rstrip('"')
+        query = parse_qs(urlsplit(metadata).query)
+        assert query["mcp_server_name"] == ["interactive"]
+        opened = keyed_oauth_flow.open_keyed_oauth_flow(Request(scope), query["flow"][0])
+        assert opened.user_id == "owner" and opened.server_id == server.server_id
+        assert allowed.call_args.args[0] is original
+        assert original.models == ["restricted-model"]
