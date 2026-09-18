@@ -157,7 +157,12 @@ class RealTimeStreaming:
         self.messages: list[OpenAIRealtimeEvents] = []
         if account_usage and live_initialization_seconds > 0:
             self.messages.append(
-                {"type": "litellm.live.initialization", "usage": {"seconds": live_initialization_seconds}}
+                {  # mutable-ok: initialization event is appended to the mutable event history
+                    "type": "litellm.live.initialization",
+                    "usage": {  # mutable-ok: usage payload is consumed as part of the typed event
+                        "seconds": live_initialization_seconds,
+                    },
+                }
             )
         self._backend_sent_frames: bool = False
         self.input_message: dict = {}

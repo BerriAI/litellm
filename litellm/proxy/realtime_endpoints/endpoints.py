@@ -362,9 +362,9 @@ async def create_realtime_client_secret(
     return RealtimeClientSecretResponse(**upstream_json)
 
 
-@router.post("/v1/live", tags=["realtime"])
-@router.post("/live", tags=["realtime"])
-@router.post("/openai/v1/live", tags=["realtime"])
+@router.post("/v1/live", tags=["realtime"])  # mutable-ok: FastAPI route metadata uses a mutable tag list
+@router.post("/live", tags=["realtime"])  # mutable-ok: FastAPI route metadata uses a mutable tag list
+@router.post("/openai/v1/live", tags=["realtime"])  # mutable-ok: FastAPI route metadata uses a mutable tag list
 async def proxy_live_calls(request: Request) -> Response:
     from litellm.proxy.realtime_endpoints.call_sessions import create_codex_realtime_call
 

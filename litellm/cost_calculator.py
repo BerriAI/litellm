@@ -2768,7 +2768,9 @@ def handle_realtime_stream_cost_calculation(
         potential_model_names=potential_model_names,
         combined_usage_object=(
             RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
-                [event for event in results if event.get("type") != "response.event"]
+                [  # mutable-ok: collector requires a concrete event list
+                    event for event in results if event.get("type") != "response.event"
+                ]
             )
             if any(event.get("type") == "response.event" for event in results)
             else combined_usage_object
@@ -2832,7 +2834,7 @@ class _LiveBackendEnvelope(BaseModel):
 def _live_backend_responses(
     results: OpenAIRealtimeStreamList, logging_obj: LitellmLoggingObject | None = None
 ) -> tuple[ResponsesAPIResponse, ...]:
-    responses: Final = {
+    responses: Final = {  # mutable-ok: deduplicate terminal backend responses by response id
         response.id: response
         for result in results
         if result.get("type") == "response.event"

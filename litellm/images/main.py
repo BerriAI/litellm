@@ -870,7 +870,14 @@ def image_edit(
                     extra_body if isinstance(extra_body, dict) else None,
                 )
                 if image_edit_provider_config.use_multipart_form_data()
-                else {**non_default_params, **(extra_body if isinstance(extra_body, dict) else {})}
+                else {  # mutable-ok: image provider update requires a concrete request-parameter dict
+                    **non_default_params,
+                    **(
+                        extra_body
+                        if isinstance(extra_body, dict)
+                        else {}  # mutable-ok: empty fallback is consumed immediately
+                    ),
+                }
             )
 
         # Pre Call logging

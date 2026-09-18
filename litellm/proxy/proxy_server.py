@@ -12176,7 +12176,9 @@ async def realtime_websocket_endpoint(
     # Only use explicit parameters, not all query params
     query_params: Final = cast(
         RealtimeQueryParams,
-        dict(_realtime_query_params_template(model, intent) + ((("call_id", call_id),) if call_id is not None else ())),
+        dict(  # mutable-ok: FastAPI request query params must be materialized as a dict
+            _realtime_query_params_template(model, intent) + ((("call_id", call_id),) if call_id is not None else ())
+        ),
     )
 
     data: dict[str, object] = {
