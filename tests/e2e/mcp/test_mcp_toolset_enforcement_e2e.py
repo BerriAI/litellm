@@ -161,7 +161,7 @@ def _assert_principal_toolset(client: McpClient, resources: ResourceManager, pri
         assert replica.await_tools(scoped_key, server_id, expected=expected) == expected
         denied = replica.call_tool(scoped_key, server_id=server_id, name=outside[0], arguments={})
         assert isinstance(denied, UnknownApiError) and denied.status_code == 403, denied
-        assert "access_denied" in denied.body, denied.body
+        assert "is not allowed for your key/team on server" in denied.body, denied.body
         arguments = {"query": f"service:e2e-toolset-{unique_marker()}", "from": DD_SEARCH_FROM}
         granted.assert_arguments_are_documented(arguments)
         result = unwrap(replica.call_tool(scoped_key, server_id=server_id, name=granted.name, arguments=arguments))
