@@ -13,8 +13,7 @@ mod client;
 mod common_utils;
 mod handler;
 mod prepare;
-pub mod transformation;
-pub mod types;
+pub use litellm_providers::messages::types;
 
 use handler::{execute_messages_provider_call, execute_messages_provider_stream};
 use types::{AnthropicMessagesResponse, MessagesRequest};

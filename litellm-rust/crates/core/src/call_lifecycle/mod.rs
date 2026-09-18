@@ -228,9 +228,10 @@ fn epoch_seconds() -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::pin::Pin;
     use std::sync::Mutex;
+
+    use super::*;
 
     type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 

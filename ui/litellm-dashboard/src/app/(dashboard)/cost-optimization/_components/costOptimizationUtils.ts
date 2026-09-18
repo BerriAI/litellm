@@ -44,8 +44,6 @@ export interface CacheLeakageResult {
   netSavingsPerCachedToken: number | null;
 }
 
-export const isAnthropicModel = (model: string): boolean => /claude|anthropic/i.test(model);
-
 interface LeakageAccumulator {
   alias: string | null;
   teamId: string | null;
@@ -96,7 +94,6 @@ const aggregateByModel = (results: readonly DailyData[]): Map<string, LeakageAcc
   const byModel = new Map<string, LeakageAccumulator>();
   for (const day of results) {
     for (const [model, entry] of Object.entries(day.breakdown?.models ?? {})) {
-      if (!isAnthropicModel(model)) continue;
       const acc = byModel.get(model) ?? emptyAccumulator();
       byModel.set(model, addMetrics(acc, entry.metrics, null, null));
     }

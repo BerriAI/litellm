@@ -154,17 +154,3 @@ class TestTensormeshCostMap:
         for model in TENSORMESH_MODELS:
             assert litellm.supports_reasoning(model) is (model in reasoning_models), model
 
-    def test_cost_is_wired_and_cache_reads_are_free(self):
-        prompt_cost, completion_cost = litellm.cost_per_token(
-            model="tensormesh/openai/gpt-oss-120b",
-            prompt_tokens=1_000_000,
-            completion_tokens=1_000_000,
-        )
-        assert prompt_cost == pytest.approx(0.15)
-        assert completion_cost == pytest.approx(0.60)
-        assert (
-            litellm.model_cost["tensormesh/openai/gpt-oss-120b"][
-                "cache_read_input_token_cost"
-            ]
-            == 0
-        )

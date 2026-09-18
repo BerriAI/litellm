@@ -9,6 +9,7 @@ from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequenc
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import count, groupby
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 from urllib.parse import urlencode, urlparse
 
@@ -991,7 +992,7 @@ async def pass_through_request(
         )
         upstream_headers: Final = _with_trace_context(headers, parent_span=user_api_key_dict.parent_otel_span)
 
-        requested_query_params: dict | None = query_params or dict(request.query_params)
+        requested_query_params: dict | None = query_params or dict(request.query_params) or None
 
         endpoint_type: Final[EndpointType] = HttpPassThroughEndpointHelpers.get_endpoint_type(str(url))
 
@@ -1193,7 +1194,7 @@ async def pass_through_request(
                 query=urlencode(
                     HttpPassThroughEndpointHelpers.get_merged_query_parameters(
                         existing_url=url,
-                        request_query_params=requested_query_params,
+                        request_query_params=requested_query_params or MappingProxyType({}),
                         default_query_params=default_query_params,
                     )
                 ).encode("ascii")
