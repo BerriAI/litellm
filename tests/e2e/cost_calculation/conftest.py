@@ -7,6 +7,11 @@ deployment under test, and the request shapes plus asserted goldens live in
 scripted-provider sidecar (``scripted_provider.py``), registered per scenario
 over its control API.
 
+The proxy must also run with ``MODEL_COST_MAP_MIN_MODEL_COUNT=1`` and
+``MODEL_COST_MAP_MAX_SHRINK_RATIO=0``: the 21-entry test map trips the
+fetched-cost-map integrity check (too few models, large shrink versus the
+bundled map) at those env vars' defaults.
+
 Deselected unless E2E_COST_MAP_STACK is set (marker `cost_map_stack`).
 """
 

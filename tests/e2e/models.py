@@ -186,6 +186,18 @@ class ChatMetadata(BaseModel):
 
 class ImageUrl(BaseModel):
     url: str
+    detail: str | None = None
+
+
+class InputAudio(BaseModel):
+    data: str
+    format: str
+
+
+class FileObject(BaseModel):
+    file_data: str | None = None
+    file_id: str | None = None
+    format: str | None = None
 
 
 class TextContentPart(BaseModel):
@@ -199,7 +211,17 @@ class ImageContentPart(BaseModel):
     image_url: ImageUrl
 
 
-ContentPart = TextContentPart | ImageContentPart
+class InputAudioContentPart(BaseModel):
+    type: str = "input_audio"
+    input_audio: InputAudio
+
+
+class FileContentPart(BaseModel):
+    type: str = "file"
+    file: FileObject
+
+
+ContentPart = TextContentPart | ImageContentPart | InputAudioContentPart | FileContentPart
 
 
 class ChatMessage(BaseModel):
@@ -284,6 +306,37 @@ class ChatToolResultTurn(BaseModel):
 type ChatTurn = ChatMessage | ChatAssistantTurn | ChatToolResultTurn
 
 
+class HostedWebSearchTool(BaseModel):
+    """A provider-hosted web-search tool sent inside an OpenAI tools list
+    (Anthropic's ``web_search_20250305`` shape)."""
+
+    type: str
+    name: str
+    max_uses: int | None = None
+
+
+class GoogleSearchTool(BaseModel):
+    googleSearch: dict[str, object] = {}
+
+
+class GoogleMapsTool(BaseModel):
+    googleMaps: dict[str, object] = {}
+
+
+class FileSearchTool(BaseModel):
+    type: Literal["file_search"] = "file_search"
+    vector_store_ids: list[str]
+
+
+class WebSearchOptions(BaseModel):
+    search_context_size: Literal["low", "medium", "high"] | None = None
+
+
+class ChatAudio(BaseModel):
+    voice: str
+    format: str
+
+
 class ChatStreamOptions(BaseModel):
     include_usage: bool
 
@@ -302,10 +355,16 @@ class ChatBody(BaseModel):
     thinking: ThinkingParam | None = None
     service_tier: str | None = None
     prompt_cache_key: str | None = None
-    tools: Sequence[ChatTool | McpChatTool] | None = None
+    tools: Sequence[
+        ChatTool | McpChatTool | HostedWebSearchTool | GoogleSearchTool | GoogleMapsTool | FileSearchTool
+    ] | None = None
     tool_choice: str | None = None
+    modalities: list[str] | None = None
+    audio: ChatAudio | None = None
+    web_search_options: WebSearchOptions | None = None
     guardrails: list[str] | None = None
     response_format: dict[str, object] | None = None
+    allowed_openai_params: list[str] | None = None
     chat_template_kwargs: dict[str, bool] | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
 

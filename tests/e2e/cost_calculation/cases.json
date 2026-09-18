@@ -1,468 +1,1837 @@
 {
   "deployments": [
-    {"map_key": "azure/gpt-5.4-mini", "litellm_model": "azure/cc-pinned-deployment", "base_model": "azure/gpt-5.4-mini"}
+    {
+      "map_key": "azure/gpt-5.4-mini",
+      "litellm_model": "azure/cc-pinned-deployment",
+      "base_model": "azure/gpt-5.4-mini"
+    }
   ],
   "cases": [
     {
-      "name": "basic",
-      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "name": "input_text",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412
+      },
+      "owns": [
+        "input_cost_per_token",
+        "output_cost_per_token"
+      ],
+      "fallback_for": [],
       "expected": {
-        "anthropic.claude-sonnet-5-v1:0": {"spend": 0.034, "input_cost": 0.0204, "output_cost": 0.0136, "prompt_tokens": 120, "completion_tokens": 40},
-        "azure/gpt-5.4-mini": {"spend": 0.032, "input_cost": 0.0192, "output_cost": 0.0128, "prompt_tokens": 120, "completion_tokens": 40},
-        "azure/gpt-5.6": {"spend": 0.03, "input_cost": 0.018, "output_cost": 0.012, "prompt_tokens": 120, "completion_tokens": 40},
-        "claude-haiku-4-5": {"spend": 0.014, "input_cost": 0.0084, "output_cost": 0.0056, "prompt_tokens": 120, "completion_tokens": 40},
-        "claude-opus-5": {"spend": 0.01, "input_cost": 0.006, "output_cost": 0.004, "prompt_tokens": 120, "completion_tokens": 40},
-        "claude-sonnet-5": {"spend": 0.012, "input_cost": 0.0072, "output_cost": 0.0048, "prompt_tokens": 120, "completion_tokens": 40},
-        "fireworks_ai/deepseek-v4p1-flash": {"spend": 0.028, "input_cost": 0.0168, "output_cost": 0.0112, "prompt_tokens": 120, "completion_tokens": 40},
-        "fireworks_ai/kimi-k3": {"spend": 0.024, "input_cost": 0.0144, "output_cost": 0.0096, "prompt_tokens": 120, "completion_tokens": 40},
-        "fireworks_ai/qwen3p8-max": {"spend": 0.026, "input_cost": 0.0156, "output_cost": 0.0104, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini-3.1-pro-preview": {"spend": 0.042, "input_cost": 0.0252, "output_cost": 0.0168, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini-3.8-flash": {"spend": 0.04, "input_cost": 0.024, "output_cost": 0.016, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini/gemini-3.1-pro-preview": {"spend": 0.018, "input_cost": 0.0108, "output_cost": 0.0072, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini/gemini-3.8-flash": {"spend": 0.016, "input_cost": 0.0096, "output_cost": 0.0064, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.3-codex": {"spend": 0.006, "input_cost": 0.0036, "output_cost": 0.0024, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.4-mini": {"spend": 0.008, "input_cost": 0.0048, "output_cost": 0.0032, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.5-pro": {"spend": 0.004, "input_cost": 0.0024, "output_cost": 0.0016, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.6": {"spend": 0.002, "input_cost": 0.0012, "output_cost": 0.0008, "prompt_tokens": 120, "completion_tokens": 40},
-        "meta.llama4-maverick-17b-instruct-v1:0": {"spend": 0.038, "input_cost": 0.0228, "output_cost": 0.0152, "prompt_tokens": 120, "completion_tokens": 40},
-        "together_ai/moonshotai/Kimi-K3": {"spend": 0.02, "input_cost": 0.012, "output_cost": 0.008, "prompt_tokens": 120, "completion_tokens": 40},
-        "together_ai/zai-org/GLM-5.3": {"spend": 0.022, "input_cost": 0.0132, "output_cost": 0.0088, "prompt_tokens": 120, "completion_tokens": 40},
-        "us.anthropic.claude-opus-5-v1:0": {"spend": 0.036, "input_cost": 0.0216, "output_cost": 0.0144, "prompt_tokens": 120, "completion_tokens": 40}
+        "gpt-5.6": {
+          "spend": 0.008988,
+          "input_cost": 0.00322,
+          "output_cost": 0.005768,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.4-mini": {
+          "spend": 0.0017976,
+          "input_cost": 0.000644,
+          "output_cost": 0.0011536,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.6": {
+          "spend": 0.0092448,
+          "input_cost": 0.003312,
+          "output_cost": 0.0059328,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.4-mini": {
+          "spend": 0.00184896,
+          "input_cost": 0.0006624,
+          "output_cost": 0.00118656,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.3-codex": {
+          "spend": 0.007704,
+          "input_cost": 0.00276,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.5-pro": {
+          "spend": 0.07704,
+          "input_cost": 0.0276,
+          "output_cost": 0.04944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-opus-5": {
+          "spend": 0.0195,
+          "input_cost": 0.0092,
+          "output_cost": 0.0103,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-sonnet-5": {
+          "spend": 0.0117,
+          "input_cost": 0.00552,
+          "output_cost": 0.00618,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-haiku-4-5": {
+          "spend": 0.0039,
+          "input_cost": 0.00184,
+          "output_cost": 0.00206,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "us.anthropic.claude-opus-5-v1:0": {
+          "spend": 0.02145,
+          "input_cost": 0.01012,
+          "output_cost": 0.01133,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "anthropic.claude-sonnet-5-v1:0": {
+          "spend": 0.01287,
+          "input_cost": 0.006072,
+          "output_cost": 0.006798,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "meta.llama4-maverick-17b-instruct-v1:0": {
+          "spend": 0.00084124,
+          "input_cost": 0.0004416,
+          "output_cost": 0.00039964,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.008624,
+          "input_cost": 0.00368,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.002156,
+          "input_cost": 0.00092,
+          "output_cost": 0.001236,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.0090552,
+          "input_cost": 0.003864,
+          "output_cost": 0.0051912,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.8-flash": {
+          "spend": 0.00224224,
+          "input_cost": 0.0009568,
+          "output_cost": 0.00128544,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "together_ai/moonshotai/Kimi-K3": {
+          "spend": 0.0035374,
+          "input_cost": 0.002116,
+          "output_cost": 0.0014214,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "together_ai/zai-org/GLM-5.3": {
+          "spend": 0.0019184,
+          "input_cost": 0.001012,
+          "output_cost": 0.0009064,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/kimi-k3": {
+          "spend": 0.002134,
+          "input_cost": 0.001104,
+          "output_cost": 0.00103,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash": {
+          "spend": 0.0005232,
+          "input_cost": 0.000276,
+          "output_cost": 0.0002472,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/qwen3p8-max": {
+          "spend": 0.0031392,
+          "input_cost": 0.001656,
+          "output_cost": 0.0014832,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
       }
     },
     {
       "name": "cache_read",
-      "usage": {"fresh_input_tokens": 100, "cache_read_tokens": 50, "output_tokens": 30},
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 640,
+        "cache_read_tokens": 12288,
+        "output_tokens": 380
+      },
+      "owns": [
+        "cache_read_input_token_cost"
+      ],
+      "fallback_for": [],
       "expected": {
-        "anthropic.claude-sonnet-5-v1:0": {"spend": 0.02805, "input_cost": 0.01785, "output_cost": 0.0102, "prompt_tokens": 150, "completion_tokens": 30},
-        "azure/gpt-5.4-mini": {"spend": 0.0264, "input_cost": 0.0168, "output_cost": 0.0096, "prompt_tokens": 150, "completion_tokens": 30},
-        "azure/gpt-5.6": {"spend": 0.02475, "input_cost": 0.01575, "output_cost": 0.009, "prompt_tokens": 150, "completion_tokens": 30},
-        "claude-haiku-4-5": {"spend": 0.01155, "input_cost": 0.00735, "output_cost": 0.0042, "prompt_tokens": 150, "completion_tokens": 30},
-        "claude-opus-5": {"spend": 0.00825, "input_cost": 0.00525, "output_cost": 0.003, "prompt_tokens": 150, "completion_tokens": 30},
-        "claude-sonnet-5": {"spend": 0.0099, "input_cost": 0.0063, "output_cost": 0.0036, "prompt_tokens": 150, "completion_tokens": 30},
-        "fireworks_ai/deepseek-v4p1-flash": {"spend": 0.0231, "input_cost": 0.0147, "output_cost": 0.0084, "prompt_tokens": 150, "completion_tokens": 30},
-        "fireworks_ai/kimi-k3": {"spend": 0.0198, "input_cost": 0.0126, "output_cost": 0.0072, "prompt_tokens": 150, "completion_tokens": 30},
-        "fireworks_ai/qwen3p8-max": {"spend": 0.02145, "input_cost": 0.01365, "output_cost": 0.0078, "prompt_tokens": 150, "completion_tokens": 30},
-        "gemini-3.1-pro-preview": {"spend": 0.03465, "input_cost": 0.02205, "output_cost": 0.0126, "prompt_tokens": 150, "completion_tokens": 30},
-        "gemini-3.8-flash": {"spend": 0.033, "input_cost": 0.021, "output_cost": 0.012, "prompt_tokens": 150, "completion_tokens": 30},
-        "gemini/gemini-3.1-pro-preview": {"spend": 0.01485, "input_cost": 0.00945, "output_cost": 0.0054, "prompt_tokens": 150, "completion_tokens": 30},
-        "gemini/gemini-3.8-flash": {"spend": 0.0132, "input_cost": 0.0084, "output_cost": 0.0048, "prompt_tokens": 150, "completion_tokens": 30},
-        "gpt-5.3-codex": {"spend": 0.00495, "input_cost": 0.00315, "output_cost": 0.0018, "prompt_tokens": 150, "completion_tokens": 30},
-        "gpt-5.4-mini": {"spend": 0.0066, "input_cost": 0.0042, "output_cost": 0.0024, "prompt_tokens": 150, "completion_tokens": 30},
-        "gpt-5.5-pro": {"spend": 0.0033, "input_cost": 0.0021, "output_cost": 0.0012, "prompt_tokens": 150, "completion_tokens": 30},
-        "gpt-5.6": {"spend": 0.00165, "input_cost": 0.00105, "output_cost": 0.0006, "prompt_tokens": 150, "completion_tokens": 30},
-        "together_ai/moonshotai/Kimi-K3": {"spend": 0.0165, "input_cost": 0.0105, "output_cost": 0.006, "prompt_tokens": 150, "completion_tokens": 30},
-        "together_ai/zai-org/GLM-5.3": {"spend": 0.01815, "input_cost": 0.01155, "output_cost": 0.0066, "prompt_tokens": 150, "completion_tokens": 30},
-        "us.anthropic.claude-opus-5-v1:0": {"spend": 0.0297, "input_cost": 0.0189, "output_cost": 0.0108, "prompt_tokens": 150, "completion_tokens": 30}
+        "gpt-5.6": {
+          "spend": 0.0085904,
+          "input_cost": 0.0032704,
+          "output_cost": 0.00532,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        },
+        "gpt-5.4-mini": {
+          "spend": 0.00171808,
+          "input_cost": 0.00065408,
+          "output_cost": 0.001064,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        },
+        "azure/gpt-5.6": {
+          "spend": 0.00883584,
+          "input_cost": 0.00336384,
+          "output_cost": 0.005472,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        },
+        "azure/gpt-5.4-mini": {
+          "spend": 0.001767168,
+          "input_cost": 0.000672768,
+          "output_cost": 0.0010944,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        },
+        "gpt-5.3-codex": {
+          "spend": 0.0073632,
+          "input_cost": 0.0028032,
+          "output_cost": 0.00456,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        },
+        "gpt-5.5-pro": {
+          "spend": 0.073632,
+          "input_cost": 0.028032,
+          "output_cost": 0.0456,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        },
+        "claude-opus-5": {
+          "spend": 0.018844,
+          "input_cost": 0.009344,
+          "output_cost": 0.0095,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        },
+        "claude-sonnet-5": {
+          "spend": 0.0113064,
+          "input_cost": 0.0056064,
+          "output_cost": 0.0057,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        },
+        "claude-haiku-4-5": {
+          "spend": 0.0037688,
+          "input_cost": 0.0018688,
+          "output_cost": 0.0019,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        },
+        "us.anthropic.claude-opus-5-v1:0": {
+          "spend": 0.0207284,
+          "input_cost": 0.0102784,
+          "output_cost": 0.01045,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        },
+        "anthropic.claude-sonnet-5-v1:0": {
+          "spend": 0.01243704,
+          "input_cost": 0.00616704,
+          "output_cost": 0.00627,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        },
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.0082976,
+          "input_cost": 0.0037376,
+          "output_cost": 0.00456,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.0020744,
+          "input_cost": 0.0009344,
+          "output_cost": 0.00114,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.00871248,
+          "input_cost": 0.00392448,
+          "output_cost": 0.004788,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        },
+        "gemini-3.8-flash": {
+          "spend": 0.002157376,
+          "input_cost": 0.000971776,
+          "output_cost": 0.0011856,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        },
+        "fireworks_ai/accounts/fireworks/models/kimi-k3": {
+          "spend": 0.00207128,
+          "input_cost": 0.00112128,
+          "output_cost": 0.00095,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        },
+        "fireworks_ai/accounts/fireworks/models/qwen3p8-max": {
+          "spend": 0.00304992,
+          "input_cost": 0.00168192,
+          "output_cost": 0.001368,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        }
       }
     },
     {
       "name": "cache_write_5m",
-      "usage": {"fresh_input_tokens": 90, "cache_write_5m_tokens": 60, "output_tokens": 30},
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 512,
+        "cache_write_5m_tokens": 9216,
+        "output_tokens": 350
+      },
+      "owns": [
+        "cache_creation_input_token_cost"
+      ],
+      "fallback_for": [],
       "expected": {
-        "anthropic.claude-sonnet-5-v1:0": {"spend": 0.0561, "input_cost": 0.0459, "output_cost": 0.0102, "prompt_tokens": 150, "completion_tokens": 30},
-        "azure/gpt-5.4-mini": {"spend": 0.0528, "input_cost": 0.0432, "output_cost": 0.0096, "prompt_tokens": 150, "completion_tokens": 30},
-        "azure/gpt-5.6": {"spend": 0.0495, "input_cost": 0.0405, "output_cost": 0.009, "prompt_tokens": 150, "completion_tokens": 30},
-        "claude-haiku-4-5": {"spend": 0.0231, "input_cost": 0.0189, "output_cost": 0.0042, "prompt_tokens": 150, "completion_tokens": 30},
-        "claude-opus-5": {"spend": 0.0165, "input_cost": 0.0135, "output_cost": 0.003, "prompt_tokens": 150, "completion_tokens": 30},
-        "claude-sonnet-5": {"spend": 0.0198, "input_cost": 0.0162, "output_cost": 0.0036, "prompt_tokens": 150, "completion_tokens": 30},
-        "fireworks_ai/deepseek-v4p1-flash": {"spend": 0.0408, "input_cost": 0.0324, "output_cost": 0.0084, "prompt_tokens": 150, "completion_tokens": 30},
-        "fireworks_ai/kimi-k3": {"spend": 0.0378, "input_cost": 0.0306, "output_cost": 0.0072, "prompt_tokens": 150, "completion_tokens": 30},
-        "fireworks_ai/qwen3p8-max": {"spend": 0.0393, "input_cost": 0.0315, "output_cost": 0.0078, "prompt_tokens": 150, "completion_tokens": 30},
-        "gpt-5.4-mini": {"spend": 0.0132, "input_cost": 0.0108, "output_cost": 0.0024, "prompt_tokens": 150, "completion_tokens": 30},
-        "gpt-5.6": {"spend": 0.0033, "input_cost": 0.0027, "output_cost": 0.0006, "prompt_tokens": 150, "completion_tokens": 30},
-        "together_ai/moonshotai/Kimi-K3": {"spend": 0.033, "input_cost": 0.027, "output_cost": 0.006, "prompt_tokens": 150, "completion_tokens": 30},
-        "together_ai/zai-org/GLM-5.3": {"spend": 0.0363, "input_cost": 0.0297, "output_cost": 0.0066, "prompt_tokens": 150, "completion_tokens": 30},
-        "us.anthropic.claude-opus-5-v1:0": {"spend": 0.0594, "input_cost": 0.0486, "output_cost": 0.0108, "prompt_tokens": 150, "completion_tokens": 30}
+        "claude-opus-5": {
+          "spend": 0.06891,
+          "input_cost": 0.06016,
+          "output_cost": 0.00875,
+          "prompt_tokens": 9728,
+          "completion_tokens": 350
+        },
+        "claude-sonnet-5": {
+          "spend": 0.041346,
+          "input_cost": 0.036096,
+          "output_cost": 0.00525,
+          "prompt_tokens": 9728,
+          "completion_tokens": 350
+        },
+        "claude-haiku-4-5": {
+          "spend": 0.013782,
+          "input_cost": 0.012032,
+          "output_cost": 0.00175,
+          "prompt_tokens": 9728,
+          "completion_tokens": 350
+        },
+        "us.anthropic.claude-opus-5-v1:0": {
+          "spend": 0.075801,
+          "input_cost": 0.066176,
+          "output_cost": 0.009625,
+          "prompt_tokens": 9728,
+          "completion_tokens": 350
+        },
+        "anthropic.claude-sonnet-5-v1:0": {
+          "spend": 0.0454806,
+          "input_cost": 0.0397056,
+          "output_cost": 0.005775,
+          "prompt_tokens": 9728,
+          "completion_tokens": 350
+        }
       }
     },
     {
       "name": "cache_write_1h",
-      "usage": {"fresh_input_tokens": 90, "cache_write_5m_tokens": 20, "cache_write_1h_tokens": 40, "output_tokens": 30},
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 512,
+        "cache_write_5m_tokens": 2048,
+        "cache_write_1h_tokens": 7168,
+        "output_tokens": 350
+      },
+      "owns": [
+        "cache_creation_input_token_cost_above_1hr"
+      ],
+      "fallback_for": [],
       "expected": {
-        "anthropic.claude-sonnet-5-v1:0": {"spend": 0.0629, "input_cost": 0.0527, "output_cost": 0.0102, "prompt_tokens": 150, "completion_tokens": 30},
-        "azure/gpt-5.4-mini": {"spend": 0.0592, "input_cost": 0.0496, "output_cost": 0.0096, "prompt_tokens": 150, "completion_tokens": 30},
-        "azure/gpt-5.6": {"spend": 0.0555, "input_cost": 0.0465, "output_cost": 0.009, "prompt_tokens": 150, "completion_tokens": 30},
-        "claude-haiku-4-5": {"spend": 0.0259, "input_cost": 0.0217, "output_cost": 0.0042, "prompt_tokens": 150, "completion_tokens": 30},
-        "claude-opus-5": {"spend": 0.0185, "input_cost": 0.0155, "output_cost": 0.003, "prompt_tokens": 150, "completion_tokens": 30},
-        "claude-sonnet-5": {"spend": 0.0222, "input_cost": 0.0186, "output_cost": 0.0036, "prompt_tokens": 150, "completion_tokens": 30},
-        "fireworks_ai/deepseek-v4p1-flash": {"spend": 0.0452, "input_cost": 0.0368, "output_cost": 0.0084, "prompt_tokens": 150, "completion_tokens": 30},
-        "fireworks_ai/kimi-k3": {"spend": 0.0422, "input_cost": 0.035, "output_cost": 0.0072, "prompt_tokens": 150, "completion_tokens": 30},
-        "fireworks_ai/qwen3p8-max": {"spend": 0.0437, "input_cost": 0.0359, "output_cost": 0.0078, "prompt_tokens": 150, "completion_tokens": 30},
-        "gpt-5.4-mini": {"spend": 0.0148, "input_cost": 0.0124, "output_cost": 0.0024, "prompt_tokens": 150, "completion_tokens": 30},
-        "gpt-5.6": {"spend": 0.0037, "input_cost": 0.0031, "output_cost": 0.0006, "prompt_tokens": 150, "completion_tokens": 30},
-        "together_ai/moonshotai/Kimi-K3": {"spend": 0.037, "input_cost": 0.031, "output_cost": 0.006, "prompt_tokens": 150, "completion_tokens": 30},
-        "together_ai/zai-org/GLM-5.3": {"spend": 0.0407, "input_cost": 0.0341, "output_cost": 0.0066, "prompt_tokens": 150, "completion_tokens": 30},
-        "us.anthropic.claude-opus-5-v1:0": {"spend": 0.0666, "input_cost": 0.0558, "output_cost": 0.0108, "prompt_tokens": 150, "completion_tokens": 30}
+        "claude-opus-5": {
+          "spend": 0.09579,
+          "input_cost": 0.08704,
+          "output_cost": 0.00875,
+          "prompt_tokens": 9728,
+          "completion_tokens": 350
+        },
+        "claude-sonnet-5": {
+          "spend": 0.057474,
+          "input_cost": 0.052224,
+          "output_cost": 0.00525,
+          "prompt_tokens": 9728,
+          "completion_tokens": 350
+        },
+        "claude-haiku-4-5": {
+          "spend": 0.019158,
+          "input_cost": 0.017408,
+          "output_cost": 0.00175,
+          "prompt_tokens": 9728,
+          "completion_tokens": 350
+        },
+        "us.anthropic.claude-opus-5-v1:0": {
+          "spend": 0.105369,
+          "input_cost": 0.095744,
+          "output_cost": 0.009625,
+          "prompt_tokens": 9728,
+          "completion_tokens": 350
+        },
+        "anthropic.claude-sonnet-5-v1:0": {
+          "spend": 0.0632214,
+          "input_cost": 0.0574464,
+          "output_cost": 0.005775,
+          "prompt_tokens": 9728,
+          "completion_tokens": 350
+        }
+      }
+    },
+    {
+      "name": "audio_input",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 96,
+        "audio_input_tokens": 1450,
+        "output_tokens": 210
+      },
+      "owns": [
+        "input_cost_per_audio_token"
+      ],
+      "fallback_for": [],
+      "audio_input": true,
+      "expected": {
+        "gpt-5.6": {
+          "spend": 0.061108,
+          "input_cost": 0.058168,
+          "output_cost": 0.00294,
+          "prompt_tokens": 1546,
+          "completion_tokens": 210
+        },
+        "gpt-5.4-mini": {
+          "spend": 0.0151216,
+          "input_cost": 0.0145336,
+          "output_cost": 0.000588,
+          "prompt_tokens": 1546,
+          "completion_tokens": 210
+        },
+        "azure/gpt-5.6": {
+          "spend": 0.0626468,
+          "input_cost": 0.0596228,
+          "output_cost": 0.003024,
+          "prompt_tokens": 1546,
+          "completion_tokens": 210
+        },
+        "azure/gpt-5.4-mini": {
+          "spend": 0.01586436,
+          "input_cost": 0.01525956,
+          "output_cost": 0.0006048,
+          "prompt_tokens": 1546,
+          "completion_tokens": 210
+        },
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.006482,
+          "input_cost": 0.003962,
+          "output_cost": 0.00252,
+          "prompt_tokens": 1546,
+          "completion_tokens": 210
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.002128,
+          "input_cost": 0.001498,
+          "output_cost": 0.00063,
+          "prompt_tokens": 1546,
+          "completion_tokens": 210
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.0067626,
+          "input_cost": 0.0041166,
+          "output_cost": 0.002646,
+          "prompt_tokens": 1546,
+          "completion_tokens": 210
+        },
+        "gemini-3.8-flash": {
+          "spend": 0.00221312,
+          "input_cost": 0.00155792,
+          "output_cost": 0.0006552,
+          "prompt_tokens": 1546,
+          "completion_tokens": 210
+        }
+      }
+    },
+    {
+      "name": "audio_output",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 220,
+        "output_tokens": 180,
+        "audio_output_tokens": 1120
+      },
+      "owns": [
+        "output_cost_per_audio_token"
+      ],
+      "fallback_for": [],
+      "audio_output": true,
+      "expected": {
+        "gpt-5.6": {
+          "spend": 0.092505,
+          "input_cost": 0.000385,
+          "output_cost": 0.09212,
+          "prompt_tokens": 220,
+          "completion_tokens": 1300
+        },
+        "gpt-5.4-mini": {
+          "spend": 0.022981,
+          "input_cost": 7.7e-05,
+          "output_cost": 0.022904,
+          "prompt_tokens": 220,
+          "completion_tokens": 1300
+        },
+        "azure/gpt-5.6": {
+          "spend": 0.094828,
+          "input_cost": 0.000396,
+          "output_cost": 0.094432,
+          "prompt_tokens": 220,
+          "completion_tokens": 1300
+        },
+        "azure/gpt-5.4-mini": {
+          "spend": 0.0241176,
+          "input_cost": 7.92e-05,
+          "output_cost": 0.0240384,
+          "prompt_tokens": 220,
+          "completion_tokens": 1300
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.00737,
+          "input_cost": 0.00011,
+          "output_cost": 0.00726,
+          "prompt_tokens": 220,
+          "completion_tokens": 1300
+        },
+        "gemini-3.8-flash": {
+          "spend": 0.0076648,
+          "input_cost": 0.0001144,
+          "output_cost": 0.0075504,
+          "prompt_tokens": 220,
+          "completion_tokens": 1300
+        }
+      }
+    },
+    {
+      "name": "image_input",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 310,
+        "image_input_tokens": 1806,
+        "output_tokens": 240
+      },
+      "owns": [
+        "input_cost_per_image_token"
+      ],
+      "fallback_for": [],
+      "image_input": true,
+      "expected": {
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.0074732,
+          "input_cost": 0.0045932,
+          "output_cost": 0.00288,
+          "prompt_tokens": 2116,
+          "completion_tokens": 240
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.0018683,
+          "input_cost": 0.0011483,
+          "output_cost": 0.00072,
+          "prompt_tokens": 2116,
+          "completion_tokens": 240
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.0078288,
+          "input_cost": 0.0048048,
+          "output_cost": 0.003024,
+          "prompt_tokens": 2116,
+          "completion_tokens": 240
+        }
+      }
+    },
+    {
+      "name": "video_input",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 140,
+        "video_input_tokens": 7920,
+        "output_tokens": 300
+      },
+      "owns": [
+        "input_cost_per_video_token"
+      ],
+      "fallback_for": [],
+      "video_input": true,
+      "expected": {
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.022888,
+          "input_cost": 0.019288,
+          "output_cost": 0.0036,
+          "prompt_tokens": 8060,
+          "completion_tokens": 300
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.005722,
+          "input_cost": 0.004822,
+          "output_cost": 0.0009,
+          "prompt_tokens": 8060,
+          "completion_tokens": 300
+        },
+        "gemini-3.8-flash": {
+          "spend": 0.0059192,
+          "input_cost": 0.0049832,
+          "output_cost": 0.000936,
+          "prompt_tokens": 8060,
+          "completion_tokens": 300
+        }
       }
     },
     {
       "name": "reasoning",
-      "usage": {"fresh_input_tokens": 100, "output_tokens": 30, "reasoning_tokens": 70},
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 1240,
+        "output_tokens": 560,
+        "reasoning_tokens": 3480
+      },
+      "owns": [
+        "output_cost_per_reasoning_token"
+      ],
+      "fallback_for": [],
+      "reasoning": true,
       "expected": {
-        "azure/gpt-5.4-mini": {"spend": 0.0816, "input_cost": 0.016, "output_cost": 0.0656, "prompt_tokens": 100, "completion_tokens": 100},
-        "azure/gpt-5.6": {"spend": 0.0765, "input_cost": 0.015, "output_cost": 0.0615, "prompt_tokens": 100, "completion_tokens": 100},
-        "fireworks_ai/deepseek-v4p1-flash": {"spend": 0.0609, "input_cost": 0.014, "output_cost": 0.0469, "prompt_tokens": 100, "completion_tokens": 100},
-        "fireworks_ai/kimi-k3": {"spend": 0.0577, "input_cost": 0.012, "output_cost": 0.0457, "prompt_tokens": 100, "completion_tokens": 100},
-        "fireworks_ai/qwen3p8-max": {"spend": 0.0593, "input_cost": 0.013, "output_cost": 0.0463, "prompt_tokens": 100, "completion_tokens": 100},
-        "gemini-3.1-pro-preview": {"spend": 0.1071, "input_cost": 0.021, "output_cost": 0.0861, "prompt_tokens": 100, "completion_tokens": 100},
-        "gemini-3.8-flash": {"spend": 0.102, "input_cost": 0.02, "output_cost": 0.082, "prompt_tokens": 100, "completion_tokens": 100},
-        "gemini/gemini-3.1-pro-preview": {"spend": 0.0459, "input_cost": 0.009, "output_cost": 0.0369, "prompt_tokens": 100, "completion_tokens": 100},
-        "gemini/gemini-3.8-flash": {"spend": 0.0408, "input_cost": 0.008, "output_cost": 0.0328, "prompt_tokens": 100, "completion_tokens": 100},
-        "gpt-5.3-codex": {"spend": 0.0153, "input_cost": 0.003, "output_cost": 0.0123, "prompt_tokens": 100, "completion_tokens": 100},
-        "gpt-5.4-mini": {"spend": 0.0204, "input_cost": 0.004, "output_cost": 0.0164, "prompt_tokens": 100, "completion_tokens": 100},
-        "gpt-5.5-pro": {"spend": 0.0102, "input_cost": 0.002, "output_cost": 0.0082, "prompt_tokens": 100, "completion_tokens": 100},
-        "gpt-5.6": {"spend": 0.0051, "input_cost": 0.001, "output_cost": 0.0041, "prompt_tokens": 100, "completion_tokens": 100},
-        "together_ai/moonshotai/Kimi-K3": {"spend": 0.051, "input_cost": 0.01, "output_cost": 0.041, "prompt_tokens": 100, "completion_tokens": 100},
-        "together_ai/zai-org/GLM-5.3": {"spend": 0.0561, "input_cost": 0.011, "output_cost": 0.0451, "prompt_tokens": 100, "completion_tokens": 100}
+        "gpt-5.6": {
+          "spend": 0.06569,
+          "input_cost": 0.00217,
+          "output_cost": 0.06352,
+          "prompt_tokens": 1240,
+          "completion_tokens": 4040
+        },
+        "gpt-5.4-mini": {
+          "spend": 0.013138,
+          "input_cost": 0.000434,
+          "output_cost": 0.012704,
+          "prompt_tokens": 1240,
+          "completion_tokens": 4040
+        },
+        "azure/gpt-5.6": {
+          "spend": 0.067716,
+          "input_cost": 0.002232,
+          "output_cost": 0.065484,
+          "prompt_tokens": 1240,
+          "completion_tokens": 4040
+        },
+        "azure/gpt-5.4-mini": {
+          "spend": 0.0135432,
+          "input_cost": 0.0004464,
+          "output_cost": 0.0130968,
+          "prompt_tokens": 1240,
+          "completion_tokens": 4040
+        },
+        "gpt-5.3-codex": {
+          "spend": 0.05382,
+          "input_cost": 0.00186,
+          "output_cost": 0.05196,
+          "prompt_tokens": 1240,
+          "completion_tokens": 4040
+        },
+        "gpt-5.5-pro": {
+          "spend": 0.5382,
+          "input_cost": 0.0186,
+          "output_cost": 0.5196,
+          "prompt_tokens": 1240,
+          "completion_tokens": 4040
+        },
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.05444,
+          "input_cost": 0.00248,
+          "output_cost": 0.05196,
+          "prompt_tokens": 1240,
+          "completion_tokens": 4040
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.01448,
+          "input_cost": 0.00062,
+          "output_cost": 0.01386,
+          "prompt_tokens": 1240,
+          "completion_tokens": 4040
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.05664,
+          "input_cost": 0.002604,
+          "output_cost": 0.054036,
+          "prompt_tokens": 1240,
+          "completion_tokens": 4040
+        }
       }
     },
     {
-      "name": "audio",
-      "usage": {"fresh_input_tokens": 100, "audio_input_tokens": 25, "output_tokens": 30, "audio_output_tokens": 15},
+      "name": "tiered_input_above_200k",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 204800,
+        "output_tokens": 620
+      },
+      "owns": [
+        "input_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens"
+      ],
+      "fallback_for": [],
       "expected": {
-        "azure/gpt-5.4-mini": {"spend": 0.0664, "input_cost": 0.04, "output_cost": 0.0264, "prompt_tokens": 125, "completion_tokens": 45},
-        "azure/gpt-5.6": {"spend": 0.06225, "input_cost": 0.0375, "output_cost": 0.02475, "prompt_tokens": 125, "completion_tokens": 45},
-        "fireworks_ai/deepseek-v4p1-flash": {"spend": 0.05045, "input_cost": 0.0305, "output_cost": 0.01995, "prompt_tokens": 125, "completion_tokens": 45},
-        "fireworks_ai/kimi-k3": {"spend": 0.04725, "input_cost": 0.0285, "output_cost": 0.01875, "prompt_tokens": 125, "completion_tokens": 45},
-        "fireworks_ai/qwen3p8-max": {"spend": 0.04885, "input_cost": 0.0295, "output_cost": 0.01935, "prompt_tokens": 125, "completion_tokens": 45},
-        "gemini-3.1-pro-preview": {"spend": 0.08715, "input_cost": 0.0525, "output_cost": 0.03465, "prompt_tokens": 125, "completion_tokens": 45},
-        "gemini-3.8-flash": {"spend": 0.083, "input_cost": 0.05, "output_cost": 0.033, "prompt_tokens": 125, "completion_tokens": 45},
-        "gemini/gemini-3.1-pro-preview": {"spend": 0.03735, "input_cost": 0.0225, "output_cost": 0.01485, "prompt_tokens": 125, "completion_tokens": 45},
-        "gemini/gemini-3.8-flash": {"spend": 0.0332, "input_cost": 0.02, "output_cost": 0.0132, "prompt_tokens": 125, "completion_tokens": 45},
-        "gpt-5.4-mini": {"spend": 0.0166, "input_cost": 0.01, "output_cost": 0.0066, "prompt_tokens": 125, "completion_tokens": 45},
-        "gpt-5.6": {"spend": 0.00415, "input_cost": 0.0025, "output_cost": 0.00165, "prompt_tokens": 125, "completion_tokens": 45},
-        "together_ai/moonshotai/Kimi-K3": {"spend": 0.0415, "input_cost": 0.025, "output_cost": 0.0165, "prompt_tokens": 125, "completion_tokens": 45},
-        "together_ai/zai-org/GLM-5.3": {"spend": 0.04565, "input_cost": 0.0275, "output_cost": 0.01815, "prompt_tokens": 125, "completion_tokens": 45}
+        "claude-opus-5": {
+          "spend": 2.07125,
+          "input_cost": 2.048,
+          "output_cost": 0.02325,
+          "prompt_tokens": 204800,
+          "completion_tokens": 620
+        },
+        "claude-sonnet-5": {
+          "spend": 1.24275,
+          "input_cost": 1.2288,
+          "output_cost": 0.01395,
+          "prompt_tokens": 204800,
+          "completion_tokens": 620
+        },
+        "us.anthropic.claude-opus-5-v1:0": {
+          "spend": 2.278375,
+          "input_cost": 2.2528,
+          "output_cost": 0.025575,
+          "prompt_tokens": 204800,
+          "completion_tokens": 620
+        },
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.83036,
+          "input_cost": 0.8192,
+          "output_cost": 0.01116,
+          "prompt_tokens": 204800,
+          "completion_tokens": 620
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.871878,
+          "input_cost": 0.86016,
+          "output_cost": 0.011718,
+          "prompt_tokens": 204800,
+          "completion_tokens": 620
+        }
       }
     },
     {
-      "name": "tiered",
-      "usage": {"fresh_input_tokens": 200001, "output_tokens": 30},
+      "name": "tiered_cache_read_above_200k",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 4096,
+        "cache_read_tokens": 201728,
+        "output_tokens": 480
+      },
+      "owns": [
+        "cache_read_input_token_cost_above_200k_tokens"
+      ],
+      "fallback_for": [],
       "expected": {
-        "azure/gpt-5.4-mini": {"spend": 256.04448, "input_cost": 256.00128, "output_cost": 0.0432, "prompt_tokens": 200001, "completion_tokens": 30},
-        "azure/gpt-5.6": {"spend": 240.0417, "input_cost": 240.0012, "output_cost": 0.0405, "prompt_tokens": 200001, "completion_tokens": 30},
-        "gemini-3.1-pro-preview": {"spend": 336.05838, "input_cost": 336.00168, "output_cost": 0.0567, "prompt_tokens": 200001, "completion_tokens": 30},
-        "gemini-3.8-flash": {"spend": 320.0556, "input_cost": 320.0016, "output_cost": 0.054, "prompt_tokens": 200001, "completion_tokens": 30},
-        "gemini/gemini-3.1-pro-preview": {"spend": 144.02502, "input_cost": 144.00072, "output_cost": 0.0243, "prompt_tokens": 200001, "completion_tokens": 30},
-        "gemini/gemini-3.8-flash": {"spend": 128.02224, "input_cost": 128.00064, "output_cost": 0.0216, "prompt_tokens": 200001, "completion_tokens": 30},
-        "gpt-5.3-codex": {"spend": 48.00834, "input_cost": 48.00024, "output_cost": 0.0081, "prompt_tokens": 200001, "completion_tokens": 30},
-        "gpt-5.4-mini": {"spend": 64.01112, "input_cost": 64.00032, "output_cost": 0.0108, "prompt_tokens": 200001, "completion_tokens": 30},
-        "gpt-5.5-pro": {"spend": 32.00556, "input_cost": 32.00016, "output_cost": 0.0054, "prompt_tokens": 200001, "completion_tokens": 30},
-        "gpt-5.6": {"spend": 16.00278, "input_cost": 16.00008, "output_cost": 0.0027, "prompt_tokens": 200001, "completion_tokens": 30},
-        "together_ai/moonshotai/Kimi-K3": {"spend": 160.0278, "input_cost": 160.0008, "output_cost": 0.027, "prompt_tokens": 200001, "completion_tokens": 30},
-        "together_ai/zai-org/GLM-5.3": {"spend": 176.03058, "input_cost": 176.00088, "output_cost": 0.0297, "prompt_tokens": 200001, "completion_tokens": 30}
+        "claude-opus-5": {
+          "spend": 0.260688,
+          "input_cost": 0.242688,
+          "output_cost": 0.018,
+          "prompt_tokens": 205824,
+          "completion_tokens": 480
+        },
+        "claude-sonnet-5": {
+          "spend": 0.1564128,
+          "input_cost": 0.1456128,
+          "output_cost": 0.0108,
+          "prompt_tokens": 205824,
+          "completion_tokens": 480
+        },
+        "us.anthropic.claude-opus-5-v1:0": {
+          "spend": 0.2867568,
+          "input_cost": 0.2669568,
+          "output_cost": 0.0198,
+          "prompt_tokens": 205824,
+          "completion_tokens": 480
+        },
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.1057152,
+          "input_cost": 0.0970752,
+          "output_cost": 0.00864,
+          "prompt_tokens": 205824,
+          "completion_tokens": 480
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.11100096,
+          "input_cost": 0.10192896,
+          "output_cost": 0.009072,
+          "prompt_tokens": 205824,
+          "completion_tokens": 480
+        }
+      }
+    },
+    {
+      "name": "tiered_cache_write_above_200k",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 4096,
+        "cache_write_5m_tokens": 200704,
+        "output_tokens": 480
+      },
+      "owns": [
+        "cache_creation_input_token_cost_above_200k_tokens"
+      ],
+      "fallback_for": [],
+      "expected": {
+        "claude-opus-5": {
+          "spend": 2.56776,
+          "input_cost": 2.54976,
+          "output_cost": 0.018,
+          "prompt_tokens": 204800,
+          "completion_tokens": 480
+        },
+        "claude-sonnet-5": {
+          "spend": 1.540656,
+          "input_cost": 1.529856,
+          "output_cost": 0.0108,
+          "prompt_tokens": 204800,
+          "completion_tokens": 480
+        },
+        "us.anthropic.claude-opus-5-v1:0": {
+          "spend": 2.824536,
+          "input_cost": 2.804736,
+          "output_cost": 0.0198,
+          "prompt_tokens": 204800,
+          "completion_tokens": 480
+        }
       }
     },
     {
       "name": "service_tier_flex",
-      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412
+      },
+      "owns": [
+        "input_cost_per_token_flex",
+        "output_cost_per_token_flex"
+      ],
+      "fallback_for": [],
       "service_tier": "flex",
       "expected": {
-        "azure/gpt-5.4-mini": {"spend": 0.0448, "input_cost": 0.0288, "output_cost": 0.016, "prompt_tokens": 120, "completion_tokens": 40},
-        "azure/gpt-5.6": {"spend": 0.042, "input_cost": 0.027, "output_cost": 0.015, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini-3.1-pro-preview": {"spend": 0.0588, "input_cost": 0.0378, "output_cost": 0.021, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini-3.8-flash": {"spend": 0.056, "input_cost": 0.036, "output_cost": 0.02, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini/gemini-3.1-pro-preview": {"spend": 0.0252, "input_cost": 0.0162, "output_cost": 0.009, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini/gemini-3.8-flash": {"spend": 0.0224, "input_cost": 0.0144, "output_cost": 0.008, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.3-codex": {"spend": 0.0084, "input_cost": 0.0054, "output_cost": 0.003, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.4-mini": {"spend": 0.0112, "input_cost": 0.0072, "output_cost": 0.004, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.5-pro": {"spend": 0.0056, "input_cost": 0.0036, "output_cost": 0.002, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.6": {"spend": 0.0028, "input_cost": 0.0018, "output_cost": 0.001, "prompt_tokens": 120, "completion_tokens": 40},
-        "together_ai/moonshotai/Kimi-K3": {"spend": 0.028, "input_cost": 0.018, "output_cost": 0.01, "prompt_tokens": 120, "completion_tokens": 40},
-        "together_ai/zai-org/GLM-5.3": {"spend": 0.0308, "input_cost": 0.0198, "output_cost": 0.011, "prompt_tokens": 120, "completion_tokens": 40}
+        "gpt-5.6": {
+          "spend": 0.004494,
+          "input_cost": 0.00161,
+          "output_cost": 0.002884,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.4-mini": {
+          "spend": 0.0008988,
+          "input_cost": 0.000322,
+          "output_cost": 0.0005768,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.6": {
+          "spend": 0.0046224,
+          "input_cost": 0.001656,
+          "output_cost": 0.0029664,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.4-mini": {
+          "spend": 0.00092448,
+          "input_cost": 0.0003312,
+          "output_cost": 0.00059328,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.3-codex": {
+          "spend": 0.003852,
+          "input_cost": 0.00138,
+          "output_cost": 0.002472,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.5-pro": {
+          "spend": 0.03852,
+          "input_cost": 0.0138,
+          "output_cost": 0.02472,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "us.anthropic.claude-opus-5-v1:0": {
+          "spend": 0.010725,
+          "input_cost": 0.00506,
+          "output_cost": 0.005665,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "anthropic.claude-sonnet-5-v1:0": {
+          "spend": 0.006435,
+          "input_cost": 0.003036,
+          "output_cost": 0.003399,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.004312,
+          "input_cost": 0.00184,
+          "output_cost": 0.002472,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.001078,
+          "input_cost": 0.00046,
+          "output_cost": 0.000618,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.0045276,
+          "input_cost": 0.001932,
+          "output_cost": 0.0025956,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.8-flash": {
+          "spend": 0.00112112,
+          "input_cost": 0.0004784,
+          "output_cost": 0.00064272,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
       }
     },
     {
       "name": "service_tier_priority",
-      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412
+      },
+      "owns": [
+        "input_cost_per_token_priority",
+        "output_cost_per_token_priority"
+      ],
+      "fallback_for": [],
       "service_tier": "priority",
       "expected": {
-        "azure/gpt-5.4-mini": {"spend": 0.04992, "input_cost": 0.03264, "output_cost": 0.01728, "prompt_tokens": 120, "completion_tokens": 40},
-        "azure/gpt-5.6": {"spend": 0.0468, "input_cost": 0.0306, "output_cost": 0.0162, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini-3.1-pro-preview": {"spend": 0.06552, "input_cost": 0.04284, "output_cost": 0.02268, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini-3.8-flash": {"spend": 0.0624, "input_cost": 0.0408, "output_cost": 0.0216, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini/gemini-3.1-pro-preview": {"spend": 0.02808, "input_cost": 0.01836, "output_cost": 0.00972, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini/gemini-3.8-flash": {"spend": 0.02496, "input_cost": 0.01632, "output_cost": 0.00864, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.3-codex": {"spend": 0.00936, "input_cost": 0.00612, "output_cost": 0.00324, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.4-mini": {"spend": 0.01248, "input_cost": 0.00816, "output_cost": 0.00432, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.5-pro": {"spend": 0.00624, "input_cost": 0.00408, "output_cost": 0.00216, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.6": {"spend": 0.00312, "input_cost": 0.00204, "output_cost": 0.00108, "prompt_tokens": 120, "completion_tokens": 40},
-        "together_ai/moonshotai/Kimi-K3": {"spend": 0.0312, "input_cost": 0.0204, "output_cost": 0.0108, "prompt_tokens": 120, "completion_tokens": 40},
-        "together_ai/zai-org/GLM-5.3": {"spend": 0.03432, "input_cost": 0.02244, "output_cost": 0.01188, "prompt_tokens": 120, "completion_tokens": 40}
+        "gpt-5.6": {
+          "spend": 0.017976,
+          "input_cost": 0.00644,
+          "output_cost": 0.011536,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.4-mini": {
+          "spend": 0.0035952,
+          "input_cost": 0.001288,
+          "output_cost": 0.0023072,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.6": {
+          "spend": 0.0184896,
+          "input_cost": 0.006624,
+          "output_cost": 0.0118656,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.4-mini": {
+          "spend": 0.00369792,
+          "input_cost": 0.0013248,
+          "output_cost": 0.00237312,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.3-codex": {
+          "spend": 0.015408,
+          "input_cost": 0.00552,
+          "output_cost": 0.009888,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.5-pro": {
+          "spend": 0.15408,
+          "input_cost": 0.0552,
+          "output_cost": 0.09888,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-opus-5": {
+          "spend": 0.024375,
+          "input_cost": 0.0115,
+          "output_cost": 0.012875,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-sonnet-5": {
+          "spend": 0.014625,
+          "input_cost": 0.0069,
+          "output_cost": 0.007725,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-haiku-4-5": {
+          "spend": 0.004875,
+          "input_cost": 0.0023,
+          "output_cost": 0.002575,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "us.anthropic.claude-opus-5-v1:0": {
+          "spend": 0.0268125,
+          "input_cost": 0.01265,
+          "output_cost": 0.0141625,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "anthropic.claude-sonnet-5-v1:0": {
+          "spend": 0.0160875,
+          "input_cost": 0.00759,
+          "output_cost": 0.0084975,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.01078,
+          "input_cost": 0.0046,
+          "output_cost": 0.00618,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.002695,
+          "input_cost": 0.00115,
+          "output_cost": 0.001545,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.011319,
+          "input_cost": 0.00483,
+          "output_cost": 0.006489,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.8-flash": {
+          "spend": 0.0028028,
+          "input_cost": 0.001196,
+          "output_cost": 0.0016068,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
       }
     },
     {
-      "name": "web_search",
-      "usage": {"fresh_input_tokens": 100, "output_tokens": 30, "web_search_calls": 3},
+      "name": "anthropic_fast_mode",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412
+      },
+      "owns": [
+        "provider_specific_entry.fast"
+      ],
+      "fallback_for": [],
+      "speed": "fast",
       "expected": {
-        "claude-haiku-4-5": {"spend": 0.0712, "input_cost": 0.007, "output_cost": 0.0042, "prompt_tokens": 100, "completion_tokens": 30},
-        "claude-opus-5": {"spend": 0.068, "input_cost": 0.005, "output_cost": 0.003, "prompt_tokens": 100, "completion_tokens": 30},
-        "claude-sonnet-5": {"spend": 0.0696, "input_cost": 0.006, "output_cost": 0.0036, "prompt_tokens": 100, "completion_tokens": 30},
-        "gemini-3.1-pro-preview": {"spend": 0.0936, "input_cost": 0.021, "output_cost": 0.0126, "prompt_tokens": 100, "completion_tokens": 30},
-        "gemini-3.8-flash": {"spend": 0.092, "input_cost": 0.02, "output_cost": 0.012, "prompt_tokens": 100, "completion_tokens": 30},
-        "gemini/gemini-3.1-pro-preview": {"spend": 0.0744, "input_cost": 0.009, "output_cost": 0.0054, "prompt_tokens": 100, "completion_tokens": 30},
-        "gemini/gemini-3.8-flash": {"spend": 0.0728, "input_cost": 0.008, "output_cost": 0.0048, "prompt_tokens": 100, "completion_tokens": 30},
-        "gpt-5.3-codex": {"spend": 0.0648, "input_cost": 0.003, "output_cost": 0.0018, "prompt_tokens": 100, "completion_tokens": 30},
-        "gpt-5.5-pro": {"spend": 0.0632, "input_cost": 0.002, "output_cost": 0.0012, "prompt_tokens": 100, "completion_tokens": 30}
+        "claude-opus-5": {
+          "spend": 0.117,
+          "input_cost": 0.0552,
+          "output_cost": 0.0618,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
       }
     },
     {
-      "name": "web_search_single",
-      "usage": {"fresh_input_tokens": 100, "output_tokens": 30, "web_search_calls": 1},
+      "name": "anthropic_us_inference",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412
+      },
+      "owns": [
+        "provider_specific_entry.us"
+      ],
+      "fallback_for": [],
+      "inference_geo": "us",
       "expected": {
-        "azure/gpt-5.4-mini": {"spend": 0.0456, "input_cost": 0.016, "output_cost": 0.0096, "prompt_tokens": 100, "completion_tokens": 30},
-        "azure/gpt-5.6": {"spend": 0.044, "input_cost": 0.015, "output_cost": 0.009, "prompt_tokens": 100, "completion_tokens": 30},
-        "fireworks_ai/deepseek-v4p1-flash": {"spend": 0.0424, "input_cost": 0.014, "output_cost": 0.0084, "prompt_tokens": 100, "completion_tokens": 30},
-        "fireworks_ai/kimi-k3": {"spend": 0.0392, "input_cost": 0.012, "output_cost": 0.0072, "prompt_tokens": 100, "completion_tokens": 30},
-        "fireworks_ai/qwen3p8-max": {"spend": 0.0408, "input_cost": 0.013, "output_cost": 0.0078, "prompt_tokens": 100, "completion_tokens": 30},
-        "gpt-5.4-mini": {"spend": 0.0264, "input_cost": 0.004, "output_cost": 0.0024, "prompt_tokens": 100, "completion_tokens": 30},
-        "gpt-5.6": {"spend": 0.0216, "input_cost": 0.001, "output_cost": 0.0006, "prompt_tokens": 100, "completion_tokens": 30},
-        "together_ai/moonshotai/Kimi-K3": {"spend": 0.036, "input_cost": 0.01, "output_cost": 0.006, "prompt_tokens": 100, "completion_tokens": 30},
-        "together_ai/zai-org/GLM-5.3": {"spend": 0.0376, "input_cost": 0.011, "output_cost": 0.0066, "prompt_tokens": 100, "completion_tokens": 30}
+        "claude-opus-5": {
+          "spend": 0.02145,
+          "input_cost": 0.01012,
+          "output_cost": 0.01133,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-sonnet-5": {
+          "spend": 0.01287,
+          "input_cost": 0.006072,
+          "output_cost": 0.006798,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-haiku-4-5": {
+          "spend": 0.00429,
+          "input_cost": 0.002024,
+          "output_cost": 0.002266,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
+      }
+    },
+    {
+      "name": "web_search_medium",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412,
+        "web_search_calls": 3
+      },
+      "owns": [
+        "search_context_cost_per_query.search_context_size_medium",
+        "web_search_billing_unit"
+      ],
+      "fallback_for": [],
+      "web_search": "medium",
+      "expected": {
+        "gpt-5.6": {
+          "spend": 0.021488,
+          "input_cost": 0.00322,
+          "output_cost": 0.005768,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.4-mini": {
+          "spend": 0.0142976,
+          "input_cost": 0.000644,
+          "output_cost": 0.0011536,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.6": {
+          "spend": 0.0217448,
+          "input_cost": 0.003312,
+          "output_cost": 0.0059328,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.4-mini": {
+          "spend": 0.01434896,
+          "input_cost": 0.0006624,
+          "output_cost": 0.00118656,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.3-codex": {
+          "spend": 0.045204,
+          "input_cost": 0.00276,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.5-pro": {
+          "spend": 0.11454,
+          "input_cost": 0.0276,
+          "output_cost": 0.04944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-opus-5": {
+          "spend": 0.0495,
+          "input_cost": 0.0092,
+          "output_cost": 0.0103,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-sonnet-5": {
+          "spend": 0.0417,
+          "input_cost": 0.00552,
+          "output_cost": 0.00618,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-haiku-4-5": {
+          "spend": 0.0339,
+          "input_cost": 0.00184,
+          "output_cost": 0.00206,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.113624,
+          "input_cost": 0.00368,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.1140552,
+          "input_cost": 0.003864,
+          "output_cost": 0.0051912,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
+      }
+    },
+    {
+      "name": "web_search_low",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412,
+        "web_search_calls": 1
+      },
+      "owns": [
+        "search_context_cost_per_query.search_context_size_low"
+      ],
+      "fallback_for": [],
+      "web_search": "low",
+      "expected": {
+        "gpt-5.6": {
+          "spend": 0.018988,
+          "input_cost": 0.00322,
+          "output_cost": 0.005768,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.4-mini": {
+          "spend": 0.0117976,
+          "input_cost": 0.000644,
+          "output_cost": 0.0011536,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.6": {
+          "spend": 0.0192448,
+          "input_cost": 0.003312,
+          "output_cost": 0.0059328,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.4-mini": {
+          "spend": 0.01184896,
+          "input_cost": 0.0006624,
+          "output_cost": 0.00118656,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.3-codex": {
+          "spend": 0.017704,
+          "input_cost": 0.00276,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.5-pro": {
+          "spend": 0.08704,
+          "input_cost": 0.0276,
+          "output_cost": 0.04944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
+      }
+    },
+    {
+      "name": "web_search_high",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412,
+        "web_search_calls": 1
+      },
+      "owns": [
+        "search_context_cost_per_query.search_context_size_high"
+      ],
+      "fallback_for": [],
+      "web_search": "high",
+      "expected": {
+        "gpt-5.6": {
+          "spend": 0.023988,
+          "input_cost": 0.00322,
+          "output_cost": 0.005768,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.4-mini": {
+          "spend": 0.0167976,
+          "input_cost": 0.000644,
+          "output_cost": 0.0011536,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.6": {
+          "spend": 0.0242448,
+          "input_cost": 0.003312,
+          "output_cost": 0.0059328,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.4-mini": {
+          "spend": 0.01684896,
+          "input_cost": 0.0006624,
+          "output_cost": 0.00118656,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.3-codex": {
+          "spend": 0.022704,
+          "input_cost": 0.00276,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.5-pro": {
+          "spend": 0.09204,
+          "input_cost": 0.0276,
+          "output_cost": 0.04944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
+      }
+    },
+    {
+      "name": "web_search_per_prompt",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412,
+        "web_search_calls": 3
+      },
+      "owns": [
+        "search_context_cost_per_query.search_context_size_medium",
+        "web_search_billing_unit"
+      ],
+      "fallback_for": [],
+      "web_search": "medium",
+      "expected": {
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.037156,
+          "input_cost": 0.00092,
+          "output_cost": 0.001236,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.8-flash": {
+          "spend": 0.03724224,
+          "input_cost": 0.0009568,
+          "output_cost": 0.00128544,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
+      }
+    },
+    {
+      "name": "google_maps_grounding",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412,
+        "google_maps_calls": 1
+      },
+      "owns": [
+        "google_maps_grounding_cost_per_query"
+      ],
+      "fallback_for": [],
+      "google_maps": true,
+      "expected": {
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.033624,
+          "input_cost": 0.00368,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.027156,
+          "input_cost": 0.00092,
+          "output_cost": 0.001236,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.0340552,
+          "input_cost": 0.003864,
+          "output_cost": 0.0051912,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.8-flash": {
+          "spend": 0.02724224,
+          "input_cost": 0.0009568,
+          "output_cost": 0.00128544,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
+      }
+    },
+    {
+      "name": "file_search",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412,
+        "file_search_calls": 1
+      },
+      "owns": [
+        "file_search_cost_per_1k_calls"
+      ],
+      "fallback_for": [],
+      "file_search": true,
+      "expected": {
+        "gpt-5.3-codex": {
+          "spend": 0.010204,
+          "input_cost": 0.00276,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.5-pro": {
+          "spend": 0.07954,
+          "input_cost": 0.0276,
+          "output_cost": 0.04944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
+      }
+    },
+    {
+      "name": "fallback_cache_read_at_input_rate",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 640,
+        "cache_read_tokens": 12288,
+        "output_tokens": 380
+      },
+      "owns": [],
+      "fallback_for": [
+        "cache_read_input_token_cost"
+      ],
+      "expected": {
+        "meta.llama4-maverick-17b-instruct-v1:0": {
+          "spend": 0.00347132,
+          "input_cost": 0.00310272,
+          "output_cost": 0.0003686,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        },
+        "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash": {
+          "spend": 0.0021672,
+          "input_cost": 0.0019392,
+          "output_cost": 0.000228,
+          "prompt_tokens": 12928,
+          "completion_tokens": 380
+        }
+      }
+    },
+    {
+      "name": "fallback_cache_write_at_input_rate",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 512,
+        "cache_write_5m_tokens": 9216,
+        "output_tokens": 350
+      },
+      "owns": [],
+      "fallback_for": [
+        "cache_creation_input_token_cost"
+      ],
+      "expected": {
+        "meta.llama4-maverick-17b-instruct-v1:0": {
+          "spend": 0.00267422,
+          "input_cost": 0.00233472,
+          "output_cost": 0.0003395,
+          "prompt_tokens": 9728,
+          "completion_tokens": 350
+        }
+      }
+    },
+    {
+      "name": "fallback_reasoning_at_output_rate",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 1240,
+        "output_tokens": 560,
+        "reasoning_tokens": 3480
+      },
+      "owns": [],
+      "fallback_for": [
+        "output_cost_per_reasoning_token"
+      ],
+      "reasoning": true,
+      "expected": {
+        "gemini-3.8-flash": {
+          "spend": 0.0132496,
+          "input_cost": 0.0006448,
+          "output_cost": 0.0126048,
+          "prompt_tokens": 1240,
+          "completion_tokens": 4040
+        }
+      }
+    },
+    {
+      "name": "fallback_image_tokens_at_input_rate",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 310,
+        "image_input_tokens": 1806,
+        "output_tokens": 240
+      },
+      "owns": [],
+      "fallback_for": [
+        "input_cost_per_image_token"
+      ],
+      "image_input": true,
+      "expected": {
+        "gemini-3.8-flash": {
+          "spend": 0.00184912,
+          "input_cost": 0.00110032,
+          "output_cost": 0.0007488,
+          "prompt_tokens": 2116,
+          "completion_tokens": 240
+        }
+      }
+    },
+    {
+      "name": "fallback_video_tokens_at_input_rate",
+      "family": "pricing",
+      "usage": {
+        "fresh_input_tokens": 140,
+        "video_input_tokens": 7920,
+        "output_tokens": 300
+      },
+      "owns": [],
+      "fallback_for": [
+        "input_cost_per_video_token"
+      ],
+      "video_input": true,
+      "expected": {
+        "gemini-3.1-pro": {
+          "spend": 0.020706,
+          "input_cost": 0.016926,
+          "output_cost": 0.00378,
+          "prompt_tokens": 8060,
+          "completion_tokens": 300
+        }
       }
     },
     {
       "name": "stream",
-      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "family": "transport",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412
+      },
       "stream": true,
       "expected": {
-        "anthropic.claude-sonnet-5-v1:0": {"spend": 0.034, "input_cost": 0.0204, "output_cost": 0.0136, "prompt_tokens": 120, "completion_tokens": 40},
-        "azure/gpt-5.4-mini": {"spend": 0.032, "input_cost": 0.0192, "output_cost": 0.0128, "prompt_tokens": 120, "completion_tokens": 40},
-        "azure/gpt-5.6": {"spend": 0.03, "input_cost": 0.018, "output_cost": 0.012, "prompt_tokens": 120, "completion_tokens": 40},
-        "claude-haiku-4-5": {"spend": 0.014, "input_cost": 0.0084, "output_cost": 0.0056, "prompt_tokens": 120, "completion_tokens": 40},
-        "claude-opus-5": {"spend": 0.01, "input_cost": 0.006, "output_cost": 0.004, "prompt_tokens": 120, "completion_tokens": 40},
-        "claude-sonnet-5": {"spend": 0.012, "input_cost": 0.0072, "output_cost": 0.0048, "prompt_tokens": 120, "completion_tokens": 40},
-        "fireworks_ai/deepseek-v4p1-flash": {"spend": 0.028, "input_cost": 0.0168, "output_cost": 0.0112, "prompt_tokens": 120, "completion_tokens": 40},
-        "fireworks_ai/kimi-k3": {"spend": 0.024, "input_cost": 0.0144, "output_cost": 0.0096, "prompt_tokens": 120, "completion_tokens": 40},
-        "fireworks_ai/qwen3p8-max": {"spend": 0.026, "input_cost": 0.0156, "output_cost": 0.0104, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini-3.1-pro-preview": {"spend": 0.042, "input_cost": 0.0252, "output_cost": 0.0168, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini-3.8-flash": {"spend": 0.04, "input_cost": 0.024, "output_cost": 0.016, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini/gemini-3.1-pro-preview": {"spend": 0.018, "input_cost": 0.0108, "output_cost": 0.0072, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini/gemini-3.8-flash": {"spend": 0.016, "input_cost": 0.0096, "output_cost": 0.0064, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.3-codex": {"spend": 0.006, "input_cost": 0.0036, "output_cost": 0.0024, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.4-mini": {"spend": 0.008, "input_cost": 0.0048, "output_cost": 0.0032, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.5-pro": {"spend": 0.004, "input_cost": 0.0024, "output_cost": 0.0016, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.6": {"spend": 0.002, "input_cost": 0.0012, "output_cost": 0.0008, "prompt_tokens": 120, "completion_tokens": 40},
-        "meta.llama4-maverick-17b-instruct-v1:0": {"spend": 0.038, "input_cost": 0.0228, "output_cost": 0.0152, "prompt_tokens": 120, "completion_tokens": 40},
-        "together_ai/moonshotai/Kimi-K3": {"spend": 0.02, "input_cost": 0.012, "output_cost": 0.008, "prompt_tokens": 120, "completion_tokens": 40},
-        "together_ai/zai-org/GLM-5.3": {"spend": 0.022, "input_cost": 0.0132, "output_cost": 0.0088, "prompt_tokens": 120, "completion_tokens": 40},
-        "us.anthropic.claude-opus-5-v1:0": {"spend": 0.036, "input_cost": 0.0216, "output_cost": 0.0144, "prompt_tokens": 120, "completion_tokens": 40}
+        "gpt-5.6": {
+          "spend": 0.008988,
+          "input_cost": 0.00322,
+          "output_cost": 0.005768,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.4-mini": {
+          "spend": 0.0017976,
+          "input_cost": 0.000644,
+          "output_cost": 0.0011536,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.6": {
+          "spend": 0.0092448,
+          "input_cost": 0.003312,
+          "output_cost": 0.0059328,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.4-mini": {
+          "spend": 0.00184896,
+          "input_cost": 0.0006624,
+          "output_cost": 0.00118656,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.3-codex": {
+          "spend": 0.007704,
+          "input_cost": 0.00276,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.5-pro": {
+          "spend": 0.07704,
+          "input_cost": 0.0276,
+          "output_cost": 0.04944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-opus-5": {
+          "spend": 0.0195,
+          "input_cost": 0.0092,
+          "output_cost": 0.0103,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-sonnet-5": {
+          "spend": 0.0117,
+          "input_cost": 0.00552,
+          "output_cost": 0.00618,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-haiku-4-5": {
+          "spend": 0.0039,
+          "input_cost": 0.00184,
+          "output_cost": 0.00206,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "us.anthropic.claude-opus-5-v1:0": {
+          "spend": 0.02145,
+          "input_cost": 0.01012,
+          "output_cost": 0.01133,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "anthropic.claude-sonnet-5-v1:0": {
+          "spend": 0.01287,
+          "input_cost": 0.006072,
+          "output_cost": 0.006798,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "meta.llama4-maverick-17b-instruct-v1:0": {
+          "spend": 0.00084124,
+          "input_cost": 0.0004416,
+          "output_cost": 0.00039964,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.008624,
+          "input_cost": 0.00368,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.002156,
+          "input_cost": 0.00092,
+          "output_cost": 0.001236,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.0090552,
+          "input_cost": 0.003864,
+          "output_cost": 0.0051912,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.8-flash": {
+          "spend": 0.00224224,
+          "input_cost": 0.0009568,
+          "output_cost": 0.00128544,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "together_ai/moonshotai/Kimi-K3": {
+          "spend": 0.0035374,
+          "input_cost": 0.002116,
+          "output_cost": 0.0014214,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "together_ai/zai-org/GLM-5.3": {
+          "spend": 0.0019184,
+          "input_cost": 0.001012,
+          "output_cost": 0.0009064,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/kimi-k3": {
+          "spend": 0.002134,
+          "input_cost": 0.001104,
+          "output_cost": 0.00103,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash": {
+          "spend": 0.0005232,
+          "input_cost": 0.000276,
+          "output_cost": 0.0002472,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/qwen3p8-max": {
+          "spend": 0.0031392,
+          "input_cost": 0.001656,
+          "output_cost": 0.0014832,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
       }
     },
     {
       "name": "stream_no_usage",
-      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "family": "transport",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412
+      },
       "stream": true,
       "stream_usage": "absent",
       "exact_spend": false,
       "models": [
-        "anthropic.claude-sonnet-5-v1:0",
-        "azure/gpt-5.4-mini",
+        "gpt-5.6",
+        "gpt-5.4-mini",
         "azure/gpt-5.6",
-        "claude-haiku-4-5",
+        "azure/gpt-5.4-mini",
+        "gpt-5.3-codex",
+        "gpt-5.5-pro",
         "claude-opus-5",
         "claude-sonnet-5",
-        "fireworks_ai/deepseek-v4p1-flash",
-        "fireworks_ai/kimi-k3",
-        "fireworks_ai/qwen3p8-max",
-        "gemini-3.1-pro-preview",
-        "gemini-3.8-flash",
-        "gemini/gemini-3.1-pro-preview",
-        "gemini/gemini-3.8-flash",
-        "gpt-5.3-codex",
-        "gpt-5.4-mini",
-        "gpt-5.5-pro",
-        "gpt-5.6",
+        "claude-haiku-4-5",
+        "us.anthropic.claude-opus-5-v1:0",
+        "anthropic.claude-sonnet-5-v1:0",
         "meta.llama4-maverick-17b-instruct-v1:0",
+        "gemini/gemini-3.1-pro",
+        "gemini/gemini-3.8-flash",
+        "gemini-3.1-pro",
+        "gemini-3.8-flash",
         "together_ai/moonshotai/Kimi-K3",
         "together_ai/zai-org/GLM-5.3",
-        "us.anthropic.claude-opus-5-v1:0"
+        "fireworks_ai/accounts/fireworks/models/kimi-k3",
+        "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash",
+        "fireworks_ai/accounts/fireworks/models/qwen3p8-max"
       ]
     },
     {
-      "name": "response_model_override",
-      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
-      "response_model_override": true,
-      "expected": {
-        "azure/gpt-5.4-mini": {"spend": 0.032, "input_cost": 0.0192, "output_cost": 0.0128, "prompt_tokens": 120, "completion_tokens": 40},
-        "azure/gpt-5.6": {"spend": 0.032, "input_cost": 0.0192, "output_cost": 0.0128, "prompt_tokens": 120, "completion_tokens": 40},
-        "claude-haiku-4-5": {"spend": 0.01, "input_cost": 0.006, "output_cost": 0.004, "prompt_tokens": 120, "completion_tokens": 40},
-        "claude-opus-5": {"spend": 0.012, "input_cost": 0.0072, "output_cost": 0.0048, "prompt_tokens": 120, "completion_tokens": 40},
-        "claude-sonnet-5": {"spend": 0.014, "input_cost": 0.0084, "output_cost": 0.0056, "prompt_tokens": 120, "completion_tokens": 40},
-        "fireworks_ai/deepseek-v4p1-flash": {"spend": 0.024, "input_cost": 0.0144, "output_cost": 0.0096, "prompt_tokens": 120, "completion_tokens": 40},
-        "fireworks_ai/kimi-k3": {"spend": 0.026, "input_cost": 0.0156, "output_cost": 0.0104, "prompt_tokens": 120, "completion_tokens": 40},
-        "fireworks_ai/qwen3p8-max": {"spend": 0.028, "input_cost": 0.0168, "output_cost": 0.0112, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini-3.1-pro-preview": {"spend": 0.04, "input_cost": 0.024, "output_cost": 0.016, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini-3.8-flash": {"spend": 0.042, "input_cost": 0.0252, "output_cost": 0.0168, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini/gemini-3.1-pro-preview": {"spend": 0.016, "input_cost": 0.0096, "output_cost": 0.0064, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini/gemini-3.8-flash": {"spend": 0.018, "input_cost": 0.0108, "output_cost": 0.0072, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.3-codex": {"spend": 0.004, "input_cost": 0.0024, "output_cost": 0.0016, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.4-mini": {"spend": 0.002, "input_cost": 0.0012, "output_cost": 0.0008, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.5-pro": {"spend": 0.006, "input_cost": 0.0036, "output_cost": 0.0024, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.6": {"spend": 0.008, "input_cost": 0.0048, "output_cost": 0.0032, "prompt_tokens": 120, "completion_tokens": 40},
-        "together_ai/moonshotai/Kimi-K3": {"spend": 0.022, "input_cost": 0.0132, "output_cost": 0.0088, "prompt_tokens": 120, "completion_tokens": 40},
-        "together_ai/zai-org/GLM-5.3": {"spend": 0.02, "input_cost": 0.012, "output_cost": 0.008, "prompt_tokens": 120, "completion_tokens": 40}
-      }
-    },
-    {
-      "name": "stream_response_model_override",
-      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
-      "stream": true,
-      "response_model_override": true,
-      "expected": {
-        "azure/gpt-5.4-mini": {"spend": 0.032, "input_cost": 0.0192, "output_cost": 0.0128, "prompt_tokens": 120, "completion_tokens": 40},
-        "azure/gpt-5.6": {"spend": 0.032, "input_cost": 0.0192, "output_cost": 0.0128, "prompt_tokens": 120, "completion_tokens": 40},
-        "claude-haiku-4-5": {"spend": 0.01, "input_cost": 0.006, "output_cost": 0.004, "prompt_tokens": 120, "completion_tokens": 40},
-        "claude-opus-5": {"spend": 0.012, "input_cost": 0.0072, "output_cost": 0.0048, "prompt_tokens": 120, "completion_tokens": 40},
-        "claude-sonnet-5": {"spend": 0.014, "input_cost": 0.0084, "output_cost": 0.0056, "prompt_tokens": 120, "completion_tokens": 40},
-        "fireworks_ai/deepseek-v4p1-flash": {"spend": 0.024, "input_cost": 0.0144, "output_cost": 0.0096, "prompt_tokens": 120, "completion_tokens": 40},
-        "fireworks_ai/kimi-k3": {"spend": 0.026, "input_cost": 0.0156, "output_cost": 0.0104, "prompt_tokens": 120, "completion_tokens": 40},
-        "fireworks_ai/qwen3p8-max": {"spend": 0.028, "input_cost": 0.0168, "output_cost": 0.0112, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini-3.1-pro-preview": {"spend": 0.04, "input_cost": 0.024, "output_cost": 0.016, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini-3.8-flash": {"spend": 0.042, "input_cost": 0.0252, "output_cost": 0.0168, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini/gemini-3.1-pro-preview": {"spend": 0.016, "input_cost": 0.0096, "output_cost": 0.0064, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini/gemini-3.8-flash": {"spend": 0.018, "input_cost": 0.0108, "output_cost": 0.0072, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.3-codex": {"spend": 0.004, "input_cost": 0.0024, "output_cost": 0.0016, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.4-mini": {"spend": 0.002, "input_cost": 0.0012, "output_cost": 0.0008, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.5-pro": {"spend": 0.006, "input_cost": 0.0036, "output_cost": 0.0024, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.6": {"spend": 0.008, "input_cost": 0.0048, "output_cost": 0.0032, "prompt_tokens": 120, "completion_tokens": 40},
-        "together_ai/moonshotai/Kimi-K3": {"spend": 0.022, "input_cost": 0.0132, "output_cost": 0.0088, "prompt_tokens": 120, "completion_tokens": 40},
-        "together_ai/zai-org/GLM-5.3": {"spend": 0.02, "input_cost": 0.012, "output_cost": 0.008, "prompt_tokens": 120, "completion_tokens": 40}
-      }
-    },
-    {
-      "name": "tool_call",
-      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
-      "tool_call": true,
-      "expected": {
-        "anthropic.claude-sonnet-5-v1:0": {"spend": 0.034, "input_cost": 0.0204, "output_cost": 0.0136, "prompt_tokens": 120, "completion_tokens": 40},
-        "azure/gpt-5.4-mini": {"spend": 0.032, "input_cost": 0.0192, "output_cost": 0.0128, "prompt_tokens": 120, "completion_tokens": 40},
-        "azure/gpt-5.6": {"spend": 0.03, "input_cost": 0.018, "output_cost": 0.012, "prompt_tokens": 120, "completion_tokens": 40},
-        "claude-haiku-4-5": {"spend": 0.014, "input_cost": 0.0084, "output_cost": 0.0056, "prompt_tokens": 120, "completion_tokens": 40},
-        "claude-opus-5": {"spend": 0.01, "input_cost": 0.006, "output_cost": 0.004, "prompt_tokens": 120, "completion_tokens": 40},
-        "claude-sonnet-5": {"spend": 0.012, "input_cost": 0.0072, "output_cost": 0.0048, "prompt_tokens": 120, "completion_tokens": 40},
-        "fireworks_ai/deepseek-v4p1-flash": {"spend": 0.028, "input_cost": 0.0168, "output_cost": 0.0112, "prompt_tokens": 120, "completion_tokens": 40},
-        "fireworks_ai/kimi-k3": {"spend": 0.024, "input_cost": 0.0144, "output_cost": 0.0096, "prompt_tokens": 120, "completion_tokens": 40},
-        "fireworks_ai/qwen3p8-max": {"spend": 0.026, "input_cost": 0.0156, "output_cost": 0.0104, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini-3.1-pro-preview": {"spend": 0.042, "input_cost": 0.0252, "output_cost": 0.0168, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini-3.8-flash": {"spend": 0.04, "input_cost": 0.024, "output_cost": 0.016, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini/gemini-3.1-pro-preview": {"spend": 0.018, "input_cost": 0.0108, "output_cost": 0.0072, "prompt_tokens": 120, "completion_tokens": 40},
-        "gemini/gemini-3.8-flash": {"spend": 0.016, "input_cost": 0.0096, "output_cost": 0.0064, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.3-codex": {"spend": 0.006, "input_cost": 0.0036, "output_cost": 0.0024, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.4-mini": {"spend": 0.008, "input_cost": 0.0048, "output_cost": 0.0032, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.5-pro": {"spend": 0.004, "input_cost": 0.0024, "output_cost": 0.0016, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.6": {"spend": 0.002, "input_cost": 0.0012, "output_cost": 0.0008, "prompt_tokens": 120, "completion_tokens": 40},
-        "meta.llama4-maverick-17b-instruct-v1:0": {"spend": 0.038, "input_cost": 0.0228, "output_cost": 0.0152, "prompt_tokens": 120, "completion_tokens": 40},
-        "together_ai/moonshotai/Kimi-K3": {"spend": 0.02, "input_cost": 0.012, "output_cost": 0.008, "prompt_tokens": 120, "completion_tokens": 40},
-        "together_ai/zai-org/GLM-5.3": {"spend": 0.022, "input_cost": 0.0132, "output_cost": 0.0088, "prompt_tokens": 120, "completion_tokens": 40},
-        "us.anthropic.claude-opus-5-v1:0": {"spend": 0.036, "input_cost": 0.0216, "output_cost": 0.0144, "prompt_tokens": 120, "completion_tokens": 40}
-      }
-    },
-    {
-      "name": "stream_tool_call",
-      "usage": {"fresh_input_tokens": 80, "output_tokens": 25},
-      "stream": true,
-      "tool_call": true,
-      "expected": {
-        "anthropic.claude-sonnet-5-v1:0": {"spend": 0.0221, "input_cost": 0.0136, "output_cost": 0.0085, "prompt_tokens": 80, "completion_tokens": 25},
-        "azure/gpt-5.4-mini": {"spend": 0.0208, "input_cost": 0.0128, "output_cost": 0.008, "prompt_tokens": 80, "completion_tokens": 25},
-        "azure/gpt-5.6": {"spend": 0.0195, "input_cost": 0.012, "output_cost": 0.0075, "prompt_tokens": 80, "completion_tokens": 25},
-        "claude-haiku-4-5": {"spend": 0.0091, "input_cost": 0.0056, "output_cost": 0.0035, "prompt_tokens": 80, "completion_tokens": 25},
-        "claude-opus-5": {"spend": 0.0065, "input_cost": 0.004, "output_cost": 0.0025, "prompt_tokens": 80, "completion_tokens": 25},
-        "claude-sonnet-5": {"spend": 0.0078, "input_cost": 0.0048, "output_cost": 0.003, "prompt_tokens": 80, "completion_tokens": 25},
-        "fireworks_ai/deepseek-v4p1-flash": {"spend": 0.0182, "input_cost": 0.0112, "output_cost": 0.007, "prompt_tokens": 80, "completion_tokens": 25},
-        "fireworks_ai/kimi-k3": {"spend": 0.0156, "input_cost": 0.0096, "output_cost": 0.006, "prompt_tokens": 80, "completion_tokens": 25},
-        "fireworks_ai/qwen3p8-max": {"spend": 0.0169, "input_cost": 0.0104, "output_cost": 0.0065, "prompt_tokens": 80, "completion_tokens": 25},
-        "gemini-3.1-pro-preview": {"spend": 0.0273, "input_cost": 0.0168, "output_cost": 0.0105, "prompt_tokens": 80, "completion_tokens": 25},
-        "gemini-3.8-flash": {"spend": 0.026, "input_cost": 0.016, "output_cost": 0.01, "prompt_tokens": 80, "completion_tokens": 25},
-        "gemini/gemini-3.1-pro-preview": {"spend": 0.0117, "input_cost": 0.0072, "output_cost": 0.0045, "prompt_tokens": 80, "completion_tokens": 25},
-        "gemini/gemini-3.8-flash": {"spend": 0.0104, "input_cost": 0.0064, "output_cost": 0.004, "prompt_tokens": 80, "completion_tokens": 25},
-        "gpt-5.3-codex": {"spend": 0.0039, "input_cost": 0.0024, "output_cost": 0.0015, "prompt_tokens": 80, "completion_tokens": 25},
-        "gpt-5.4-mini": {"spend": 0.0052, "input_cost": 0.0032, "output_cost": 0.002, "prompt_tokens": 80, "completion_tokens": 25},
-        "gpt-5.5-pro": {"spend": 0.0026, "input_cost": 0.0016, "output_cost": 0.001, "prompt_tokens": 80, "completion_tokens": 25},
-        "gpt-5.6": {"spend": 0.0013, "input_cost": 0.0008, "output_cost": 0.0005, "prompt_tokens": 80, "completion_tokens": 25},
-        "meta.llama4-maverick-17b-instruct-v1:0": {"spend": 0.0247, "input_cost": 0.0152, "output_cost": 0.0095, "prompt_tokens": 80, "completion_tokens": 25},
-        "together_ai/moonshotai/Kimi-K3": {"spend": 0.013, "input_cost": 0.008, "output_cost": 0.005, "prompt_tokens": 80, "completion_tokens": 25},
-        "together_ai/zai-org/GLM-5.3": {"spend": 0.0143, "input_cost": 0.0088, "output_cost": 0.0055, "prompt_tokens": 80, "completion_tokens": 25},
-        "us.anthropic.claude-opus-5-v1:0": {"spend": 0.0234, "input_cost": 0.0144, "output_cost": 0.009, "prompt_tokens": 80, "completion_tokens": 25}
-      }
-    },
-    {
       "name": "stream_no_usage_tool_call",
-      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "family": "transport",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412
+      },
       "stream": true,
       "stream_usage": "absent",
       "tool_call": true,
       "exact_spend": false,
       "models": [
-        "anthropic.claude-sonnet-5-v1:0",
-        "azure/gpt-5.4-mini",
+        "gpt-5.6",
+        "gpt-5.4-mini",
         "azure/gpt-5.6",
-        "claude-haiku-4-5",
+        "azure/gpt-5.4-mini",
+        "gpt-5.3-codex",
+        "gpt-5.5-pro",
         "claude-opus-5",
         "claude-sonnet-5",
-        "fireworks_ai/deepseek-v4p1-flash",
-        "fireworks_ai/kimi-k3",
-        "fireworks_ai/qwen3p8-max",
-        "gemini-3.1-pro-preview",
-        "gemini-3.8-flash",
-        "gemini/gemini-3.1-pro-preview",
-        "gemini/gemini-3.8-flash",
-        "gpt-5.3-codex",
-        "gpt-5.4-mini",
-        "gpt-5.5-pro",
-        "gpt-5.6",
+        "claude-haiku-4-5",
+        "us.anthropic.claude-opus-5-v1:0",
+        "anthropic.claude-sonnet-5-v1:0",
         "meta.llama4-maverick-17b-instruct-v1:0",
+        "gemini/gemini-3.1-pro",
+        "gemini/gemini-3.8-flash",
+        "gemini-3.1-pro",
+        "gemini-3.8-flash",
         "together_ai/moonshotai/Kimi-K3",
         "together_ai/zai-org/GLM-5.3",
-        "us.anthropic.claude-opus-5-v1:0"
+        "fireworks_ai/accounts/fireworks/models/kimi-k3",
+        "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash",
+        "fireworks_ai/accounts/fireworks/models/qwen3p8-max"
       ]
     },
     {
       "name": "stream_no_usage_image_input",
-      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "family": "transport",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412
+      },
       "stream": true,
       "stream_usage": "absent",
       "image_input": true,
       "exact_spend": false,
       "models": [
-        "anthropic.claude-sonnet-5-v1:0",
-        "azure/gpt-5.4-mini",
+        "gpt-5.6",
+        "gpt-5.4-mini",
         "azure/gpt-5.6",
-        "claude-haiku-4-5",
+        "azure/gpt-5.4-mini",
+        "gpt-5.3-codex",
+        "gpt-5.5-pro",
         "claude-opus-5",
         "claude-sonnet-5",
-        "fireworks_ai/deepseek-v4p1-flash",
-        "fireworks_ai/kimi-k3",
-        "fireworks_ai/qwen3p8-max",
-        "gemini-3.1-pro-preview",
-        "gemini-3.8-flash",
-        "gemini/gemini-3.1-pro-preview",
-        "gemini/gemini-3.8-flash",
-        "gpt-5.3-codex",
-        "gpt-5.4-mini",
-        "gpt-5.5-pro",
-        "gpt-5.6",
+        "claude-haiku-4-5",
+        "us.anthropic.claude-opus-5-v1:0",
+        "anthropic.claude-sonnet-5-v1:0",
         "meta.llama4-maverick-17b-instruct-v1:0",
+        "gemini/gemini-3.1-pro",
+        "gemini/gemini-3.8-flash",
+        "gemini-3.1-pro",
+        "gemini-3.8-flash",
         "together_ai/moonshotai/Kimi-K3",
         "together_ai/zai-org/GLM-5.3",
-        "us.anthropic.claude-opus-5-v1:0"
+        "fireworks_ai/accounts/fireworks/models/kimi-k3",
+        "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash",
+        "fireworks_ai/accounts/fireworks/models/qwen3p8-max"
       ]
     },
     {
       "name": "stream_incomplete",
-      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "family": "transport",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412
+      },
       "stream": true,
       "terminal": "incomplete",
       "expected": {
-        "gpt-5.3-codex": {"spend": 0.006, "input_cost": 0.0036, "output_cost": 0.0024, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.5-pro": {"spend": 0.004, "input_cost": 0.0024, "output_cost": 0.0016, "prompt_tokens": 120, "completion_tokens": 40}
+        "gpt-5.3-codex": {
+          "spend": 0.007704,
+          "input_cost": 0.00276,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.5-pro": {
+          "spend": 0.07704,
+          "input_cost": 0.0276,
+          "output_cost": 0.04944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
       }
     },
     {
       "name": "stream_no_usage_incomplete",
-      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "family": "transport",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412
+      },
       "stream": true,
       "stream_usage": "absent",
       "terminal": "incomplete",
@@ -474,17 +1843,37 @@
     },
     {
       "name": "stream_unvalidated",
-      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "family": "transport",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412
+      },
       "stream": true,
       "terminal": "unvalidated",
       "expected": {
-        "gpt-5.3-codex": {"spend": 0.006, "input_cost": 0.0036, "output_cost": 0.0024, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.5-pro": {"spend": 0.004, "input_cost": 0.0024, "output_cost": 0.0016, "prompt_tokens": 120, "completion_tokens": 40}
+        "gpt-5.3-codex": {
+          "spend": 0.007704,
+          "input_cost": 0.00276,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.5-pro": {
+          "spend": 0.07704,
+          "input_cost": 0.0276,
+          "output_cost": 0.04944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
       }
     },
     {
       "name": "stream_no_usage_unvalidated",
-      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "family": "transport",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412
+      },
       "stream": true,
       "stream_usage": "absent",
       "terminal": "unvalidated",
@@ -496,88 +1885,1008 @@
     },
     {
       "name": "prompt_blocked",
-      "usage": {"fresh_input_tokens": 1000, "output_tokens": 0},
+      "family": "transport",
+      "usage": {
+        "fresh_input_tokens": 1840
+      },
       "terminal": "prompt_blocked",
-      "response_model_override": true,
       "expected": {
-        "gemini-3.1-pro-preview": {"spend": 0.2, "input_cost": 0.2, "output_cost": 0.0, "prompt_tokens": 1000, "completion_tokens": 0},
-        "gemini-3.8-flash": {"spend": 0.21, "input_cost": 0.21, "output_cost": 0.0, "prompt_tokens": 1000, "completion_tokens": 0},
-        "gemini/gemini-3.1-pro-preview": {"spend": 0.08, "input_cost": 0.08, "output_cost": 0.0, "prompt_tokens": 1000, "completion_tokens": 0},
-        "gemini/gemini-3.8-flash": {"spend": 0.09, "input_cost": 0.09, "output_cost": 0.0, "prompt_tokens": 1000, "completion_tokens": 0}
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.00368,
+          "input_cost": 0.00368,
+          "output_cost": 0.0,
+          "prompt_tokens": 1840,
+          "completion_tokens": 0
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.00092,
+          "input_cost": 0.00092,
+          "output_cost": 0.0,
+          "prompt_tokens": 1840,
+          "completion_tokens": 0
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.003864,
+          "input_cost": 0.003864,
+          "output_cost": 0.0,
+          "prompt_tokens": 1840,
+          "completion_tokens": 0
+        },
+        "gemini-3.8-flash": {
+          "spend": 0.0009568,
+          "input_cost": 0.0009568,
+          "output_cost": 0.0,
+          "prompt_tokens": 1840,
+          "completion_tokens": 0
+        }
       }
     },
     {
       "name": "stream_prompt_blocked",
-      "usage": {"fresh_input_tokens": 1000, "output_tokens": 0},
+      "family": "transport",
+      "usage": {
+        "fresh_input_tokens": 1840
+      },
       "stream": true,
       "terminal": "prompt_blocked",
+      "expected": {
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.00368,
+          "input_cost": 0.00368,
+          "output_cost": 0.0,
+          "prompt_tokens": 1840,
+          "completion_tokens": 0
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.00092,
+          "input_cost": 0.00092,
+          "output_cost": 0.0,
+          "prompt_tokens": 1840,
+          "completion_tokens": 0
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.003864,
+          "input_cost": 0.003864,
+          "output_cost": 0.0,
+          "prompt_tokens": 1840,
+          "completion_tokens": 0
+        },
+        "gemini-3.8-flash": {
+          "spend": 0.0009568,
+          "input_cost": 0.0009568,
+          "output_cost": 0.0,
+          "prompt_tokens": 1840,
+          "completion_tokens": 0
+        }
+      }
+    },
+    {
+      "name": "response_model_override",
+      "family": "transport",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412
+      },
       "response_model_override": true,
       "expected": {
-        "gemini-3.1-pro-preview": {"spend": 0.2, "input_cost": 0.2, "output_cost": 0.0, "prompt_tokens": 1000, "completion_tokens": 0},
-        "gemini-3.8-flash": {"spend": 0.21, "input_cost": 0.21, "output_cost": 0.0, "prompt_tokens": 1000, "completion_tokens": 0},
-        "gemini/gemini-3.1-pro-preview": {"spend": 0.08, "input_cost": 0.08, "output_cost": 0.0, "prompt_tokens": 1000, "completion_tokens": 0},
-        "gemini/gemini-3.8-flash": {"spend": 0.09, "input_cost": 0.09, "output_cost": 0.0, "prompt_tokens": 1000, "completion_tokens": 0}
+        "gpt-5.6": {
+          "spend": 0.0017976,
+          "input_cost": 0.000644,
+          "output_cost": 0.0011536,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.4-mini": {
+          "spend": 0.008988,
+          "input_cost": 0.00322,
+          "output_cost": 0.005768,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.6": {
+          "spend": 0.00184896,
+          "input_cost": 0.0006624,
+          "output_cost": 0.00118656,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.4-mini": {
+          "spend": 0.00184896,
+          "input_cost": 0.0006624,
+          "output_cost": 0.00118656,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.3-codex": {
+          "spend": 0.07704,
+          "input_cost": 0.0276,
+          "output_cost": 0.04944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.5-pro": {
+          "spend": 0.007704,
+          "input_cost": 0.00276,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-opus-5": {
+          "spend": 0.0117,
+          "input_cost": 0.00552,
+          "output_cost": 0.00618,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-sonnet-5": {
+          "spend": 0.0039,
+          "input_cost": 0.00184,
+          "output_cost": 0.00206,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-haiku-4-5": {
+          "spend": 0.0195,
+          "input_cost": 0.0092,
+          "output_cost": 0.0103,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "us.anthropic.claude-opus-5-v1:0": {
+          "spend": 0.02145,
+          "input_cost": 0.01012,
+          "output_cost": 0.01133,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "anthropic.claude-sonnet-5-v1:0": {
+          "spend": 0.01287,
+          "input_cost": 0.006072,
+          "output_cost": 0.006798,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "meta.llama4-maverick-17b-instruct-v1:0": {
+          "spend": 0.00084124,
+          "input_cost": 0.0004416,
+          "output_cost": 0.00039964,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.002156,
+          "input_cost": 0.00092,
+          "output_cost": 0.001236,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.008624,
+          "input_cost": 0.00368,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.00224224,
+          "input_cost": 0.0009568,
+          "output_cost": 0.00128544,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.8-flash": {
+          "spend": 0.0090552,
+          "input_cost": 0.003864,
+          "output_cost": 0.0051912,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "together_ai/moonshotai/Kimi-K3": {
+          "spend": 0.0019184,
+          "input_cost": 0.001012,
+          "output_cost": 0.0009064,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "together_ai/zai-org/GLM-5.3": {
+          "spend": 0.0035374,
+          "input_cost": 0.002116,
+          "output_cost": 0.0014214,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/kimi-k3": {
+          "spend": 0.0031392,
+          "input_cost": 0.001656,
+          "output_cost": 0.0014832,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash": {
+          "spend": 0.002134,
+          "input_cost": 0.001104,
+          "output_cost": 0.00103,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/qwen3p8-max": {
+          "spend": 0.0005232,
+          "input_cost": 0.000276,
+          "output_cost": 0.0002472,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
       }
     },
     {
-      "name": "all_components_chat",
-      "usage": {"fresh_input_tokens": 80, "cache_read_tokens": 40, "cache_write_5m_tokens": 20, "cache_write_1h_tokens": 10, "output_tokens": 25, "reasoning_tokens": 15, "audio_input_tokens": 5, "audio_output_tokens": 3},
-      "expected": {
-        "azure/gpt-5.4-mini": {"spend": 0.0576, "input_cost": 0.03424, "output_cost": 0.02336, "prompt_tokens": 155, "completion_tokens": 43},
-        "azure/gpt-5.6": {"spend": 0.054, "input_cost": 0.0321, "output_cost": 0.0219, "prompt_tokens": 155, "completion_tokens": 43},
-        "gpt-5.4-mini": {"spend": 0.0144, "input_cost": 0.00856, "output_cost": 0.00584, "prompt_tokens": 155, "completion_tokens": 43},
-        "gpt-5.6": {"spend": 0.0036, "input_cost": 0.00214, "output_cost": 0.00146, "prompt_tokens": 155, "completion_tokens": 43},
-        "together_ai/moonshotai/Kimi-K3": {"spend": 0.036, "input_cost": 0.0214, "output_cost": 0.0146, "prompt_tokens": 155, "completion_tokens": 43},
-        "together_ai/zai-org/GLM-5.3": {"spend": 0.0396, "input_cost": 0.02354, "output_cost": 0.01606, "prompt_tokens": 155, "completion_tokens": 43}
-      }
-    },
-    {
-      "name": "all_components_fireworks",
-      "usage": {"fresh_input_tokens": 80, "cache_read_tokens": 40, "output_tokens": 25},
-      "expected": {
-        "fireworks_ai/deepseek-v4p1-flash": {"spend": 0.01876, "input_cost": 0.01176, "output_cost": 0.007, "prompt_tokens": 120, "completion_tokens": 25},
-        "fireworks_ai/kimi-k3": {"spend": 0.01608, "input_cost": 0.01008, "output_cost": 0.006, "prompt_tokens": 120, "completion_tokens": 25},
-        "fireworks_ai/qwen3p8-max": {"spend": 0.01742, "input_cost": 0.01092, "output_cost": 0.0065, "prompt_tokens": 120, "completion_tokens": 25}
-      }
-    },
-    {
-      "name": "all_components_anthropic",
-      "usage": {"fresh_input_tokens": 80, "cache_read_tokens": 40, "cache_write_5m_tokens": 20, "cache_write_1h_tokens": 10, "output_tokens": 25},
-      "expected": {
-        "anthropic.claude-sonnet-5-v1:0": {"spend": 0.03978, "input_cost": 0.03128, "output_cost": 0.0085, "prompt_tokens": 150, "completion_tokens": 25},
-        "claude-haiku-4-5": {"spend": 0.01638, "input_cost": 0.01288, "output_cost": 0.0035, "prompt_tokens": 150, "completion_tokens": 25},
-        "claude-opus-5": {"spend": 0.0117, "input_cost": 0.0092, "output_cost": 0.0025, "prompt_tokens": 150, "completion_tokens": 25},
-        "claude-sonnet-5": {"spend": 0.01404, "input_cost": 0.01104, "output_cost": 0.003, "prompt_tokens": 150, "completion_tokens": 25},
-        "meta.llama4-maverick-17b-instruct-v1:0": {"spend": 0.038, "input_cost": 0.0285, "output_cost": 0.0095, "prompt_tokens": 150, "completion_tokens": 25},
-        "us.anthropic.claude-opus-5-v1:0": {"spend": 0.04212, "input_cost": 0.03312, "output_cost": 0.009, "prompt_tokens": 150, "completion_tokens": 25}
-      }
-    },
-    {
-      "name": "all_components_anthropic_stream",
-      "usage": {"fresh_input_tokens": 80, "cache_read_tokens": 40, "cache_write_5m_tokens": 20, "cache_write_1h_tokens": 10, "output_tokens": 25},
+      "name": "stream_response_model_override",
+      "family": "transport",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412
+      },
+      "response_model_override": true,
       "stream": true,
       "expected": {
-        "claude-haiku-4-5": {"spend": 0.01638, "input_cost": 0.01288, "output_cost": 0.0035, "prompt_tokens": 150, "completion_tokens": 25},
-        "claude-opus-5": {"spend": 0.0117, "input_cost": 0.0092, "output_cost": 0.0025, "prompt_tokens": 150, "completion_tokens": 25},
-        "claude-sonnet-5": {"spend": 0.01404, "input_cost": 0.01104, "output_cost": 0.003, "prompt_tokens": 150, "completion_tokens": 25}
+        "gpt-5.6": {
+          "spend": 0.0017976,
+          "input_cost": 0.000644,
+          "output_cost": 0.0011536,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.4-mini": {
+          "spend": 0.008988,
+          "input_cost": 0.00322,
+          "output_cost": 0.005768,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.6": {
+          "spend": 0.00184896,
+          "input_cost": 0.0006624,
+          "output_cost": 0.00118656,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.4-mini": {
+          "spend": 0.00184896,
+          "input_cost": 0.0006624,
+          "output_cost": 0.00118656,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.3-codex": {
+          "spend": 0.07704,
+          "input_cost": 0.0276,
+          "output_cost": 0.04944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.5-pro": {
+          "spend": 0.007704,
+          "input_cost": 0.00276,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-opus-5": {
+          "spend": 0.0117,
+          "input_cost": 0.00552,
+          "output_cost": 0.00618,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-sonnet-5": {
+          "spend": 0.0039,
+          "input_cost": 0.00184,
+          "output_cost": 0.00206,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-haiku-4-5": {
+          "spend": 0.0195,
+          "input_cost": 0.0092,
+          "output_cost": 0.0103,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "us.anthropic.claude-opus-5-v1:0": {
+          "spend": 0.02145,
+          "input_cost": 0.01012,
+          "output_cost": 0.01133,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "anthropic.claude-sonnet-5-v1:0": {
+          "spend": 0.01287,
+          "input_cost": 0.006072,
+          "output_cost": 0.006798,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "meta.llama4-maverick-17b-instruct-v1:0": {
+          "spend": 0.00084124,
+          "input_cost": 0.0004416,
+          "output_cost": 0.00039964,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.002156,
+          "input_cost": 0.00092,
+          "output_cost": 0.001236,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.008624,
+          "input_cost": 0.00368,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.00224224,
+          "input_cost": 0.0009568,
+          "output_cost": 0.00128544,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.8-flash": {
+          "spend": 0.0090552,
+          "input_cost": 0.003864,
+          "output_cost": 0.0051912,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "together_ai/moonshotai/Kimi-K3": {
+          "spend": 0.0019184,
+          "input_cost": 0.001012,
+          "output_cost": 0.0009064,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "together_ai/zai-org/GLM-5.3": {
+          "spend": 0.0035374,
+          "input_cost": 0.002116,
+          "output_cost": 0.0014214,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/kimi-k3": {
+          "spend": 0.0031392,
+          "input_cost": 0.001656,
+          "output_cost": 0.0014832,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash": {
+          "spend": 0.002134,
+          "input_cost": 0.001104,
+          "output_cost": 0.00103,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/qwen3p8-max": {
+          "spend": 0.0005232,
+          "input_cost": 0.000276,
+          "output_cost": 0.0002472,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
       }
     },
     {
-      "name": "all_components_gemini",
-      "usage": {"fresh_input_tokens": 80, "cache_read_tokens": 40, "output_tokens": 25, "reasoning_tokens": 15, "audio_input_tokens": 5, "audio_output_tokens": 3},
+      "name": "tool_call",
+      "family": "transport",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412
+      },
+      "tool_call": true,
       "expected": {
-        "gemini-3.1-pro-preview": {"spend": 0.0546, "input_cost": 0.02394, "output_cost": 0.03066, "prompt_tokens": 125, "completion_tokens": 43},
-        "gemini-3.8-flash": {"spend": 0.052, "input_cost": 0.0228, "output_cost": 0.0292, "prompt_tokens": 125, "completion_tokens": 43},
-        "gemini/gemini-3.1-pro-preview": {"spend": 0.0234, "input_cost": 0.01026, "output_cost": 0.01314, "prompt_tokens": 125, "completion_tokens": 43},
-        "gemini/gemini-3.8-flash": {"spend": 0.0208, "input_cost": 0.00912, "output_cost": 0.01168, "prompt_tokens": 125, "completion_tokens": 43}
+        "gpt-5.6": {
+          "spend": 0.008988,
+          "input_cost": 0.00322,
+          "output_cost": 0.005768,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.4-mini": {
+          "spend": 0.0017976,
+          "input_cost": 0.000644,
+          "output_cost": 0.0011536,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.6": {
+          "spend": 0.0092448,
+          "input_cost": 0.003312,
+          "output_cost": 0.0059328,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.4-mini": {
+          "spend": 0.00184896,
+          "input_cost": 0.0006624,
+          "output_cost": 0.00118656,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.3-codex": {
+          "spend": 0.007704,
+          "input_cost": 0.00276,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.5-pro": {
+          "spend": 0.07704,
+          "input_cost": 0.0276,
+          "output_cost": 0.04944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-opus-5": {
+          "spend": 0.0195,
+          "input_cost": 0.0092,
+          "output_cost": 0.0103,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-sonnet-5": {
+          "spend": 0.0117,
+          "input_cost": 0.00552,
+          "output_cost": 0.00618,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-haiku-4-5": {
+          "spend": 0.0039,
+          "input_cost": 0.00184,
+          "output_cost": 0.00206,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "us.anthropic.claude-opus-5-v1:0": {
+          "spend": 0.02145,
+          "input_cost": 0.01012,
+          "output_cost": 0.01133,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "anthropic.claude-sonnet-5-v1:0": {
+          "spend": 0.01287,
+          "input_cost": 0.006072,
+          "output_cost": 0.006798,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "meta.llama4-maverick-17b-instruct-v1:0": {
+          "spend": 0.00084124,
+          "input_cost": 0.0004416,
+          "output_cost": 0.00039964,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.008624,
+          "input_cost": 0.00368,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.002156,
+          "input_cost": 0.00092,
+          "output_cost": 0.001236,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.0090552,
+          "input_cost": 0.003864,
+          "output_cost": 0.0051912,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.8-flash": {
+          "spend": 0.00224224,
+          "input_cost": 0.0009568,
+          "output_cost": 0.00128544,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "together_ai/moonshotai/Kimi-K3": {
+          "spend": 0.0035374,
+          "input_cost": 0.002116,
+          "output_cost": 0.0014214,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "together_ai/zai-org/GLM-5.3": {
+          "spend": 0.0019184,
+          "input_cost": 0.001012,
+          "output_cost": 0.0009064,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/kimi-k3": {
+          "spend": 0.002134,
+          "input_cost": 0.001104,
+          "output_cost": 0.00103,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash": {
+          "spend": 0.0005232,
+          "input_cost": 0.000276,
+          "output_cost": 0.0002472,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/qwen3p8-max": {
+          "spend": 0.0031392,
+          "input_cost": 0.001656,
+          "output_cost": 0.0014832,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
       }
     },
     {
-      "name": "all_components_responses",
-      "usage": {"fresh_input_tokens": 80, "cache_read_tokens": 40, "output_tokens": 25, "reasoning_tokens": 15},
+      "name": "stream_tool_call",
+      "family": "transport",
+      "usage": {
+        "fresh_input_tokens": 1840,
+        "output_tokens": 412
+      },
+      "stream": true,
+      "tool_call": true,
       "expected": {
-        "gpt-5.3-codex": {"spend": 0.00627, "input_cost": 0.00252, "output_cost": 0.00375, "prompt_tokens": 120, "completion_tokens": 40},
-        "gpt-5.5-pro": {"spend": 0.00418, "input_cost": 0.00168, "output_cost": 0.0025, "prompt_tokens": 120, "completion_tokens": 40}
+        "gpt-5.6": {
+          "spend": 0.008988,
+          "input_cost": 0.00322,
+          "output_cost": 0.005768,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.4-mini": {
+          "spend": 0.0017976,
+          "input_cost": 0.000644,
+          "output_cost": 0.0011536,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.6": {
+          "spend": 0.0092448,
+          "input_cost": 0.003312,
+          "output_cost": 0.0059328,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "azure/gpt-5.4-mini": {
+          "spend": 0.00184896,
+          "input_cost": 0.0006624,
+          "output_cost": 0.00118656,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.3-codex": {
+          "spend": 0.007704,
+          "input_cost": 0.00276,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gpt-5.5-pro": {
+          "spend": 0.07704,
+          "input_cost": 0.0276,
+          "output_cost": 0.04944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-opus-5": {
+          "spend": 0.0195,
+          "input_cost": 0.0092,
+          "output_cost": 0.0103,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-sonnet-5": {
+          "spend": 0.0117,
+          "input_cost": 0.00552,
+          "output_cost": 0.00618,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "claude-haiku-4-5": {
+          "spend": 0.0039,
+          "input_cost": 0.00184,
+          "output_cost": 0.00206,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "us.anthropic.claude-opus-5-v1:0": {
+          "spend": 0.02145,
+          "input_cost": 0.01012,
+          "output_cost": 0.01133,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "anthropic.claude-sonnet-5-v1:0": {
+          "spend": 0.01287,
+          "input_cost": 0.006072,
+          "output_cost": 0.006798,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "meta.llama4-maverick-17b-instruct-v1:0": {
+          "spend": 0.00084124,
+          "input_cost": 0.0004416,
+          "output_cost": 0.00039964,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.008624,
+          "input_cost": 0.00368,
+          "output_cost": 0.004944,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.002156,
+          "input_cost": 0.00092,
+          "output_cost": 0.001236,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.0090552,
+          "input_cost": 0.003864,
+          "output_cost": 0.0051912,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "gemini-3.8-flash": {
+          "spend": 0.00224224,
+          "input_cost": 0.0009568,
+          "output_cost": 0.00128544,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "together_ai/moonshotai/Kimi-K3": {
+          "spend": 0.0035374,
+          "input_cost": 0.002116,
+          "output_cost": 0.0014214,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "together_ai/zai-org/GLM-5.3": {
+          "spend": 0.0019184,
+          "input_cost": 0.001012,
+          "output_cost": 0.0009064,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/kimi-k3": {
+          "spend": 0.002134,
+          "input_cost": 0.001104,
+          "output_cost": 0.00103,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash": {
+          "spend": 0.0005232,
+          "input_cost": 0.000276,
+          "output_cost": 0.0002472,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/qwen3p8-max": {
+          "spend": 0.0031392,
+          "input_cost": 0.001656,
+          "output_cost": 0.0014832,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        }
+      }
+    },
+    {
+      "name": "stream_full_usage",
+      "family": "transport",
+      "usage": {},
+      "stream": true,
+      "usage_by_model": {
+        "gpt-5.6": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144,
+          "reasoning_tokens": 900,
+          "audio_input_tokens": 330,
+          "audio_output_tokens": 280
+        },
+        "gpt-5.4-mini": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144,
+          "reasoning_tokens": 900,
+          "audio_input_tokens": 330,
+          "audio_output_tokens": 280
+        },
+        "azure/gpt-5.6": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144,
+          "reasoning_tokens": 900,
+          "audio_input_tokens": 330,
+          "audio_output_tokens": 280
+        },
+        "azure/gpt-5.4-mini": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144,
+          "reasoning_tokens": 900,
+          "audio_input_tokens": 330,
+          "audio_output_tokens": 280
+        },
+        "gpt-5.3-codex": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144,
+          "reasoning_tokens": 900
+        },
+        "gpt-5.5-pro": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144,
+          "reasoning_tokens": 900
+        },
+        "claude-opus-5": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144,
+          "cache_write_5m_tokens": 2048,
+          "cache_write_1h_tokens": 1024
+        },
+        "claude-sonnet-5": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144,
+          "cache_write_5m_tokens": 2048,
+          "cache_write_1h_tokens": 1024
+        },
+        "claude-haiku-4-5": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144,
+          "cache_write_5m_tokens": 2048,
+          "cache_write_1h_tokens": 1024
+        },
+        "us.anthropic.claude-opus-5-v1:0": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144,
+          "cache_write_5m_tokens": 2048,
+          "cache_write_1h_tokens": 1024
+        },
+        "anthropic.claude-sonnet-5-v1:0": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144,
+          "cache_write_5m_tokens": 2048,
+          "cache_write_1h_tokens": 1024
+        },
+        "meta.llama4-maverick-17b-instruct-v1:0": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144,
+          "cache_write_5m_tokens": 2048,
+          "cache_write_1h_tokens": 1024
+        },
+        "gemini/gemini-3.1-pro": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144,
+          "reasoning_tokens": 900,
+          "audio_input_tokens": 330
+        },
+        "gemini/gemini-3.8-flash": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144,
+          "reasoning_tokens": 900,
+          "audio_input_tokens": 330,
+          "audio_output_tokens": 280
+        },
+        "gemini-3.1-pro": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144,
+          "reasoning_tokens": 900,
+          "audio_input_tokens": 330
+        },
+        "gemini-3.8-flash": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144,
+          "reasoning_tokens": 900,
+          "audio_input_tokens": 330,
+          "audio_output_tokens": 280
+        },
+        "together_ai/moonshotai/Kimi-K3": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412
+        },
+        "together_ai/zai-org/GLM-5.3": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/kimi-k3": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144
+        },
+        "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/qwen3p8-max": {
+          "fresh_input_tokens": 1840,
+          "output_tokens": 412,
+          "cache_read_tokens": 6144
+        }
+      },
+      "expected": {
+        "gpt-5.6": {
+          "spend": 0.0600632,
+          "input_cost": 0.0174952,
+          "output_cost": 0.042568,
+          "prompt_tokens": 8314,
+          "completion_tokens": 1592
+        },
+        "gpt-5.4-mini": {
+          "spend": 0.01379264,
+          "input_cost": 0.00415904,
+          "output_cost": 0.0096336,
+          "prompt_tokens": 8314,
+          "completion_tokens": 1592
+        },
+        "azure/gpt-5.6": {
+          "spend": 0.06169072,
+          "input_cost": 0.01794792,
+          "output_cost": 0.0437428,
+          "prompt_tokens": 8314,
+          "completion_tokens": 1592
+        },
+        "azure/gpt-5.4-mini": {
+          "spend": 0.014385144,
+          "input_cost": 0.004348584,
+          "output_cost": 0.01003656,
+          "prompt_tokens": 8314,
+          "completion_tokens": 1592
+        },
+        "gpt-5.3-codex": {
+          "spend": 0.0203256,
+          "input_cost": 0.0036816,
+          "output_cost": 0.016644,
+          "prompt_tokens": 7984,
+          "completion_tokens": 1312
+        },
+        "gpt-5.5-pro": {
+          "spend": 0.203256,
+          "input_cost": 0.036816,
+          "output_cost": 0.16644,
+          "prompt_tokens": 7984,
+          "completion_tokens": 1312
+        },
+        "claude-opus-5": {
+          "spend": 0.045612,
+          "input_cost": 0.035312,
+          "output_cost": 0.0103,
+          "prompt_tokens": 11056,
+          "completion_tokens": 412
+        },
+        "claude-sonnet-5": {
+          "spend": 0.0273672,
+          "input_cost": 0.0211872,
+          "output_cost": 0.00618,
+          "prompt_tokens": 11056,
+          "completion_tokens": 412
+        },
+        "claude-haiku-4-5": {
+          "spend": 0.0091224,
+          "input_cost": 0.0070624,
+          "output_cost": 0.00206,
+          "prompt_tokens": 11056,
+          "completion_tokens": 412
+        },
+        "us.anthropic.claude-opus-5-v1:0": {
+          "spend": 0.0501732,
+          "input_cost": 0.0388432,
+          "output_cost": 0.01133,
+          "prompt_tokens": 11056,
+          "completion_tokens": 412
+        },
+        "anthropic.claude-sonnet-5-v1:0": {
+          "spend": 0.03010392,
+          "input_cost": 0.02330592,
+          "output_cost": 0.006798,
+          "prompt_tokens": 11056,
+          "completion_tokens": 412
+        },
+        "meta.llama4-maverick-17b-instruct-v1:0": {
+          "spend": 0.00305308,
+          "input_cost": 0.00265344,
+          "output_cost": 0.00039964,
+          "prompt_tokens": 11056,
+          "completion_tokens": 412
+        },
+        "gemini/gemini-3.1-pro": {
+          "spend": 0.0224108,
+          "input_cost": 0.0057668,
+          "output_cost": 0.016644,
+          "prompt_tokens": 8314,
+          "completion_tokens": 1312
+        },
+        "gemini/gemini-3.8-flash": {
+          "spend": 0.0076232,
+          "input_cost": 0.0015572,
+          "output_cost": 0.006066,
+          "prompt_tokens": 8314,
+          "completion_tokens": 1592
+        },
+        "gemini-3.1-pro": {
+          "spend": 0.02338644,
+          "input_cost": 0.00604524,
+          "output_cost": 0.0173412,
+          "prompt_tokens": 8314,
+          "completion_tokens": 1312
+        },
+        "gemini-3.8-flash": {
+          "spend": 0.007460128,
+          "input_cost": 0.001619488,
+          "output_cost": 0.00584064,
+          "prompt_tokens": 8314,
+          "completion_tokens": 1592
+        },
+        "together_ai/moonshotai/Kimi-K3": {
+          "spend": 0.0035374,
+          "input_cost": 0.002116,
+          "output_cost": 0.0014214,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "together_ai/zai-org/GLM-5.3": {
+          "spend": 0.0019184,
+          "input_cost": 0.001012,
+          "output_cost": 0.0009064,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/kimi-k3": {
+          "spend": 0.00250264,
+          "input_cost": 0.00147264,
+          "output_cost": 0.00103,
+          "prompt_tokens": 7984,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash": {
+          "spend": 0.0005232,
+          "input_cost": 0.000276,
+          "output_cost": 0.0002472,
+          "prompt_tokens": 1840,
+          "completion_tokens": 412
+        },
+        "fireworks_ai/accounts/fireworks/models/qwen3p8-max": {
+          "spend": 0.00369216,
+          "input_cost": 0.00220896,
+          "output_cost": 0.0014832,
+          "prompt_tokens": 7984,
+          "completion_tokens": 412
+        }
       }
     }
   ]
