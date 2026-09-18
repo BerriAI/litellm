@@ -5,58 +5,161 @@ Covers the OAuth device-flow surface (RFC 8414 discovery, RFC 8628 device
 authorization + token), managed settings, OTLP ingestion, and the enable flag.
 """
 
-from contextlib import contextmanager
-from typing import Any, Iterator, Optional
-from unittest.mock import patch
+import asyncio
+from collections.abc import Iterator, Mapping
+from contextlib import ExitStack, contextmanager
+from types import MappingProxyType
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from litellm.caching.dual_cache import DualCache
+from litellm.proxy._types import ProxyException
 from litellm.proxy.anthropic_endpoints import gateway_endpoints
-from litellm.proxy.management_endpoints.ui_sso import _get_cli_sso_flow_cache_key
+from litellm.proxy.management_endpoints.ui_sso import _get_cli_sso_flow_cache_key, _set_cli_sso_flow
+
+_DEVICE_CODE_GRANT: Final = "urn:ietf:params:oauth:grant-type:device_code"
+_MASTER_KEY: Final = "sk-master-key"
+_MINT: Final = "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token"
+_PROTOBUF_BODY: Final = b"\x0a\x05hello\x12\x03{{{"
+_COMPLETED_SESSION: Final = MappingProxyType(
+    {
+        "user_id": "user-123",
+        "user_role": "internal_user",
+        "models": ["claude-sonnet-4-5"],
+        "teams": ["team-a"],
+        "team_details": [
+            {
+                "team_id": "team-a",
+                "team_alias": "Team A",
+                "team_models": ["claude-sonnet-4-5"],
+                "team_model_aliases": None,
+            }
+        ],
+    }
+)
+
+
+class _SharedRedisFake:
+    def __init__(self) -> None:
+        self.values: Mapping[str, object] = MappingProxyType({})
+        self.counters: Mapping[str, float] = MappingProxyType({})
+
+    def set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        self.values = MappingProxyType({**self.values, key: value})
+
+    def get_cache(self, key: str, **kwargs: object) -> object:
+        return self.values.get(key)
+
+    def delete_cache(self, key: str) -> None:
+        self.values = MappingProxyType({name: value for name, value in self.values.items() if name != key})
+
+    async def async_delete_cache(self, key: str) -> None:
+        self.delete_cache(key)
+
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
+        incremented: Final = self.counters.get(key, 0) + value
+        self.counters = MappingProxyType({**self.counters, key: incremented})
+        return incremented
+
+
+def _replica(redis: _SharedRedisFake) -> DualCache:
+    return DualCache(redis_cache=redis, default_in_memory_ttl=600)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+
+
+def _real_auth_proxy_attrs() -> Mapping[str, object]:
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    return MappingProxyType(
+        {
+            "master_key": _MASTER_KEY,
+            "prisma_client": None,
+            "user_api_key_cache": DualCache(),
+            "proxy_logging_obj": proxy_logging_obj,
+            "llm_router": None,
+            "llm_model_list": [],
+            "user_custom_auth": None,
+            "litellm_proxy_admin_name": "admin",
+            "jwt_handler": None,
+            "open_telemetry_logger": None,
+            "model_max_budget_limiter": MagicMock(),
+        }
+    )
 
 
 @contextmanager
 def _gateway_env(
     *,
     enabled: bool = True,
-    managed_settings: Optional[dict[str, Any]] = None,
+    managed_settings: Mapping[str, object] | None = None,
+    cache: DualCache | None = None,
+    real_auth: bool = False,
 ) -> Iterator[tuple[TestClient, DualCache]]:
-    general_settings: dict[str, Any] = {"enable_claude_code_gateway": enabled}
-    if managed_settings is not None:
-        general_settings["claude_code_gateway_managed_settings"] = managed_settings
-    cache = DualCache(default_in_memory_ttl=600)
+    general_settings: Final = {
+        "enable_claude_code_gateway": enabled,
+        **({} if managed_settings is None else {"claude_code_gateway_managed_settings": dict(managed_settings)}),
+    }
+    session_cache: Final = cache or DualCache(default_in_memory_ttl=600)
 
-    app = FastAPI()
+    app: Final = FastAPI()
     app.include_router(gateway_endpoints.router)
 
-    async def _fake_auth() -> Any:
+    async def _fake_auth() -> object:
         return object()
 
-    app.dependency_overrides[gateway_endpoints.user_api_key_auth] = _fake_auth
-
-    with patch("litellm.proxy.proxy_server.general_settings", general_settings), patch(
-        "litellm.proxy.proxy_server.cli_sso_session_cache", cache
-    ):
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch(  # test-quality-ok: the gateway reads this proxy_server module global and has no injection seam
+                "litellm.proxy.proxy_server.general_settings", general_settings
+            )
+        )
+        stack.enter_context(
+            patch(  # test-quality-ok: the CLI SSO flow cache is this proxy_server module global shared with ui_sso
+                "litellm.proxy.proxy_server.cli_sso_session_cache", session_cache
+            )
+        )
+        if real_auth:
+            for name, value in _real_auth_proxy_attrs().items():
+                stack.enter_context(patch(f"litellm.proxy.proxy_server.{name}", value))
+        else:
+            app.dependency_overrides[gateway_endpoints.user_api_key_auth] = _fake_auth
         with TestClient(app) as client:
-            yield client, cache
+            yield client, session_cache
 
 
-def _complete_flow(cache: DualCache, device_code: str) -> None:
-    key = _get_cli_sso_flow_cache_key(device_code)
-    flow = cache.get_cache(key=key)
-    assert isinstance(flow, dict)
-    flow["sso_complete"] = True
-    flow["user_code_verified"] = True
-    flow["session_data"] = {
-        "user_id": "user-123",
-        "user_role": "internal_user",
-        "models": ["claude-sonnet-4-5"],
-        "teams": ["team-a"],
+def _start_device_flow(client: TestClient) -> str:
+    return client.post("/claude_code_gateway/oauth/device_authorization").json()["device_code"]
+
+
+def _request_token(client: TestClient, device_code: str) -> httpx.Response:
+    return client.post(
+        "/claude_code_gateway/oauth/token",
+        data={"grant_type": _DEVICE_CODE_GRANT, "device_code": device_code},
+    )
+
+
+def _completed_flow(session_data: Mapping[str, object] = _COMPLETED_SESSION) -> dict[str, object]:
+    return {
+        "poll_secret_hash": "unused",
+        "user_code_hash": "unused",
+        "sso_complete": True,
+        "user_code_verified": True,
+        "session_data": dict(session_data),
     }
-    cache.set_cache(key=key, value=flow, ttl=600)
+
+
+def _complete_flow(
+    cache: DualCache, device_code: str, session_data: Mapping[str, object] = _COMPLETED_SESSION
+) -> None:
+    key: Final = _get_cli_sso_flow_cache_key(device_code)
+    flow: Final = cache.get_cache(key=key)
+    assert isinstance(flow, dict)
+    cache.set_cache(key=key, value={**flow, **_completed_flow(session_data)}, ttl=600)
 
 
 def test_discovery_shape():
@@ -105,28 +208,18 @@ def test_device_authorization_returns_rfc8628_shape_and_persists_flow():
 
 def test_token_authorization_pending_before_browser_completes():
     with _gateway_env() as (client, _):
-        device_code = client.post("/claude_code_gateway/oauth/device_authorization").json()["device_code"]
-        resp = client.post(
-            "/claude_code_gateway/oauth/token",
-            data={"grant_type": "urn:ietf:params:oauth:grant-type:device_code", "device_code": device_code},
-        )
+        resp = _request_token(client, _start_device_flow(client))
     assert resp.status_code == 400
     assert resp.json()["error"] == "authorization_pending"
 
 
 def test_token_success_mints_bearer_and_is_single_use():
     with _gateway_env() as (client, cache):
-        device_code = client.post("/claude_code_gateway/oauth/device_authorization").json()["device_code"]
+        device_code = _start_device_flow(client)
         _complete_flow(cache, device_code)
 
-        with patch(
-            "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
-            return_value="sk-litellm-session-token",
-        ) as mint:
-            resp = client.post(
-                "/claude_code_gateway/oauth/token",
-                data={"grant_type": "urn:ietf:params:oauth:grant-type:device_code", "device_code": device_code},
-            )
+        with patch(_MINT, return_value="sk-litellm-session-token") as mint:
+            resp = _request_token(client, device_code)
             assert resp.status_code == 200
             body = resp.json()
             assert body["access_token"] == "sk-litellm-session-token"
@@ -136,22 +229,77 @@ def test_token_success_mints_bearer_and_is_single_use():
             called_user = mint.call_args.kwargs["user_info"]
             assert called_user.user_id == "user-123"
             assert mint.call_args.kwargs["team_id"] == "team-a"
+            assert mint.call_args.kwargs["team_alias"] == "Team A"
+            assert mint.call_args.kwargs["team_models"] == ("claude-sonnet-4-5",)
 
             # Single-use: the flow is deleted, so a replay returns expired_token.
-            replay = client.post(
-                "/claude_code_gateway/oauth/token",
-                data={"grant_type": "urn:ietf:params:oauth:grant-type:device_code", "device_code": device_code},
-            )
+            replay = _request_token(client, device_code)
     assert replay.status_code == 400
     assert replay.json()["error"] == "expired_token"
 
 
+def test_token_teamless_user_mints_without_a_team():
+    with _gateway_env() as (client, cache):
+        device_code = _start_device_flow(client)
+        _complete_flow(cache, device_code, session_data={**_COMPLETED_SESSION, "teams": [], "team_details": []})
+        with patch(_MINT, return_value="sk-litellm-session-token") as mint:
+            resp = _request_token(client, device_code)
+    assert resp.status_code == 200
+    assert mint.call_args.kwargs["team_id"] is None
+    assert mint.call_args.kwargs["team_models"] == ()
+
+
+def test_token_malformed_session_is_invalid_grant():
+    with _gateway_env() as (client, cache):
+        device_code = _start_device_flow(client)
+        _complete_flow(cache, device_code, session_data={"user_role": "internal_user"})
+        with patch(_MINT) as mint:
+            resp = _request_token(client, device_code)
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_grant"
+    mint.assert_not_called()
+
+
+def test_token_unknown_team_grants_is_invalid_grant():
+    with _gateway_env() as (client, cache):
+        device_code = _start_device_flow(client)
+        _complete_flow(cache, device_code, session_data={**_COMPLETED_SESSION, "team_details": []})
+        with patch(_MINT) as mint:
+            resp = _request_token(client, device_code)
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_grant"
+    mint.assert_not_called()
+
+
+def test_token_mints_on_a_replica_that_did_not_start_the_login():
+    redis: Final = _SharedRedisFake()
+    device_code: Final = "cli-shared-login-code"
+    _set_cli_sso_flow(login_id=device_code, cache=_replica(redis), flow=_completed_flow())
+
+    with _gateway_env(cache=_replica(redis)) as (client, _), patch(_MINT, return_value="sk-session") as mint:
+        resp = _request_token(client, device_code)
+    assert resp.status_code == 200
+    assert resp.json()["access_token"] == "sk-session"
+    assert mint.call_args.kwargs["team_id"] == "team-a"
+
+
+def test_token_refuses_a_device_code_another_replica_already_claimed():
+    redis: Final = _SharedRedisFake()
+    replica_a: Final = _replica(redis)
+    device_code: Final = "cli-shared-login-code"
+    _set_cli_sso_flow(login_id=device_code, cache=replica_a, flow=_completed_flow())
+    assert asyncio.run(gateway_endpoints._claim_device_code(device_code, replica_a)) is True
+
+    with _gateway_env(cache=_replica(redis)) as (client, _), patch(_MINT) as mint:
+        resp = _request_token(client, device_code)
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "expired_token"
+    mint.assert_not_called()
+
+
 def test_token_unknown_device_code_is_expired_token():
     with _gateway_env() as (client, _):
-        resp = client.post(
-            "/claude_code_gateway/oauth/token",
-            data={"grant_type": "urn:ietf:params:oauth:grant-type:device_code", "device_code": "cli-does-not-exist"},
-        )
+        resp = _request_token(client, "cli-does-not-exist")
     assert resp.status_code == 400
     assert resp.json()["error"] == "expired_token"
 
@@ -211,6 +359,26 @@ def test_otlp_endpoints_404_when_disabled(signal: str):
     with _gateway_env(enabled=False) as (client, _):
         resp = client.post(f"/claude_code_gateway/v1/{signal}", content=b"payload")
     assert resp.status_code == 404
+
+
+def test_otlp_protobuf_body_is_accepted_through_real_auth():
+    with _gateway_env(real_auth=True) as (client, _):
+        resp = client.post(
+            "/claude_code_gateway/v1/metrics",
+            content=_PROTOBUF_BODY,
+            headers={"Authorization": f"Bearer {_MASTER_KEY}", "Content-Type": "application/x-protobuf"},
+        )
+    assert resp.status_code == 200
+
+
+def test_otlp_without_a_bearer_is_rejected_by_real_auth():
+    with _gateway_env(real_auth=True) as (client, _), pytest.raises(ProxyException) as exc_info:
+        client.post(
+            "/claude_code_gateway/v1/metrics",
+            content=_PROTOBUF_BODY,
+            headers={"Content-Type": "application/x-protobuf"},
+        )
+    assert exc_info.value.code == "401"
 
 
 def test_messages_gated_by_enable_flag():

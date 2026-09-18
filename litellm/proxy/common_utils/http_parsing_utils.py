@@ -18,6 +18,8 @@ from litellm.types.router import Deployment
 
 _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-urlencoded", "multipart/form-data"})
 
+_PROTOBUF_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobuf", "application/protobuf"})
+
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
 
 
@@ -42,6 +44,10 @@ def _is_form_content_type(content_type: str) -> bool:
 def is_json_content_type(content_type: str) -> bool:
     """True iff the body should be parsed as JSON."""
     return _normalize_media_type(content_type) == "application/json"
+
+
+def _is_protobuf_content_type(content_type: str) -> bool:
+    return _normalize_media_type(content_type) in _PROTOBUF_CONTENT_TYPES
 
 
 def _unqualified(annotation: object) -> object:
@@ -133,7 +139,9 @@ async def _read_request_body(request: Request | None) -> dict:
         _request_headers: Final[dict] = _safe_get_request_headers(request=request)
         content_type: Final = _request_headers.get("content-type", "")
 
-        if _is_form_content_type(content_type):
+        if _is_protobuf_content_type(content_type):
+            parsed_body = {}
+        elif _is_form_content_type(content_type):
             try:
                 form_data: Final = await request.form()
             except Exception as e:
