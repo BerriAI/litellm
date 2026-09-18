@@ -627,11 +627,9 @@ async def test_update_tag_resets_spend():
 
     try:
         with (
-            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
-            patch("litellm.proxy.proxy_server.spend_counter_cache") as mock_spend_counter_cache,
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),  # test-quality-ok: the endpoint imports proxy_server.litellm_proxy_admin_name itself; no parameter to inject
+            patch("litellm.proxy.proxy_server.spend_counter_cache") as mock_spend_counter_cache,  # test-quality-ok: the endpoint imports proxy_server.spend_counter_cache itself; no parameter to inject
         ):
             mock_spend_counter_cache.redis_cache = None
 
@@ -692,11 +690,9 @@ async def test_update_tag_resets_spend_in_redis():
 
     try:
         with (
-            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
-            patch("litellm.proxy.proxy_server.spend_counter_cache") as mock_spend_counter_cache,
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),  # test-quality-ok: the endpoint imports proxy_server.litellm_proxy_admin_name itself; no parameter to inject
+            patch("litellm.proxy.proxy_server.spend_counter_cache") as mock_spend_counter_cache,  # test-quality-ok: the endpoint imports proxy_server.spend_counter_cache itself; no parameter to inject
         ):
             mock_spend_counter_cache.redis_cache = MagicMock()
             mock_spend_counter_cache.redis_cache.async_set_cache = AsyncMock()
@@ -755,11 +751,9 @@ async def test_update_tag_resets_spend_redis_failure_does_not_fail_request():
 
     try:
         with (
-            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
-            patch("litellm.proxy.proxy_server.spend_counter_cache") as mock_spend_counter_cache,
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),  # test-quality-ok: the endpoint imports proxy_server.litellm_proxy_admin_name itself; no parameter to inject
+            patch("litellm.proxy.proxy_server.spend_counter_cache") as mock_spend_counter_cache,  # test-quality-ok: the endpoint imports proxy_server.spend_counter_cache itself; no parameter to inject
         ):
             mock_spend_counter_cache.redis_cache = MagicMock()
             mock_spend_counter_cache.redis_cache.async_set_cache = AsyncMock(
@@ -816,11 +810,9 @@ async def test_update_tag_without_spend_does_not_touch_counter_cache():
 
     try:
         with (
-            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
-            patch("litellm.proxy.proxy_server.spend_counter_cache") as mock_spend_counter_cache,
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),  # test-quality-ok: the endpoint imports proxy_server.litellm_proxy_admin_name itself; no parameter to inject
+            patch("litellm.proxy.proxy_server.spend_counter_cache") as mock_spend_counter_cache,  # test-quality-ok: the endpoint imports proxy_server.spend_counter_cache itself; no parameter to inject
         ):
             mock_db = Mock()
             mock_prisma.db = mock_db
@@ -875,7 +867,7 @@ async def test_update_tag_rejects_non_finite_spend():
     )
 
     try:
-        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
             mock_db = Mock()
             mock_prisma.db = mock_db
             mock_db.litellm_tagtable.update = AsyncMock()
