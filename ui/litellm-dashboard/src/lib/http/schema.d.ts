@@ -22634,6 +22634,42 @@ export interface paths {
         patch: operations["watsonx_proxy_route_watsonx__endpoint__patch"];
         trace?: never;
     };
+    "/xai/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Xai Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/xai)
+         */
+        get: operations["xai_proxy_route_xai__endpoint__get"];
+        /**
+         * Xai Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/xai)
+         */
+        put: operations["xai_proxy_route_xai__endpoint__put"];
+        /**
+         * Xai Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/xai)
+         */
+        post: operations["xai_proxy_route_xai__endpoint__post"];
+        /**
+         * Xai Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/xai)
+         */
+        delete: operations["xai_proxy_route_xai__endpoint__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Xai Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/xai)
+         */
+        patch: operations["xai_proxy_route_xai__endpoint__patch"];
+        trace?: never;
+    };
     "/{mcp_server_name}/authorize": {
         parameters: {
             query?: never;
@@ -70581,6 +70617,161 @@ export interface operations {
         };
     };
     watsonx_proxy_route_watsonx__endpoint__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    xai_proxy_route_xai__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    xai_proxy_route_xai__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    xai_proxy_route_xai__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    xai_proxy_route_xai__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    xai_proxy_route_xai__endpoint__patch: {
         parameters: {
             query?: never;
             header?: never;
