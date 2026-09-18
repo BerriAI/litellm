@@ -2865,6 +2865,35 @@ async def test_failed_daily_spend_commit_requeues_the_rows_and_flushes_the_other
 
 
 @pytest.mark.asyncio
+async def test_failed_daily_tag_spend_commit_requeues_the_rows():
+    """The tag rollup drains on its own scheduler job with the same no-Redis drop:
+    a failed LiteLLM_DailyTagSpend commit has to put the rows back for the next tick."""
+    db_writer = DBSpendUpdateWriter()
+    tag_txn = {key: value for key, value in _daily_txn().items() if key != "user_id"} | {"tag": "tag-1"}
+    await db_writer.daily_tag_spend_update_queue.add_update({"tag-key": tag_txn})
+    db = _DailySpendFakeDB(failing_table="LiteLLM_DailyTagSpend")
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    await db_writer._commit_daily_tag_spend_to_db(
+        prisma_client=_WindowSpendFakePrisma(db), n_retry_times=0, proxy_logging_obj=proxy_logging_obj
+    )
+
+    assert _daily_upserts(db, "LiteLLM_DailyTagSpend") == []
+    assert not db_writer.daily_tag_spend_update_queue.update_queue.empty()
+
+    db.failing_table = None
+    await db_writer._commit_daily_tag_spend_to_db(
+        prisma_client=_WindowSpendFakePrisma(db), n_retry_times=0, proxy_logging_obj=proxy_logging_obj
+    )
+
+    (tag_upsert,) = _daily_upserts(db, "LiteLLM_DailyTagSpend")
+    assert _row_values(tag_upsert, "tag") == ["tag-1"]
+    assert _row_values(tag_upsert, "spend") == [0.1]
+    assert db_writer.daily_tag_spend_update_queue.update_queue.empty()
+
+
+@pytest.mark.asyncio
 async def test_failed_window_spend_commit_from_redis_is_restored_to_redis():
     """The Redis drain is destructive, so a failed window commit has to push
     the popped increments back exactly like the other spend categories."""

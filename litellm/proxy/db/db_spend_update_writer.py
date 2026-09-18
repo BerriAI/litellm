@@ -1305,7 +1305,7 @@ class DBSpendUpdateWriter:
     async def _flush_daily_spend_queue(
         self,
         queue: DailySpendUpdateQueue,
-        entity_type: Literal["user", "team", "org", "end_user", "agent"],
+        entity_type: Literal["user", "team", "org", "tag", "end_user", "agent"],
         commit: _DailySpendCommit[_DailySpendTransactionT],
         n_retry_times: int,
         prisma_client: PrismaClient,
@@ -1447,18 +1447,14 @@ class DBSpendUpdateWriter:
         Commit only tag spend updates to database.
         This is called by a separate scheduler job at a longer interval.
         """
-        daily_tag_spend_update_transactions: Final = cast(
-            dict[str, DailyTagSpendTransaction],
-            await self.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
+        await self._flush_daily_spend_queue(
+            queue=self.daily_tag_spend_update_queue,
+            entity_type="tag",
+            commit=DBSpendUpdateWriter.update_daily_tag_spend,
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
         )
-
-        if daily_tag_spend_update_transactions:
-            await DBSpendUpdateWriter.update_daily_tag_spend(
-                n_retry_times=n_retry_times,
-                prisma_client=prisma_client,
-                proxy_logging_obj=proxy_logging_obj,
-                daily_spend_transactions=daily_tag_spend_update_transactions,
-            )
 
     async def _commit_daily_tag_spend_to_db_with_redis(
         self,
