@@ -133,9 +133,9 @@ MCP_AUTH_DIAGNOSTICS_SCOPE_KEY: Final = "litellm.mcp.auth_diagnostics"
 
 
 def record_auth_resolution(server_id: str, source: AuthResolution) -> None:
-    from mcp.server.lowlevel.server import request_ctx
+    from litellm.proxy._experimental.mcp_server.mcp_context import get_active_mcp_request_ctx
 
-    context: Final[object] = request_ctx.get(None)
+    context: Final[object] = get_active_mcp_request_ctx()
     request: Final[object] = getattr(context, "request", None)
     if isinstance(request, HTTPConnection):
         diagnostics: Final[object] = request.scope.get(MCP_AUTH_DIAGNOSTICS_SCOPE_KEY)

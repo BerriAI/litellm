@@ -150,6 +150,16 @@ def _known_connection_error_message(exc: BaseException, url: str | None, timeout
             "Check the MCP endpoint URL and the server's protocol implementation."
         )
     if MCP_AVAILABLE and isinstance(exc, MCPError):
+        if exc.error.message.startswith("Unexpected content type:"):
+            return (
+                "Failed to connect to MCP server: the endpoint returned an unsupported content type. "
+                "Check that the URL is an MCP endpoint, not a web page, and matches the selected transport."
+            )
+        if exc.error.code == -32700 or exc.error.message.startswith("Failed to parse"):
+            return (
+                "Failed to connect to MCP server: the endpoint returned invalid JSON or an invalid MCP response. "
+                "Check the MCP endpoint URL and the server's protocol implementation."
+            )
         if exc.error.code == -32000 and exc.error.message == "Connection closed":
             return (
                 "Failed to connect to MCP server: the connection was closed before the request completed. "

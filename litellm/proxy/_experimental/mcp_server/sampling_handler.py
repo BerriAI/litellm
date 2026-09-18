@@ -1065,12 +1065,12 @@ async def _build_completion_kwargs(
 ) -> dict[str, Any]:
     openai_messages: Final = _convert_mcp_messages_to_openai(
         messages=params.messages,
-        system_prompt=params.systemPrompt,
+        system_prompt=params.system_prompt,
     )
     completion_kwargs: Final[dict[str, object]] = {
         "model": model,
         "messages": openai_messages,
-        "max_tokens": params.maxTokens,
+        "max_tokens": params.max_tokens,
     }
     if params.temperature is not None:
         completion_kwargs["temperature"] = params.temperature
@@ -1079,7 +1079,7 @@ async def _build_completion_kwargs(
     openai_tools: Final = _convert_mcp_tools_to_openai(params.tools)
     if openai_tools:
         completion_kwargs["tools"] = openai_tools
-    openai_tool_choice: Final = _convert_mcp_tool_choice_to_openai(params.toolChoice)
+    openai_tool_choice: Final = _convert_mcp_tool_choice_to_openai(params.tool_choice)
     if openai_tool_choice is not None:
         completion_kwargs["tool_choice"] = openai_tool_choice
     completion_kwargs["metadata"] = {"mcp_metadata": params.metadata} if params.metadata else {}
