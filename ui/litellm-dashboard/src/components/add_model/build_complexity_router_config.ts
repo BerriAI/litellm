@@ -156,6 +156,7 @@ export interface StoredComplexityRouterConfig {
   jev_classifier_config?: unknown;
   classifier_context_window_size?: unknown;
   classifier_context_budget_chars?: unknown;
+  classifier_context_per_turn_chars?: unknown;
   classifier_context_include_assistant_turns?: unknown;
   classifier_fallback?: unknown;
   classification_mode?: unknown;
@@ -195,6 +196,7 @@ export interface BuildComplexityRouterConfigParams {
   jevClassifierConfig?: JevClassifierConfig;
   classifierContextWindowSize: number | undefined;
   classifierContextBudgetChars: number | undefined;
+  classifierContextPerTurnChars?: number;
   classifierContextIncludeAssistantTurns: boolean | undefined;
   classifierFallback: ClassifierFallback | undefined;
   classificationPrompt: string | undefined;
@@ -533,6 +535,7 @@ const classifierWireFields = (
     hybridBoundaryMargin,
     classifierContextWindowSize,
     classifierContextBudgetChars,
+    classifierContextPerTurnChars,
     classifierContextIncludeAssistantTurns,
   }: Pick<
     BuildComplexityRouterConfigParams,
@@ -542,6 +545,7 @@ const classifierWireFields = (
     | "hybridBoundaryMargin"
     | "classifierContextWindowSize"
     | "classifierContextBudgetChars"
+    | "classifierContextPerTurnChars"
     | "classifierContextIncludeAssistantTurns"
   >,
 ): Partial<ComplexityRouterConfigPayload> => {
@@ -567,6 +571,10 @@ const classifierWireFields = (
         classifier_context_budget_chars: classifierContextBudgetChars,
       }),
     ...(usesClassifierContext(effectiveType) &&
+      classifierContextPerTurnChars !== undefined && {
+        classifier_context_per_turn_chars: classifierContextPerTurnChars,
+      }),
+    ...(usesClassifierContext(effectiveType) &&
       classifierContextIncludeAssistantTurns !== undefined && {
         classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
       }),
@@ -587,6 +595,7 @@ export const buildComplexityRouterConfig = ({
   jevClassifierConfig,
   classifierContextWindowSize,
   classifierContextBudgetChars,
+  classifierContextPerTurnChars,
   classifierContextIncludeAssistantTurns,
   classifierFallback,
   classificationPrompt,
@@ -648,6 +657,7 @@ export const buildComplexityRouterConfig = ({
     hybridBoundaryMargin,
     classifierContextWindowSize,
     classifierContextBudgetChars,
+    classifierContextPerTurnChars,
     classifierContextIncludeAssistantTurns,
   };
   const effectiveType = effectiveClassifierType({ custom_tier_set: customTierSet, classifier_type: classifierType });

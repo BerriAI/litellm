@@ -91,6 +91,7 @@ describe("buildComplexityRouterConfig", () => {
       classificationExamples: "stale examples",
       classifierContextWindowSize: 4,
       classifierContextBudgetChars: 2000,
+      classifierContextPerTurnChars: 450,
       classifierContextIncludeAssistantTurns: true,
       classifierFallback: "default_model",
       ...(custom && {
@@ -115,6 +116,7 @@ describe("buildComplexityRouterConfig", () => {
     expect(config.jev_classifier_config).toEqual(expectedJevConfig);
     expect(config.classifier_context_window_size).toBe(4);
     expect(config.classifier_context_budget_chars).toBe(2000);
+    expect(config.classifier_context_per_turn_chars).toBe(450);
     expect(config.classifier_context_include_assistant_turns).toBe(true);
     expect(config).not.toHaveProperty("classifier_llm_config");
     expect(config).not.toHaveProperty("classification_prompt");
@@ -876,13 +878,13 @@ describe("buildComplexityRouterConfig scorer knobs", () => {
     "%s with fallback %s only emits custom dimensions when its scorer decides",
     (classifierType, classifierFallback, emits) => {
       const dimension = { name: "d", weight: 0.4, keywords: ["orbitmesh"] };
-      const params = {
+      const uncheckedParams: unknown = {
         ...baseParams,
         classifierType,
         classifierFallback,
         customDimensions: [{ id: "row", ...dimension }],
       };
-      const payload = buildComplexityRouterConfig(params);
+      const payload = buildComplexityRouterConfig(uncheckedParams as BuildComplexityRouterConfigParams);
       if (emits) expect(payload.custom_dimensions).toEqual([dimension]);
       else expect(payload).not.toHaveProperty("custom_dimensions");
     },
