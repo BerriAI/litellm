@@ -6,7 +6,7 @@ same route are non-inference and free.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Dict, Optional, cast
+from typing import TYPE_CHECKING, Dict, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -42,7 +42,7 @@ class CheckResponsesCost:
         self.llm_router: Router = llm_router
 
     def _resolve_deployment(self, response_id: str) -> bool:
-        model_id: Optional[str] = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
+        model_id: str | None = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
         return model_id is not None and self.llm_router.get_deployment(model_id=model_id) is not None
 
     async def _get_response(
@@ -149,7 +149,6 @@ class CheckResponsesCost:
 
         for job in jobs:
             unified_object_id = job.unified_object_id
-            via_router = False
 
             try:
                 from litellm.proxy.hooks.responses_id_security import (
@@ -159,32 +158,38 @@ class CheckResponsesCost:
                 # Get the stored response object to extract model information
                 stored_response = job.file_object
                 model_name = stored_response.get("model", None)
-                
+
                 # Decrypt the response ID
                 responses_id_security, _, _ = ResponsesIDSecurity()._decrypt_response_id(unified_object_id)
-                
+
                 # Prepare metadata with model information for cost tracking
                 litellm_metadata = {
                     "user_api_key_user_id": job.created_by or "default-user-id",
                     INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
                 }
-                
+
                 # Add model information if available
                 if model_name:
                     litellm_metadata["model"] = model_name
                     litellm_metadata["model_group"] = model_name  # Use same value for model_group
-                
-                via_router = self._resolve_deployment(responses_id_security)
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    f"Skipping job {unified_object_id} due to error: {e}"
+                )
+                continue
+
+            via_router = self._resolve_deployment(responses_id_security)
+            try:
                 response = await self._get_response(
                     response_id=responses_id_security,
                     litellm_metadata=litellm_metadata,
                     via_router=via_router,
                 )
-                
+
                 verbose_proxy_logger.debug(
                     f"Response {unified_object_id} status: {response.status}, model: {model_name}"
                 )
-                
+
             except litellm.NotFoundError as e:
                 if not via_router:
                     verbose_proxy_logger.warning(
