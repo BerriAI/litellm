@@ -133,6 +133,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                 { label: "Max Budget", value: selectedBudget?.max_budget },
                 { label: "TPM", value: selectedBudget?.tpm_limit },
                 { label: "RPM", value: selectedBudget?.rpm_limit },
+                { label: "TPD (batch)", value: selectedBudget?.tpd_limit },
               ]}
               onCancel={handleDeleteCancel}
               onOk={handleDeleteConfirm}

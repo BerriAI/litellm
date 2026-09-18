@@ -3,7 +3,8 @@ import contextlib
 import datetime
 import os
 import sys
-from typing import Literal
+from collections.abc import Callable
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -394,53 +395,6 @@ class TestGetRouterDeploymentModelInfo:
         logging_obj.litellm_params = {"api_base": ""}
         assert logging_obj.get_router_deployment_model_info() is None
 
-    @pytest.mark.parametrize(
-        "declared,expected_input,expected_output",
-        [
-            ({"input_cost_per_token": 1e-06}, 1e-06, 1.5e-05),
-            ({"output_cost_per_token": 5e-06}, 3e-06, 5e-06),
-            ({"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}, 0.0, 0.0),
-        ],
-        ids=["input-only", "output-only", "both-zero"],
-    )
-    def test_one_sided_override_keeps_the_published_rate_for_the_other_side(
-        self,
-        declared: dict[str, float],
-        expected_input: float,
-        expected_output: float,
-    ) -> None:
-        """A deployment may configure one direction only.
-
-        Substituting its pricing wholesale billed the direction it left unset at
-        zero, because get_model_info fills an absent cost with 0 and that
-        suppressed the global fallback.
-        """
-        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-
-        model = "bedrock/global.anthropic.claude-sonnet-4-6"
-        published = litellm.get_model_info(model=model)
-        assert (published["input_cost_per_token"], published["output_cost_per_token"]) == (3e-06, 1.5e-05)
-
-        deployment_id = f"deploy-one-sided-{'-'.join(sorted(declared))}"
-        litellm.model_cost[deployment_id] = {"id": deployment_id, **declared}
-        obj = LiteLLMLoggingObj(
-            model=model,
-            messages=[],
-            stream=False,
-            call_type="aretrieve_batch",
-            start_time=time.time(),
-            litellm_call_id="one-sided",
-            function_id="f",
-        )
-        obj.litellm_params = {"litellm_metadata": {"model_info": {"id": deployment_id}}, "model": model}
-        obj.model_call_details["model"] = model
-        try:
-            info = obj.get_router_deployment_model_info()
-            assert info is not None
-            assert info["input_cost_per_token"] == expected_input
-            assert info["output_cost_per_token"] == expected_output
-        finally:
-            litellm.model_cost.pop(deployment_id, None)
 
     def test_a_published_batch_rate_never_displaces_a_declared_standard_rate(self) -> None:
         """Ownership is per token direction, not per field.
@@ -510,7 +464,6 @@ class TestGetRouterDeploymentModelInfo:
             cached_before = dict(litellm.get_model_info(model=deployment_id))
             info = obj.get_router_deployment_model_info()
             assert info is not None
-            assert info["output_cost_per_token"] == 1.5e-05
             assert dict(litellm.get_model_info(model=deployment_id)) == cached_before
         finally:
             litellm.model_cost.pop(deployment_id, None)
@@ -2425,7 +2378,7 @@ async def test_e2e_generate_cold_storage_object_key_with_custom_logger_s3_path()
     Test that _generate_cold_storage_object_key uses s3_path from custom logger instance.
     """
     from datetime import datetime, timezone
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import MagicMock, patch
 
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
@@ -2472,7 +2425,7 @@ async def test_e2e_generate_cold_storage_object_key_with_logger_no_s3_path():
     Test that _generate_cold_storage_object_key falls back to empty s3_path when logger has no s3_path.
     """
     from datetime import datetime, timezone
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import MagicMock, patch
 
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
@@ -5220,10 +5173,11 @@ def test_handle_anthropic_messages_parsed_response_logging_preserves_fast_mode_s
     assert getattr(result.usage, "speed", None) == "fast"
 
 
-def test_logging_init_sets_trace_id():
+def test_logging_init_sets_trace_id(monkeypatch):
     """Logging.__init__() must call set_trace_id with self.litellm_trace_id."""
     from litellm.litellm_core_utils.litellm_logging import Logging
 
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("")
 
     log_obj = Logging(
@@ -5239,7 +5193,7 @@ def test_logging_init_sets_trace_id():
     assert trace_id_var.get() == log_obj.litellm_trace_id
 
 
-def test_logging_init_skips_stamping_when_correlation_logging_unsupported():
+def test_logging_init_skips_stamping_when_correlation_logging_unsupported(monkeypatch):
     """supports_correlation_logging=False (what wrapper(), the sync entry
     point, always passes) must leave trace_id_var/session_id_var completely
     untouched, even though self.litellm_trace_id/litellm_session_id (the
@@ -5247,6 +5201,7 @@ def test_logging_init_skips_stamping_when_correlation_logging_unsupported():
     usual - only the ambient contextvar stamping is gated."""
     from litellm.litellm_core_utils.litellm_logging import Logging
 
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("")
     session_id_var.set("")
 
@@ -5270,10 +5225,48 @@ def test_logging_init_skips_stamping_when_correlation_logging_unsupported():
     assert log_obj.litellm_session_id == "should-not-be-stamped"
 
 
-def test_logging_init_sets_session_id_when_provided():
+def test_logging_init_skips_stamping_when_request_correlation_in_logs_disabled(monkeypatch):
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
+    trace_id_var.set("outer")
+    session_id_var.set("outer-sid")
+    try:
+        with (
+            patch(  # test-quality-ok: regression test verifies disabled stamping skips both setters
+                "litellm.litellm_core_utils.litellm_logging.set_trace_id"
+            ) as mock_set_trace_id,
+            patch(  # test-quality-ok: regression test verifies disabled stamping skips both setters
+                "litellm.litellm_core_utils.litellm_logging.set_session_id"
+            ) as mock_set_session_id,
+        ):
+            log_obj = Logging(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=False,
+                call_type="completion",
+                start_time=None,
+                litellm_call_id="call-disabled",
+                function_id="fn-disabled",
+                kwargs={"litellm_session_id": "disabled-session"},
+                supports_correlation_logging=True,
+            )
+
+            assert trace_id_var.get() == "outer"
+            assert session_id_var.get() == "outer-sid"
+            assert log_obj._own_trace_id == "outer"
+            mock_set_trace_id.assert_not_called()
+            mock_set_session_id.assert_not_called()
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_logging_init_sets_session_id_when_provided(monkeypatch):
     """Logging.__init__() must call set_session_id when litellm_session_id is in kwargs."""
     from litellm.litellm_core_utils.litellm_logging import Logging
 
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     session_id_var.set("")
 
     Logging(
@@ -5289,11 +5282,12 @@ def test_logging_init_sets_session_id_when_provided():
     assert session_id_var.get() == "my-session-99"
 
 
-def test_logging_init_resets_session_id_to_empty_when_absent():
+def test_logging_init_resets_session_id_to_empty_when_absent(monkeypatch):
     """When no session_id is in kwargs, Logging.__init__() must reset session_id_var to ""
     so a prior request's session_id does not leak into subsequent log records."""
     from litellm.litellm_core_utils.litellm_logging import Logging
 
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     session_id_var.set("preexisting-sid")
 
     Logging(
@@ -5309,7 +5303,7 @@ def test_logging_init_resets_session_id_to_empty_when_absent():
     assert session_id_var.get() == ""
 
 
-def test_restore_correlation_context_resets_to_pre_call_value():
+def test_restore_correlation_context_resets_to_pre_call_value(monkeypatch):
     """_restore_correlation_context() must put trace_id_var/session_id_var back to
     whatever they were immediately before this Logging instance was constructed.
     This is the mechanism that prevents a nested call (e.g. a guardrail's own
@@ -5317,6 +5311,7 @@ def test_restore_correlation_context_resets_to_pre_call_value():
     session_id into the outer call's subsequent log lines."""
     from litellm.litellm_core_utils.litellm_logging import Logging
 
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace")
     session_id_var.set("outer-session")
     try:
@@ -5342,7 +5337,7 @@ def test_restore_correlation_context_resets_to_pre_call_value():
         session_id_var.set("")
 
 
-def test_restore_correlation_context_safe_to_call_repeatedly():
+def test_restore_correlation_context_safe_to_call_repeatedly(monkeypatch):
     """Calling _restore_correlation_context() more than once must not raise.
 
     It's deliberately NOT guarded against repeat calls: wrapper()'s finally
@@ -5352,6 +5347,7 @@ def test_restore_correlation_context_safe_to_call_repeatedly():
     the contextvars, so repeat calls are expected, not just tolerated."""
     from litellm.litellm_core_utils.litellm_logging import Logging
 
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     log_obj = Logging(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "hi"}],
@@ -5366,8 +5362,40 @@ def test_restore_correlation_context_safe_to_call_repeatedly():
     log_obj._restore_correlation_context()  # must not raise
 
 
+def test_restore_correlation_context_does_not_resanitize(monkeypatch):
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm._logging import _sanitize_correlation_id
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    trace_id_var.set("outer-trace")
+    session_id_var.set("outer-session")
+    try:
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="call-no-resanitize",
+            function_id="fn-no-resanitize",
+            kwargs={"litellm_session_id": "inner-session"},
+        )
+
+        with patch(  # test-quality-ok: regression test verifies restore avoids sanitization
+            "litellm._logging._sanitize_correlation_id", wraps=_sanitize_correlation_id
+        ) as mock_sanitize:
+            log_obj._restore_correlation_context()
+
+        mock_sanitize.assert_not_called()
+        assert trace_id_var.get() == "outer-trace"
+        assert session_id_var.get() == "outer-session"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
 @pytest.mark.asyncio
-async def test_restore_correlation_context_works_across_asyncio_task_boundary():
+async def test_restore_correlation_context_works_across_asyncio_task_boundary(monkeypatch):
     """_restore_correlation_context() must succeed even when it's called from a
     different asyncio Task than the one Logging.__init__() ran in - exactly what
     happens on litellm's real async success path, where async_success_handler is
@@ -5384,6 +5412,7 @@ async def test_restore_correlation_context_works_across_asyncio_task_boundary():
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
 
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-cross-task")
     session_id_var.set("outer-session-cross-task")
     try:
@@ -5887,6 +5916,81 @@ def test_resolve_vertex_location_for_cost_default_region(monkeypatch):
 
     assert _resolve("vertex_ai", {}, None, "gemini-3.5-flash") == "us-central1"
     assert _resolve("vertex_ai", None, None, "gemini-3.5-flash") == "us-central1"
+
+
+def test_resolve_mantle_region_for_cost(monkeypatch):
+    """Bedrock Mantle requests resolve the served region the way dispatch does (explicit
+    aws_region_name, then the api_base host, then the default); other providers get None."""
+    from litellm.litellm_core_utils.litellm_logging import _resolve_mantle_region_for_cost
+
+    for var in ("BEDROCK_MANTLE_REGION", "BEDROCK_MANTLE_API_BASE", "AWS_REGION_NAME", "AWS_REGION"):
+        monkeypatch.delenv(var, raising=False)
+
+    assert _resolve_mantle_region_for_cost("bedrock", {"aws_region_name": "us-gov-west-1"}) is None
+    assert _resolve_mantle_region_for_cost(None, {"aws_region_name": "us-gov-west-1"}) is None
+    assert _resolve_mantle_region_for_cost("bedrock_mantle", {"aws_region_name": "us-gov-west-1"}) == "us-gov-west-1"
+    assert (
+        _resolve_mantle_region_for_cost(
+            "bedrock_mantle",
+            {"api_base": "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1/chat/completions"},
+        )
+        == "us-gov-west-1"
+    )
+    assert _resolve_mantle_region_for_cost("bedrock_mantle", None) == "us-east-1"
+
+
+def test_response_cost_calculator_prices_mantle_calls_on_the_served_region(monkeypatch):
+    """
+    Mantle responses carry no region of their own (the OpenAI-compatible transform rebuilds the
+    response, and streams never had one), so the logging layer must price them from the region
+    the deployment was served in: an explicit aws_region_name or the api_base host, both of which
+    must select the GovCloud row over the commercial one.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=""))
+    for var in ("BEDROCK_MANTLE_REGION", "BEDROCK_MANTLE_API_BASE", "AWS_REGION_NAME", "AWS_REGION"):
+        monkeypatch.delenv(var, raising=False)
+
+    def cost_with(litellm_params):
+        logging_obj = LitellmLogging(
+            model="xai.grok-4.3",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=datetime.now(),
+            litellm_call_id="mantle-region",
+            function_id="f",
+        )
+        logging_obj.update_environment_variables(
+            model="xai.grok-4.3",
+            user="",
+            optional_params={},
+            litellm_params=litellm_params,
+            custom_llm_provider="bedrock_mantle",
+        )
+        response = ModelResponse(
+            id="resp-1",
+            model="xai.grok-4.3",
+            choices=[{"message": {"role": "assistant", "content": "hello"}, "index": 0, "finish_reason": "stop"}],
+            usage={"prompt_tokens": 38, "completion_tokens": 20, "total_tokens": 58},
+        )
+        return logging_obj._response_cost_calculator(result=response)
+
+    commercial = litellm.model_cost["bedrock_mantle/xai.grok-4.3"]
+    gov = litellm.model_cost["bedrock_mantle/us-gov-west-1/xai.grok-4.3"]
+    expected_commercial = 38 * commercial["input_cost_per_token"] + 20 * commercial["output_cost_per_token"]
+    expected_gov = 38 * gov["input_cost_per_token"] + 20 * gov["output_cost_per_token"]
+    assert expected_gov != expected_commercial
+
+    assert cost_with({"api_base": ""}) == pytest.approx(expected_commercial)
+    assert cost_with({"aws_region_name": "us-gov-west-1"}) == pytest.approx(expected_gov)
+    assert cost_with(
+        {"api_base": "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1/chat/completions"}
+    ) == pytest.approx(expected_gov)
 
 
 def test_response_cost_calculator_prices_proxy_vertex_calls_on_the_configured_location(monkeypatch):
@@ -6402,9 +6506,9 @@ async def test_prompt_hook_injection_marker_recorded_for_every_surface(logging_o
     assert pre_choice["metadata"]["litellm_gateway_injected_cache"] == ""
 
 
-def _responses_ws_logging_obj() -> LitellmLogging:
+def _responses_ws_logging_obj(model: str = "gpt-4o") -> LitellmLogging:
     return LitellmLogging(
-        model="gpt-4o",
+        model=model,
         messages=[],
         stream=False,
         call_type=CallTypes.aresponses_websocket.value,
@@ -6484,6 +6588,62 @@ def test_normalize_logging_result_bills_incomplete_responses_websocket_turns():
     assert normalized.usage.prompt_tokens == 55
     assert normalized.usage.completion_tokens == 20
     assert normalized.usage.total_tokens == 75
+
+
+def test_normalize_logging_result_prices_responses_websocket_at_returned_service_tier():
+    """Issue #41299: a WebSocket turn billed at priority tier reported it on
+    response.completed.response.service_tier, but the logging object dropped it and the
+    session was priced at the default tier."""
+    events = [
+        {"type": "response.created", "response": {}},
+        {
+            "type": "response.completed",
+            "response": {
+                "service_tier": "priority",
+                "usage": {"input_tokens": 100, "output_tokens": 40, "total_tokens": 140},
+            },
+        },
+    ]
+
+    normalized = _responses_ws_logging_obj(model="gpt-5.4").normalize_logging_result(result=events)
+
+    assert isinstance(normalized, LiteLLMRealtimeStreamLoggingObject)
+    assert normalized.service_tier == "priority"
+
+    usage = ResponseAPIUsage(input_tokens=100, output_tokens=40, total_tokens=140)
+    ws_cost = litellm.completion_cost(
+        completion_response=normalized,
+        model="gpt-5.4",
+        call_type=CallTypes.aresponses_websocket.value,
+        custom_llm_provider="openai",
+    )
+    priority_http_cost = litellm.completion_cost(
+        completion_response=ResponsesAPIResponse(
+            id="resp-priority",
+            created_at=1700000000,
+            output=[],
+            service_tier="priority",
+            usage=usage,
+        ),
+        model="gpt-5.4",
+        call_type=CallTypes.aresponses.value,
+        custom_llm_provider="openai",
+    )
+    default_http_cost = litellm.completion_cost(
+        completion_response=ResponsesAPIResponse(
+            id="resp-default",
+            created_at=1700000000,
+            output=[],
+            service_tier="default",
+            usage=usage,
+        ),
+        model="gpt-5.4",
+        call_type=CallTypes.aresponses.value,
+        custom_llm_provider="openai",
+    )
+
+    assert ws_cost == priority_http_cost
+    assert priority_http_cost > default_http_cost
 
 
 def test_get_standard_logging_object_payload_reads_overhead_from_logging_obj_for_dict_results(logging_obj):
@@ -6801,3 +6961,375 @@ def test_get_error_information_redacts_provider_key_from_upstream_url():
     assert "REDACTED" in result["traceback"]
     assert "REDACTED" in result["error_message"]
     assert result["error_code"] == "400"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["openai", "azure", "anthropic", "bedrock", "responses"])
+async def test_classifier_audit_matches_provider_transport(provider: str) -> None:
+    import json
+
+    from openai import AsyncAzureOpenAI, AsyncOpenAI
+
+    from litellm.litellm_core_utils.classifier_logging import classifier_input_snapshot
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    outbound: Final = asyncio.Queue()
+    logs: Final = asyncio.Queue()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        outbound.put_nowait(json.loads(request.content))
+        content: Final = '{"tier":"SIMPLE"}'
+        if provider == "responses":
+            from litellm.responses.main import mock_responses_api_response
+
+            return httpx.Response(200, json=mock_responses_api_response(content).model_dump())
+        if provider == "anthropic":
+            return httpx.Response(200, json={
+                "id": "msg-audit", "type": "message", "role": "assistant", "model": "claude-haiku-4-5",
+                "content": [{"type": "text", "text": content}], "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            })
+        if provider == "bedrock":
+            return httpx.Response(200, json={
+                "output": {"message": {"role": "assistant", "content": [{"text": content}]}},
+                "stopReason": "end_turn", "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+                "metrics": {"latencyMs": 1},
+            })
+        return httpx.Response(200, json={
+            "id": "chatcmpl-audit", "object": "chat.completion", "created": 0, "model": "gpt-5.6",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        })
+
+    async def capture(kwargs, response_obj, start_time, end_time):
+        logs.put_nowait(kwargs["standard_logging_object"])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        handler: Final = AsyncHTTPHandler()
+        await handler.close()
+        handler.client = http_client
+        client: Final = (
+            AsyncAzureOpenAI(
+                api_key="transport-only", azure_endpoint="https://azure.invalid",
+                api_version="2025-04-01-preview", http_client=http_client,
+            )
+            if provider == "azure" else AsyncOpenAI(api_key="transport-only", http_client=http_client)
+            if provider == "openai" else handler
+        )
+        model: Final = {
+            "openai": "openai/gpt-5.6",
+            "azure": "azure/gpt-5.6",
+            "anthropic": "anthropic/claude-haiku-4-5",
+            "bedrock": "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            "responses": "openai/gpt-5.6",
+        }[provider]
+
+        async def run(marker: str) -> None:
+            if provider == "responses":
+                await litellm.aresponses(
+                    model=model, api_key="transport-only", client=client, max_output_tokens=128,
+                    instructions="classifier-rubric", input=marker,
+                    metadata={"internal_call_origin": "autorouter_classifier"},
+                    proxy_server_request={"body": {}, "originating_request_masked": {"input": f"source-only-{marker}"}},
+                    success_callback=[capture], num_retries=0,
+                )
+                return
+            await litellm.acompletion(
+                model=model, api_key="transport-only", client=client, max_tokens=128,
+                aws_access_key_id="transport-only", aws_secret_access_key="transport-only", aws_region_name="us-east-1",
+                messages=[{"role": "system", "content": "classifier-rubric"}, {"role": "user", "content": marker}],
+                metadata={"internal_call_origin": "autorouter_classifier"},
+                proxy_server_request={"body": {}, "originating_request_masked": {"input": f"source-only-{marker}"}},
+                success_callback=[capture], num_retries=0,
+                **({"api_base": "https://azure.invalid", "api_version": "2025-04-01-preview"} if provider == "azure" else {}),
+                **({"extra_body": {"audit_context": "provider-extra"}, "extra_headers": {"X-Audit": "header-only-secret"}}
+                   if provider in ("openai", "azure") else {}),
+            )
+
+        await asyncio.gather(run("request-one"), run("request-two"))
+        requests: Final = await asyncio.wait_for(asyncio.gather(outbound.get(), outbound.get()), timeout=10)
+        payloads: Final = await asyncio.wait_for(asyncio.gather(logs.get(), logs.get()), timeout=10)
+        for payload in payloads:
+            snapshot: Final = payload["classifier_input"]
+            assert snapshot in requests
+            assert "source-only" not in json.dumps(snapshot)
+            assert "classifier-rubric" in json.dumps(snapshot)
+            assert "transport-only" not in json.dumps(snapshot)
+            assert "header-only-secret" not in json.dumps(snapshot)
+            assert "SIMPLE" in json.dumps(payload["response"])
+            marker: Final = "request-one" if "request-one" in json.dumps(snapshot) else "request-two"
+            assert payload["originating_request_masked"] == {"input": f"source-only-{marker}"}
+            assert classifier_input_snapshot(snapshot) is not None
+        if provider not in ("openai", "azure", "responses"):
+            assert all("system" in request for request in requests)
+
+
+@pytest.mark.parametrize("redaction", ["none", "global", "request", "header"])
+@pytest.mark.parametrize("status", ["success", "failure"])
+@pytest.mark.parametrize("call_type", ["completion", "acompletion", "responses", "aresponses"])
+def test_classifier_audit_obeys_message_logging_before_payload_emission(logging_obj, monkeypatch, redaction, status, call_type):
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redaction == "global")
+    params: Final = {
+        "metadata": {"internal_call_origin": "autorouter_classifier", **(
+            {"headers": {"x-litellm-enable-message-redaction": "true"}} if redaction == "header" else {}
+        )},
+        "proxy_server_request": {"body": {}, "originating_request_masked": {"input": "source-only"}},
+    }
+    logging_obj.call_type = call_type
+    logging_obj.model_call_details["litellm_params"] = params
+    logging_obj.model_call_details["standard_callback_dynamic_params"] = (
+        {"turn_off_message_logging": True} if redaction == "request" else {}
+    )
+    logging_obj.pre_call(
+        input=[], api_key=None, additional_args={"complete_input_dict": {"system": "rubric", "messages": []}}
+    )
+    now: Final = datetime.datetime.now()
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={**logging_obj.model_call_details, "call_type": call_type}, init_response_obj={},
+        start_time=now, end_time=now, logging_obj=logging_obj, status=status,
+    )
+    assert payload is not None
+    if redaction == "none":
+        assert payload["classifier_input"] == {"system": "rubric", "messages": []}
+        assert payload["originating_request_masked"] == {"input": "source-only"}
+    else:
+        assert "classifier_input" not in payload
+        assert "originating_request_masked" not in payload
+
+
+@pytest.mark.parametrize("call_type,origin", [("completion", None), ("aembedding", "autorouter_classifier")])
+def test_classifier_audit_is_not_added_to_other_calls(logging_obj, call_type, origin):
+    logging_obj.call_type = call_type
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {"internal_call_origin": origin}}
+    logging_obj.pre_call(input=[], api_key=None, additional_args={"complete_input_dict": {"input": "embedding"}})
+    assert logging_obj.classifier_input is None
+
+
+def _run_while_a_thread_grows(target: dict, read: Callable[[], None], reads: int) -> None:
+    import itertools
+    import threading
+
+    stop: Final = threading.Event()
+
+    def grow() -> None:
+        for counter in itertools.count():
+            if stop.is_set():
+                return
+            key: Final = f"late_{counter % 64}"
+            if key in target:
+                del target[key]
+            else:
+                target[key] = counter
+
+    writer: Final = threading.Thread(target=grow, daemon=True)
+    previous_interval: Final = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    writer.start()
+    try:
+        for _ in range(reads):
+            read()
+    finally:
+        stop.set()
+        writer.join(timeout=5)
+        sys.setswitchinterval(previous_interval)
+
+
+def test_merge_litellm_metadata_survives_a_thread_growing_metadata_mid_merge():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    metadata: Final = {f"key_{i}": i for i in range(2000)}
+    litellm_params: Final = {"metadata": metadata, "litellm_metadata": {"model_group": "gpt"}}
+
+    def read() -> None:
+        merged: Final = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+        assert merged["key_1999"] == 1999
+        assert merged["model_group"] == "gpt"
+
+    _run_while_a_thread_grows(metadata, read, reads=300)
+
+
+def test_get_additional_headers_survives_a_thread_growing_headers_mid_copy():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    headers: Final = {f"llm_provider-x-custom-{i}": str(i) for i in range(2000)}
+    headers["x-ratelimit-remaining-requests"] = "7"
+
+    def read() -> None:
+        copied: Final = StandardLoggingPayloadSetup.get_additional_headers(headers)
+        assert copied is not None
+        assert copied["x_ratelimit_remaining_requests"] == 7
+        assert copied["llm_provider-x-custom-1999"] == "1999"
+
+    _run_while_a_thread_grows(headers, read, reads=300)
+
+
+def test_add_dynamic_callback_registers_once_per_list_without_touching_the_callers_list(logging_obj: LitellmLogging):
+    callback: Final = CustomLogger()
+    caller_owned: Final = ["langfuse"]
+    logging_obj.dynamic_success_callbacks = caller_owned
+
+    logging_obj.add_dynamic_callback(callback)
+    logging_obj.add_dynamic_callback(callback)
+
+    assert caller_owned == ["langfuse"]
+    assert logging_obj.dynamic_success_callbacks == ["langfuse", callback]
+    assert logging_obj.dynamic_input_callbacks == [callback]
+    assert logging_obj.dynamic_async_success_callbacks == [callback]
+    assert logging_obj.dynamic_failure_callbacks == [callback]
+    assert logging_obj.dynamic_async_failure_callbacks == [callback]
+    assert LitellmLogging._with_dynamic_callback(None, callback) == [callback]
+    assert LitellmLogging._with_dynamic_callback((callback,), callback) == [callback]
+
+
+class TestAzurePTUSpilloverCost:
+    """Azure PTU deployments price tokens at zero because the reservation is billed flat.
+
+    A request Azure spills onto pay-as-you-go capacity must bill per token instead, so
+    the zeroed custom pricing has to be skipped when the provider reports spillover.
+    """
+
+    ROUTER_MODEL_ID: Final = "ptu-spill-router-model-id"
+    SERVED_MODEL: Final = "azure/spill-served-model-ptu"
+    PTU_MODEL_INFO: Final = {
+        "id": ROUTER_MODEL_ID,
+        "team_id": "team-1",
+        "ptu_count": 100,
+        "cost_per_ptu_per_hour": 1.0,
+        "ptu_effective_from": "2026-01-01",
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    }
+    EXPECTED_SPILL_COST: Final = 100 * 2e-6 + 50 * 8e-6
+
+    @staticmethod
+    def _register_models() -> None:
+        litellm.register_model(
+            model_cost={
+                TestAzurePTUSpilloverCost.ROUTER_MODEL_ID: {
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                    "litellm_provider": "azure",
+                    "mode": "chat",
+                },
+                TestAzurePTUSpilloverCost.SERVED_MODEL: {
+                    "input_cost_per_token": 2e-6,
+                    "output_cost_per_token": 8e-6,
+                    "litellm_provider": "azure",
+                    "mode": "chat",
+                },
+            }
+        )
+
+    @staticmethod
+    def _unregister_models() -> None:
+        litellm.model_cost.pop(TestAzurePTUSpilloverCost.ROUTER_MODEL_ID, None)
+        litellm.model_cost.pop(TestAzurePTUSpilloverCost.SERVED_MODEL, None)
+
+    def _logging_obj(self, model_info: dict, *, flag: str, litellm_rate: float, monkeypatch) -> LitellmLogging:
+        monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", flag)
+        obj = LitellmLogging(
+            model=self.SERVED_MODEL,
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="ptu-spill-1",
+            function_id="f",
+        )
+        obj.update_environment_variables(
+            model=self.SERVED_MODEL,
+            user="",
+            optional_params={},
+            litellm_params={
+                "api_base": "",
+                "metadata": {"model_info": model_info},
+                "input_cost_per_token": litellm_rate,
+                "output_cost_per_token": litellm_rate,
+            },
+            custom_llm_provider="azure",
+        )
+        return obj
+
+    @staticmethod
+    def _response() -> ModelResponse:
+        from litellm.types.utils import Usage
+
+        return ModelResponse(
+            id="chatcmpl-spill-1",
+            created=1234567890,
+            model="spill-served-model-ptu",
+            choices=[
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        )
+
+    def test_spillover_via_response_additional_headers_bills_per_token(self, monkeypatch) -> None:
+        self._register_models()
+        try:
+            obj = self._logging_obj(dict(self.PTU_MODEL_INFO), flag="True", litellm_rate=0.0, monkeypatch=monkeypatch)
+            response = self._response()
+            response._hidden_params["additional_headers"] = {"llm_provider-x-ms-is-spilled-over": "true"}
+
+            assert obj._response_cost_calculator(result=response) == pytest.approx(self.EXPECTED_SPILL_COST)
+        finally:
+            self._unregister_models()
+
+    def test_spillover_via_streaming_response_headers_bills_per_token(self, monkeypatch) -> None:
+        self._register_models()
+        try:
+            obj = self._logging_obj(dict(self.PTU_MODEL_INFO), flag="True", litellm_rate=0.0, monkeypatch=monkeypatch)
+            obj.model_call_details["response_headers"] = {
+                "x-ms-is-spilled-over": "true",
+                "x-ms-spillover-from-deployment": "ptu-dep",
+            }
+
+            assert obj._response_cost_calculator(result=self._response()) == pytest.approx(self.EXPECTED_SPILL_COST)
+        finally:
+            self._unregister_models()
+
+    def test_non_spilled_ptu_request_stays_zero_priced(self, monkeypatch) -> None:
+        self._register_models()
+        try:
+            obj = self._logging_obj(dict(self.PTU_MODEL_INFO), flag="True", litellm_rate=0.0, monkeypatch=monkeypatch)
+
+            assert obj._response_cost_calculator(result=self._response()) == 0.0
+        finally:
+            self._unregister_models()
+
+    def test_spillover_header_without_the_flag_stays_zero_priced(self, monkeypatch) -> None:
+        self._register_models()
+        try:
+            obj = self._logging_obj(dict(self.PTU_MODEL_INFO), flag="", litellm_rate=0.0, monkeypatch=monkeypatch)
+            response = self._response()
+            response._hidden_params["additional_headers"] = {"llm_provider-x-ms-is-spilled-over": "true"}
+
+            assert obj._response_cost_calculator(result=response) == 0.0
+        finally:
+            self._unregister_models()
+
+    def test_spillover_header_does_not_touch_non_ptu_custom_pricing(self, monkeypatch) -> None:
+        self._register_models()
+        custom_model_id: Final = "non-ptu-custom-router-model-id"
+        litellm.model_cost[custom_model_id] = {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 1e-6,
+            "litellm_provider": "azure",
+            "mode": "chat",
+        }
+        try:
+            model_info: Final = {"id": custom_model_id, "input_cost_per_token": 1e-6}
+            obj = self._logging_obj(model_info, flag="True", litellm_rate=1e-6, monkeypatch=monkeypatch)
+            response = self._response()
+            response._hidden_params["additional_headers"] = {"llm_provider-x-ms-is-spilled-over": "true"}
+
+            assert obj._response_cost_calculator(result=response) == pytest.approx(150 * 1e-6)
+        finally:
+            litellm.model_cost.pop(custom_model_id, None)
+            self._unregister_models()

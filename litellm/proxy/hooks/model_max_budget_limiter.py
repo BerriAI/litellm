@@ -19,12 +19,14 @@ from litellm.types.utils import BudgetConfig, StandardLoggingPayload
 VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX: Final = "virtual_key_spend"
 END_USER_SPEND_CACHE_KEY_PREFIX: Final = "end_user_model_spend"
 USER_SPEND_CACHE_KEY_PREFIX: Final = "user_model_spend"
+TEAM_SPEND_CACHE_KEY_PREFIX: Final = "team_model_spend"
 
 _SPEND_CACHE_KEY_PREFIXES: Final = MappingProxyType(
     {
         Litellm_EntityType.KEY: VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
         Litellm_EntityType.USER: USER_SPEND_CACHE_KEY_PREFIX,
         Litellm_EntityType.END_USER: END_USER_SPEND_CACHE_KEY_PREFIX,
+        Litellm_EntityType.TEAM: TEAM_SPEND_CACHE_KEY_PREFIX,
     }
 )
 
@@ -37,6 +39,7 @@ _BUDGET_START_TIME_KEY_PREFIXES: Final = MappingProxyType(
         Litellm_EntityType.KEY: "virtual_key_budget_start_time",
         Litellm_EntityType.USER: "user_model_budget_start_time",
         Litellm_EntityType.END_USER: "end_user_budget_start_time",
+        Litellm_EntityType.TEAM: "team_model_budget_start_time",
     }
 )
 
@@ -137,6 +140,18 @@ def resolve_model_budget(model: str, model_max_budget: Mapping[str, object]) -> 
             continue
         return ResolvedModelBudget(budget_model=candidate, budget_config=budget_config)
     return None
+
+
+def team_model_budget_applies(model: str, key_model_max_budget: Mapping[str, object] | None) -> bool:
+    """A key entry that spend-gates `model` overrides the team cap: it is then gated on and billed to the key alone."""
+    if not key_model_max_budget:
+        return True
+    resolved: Final = resolve_model_budget(model=model, model_max_budget=key_model_max_budget)
+    return resolved is None or not _spend_gated(resolved.budget_config)
+
+
+def _spend_gated(budget_config: BudgetConfig) -> bool:
+    return budget_config.max_budget is not None and budget_config.max_budget >= 0
 
 
 def _budget_model_candidates(model: str) -> tuple[str, ...]:
@@ -346,6 +361,30 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             exceeded_message=f"LiteLLM End User: {end_user_id}, exceeded budget for model={model}",
         )
 
+    async def is_team_within_model_budget(
+        self,
+        team_id: str,
+        team_model_max_budget: Mapping[str, object],
+        key_model_max_budget: Mapping[str, object] | None,
+        model: str,
+    ) -> bool:
+        """
+        Check if the team is within the model budget, unless the key's own
+        `model_max_budget` overrides it for `model`
+
+        Raises:
+            BudgetExceededError: If the team has exceeded the model budget
+        """
+        if not team_model_budget_applies(model=model, key_model_max_budget=key_model_max_budget):
+            return True
+        return await self._is_entity_within_model_budget(
+            entity_type=Litellm_EntityType.TEAM,
+            entity_id=team_id,
+            model_max_budget=team_model_max_budget,
+            model=model,
+            exceeded_message=f"LiteLLM Team: {team_id}, exceeded budget for model={model}",
+        )
+
     async def _is_entity_within_model_budget(
         self,
         entity_type: Litellm_EntityType,
@@ -456,11 +495,26 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             return
 
         response_cost: Final[float] = standard_logging_payload.get("response_cost", 0)
+        key_model_max_budget: Final = _metadata.get("user_api_key_model_max_budget")
         entity_budgets: Final = (
             (
                 Litellm_EntityType.KEY,
                 payload_metadata.get("user_api_key_hash"),
-                _metadata.get("user_api_key_model_max_budget"),
+                key_model_max_budget,
+            ),
+            (
+                Litellm_EntityType.TEAM,
+                payload_metadata.get("user_api_key_team_id"),
+                (
+                    _metadata.get("user_api_key_team_model_max_budget")
+                    if team_model_budget_applies(
+                        model=model,
+                        key_model_max_budget=(
+                            key_model_max_budget if isinstance(key_model_max_budget, Mapping) else None
+                        ),
+                    )
+                    else None
+                ),
             ),
             (
                 Litellm_EntityType.USER,
@@ -478,7 +532,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         if not resolved_budgets:
             verbose_proxy_logger.debug(
                 "Not running _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event: "
-                "no key, user or end-user model_max_budget covers model=%s",
+                "no key, team, user or end-user model_max_budget covers model=%s",
                 model,
             )
             return

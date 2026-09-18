@@ -26,13 +26,21 @@ from typing import (
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
-from litellm.proxy.auth.auth_checks import can_user_call_model, get_user_object
+from litellm.proxy.auth.auth_checks import (
+    can_user_call_model,
+    delete_cache_key_objects,
+    get_jwt_key_mapping_cache_keys_for_tokens,
+    get_user_object,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
     update_budget,
@@ -52,7 +60,7 @@ from litellm.proxy.management_helpers.utils import (
     get_new_internal_user_defaults,
     management_endpoint_wrapper,
 )
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -79,8 +87,25 @@ if TYPE_CHECKING:
     )
     from prisma.models import LiteLLM_OrganizationTable as PrismaOrganizationTable
     from prisma.models import LiteLLM_UserTable as PrismaUserTable
+    from prisma.models import LiteLLM_VerificationToken as PrismaVerificationToken
 
-router: Final = APIRouter()
+
+async def _enterprise_license_required(
+    _user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> None:
+    from litellm.proxy.proxy_server import premium_user
+
+    if not premium_user:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Organizations are only available for LiteLLM Enterprise users. "
+                f"{CommonProxyErrors.not_premium_user.value}"
+            },
+        )
+
+
+router: Final = APIRouter(dependencies=[Depends(_enterprise_license_required)])
 
 
 class _ObjectPermissionRow(Protocol):
@@ -152,7 +177,13 @@ class _TeamTableClient(Protocol):
 
 
 class _VerificationTokenTableClient(Protocol):
+    async def find_many(self, where: Mapping[str, object] | None = None) -> "Sequence[PrismaVerificationToken]": ...
+
     async def delete_many(self, where: Mapping[str, object]) -> int: ...
+
+
+class _OrganizationIdFilter(TypedDict):
+    organization_id: ReadOnly[str]
 
 
 class _ObjectPermissionTxClient(Protocol):
@@ -346,6 +377,7 @@ async def new_organization(
     - max_budget: *Optional[float]* - Max budget for org
     - tpm_limit: *Optional[int]* - Max tpm limit for org
     - rpm_limit: *Optional[int]* - Max rpm limit for org
+    - tpd_limit: *Optional[int]* - Max tokens per day stored on the org budget. Batch submissions enforce tpd_limit at the key, team and end user scopes only.
     - model_rpm_limit: *Optional[Dict[str, int]]* - The RPM (Requests Per Minute) limit per model for this organization.
     - model_tpm_limit: *Optional[Dict[str, int]]* - The TPM (Tokens Per Minute) limit per model for this organization.
     - max_parallel_requests: *Optional[int]* - [Not Implemented Yet] Max parallel requests for org
@@ -944,7 +976,7 @@ async def delete_organization(
 
     - organization_ids: List[str] - The organization ids to delete.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(
@@ -966,8 +998,12 @@ async def delete_organization(
         await _table(OrganizationMembershipRepository(prisma_client)).delete_many(
             where={"organization_id": organization_id}
         )
-        # delete all keys in the organization
-        await _table(VerificationTokenRepository(prisma_client)).delete_many(where={"organization_id": organization_id})
+        await _delete_organization_keys(
+            organization_id=organization_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
         # delete the organization
         deleted_org = await _table(OrganizationRepository(prisma_client)).delete(
             where={"organization_id": organization_id},
@@ -981,6 +1017,28 @@ async def delete_organization(
         deleted_orgs.append(deleted_org)
 
     return deleted_orgs
+
+
+async def _delete_organization_keys(
+    organization_id: str,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
+) -> None:
+    key_filter: Final[_OrganizationIdFilter] = {"organization_id": organization_id}
+    keys_to_delete: Final = await _table(VerificationTokenRepository(prisma_client)).find_many(where=key_filter)
+    hashed_tokens_to_delete: Final = tuple(key.token for key in keys_to_delete)
+    jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_tokens(
+        hashed_tokens=hashed_tokens_to_delete,
+        prisma_client=prisma_client,
+    )
+    await _table(VerificationTokenRepository(prisma_client)).delete_many(where=key_filter)
+    await delete_cache_key_objects(
+        hashed_tokens=hashed_tokens_to_delete,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
 
 
 @router.get(

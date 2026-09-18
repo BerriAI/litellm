@@ -122,13 +122,13 @@ _USED_CODE_CACHE_PREFIX: Final = "mcp_gateway_dcr_code_used:"
 _USED_FLOW_CACHE_PREFIX: Final = "mcp_gateway_dcr_flow_used:"
 _USED_REFRESH_CACHE_PREFIX: Final = "mcp_gateway_dcr_refresh_used:"
 
-MAX_REDIRECT_URIS: Final = 3
+MAX_REDIRECT_URIS: Final = 4
 MAX_REDIRECT_URI_LENGTH: Final = 256
 MAX_CLIENT_ID_LENGTH: Final = 2048
 """Registration bounds. They exist to bound the sealed client_id, which rides inside
-every session-token claim set: 3 URIs of 256 bytes seal to roughly 1.2KB, comfortably
-under this cap and under the session token's own 4KB ceiling. Claude Desktop and MCP
-Inspector register one or two redirect URIs."""
+every session-token claim set. Four 256-character ASCII URIs seal to roughly 1.5KB;
+the encoded client_id is checked against its own cap before registration succeeds.
+VS Code registers four callbacks for its web and desktop environments."""
 
 MAX_STATE_LENGTH: Final = 1024
 """Bound on the client ``state`` sealed into the flow cookie and echoed on the auth-code

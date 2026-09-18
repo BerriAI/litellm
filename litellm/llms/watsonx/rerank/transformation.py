@@ -191,7 +191,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
 
             transformed_results.append(transformed_result)
 
-        response_id: Final = raw_response_json.get("id") or raw_response_json.get("model_id") or str(uuid.uuid4())
+        response_id: Final = raw_response_json.get("id") or str(uuid.uuid4())
 
         # Extract usage information
         _tokens: Final = RerankTokens(

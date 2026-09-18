@@ -618,15 +618,6 @@ class VertexBase:
                 project_id=project_id,
             )
 
-    def is_using_v1beta1_features(self, optional_params: dict) -> bool:
-        """
-        use this helper to decide if request should be sent to v1 or v1beta1
-
-        Returns true if any beta feature is enabled
-        Returns false in all other cases
-        """
-        return False
-
     def _check_custom_proxy(
         self,
         api_base: str | None,

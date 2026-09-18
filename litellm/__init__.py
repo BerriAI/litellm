@@ -45,9 +45,11 @@ from typing import (
     TYPE_CHECKING,
     Union,
 )
+from collections.abc import Mapping
 from litellm.types.integrations.datadog import DatadogInitParams
 from litellm.types.integrations.newrelic import NewRelicInitParams
 from litellm.litellm_core_utils.core_helpers import drop_params_env_flag
+from litellm.types.integrations.pointfive import PointFiveInitParams
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -154,6 +156,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "smtp_email",
     "deepeval",
     "s3_v2",
+    "pointfive",
     "aws_sqs",
     "vector_store_pre_call_hook",
     "dotprompt",
@@ -241,6 +244,7 @@ telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = drop_params_env_flag(os.environ, verbose_logger)
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
+bedrock_neutralize_orphaned_tool_blocks: bool = True
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
 )  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
@@ -263,10 +267,6 @@ route_all_chat_openai_to_responses: bool = (
 # When True, Gemini/Vertex Live setup is deferred until client `session.update`.
 # Default False preserves historical behavior (auto-send setup on connect).
 gemini_live_defer_setup: bool = os.getenv("LITELLM_GEMINI_LIVE_DEFER_SETUP", "false").lower() == "true"
-use_legacy_interactions_schema: bool = (
-    os.getenv("LITELLM_USE_LEGACY_INTERACTIONS_SCHEMA", "false").lower() == "true"
-)  # When True, sends Api-Revision: 2026-05-07 to Google so responses use the legacy `outputs`
-# schema instead of the new `steps` schema. Remove this flag after June 8, 2026.
 retry = True
 ### AUTH ###
 api_key: Optional[str] = None
@@ -340,6 +340,7 @@ _anthropic_prompt_caching_ttl_env: Optional[str] = os.getenv("LITELLM_ANTHROPIC_
 anthropic_prompt_caching_ttl: Optional[Literal["5m", "1h"]] = (
     "1h" if _anthropic_prompt_caching_ttl_env == "1h" else "5m" if _anthropic_prompt_caching_ttl_env == "5m" else None
 )
+openai_system_messages_first: bool = False
 disable_vertex_batch_output_transformation: bool = False
 extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: "LLMClientCache"
@@ -439,6 +440,7 @@ s3_audit_callback_params: Optional[Dict] = None
 datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]] = None
 datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
 newrelic_params: Optional[Union[NewRelicInitParams, Dict]] = None
+pointfive_params: Optional[Union[PointFiveInitParams, Mapping[str, object]]] = None
 aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
@@ -475,6 +477,7 @@ prometheus_metrics_config: Optional[List] = None
 prometheus_exclude_metrics: Optional[List[str]] = None
 prometheus_exclude_labels: Optional[List[str]] = None
 prometheus_emit_stream_label: bool = False
+prometheus_emit_input_sequence_length_label: bool = False
 prometheus_deployment_and_latency_caller_identity: Literal[
     "api_key_alias",
     "user_email",
@@ -496,6 +499,7 @@ disable_copilot_system_to_assistant: bool = False  # If false (default), convert
 public_mcp_servers: Optional[List[str]] = None
 public_mcp_hub_strict_whitelist: bool = True
 public_model_groups: Optional[List[str]] = None
+public_skills_index: bool = False
 public_agent_groups: Optional[List[str]] = None
 agent_search_embedding_model: Optional[str] = None
 mcp_tool_search: Optional[Mapping[str, object]] = None
@@ -518,6 +522,7 @@ aiohttp_trust_env: bool = False  # set to true to use HTTP_ Proxy settings
 disable_aiohttp_transport: bool = False  # Set this to true to use httpx instead
 disable_aiohttp_trust_env: bool = False  # When False, aiohttp will respect HTTP(S)_PROXY env vars
 force_ipv4: bool = False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
+http2: bool = False
 network_mock: bool = False  # When True, use mock transport — no real network calls
 
 ####### STOP SEQUENCE LIMIT #######
@@ -1365,6 +1370,7 @@ from .exceptions import (
     InvalidRequestError,
     BadRequestError,
     ImageFetchError,
+    VectorStoreSearchError,
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
@@ -1396,8 +1402,22 @@ from .images.main import *
 from .videos.main import *
 from .batch_completion.main import *
 from .rerank_api.main import *
-from .llms.anthropic.experimental_pass_through.messages.handler import *
-from .responses.main import *
+from .messages.dispatch import *
+from .responses.dispatch import *
+from .responses.main import (
+    acancel_responses,
+    acompact_responses,
+    adelete_responses,
+    aget_responses,
+    alist_input_items,
+    aresponses_api_with_mcp,
+    cancel_responses,
+    compact_responses,
+    delete_responses,
+    get_responses,
+    list_input_items,
+    mock_responses_api_response,
+)
 
 # Interactions API is available as litellm.interactions module
 # Usage: litellm.interactions.create(), litellm.interactions.get(), etc.
@@ -1425,7 +1445,8 @@ from .skills.main import (
     adelete_skill,
 )
 from .containers.main import *
-from .ocr.main import *
+from .ocr.dispatch import *
+from .chat_completions.dispatch import *
 from .rust_bridge import rust
 from .rag.main import *
 from .sandbox.main import *
@@ -1466,9 +1487,11 @@ from .vector_stores.vector_store_registry import (
     VectorStoreRegistry,
     VectorStoreIndexRegistry,
 )
+from .types.vector_stores import VectorStoreSearchFailureMode
 
 vector_store_registry: Optional[VectorStoreRegistry] = None
 vector_store_index_registry: Optional[VectorStoreIndexRegistry] = None
+vector_store_search_failure_mode: VectorStoreSearchFailureMode = "annotate"
 
 ### RAG ###
 from . import rag
@@ -1806,6 +1829,9 @@ if TYPE_CHECKING:
     )
     from .llms.azure.responses.o_series_transformation import (
         AzureOpenAIOSeriesResponsesAPIConfig as AzureOpenAIOSeriesResponsesAPIConfig,
+    )
+    from .llms.azure_ai.responses.transformation import (
+        AzureAIResponsesAPIConfig as AzureAIResponsesAPIConfig,
     )
     from .llms.xai.responses.transformation import (
         XAIResponsesAPIConfig as XAIResponsesAPIConfig,
