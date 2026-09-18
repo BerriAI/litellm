@@ -112,7 +112,6 @@ _NO_ATTRS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 def _span_scope(callback_name: str, params: StandardCallbackDynamicParams) -> OtelSpanScope:
-    """The export scope the tenant configured; only Langfuse offers one, every other backend gets the full tree."""
     if callback_name != "langfuse_otel":
         return "full"
     return params.get("langfuse_span_scope") or "full"

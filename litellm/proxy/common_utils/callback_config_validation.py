@@ -48,8 +48,6 @@ def _langfuse_environment_error(callback_vars: Mapping[str, str]) -> str | None:
 
 
 def _langfuse_span_scope_error(callback_name: str | None, callback_vars: Mapping[str, str]) -> str | None:
-    """Only the OTel Langfuse callback reads the scope; on any other callback the
-    value would be stored and then ignored, with the full tree still exported."""
     value: Final = callback_vars.get("langfuse_span_scope")
     if value is None:
         return None

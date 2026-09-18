@@ -1142,8 +1142,7 @@ def deliverable_destinations(
 
 
 def operator_sink_scopes(*configs: OpenTelemetryV2Config) -> 'Mapping[_SinkKey, "OtelSpanScope"]':
-    """The accounts the operator's own exporters write to, in destination terms, and
-    how much of the tree each one receives.
+    """The accounts the operator's own exporters write to, in destination terms.
 
     Every v2 logger's config counts, since each logger exports through its own
     provider. An exporter with no endpoint of its own resolves one from the
@@ -1151,18 +1150,21 @@ def operator_sink_scopes(*configs: OpenTelemetryV2Config) -> 'Mapping[_SinkKey, 
     and so is one that never reaches the wire: a console kind ignores the endpoint,
     and a header-gated spec with no credentials is skipped when the provider is built.
     """
-    return MappingProxyType(
-        {
-            key: _operator_scope(config, spec)
-            for config in configs
-            for spec in config.exporters
-            if _exports_to_the_wire(spec) and (key := _sink_key(spec.endpoint, parse_headers(spec.headers))) is not None
-        }
+    scoped: Final = tuple(
+        (key, _operator_scope(config, spec))
+        for config in configs
+        for spec in config.exporters
+        if _exports_to_the_wire(spec) and (key := _sink_key(spec.endpoint, parse_headers(spec.headers))) is not None
     )
+    return MappingProxyType({key: _widest(scope for other, scope in scoped if other == key) for key, _ in scoped})
 
 
 def _operator_scope(config: OpenTelemetryV2Config, spec: ExporterSpec) -> "OtelSpanScope":
     return config.langfuse_span_scope if spec.owner is ExporterOwner.LANGFUSE_OTEL else "full"
+
+
+def _widest(scopes: "Iterable[OtelSpanScope]") -> "OtelSpanScope":
+    return "full" if any(scope == "full" for scope in scopes) else "llm_only"
 
 
 def _exports_to_the_wire(spec: ExporterSpec) -> bool:
