@@ -3050,6 +3050,18 @@
         },
         "DailySpendMetadata": {
           "properties": {
+            "api_key_limit": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When set, api_keys and every api_key_breakdown list at most this many keys, ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.",
+              "title": "Api Key Limit"
+            },
             "has_more": {
               "default": false,
               "title": "Has More",
@@ -3059,6 +3071,18 @@
               "default": 1,
               "title": "Page",
               "type": "integer"
+            },
+            "total_api_keys": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key lists are truncated to the highest-spend keys.",
+              "title": "Total Api Keys"
             },
             "total_api_requests": {
               "default": 0,
@@ -7235,6 +7259,18 @@
               "description": "Certificate role name for TLS cert authentication",
               "title": "Vault Cert Role"
             },
+            "vault_login_namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Namespace for AppRole and TLS cert login (X-Vault-Namespace header); falls back to vault_namespace",
+              "title": "Vault Login Namespace"
+            },
             "vault_mount_name": {
               "anyOf": [
                 {
@@ -7256,7 +7292,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Vault namespace (for multi-tenant Vault, sent as X-Vault-Namespace header)",
+              "description": "Vault namespace used for both login and secret operations unless overridden below",
               "title": "Vault Namespace"
             },
             "vault_path_prefix": {
@@ -7270,6 +7306,18 @@
               ],
               "description": "Optional path prefix for secrets (e.g., myapp -> secret/data/myapp/{secret_name})",
               "title": "Vault Path Prefix"
+            },
+            "vault_secret_namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Namespace for secret reads and writes (URL path segment); falls back to vault_namespace",
+              "title": "Vault Secret Namespace"
             },
             "vault_token": {
               "anyOf": [
@@ -10006,7 +10054,7 @@
             },
             "unreachable_fallback": {
               "default": "fail_closed",
-              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
+              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
               "enum": [
                 "fail_closed",
                 "fail_open"
@@ -27766,6 +27814,181 @@
           "title": "MCPEnvVarScope",
           "type": "string"
         },
+        "MCPGatewaySession": {
+          "description": "One live stateful Streamable HTTP session held by this proxy worker.",
+          "properties": {
+            "client_ip": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Ip"
+            },
+            "client_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Name"
+            },
+            "client_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Version"
+            },
+            "idle_seconds": {
+              "title": "Idle Seconds",
+              "type": "number"
+            },
+            "in_flight_requests": {
+              "title": "In Flight Requests",
+              "type": "integer"
+            },
+            "key_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key Alias"
+            },
+            "session_id_prefix": {
+              "title": "Session Id Prefix",
+              "type": "string"
+            },
+            "team_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Alias"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            },
+            "user_email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Email"
+            },
+            "user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            }
+          },
+          "required": [
+            "session_id_prefix",
+            "idle_seconds",
+            "in_flight_requests"
+          ],
+          "title": "MCPGatewaySession",
+          "type": "object"
+        },
+        "MCPGatewaySessionGroupCount": {
+          "properties": {
+            "count": {
+              "title": "Count",
+              "type": "integer"
+            },
+            "label": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Label"
+            }
+          },
+          "required": [
+            "count"
+          ],
+          "title": "MCPGatewaySessionGroupCount",
+          "type": "object"
+        },
+        "MCPGatewaySessionsResponse": {
+          "properties": {
+            "by_client": {
+              "items": {
+                "$ref": "#/components/schemas/MCPGatewaySessionGroupCount"
+              },
+              "title": "By Client",
+              "type": "array"
+            },
+            "by_user": {
+              "items": {
+                "$ref": "#/components/schemas/MCPGatewaySessionGroupCount"
+              },
+              "title": "By User",
+              "type": "array"
+            },
+            "sessions": {
+              "items": {
+                "$ref": "#/components/schemas/MCPGatewaySession"
+              },
+              "title": "Sessions",
+              "type": "array"
+            },
+            "total_sessions": {
+              "title": "Total Sessions",
+              "type": "integer"
+            },
+            "worker_pid": {
+              "title": "Worker Pid",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "worker_pid",
+            "total_sessions"
+          ],
+          "title": "MCPGatewaySessionsResponse",
+          "type": "object"
+        },
         "MCPOAuthUserCredentialRequest": {
           "description": "Stores a user's OAuth2 token for an OpenAPI MCP server.",
           "properties": {
@@ -30495,6 +30718,33 @@
             }
           ],
           "summary": "Store Mcp User Env Vars",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/sessions": {
+        "get": {
+          "description": "Live stateful MCP gateway sessions on this proxy worker, grouped by AI client and by user.",
+          "operationId": "get_mcp_gateway_sessions_v1_mcp_sessions_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MCPGatewaySessionsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Mcp Gateway Sessions",
           "tags": [
             "mcp_management"
           ]
@@ -38316,6 +38566,7 @@
           "type": "object"
         },
         "SCIMMultiValuedAttribute": {
+          "additionalProperties": true,
           "properties": {
             "display": {
               "anyOf": [
@@ -38351,13 +38602,17 @@
               "title": "Type"
             },
             "value": {
-              "title": "Value",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Value"
             }
           },
-          "required": [
-            "value"
-          ],
           "title": "SCIMMultiValuedAttribute",
           "type": "object"
         },
