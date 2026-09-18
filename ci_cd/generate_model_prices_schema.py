@@ -31,7 +31,45 @@ EXTRA_BOOLEAN_KEYS = frozenset(
     }
 )
 
+HOURS_UTC: JsonSchema = {
+    "description": 'UTC "HH:MM-HH:MM" window, or a list of them; a window may wrap past midnight.',
+    "oneOf": [STRING, {"type": "array", "items": STRING, "minItems": 1}],
+}
+
+OFF_PEAK_WINDOW: JsonSchema = {
+    "type": "object",
+    "properties": {
+        "hours_utc": HOURS_UTC,
+        "weekdays": {
+            "type": "array",
+            "description": "ISO-8601 weekday numbers (1 = Monday .. 7 = Sunday) or English day names the window applies on.",
+            "items": {"oneOf": [{"type": "integer", "minimum": 1, "maximum": 7}, STRING]},
+            "minItems": 1,
+        },
+    },
+    "required": ["hours_utc"],
+    "additionalProperties": False,
+}
+
 OBJECT_KEYS: dict[str, JsonSchema] = {
+    "off_peak_pricing": {
+        "type": "object",
+        "description": "Rates that replace the same-named base fields while the request falls inside the stated UTC windows.",
+        "properties": {
+            "hours_utc": HOURS_UTC,
+            "windows": {"type": "array", "items": OFF_PEAK_WINDOW, "minItems": 1},
+            "weekday_timezone": {
+                "type": "string",
+                "description": "IANA zone the weekdays of each window are read on; defaults to UTC.",
+            },
+            "input_cost_per_token": NONNEG_NUMBER,
+            "output_cost_per_token": NONNEG_NUMBER,
+            "output_cost_per_reasoning_token": NONNEG_NUMBER,
+            "cache_read_input_token_cost": NONNEG_NUMBER,
+            "cache_creation_input_token_cost": NONNEG_NUMBER,
+        },
+        "additionalProperties": False,
+    },
     "search_context_cost_per_query": {
         "type": "object",
         "description": "USD cost per web search query, keyed by search context size.",

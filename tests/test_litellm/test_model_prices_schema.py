@@ -125,6 +125,50 @@ def test_schema_accepts_cache_creation_cost_inside_a_pricing_tier(committed_sche
     assert validator.is_valid({"some-model": entry})
 
 
+OFF_PEAK_ENTRY: Final = MappingProxyType(
+    {
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 8e-6,
+        "off_peak_pricing": {
+            "hours_utc": "16:30-00:30",
+            "windows": [{"hours_utc": ["00:30-02:00"], "weekdays": [6, "Sunday"]}],
+            "weekday_timezone": "Asia/Shanghai",
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 4e-6,
+            "cache_read_input_token_cost": 1e-7,
+        },
+    }
+)
+
+
+def test_generator_classifies_off_peak_pricing_as_a_windowed_rate_block():
+    generator = load_generator()
+    schema = json.loads(generator.render(generator.build_schema({"some-model": dict(OFF_PEAK_ENTRY)})))
+    validator = build_validator(schema)
+    assert validator.is_valid({"some-model": dict(OFF_PEAK_ENTRY)})
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"hours_utc": "16:30-00:30", "input_cost_per_token": "1e-6"},
+        {"hours_utc": "16:30-00:30", "input_cost_per_token": -1e-6},
+        {"hours_utc": 1630, "input_cost_per_token": 1e-6},
+        {"hours_utc": "16:30-00:30", "discount": 0.5},
+        {"windows": [{"weekdays": [6]}], "input_cost_per_token": 1e-6},
+        {"windows": [{"hours_utc": "00:30-02:00", "weekdays": [0]}], "input_cost_per_token": 1e-6},
+        {"windows": [], "input_cost_per_token": 1e-6},
+    ],
+)
+def test_generated_off_peak_schema_rejects_malformed_blocks(block: dict):
+    generator = load_generator()
+    schema = json.loads(generator.render(generator.build_schema({"some-model": dict(OFF_PEAK_ENTRY)})))
+    validator = build_validator(schema)
+    assert not validator.is_valid({"some-model": {**OFF_PEAK_ENTRY, "off_peak_pricing": block}})
+
+
 def find_duplicate_keys(path: Path) -> list[str]:
     duplicates: list[str] = []
 
