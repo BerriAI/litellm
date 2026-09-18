@@ -2,18 +2,16 @@
 //! place, and turns the host operations that future requests into [`Machine`] steps. No
 //! task is spawned; dropping the machine drops the in-flight call.
 
-mod auth;
-
 use std::{future::Future, pin::Pin};
 
-pub use auth::{HostTokenProvider, TokenRoute};
-use litellm_callbacks::{
-    event::{CallEvent, RequestContext, WireRequest},
-    host::{HostOp, HostResult},
-    machine::{HostFailure, Interrupted, Machine, MachineStep, Step},
+use tokio::sync::{mpsc, oneshot};
+
+use super::{HostFailure, Interrupted, Machine, MachineStep, Step};
+use crate::{
+    event::{MachineEvent, RequestContext, WireRequest},
+    host::{Demand, HostOp, HostResult},
     route::Route,
 };
-use tokio::sync::{mpsc, oneshot};
 
 /// The machine's own failures, distinct from anything the provider call reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,9 +80,24 @@ where
         }
     }
 
-    pub async fn emit(&self, event: CallEvent) -> Result<(), R::Error> {
+    pub async fn emit(&self, event: MachineEvent) -> Result<(), R::Error> {
         match self.invoke(HostOp::Emit(event)).await? {
             HostResult::Emitted => Ok(()),
+            _ => Err(MachineFault::Mismatch.into()),
+        }
+    }
+
+    pub async fn open(&self, head: R::StreamHead) -> Result<Demand, R::Error> {
+        self.demand(HostOp::Open(head)).await
+    }
+
+    pub async fn deliver(&self, chunk: R::Chunk) -> Result<Demand, R::Error> {
+        self.demand(HostOp::Deliver(chunk)).await
+    }
+
+    async fn demand(&self, op: HostOp<R>) -> Result<Demand, R::Error> {
+        match self.invoke(op).await? {
+            HostResult::Demand(demand) => Ok(demand),
             _ => Err(MachineFault::Mismatch.into()),
         }
     }

@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
@@ -53,6 +53,7 @@ from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.responses.main import *
+from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import all_litellm_params
 from litellm.utils import (
@@ -2261,6 +2262,31 @@ def _build_litellm_metadata_for_ws(kwargs: dict) -> dict:
     return metadata
 
 
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object] | None)
+
+
+def _deployment_reasoning_default(kwargs: Mapping[str, object]) -> Reasoning | dict[str, object] | None:
+    if kwargs.get("reasoning") is not None:
+        return None
+    reasoning_effort: Final = kwargs.get("reasoning_effort")
+    if isinstance(reasoning_effort, str):
+        return LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
+    return _JSON_OBJECT_ADAPTER.validate_python(reasoning_effort) if isinstance(reasoning_effort, Mapping) else None
+
+
+def _build_responses_websocket_request_defaults(kwargs: Mapping[str, object]) -> ResponsesWebSocketRequestDefaults:
+    default_reasoning: Final = _deployment_reasoning_default(kwargs)
+    candidate_params: Final[dict[str, object]] = {
+        **kwargs,
+        **({"reasoning": default_reasoning} if default_reasoning is not None else {}),
+    }
+    fill_missing: Final = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(candidate_params)
+    return ResponsesWebSocketRequestDefaults(
+        fill_missing=MappingProxyType(dict(fill_missing)),
+        overrides=MappingProxyType(_JSON_OBJECT_ADAPTER.validate_python(kwargs.get("extra_body")) or {}),
+    )
+
+
 @client
 async def _aresponses_websocket(
     model: str,
@@ -2352,5 +2378,6 @@ async def _aresponses_websocket(
         user_api_key_dict=kwargs.get("user_api_key_dict"),
         litellm_metadata=_build_litellm_metadata_for_ws(kwargs),
         custom_llm_provider=_custom_llm_provider,
+        request_defaults=_build_responses_websocket_request_defaults(kwargs),
         **remaining_kwargs,
     )
