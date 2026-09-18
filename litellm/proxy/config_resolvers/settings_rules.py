@@ -89,25 +89,17 @@ def coerce_bool(value: JsonValue) -> JsonValue:
     return bool(value)
 
 
-def resolve(rule: KeyRule, yaml_value: SettingValue, db_value: SettingValue) -> Resolved:
+def resolve(yaml_value: SettingValue, db_value: SettingValue) -> Resolved:
     """Config wins. A key the config file declares is config-owned, whatever the database holds.
 
-    ``rule`` only selects which stored row the database value came from; it no longer
-    varies the precedence. A stored ``null`` still counts as absent, so clearing a row
-    does not erase a value the file never declared.
+    A stored ``null`` still counts as absent, so clearing a row does not erase a value
+    the file never declared.
     """
-    del rule
     if yaml_value is not ABSENT:
         return Resolved(value=yaml_value, source="config")
     if _db_is_present(db_value):
         return Resolved(value=db_value, source="db")
     return Resolved(value=ABSENT, source="unset")
-
-
-
-
-
-
 
 
 def is_absent(value: SettingValue) -> bool:
@@ -116,5 +108,3 @@ def is_absent(value: SettingValue) -> bool:
 
 def _db_is_present(value: SettingValue) -> bool:
     return not is_absent(value) and value is not None
-
-

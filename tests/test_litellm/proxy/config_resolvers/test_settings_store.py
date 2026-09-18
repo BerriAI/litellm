@@ -177,7 +177,6 @@ def test_settings_store_reports_the_config_owned_keys_a_write_would_change() -> 
     )
 
     assert rejected == ("max_parallel_requests",)
-    assert store.config_owned_keys() == frozenset({"max_parallel_requests", "ui_access_mode"})
 
 
 def test_settings_store_resolved_view_is_read_only() -> None:

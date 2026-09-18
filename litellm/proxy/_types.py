@@ -2423,7 +2423,7 @@ class ConfigList(LiteLLMPydanticObjectBase):
     nested_fields: list[FieldDetail] | None = None  # For nested dictionary or Pydantic fields
     field_options: list[str] | None = None  # Allowed values, for field_type == "Select"
     field_tab: str | None = None  # Admin UI sub-tab this field renders under; None groups it with the rest
-    source: str = "unset"
+    source: Literal["config", "db", "env", "default", "unset"] = "unset"
     editable: bool = True
 
 
@@ -3695,7 +3695,7 @@ class InvitationClaim(LiteLLMPydanticObjectBase):
 class ConfigFieldInfo(LiteLLMPydanticObjectBase):
     field_name: str
     field_value: Any
-    source: str = "unset"
+    source: Literal["config", "db", "env", "default", "unset"] = "unset"
     editable: bool = True
 
 

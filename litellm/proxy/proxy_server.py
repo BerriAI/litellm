@@ -439,11 +439,12 @@ from litellm.proxy.config_resolvers.alerting import (
 )
 from litellm.proxy.config_resolvers.changed_section_keys import changed_section_keys
 from litellm.proxy.config_resolvers.settings_rules import (
-    JsonValue as SettingsJsonValue,
-)
-from litellm.proxy.config_resolvers.settings_rules import (
+    DbRow,
     Section,
     coerce_bool,
+)
+from litellm.proxy.config_resolvers.settings_rules import (
+    JsonValue as SettingsJsonValue,
 )
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
@@ -5041,7 +5042,7 @@ class ProxyConfig:
             else MappingProxyType({})
         )
         changed_keys, removed_keys = changed_section_keys(baseline_section, new_section)
-        self._reject_config_owned_writes(section_name=section_name, changed_keys=changed_keys)
+        self.reject_config_owned_writes(section_name=section_name, changed_keys=changed_keys)
         if not changed_keys and not removed_keys:
             return
         wrote_section: Final = await self._upsert_changed_config_section(
@@ -5050,11 +5051,14 @@ class ProxyConfig:
             removed_keys=removed_keys,
             prisma_client=prisma_client,
         )
-        if not wrote_section:
+        if wrote_section is None:
             return
+        store: Final = self._settings_stores.get(cast(Section, section_name))
+        if store is not None:
+            store.apply_db_row(cast(DbRow, section_name), wrote_section)
         await invalidate_config_param(section_name)
 
-    def _reject_config_owned_writes(self, *, section_name: str, changed_keys: Mapping[str, JsonValue]) -> None:
+    def reject_config_owned_writes(self, *, section_name: str, changed_keys: Mapping[str, JsonValue]) -> None:
         """Refuse a write to a setting the config file owns, rather than storing a value that never applies."""
         store: Final = self._settings_stores.get(cast(Section, section_name))
         if store is None:
@@ -5062,15 +5066,19 @@ class ProxyConfig:
         rejected: Final = store.rejected_writes(changed_keys)
         if not rejected:
             return
+        subject: Final = (
+            f"key '{rejected[0]}' is" if len(rejected) == 1 else f"keys {', '.join(repr(key) for key in rejected)} are"
+        )
+        pronoun: Final = "it" if len(rejected) == 1 else "them"
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"{section_name} keys {list(rejected)} are set in the config file and cannot be changed here",
+                "error": f"{section_name} {subject} set in the config file and cannot be changed here",
                 "keys": list(rejected),
                 "section": section_name,
                 "resolution": (
-                    f"edit {user_config_file_path} to change them, "
-                    "or remove them from it to let the database own them"
+                    f"edit {user_config_file_path} to change {pronoun}, "
+                    f"or remove {pronoun} from the file to let the database own {pronoun}"
                 ),
             },
         )
@@ -5082,7 +5090,7 @@ class ProxyConfig:
         changed_keys: Mapping[str, JsonValue],
         removed_keys: frozenset[str],
         prisma_client: PrismaClient,
-    ) -> bool:
+    ) -> Mapping[str, JsonValue] | None:
         async with prisma_client.tx() as tx:
             await tx.query_raw(_CONFIG_SECTION_LOCK_SQL, section_name)
             config_table: Final = cast("TableActions[_ConfigParamRow]", tx.litellm_config)
@@ -5106,14 +5114,14 @@ class ProxyConfig:
                 }
             )
             if merged_section == existing_section:
-                return False
+                return None
             serialized_section: Final = json.dumps(dict(merged_section))  # mutable-ok: JSON encoder requires a dict
             config_data: Final[_ConfigParamUpsert] = {
                 "create": {"param_name": section_name, "param_value": serialized_section},
                 "update": {"param_value": serialized_section},
             }
             await config_table.upsert(where=config_where, data=config_data)
-            return True
+            return merged_section
 
     async def save_environment_variables(self, updates: dict[str, str | None]) -> None:
         """Persist specific environment variables to the DB config row.
@@ -17229,19 +17237,10 @@ async def update_config_general_settings(
 
     ## update db
 
-    if proxy_config.settings.owned_by_config(data.field_name):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": f"general_settings key '{data.field_name}' is set in the config file and cannot be changed here",
-                "keys": [data.field_name],
-                "section": "general_settings",
-                "resolution": (
-                    f"edit {user_config_file_path} to change it, "
-                    "or remove it from the file to let the database own it"
-                ),
-            },
-        )
+    proxy_config.reject_config_owned_writes(
+        section_name="general_settings",
+        changed_keys={data.field_name: cast(JsonValue, data.field_value)},  # cast-ok: validated above
+    )
 
     field_value = data.field_value
     if data.field_name == "plugins":
@@ -17260,6 +17259,7 @@ async def update_config_general_settings(
         },
     )
     await invalidate_config_param("general_settings")
+    proxy_config.settings.apply_db_row("general_settings", general_settings)
     asyncio.create_task(
         create_config_audit_log(
             "general_settings", "updated", before_general_settings, general_settings, user_api_key_dict
@@ -17448,8 +17448,6 @@ async def get_config_general_settings(
             detail={"error": f"Invalid field={field_name} passed in."},
         )
 
-    # Answer with the value the proxy resolved, not the stored row: the config file may
-    # own this key, in which case the row holds a value that never applies.
     settings: Final = proxy_config.settings
     if field_name not in settings:
         raise HTTPException(

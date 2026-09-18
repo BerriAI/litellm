@@ -39,15 +39,10 @@ class SettingsStore(MutableMapping[str, JsonValue]):
     def owned_by_config(self, key: str) -> bool:
         return key in self._yaml_values
 
-    def config_owned_keys(self) -> frozenset[str]:
-        return frozenset(self._yaml_values)
-
     def rejected_writes(self, incoming: Mapping[str, JsonValue]) -> tuple[str, ...]:
         return tuple(
             sorted(
-                key
-                for key, value in incoming.items()
-                if self.owned_by_config(key) and value != self._yaml_values[key]
+                key for key, value in incoming.items() if self.owned_by_config(key) and value != self._yaml_values[key]
             )
         )
 
@@ -130,4 +125,4 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         rule: Final = rule_for(self._section, key)
         yaml_value: Final[SettingValue] = self._yaml_values.get(key, ABSENT)
         db_value: Final[SettingValue] = self._database_rows.get(rule.db_row, _EMPTY_VALUES).get(key, ABSENT)
-        return resolve(rule, yaml_value, db_value)
+        return resolve(yaml_value, db_value)

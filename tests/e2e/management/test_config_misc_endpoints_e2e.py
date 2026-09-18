@@ -564,7 +564,7 @@ class TestConfigPersistence:
         )
         match field_info:
             case UnknownApiError(status_code=400, body=body):
-                assert "not in DB" in body
+                assert "is not set" in body
             case _:
                 pytest.fail(f"expected max_parallel_requests to remain absent from the DB row, got {field_info}")
 
