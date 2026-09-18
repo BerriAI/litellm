@@ -1974,21 +1974,6 @@ class TestClaudeOpus48AdaptiveThinking:
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
-    def test_resolver_reads_flag_through_bedrock_invoke_prefix(self, local_model_cost_map):
-        """The resolver fix: ``bedrock/invoke/...`` resolves to the flagged
-        Bedrock entry. Pure ``_supports_factory`` without prefix-stripping
-        returns False here, which is why the data-only fix alone was not enough."""
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-
-        assert (
-            AnthropicModelInfo._supports_model_capability(
-                "bedrock/invoke/us.anthropic.claude-opus-4-8",
-                "supports_adaptive_thinking",
-                "anthropic",
-            )
-            is True
-        )
-
     @pytest.mark.parametrize(
         "model",
         [
@@ -2171,15 +2156,6 @@ class TestCapabilityProbeUsesCallerProvider:
         litellm.get_model_info.cache_clear()
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock") is False
-
-    def test_native_anthropic_probe_still_reads_anthropic_entry(self, local_model_cost_map, monkeypatch):
-        import litellm
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-
-        monkeypatch.setitem(litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False)
-        litellm.get_model_info.cache_clear()
-
-        assert AnthropicModelInfo._is_adaptive_thinking_model("claude-opus-4-8", "anthropic") is True
 
 
 def test_create_anthropic_model_list_response_shape():

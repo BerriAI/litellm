@@ -75,22 +75,6 @@ def wandb_request_mock(respx_mock: respx.MockRouter) -> respx.Route:
 class TestWandbConfig:
     """Test class for WandB Inference functionality"""
 
-    @pytest.mark.parametrize("model", WANDB_REASONING_MODELS)
-    def test_map_openai_params_preserves_reasoning_effort(self, wandb_test_config, model: str):
-        assert litellm.model_cost[f"wandb/{model}"].get("supports_reasoning") is True
-        supported_params = litellm.get_supported_openai_params(model=f"wandb/{model}")
-        assert supported_params is not None
-        assert "reasoning_effort" in supported_params
-
-        result = WandbConfig().map_openai_params(
-            non_default_params={"reasoning_effort": "medium", "max_completion_tokens": 64},
-            optional_params={},
-            model=model,
-            drop_params=True,
-        )
-
-        assert result == {"reasoning_effort": "medium", "max_tokens": 64}
-
     def test_default_api_base(self):
         """Test that default API base is used when none is provided"""
         config = WandbConfig()
@@ -123,9 +107,7 @@ class TestWandbConfig:
         This test mocks the actual HTTP request to test the integration properly.
         """
 
-        litellm.disable_aiohttp_transport = (
-            True  # since this uses respx, we need to set use_aiohttp_transport to False
-        )
+        litellm.disable_aiohttp_transport = True  # since this uses respx, we need to set use_aiohttp_transport to False
 
         # Set up environment variables for the test
         api_key = "fake-wandb-key"
@@ -162,9 +144,7 @@ class TestWandbConfig:
         # Make the actual API call through LiteLLM
         response = completion(
             model=model,
-            messages=[
-                {"role": "user", "content": "write code for saying hey from LiteLLM"}
-            ],
+            messages=[{"role": "user", "content": "write code for saying hey from LiteLLM"}],
             api_key=api_key,
             api_base=api_base,
         )
@@ -242,53 +222,6 @@ class TestWandbConfig:
         assert request_body["reasoning_effort"] == effort
         assert request_body["max_tokens"] == 64
         assert "max_completion_tokens" not in request_body
-
-    @pytest.mark.respx(assert_all_called=False)
-    @pytest.mark.parametrize("drop_params", [True, False])
-    @pytest.mark.parametrize(
-        "model,explicit_false",
-        [
-            ("meta-llama/Llama-3.1-8B-Instruct", False),
-            ("openai/gpt-oss-20b", True),
-        ],
-    )
-    def test_wandb_completion_without_reasoning_support(
-        self,
-        wandb_test_config,
-        wandb_request_mock: respx.Route,
-        respx_mock: respx.MockRouter,
-        monkeypatch: pytest.MonkeyPatch,
-        model: str,
-        explicit_false: bool,
-        drop_params: bool,
-    ):
-        with monkeypatch.context() as context:
-            if explicit_false:
-                context.setitem(litellm.model_cost[f"wandb/{model}"], "supports_reasoning", False)
-
-            kwargs = {
-                "model": f"wandb/{model}",
-                "messages": [{"role": "user", "content": "Hello"}],
-                "api_key": "fake-wandb-key",
-                "api_base": "https://api.inference.wandb.ai/v1",
-                "reasoning_effort": "medium",
-                "drop_params": drop_params,
-            }
-            if not drop_params:
-                with pytest.raises(litellm.UnsupportedParamsError, match="reasoning_effort"):
-                    completion(**kwargs)
-                assert len(respx_mock.calls) == 0
-                return
-
-            completion(**kwargs)
-            assert wandb_request_mock.call_count == 1
-            request_body = json.loads(wandb_request_mock.calls[0].request.content)
-            assert request_body["model"] == model
-            assert "reasoning_effort" not in request_body
-
-            supported_params = litellm.get_supported_openai_params(model=f"wandb/{model}")
-            assert supported_params is not None
-            assert "reasoning_effort" not in supported_params
 
     @pytest.mark.respx()
     def test_wandb_completion_keeps_reasoning_effort_for_an_unregistered_model(

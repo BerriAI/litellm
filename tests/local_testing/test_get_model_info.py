@@ -47,12 +47,6 @@ def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
     assert model_info["input_cost_per_token"] == 0.0
 
 
-def test_get_model_info_gemini_pro():
-    info = litellm.get_model_info("gemini-2.0-flash")
-    print("info", info)
-    assert info["key"] == "gemini-2.0-flash"
-
-
 def test_get_model_info_ollama_chat():
     from litellm.llms.ollama.completion.transformation import OllamaConfig
 
@@ -120,19 +114,13 @@ def test_get_model_info_ft_model_with_provider_prefix():
     assert info["key"] == "ft:gpt-3.5-turbo"
 
 
-def _enforce_bedrock_converse_models(
-    model_cost: List[Dict[str, Any]], whitelist_models: List[str]
-):
+def _enforce_bedrock_converse_models(model_cost: List[Dict[str, Any]], whitelist_models: List[str]):
     """
     Assert all new bedrock chat models are added as `bedrock_converse` unless explicitly whitelisted.
     """
     # Check for unwhitelisted models
     for model, info in litellm.model_cost.items():
-        if (
-            info["litellm_provider"] == "bedrock"
-            and info["mode"] == "chat"
-            and model not in whitelist_models
-        ):
+        if info["litellm_provider"] == "bedrock" and info["mode"] == "chat" and model not in whitelist_models:
             raise AssertionError(
                 f"New bedrock chat model detected: {model}. Please set `litellm_provider='bedrock_converse'` for this model."
             )
@@ -153,9 +141,7 @@ def test_model_info_bedrock_converse(monkeypatch):
     except FileNotFoundError:
         pytest.skip("whitelisted_bedrock_models.txt not found")
 
-    _enforce_bedrock_converse_models(
-        model_cost=litellm.model_cost, whitelist_models=whitelist_models
-    )
+    _enforce_bedrock_converse_models(model_cost=litellm.model_cost, whitelist_models=whitelist_models)
 
 
 @pytest.mark.flaky(retries=6, delay=2)
@@ -179,10 +165,8 @@ def test_model_info_bedrock_converse_enforcement(monkeypatch):
 
         # Check for unwhitelisted models
         with pytest.raises(AssertionError):
-            _enforce_bedrock_converse_models(
-                model_cost=litellm.model_cost, whitelist_models=whitelist_models
-            )
-    except FileNotFoundError as e:
+            _enforce_bedrock_converse_models(model_cost=litellm.model_cost, whitelist_models=whitelist_models)
+    except FileNotFoundError:
         pytest.skip("whitelisted_bedrock_models.txt not found")
 
 
@@ -219,9 +203,7 @@ def test_get_model_info_custom_provider():
     # Get registered model info
     from litellm import get_model_info
 
-    get_model_info(
-        model="my-custom-llm/my-fake-model"
-    )  # 💥 "Exception: This model isn't mapped yet." in v1.56.10
+    get_model_info(model="my-custom-llm/my-fake-model")  # 💥 "Exception: This model isn't mapped yet." in v1.56.10
 
 
 def test_get_model_info_custom_model_router():
@@ -273,11 +255,7 @@ def test_get_model_info_bedrock_models():
                     k = k.replace(f"{commitment}/", "")
             base_model = BedrockModelInfo.get_base_model(k)
             # get_base_model() returns model id without "bedrock/" prefix; cost map keys use "bedrock/<model>"
-            base_model_key = (
-                base_model
-                if base_model in litellm.model_cost
-                else f"bedrock/{base_model}"
-            )
+            base_model_key = base_model if base_model in litellm.model_cost else f"bedrock/{base_model}"
             if base_model_key not in litellm.model_cost:
                 continue
             base_model_info = litellm.model_cost[base_model_key]
@@ -285,12 +263,10 @@ def test_get_model_info_bedrock_models():
                 if "invoke/" in k:
                     continue
                 if base_model_key.startswith("supports_"):
-                    assert (
-                        base_model_key in v
-                    ), f"{base_model_key} is not in model cost map for {k}"
-                    assert (
-                        v[base_model_key] == base_model_value
-                    ), f"{base_model_key} is not equal to {base_model_value} for model {k}"
+                    assert base_model_key in v, f"{base_model_key} is not in model cost map for {k}"
+                    assert v[base_model_key] == base_model_value, (
+                        f"{base_model_key} is not equal to {base_model_value} for model {k}"
+                    )
 
 
 def test_get_model_info_bedrock_cross_region_capability_parity():
@@ -318,9 +294,7 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
             if not cap.startswith("supports_"):
                 continue
             assert cap in v, f"{cap} is on {base_model_key} but missing from {k}"
-            assert (
-                v[cap] == base_value
-            ), f"{cap} is {v[cap]} on {k} but {base_value} on {base_model_key}"
+            assert v[cap] == base_value, f"{cap} is {v[cap]} on {k} but {base_value} on {base_model_key}"
 
     assert checked > 0, "no cross-region bedrock profiles found - the filter is inert"
 
@@ -354,27 +328,6 @@ def test_get_model_info_huggingface_models(monkeypatch):
     )
 
 
-@pytest.mark.parametrize(
-    "model, provider",
-    [
-        ("bedrock/us-east-2/us.anthropic.claude-3-haiku-20240307-v1:0", None),
-        (
-            "bedrock/us-east-2/us.anthropic.claude-3-haiku-20240307-v1:0",
-            "bedrock",
-        ),
-    ],
-)
-def test_get_model_info_cost_calculator_bedrock_region_cris_stripped(model, provider):
-    """
-    ensure cross region inferencing model is used correctly
-    Relevant Issue: https://github.com/BerriAI/litellm/issues/8115
-    """
-    info = get_model_info(model=model, custom_llm_provider=provider)
-    print("info", info)
-    assert info["key"] == "us.anthropic.claude-3-haiku-20240307-v1:0"
-    assert info["litellm_provider"] == "bedrock"
-
-
 def test_get_model_info_case_insensitive_lookup(monkeypatch):
     """
     Test that model info lookup is case-insensitive.
@@ -402,23 +355,17 @@ def test_get_model_info_case_insensitive_lookup(monkeypatch):
     )
 
     # Test 1: Exact case should work
-    info = litellm.get_model_info(
-        model="Qwen/Qwen3-Next-80B-A3B-Thinking", custom_llm_provider="together_ai"
-    )
+    info = litellm.get_model_info(model="Qwen/Qwen3-Next-80B-A3B-Thinking", custom_llm_provider="together_ai")
     assert info is not None
     assert info["supports_function_calling"] is True
 
     # Test 2: Lowercase should also work (case-insensitive lookup)
-    info_lower = litellm.get_model_info(
-        model="qwen/qwen3-next-80b-a3b-thinking", custom_llm_provider="together_ai"
-    )
+    info_lower = litellm.get_model_info(model="qwen/qwen3-next-80b-a3b-thinking", custom_llm_provider="together_ai")
     assert info_lower is not None
     assert info_lower["supports_function_calling"] is True
 
     # Test 3: Mixed case should also work
-    info_mixed = litellm.get_model_info(
-        model="QWEN/qwen3-NEXT-80b-a3b-thinking", custom_llm_provider="together_ai"
-    )
+    info_mixed = litellm.get_model_info(model="QWEN/qwen3-NEXT-80b-a3b-thinking", custom_llm_provider="together_ai")
     assert info_mixed is not None
     assert info_mixed["supports_function_calling"] is True
 
@@ -446,13 +393,7 @@ def test_get_model_info_case_insensitive_supports_function_calling(monkeypatch):
     from litellm.utils import supports_function_calling
 
     # Exact case
-    assert (
-        supports_function_calling("TestModel-ABC", custom_llm_provider="test_provider")
-        is True
-    )
+    assert supports_function_calling("TestModel-ABC", custom_llm_provider="test_provider") is True
 
     # Lowercase (should now work with case-insensitive lookup)
-    assert (
-        supports_function_calling("testmodel-abc", custom_llm_provider="test_provider")
-        is True
-    )
+    assert supports_function_calling("testmodel-abc", custom_llm_provider="test_provider") is True

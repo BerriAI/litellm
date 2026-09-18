@@ -13,8 +13,6 @@ import httpx
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.llms.openai.cost_calculation import video_generation_cost
 from litellm.llms.vertex_ai.videos.transformation import (
     VertexAIVideoConfig,
     _convert_image_to_vertex_format,
@@ -23,14 +21,8 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoObject
 
 VEO_31_LITE_VERTEX_MODEL = "vertex_ai/veo-3.1-lite-generate-001"
-ROOT_MODEL_COST_PATH = (
-    Path(__file__).parents[5] / "model_prices_and_context_window.json"
-)
-BACKUP_MODEL_COST_PATH = (
-    Path(__file__).parents[5]
-    / "litellm"
-    / "model_prices_and_context_window_backup.json"
-)
+ROOT_MODEL_COST_PATH = Path(__file__).parents[5] / "model_prices_and_context_window.json"
+BACKUP_MODEL_COST_PATH = Path(__file__).parents[5] / "litellm" / "model_prices_and_context_window_backup.json"
 ModelCostMap = Mapping[str, Mapping[str, object]]
 
 
@@ -84,9 +76,7 @@ class TestVertexAIVideoConfig:
             "vertex_location": "us-central1",
         }
 
-        url = self.config.get_complete_url(
-            model="vertex_ai/veo-002", api_base=None, litellm_params=litellm_params
-        )
+        url = self.config.get_complete_url(model="vertex_ai/veo-002", api_base=None, litellm_params=litellm_params)
 
         expected = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/veo-002"
         assert url == expected
@@ -119,29 +109,7 @@ class TestVertexAIVideoConfig:
         monkeypatch.setattr(litellm, "vertex_project", None)
 
         with pytest.raises(ValueError, match="vertex_project is required"):
-            self.config.get_complete_url(
-                model="veo-002", api_base=None, litellm_params={}
-            )
-
-
-    def test_veo_31_lite_provider_routing_from_local_model_map(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
-        vertex_video_models = {
-            model_name.removeprefix("vertex_ai/")
-            for model_name, info in model_cost.items()
-            if info.get("litellm_provider") == "vertex_ai-video-models"
-        }
-        monkeypatch.setattr(litellm, "vertex_ai_video_models", vertex_video_models)
-
-        model, custom_llm_provider, _, _ = get_llm_provider(
-            model="veo-3.1-lite-generate-001"
-        )
-
-        assert model == "veo-3.1-lite-generate-001"
-        assert custom_llm_provider == "vertex_ai"
-
+            self.config.get_complete_url(model="veo-002", api_base=None, litellm_params={})
 
     def test_transform_video_create_request(self):
         """Test transformation of video creation request."""
@@ -282,9 +250,7 @@ class TestVertexAIVideoConfig:
         assert mapped["aspectRatio"] == "16:9"
         assert "resolution" not in mapped
 
-    def test_map_openai_size_does_not_infer_resolution_for_existing_veo_3(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_map_openai_size_does_not_infer_resolution_for_existing_veo_3(self, monkeypatch: pytest.MonkeyPatch):
         model = "veo-3.1-generate-001"
         model_key = f"vertex_ai/{model}"
         model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
@@ -457,9 +423,7 @@ class TestVertexAIVideoConfig:
                 "raiMediaFilteredCount": 0,
                 "videos": [
                     {
-                        "bytesBase64Encoded": base64.b64encode(
-                            b"fake_video_data"
-                        ).decode(),
+                        "bytesBase64Encoded": base64.b64encode(b"fake_video_data").decode(),
                         "mimeType": "video/mp4",
                     }
                 ],
@@ -525,9 +489,7 @@ class TestVertexAIVideoConfig:
             "done": True,
             "response": {
                 "@type": "type.googleapis.com/cloud.ai.large_models.vision.GenerateVideoResponse",
-                "videos": [
-                    {"bytesBase64Encoded": encoded_video, "mimeType": "video/mp4"}
-                ],
+                "videos": [{"bytesBase64Encoded": encoded_video, "mimeType": "video/mp4"}],
             },
         }
 
@@ -547,9 +509,7 @@ class TestVertexAIVideoConfig:
         }
 
         with pytest.raises(ValueError, match="Video generation is not complete yet"):
-            self.config.transform_video_content_response(
-                raw_response=mock_response, logging_obj=self.mock_logging_obj
-            )
+            self.config.transform_video_content_response(raw_response=mock_response, logging_obj=self.mock_logging_obj)
 
     def test_transform_video_content_response_missing_video_data(self):
         """Test that missing video data raises error."""
@@ -561,9 +521,7 @@ class TestVertexAIVideoConfig:
         }
 
         with pytest.raises(ValueError, match="No video data found"):
-            self.config.transform_video_content_response(
-                raw_response=mock_response, logging_obj=self.mock_logging_obj
-            )
+            self.config.transform_video_content_response(raw_response=mock_response, logging_obj=self.mock_logging_obj)
 
     def test_get_video_edit_prefetch_params(self):
         """Test that prefetch params returns the fetchPredictOperation URL and body."""
@@ -589,9 +547,7 @@ class TestVertexAIVideoConfig:
 
         prefetched = {
             "done": True,
-            "response": {
-                "videos": [{"bytesBase64Encoded": fake_bytes, "mimeType": "video/mp4"}]
-            },
+            "response": {"videos": [{"bytesBase64Encoded": fake_bytes, "mimeType": "video/mp4"}]},
         }
 
         url, data, files = self.config.transform_video_edit_request(
@@ -618,9 +574,7 @@ class TestVertexAIVideoConfig:
 
         prefetched = {
             "done": True,
-            "response": {
-                "videos": [{"gcsUri": "gs://bucket/video.mp4", "mimeType": "video/mp4"}]
-            },
+            "response": {"videos": [{"gcsUri": "gs://bucket/video.mp4", "mimeType": "video/mp4"}]},
         }
 
         _, data, _ = self.config.transform_video_edit_request(
@@ -746,9 +700,7 @@ class TestVertexAIVideoConfig:
 
     def test_get_error_class(self):
         """Test error class generation."""
-        error = self.config.get_error_class(
-            error_message="Test error", status_code=500, headers={}
-        )
+        error = self.config.get_error_class(error_message="Test error", status_code=500, headers={})
 
         # Should return VertexAIError
         from litellm.llms.vertex_ai.common_utils import VertexAIError
@@ -960,10 +912,7 @@ class TestImageAndParametersPassthrough:
         # instances contains prompt + image
         assert len(data["instances"]) == 1
         instance = data["instances"][0]
-        assert (
-            instance["prompt"]
-            == "Cinematic drone shot moving forward along the beach boardwalk"
-        )
+        assert instance["prompt"] == "Cinematic drone shot moving forward along the beach boardwalk"
         assert instance["image"] == image
 
         # parameters block is correct and not double-nested

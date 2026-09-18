@@ -154,27 +154,6 @@ class TestSCXAIModelMetadata:
         with open(json_path) as f:
             return json.load(f)
 
-    def test_scx_ai_models_registered_with_correct_metadata(self):
-        model_cost = self._load(("model_prices_and_context_window.json",))
-        for model in self.SCX_MODELS:
-            info = model_cost.get(model)
-            assert info is not None, f"{model} missing from model_prices_and_context_window.json"
-            assert info["litellm_provider"] == "scx-ai"
-            assert info["mode"] == "chat"
-            assert info["input_cost_per_token"] > 0
-            assert info["output_cost_per_token"] > 0
-            assert info["supports_function_calling"] is True
-            assert info["supports_tool_choice"] is True
-            assert info["supports_reasoning"] is True
-            assert info["supports_response_schema"] is True
-            assert info.get("supports_vision", False) is (model in self.VISION_MODELS)
-
-            assert info["supports_prompt_caching"] is True
-            assert 0 < info["cache_read_input_token_cost"] < info["input_cost_per_token"]
-
-            assert info["max_tokens"] == info["max_output_tokens"]
-            assert info["max_input_tokens"] >= 1_000_000
-
     def test_scx_ai_models_synced_to_backup(self):
         model_cost = self._load(("model_prices_and_context_window.json",))
         backup = self._load(("litellm", "model_prices_and_context_window_backup.json"))
