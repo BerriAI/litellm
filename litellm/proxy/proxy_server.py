@@ -4858,9 +4858,16 @@ class ProxyConfig:
         )
 
     def _load_yaml_settings_stores(self, config: Mapping[str, object]) -> None:
+        global config_passthrough_endpoints
         for section, store in self._settings_stores.items():
             store.load_yaml(_as_settings_mapping(config.get(section)))
             store.apply_db_row(section, _EMPTY_SETTINGS_MAPPING)
+        yaml_endpoints: Final = self.settings.config_value("pass_through_endpoints")
+        config_passthrough_endpoints = (
+            [dict(endpoint) for endpoint in yaml_endpoints if isinstance(endpoint, dict)]
+            if isinstance(yaml_endpoints, list)
+            else None
+        )
 
     def _config_with_resolved_settings(self, config: Mapping[str, object]) -> dict[str, object]:
         return {  # mutable-ok: get_config preserves the mutable mapping contract used by existing loaders
@@ -6161,7 +6168,6 @@ class ProxyConfig:
 
             ## pass through endpoints
             if general_settings.get("pass_through_endpoints", None) is not None:
-                config_passthrough_endpoints = general_settings["pass_through_endpoints"]
                 await initialize_pass_through_endpoints(
                     pass_through_endpoints=general_settings["pass_through_endpoints"],
                     config_file_path=config_file_path,
@@ -7265,17 +7271,7 @@ class ProxyConfig:
         db_values: Mapping[str, SettingsJsonValue],
         previous_retention_values: tuple[SettingsJsonValue | None, ...],
     ) -> None:
-        if (
-            any(
-                key in db_values
-                for key in (
-                    "maximum_spend_logs_retention_period",
-                    "maximum_autorouter_session_retention_period",
-                    "maximum_health_check_retention_period",
-                )
-            )
-            and previous_retention_values != self._resolved_retention_values()
-        ):
+        if previous_retention_values != self._resolved_retention_values():
             await self._reschedule_spend_log_cleanup_job()
 
     async def _apply_ssrf_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:

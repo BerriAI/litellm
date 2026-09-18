@@ -3776,6 +3776,23 @@ async def test_ProxyConfig__update_general_settings_skips_redundant_retention_re
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_reschedules_after_retention_key_deletion(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    reschedule: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(pc, "_reschedule_spend_log_cleanup_job", reschedule)
+
+    await pc._update_general_settings({"maximum_health_check_retention_period": "30d"})
+    reschedule.reset_mock()
+
+    await pc._update_general_settings({})
+
+    reschedule.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig__update_general_settings_dispatches_every_side_effect_handler(monkeypatch):
     pc = ProxyConfig()
     handlers: Final = (
@@ -3868,6 +3885,19 @@ async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stor
     assert resolved["router_settings"] == {"fallbacks": ["config"], "num_retries": 2}
     assert pc.settings.source("max_file_size_mb") == "config"
     assert pc.settings.source("max_parallel_requests") == "db"
+
+
+def test_ProxyConfig_load_yaml_settings_stores_keeps_db_endpoints_out_of_config_baseline():
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    config_endpoint: Final = {"path": "/config", "target": "https://config.example"}
+    db_endpoint: Final = {"id": "db-endpoint", "path": "/db", "target": "https://db.example"}
+
+    pc._load_yaml_settings_stores({"general_settings": {"pass_through_endpoints": [config_endpoint]}})
+    pc.settings.apply_db_row("general_settings", {"pass_through_endpoints": [db_endpoint]})
+
+    assert proxy_server.config_passthrough_endpoints == [config_endpoint]
 
 
 @pytest.mark.asyncio

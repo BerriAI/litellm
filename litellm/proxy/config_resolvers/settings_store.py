@@ -33,6 +33,9 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         self._yaml_values = MappingProxyType(dict(mapping))
         self._clear_runtime()
 
+    def config_value(self, key: str) -> JsonValue:
+        return self._yaml_values.get(key)
+
     def apply_db_row(self, row: DbRow, db_row: Mapping[str, JsonValue]) -> None:
         previous_row: Final = self._database_rows.get(row, _EMPTY_VALUES)
         self._database_rows = MappingProxyType({**self._database_rows, row: MappingProxyType(dict(db_row))})
