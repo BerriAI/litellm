@@ -486,17 +486,26 @@ async def _get_budget_counters(
         (not is_team_key or apply_user_budget_to_team_keys)
         and user_object is not None
         and user_object.user_id is not None
-        and user_object.max_budget is not None
-        and user_object.max_budget > 0
     ):
-        counters.append(
-            _BudgetCounter(
-                counter_key=f"spend:user:{user_object.user_id}",
-                source_cache_key=user_object.user_id,
-                max_budget=float(user_object.max_budget),
-                fallback_spend=float(user_object.spend or 0.0),
+        user_id: Final = user_object.user_id
+        if user_object.max_budget is not None and user_object.max_budget > 0:
+            counters.append(
+                _BudgetCounter(
+                    counter_key=f"spend:user:{user_id}",
+                    source_cache_key=user_id,
+                    max_budget=float(user_object.max_budget),
+                    fallback_spend=float(user_object.spend or 0.0),
+                    entity_type="User",
+                    entity_id=user_id,
+                )
+            )
+        counters.extend(
+            _get_budget_limit_counters(
+                entity_prefix=f"spend:user:{user_id}",
                 entity_type="User",
-                entity_id=user_object.user_id,
+                entity_id=user_id,
+                budget_limits=user_object.budget_limits,
+                fallback_spend=float(user_object.spend or 0.0),
             )
         )
 

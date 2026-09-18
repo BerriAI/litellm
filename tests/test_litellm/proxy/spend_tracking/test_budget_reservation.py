@@ -10,9 +10,10 @@ import pytest
 import litellm
 from litellm.caching import DualCache
 from litellm.proxy import proxy_server
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking.budget_reservation import (
+    _get_budget_counters,
     count_request_input_tokens,
     estimate_request_max_cost,
     reserve_budget_for_request,
@@ -445,3 +446,45 @@ async def test_models_without_a_rust_tokenizer_stay_in_python(
     assert factory.calls == []
     assert dict(counts) == dict(python_counts)
     assert counts[model] not in RUST_INPUT_TOKENS_BY_TOKENIZER.values()
+
+
+WINDOWED_USER: Final = LiteLLM_UserTable(
+    user_id="windowed-user",
+    spend=0.0,
+    budget_limits=[{"budget_duration": "24h", "max_budget": 5.0}, {"budget_duration": "30d", "max_budget": 50.0}],
+)
+USER_WINDOW_COUNTER_KEYS: Final = frozenset(
+    {"spend:user:windowed-user:window:24h", "spend:user:windowed-user:window:30d"}
+)
+
+
+async def _counter_keys(team_object: LiteLLM_TeamTable | None, apply_user_budget_to_team_keys: bool) -> frozenset[str]:
+    counters: Final = await _get_budget_counters(
+        request_body={"model": "gpt-4o", "messages": ANTHROPIC_MESSAGES},
+        valid_token=UserAPIKeyAuth(token="hashed-windowed-key", user_id=WINDOWED_USER.user_id),
+        team_object=team_object,
+        user_object=WINDOWED_USER,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        apply_user_budget_to_team_keys=apply_user_budget_to_team_keys,
+    )
+    return frozenset(counter.counter_key for counter in counters)
+
+
+@pytest.mark.asyncio
+async def test_user_budget_windows_are_reserved_for_personal_keys() -> None:
+    keys: Final = await _counter_keys(team_object=None, apply_user_budget_to_team_keys=False)
+
+    assert USER_WINDOW_COUNTER_KEYS <= keys
+
+
+@pytest.mark.asyncio
+async def test_user_budget_windows_follow_apply_user_budget_to_team_keys() -> None:
+    team: Final = LiteLLM_TeamTable(team_id="team-1")
+
+    skipped: Final = await _counter_keys(team_object=team, apply_user_budget_to_team_keys=False)
+    applied: Final = await _counter_keys(team_object=team, apply_user_budget_to_team_keys=True)
+
+    assert USER_WINDOW_COUNTER_KEYS.isdisjoint(skipped)
+    assert USER_WINDOW_COUNTER_KEYS <= applied
