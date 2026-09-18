@@ -13611,7 +13611,9 @@ async def test_delete_team_emits_only_the_deleted_audit_event(monkeypatch):
     )
     await _settle_audit_log_tasks()
 
-    team_events = [(p["object_id"], p["action"]) for p in audit_logger.payloads if p["table_name"] == "LiteLLM_TeamTable"]
+    team_events = [
+        (p["object_id"], p["action"]) for p in audit_logger.payloads if p["table_name"] == "LiteLLM_TeamTable"
+    ]
     assert team_events == [("team-gone", "deleted")]
 
 
