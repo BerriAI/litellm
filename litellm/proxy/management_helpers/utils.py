@@ -86,7 +86,9 @@ class _PrismaUserTable(Protocol):
 class _PrismaTeamMembershipTable(Protocol):
     """Team membership table actions the management helpers issue."""
 
-    async def create(self, *, data: Mapping[str, object], include: Mapping[str, bool]) -> _PrismaRecord: ...
+    async def upsert(
+        self, *, where: Mapping[str, object], data: Mapping[str, Mapping[str, object]], include: Mapping[str, bool]
+    ) -> _PrismaRecord: ...
 
 
 class MemberWriteTx(Protocol):
@@ -348,7 +350,7 @@ async def _resolve_member_budget_id(
     default member budget is cloned (with ``budget_duration`` overriding its
     reset window while keeping its other limits). A lone ``budget_duration``
     with no team default creates a window-only budget. With nothing set the
-    member gets no budget.
+    member gets no budget, though ``add_new_member`` still writes its membership row.
     """
     has_explicit_limit: Final = max_budget_in_team is not None or allowed_models is not None
 
@@ -415,9 +417,9 @@ async def add_new_member(
     Add a new member to a team
 
     - add team id to user table
-    - add team member w/ budget to team member table
+    - add team member to team member table, linked to a budget when one resolves
 
-    Returns created/existing user + team membership w/ budget id
+    Returns created/existing user + team membership (``budget_id`` is ``None`` when no budget applies)
 
     Callers already inside a transaction pass it as ``tx`` so every write here runs on that
     connection instead of borrowing more from the pool while the caller's locks are held.
@@ -471,14 +473,15 @@ async def add_new_member(
         tx=tx,
     )
 
-    if _budget_id and returned_user is not None and returned_user.user_id is not None:
+    if returned_user is not None and returned_user.user_id is not None:
         membership_table: Final[_PrismaTeamMembershipTable] = _team_membership_table(prisma_client, tx)
-        _returned_team_membership: Final = await membership_table.create(
-            data={
-                "team_id": team_id,
-                "user_id": returned_user.user_id,
-                "budget_id": _budget_id,
-            },
+        membership_key: Final[Mapping[str, object]] = {"user_id": returned_user.user_id, "team_id": team_id}
+        budget_link: Final[Mapping[str, str]] = (
+            MappingProxyType({"budget_id": _budget_id}) if _budget_id is not None else MappingProxyType({})
+        )
+        _returned_team_membership: Final = await membership_table.upsert(
+            where={"user_id_team_id": membership_key},
+            data={"create": {**membership_key, **budget_link}, "update": {}},
             include={"litellm_budget_table": True},
         )
 
