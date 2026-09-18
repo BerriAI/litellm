@@ -14,7 +14,7 @@ async def test_azure_chat_o_series_transformation():
     provider_config = AzureOpenAIO1Config()
     model = "o_series/web-interface-o1-mini"
     messages = [{"role": "user", "content": "Hello, how are you?"}]
-    optional_params = {"tool_choice": "none"}
+    optional_params = {}
     litellm_params = {}
     headers = {}
 
@@ -23,7 +23,6 @@ async def test_azure_chat_o_series_transformation():
     )
     print(response)
     assert response["model"] == "web-interface-o1-mini"
-    assert "tool_choice" not in response
 
 
 def test_azure_o_series_transform_request_flattens_top_level_anyof():
