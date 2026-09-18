@@ -1252,6 +1252,42 @@ class TestNativeWebSocketDeploymentDefaults:
         assert dict(defaults.fill_missing) == {"reasoning": {"effort": "low"}}
         assert dict(defaults.overrides) == {}
 
+    def test_builder_copies_dict_valued_reasoning_effort_like_the_http_path(self):
+        from litellm.responses.main import _build_responses_websocket_request_defaults
+
+        defaults = _build_responses_websocket_request_defaults(
+            {"model": "gpt-5-pro", "reasoning_effort": {"effort": "xhigh", "summary": "auto"}}
+        )
+
+        assert dict(defaults.fill_missing) == {"reasoning": {"effort": "xhigh", "summary": "auto"}}
+
+    @pytest.mark.asyncio
+    async def test_extra_body_type_key_never_replaces_the_frame_type(self):
+        from types import MappingProxyType
+
+        from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
+
+        handler = _make_streaming(
+            authorized_model="gpt-5-pro",
+            request_defaults=ResponsesWebSocketRequestDefaults(
+                fill_missing=MappingProxyType({}),
+                overrides=MappingProxyType({"type": "session.update", "provider_default": "configured"}),
+            ),
+        )
+
+        forwarded = json.loads(
+            await handler._mask_response_create(
+                json.dumps({"type": "response.create", "model": "gpt-5-pro", "input": "hi"})
+            )
+        )
+
+        assert forwarded == {
+            "type": "response.create",
+            "model": "gpt-5-pro",
+            "input": "hi",
+            "provider_default": "configured",
+        }
+
     @pytest.mark.asyncio
     async def test_flat_frame_gets_defaults_client_keys_win_extra_body_overrides(self):
         handler = _make_streaming(authorized_model="gpt-5-pro", request_defaults=_deployment_defaults())

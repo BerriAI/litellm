@@ -2262,24 +2262,28 @@ def _build_litellm_metadata_for_ws(kwargs: dict) -> dict:
     return metadata
 
 
-_EXTRA_BODY_ADAPTER: Final = TypeAdapter(dict[str, object] | None)
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object] | None)
+
+
+def _deployment_reasoning_default(kwargs: Mapping[str, object]) -> Reasoning | dict[str, object] | None:
+    if kwargs.get("reasoning") is not None:
+        return None
+    reasoning_effort: Final = kwargs.get("reasoning_effort")
+    if isinstance(reasoning_effort, str):
+        return LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
+    return _JSON_OBJECT_ADAPTER.validate_python(reasoning_effort) if isinstance(reasoning_effort, Mapping) else None
 
 
 def _build_responses_websocket_request_defaults(kwargs: Mapping[str, object]) -> ResponsesWebSocketRequestDefaults:
-    reasoning_effort: Final = kwargs.get("reasoning_effort")
-    mapped_reasoning: Final = (
-        LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
-        if kwargs.get("reasoning") is None and isinstance(reasoning_effort, str)
-        else None
-    )
+    default_reasoning: Final = _deployment_reasoning_default(kwargs)
     candidate_params: Final[dict[str, object]] = {
         **kwargs,
-        **({"reasoning": mapped_reasoning} if mapped_reasoning is not None else {}),
+        **({"reasoning": default_reasoning} if default_reasoning is not None else {}),
     }
     fill_missing: Final = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(candidate_params)
     return ResponsesWebSocketRequestDefaults(
         fill_missing=MappingProxyType(dict(fill_missing)),
-        overrides=MappingProxyType(_EXTRA_BODY_ADAPTER.validate_python(kwargs.get("extra_body")) or {}),
+        overrides=MappingProxyType(_JSON_OBJECT_ADAPTER.validate_python(kwargs.get("extra_body")) or {}),
     )
 
 
