@@ -1,5 +1,8 @@
+import io
 import json
+import wave
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -29,6 +32,25 @@ TRANSCRIPT_BODY = {
 TRANSCRIPT = json.dumps(TRANSCRIPT_BODY)
 TRANSCRIPT_AUDIO_SECONDS = 3.0
 PRICE_PER_SECOND = 0.5
+WAV_SAMPLE_RATE: Final = 16000
+UNRECOGNIZED_BODIES: Final = (
+    {"RecognitionStatus": "NoMatch", "Offset": 0, "Duration": 0},
+    {"RecognitionStatus": "InitialSilenceTimeout"},
+    {"Offset": "5000000", "Duration": "25000000"},
+    {},
+    [],
+    None,
+)
+
+
+def _pcm16_wav(seconds: float) -> bytes:
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(WAV_SAMPLE_RATE)
+        wav.writeframes(b"\x00\x00" * int(seconds * WAV_SAMPLE_RATE))
+    return buffer.getvalue()
 
 
 @pytest.fixture(autouse=True)
@@ -45,8 +67,8 @@ def azure_stt_price(monkeypatch: pytest.MonkeyPatch):
     )
 
 
-def _make_response(url: str) -> httpx.Response:
-    request = httpx.Request("POST", url, headers={"Ocp-Apim-Subscription-Key": "server-secret"})
+def _make_response(url: str, uploaded: bytes = b"") -> httpx.Response:
+    request = httpx.Request("POST", url, headers={"Ocp-Apim-Subscription-Key": "server-secret"}, content=uploaded)
     return httpx.Response(200, request=request, text=TRANSCRIPT)
 
 
@@ -92,22 +114,13 @@ class TestAzureSpeechPassthroughHandler:
         assert logging_obj.model_call_details["custom_llm_provider"] == "azure_speech"
         assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected_cost)
 
-    @pytest.mark.parametrize(
-        "response_body",
-        [
-            {"RecognitionStatus": "NoMatch", "Offset": 0, "Duration": 0},
-            {"RecognitionStatus": "InitialSilenceTimeout"},
-            {"Offset": "5000000", "Duration": "25000000"},
-            {},
-            [],
-            None,
-        ],
-    )
-    def test_short_audio_without_recognized_duration_logs_zero_cost(
-        self, response_body: dict[str, object] | list[dict[str, object]] | None
+    @pytest.mark.parametrize("response_body", UNRECOGNIZED_BODIES)
+    @pytest.mark.parametrize("uploaded", [b"", b"not audio at all"])
+    def test_short_audio_with_neither_recognized_nor_decodable_audio_logs_zero_cost(
+        self, response_body: dict[str, object] | list[dict[str, object]] | None, uploaded: bytes
     ):
         handler_result = AzureSpeechPassthroughLoggingHandler.azure_speech_passthrough_handler(
-            httpx_response=_make_response(SHORT_AUDIO_URL),
+            httpx_response=_make_response(SHORT_AUDIO_URL, uploaded),
             response_body=response_body,
             logging_obj=_make_logging_obj(),
             url_route=SHORT_AUDIO_URL,
@@ -120,6 +133,60 @@ class TestAzureSpeechPassthroughHandler:
 
         assert handler_result["kwargs"]["model"] == "azure_speech/short-audio"
         assert handler_result["kwargs"]["response_cost"] == 0.0
+
+    @pytest.mark.parametrize("response_body", UNRECOGNIZED_BODIES)
+    def test_short_audio_bills_the_uploaded_audio_when_nothing_was_recognized(
+        self, response_body: dict[str, object] | list[dict[str, object]] | None
+    ):
+        handler_result = AzureSpeechPassthroughLoggingHandler.azure_speech_passthrough_handler(
+            httpx_response=_make_response(SHORT_AUDIO_URL, _pcm16_wav(seconds=2.0)),
+            response_body=response_body,
+            logging_obj=_make_logging_obj(),
+            url_route=SHORT_AUDIO_URL,
+            result="",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+            request_body={},
+        )
+
+        assert handler_result["kwargs"]["response_cost"] == pytest.approx(2.0 * PRICE_PER_SECOND)
+
+    @pytest.mark.parametrize(
+        "uploaded_seconds,expected_seconds",
+        [(1.0, TRANSCRIPT_AUDIO_SECONDS), (TRANSCRIPT_AUDIO_SECONDS + 2.0, TRANSCRIPT_AUDIO_SECONDS + 2.0)],
+    )
+    def test_short_audio_bills_the_longer_of_uploaded_and_recognized_audio(
+        self, uploaded_seconds: float, expected_seconds: float
+    ):
+        handler_result = AzureSpeechPassthroughLoggingHandler.azure_speech_passthrough_handler(
+            httpx_response=_make_response(SHORT_AUDIO_URL, _pcm16_wav(seconds=uploaded_seconds)),
+            response_body=TRANSCRIPT_BODY,
+            logging_obj=_make_logging_obj(),
+            url_route=SHORT_AUDIO_URL,
+            result=TRANSCRIPT,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+            request_body={},
+        )
+
+        assert handler_result["kwargs"]["response_cost"] == pytest.approx(expected_seconds * PRICE_PER_SECOND)
+
+    def test_fast_transcription_ignores_the_uploaded_multipart_body(self):
+        handler_result = AzureSpeechPassthroughLoggingHandler.azure_speech_passthrough_handler(
+            httpx_response=_make_response(FAST_URL, _pcm16_wav(seconds=30.0)),
+            response_body=FAST_BODY,
+            logging_obj=_make_logging_obj(),
+            url_route=FAST_URL,
+            result=json.dumps(FAST_BODY),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+            request_body={},
+        )
+
+        assert handler_result["kwargs"]["response_cost"] == pytest.approx(FAST_AUDIO_SECONDS * PRICE_PER_SECOND)
 
     @pytest.mark.parametrize(
         "response_body",

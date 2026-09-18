@@ -33,6 +33,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _proxy_general_settings,
     anthropic_proxy_route,
     azure_proxy_route,
+    azure_speech_proxy_route,
     bedrock_llm_proxy_route,
     bedrock_proxy_route,
     create_pass_through_route,
@@ -6443,6 +6444,7 @@ AZURE_SPEECH_PCM16_HEADER: Final = (
     b"RIFF\x24\x0c\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80\x3e\x00\x00\x00\x7d\x00\x00\x02\x00\x10\x00data\x00\x0c\x00\x00"
 )
 AZURE_SPEECH_WAV_BYTES: Final = AZURE_SPEECH_PCM16_HEADER + b"\x00" * 3072
+AZURE_SPEECH_WAV_SECONDS: Final = 3072 / (16000 * 2)
 AZURE_SPEECH_NON_UTF8_WAV_BYTES: Final = AZURE_SPEECH_PCM16_HEADER + bytes(range(256)) * 12
 AZURE_SPEECH_TRANSCRIPT: Final = {"RecognitionStatus": "Success", "DisplayText": "The eagle has landed."}
 
@@ -6825,6 +6827,79 @@ class TestAzureSpeechProxyRoute:
         from litellm.proxy._types import LiteLLMRoutes
 
         assert "/azure_speech" in LiteLLMRoutes.mapped_pass_through_routes.value
+
+    def test_short_audio_with_no_recognized_speech_is_billed_for_the_uploaded_audio(
+        self, azure_speech_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.integrations.custom_logger import CustomLogger
+
+        class _Recorder(CustomLogger):
+            def __init__(self) -> None:
+                super().__init__()
+                self.payloads: list[dict[str, object]] = []  # mutable-ok: test recorder accumulates callback payloads
+
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+                self.payloads.append(kwargs["standard_logging_object"])
+
+        recorder: Final = _Recorder()
+        monkeypatch.setattr(litellm, "_async_success_callback", [*litellm._async_success_callback, recorder])
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "azure/speech/azure-stt",
+            {
+                "litellm_provider": "azure",
+                "mode": "audio_transcription",
+                "input_cost_per_second": 0.25,
+                "output_cost_per_second": 0.0,
+            },
+        )
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(f"https://eastus.stt.speech.microsoft.com{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}").mock(
+                return_value=httpx.Response(200, json={"RecognitionStatus": "NoMatch", "Offset": 0, "Duration": 0})
+            )
+
+            response = azure_speech_client.post(
+                f"/azure_speech{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}",
+                content=AZURE_SPEECH_WAV_BYTES,
+                headers={"Content-Type": "audio/wav", "Authorization": "Bearer sk-virtual"},
+            )
+
+        assert response.status_code == 200
+        assert [p["model"] for p in recorder.payloads] == ["azure_speech/short-audio"]
+        assert recorder.payloads[0]["response_cost"] == pytest.approx(AZURE_SPEECH_WAV_SECONDS * 0.25)
+
+
+class TestAzureSpeechProxyRoutePathTraversal:
+    """Calls the route function directly because httpx clients resolve dot segments before sending."""
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            f"speech/..{AZURE_SPEECH_BATCH_ENDPOINT}",
+            f"speech/recognition/../..{AZURE_SPEECH_BATCH_ENDPOINT}/",
+            f"speech/./..{AZURE_SPEECH_BATCH_ENDPOINT}/8a5d3f2c-0b1e-4c7d-9e6f-1234567890ab",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_dot_segments_cannot_reach_shared_batch_resources_with_a_non_admin_key(
+        self, monkeypatch: pytest.MonkeyPatch, endpoint: str
+    ) -> None:
+        monkeypatch.setenv("AZURE_SPEECH_API_KEY", "server-subscription-key")
+        monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+        monkeypatch.delenv("AZURE_SPEECH_API_BASE", raising=False)
+        request: Final = MagicMock(spec=Request)
+        request.method = "GET"
+
+        with pytest.raises(HTTPException) as denied:
+            await azure_speech_proxy_route(
+                endpoint=endpoint,
+                request=request,
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-virtual"),
+            )
+
+        assert denied.value.status_code == 403
+        assert AZURE_SPEECH_FAST_ENDPOINT in str(denied.value.detail)
 
 
 def _azure_speech_real_auth_attrs() -> dict[str, object]:
