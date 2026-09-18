@@ -236,15 +236,6 @@ class StandardBuiltInToolCostTracking:
         return max(count, 1)
 
     @staticmethod
-    def response_object_includes_image_generation_call(response_object: object) -> bool:
-        """Check if the response object includes an image generation call (Responses API)."""
-        if not isinstance(response_object, ResponsesAPIResponse):
-            return False
-        return StandardBuiltInToolCostTracking.response_includes_output_type(
-            response_object=response_object, output_type="image_generation_call"
-        )
-
-    @staticmethod
     def _image_generation_call_cost(output_item: object, custom_llm_provider: str | None) -> float:
         from litellm.cost_calculator import (
             default_image_cost_calculator,  # pyright: ignore[reportUnknownVariableType]  # optional_params param is untyped
