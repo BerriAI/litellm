@@ -282,7 +282,6 @@ fn extra_information(context: &ExceptionContext, api_base: Option<&str>) -> Stri
     let lines = [
         Some(format!("\nModel: {}", context.model)),
         api_base.map(|api_base| format!("\nAPI Base: `{api_base}`")),
-        (!context.redact_messages_in_exceptions).then(|| "\nMessages: `None`".to_string()),
         context
             .model_group
             .as_ref()
@@ -314,7 +313,7 @@ fn extra_information(context: &ExceptionContext, api_base: Option<&str>) -> Stri
 mod testing {
     use super::*;
 
-    pub(super) const DEBUG: &str = "\nModel: ocr-model\nMessages: `None`";
+    pub(super) const DEBUG: &str = "\nModel: ocr-model";
 
     pub(super) fn context(provider: &str, family: ExceptionFamily) -> ExceptionContext {
         ExceptionContext {
@@ -366,14 +365,6 @@ mod testing {
     pub(super) fn with_debug(failure: PublicFailure) -> PublicFailure {
         PublicFailure {
             litellm_debug_info: Some(DEBUG.into()),
-            ..failure
-        }
-    }
-
-    /// What `exception_type` returns for an `http` original the rule mapped to `failure`.
-    pub(super) fn with_headers(failure: PublicFailure) -> PublicFailure {
-        PublicFailure {
-            litellm_response_headers: Some(vec![("retry-after".into(), "7".into())]),
             ..failure
         }
     }
@@ -492,7 +483,17 @@ mod tests {
         #[case] message: &str,
     ) {
         let context = context("reducto", ExceptionFamily::Other);
-        let expected = failure(PublicKind::ApiConnection, message, "reducto");
+        let expected = match original {
+            OriginalException::Http { .. } => with_debug(failure(
+                status(StatusClass::BadRequest, upstream(409, "rejected")),
+                message,
+                "reducto",
+            )),
+            OriginalException::Connection { .. } | OriginalException::Local { .. } => {
+                failure(PublicKind::ApiConnection, message, "reducto")
+            }
+            _ => unreachable!(),
+        };
         let actual = exception_type(&context, &original);
         assert_eq!(
             PublicFailure {
@@ -669,7 +670,6 @@ mod tests {
                 "\n\nKey Name: `key`\nTeam: `None`",
                 "\nModel: ocr-model",
                 "\nAPI Base: `region-aiplatform.googleapis.com/v1/projects/project/locations/region/publishers/google/models/ocr-model:generateContent`",
-                "\nMessages: `None`",
                 "\nmodel_group: `ocr`\n",
                 "\ndeployment: `deployment`\n",
                 "\nvertex_project: `project`\n",
@@ -681,7 +681,6 @@ mod tests {
     #[rstest::rstest]
     #[case::bare(ExceptionContext::default(), "\nModel: ")]
     #[case::redacted_messages(ExceptionContext { redact_messages_in_exceptions: true, model: "m".into(), ..ExceptionContext::default() }, "\nModel: m")]
-    #[case::messages(ExceptionContext { model: "m".into(), ..ExceptionContext::default() }, "\nModel: m\nMessages: `None`")]
     #[case::team_alias(
         ExceptionContext { model: "m".into(), user_api_key_alias: Some("key".into()), user_api_key_team_alias: Some("team".into()), redact_messages_in_exceptions: true, ..ExceptionContext::default() },
         "\n\nKey Name: `key`\nTeam: `team`\nModel: m"
