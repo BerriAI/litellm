@@ -51,6 +51,7 @@ from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
+    AzureSpillover,
     CallTypes,
     CostBreakdown,
     EmbeddingResponse,
@@ -468,6 +469,7 @@ class LiteLLMRoutes(enum.Enum):
     mapped_pass_through_routes = [
         "/bedrock",
         "/comprehendmedical",
+        "/transcribe",
         "/vertex-ai",
         "/vertex_ai",
         "/cohere",
@@ -483,6 +485,7 @@ class LiteLLMRoutes(enum.Enum):
         "/eu.assemblyai",
         "/vllm",
         "/mistral",
+        "/typesafe",
         "/milvus",
         "/gigachat",
         "/watsonx",
@@ -531,6 +534,7 @@ class LiteLLMRoutes(enum.Enum):
     mcp_management_routes = [
         "/v1/mcp/server",
         "/v1/mcp/server/{path:path}",
+        "/v1/mcp/sessions",
     ]
 
     # Backwards-compat union — virtual keys may be configured with
@@ -850,6 +854,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/member_add",
         "/team/member_delete",
         "/management/v1/teams/{team_id}/members/bulk_delete",
+        "/management/v1/teams/{team_id}/members/bulk_update",
         "/team/member_update",
         "/team/{team_id}/member/{user_id}/reset_spend",
         "/team/permissions_list",
@@ -1215,6 +1220,7 @@ class KeyRequestBase(GenerateRequestBase):
     default_estimated_output_tokens: PositiveInt | None = None
     default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     budget_id: str | None = None
+    end_user_budget_id: str | None = None
     tags: list[str] | None = None
     disable_global_guardrails: bool | None = None
     enable_prompt_caching: bool | None = None
@@ -2420,6 +2426,8 @@ class ConfigList(LiteLLMPydanticObjectBase):
     nested_fields: list[FieldDetail] | None = None  # For nested dictionary or Pydantic fields
     field_options: list[str] | None = None  # Allowed values, for field_type == "Select"
     field_tab: str | None = None  # Admin UI sub-tab this field renders under; None groups it with the rest
+    source: Literal["config", "db", "env", "default", "unset"] = "unset"
+    editable: bool = True
 
 
 class UserHeaderMapping(LiteLLMPydanticObjectBase):
@@ -2779,6 +2787,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     enable_openai_websocket_passthrough: bool | None = Field(
         default=None,
         description="Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.",
+    )
+    transcribe_media_buckets: list[str] | None = Field(
+        default=None,
+        description="S3 bucket names that keys other than proxy admins may read media from and write transcripts to through the Amazon Transcribe pass-through. Unset means only proxy admins can start transcription jobs.",
     )
     user_header_name: str | None = Field(
         None,
@@ -3694,6 +3706,8 @@ class InvitationClaim(LiteLLMPydanticObjectBase):
 class ConfigFieldInfo(LiteLLMPydanticObjectBase):
     field_name: str
     field_value: Any
+    source: Literal["config", "db", "env", "default", "unset"] = "unset"
+    editable: bool = True
 
 
 class CallbackOnUI(LiteLLMPydanticObjectBase):
@@ -3899,6 +3913,7 @@ class SpendLogsMetadata(TypedDict):
     autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed
     litellm_gateway_injected_cache: ReadOnly[str | None]
     router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
+    azure_spillover: ReadOnly[AzureSpillover | None]  # None = Azure did not report spillover
 
 
 class SpendLogsPayload(TypedDict):
@@ -4401,6 +4416,23 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
         default=None,
         description="List of models this team member can access. Pass an empty list to remove per-member model restrictions.",
     )
+    temp_budget_increase: float | None = Field(
+        default=None,
+        ge=0,
+        allow_inf_nan=False,
+        description="Temporary additive budget increase for this team member, active until temp_budget_expiry",
+    )
+    temp_budget_expiry: datetime | None = Field(
+        default=None,
+        description="UTC expiry for temp_budget_increase",
+    )
+
+    @model_validator(mode="after")
+    def validate_temp_budget(self) -> "TeamMemberUpdateRequest":
+        if self.temp_budget_increase is not None or self.temp_budget_expiry is not None:
+            if self.temp_budget_increase is None or self.temp_budget_expiry is None:
+                raise ValueError("temp_budget_increase and temp_budget_expiry must be set together")
+        return self
 
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
@@ -4410,6 +4442,8 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
     rpm_limit: int | None = None
     budget_duration: str | None = None
     allowed_models: list[str] | None = None
+    temp_budget_increase: float | None = None
+    temp_budget_expiry: datetime | None = None
 
 
 class TeamModelAddRequest(BaseModel):
@@ -4725,6 +4759,7 @@ LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "enforced_file_expires_after",
     "throttle_on_budget_exceeded",
     "enable_prompt_caching",
+    "end_user_budget_id",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium: Final = [
