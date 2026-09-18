@@ -1,6 +1,8 @@
 import asyncio
+import contextlib
 import contextvars
 import os
+from collections.abc import Iterator
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Final
@@ -9,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from mcp import ReadResourceResult, Resource
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import (
     BlobResourceContents,
     CallToolResult,
@@ -8649,6 +8652,192 @@ class TestPreemptive401ModeAware:
             await self._run(delegate, None, has_stored_token=False)
         assert exc.value.status_code == 401
         await self._run(delegate, self.LITELLM_KEY_HEADERS, has_stored_token=False)
+
+
+class TestPreemptive401GatedByKeyAllowlist:
+    """The preemptive OAuth 401 challenge must be gated on the servers the
+    caller's key is allowed to reach, not only on toolset scoping. A key whose
+    object_permission.mcp_servers excludes an oauth2 server must fall through
+    to the existing 403 denial instead of being pushed into an OAuth flow it
+    can never complete."""
+
+    @staticmethod
+    def _auth() -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(api_key="sk-litellm-virtual-key")
+
+    @staticmethod
+    def _initialize_call(alias: str) -> tuple[dict[str, object], AsyncMock]:
+        body = (
+            b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":'
+            b'{"protocolVersion":"2024-11-05","capabilities":{},'
+            b'"clientInfo":{"name":"test","version":"0"}}}'
+        )
+        receive = AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False})
+        return {"type": "http", "method": "POST", "path": f"/mcp/{alias}", "headers": []}, receive
+
+    @contextlib.contextmanager
+    def _patches(
+        self,
+        server: MCPServer,
+        *,
+        allowed_servers: list[MCPServer],
+        handle_target: StreamableHTTPSessionManager,
+        toolset_auth: UserAPIKeyAuth | None = None,
+    ) -> Iterator[AsyncMock]:
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                patch(  # test-quality-ok: transport handler collaborators are module-level globals, no injectable seam
+                    "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                    new_callable=AsyncMock,
+                    return_value=(self._auth(), None, [server.alias], None, None, None),
+                )
+            )
+            stack.enter_context(
+                patch(  # test-quality-ok: transport handler collaborators are module-level globals, no injectable seam
+                    "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                    new_callable=AsyncMock,
+                    return_value=allowed_servers,
+                )
+            )
+            stack.enter_context(
+                patch(  # test-quality-ok: transport handler collaborators are module-level globals, no injectable seam
+                    "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+                    True,
+                )
+            )
+            stack.enter_context(
+                patch.object(  # test-quality-ok: transport handler collaborators are module-level globals, no injectable seam
+                    server_module.global_mcp_server_manager,
+                    "get_mcp_server_by_name",
+                    return_value=server,
+                )
+            )
+            stack.enter_context(
+                patch.object(  # test-quality-ok: transport handler collaborators are module-level globals, no injectable seam
+                    server_module.global_mcp_server_manager,
+                    "has_user_oauth_token",
+                    new_callable=AsyncMock,
+                    return_value=False,
+                )
+            )
+            stack.enter_context(
+                patch.object(  # test-quality-ok: transport handler collaborators are module-level globals, no injectable seam
+                    server_module.global_mcp_server_manager,
+                    "_ensure_upstream_initialize_instructions_cached",
+                    new_callable=AsyncMock,
+                )
+            )
+            if toolset_auth is not None:
+                stack.enter_context(
+                    patch(  # test-quality-ok: transport handler collaborators are module-level globals, no injectable seam
+                        "litellm.proxy._experimental.mcp_server.server._apply_toolset_scope",
+                        new_callable=AsyncMock,
+                        return_value=toolset_auth,
+                    )
+                )
+            handle_request = stack.enter_context(
+                patch.object(  # test-quality-ok: transport handler collaborators are module-level globals, no injectable seam
+                    handle_target,
+                    "handle_request",
+                    new_callable=AsyncMock,
+                )
+            )
+            yield handle_request
+
+    @pytest.mark.asyncio
+    async def test_key_not_allowed_gets_403_not_401_streamable(self):
+        """Denied key on an oauth2 server must reach the scoped-access denial
+        (403) instead of an OAuth challenge (401) it can never satisfy."""
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        server = _make_oauth2_server("restricted")
+        scope, receive = self._initialize_call("restricted")
+
+        with (
+            self._patches(
+                server, allowed_servers=[], handle_target=server_module.session_manager_stateful
+            ) as handle_request,
+            pytest.raises(HTTPException) as exc,
+        ):
+            await server_module.handle_streamable_http_mcp(scope, receive, AsyncMock())
+
+        assert exc.value.status_code == 403
+        handle_request.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_key_allowed_still_challenges_streamable(self):
+        """Key allowlist includes the oauth2 server with no stored token:
+        the 401 challenge still fires, so the gate is not over-broad."""
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        server = _make_oauth2_server("restricted")
+        scope, receive = self._initialize_call("restricted")
+
+        with (
+            self._patches(
+                server, allowed_servers=[server], handle_target=server_module.session_manager_stateful
+            ) as handle_request,
+            pytest.raises(HTTPException) as exc,
+        ):
+            await server_module.handle_streamable_http_mcp(scope, receive, AsyncMock())
+
+        assert exc.value.status_code == 401
+        assert "www-authenticate" in {k.lower() for k in exc.value.headers}
+        handle_request.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_toolset_excluding_server_does_not_challenge_streamable(
+        self,
+    ):  # test-quality-ok: reaching the session dispatch is the caller-visible outcome here; the denied-key variants assert the 403 itself
+        """Key allowlist includes the server but the active toolset scope
+        excludes it: no 401, same fall-through as the key allowlist."""
+        from litellm.proxy._experimental.mcp_server import server as server_module
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        server = _make_oauth2_server("restricted")
+        scoped_auth = self._auth().model_copy(
+            update={
+                "object_permission": LiteLLM_ObjectPermissionTable(
+                    object_permission_id="toolset-scope",
+                    mcp_servers=["id-other"],
+                )
+            }
+        )
+        scope, receive = self._initialize_call("restricted")
+        token = server_module._mcp_active_toolset_id.set("toolset-1")
+        try:
+            with self._patches(
+                server,
+                allowed_servers=[server],
+                handle_target=server_module.session_manager_stateful,
+                toolset_auth=scoped_auth,
+            ) as handle_request:
+                await server_module.handle_streamable_http_mcp(scope, receive, AsyncMock())
+        finally:
+            server_module._mcp_active_toolset_id.reset(token)
+
+        handle_request.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_key_not_allowed_gets_403_not_401_sse(self):
+        """Same gate on the SSE transport: a denied key gets 403, not a 401."""
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        server = _make_oauth2_server("restricted")
+        scope = {"type": "http", "method": "GET", "path": "/mcp/restricted", "headers": []}
+
+        with (
+            self._patches(
+                server, allowed_servers=[], handle_target=server_module.sse_session_manager
+            ) as handle_request,
+            pytest.raises(HTTPException) as exc,
+        ):
+            await server_module.handle_sse_mcp(scope, AsyncMock(), AsyncMock())
+
+        assert exc.value.status_code == 403
+        handle_request.assert_not_awaited()
 
 
 class TestSingleServerPreflightReachesIdJag:

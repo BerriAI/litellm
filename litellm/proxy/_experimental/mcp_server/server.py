@@ -14,6 +14,7 @@ import traceback
 import types
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol
 
@@ -4013,6 +4014,20 @@ if MCP_AVAILABLE:
             )
         return user_api_key_auth.model_copy(update={"object_permission": updated_op})
 
+    async def _challenge_allowed_server_ids(
+        user_api_key_auth: UserAPIKeyAuth | None,
+        mcp_servers: list[str] | None,
+        client_ip: str | None,
+        toolset_allowed_server_ids: AbstractSet[str] | None,
+    ) -> frozenset[str]:
+        allowed_servers: Final = await _get_allowed_mcp_servers(
+            user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
+        )
+        allowed_ids: Final = frozenset(srv.server_id for srv in allowed_servers)
+        if toolset_allowed_server_ids is None:
+            return allowed_ids
+        return allowed_ids & frozenset(toolset_allowed_server_ids)
+
     async def _raise_preemptive_401_for_unauthenticated_servers(
         scope: Scope,
         mcp_servers: list[str] | None,
@@ -4020,7 +4035,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         user_api_key_auth: UserAPIKeyAuth | None,
         client_ip: str | None,
-        allowed_server_ids: set[str] | None = None,
+        allowed_server_ids: AbstractSet[str] | None = None,
         raw_headers: Mapping[str, str] | None = None,
     ) -> None:
         """Fail fast with HTTP 401 for MCP servers that need user auth but
@@ -4028,11 +4043,10 @@ if MCP_AVAILABLE:
         (points clients at the gateway AS metadata) and pass-through OAuth
         (points clients at the upstream resource-metadata via our well-known).
 
-        ``allowed_server_ids`` may be passed by callers that have already
-        narrowed the authorized server set (e.g. toolset scoping); servers
-        not in that set are skipped so a client targeting a toolset that
-        excludes a passthrough server is not pushed into an OAuth flow for
-        a server it will be 403'd on immediately after authentication.
+        ``allowed_server_ids`` is the set of servers the caller's key may
+        reach, narrowed further by any active toolset scope; servers not in
+        that set are skipped so a client is not pushed into an OAuth flow
+        for a server it will be 403'd on immediately after authentication.
         """
         for server_name in mcp_servers or []:
             server = global_mcp_server_manager.get_mcp_server_by_name(server_name, client_ip=client_ip)
@@ -4428,9 +4442,10 @@ if MCP_AVAILABLE:
 
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             # Must run after toolset scoping so the challenge set is derived
-            # from the fully-authorized server set: a passthrough server that
-            # the active toolset excludes should not trigger an OAuth flow
-            # for a server the caller will be 403'd on after authentication.
+            # from the fully-authorized server set (the key's allowed servers,
+            # narrowed by any active toolset scope): a server the key cannot
+            # reach should not trigger an OAuth flow for a server the caller
+            # will be 403'd on after authentication.
             await _raise_preemptive_401_for_unauthenticated_servers(
                 scope=scope,
                 mcp_servers=mcp_servers,
@@ -4438,7 +4453,12 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_client_ip,
-                allowed_server_ids=toolset_allowed_server_ids,
+                allowed_server_ids=await _challenge_allowed_server_ids(
+                    user_api_key_auth=user_api_key_auth,
+                    mcp_servers=mcp_servers,
+                    client_ip=_client_ip,
+                    toolset_allowed_server_ids=toolset_allowed_server_ids,
+                ),
                 raw_headers=raw_headers,
             )
 
@@ -4756,9 +4776,10 @@ if MCP_AVAILABLE:
 
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             # Must run after toolset scoping so the challenge set is derived
-            # from the fully-authorized server set: a passthrough server that
-            # the active toolset excludes should not trigger an OAuth flow
-            # for a server the caller will be 403'd on after authentication.
+            # from the fully-authorized server set (the key's allowed servers,
+            # narrowed by any active toolset scope): a server the key cannot
+            # reach should not trigger an OAuth flow for a server the caller
+            # will be 403'd on after authentication.
             await _raise_preemptive_401_for_unauthenticated_servers(
                 scope=scope,
                 mcp_servers=mcp_servers,
@@ -4766,7 +4787,12 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_sse_client_ip,
-                allowed_server_ids=toolset_allowed_server_ids,
+                allowed_server_ids=await _challenge_allowed_server_ids(
+                    user_api_key_auth=user_api_key_auth,
+                    mcp_servers=mcp_servers,
+                    client_ip=_sse_client_ip,
+                    toolset_allowed_server_ids=toolset_allowed_server_ids,
+                ),
                 raw_headers=raw_headers,
             )
 
