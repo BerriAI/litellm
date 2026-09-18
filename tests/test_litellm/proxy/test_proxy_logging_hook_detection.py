@@ -656,6 +656,29 @@ class _InheritsModerationOverride(_RejectsInModeration):
     pass
 
 
+class _V1PreCallGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="v1-pre-call")
+        self.moderation_check = "pre_call"
+
+
+@pytest.mark.asyncio
+@pytest.mark.filterwarnings("error::RuntimeWarning")
+async def test_during_call_hook_runs_moderation_override_after_v1_pre_call_guardrail(monkeypatch):
+    moderator = _RejectsInModeration()
+    monkeypatch.setattr(litellm, "callbacks", [_V1PreCallGuardrail(), moderator])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
+            data={"messages": [{"role": "user", "content": "hi"}]},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+            call_type="acompletion",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert moderator.moderated == ["acompletion"]
+
+
 @pytest.mark.asyncio
 async def test_during_call_hook_runs_moderation_override_inherited_from_parent(monkeypatch):
     moderator = _InheritsModerationOverride()
