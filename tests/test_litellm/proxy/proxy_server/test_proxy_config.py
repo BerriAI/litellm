@@ -1252,6 +1252,7 @@ async def test_ProxyConfig_save_config_persists_unchanged_environment_variables_
         "litellm_settings": {},
         "environment_variables": {"OPENAI_API_KEY": "sk-explicit"},
     }
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-salt-key")
 
     await proxy_config.save_config(config)
 
