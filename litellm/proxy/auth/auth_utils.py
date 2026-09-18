@@ -716,6 +716,18 @@ def get_request_route_template(request: Request) -> str | None:
         return None
 
 
+def _safe_get_request_path_params(request: Request | None) -> dict[str, object] | None:
+    """Starlette's resolved path parameters, or None when unavailable."""
+    if request is None:
+        return None
+    try:
+        params: Final = request.path_params
+        return dict(params) if params else None
+    except Exception as e:
+        verbose_proxy_logger.debug("error reading request path_params: %s", e)
+        return None
+
+
 @lru_cache(maxsize=256)
 def normalize_request_route(route: str) -> str:
     """
@@ -1697,22 +1709,47 @@ _MODEL_ROUTING_BODY_TARGET_MODEL_ROUTE_MARKERS: Final = (
     "/vector_stores",
 )
 _MODEL_ROUTING_COMPLETION_MODEL_ROUTE_MARKERS: Final = ("/evals",)
-# Routes served by the chat-completions, completions and embeddings handlers.
-# These handlers bind a ``model`` path or query parameter
-# (``/openai/deployments/{model}/...``, ``/engines/{model}/...``, ``?model=``)
-# and route from it in preference to the body ``model``. The allowlist check
-# therefore has to validate that value too: with only the body validated, a
-# key scoped to one model could name an allowed model in the body and a
-# denied one in the query string, and be served the denied model.
-_MODEL_ROUTING_LLM_HANDLER_ROUTE_MARKERS: Final = (
-    "/chat/completions",
-    "/completions",
-    "/embeddings",
+# The chat-completions, completions and embeddings handlers (and the queue
+# variant) declare a ``model`` parameter that FastAPI binds from the URL —
+# from ``?model=`` on the plain routes, from ``{model:path}`` on the
+# deployment-style routes — and request processing routes from that value in
+# preference to the body ``model``. The allowlist check therefore has to
+# validate the URL-bound model too: with only the body validated, a key scoped
+# to one model could name an allowed model in the body and a denied one in the
+# URL, and be served the denied model. The two sets below are the exact route
+# templates those handlers are mounted on (proxy_server.py); classification is
+# by matched template, never by substring, so unrelated routes that merely
+# contain ``/completions`` do not get a stray ``?model=`` promoted to an
+# authorization input. On a ``{model:path}`` route FastAPI binds the path
+# value and ignores a same-named query parameter, so only the path value is a
+# candidate there.
+_LLM_HANDLER_QUERY_MODEL_ROUTES: Final = frozenset(
+    {
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/queue/chat/completions",
+        "/v1/completions",
+        "/completions",
+        "/v1/embeddings",
+        "/embeddings",
+    }
 )
-# Anchored at the path start on purpose: ``/azure/openai/deployments/...`` is the
-# Azure relay route, whose model group is resolved separately below.
+_LLM_HANDLER_PATH_MODEL_TEMPLATES: Final = frozenset(
+    {
+        "/openai/deployments/{model:path}/chat/completions",
+        "/engines/{model:path}/chat/completions",
+        "/openai/deployments/{model:path}/completions",
+        "/engines/{model:path}/completions",
+        "/openai/deployments/{model:path}/embeddings",
+        "/engines/{model:path}/embeddings",
+    }
+)
+# Fallback for callers that have no ``Request`` (budget reservation, unit
+# tests): recover the ``{model:path}`` value from the literal path. Anchored
+# at the path start: ``get_request_route`` already strips ``root_path``, and
+# ``/azure/openai/deployments/...`` is the Azure relay, resolved separately.
 _LLM_HANDLER_PATH_MODEL_PATTERN: Final = re.compile(
-    r"^/(?:openai/deployments|engines)/(.+?)/(?:chat/completions|completions|embeddings)$"
+    r"^/(?P<prefix>openai/deployments|engines)/(?P<model>.+?)/(?P<suffix>chat/completions|completions|embeddings)$"
 )
 # Realtime WebRTC routes carry the effective model inside the nested
 # ``session.model`` field (see realtime_endpoints.endpoints), so the model the
@@ -1777,15 +1814,38 @@ def _route_matches_any_marker(route: str, markers: tuple[str, ...]) -> bool:
     return any(marker in normalized_route for marker in markers)
 
 
-def _llm_handler_path_model(route: str) -> str | None:
-    """Model named in the path of a deployment-style LLM route.
+def _llm_handler_url_model(
+    route: str,
+    route_template: str | None,
+    request_path_params: Mapping[str, object] | None,
+    request_query_params: Mapping[str, object] | None,
+) -> str | None:
+    """The model FastAPI binds from the URL for an LLM handler route, or None.
 
-    ``/openai/deployments/{model}/chat/completions`` and ``/engines/{model}/...``
-    bind ``{model}`` (which may itself contain ``/``) to the handler's ``model``
-    argument, which then takes precedence over the body model when routing.
+    Mirrors the handlers' ``model`` parameter binding: the ``{model:path}``
+    segment on the deployment-style templates (a same-named query parameter
+    is ignored there, as FastAPI does), the exact-case ``model`` query
+    parameter on the plain routes (``?MODEL=`` is not bound, so it is not a
+    candidate; duplicates are last-wins in both FastAPI and the parsed
+    mapping). ``route_template`` comes from the matched Starlette route when a
+    request is available; without one, the literal path is classified instead.
     """
-    match: Final = _LLM_HANDLER_PATH_MODEL_PATTERN.match(route)
-    return match.group(1) if match else None
+    if route_template is None:
+        if route in _LLM_HANDLER_QUERY_MODEL_ROUTES:
+            route_template = route
+        else:
+            match: Final = _LLM_HANDLER_PATH_MODEL_PATTERN.match(route)
+            if match:
+                route_template = f"/{match.group('prefix')}/{{model:path}}/{match.group('suffix')}"
+                if request_path_params is None:
+                    request_path_params = {"model": match.group("model")}
+    if route_template in _LLM_HANDLER_PATH_MODEL_TEMPLATES:
+        path_model = (request_path_params or {}).get("model")
+        return path_model if isinstance(path_model, str) and path_model else None
+    if route_template in _LLM_HANDLER_QUERY_MODEL_ROUTES:
+        query_model = (request_query_params or {}).get("model")
+        return query_model if isinstance(query_model, str) and query_model else None
+    return None
 
 
 def _route_uses_model_routing_sources(route: str) -> bool:
@@ -1904,6 +1964,8 @@ def _extract_model_candidates_from_request(
     request_query_params: Mapping[str, object] | None = None,
     llm_router: Router | None = None,
     team_id: str | None = None,
+    route_template: str | None = None,
+    request_path_params: Mapping[str, object] | None = None,
 ) -> list[str]:
     if route == "/cost/predict-cache":
         prediction_models: Final = _cache_prediction_model_candidates(request_data, llm_router, team_id)  # pyright: ignore[reportUnknownArgumentType]  # the typed reader validates each deployment ID from this legacy payload
@@ -1933,13 +1995,19 @@ def _extract_model_candidates_from_request(
             _append_model_candidates(candidates, session.get("model"))
     if uses_completion_model_sources and isinstance(request_data.get("completion"), dict):
         _append_model_candidates(candidates, request_data["completion"].get("model"))
-    if _route_matches_any_marker(route=route, markers=_MODEL_ROUTING_LLM_HANDLER_ROUTE_MARKERS):
-        # The handler routes from ``?model=`` / ``{model}`` ahead of the body, so
-        # every model it can end up dispatching to must pass the allowlist. The
-        # ``x-litellm-model`` header is deliberately not read here: these handlers
-        # do not route from it.
-        _append_model_candidates(candidates, _get_case_insensitive_mapping_value(request_query_params, "model"))
-        _append_model_candidates(candidates, _llm_handler_path_model(route))
+    # URL-bound model on the LLM handler routes: request processing prefers it
+    # over the body model, so it must pass the allowlist as well. The
+    # ``x-litellm-model`` header is deliberately not read: these handlers do
+    # not route from it.
+    _append_model_candidates(
+        candidates,
+        _llm_handler_url_model(
+            route=route,
+            route_template=route_template,
+            request_path_params=request_path_params,
+            request_query_params=request_query_params,
+        ),
+    )
 
     if uses_model_routing_sources:
         if uses_header_or_query_model_sources:
@@ -2037,6 +2105,8 @@ def get_model_from_request(
         request_query_params=request_query_params,
         llm_router=llm_router,
         team_id=team_id,
+        route_template=get_request_route_template(request) if request is not None else None,
+        request_path_params=_safe_get_request_path_params(request),
     )
     model = _format_model_candidates(candidates)
 
