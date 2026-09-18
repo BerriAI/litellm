@@ -3471,10 +3471,11 @@ class TestSyncUiSettingsToGeneralSettings:
 
 
 class TestDeleteAllowedIpClearsTheKeyWhenTheListEmpties:
-    """Leaving ``allowed_ips: []`` behind after the last entry is removed bricks
-    the proxy: the IP check reads an empty allowlist as "configured and nothing
-    matches" and 403s everyone, including the call that would add an IP back.
-    The delete endpoint has to drop the key, not store an empty list."""
+    """An empty allowlist denies every address, so writing one as a side effect of
+    removing the last entry bricks the proxy, including the call that would add an
+    IP back. Deleting the last entry has to drop the key so no allowlist is
+    configured at all; setting ``allowed_ips: []`` by hand still denies everything,
+    which is the point of it."""
 
     @staticmethod
     def _harness(monkeypatch, stored_allowed_ips: list[str]):
@@ -3534,7 +3535,7 @@ class TestDeleteAllowedIpClearsTheKeyWhenTheListEmpties:
         assert "allowed_ips" not in saved["config"]["general_settings"]
         assert general_settings.get("allowed_ips") is None
 
-    def test_removing_the_last_ip_leaves_the_ip_check_open(self, monkeypatch):
+    def test_removing_the_last_ip_does_not_leave_a_deny_all_behind(self, monkeypatch):
         from litellm.proxy.auth.auth_utils import _check_valid_ip
 
         general_settings, saved = self._harness(monkeypatch, ["203.0.113.77"])

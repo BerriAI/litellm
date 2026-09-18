@@ -4405,17 +4405,17 @@ async def test_add_deployment_syncs_ui_settings_even_when_the_model_reconcile_fa
 @pytest.mark.parametrize(
     ("allowed_ips_yaml", "expected_error"),
     [
-        ("  allowed_ips: []\n", None),
         ("", None),
+        ("  allowed_ips: []\n", "allowed_ips is an Enterprise Feature"),
         ("  allowed_ips:\n    - 127.0.0.1\n", "allowed_ips is an Enterprise Feature"),
     ],
 )
-async def test_ProxyConfig_load_config_enterprise_gate_ignores_an_empty_allowed_ips(
+async def test_ProxyConfig_load_config_enterprise_gate_covers_every_declared_allowlist(
     tmp_path, monkeypatch, allowed_ips_yaml, expected_error
 ):
-    """An empty allowed_ips is no allowlist at all, so it must not trip the Enterprise
-    gate and refuse to boot a non-premium proxy. Deleting the last entry used to leave
-    [] behind, which would have bricked startup as well as request handling."""
+    """An empty allowed_ips is still an allowlist, the one that denies everything, so a
+    non-premium proxy must be refused it just like a populated one. Only an absent
+    setting means the feature is unused."""
     config_file = tmp_path / "allowed_ips.yaml"
     config_file.write_text("model_list: []\nlitellm_settings: {}\ngeneral_settings:\n  master_key: null\n" + allowed_ips_yaml)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)

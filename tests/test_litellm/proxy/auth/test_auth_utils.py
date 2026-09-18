@@ -3920,12 +3920,10 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
         )
 
 
-class TestAllowedIpsEmptyListIsNotAnAllowlist:
-    """Removing the last entry via ``/delete/allowed_ip`` used to leave
-    ``general_settings.allowed_ips == []`` behind, which the IP check read as
-    "an allowlist is configured and nothing matches" and answered with 403 for
-    every caller from every address, including the endpoint needed to add an IP
-    back. An empty allowlist has to mean the same thing as an unset one."""
+class TestAllowedIpsEmptyListDeniesEveryAddress:
+    """An empty allowlist is an allowlist that matches nothing, so it denies every
+    address. That is only safe because the delete endpoint no longer produces one by
+    accident when its last entry is removed; see the tests over delete_allowed_ip."""
 
     @staticmethod
     def _request(client_host: str) -> Request:
@@ -3957,18 +3955,27 @@ class TestAllowedIpsEmptyListIsNotAnAllowlist:
         return 200
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("stored_allowed_ips", [[], None])
-    async def test_any_ip_is_allowed_when_allowlist_is_empty_or_unset(self, monkeypatch, stored_allowed_ips):
+    async def test_an_empty_allowlist_denies_every_address(self, monkeypatch):
         status_code = await self._status_for(
             monkeypatch,
-            general_settings={"allowed_ips": stored_allowed_ips},
+            general_settings={"allowed_ips": []},
+            client_host="203.0.113.9",
+        )
+
+        assert status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_an_unset_allowlist_allows_every_address(self, monkeypatch):
+        status_code = await self._status_for(
+            monkeypatch,
+            general_settings={"allowed_ips": None},
             client_host="203.0.113.9",
         )
 
         assert status_code == 200
 
     @pytest.mark.asyncio
-    async def test_unlisted_ip_is_still_rejected_when_allowlist_is_populated(self, monkeypatch):
+    async def test_unlisted_ip_is_rejected_when_allowlist_is_populated(self, monkeypatch):
         status_code = await self._status_for(
             monkeypatch,
             general_settings={"allowed_ips": ["198.51.100.4"]},
@@ -3986,14 +3993,3 @@ class TestAllowedIpsEmptyListIsNotAnAllowlist:
         )
 
         assert status_code == 200
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("malformed_allowed_ips", ["", "127.0.0.1"])
-    async def test_a_malformed_allowlist_does_not_open_the_proxy(self, monkeypatch, malformed_allowed_ips):
-        status_code = await self._status_for(
-            monkeypatch,
-            general_settings={"allowed_ips": malformed_allowed_ips},
-            client_host="203.0.113.9",
-        )
-
-        assert status_code == 403

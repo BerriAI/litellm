@@ -6207,7 +6207,7 @@ class ProxyConfig:
             ui_access_mode = general_settings.get("ui_access_mode", "all")  # can be either ["admin_only" or "all"]
             ### ALLOWED IP ###
             allowed_ips: Final = general_settings.get("allowed_ips", None)
-            if allowed_ips and premium_user is False:
+            if allowed_ips is not None and premium_user is False:
                 raise ValueError(
                     "allowed_ips is an Enterprise Feature. Please add a valid LITELLM_LICENSE to your envionment."
                 )
