@@ -7,7 +7,6 @@ from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
 from io import BytesIO
 from types import SimpleNamespace
-from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -16,34 +15,32 @@ from fastapi import Request, Response, UploadFile
 from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
+    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
-    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     _registered_pass_through_routes,
     chat_completion_pass_through_endpoint,
     create_pass_through_route,
     initialize_pass_through_endpoints,
     pass_through_request,
-    resolve_pass_through_request_timeout,
     resolve_llm_passthrough_timeout,
+    resolve_pass_through_request_timeout,
     websocket_passthrough_request,
     _with_trace_context,
-)
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-    LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
-    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
-
-import litellm
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+)
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
 
@@ -2436,10 +2433,10 @@ async def _run_pass_through_and_capture_wire_url(
     target: str,
     incoming_query: str,
     merge_query_params: bool = False,
-    default_query_params: Optional[dict] = None,
-    custom_llm_provider: Optional[str] = None,
-    managed_files_hook: Optional[_FakeManagedFilesHook] = None,
-    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    default_query_params: dict | None = None,
+    custom_llm_provider: str | None = None,
+    managed_files_hook: _FakeManagedFilesHook | None = None,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
 ) -> httpx.URL:
     import litellm
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -2549,6 +2546,15 @@ async def test_pass_through_request_without_merge_replaces_target_query():
         incoming_query="q=litellm",
     )
     assert dict(wire_url.params) == {"q": "litellm"}
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_preserves_target_query_without_client_query():
+    wire_url = await _run_pass_through_and_capture_wire_url(
+        target="https://example.com/v1/models/gemini:streamGenerateContent?alt=sse",
+        incoming_query="",
+    )
+    assert dict(wire_url.params) == {"alt": "sse"}
 
 
 @pytest.mark.asyncio
@@ -5363,7 +5369,7 @@ async def test_websocket_passthrough_does_not_close_twice_when_success_logging_f
 
 def _passthrough_kwargs_for_reservation(
     user_api_key_dict: UserAPIKeyAuth,
-    parsed_body: Optional[dict] = None,
+    parsed_body: dict | None = None,
     user_defined_route: bool = False,
 ) -> dict:
     mock_request = MagicMock(spec=Request)

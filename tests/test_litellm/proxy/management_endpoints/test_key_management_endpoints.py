@@ -5244,7 +5244,10 @@ async def test_delete_verification_tokens_evicts_jwt_key_mapping_cache(monkeypat
     virtual_key_mapping_cache_ttl expires, instead of auto-registering again.
     """
     jwt_table = _CascadingJWTMappingTable(
-        [_JWTMappingRow("hashed-token-1", "email", "user@example.com")]
+        [
+            _JWTMappingRow("hashed-token-1", "email", "user@example.com"),
+            _JWTMappingRow("hashed-token-1", "email", "user@example.com", "https://issuer.example"),
+        ]
     )
 
     key1 = LiteLLM_VerificationToken(
@@ -5302,7 +5305,10 @@ async def test_delete_verification_tokens_evicts_jwt_key_mapping_cache(monkeypat
         ),
     )
 
-    assert recording_evict.cache_keys == (jwt_key_mapping_cache_key("email", "user@example.com", None),)
+    assert recording_evict.cache_keys == (
+        jwt_key_mapping_cache_key("email", "user@example.com", None),
+        jwt_key_mapping_cache_key("email", "user@example.com", "https://issuer.example"),
+    )
 
 
 @pytest.mark.asyncio

@@ -733,11 +733,11 @@ class TestBlockRequestsForModelsWithoutPricing:
         from litellm.proxy.proxy_server import ProxyConfig
 
         with patch.object(litellm, "block_requests_for_models_without_pricing", False):
-            ProxyConfig()._update_config_fields(
-                current_config={},
-                param_name="litellm_settings",
-                db_param_value={"block_requests_for_models_without_pricing": True},
+            proxy_config = ProxyConfig()
+            db_values = proxy_config._prepared_db_settings_values(
+                "litellm_settings", {"block_requests_for_models_without_pricing": True}
             )
+            proxy_config._apply_litellm_settings_db_values(db_values)
 
             assert litellm.block_requests_for_models_without_pricing is True
 

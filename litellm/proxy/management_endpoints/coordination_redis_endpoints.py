@@ -198,7 +198,7 @@ async def _current_coordination_redis_settings() -> dict[str, object] | None:
 
     config_state: Final = _SETTINGS_ADAPTER.validate_python(proxy_config.get_config_state())
     general_settings: Final = config_state.get(_GENERAL_SETTINGS_PARAM_NAME)
-    if not isinstance(general_settings, dict):
+    if not isinstance(general_settings, Mapping):
         return None
     from_file: Final = general_settings.get(_COORDINATION_REDIS_KEY)
     if isinstance(from_file, dict):

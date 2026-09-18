@@ -1,7 +1,11 @@
-use litellm_core::transport::Error as TransportError;
-use litellm_core::{Error, audio_transcription, chat_completions, messages, ocr, responses};
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
-use pyo3::prelude::*;
+use litellm_core::{Error, audio_transcription, chat_completions, messages, responses};
+use litellm_llms::{
+    base_llm::ocr::error::Error as OcrError, custom_httpx::transport::Error as TransportError,
+};
+use pyo3::{
+    exceptions::{PyRuntimeError, PyValueError},
+    prelude::*,
+};
 
 pyo3::create_exception!(
     _native,
@@ -39,11 +43,11 @@ pub(crate) fn core_error_to_pyerr(error: Error) -> PyErr {
             error.is_request()
                 || matches!(
                     error,
-                    ocr::Error::Auth(_)
-                        | ocr::Error::InvalidProvider(_)
-                        | ocr::Error::InvalidRequest(_)
-                        | ocr::Error::MissingField(_)
-                        | ocr::Error::MissingDocumentUrl
+                    OcrError::Auth(_)
+                        | OcrError::InvalidProvider(_)
+                        | OcrError::InvalidRequest(_)
+                        | OcrError::MissingField(_)
+                        | OcrError::MissingDocumentUrl
                 )
         }
         Error::Messages(error) => match error {
@@ -112,12 +116,6 @@ pub(crate) fn chat_completions_error_to_pyerr(error: chat_completions::Error) ->
             RustUpstreamError::new_err((0u16, message))
         }
     }
-}
-
-pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    let py = module.py();
-    module.add("RustBridgeDeclined", py.get_type::<RustBridgeDeclined>())?;
-    module.add("RustUpstreamError", py.get_type::<RustUpstreamError>())
 }
 
 #[cfg(test)]
