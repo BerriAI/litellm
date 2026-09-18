@@ -630,8 +630,6 @@ def _apply_budget_limits_to_end_user_params(
 
 
 async def user_api_key_auth_websocket(websocket: WebSocket):
-    # Accept the WebSocket connection
-
     ws_scope: Final = websocket.scope or {}
     scope_headers: Final = list(ws_scope.get("headers") or [])
     # ``get_request_route`` falls back to ``request.url.path`` when
@@ -661,37 +659,30 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
     request.body = return_body
 
     authorization: Final = websocket.headers.get("authorization")
-    # If no Authorization header, try the api-key header
     if not authorization:
         api_key = websocket.headers.get("api-key")
         if not api_key:
-            # Try extracting from WebSocket subprotocol (browser clients)
             for protocol in websocket.headers.get("sec-websocket-protocol", "").split(","):
                 protocol = protocol.strip()
                 if protocol.startswith("openai-insecure-api-key."):
                     api_key = protocol[len("openai-insecure-api-key.") :]
                     break
-        if not api_key:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            raise HTTPException(status_code=403, detail="No API key provided")
     else:
-        # Extract the API key from the Bearer token
         if not authorization.startswith("Bearer "):
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            raise HTTPException(status_code=403, detail="Invalid Authorization header format")
+            raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid Authorization header format")
 
         api_key = authorization[len("Bearer ") :].strip()
 
-    # Call user_api_key_auth with the extracted API key
-    # Note: You'll need to modify this to work with WebSocket context if needed
     try:
-        return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
+        return await user_api_key_auth(
+            request=request,
+            api_key=f"Bearer {api_key}" if api_key else None,  # pyright: ignore[reportArgumentType]  # None = no key
+        )
     except Exception as e:
         if is_invalid_virtual_key_error(e):
             raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
         verbose_proxy_logger.exception(e)
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        raise HTTPException(status_code=403, detail=str(e))
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason=str(e))
 
 
 def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_user_params: dict) -> UserAPIKeyAuth:
