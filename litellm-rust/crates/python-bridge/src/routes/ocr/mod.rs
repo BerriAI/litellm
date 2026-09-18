@@ -5,7 +5,8 @@ mod project;
 
 use host::OcrRouteHost;
 use litellm_callbacks_legacy::{LegacySurface, PublicCall, run_legacy_call};
-use litellm_core::ocr::{OcrClient, ocr_machine};
+use litellm_core::ocr::route::ocr_machine;
+use litellm_llms::custom_httpx::llm_http_handler::OcrClient;
 use pyo3::{
     prelude::*,
     types::{PyDict, PyTuple},

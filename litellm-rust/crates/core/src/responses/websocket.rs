@@ -95,7 +95,9 @@ impl ResponsesWebSocketConnection {
         timeout: Option<Duration>,
     ) -> Result<Self, Error> {
         let mut request = url.into_client_request().map_err(|error| {
-            Error::Transport(crate::transport::Error::Network(error.to_string()))
+            Error::Transport(litellm_llms::custom_httpx::transport::Error::Network(
+                error.to_string(),
+            ))
         })?;
         for (name, value) in headers {
             let header_name = name
@@ -108,7 +110,7 @@ impl ResponsesWebSocketConnection {
         let connect = connect_upstream(request);
         let result = match timeout {
             Some(timeout) => tokio::time::timeout(timeout, connect).await.map_err(|_| {
-                Error::Transport(crate::transport::Error::Network(
+                Error::Transport(litellm_llms::custom_httpx::transport::Error::Network(
                     "Responses WebSocket connection timed out".into(),
                 ))
             })?,
@@ -116,12 +118,14 @@ impl ResponsesWebSocketConnection {
         };
         let (socket, _) = result.map_err(|error| match *error {
             tokio_tungstenite::tungstenite::Error::Http(response) => {
-                Error::Transport(crate::transport::Error::Http {
+                Error::Transport(litellm_llms::custom_httpx::transport::Error::Http {
                     status: response.status().as_u16(),
                     body: String::new(),
                 })
             }
-            other => Error::Transport(crate::transport::Error::Network(other.to_string())),
+            other => Error::Transport(litellm_llms::custom_httpx::transport::Error::Network(
+                other.to_string(),
+            )),
         })?;
         Ok(Self {
             socket: Arc::new(Mutex::new(Some(socket))),
@@ -131,14 +135,17 @@ impl ResponsesWebSocketConnection {
     pub async fn send_text(&self, text: String) -> Result<(), Error> {
         let mut socket = self.socket.lock().await;
         let Some(socket) = socket.as_mut() else {
-            return Err(Error::Transport(crate::transport::Error::Network(
-                "Responses WebSocket is closed".into(),
-            )));
+            return Err(Error::Transport(
+                litellm_llms::custom_httpx::transport::Error::Network(
+                    "Responses WebSocket is closed".into(),
+                ),
+            ));
         };
-        socket
-            .send(Message::Text(text))
-            .await
-            .map_err(|error| Error::Transport(crate::transport::Error::Network(error.to_string())))
+        socket.send(Message::Text(text)).await.map_err(|error| {
+            Error::Transport(litellm_llms::custom_httpx::transport::Error::Network(
+                error.to_string(),
+            ))
+        })
     }
 
     pub async fn recv_text(&self) -> Result<Option<String>, Error> {
@@ -153,9 +160,9 @@ impl ResponsesWebSocketConnection {
                 .map_err(|error| Error::InvalidResponse(error.to_string())),
             Some(Ok(Message::Close(_))) | None => Ok(None),
             Some(Ok(_)) => Ok(None),
-            Some(Err(error)) => Err(Error::Transport(crate::transport::Error::Network(
-                error.to_string(),
-            ))),
+            Some(Err(error)) => Err(Error::Transport(
+                litellm_llms::custom_httpx::transport::Error::Network(error.to_string()),
+            )),
         }
     }
 
@@ -163,7 +170,9 @@ impl ResponsesWebSocketConnection {
         let mut socket = self.socket.lock().await;
         if let Some(socket) = socket.as_mut() {
             socket.close(None).await.map_err(|error| {
-                Error::Transport(crate::transport::Error::Network(error.to_string()))
+                Error::Transport(litellm_llms::custom_httpx::transport::Error::Network(
+                    error.to_string(),
+                ))
             })?;
         }
         *socket = None;

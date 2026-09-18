@@ -4,17 +4,16 @@ use std::{
 };
 
 use litellm_callbacks::event::{RequestContext, WireRequest};
+use litellm_llms::base_llm::ocr::error::Error;
 use rstest::rstest;
 use rstest_reuse::{self, apply, template};
 use serde_json::{Map, Value, json};
 
-use super::{
-    LocalOcrHost,
-    test_support::{
-        MockResponse, SERVED_DOCUMENT, document_server, mock_server, perform_ocr_with,
-        request_body, wire_request_with_document,
-    },
+use super::test_support::{
+    MockResponse, SERVED_DOCUMENT, document_server, mock_server, perform_ocr_with, request_body,
+    wire_request_with_document,
 };
+use crate::ocr::route::LocalOcrHost;
 
 #[derive(Clone, Copy, Debug)]
 enum Route {
@@ -111,7 +110,7 @@ impl Host {
 
 struct Sent {
     caller: Map<String, Value>,
-    result: Result<(), crate::ocr::Error>,
+    result: Result<(), Error>,
     before_send: Option<(WireRequest, RequestContext)>,
     provider_body: Option<Value>,
 }
