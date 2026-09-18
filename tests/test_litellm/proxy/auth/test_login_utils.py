@@ -1023,6 +1023,23 @@ def test_source_overrides_pick_the_most_specific_matching_range():
     assert _limit("::ffff:203.0.113.10") == 200
 
 
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"203.0.113.7": 0, "203.0.113.7/32": 5}, None),
+        ({"203.0.113.7/32": 5, "203.0.113.7": 0}, None),
+        ({"203.0.113.0/24": 3, "203.0.113.9/24": 8}, 8),
+        ({"203.0.113.9/24": 8, "203.0.113.0/24": 3}, 8),
+    ],
+    ids=["exact-then-slash32", "slash32-then-exact", "low-then-high", "high-then-low"],
+)
+def test_equivalent_override_keys_resolve_to_the_exemption_then_the_higher_limit(overrides, expected):
+    """Two spellings of the same network are a config mistake, so precedence must not depend on dict order."""
+    settings = {"trusted_proxy_ranges": ["10.0.0.0/8"], "max_failed_login_attempts_per_source_overrides": overrides}
+
+    assert _throttle_behind_trusted_proxy("203.0.113.7", settings).source_limit == expected
+
+
 def test_ipv6_sources_are_grouped_by_their_64_bit_prefix():
     """A /64 holder has 2^64 addresses; counting each one separately would hand them unlimited fresh buckets."""
     from litellm.proxy.auth.login_throttle import source_group
