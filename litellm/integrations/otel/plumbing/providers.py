@@ -1150,7 +1150,7 @@ def operator_sink_scopes(*configs: OpenTelemetryV2Config) -> 'Mapping[_SinkKey, 
     and so is one that never reaches the wire: a console kind ignores the endpoint,
     and a header-gated spec with no credentials is skipped when the provider is built.
     """
-    scoped: Final = tuple(
+    scoped: Final[tuple[tuple[_SinkKey, OtelSpanScope], ...]] = tuple(
         (key, _operator_scope(config, spec))
         for config in configs
         for spec in config.exporters
