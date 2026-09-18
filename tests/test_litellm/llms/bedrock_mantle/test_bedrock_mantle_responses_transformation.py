@@ -369,6 +369,52 @@ class TestBedrockMantleResponsesTools:
         assert "file_search" in str(mock_warning.call_args)
 
 
+class TestBedrockMantleSamplingParams:
+    """Mantle serves OpenAI's gpt-5 models under their OpenAI sampling rule: top_p and a
+    non-default temperature are accepted only when reasoning.effort resolves to none, so
+    the `openai.` catalogue name (region-prefixed on GovCloud) must answer from the OpenAI
+    model's map entry instead of dropping both params on every request."""
+
+    @pytest.mark.parametrize(
+        "model, effort, survives",
+        [
+            ("openai.gpt-5.4", None, True),
+            ("openai.gpt-5.5", None, False),
+            ("openai.gpt-5.6-luna", None, False),
+            ("openai.gpt-5.6-luna", "none", True),
+            ("openai.gpt-5.6-luna", "low", False),
+            ("us-gov-west-1/openai.gpt-5.4", None, True),
+            ("us-gov-west-1/openai.gpt-5.6-luna", None, False),
+        ],
+    )
+    def test_top_p_and_temperature_follow_the_resolved_effort(self, local_cost_map, model, effort, survives):
+        params = {"top_p": 0.9, "temperature": 0.2}
+        if effort is not None:
+            params["reasoning"] = {"effort": effort}
+        mapped = BedrockMantleResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=params,
+            model=model,
+            drop_params=True,
+        )
+        assert ("top_p" in mapped) is survives
+        assert ("temperature" in mapped) is survives
+
+    def test_top_p_without_drop_params_raises_only_while_reasoning_is_active(self, local_cost_map):
+        with pytest.raises(litellm.UnsupportedParamsError):
+            BedrockMantleResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"top_p": 0.9},
+                model="openai.gpt-5.6-luna",
+                drop_params=False,
+            )
+
+        mapped = BedrockMantleResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"top_p": 0.9},
+            model="openai.gpt-5.4",
+            drop_params=False,
+        )
+        assert mapped["top_p"] == 0.9
+
+
 class TestBedrockMantleResponsesWebSearch:
     """Web Search on Amazon Bedrock is a server-side built-in tool that Mantle runs
     itself when the caller passes {"type": "web_search"} on the Responses path, so
