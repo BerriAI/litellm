@@ -108,7 +108,7 @@ jobs:
         mkdir -p /tmp/mcp-gate-reports
         for profile in core mcp proxy; do
           for mode in minimum locked; do
-            uv run --no-project --python 3.12 --with 'packaging==26.0' --with 'coverage==7.14.0' \
+            uv run --isolated --no-project --python 3.12 --with 'packaging==26.0' --with 'coverage==7.14.0' \
               coverage run --append --branch --source=tests/mcp_dependency_tests,tests/base_sdk_tests \
               tests/mcp_dependency_tests/runner.py check \
               --wheel "${wheel[0]}" --profile "$profile" --mode "$mode" \
@@ -135,9 +135,9 @@ jobs:
               tests/base_sdk_tests/check_base_sdk_install.py
           fi
         done
-        uv run --no-project --python 3.12 --with 'packaging==26.0' \
+        uv run --isolated --no-project --python 3.12 --with 'packaging==26.0' \
           --with 'pytest==9.0.3' --with 'pytest-cov==5.0.0' --with 'coverage==7.14.0' \
-          pytest tests/mcp_dependency_tests/test_runner.py \
+          python -m pytest tests/mcp_dependency_tests/test_runner.py \
           --cov=tests/mcp_dependency_tests \
           --cov=tests/base_sdk_tests --cov-append --cov-branch \
           --cov-report=xml:mcp-dependency-coverage.xml
