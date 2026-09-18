@@ -1119,6 +1119,7 @@ class TestStreamingTransform:
             emitted_text_per_choice={},
             holdback_per_choice={},
             finish_reason_per_choice={0: "stop", 1: "length"},
+            held_chars_per_choice={},
             is_final=True,
         )
 
@@ -1157,6 +1158,7 @@ class TestStreamingTransform:
             emitted_text_per_choice={},
             holdback_per_choice={},
             finish_reason_per_choice={},
+            held_chars_per_choice={},
             is_final=False,
         )
 
@@ -1179,6 +1181,7 @@ class TestStreamingTransform:
                 emitted_text_per_choice={0: "My SSN is 123"},
                 holdback_per_choice={},
                 finish_reason_per_choice={},
+                held_chars_per_choice={},
                 is_final=False,
             )
 
@@ -1311,6 +1314,65 @@ class TestStreamingTransform:
         assert _delta_text(out[0]) == "LET ME CHECK "
         assert out[1].choices[0].delta.tool_calls
         assert out[1].choices[0].finish_reason == "tool_calls"
+
+    @pytest.mark.asyncio
+    async def test_held_text_flushes_before_tool_call_finish_reason(self):
+        """Text still held back when a separate terminal tool-call chunk arrives is
+        delivered before the stream's finish_reason, not after it."""
+        guardrail = _StreamingTextGuardrail(holdback_schedule=[100, 100, 100])
+
+        tool_chunk = ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content=None,
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": "{}"},
+                            }
+                        ],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ],
+        )
+        chunks = [_stream_chunk("let me check "), tool_chunk]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        finished_at = [i for i, item in enumerate(out) if item.choices[0].finish_reason is not None]
+        assert finished_at == [len(out) - 1]
+        assert out[-1].choices[0].finish_reason == "tool_calls"
+        assert "".join(_delta_text(i) for i in out) == "LET ME CHECK "
+        assert any(item.choices[0].delta.tool_calls for item in out)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "usage_choices",
+        [[], [StreamingChoices(index=0, delta=Delta(), finish_reason=None)]],
+        ids=["choiceless", "empty-delta"],
+    )
+    async def test_usage_chunk_is_forwarded_after_final_text(self, usage_choices):
+        """A trailing usage chunk (stream_options.include_usage) is delivered after
+        the transformed text instead of being swallowed, whether it arrives with
+        no choices or, as CustomStreamWrapper emits it, with one empty delta."""
+        guardrail = _StreamingTextGuardrail(holdback_schedule=[100, 100, 100])
+        usage_chunk = ModelResponseStream(
+            choices=usage_choices,
+            usage={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        )
+        chunks = [_stream_chunk("hello "), _stream_chunk("world", finish_reason="stop"), usage_chunk]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        assert "".join(_delta_text(i) for i in out) == "HELLO WORLD"
+        assert out[-1].usage.total_tokens == 5
+        assert not _delta_text(out[-1])
+        assert out[-2].choices[0].finish_reason == "stop"
 
     @pytest.mark.asyncio
     async def test_tool_call_blocking_guardrail_is_enforced(self):

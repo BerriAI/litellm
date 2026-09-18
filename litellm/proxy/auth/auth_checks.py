@@ -60,6 +60,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
+    ModelAccessDeniedProxyException,
     NewTeamRequest,
     ProxyErrorTypes,
     ProxyException,
@@ -71,6 +72,7 @@ from litellm.proxy.auth.budget_throttle import (
     budget_throttle_percentage,
     should_throttle_budget_exceeded,
 )
+from litellm.proxy.auth.model_access_denied import model_access_denied_client_message
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
@@ -854,6 +856,16 @@ BUDGET_ENFORCED_SIDE_EFFECT_ROUTES: Final = frozenset(
 )
 
 
+def route_skips_budget_checks(route: str) -> bool:
+    return route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES and (
+        route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route)
+    )
+
+
+def request_skips_budget_checks(route: str, model: str | list[str] | None, llm_router: Router | None) -> bool:
+    return route_skips_budget_checks(route=route) or _is_model_cost_zero(model=model, llm_router=llm_router)
+
+
 async def common_checks(
     request_body: dict,
     team_object: LiteLLM_TeamTable | None,
@@ -901,10 +913,7 @@ async def common_checks(
         team_id=valid_token.team_id if valid_token is not None else None,
     )
 
-    skip_all_budget_checks: Final = skip_budget_checks or (
-        route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES
-        and (route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route))
-    )
+    skip_all_budget_checks: Final = skip_budget_checks or route_skips_budget_checks(route=route)
 
     membership_user_id: Final = (
         valid_token.user_id if valid_token is not None and (bool(_model) or not skip_all_budget_checks) else None
@@ -1344,29 +1353,44 @@ def get_actual_routes(allowed_routes: list) -> list:
     return actual_routes
 
 
+KEY_END_USER_BUDGET_ID_METADATA_FIELD: Final = "end_user_budget_id"
+
+
+def get_key_end_user_budget_id(key_metadata: Mapping[str, object] | None) -> str | None:
+    """The default budget a key assigns to end users that carry no budget of their own."""
+    if key_metadata is None:
+        return None
+    budget_id: Final = key_metadata.get(KEY_END_USER_BUDGET_ID_METADATA_FIELD)
+    return budget_id if isinstance(budget_id, str) and budget_id != "" else None
+
+
 async def get_default_end_user_budget(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None = None,
+    budget_id: str | None = None,
 ) -> LiteLLM_BudgetTable | None:
     """
-    Fetches the default end user budget from the database if litellm.max_end_user_budget_id is configured.
+    Fetches the default end user budget from the database.
 
-    This budget is applied to end users who don't have an explicit budget_id set.
-    Results are cached for performance.
+    ``budget_id`` selects the budget row; when omitted the proxy-wide
+    ``litellm.max_end_user_budget_id`` is used. This budget is applied to end
+    users who don't have an explicit budget_id set. Results are cached for performance.
 
     Args:
         prisma_client: Database client instance
         user_api_key_cache: Cache for storing/retrieving budget data
         parent_otel_span: Optional OpenTelemetry span for tracing
+        budget_id: Budget row to load instead of the proxy-wide default
 
     Returns:
         LiteLLM_BudgetTable if configured and found, None otherwise
     """
-    if prisma_client is None or litellm.max_end_user_budget_id is None:
+    default_budget_id: Final = budget_id if budget_id is not None else litellm.max_end_user_budget_id
+    if prisma_client is None or default_budget_id is None:
         return None
 
-    cache_key: Final = f"default_end_user_budget:{litellm.max_end_user_budget_id}"
+    cache_key: Final = f"default_end_user_budget:{default_budget_id}"
 
     # Check cache first
     cached_budget: Final = await user_api_key_cache.async_get_cache(
@@ -1379,12 +1403,13 @@ async def get_default_end_user_budget(
     # Fetch from database
     try:
         budget_record: Final = await _dictable_table(BudgetRepository(prisma_client)).find_unique(
-            where={"budget_id": litellm.max_end_user_budget_id}
+            where={"budget_id": default_budget_id}  # mutable-ok: prisma where clause
         )
 
         if budget_record is None:
             verbose_proxy_logger.warning(
-                "Default end user budget not found in database: %s", litellm.max_end_user_budget_id
+                "Default end user budget not found in database: %s",
+                default_budget_id.replace("\r", "").replace("\n", ""),
             )
             return None
 
@@ -1460,47 +1485,81 @@ async def get_team_member_default_budget(
     return budget
 
 
+async def resolve_default_end_user_budget(
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    key_end_user_budget_id: str | None,
+    parent_otel_span: Span | None = None,
+) -> LiteLLM_BudgetTable | None:
+    """
+    The default budget for an end user with no budget of its own.
+
+    The key's ``end_user_budget_id`` takes precedence over the proxy-wide
+    ``litellm.max_end_user_budget_id``; the proxy-wide default is the fallback when the key
+    names no budget or its budget row is missing.
+    """
+    if key_end_user_budget_id is not None:
+        key_budget: Final = await get_default_end_user_budget(
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            budget_id=key_end_user_budget_id,
+        )
+        if key_budget is not None:
+            return key_budget
+
+    if litellm.max_end_user_budget_id is None:
+        return None
+
+    return await get_default_end_user_budget(
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+    )
+
+
 async def _apply_default_budget_to_end_user(
     end_user_obj: LiteLLM_EndUserTable,
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None = None,
+    key_end_user_budget_id: str | None = None,
 ) -> LiteLLM_EndUserTable:
     """
-    Helper function to apply default budget to end user if they don't have a budget assigned.
+    Returns the end user with the resolved default budget when it has no budget of its own.
+
+    A row whose own ``budget_id`` resolved to a budget is returned unchanged. Otherwise the
+    default is resolved on every call and set on a copy: the cached row carries at most the
+    proxy-wide default (readers such as the Prometheus customer gauges rely on that), never a
+    key's, so requests through keys with different defaults never observe each other's budget.
 
     Args:
         end_user_obj: The end user object to potentially apply default budget to
         prisma_client: Database client instance
         user_api_key_cache: Cache for storing/retrieving data
         parent_otel_span: Optional OpenTelemetry span for tracing
-
-    Returns:
-        Updated end user object with default budget applied if applicable
+        key_end_user_budget_id: The requesting key's ``end_user_budget_id``, if any
     """
-    # If end user already has a budget assigned, no need to apply default
-    if end_user_obj.litellm_budget_table is not None:
+    if end_user_obj.budget_id is not None and end_user_obj.litellm_budget_table is not None:
         return end_user_obj
 
-    # If no default budget configured, return as-is
-    if litellm.max_end_user_budget_id is None:
+    if key_end_user_budget_id is None and litellm.max_end_user_budget_id is None:
         return end_user_obj
 
-    # Fetch and apply default budget
-    default_budget: Final = await get_default_end_user_budget(
+    default_budget: Final = await resolve_default_end_user_budget(
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
+        key_end_user_budget_id=key_end_user_budget_id,
         parent_otel_span=parent_otel_span,
     )
 
-    if default_budget is not None:
-        # Apply default budget to end user object
-        end_user_obj.litellm_budget_table = default_budget
-        verbose_proxy_logger.debug(
-            "Applied default budget %s to end user %s", litellm.max_end_user_budget_id, end_user_obj.user_id
-        )
+    if default_budget is None:
+        return end_user_obj
 
-    return end_user_obj
+    verbose_proxy_logger.debug(
+        "Applied default budget %s to end user %s", default_budget.budget_id, end_user_obj.user_id
+    )
+    return end_user_obj.model_copy(update=MappingProxyType({"litellm_budget_table": default_budget}))
 
 
 async def _check_end_user_budget(
@@ -1705,6 +1764,7 @@ async def _end_user_is_known_unrestricted(
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     token_end_user_max_budget: float | None,
+    key_end_user_budget_id: str | None = None,
 ) -> bool:
     """
     True when the cached registry proves the id restricts nothing, so its row need not be read.
@@ -1712,13 +1772,14 @@ async def _end_user_is_known_unrestricted(
     Every field ``get_end_user_object`` callers consume (budget, spend under that budget, region,
     default model, object permission, blocked) is part of the registry predicate, so an id outside
     it is indistinguishable from one with no row at all. The skip is off whenever mere existence of
-    the row is meaningful: ``max_end_user_budget_id`` grafts a default budget onto any row that
-    exists, ``validate_end_user_id_in_db`` rejects ids that resolve to no row, and a token-supplied
-    ``end_user_max_budget`` (a ``user_custom_auth`` callable can set one against an otherwise
-    unrestricted row) is enforced against the row's recorded spend.
+    the row is meaningful: ``max_end_user_budget_id`` or the key's ``end_user_budget_id`` grafts a
+    default budget onto any row that exists, ``validate_end_user_id_in_db`` rejects ids that resolve
+    to no row, and a token-supplied ``end_user_max_budget`` (a ``user_custom_auth`` callable can set
+    one against an otherwise unrestricted row) is enforced against the row's recorded spend.
     """
     if (
         litellm.max_end_user_budget_id is not None
+        or key_end_user_budget_id is not None
         or litellm.validate_end_user_id_in_db
         or token_end_user_max_budget is not None
     ):
@@ -1740,12 +1801,13 @@ async def get_end_user_object(
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
     token_end_user_max_budget: float | None = None,
+    key_end_user_budget_id: str | None = None,
 ) -> LiteLLM_EndUserTable | None:
     """
     Returns end user object from database or cache.
 
-    If end user exists but has no budget_id, applies the default budget
-    (if configured via litellm.max_end_user_budget_id).
+    If end user exists but has no budget_id, applies the default budget: the key's
+    ``end_user_budget_id`` when set, otherwise ``litellm.max_end_user_budget_id``.
 
     Args:
         end_user_id: The ID of the end user
@@ -1757,6 +1819,7 @@ async def get_end_user_object(
         token_end_user_max_budget: ``valid_token.end_user_max_budget``, when the caller holds a
             token. Budget enforcement reads the row's spend, so a row that restricts nothing on
             its own must still be loaded when the token carries a budget for it.
+        key_end_user_budget_id: The requesting key's default end-user budget, if any
 
     Returns:
         LiteLLM_EndUserTable if found, None otherwise
@@ -1775,22 +1838,20 @@ async def get_end_user_object(
         model_type=LiteLLM_EndUserTable,
     )
     if cached_user_obj is not None:
-        return_obj = cached_user_obj
-        # Apply default budget if needed
-        return_obj = await _apply_default_budget_to_end_user(
-            end_user_obj=return_obj,
+        return await _apply_default_budget_to_end_user(
+            end_user_obj=cached_user_obj,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
+            key_end_user_budget_id=key_end_user_budget_id,
         )
-
-        return return_obj
 
     if await _end_user_is_known_unrestricted(
         end_user_id=end_user_id,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         token_end_user_max_budget=token_end_user_max_budget,
+        key_end_user_budget_id=key_end_user_budget_id,
     ):
         return None
 
@@ -1804,26 +1865,30 @@ async def get_end_user_object(
         if response is None:
             raise Exception
 
-        # Convert to LiteLLM_EndUserTable object
-        _response = LiteLLM_EndUserTable.model_validate(response.dict())
-
-        # Apply default budget if needed
-        _response = await _apply_default_budget_to_end_user(
-            end_user_obj=_response,
+        end_user_row: Final = await _apply_default_budget_to_end_user(
+            end_user_obj=LiteLLM_EndUserTable.model_validate(response.dict()),
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
         )
 
-        # Save to cache
         await user_api_key_cache.async_set_cache(
             key=_key,
-            value=_response,
+            value=end_user_row,
             model_type=LiteLLM_EndUserTable,
             ttl=get_management_object_ttl(user_api_key_cache),
         )
 
-        return _response
+        if key_end_user_budget_id is None:
+            return end_user_row
+
+        return await _apply_default_budget_to_end_user(
+            end_user_obj=end_user_row,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            key_end_user_budget_id=key_end_user_budget_id,
+        )
 
     except Exception:
         return None
@@ -1840,6 +1905,7 @@ async def resolve_and_validate_end_user_id(
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
     route: str = "",
+    key_end_user_budget_id: str | None = None,
 ) -> str | None:
     """Optionally drop end-user ids that don't resolve to a known DB row.
 
@@ -1853,9 +1919,10 @@ async def resolve_and_validate_end_user_id(
       - LiteLLM_UserTable.user_id
       - LiteLLM_UserTable.user_email (case-insensitive)
 
-    If the id doesn't match but ``litellm.max_end_user_budget_id`` is set,
-    we still preserve the id so the default end-user budget is applied
-    downstream; otherwise we return None.
+    If the id doesn't match but a default end-user budget is configured
+    (``litellm.max_end_user_budget_id`` or the key's ``end_user_budget_id``),
+    we still preserve the id so that budget is applied downstream; otherwise
+    we return None.
 
     DB lookups reuse ``get_end_user_object`` / ``get_user_object`` so they
     share the same cache as the rest of the auth path instead of adding new
@@ -1868,12 +1935,13 @@ async def resolve_and_validate_end_user_id(
     if prisma_client is None:
         return raw_end_user_id
 
+    has_default_budget: Final = bool(litellm.max_end_user_budget_id) or key_end_user_budget_id is not None
     cache_key: Final = f"end_user_validation:{raw_end_user_id}"
     cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=cache_key)
     if cached == "valid":
         return raw_end_user_id
     if cached == "invalid":
-        return raw_end_user_id if litellm.max_end_user_budget_id else None
+        return raw_end_user_id if has_default_budget else None
 
     is_valid: Final = await _end_user_id_exists_in_db(
         end_user_id=raw_end_user_id,
@@ -1890,12 +1958,7 @@ async def resolve_and_validate_end_user_id(
         ttl=(_END_USER_VALIDATION_POSITIVE_TTL if is_valid else _END_USER_VALIDATION_NEGATIVE_TTL),
     )
 
-    if is_valid:
-        return raw_end_user_id
-    # Preserve id so the caller can still apply litellm.max_end_user_budget_id.
-    if litellm.max_end_user_budget_id:
-        return raw_end_user_id
-    return None
+    return raw_end_user_id if is_valid or has_default_budget else None
 
 
 async def _end_user_id_exists_in_db(
@@ -2102,7 +2165,7 @@ async def _fetch_uncached_tags(
 
 @log_db_metrics
 async def get_tag_objects_batch(
-    tag_names: list[str],
+    tag_names: Sequence[str],
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None = None,
@@ -3628,6 +3691,22 @@ async def get_jwt_key_mapping_cache_keys_for_token(
     return tuple(jwt_key_mapping_cache_key(m.jwt_claim_name, m.jwt_claim_value, m.jwt_issuer) for m in mappings)
 
 
+class _TokenInFilter(TypedDict):
+    token: ReadOnly[Mapping[str, Sequence[str]]]
+
+
+async def get_jwt_key_mapping_cache_keys_for_tokens(
+    hashed_tokens: Sequence[str],
+    prisma_client: PrismaClient,
+) -> tuple[str, ...]:
+    """Cache keys of every JWT claim mapped to any of the given virtual keys."""
+    if not hashed_tokens:
+        return ()
+    token_filter: Final[_TokenInFilter] = {"token": {"in": tuple(hashed_tokens)}}
+    mappings: Final = await _jwt_key_mapping_table(JWTKeyMappingRepository(prisma_client)).find_many(where=token_filter)
+    return tuple(jwt_key_mapping_cache_key(m.jwt_claim_name, m.jwt_claim_value, m.jwt_issuer) for m in mappings)
+
+
 @log_db_metrics
 async def get_jwt_key_mapping_object(
     jwt_claim_name: str,
@@ -4170,8 +4249,13 @@ def _can_object_call_model(
         ):
             return True
 
-    raise ProxyException(
-        message=f"{object_type} not allowed to access model. This {object_type} can only access models={models}. Tried to access {model}",
+    internal_message: Final = (
+        f"{object_type} not allowed to access model. This {object_type} can only access models={models}. "
+        f"Tried to access {model}"
+    )
+    raise ModelAccessDeniedProxyException(
+        message=model_access_denied_client_message(model=model),
+        internal_message=internal_message,
         type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type=object_type),
         param="model",
         code=status.HTTP_403_FORBIDDEN,
@@ -4796,8 +4880,13 @@ async def can_user_call_model(
         return True
 
     if SpecialModelNames.no_default_models.value in user_object.models:
-        raise ProxyException(
-            message=f"User not allowed to access model. No default model access, only team models allowed. Tried to access {model}",
+        internal_message: Final = (
+            f"User not allowed to access model. No default model access, only team models allowed. "
+            f"Tried to access {model}"
+        )
+        raise ModelAccessDeniedProxyException(
+            message=model_access_denied_client_message(model=model),
+            internal_message=internal_message,
             type=ProxyErrorTypes.key_model_access_denied,
             param="model",
             code=status.HTTP_403_FORBIDDEN,
@@ -5306,12 +5395,10 @@ async def _check_team_member_budget(
         # Per-member override wins; otherwise fall back to the team-level
         # default configured via team.metadata["team_member_budget_id"].
         team_member_budget: float | None = None
-        if (
-            loaded_membership is not None
-            and loaded_membership.litellm_budget_table is not None
-            and loaded_membership.litellm_budget_table.max_budget is not None
-        ):
-            team_member_budget = loaded_membership.litellm_budget_table.max_budget
+        member_budget_row: Final = loaded_membership.litellm_budget_table if loaded_membership is not None else None
+        now: Final = get_utc_datetime()
+        if member_budget_row is not None and member_budget_row.max_budget is not None:
+            team_member_budget = member_budget_row.effective_max_budget(now=now)
         else:
             default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
             if isinstance(default_budget_id, str):
@@ -5327,7 +5414,9 @@ async def _check_team_member_budget(
                     and default_budget.max_budget is not None
                     and default_budget.max_budget > 0
                 ):
-                    team_member_budget = default_budget.max_budget
+                    team_member_budget = default_budget.max_budget + (
+                        member_budget_row.active_temp_budget_increase(now=now) if member_budget_row is not None else 0.0
+                    )
 
         if team_member_budget is not None:
             team_member_spend = (loaded_membership.spend if loaded_membership is not None else 0.0) or 0.0
@@ -5398,8 +5487,13 @@ async def _check_team_member_model_access(
             team_id=team_object.team_id,
         )
     except ProxyException:
-        raise ProxyException(
-            message=f"Team member not allowed to access model. User={valid_token.user_id}, Team={team_object.team_id}, Model={model}. Allowed member models = {member_allowed_models}",
+        internal_message: Final = (
+            f"Team member not allowed to access model. User={valid_token.user_id}, Team={team_object.team_id}, "
+            f"Model={model}. Allowed member models = {member_allowed_models}"
+        )
+        raise ModelAccessDeniedProxyException(
+            message=model_access_denied_client_message(model=model),
+            internal_message=internal_message,
             type=ProxyErrorTypes.team_model_access_denied,
             param="model",
             code=status.HTTP_403_FORBIDDEN,
@@ -5846,15 +5940,25 @@ async def _tag_max_budget_check(
     """
     from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 
-    if prisma_client is None:
+    await tag_max_budget_check_for_tags(
+        tags=get_tags_from_request_body(request_body=request_body),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        valid_token=valid_token,
+    )
+
+
+async def tag_max_budget_check_for_tags(
+    tags: Sequence[str],
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+    valid_token: UserAPIKeyAuth | None,
+) -> None:
+    if prisma_client is None or not tags:
         return
 
-    # Get tags from request metadata
-    tags: Final = get_tags_from_request_body(request_body=request_body)
-    if not tags:
-        return
-
-    # Batch fetch all tags in one go
     tag_objects: Final = await get_tag_objects_batch(
         tag_names=tags,
         prisma_client=prisma_client,

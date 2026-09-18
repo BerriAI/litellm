@@ -814,3 +814,48 @@ async def test_bedrock_invoke_claude_async_completion_inlines_document_url_sourc
         "type": "document",
         "source": {"type": "base64", "media_type": "application/pdf", "data": async_only_image_fetch.base64_png},
     } in captured["body"]["messages"][0]["content"]
+
+
+@pytest.mark.parametrize(
+    "model, expected_betas",
+    [
+        pytest.param("us.anthropic.claude-opus-4-8", ["tool-search-tool-2025-10-19"], id="opus_4_8"),
+        pytest.param("us.anthropic.claude-opus-5", ["tool-search-tool-2025-10-19"], id="opus_5"),
+        pytest.param("us.anthropic.claude-sonnet-5", ["tool-search-tool-2025-10-19"], id="sonnet_5"),
+        pytest.param("us.anthropic.claude-haiku-4-5-20251001-v1:0", ["tool-search-tool-2025-10-19"], id="haiku_4_5"),
+        pytest.param("us.anthropic.claude-opus-4-1-20250805-v1:0", None, id="opus_4_1_unsupported"),
+    ],
+)
+def test_bedrock_chat_invoke_tool_search_beta_follows_model_map(
+    local_model_cost_map, local_beta_headers_config, model, expected_betas
+):
+    """LIT-5851: the chat Invoke path used to add the ``tool-search-tool-2025-10-19``
+    beta whenever the id contained ``opus-4``, so Opus 5 and Sonnet 5 lost it, Haiku
+    4.5 never had it, and Opus 4.1 got it without support. The gate now follows the
+    model map's ``supports_tool_search`` flag, shared with the messages path."""
+    result = AmazonAnthropicClaudeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Add 2 and 3"}],
+        optional_params={
+            "max_tokens": 64,
+            "tools": [
+                {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "add_numbers",
+                        "description": "Add two integers",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                            "required": ["a", "b"],
+                        },
+                    },
+                },
+            ],
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("anthropic_beta") == expected_betas

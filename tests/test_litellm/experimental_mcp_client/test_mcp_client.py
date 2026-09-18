@@ -1934,3 +1934,18 @@ async def test_discovery_auth_fingerprint_tracks_effective_credentials(resolved:
     assert original != replaced
     assert len(original) == 64
     assert "private-original-credential" not in original
+
+
+@pytest.mark.asyncio
+async def test_request_auth_preview_uses_the_same_effective_headers_as_egress() -> None:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
+
+    client: Final = MCPClient(
+        server_url="https://upstream.example/mcp", auth_type=MCPAuth.bearer_token,
+        resolved_auth=StaticHeaderAuth("Bearer resolved"), extra_headers={"X-Trace": "trace"},
+    )
+    request: Final = await client.prepare_request_auth()
+    assert request.method == "POST"
+    assert str(request.url) == "https://upstream.example/mcp"
+    assert request.headers["Authorization"] == "Bearer resolved"
+    assert request.headers["X-Trace"] == "trace"

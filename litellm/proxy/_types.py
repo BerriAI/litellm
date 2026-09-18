@@ -51,6 +51,7 @@ from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
+    AzureSpillover,
     CallTypes,
     CostBreakdown,
     EmbeddingResponse,
@@ -70,6 +71,7 @@ from litellm.types.utils import (
     StandardLoggingVectorStoreRequest,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
+    TranscriptionResponse,
 )
 from litellm.types.videos.main import VideoObject
 
@@ -468,6 +470,8 @@ class LiteLLMRoutes(enum.Enum):
     mapped_pass_through_routes = [
         "/bedrock",
         "/comprehendmedical",
+        "/azure_speech",
+        "/transcribe",
         "/vertex-ai",
         "/vertex_ai",
         "/cohere",
@@ -483,10 +487,12 @@ class LiteLLMRoutes(enum.Enum):
         "/eu.assemblyai",
         "/vllm",
         "/mistral",
+        "/typesafe",
         "/milvus",
         "/gigachat",
         "/watsonx",
         "/nvidia_nim",
+        "/deepgram",
     ]
 
     #########################################################
@@ -531,6 +537,7 @@ class LiteLLMRoutes(enum.Enum):
     mcp_management_routes = [
         "/v1/mcp/server",
         "/v1/mcp/server/{path:path}",
+        "/v1/mcp/sessions",
     ]
 
     # Backwards-compat union — virtual keys may be configured with
@@ -657,6 +664,11 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_ACCESS_GROUP_ASSIGNMENT.value,
         KeyManagementRoutes.AUTO_ROUTER_MANAGE.value,
     ]
+
+    team_service_account_key_routes = (
+        KeyManagementRoutes.KEY_GENERATE.value,
+        KeyManagementRoutes.KEY_UPDATE.value,
+    )
 
     management_routes = (
         [
@@ -844,9 +856,13 @@ class LiteLLMRoutes(enum.Enum):
     )
 
     self_managed_routes = [
+        # update_team resolves proxy/org/team admin itself and filters team admins
+        # through the team_admin_editable_team_fields setting
+        "/team/update",
         "/team/member_add",
         "/team/member_delete",
         "/management/v1/teams/{team_id}/members/bulk_delete",
+        "/management/v1/teams/{team_id}/members/bulk_update",
         "/team/member_update",
         "/team/{team_id}/member/{user_id}/reset_spend",
         "/team/permissions_list",
@@ -1212,6 +1228,7 @@ class KeyRequestBase(GenerateRequestBase):
     default_estimated_output_tokens: PositiveInt | None = None
     default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     budget_id: str | None = None
+    end_user_budget_id: str | None = None
     tags: list[str] | None = None
     disable_global_guardrails: bool | None = None
     enable_prompt_caching: bool | None = None
@@ -1712,6 +1729,16 @@ class MCPUserCredentialListItem(LiteLLMPydanticObjectBase):
     connected_at: str | None = None  # ISO-8601
 
 
+class MCPServerUserCredentialListItem(LiteLLMPydanticObjectBase):
+    """One user's stored credential for an MCP server, as an admin sees it. Never carries the secret."""
+
+    user_id: str
+    credential_type: Literal["oauth2", "byok"]
+    expires_at: str | None = None
+    connected_at: str | None = None
+    updated_at: str
+
+
 class MCPUserEnvVarsRequest(LiteLLMPydanticObjectBase):
     """Payload for storing the calling user's per-user env var values."""
 
@@ -2004,6 +2031,13 @@ RouterSettingsDict = Annotated[
 class NewTeamRequest(TeamBase):
     router_settings: RouterSettingsDict | None = None
     model_aliases: dict | None = None
+    model_max_budget: GenericBudgetConfigType | None = Field(
+        default=None,
+        description=(
+            "Max budget per model for every key on the team, overridable per key "
+            "(e.g. {'gpt-4o': {'max_budget': 10, 'budget_duration': '1d'}})"
+        ),
+    )
     tags: list | None = None
     guardrails: list[str] | None = None
     policies: list[str] | None = None
@@ -2105,6 +2139,13 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     access_group_ids: list[str] | None = None
     budget_limits: list[BudgetLimitEntry] | None = None  # multiple concurrent budget windows
     default_team_member_models: list[str] | None = None  # default allowed_models seeded onto new team members
+    model_max_budget: GenericBudgetConfigType | None = Field(
+        default=None,
+        description=(
+            "Max budget per model for every key on the team, overridable per key "
+            "(e.g. {'gpt-4o': {'max_budget': 10, 'budget_duration': '1d'}})"
+        ),
+    )
 
 
 class PatchTeamRequest(UpdateTeamRequest):
@@ -2403,6 +2444,8 @@ class ConfigList(LiteLLMPydanticObjectBase):
     nested_fields: list[FieldDetail] | None = None  # For nested dictionary or Pydantic fields
     field_options: list[str] | None = None  # Allowed values, for field_type == "Select"
     field_tab: str | None = None  # Admin UI sub-tab this field renders under; None groups it with the rest
+    source: Literal["config", "db", "env", "default", "unset"] = "unset"
+    editable: bool = True
 
 
 class UserHeaderMapping(LiteLLMPydanticObjectBase):
@@ -2738,6 +2781,25 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="sends alerts if requests hang for 5min+",
     )
     ui_access_mode: Literal["admin_only", "all"] | None = Field("all", description="Control access to the Proxy UI")
+    max_failed_login_attempts_per_source: int | None = Field(
+        None,
+        ge=1,
+        description="Failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`. One more blocks that address for `failed_login_block_seconds`. Half this value, rounded down but at least 1, is the allowance for one username from that address; one more blocks that address for that username only, and its further failures stop counting toward the address limit, so a script stuck on one account does not block everyone behind a shared address. The per-address limit is only enforced when `trusted_proxy_ranges` is set: to the proxies in front of LiteLLM, or to an empty list when clients connect directly. Left unset, the peer address may be a shared ingress and only the per-username half runs. IPv6 addresses are grouped by /64. Set under `general_settings` in config.yaml. Defaults to 10",
+    )
+    max_failed_login_attempts_per_source_overrides: dict[str, int] | None = Field(
+        None,
+        description="Per-address overrides of `max_failed_login_attempts_per_source`, keyed by IP address or CIDR range, e.g. {'1.2.3.4': 200, '5.6.0.0/24': 500}. The most specific matching range wins (between equivalent keys such as '1.2.3.4' and '1.2.3.4/32', an exemption wins, then the higher limit), and the per-username allowance for that address follows as half the override. A value of 0 exempts the address from both limits. Set under `general_settings` in config.yaml",
+    )
+    failed_login_window_seconds: int | None = Field(
+        None,
+        ge=1,
+        description="Fixed window in seconds over which failed Admin UI sign-in attempts are counted. The window starts at the first failure and is not extended by later ones. Set under `general_settings` in config.yaml. Defaults to 60",
+    )
+    failed_login_block_seconds: int | None = Field(
+        None,
+        ge=1,
+        description="How long a blocked source address, or source address and username, stays blocked. Every attempt from a blocked key, right or wrong, is refused with 429 before the password is checked; the block is not extended by refused attempts. Set under `general_settings` in config.yaml. Defaults to 300",
+    )
     allowed_routes: list | None = Field(None, description="Proxy API Endpoints you want users to be able to access")
     reject_clientside_metadata_tags: bool | None = Field(
         None,
@@ -2762,6 +2824,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     enable_openai_websocket_passthrough: bool | None = Field(
         default=None,
         description="Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.",
+    )
+    transcribe_media_buckets: list[str] | None = Field(
+        default=None,
+        description="S3 bucket names that keys other than proxy admins may read media from and write transcripts to through the Amazon Transcribe pass-through. Unset means only proxy admins can start transcription jobs.",
     )
     user_header_name: str | None = Field(
         None,
@@ -2847,7 +2913,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     trusted_proxy_ranges: list[str] | None = Field(
         None,
-        description="CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler.",
+        description="CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler, and whose X-Forwarded-For is used to attribute Admin UI sign-in attempts to a source address. Set it to an empty list when clients connect directly, so the peer address is the source. Left unset, or containing an entry that is not an address or CIDR range, the per-source sign-in limit is off.",
     )
     store_model_in_db: bool | None = Field(
         None,
@@ -3032,6 +3098,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_tpd_limit: int | None = None
     team_max_budget: float | None = None
     team_soft_budget: float | None = None
+    team_model_max_budget: dict[str, object] | None = None
     team_models: list = []
     team_blocked: bool = False
     soft_budget: float | None = None
@@ -3247,6 +3314,15 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             team_alias="system",
             user_id="system",
             user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    @property
+    def is_team_service_account(self) -> bool:
+        return (
+            self.user_id is None
+            and self.team_id is not None
+            and bool(self.metadata)
+            and self.metadata.get("service_account_id") is not None
         )
 
 
@@ -3672,6 +3748,8 @@ class InvitationClaim(LiteLLMPydanticObjectBase):
 class ConfigFieldInfo(LiteLLMPydanticObjectBase):
     field_name: str
     field_value: Any
+    source: Literal["config", "db", "env", "default", "unset"] = "unset"
+    editable: bool = True
 
 
 class CallbackOnUI(LiteLLMPydanticObjectBase):
@@ -3710,6 +3788,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY",
             "AWS_REGION_NAME",
+            "S3_LOG_PROMPTS_ONLY",
         ],
     )
 
@@ -3876,6 +3955,7 @@ class SpendLogsMetadata(TypedDict):
     autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed
     litellm_gateway_injected_cache: ReadOnly[str | None]
     router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
+    azure_spillover: ReadOnly[AzureSpillover | None]  # None = Azure did not report spillover
 
 
 class SpendLogsPayload(TypedDict):
@@ -4030,6 +4110,22 @@ class ProxyException(Exception):
         if self.provider_specific_fields:
             error_dict["provider_specific_fields"] = self.provider_specific_fields
         return error_dict
+
+
+class ModelAccessDeniedProxyException(ProxyException):
+    def __init__(
+        self,
+        message: str,
+        internal_message: str,
+        type: str,
+        param: str | None,
+        code: int | str | None,
+    ) -> None:
+        super().__init__(message=message, type=type, param=param, code=code)
+        self.internal_message: Final = internal_message
+
+    def sanitized_internal_message(self) -> str:
+        return self.internal_message.replace("\r", "").replace("\n", "")
 
 
 class CommonProxyErrors(str, enum.Enum):
@@ -4362,6 +4458,23 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
         default=None,
         description="List of models this team member can access. Pass an empty list to remove per-member model restrictions.",
     )
+    temp_budget_increase: float | None = Field(
+        default=None,
+        ge=0,
+        allow_inf_nan=False,
+        description="Temporary additive budget increase for this team member, active until temp_budget_expiry",
+    )
+    temp_budget_expiry: datetime | None = Field(
+        default=None,
+        description="UTC expiry for temp_budget_increase",
+    )
+
+    @model_validator(mode="after")
+    def validate_temp_budget(self) -> "TeamMemberUpdateRequest":
+        if self.temp_budget_increase is not None or self.temp_budget_expiry is not None:
+            if self.temp_budget_increase is None or self.temp_budget_expiry is None:
+                raise ValueError("temp_budget_increase and temp_budget_expiry must be set together")
+        return self
 
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
@@ -4371,6 +4484,8 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
     rpm_limit: int | None = None
     budget_duration: str | None = None
     allowed_models: list[str] | None = None
+    temp_budget_increase: float | None = None
+    temp_budget_expiry: datetime | None = None
 
 
 class TeamModelAddRequest(BaseModel):
@@ -4435,6 +4550,29 @@ class TeamInfoMember(Member):
     user_alias: str | None = None
 
 
+class TeamEditUnrestricted(BaseModel):
+    kind: Literal["unrestricted"] = "unrestricted"
+
+
+class TeamEditAsTeamAdmin(BaseModel):
+    kind: Literal["team_admin"] = "team_admin"
+    editable_fields: tuple[str, ...]
+
+
+class TeamEditAsTeamAdminDisabled(BaseModel):
+    kind: Literal["team_admin_disabled"] = "team_admin_disabled"
+
+
+class TeamEditNone(BaseModel):
+    kind: Literal["none"] = "none"
+
+
+TeamEditAccess = Annotated[
+    TeamEditUnrestricted | TeamEditAsTeamAdmin | TeamEditAsTeamAdminDisabled | TeamEditNone,
+    Field(discriminator="kind"),
+]
+
+
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     members_with_roles: tuple[TeamInfoMember, ...] = ()
     team_member_budget_table: LiteLLM_BudgetTableFull | None = None
@@ -4446,6 +4584,8 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     # Parent org's model ceiling, reported only to callers who can manage the team.
     # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.
     organization_models: list[str] | None = None
+    model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
+    caller_edit_access: TeamEditAccess = Field(default_factory=TeamEditNone)
 
 
 class TeamInfoResponseObject(TypedDict):
@@ -4634,6 +4774,7 @@ PassThroughEndpointLoggingResultValues = (
     | VideoObject
     | StandardPassThroughResponseObject
     | ResponsesAPIResponse
+    | TranscriptionResponse
 )
 
 
@@ -4661,6 +4802,7 @@ LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "enforced_file_expires_after",
     "throttle_on_budget_exceeded",
     "enable_prompt_caching",
+    "end_user_budget_id",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium: Final = [
@@ -5220,6 +5362,8 @@ class BaseDailySpendTransaction(TypedDict):
     api_requests: int
     successful_requests: int
     failed_requests: int
+    total_response_time_ms: NotRequired[int]  # writable-ok: the rollup queue accumulates into this key in place
+    timed_requests: NotRequired[int]  # writable-ok: the rollup queue accumulates into this key in place
 
 
 class DailyTeamSpendTransaction(BaseDailySpendTransaction):

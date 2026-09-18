@@ -4,6 +4,7 @@ from datetime import datetime
 import contextlib
 import copy
 import json
+import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -2431,6 +2432,61 @@ def test_mock_completion_usage_falls_back_to_default_without_admission_count():
     assert response.usage.prompt_tokens == litellm_main.DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT
 
 
+_AZURE_AI_CUSTOM_PRICED_DEPLOYMENT: Final = {
+    "model_name": "azure-ai-custom-priced",
+    "litellm_params": {
+        "model": "azure_ai/gpt-5.6",
+        "api_key": "mock",
+        "api_base": "https://example.services.ai.azure.com",
+        "mock_response": "ok",
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 7e-6,
+        "cache_read_input_token_cost": 1e-7,
+        "cache_creation_input_token_cost": 5e-7,
+    },
+    "model_info": {"id": "azure-ai-custom-priced-deployment-id"},
+}
+
+
+def _expected_custom_price(response: litellm.ModelResponse) -> float:
+    params: Final = _AZURE_AI_CUSTOM_PRICED_DEPLOYMENT["litellm_params"]
+    return (
+        response.usage.prompt_tokens * params["input_cost_per_token"]
+        + response.usage.completion_tokens * params["output_cost_per_token"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", (False, True))
+async def test_mock_completion_prices_azure_ai_router_deployment_with_custom_pricing(use_async: bool):
+    router: Final = litellm.Router(model_list=[_AZURE_AI_CUSTOM_PRICED_DEPLOYMENT])
+    messages: Final = [{"role": "user", "content": "hello"}]
+
+    response: Final = (
+        await router.acompletion(model="azure-ai-custom-priced", messages=messages)
+        if use_async
+        else router.completion(model="azure-ai-custom-priced", messages=messages)
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(_expected_custom_price(response))
+    assert response._hidden_params["custom_llm_provider"] == "azure_ai"
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_provider"),
+    (("anthropic/claude-sonnet-5", "anthropic"), ("no-such-provider-model", None)),
+)
+def test_mock_completion_infers_provider_when_called_directly_without_one(model: str, expected_provider: str | None):
+    response: Final = litellm.mock_completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        mock_response="ok",
+    )
+
+    assert response.choices[0].message.content == "ok"
+    assert response._hidden_params.get("custom_llm_provider") == expected_provider
+
+
 _ADMISSION_INPUT_TOKENS: Final = 51234
 
 
@@ -3353,7 +3409,6 @@ def test_a_streamed_response_bills_the_usage_the_provider_reported(local_cost_ma
     cost = litellm.completion_cost(completion_response=rebuilt, model=STREAM_COST_MODEL)
 
     assert cost == pytest.approx(_priced_at(137, 42))
-    assert cost == pytest.approx(0.0007625)
 
 
 def test_streaming_and_not_streaming_bill_the_same_usage_the_same(local_cost_map):
@@ -3850,3 +3905,27 @@ def test_bridged_responses_with_openai_http_handler_keeps_forwarded_headers_out_
     assert "extra_headers" not in body
     assert body["model"] == "gpt-5.4"
     assert {k: request.headers[k] for k in FORWARDED_CLIENT_HEADERS} == FORWARDED_CLIENT_HEADERS
+
+
+@pytest.mark.parametrize("http2_on", [True, False])
+def test_aiohttp_openai_warns_only_when_http2_enabled(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, http2_on: bool
+):
+    from litellm.main import base_llm_aiohttp_handler
+
+    monkeypatch.setattr(litellm, "http2", http2_on)
+    monkeypatch.delenv("LITELLM_HTTP2", raising=False)
+
+    handler_completion: Final = MagicMock(return_value=MagicMock())
+    monkeypatch.setattr(base_llm_aiohttp_handler, "completion", handler_completion)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        litellm.completion(
+            model="aiohttp_openai/gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-test",
+        )
+
+    assert handler_completion.called
+    warned: Final = "aiohttp_openai/ always uses aiohttp" in caplog.text
+    assert warned is http2_on

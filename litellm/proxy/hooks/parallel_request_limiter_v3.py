@@ -91,6 +91,11 @@ else:
 _REQUEST_RATE_LIMIT_DATA: Final = TypeAdapter(Mapping[str, object])
 
 
+def _sibling_counter_keys(window_key: str) -> tuple[str, str]:
+    prefix: Final = window_key.removesuffix(":window")
+    return f"{prefix}:requests", f"{prefix}:tokens"
+
+
 BATCH_RATE_LIMITER_SCRIPT: Final = """
 local results = {}
 local now = tonumber(ARGV[1])
@@ -106,6 +111,8 @@ for i = 1, #KEYS, 2 do
     local window_start = redis.call('GET', window_key)
     if not window_start or (now - tonumber(window_start)) >= window_size then
         -- Reset window and counter
+        local prefix = string.sub(window_key, 1, -(#':window') - 1)
+        redis.call('DEL', prefix .. ':requests', prefix .. ':tokens')
         redis.call('SET', window_key, tostring(now))
         redis.call('SET', counter_key, increment_value)
         redis.call('EXPIRE', window_key, window_size)
@@ -151,6 +158,7 @@ CHECK_AND_INCREMENT_BY_N_SCRIPT: Final = """
 local time_reply = redis.call('TIME')
 local now = tonumber(time_reply[1])
 local descriptor_count = #KEYS / 2
+local reset_windows = {}
 
 -- Pass 1: read state, validate. Abort without writing if any over limit.
 local descriptor_state = {}
@@ -201,6 +209,11 @@ for i = 1, descriptor_count do
 
     if window_expired then
         active_window_start = now
+        if not reset_windows[window_key] then
+            local prefix = string.sub(window_key, 1, -(#':window') - 1)
+            redis.call('DEL', prefix .. ':requests', prefix .. ':tokens')
+            reset_windows[window_key] = true
+        end
         redis.call('SET', window_key, tostring(now))
         redis.call('SET', counter_key, increment)
         redis.call('EXPIRE', window_key, window_size)
@@ -531,6 +544,7 @@ class RequestRateLimiterStash:
     owner_litellm_call_id: str | None = None
     rate_limit_response: RateLimitResponse | None = None
     parallel_slot: ParallelSlotAcquisition | None = None
+    parallel_slot_release_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
     reserved_tokens: int = 0
     reserved_model: str | None = None
     reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
@@ -1017,6 +1031,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Implement sliding window rate limiting logic using in-memory cache operations.
         This follows the same logic as the Redis Lua script but uses async cache operations.
         """
+        async with self._check_and_increment_lock:
+            return await self._in_memory_cache_sliding_window(keys=keys, now_int=now_int, window_size=window_size)
+
+    async def _in_memory_cache_sliding_window(
+        self,
+        keys: list[str],
+        now_int: int,
+        window_size: int,
+    ) -> CacheCounterValues:
         results: Final[list[CacheCounterValue | None]] = []
 
         # Process each window/counter pair
@@ -1035,6 +1058,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # Check if window exists and is valid
             if window_start is None or (now_int - int(window_start)) >= window_size:
                 # Reset window and counter
+                for sibling_counter_key in _sibling_counter_keys(window_key):
+                    await self.internal_usage_cache.async_set_cache(
+                        key=sibling_counter_key,
+                        value=0,
+                        ttl=window_size,
+                        litellm_parent_otel_span=None,
+                        local_only=True,
+                    )
                 await self.internal_usage_cache.async_set_cache(
                     key=window_key,
                     value=str(now_int),
@@ -1620,6 +1651,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             statuses.append(self._gauge_status(gauge, in_flight + 1, "OK"))
         return RateLimitResponse(overall_code="OK", statuses=statuses)
 
+    async def _release_stashed_parallel_slot(
+        self,
+        stash: RequestRateLimiterStash | None,
+        parent_otel_span: Span | None,
+    ) -> None:
+        if stash is None:
+            return
+        async with stash.parallel_slot_release_lock:
+            acquisition: Final = stash.parallel_slot
+            if acquisition is None:
+                return
+            await self._release_parallel_request_slots(acquisition, parent_otel_span)
+            stash.parallel_slot = None  # rebind-ok: marks this request's slot as released
+
     async def _release_parallel_request_slots(
         self,
         acquisition: ParallelSlotAcquisition,
@@ -2033,6 +2078,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         # Pass 2: apply increments.
+        expired_windows: Final[Mapping[str, int]] = {
+            meta["window_key"]: meta["window_size"]
+            for meta, state in zip(per_counter_meta, descriptor_state)
+            if state["window_expired"]
+        }
+        for window_key, window_size in expired_windows.items():
+            for sibling_counter_key in _sibling_counter_keys(window_key):
+                await self.internal_usage_cache.async_set_cache(
+                    key=sibling_counter_key,
+                    value=0,
+                    ttl=window_size,
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
+                )
         statuses: Final[list[RateLimitStatus]] = []
         for meta, state in zip(per_counter_meta, descriptor_state):
             new_counter = meta["increment"] if state["window_expired"] else state["current"] + meta["increment"]
@@ -3379,13 +3438,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
                 stash.reservation_released = True
-            acquisition: Final = stash.parallel_slot
-            if acquisition is not None:
-                await self._release_parallel_request_slots(
-                    acquisition=acquisition,
-                    parent_otel_span=user_api_key_dict.parent_otel_span,
-                )
-                stash.parallel_slot = None
+            await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
             self._handle_rate_limit_error(
                 response=io_response,
                 descriptors=descriptors,
@@ -3700,13 +3753,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
 
                 if tpm_response["overall_code"] == "OVER_LIMIT":
-                    acquisition: Final = stash.parallel_slot
-                    if acquisition is not None:
-                        await self._release_parallel_request_slots(
-                            acquisition=acquisition,
-                            parent_otel_span=user_api_key_dict.parent_otel_span,
-                        )
-                        stash.parallel_slot = None
+                    await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
                     self._handle_rate_limit_error(
                         response=tpm_response,
                         descriptors=descriptors,
@@ -4524,13 +4571,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             verbose_proxy_logger.debug("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
 
             stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
-            acquisition: Final = stash.parallel_slot if stash is not None else None
-            if stash is not None and acquisition is not None:
-                await self._release_parallel_request_slots(
-                    acquisition=acquisition,
-                    parent_otel_span=litellm_parent_otel_span,
-                )
-                stash.parallel_slot = None
+            await self._release_stashed_parallel_slot(stash, litellm_parent_otel_span)
 
             pipeline_operations: Final = self._build_success_event_pipeline_operations(
                 kwargs=kwargs,
@@ -4650,13 +4691,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = []
 
             stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
-            acquisition: Final = stash.parallel_slot if stash is not None else None
-            if stash is not None and acquisition is not None:
-                await self._release_parallel_request_slots(
-                    acquisition=acquisition,
-                    parent_otel_span=litellm_parent_otel_span,
-                )
-                stash.parallel_slot = None
+            await self._release_stashed_parallel_slot(stash, litellm_parent_otel_span)
 
             # Skip the reservation refund if async_post_call_failure_hook
             # already released it (proxy-level rejection that also bubbles up
@@ -4764,23 +4799,23 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         object's current max_parallel_requests configuration, which can
         change mid-request) decides whether there is anything to release.
         """
-        stash: Final = get_request_stash()
-        if stash is None or stash.parallel_slot is None:
-            return
-
-        await self._release_parallel_request_slots(
-            acquisition=stash.parallel_slot,
-            parent_otel_span=None,
-        )
-        stash.parallel_slot = None
+        await self._release_stashed_parallel_slot(get_request_stash(), None)
 
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """
-        Post-call hook to update rate limit headers in the response.
+        Release completed-request slots and update rate limit headers in the response.
         """
         try:
-            stash: Final = get_request_stash()
-            litellm_proxy_rate_limit_response: Final = stash.rate_limit_response if stash is not None else None
+            slot_stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(data))
+            await self._release_stashed_parallel_slot(slot_stash, user_api_key_dict.parent_otel_span)
+        except Exception as e:
+            verbose_proxy_logger.exception("Error releasing parallel request slot in post-call hook: %s", e)
+
+        try:
+            header_stash: Final = get_request_stash()
+            litellm_proxy_rate_limit_response: Final = (
+                header_stash.rate_limit_response if header_stash is not None else None
+            )
 
             if litellm_proxy_rate_limit_response is not None and response_has_hidden_params(response):
                 additional_headers: Final = ensure_response_additional_headers(response)
@@ -4848,12 +4883,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             stash: Final = get_request_stash()
             if stash is None:
                 return
-            if stash.parallel_slot is not None:
-                await self._release_parallel_request_slots(
-                    acquisition=stash.parallel_slot,
-                    parent_otel_span=user_api_key_dict.parent_otel_span,
-                )
-                stash.parallel_slot = None
+            await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
 
             if stash.batch_enqueued_reservation is not None:
                 await self.batch_enqueued_token_store.refund(
