@@ -12,8 +12,7 @@ pub trait Layer<T> {
 ///
 /// ```ignore
 /// Stack::new(attempt_factory)
-///     .layer(RouterLayer::new(plan, picker, signals, clock, seed))
-///     .layer(TerminalLayer)
+///     .layer(RouterLayer::new(plan, picker, clock, seed))
 ///     .build()
 /// ```
 pub struct Stack<T>(T);

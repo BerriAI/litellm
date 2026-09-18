@@ -487,6 +487,10 @@ where
     type Route = RouteOf<F>;
     type Complete = Report<F>;
 
+    fn succeeded(report: &Self::Complete) -> bool {
+        report.outcome.is_ok()
+    }
+
     fn resume(&mut self, result: Option<HostResult<Self::Route>>) -> Step<'_, Self> {
         Box::pin(self.step(result))
     }

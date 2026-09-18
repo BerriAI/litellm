@@ -50,6 +50,12 @@ pub trait Machine: Send {
     type Route: Route;
     type Complete: Send + 'static;
 
+    /// Whether a completion is a success. A machine that completes with a report of a
+    /// failed call, a router, says no; the driver's terminal event follows this answer.
+    fn succeeded(_complete: &Self::Complete) -> bool {
+        true
+    }
+
     /// `None` on the first call and whenever the previous step completed without
     /// yielding an op; otherwise the result of the op last yielded.
     fn resume(&mut self, result: Option<HostResult<Self::Route>>) -> Step<'_, Self>;

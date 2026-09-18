@@ -1,7 +1,5 @@
 use std::time::Duration;
 
-use litellm_callbacks::terminal::CallOutcome;
-
 use crate::attempt::AttemptDisposition;
 use crate::plan::{DeploymentId, LogicalCallId};
 
@@ -13,12 +11,6 @@ pub struct CallReport<R, E> {
     pub attempts: Vec<AttemptRecord>,
     /// The deployment that produced the terminal outcome, if any attempt ran.
     pub selected: Option<DeploymentId>,
-}
-
-impl<R, E> CallOutcome for CallReport<R, E> {
-    fn succeeded(&self) -> bool {
-        self.outcome.is_ok()
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

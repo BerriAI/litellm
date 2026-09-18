@@ -123,6 +123,10 @@ where
     type Route = M::Route;
     type Complete = M::Complete;
 
+    fn succeeded(complete: &Self::Complete) -> bool {
+        M::succeeded(complete)
+    }
+
     fn resume(&mut self, result: Option<HostResult<Self::Route>>) -> Step<'_, Self> {
         Box::pin(self.step(result))
     }

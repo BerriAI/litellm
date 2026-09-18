@@ -1,6 +1,6 @@
-//! Behavior of the assembled stack: Terminal over Router over per-attempt Cache over the
-//! route machine. Each test states the attempts, drives the stack through a recording host,
-//! and asserts the exact op trace and the report. The router's own ops (plan resolution,
+//! Behavior of the assembled stack: Router over per-attempt Cache over the route machine.
+//! Each test states the attempts, drives the stack through a recording host that emits the
+//! terminal event, and asserts the exact op trace and the report. The router's own ops (plan resolution,
 //! picking) reach the host through the outer half of the layered route.
 
 use std::collections::HashMap;
@@ -13,7 +13,6 @@ use litellm_cache::{
     CacheEntry, CacheFuture, CacheKwargs, CacheLayer, Cached,
 };
 use litellm_callbacks::layer::Stack;
-use litellm_callbacks::terminal::TerminalLayer;
 use litellm_callbacks_test::{
     Answer, Observed, RecordingHost, Script, Scripted, TestRoute, Trace, WithOuter, assert_trace,
     drain,
@@ -227,7 +226,6 @@ impl Harness {
                 caching(),
             )))
             .layer(RouterLayer::new(plan, picker, self.clock.clone(), 1))
-            .layer(TerminalLayer)
             .build()
     }
 
@@ -382,18 +380,19 @@ async fn host_failure_mid_attempt_interrupts_the_whole_call_without_a_retry() {
 
     assert_trace!(
         host.inner.trace,
-        ["emit:attempt_started", "route:project", "route:send"]
+        [
+            "emit:attempt_started",
+            "route:project",
+            "route:send",
+            "emit:failed"
+        ]
     );
+    host.inner.trace.assert_one_terminal();
     assert_eq!(
         report.outcome,
         Err(CallFailure::Interrupted { error: retryable() })
     );
     assert_eq!(harness.attempts.started.lock().unwrap().len(), 1);
-    assert_eq!(
-        host.inner.trace.emitted("failed"),
-        0,
-        "interrupt cannot yield ops; the driver owns that event"
-    );
 }
 
 #[tokio::test]

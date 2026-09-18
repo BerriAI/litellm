@@ -91,9 +91,27 @@ where
     }
 }
 
-/// Drives a machine to completion against the host, recording the trace. A host failure
-/// interrupts the machine, which is what a language driver does too.
+/// Drives a machine to completion against the host, recording the trace. Like a language
+/// driver, it interrupts the machine when the host fails an op and emits the one terminal
+/// event itself once the machine is done.
 pub async fn drain<M, H>(
+    machine: &mut M,
+    host: &mut H,
+) -> Result<M::Complete, <M::Route as Route>::Error>
+where
+    M: Machine,
+    H: Answers<M::Route>,
+{
+    let outcome = drive(machine, host).await;
+    let terminal = match &outcome {
+        Ok(complete) if M::succeeded(complete) => "succeeded",
+        Ok(_) | Err(_) => "failed",
+    };
+    host.trace().0.push(Observed::Emit(terminal));
+    outcome
+}
+
+async fn drive<M, H>(
     machine: &mut M,
     host: &mut H,
 ) -> Result<M::Complete, <M::Route as Route>::Error>

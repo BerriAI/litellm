@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use litellm_callbacks::layer::Stack;
-use litellm_callbacks::terminal::TerminalLayer;
 use litellm_callbacks_test::{RecordingHost, Script, Scripted, Trace, WithOuter, drain};
 use litellm_router::{
     AttemptContext, AttemptDisposition, AttemptError, AttemptFactory, CallFailure, Clock,
@@ -139,7 +138,6 @@ proptest! {
             };
             let mut stack = Stack::new(Attempts(Arc::new(Mutex::new(scripts.clone()))))
                 .layer(RouterLayer::new(plan.clone(), picker, clock.clone(), seed))
-                .layer(TerminalLayer)
                 .build();
             let picks = Arc::new(Mutex::new(0usize));
             let counted = Arc::clone(&picks);
