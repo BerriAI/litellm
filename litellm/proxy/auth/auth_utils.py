@@ -1697,6 +1697,23 @@ _MODEL_ROUTING_BODY_TARGET_MODEL_ROUTE_MARKERS: Final = (
     "/vector_stores",
 )
 _MODEL_ROUTING_COMPLETION_MODEL_ROUTE_MARKERS: Final = ("/evals",)
+# Routes served by the chat-completions, completions and embeddings handlers.
+# These handlers bind a ``model`` path or query parameter
+# (``/openai/deployments/{model}/...``, ``/engines/{model}/...``, ``?model=``)
+# and route from it in preference to the body ``model``. The allowlist check
+# therefore has to validate that value too: with only the body validated, a
+# key scoped to one model could name an allowed model in the body and a
+# denied one in the query string, and be served the denied model.
+_MODEL_ROUTING_LLM_HANDLER_ROUTE_MARKERS: Final = (
+    "/chat/completions",
+    "/completions",
+    "/embeddings",
+)
+# Anchored at the path start on purpose: ``/azure/openai/deployments/...`` is the
+# Azure relay route, whose model group is resolved separately below.
+_LLM_HANDLER_PATH_MODEL_PATTERN: Final = re.compile(
+    r"^/(?:openai/deployments|engines)/(.+?)/(?:chat/completions|completions|embeddings)$"
+)
 # Realtime WebRTC routes carry the effective model inside the nested
 # ``session.model`` field (see realtime_endpoints.endpoints), so the model the
 # request will actually use is not present at the top level. Extract it here so
@@ -1758,6 +1775,17 @@ def _get_case_insensitive_mapping_value(mapping: Mapping[str, object] | None, ke
 def _route_matches_any_marker(route: str, markers: tuple[str, ...]) -> bool:
     normalized_route: Final = route.lower()
     return any(marker in normalized_route for marker in markers)
+
+
+def _llm_handler_path_model(route: str) -> str | None:
+    """Model named in the path of a deployment-style LLM route.
+
+    ``/openai/deployments/{model}/chat/completions`` and ``/engines/{model}/...``
+    bind ``{model}`` (which may itself contain ``/``) to the handler's ``model``
+    argument, which then takes precedence over the body model when routing.
+    """
+    match: Final = _LLM_HANDLER_PATH_MODEL_PATTERN.match(route)
+    return match.group(1) if match else None
 
 
 def _route_uses_model_routing_sources(route: str) -> bool:
@@ -1905,6 +1933,13 @@ def _extract_model_candidates_from_request(
             _append_model_candidates(candidates, session.get("model"))
     if uses_completion_model_sources and isinstance(request_data.get("completion"), dict):
         _append_model_candidates(candidates, request_data["completion"].get("model"))
+    if _route_matches_any_marker(route=route, markers=_MODEL_ROUTING_LLM_HANDLER_ROUTE_MARKERS):
+        # The handler routes from ``?model=`` / ``{model}`` ahead of the body, so
+        # every model it can end up dispatching to must pass the allowlist. The
+        # ``x-litellm-model`` header is deliberately not read here: these handlers
+        # do not route from it.
+        _append_model_candidates(candidates, _get_case_insensitive_mapping_value(request_query_params, "model"))
+        _append_model_candidates(candidates, _llm_handler_path_model(route))
 
     if uses_model_routing_sources:
         if uses_header_or_query_model_sources:

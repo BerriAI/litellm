@@ -3918,3 +3918,96 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
             )
             is True
         )
+
+# --- query-string / path model must be allowlisted on LLM handler routes ------------
+# The chat-completions, completions and embeddings handlers route from a ``model``
+# query or path parameter in preference to the body model. Only the body used to
+# be validated, so a key scoped to one model could be served another by putting
+# it in ``?model=`` (BerriAI/litellm#41810).
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/v1/completions",
+        "/completions",
+        "/v1/embeddings",
+        "/embeddings",
+    ],
+)
+def test_get_model_from_request_includes_query_model_on_llm_handler_routes(route):
+    """Body says allowed-model, query string says denied-model: both are candidates,
+    so the allowlist check rejects the request if either is outside the key's models."""
+    assert get_model_from_request(
+        request_data={"model": "allowed-model"},
+        route=route,
+        request_query_params={"model": "denied-model"},
+    ) == ["allowed-model", "denied-model"]
+
+
+def test_get_model_from_request_query_model_alone_on_chat_completions():
+    assert (
+        get_model_from_request(
+            request_data={"messages": []},
+            route="/v1/chat/completions",
+            request_query_params={"model": "denied-model"},
+        )
+        == "denied-model"
+    )
+
+
+def test_get_model_from_request_query_model_equal_to_body_dedupes():
+    assert (
+        get_model_from_request(
+            request_data={"model": "allowed-model"},
+            route="/v1/chat/completions",
+            request_query_params={"model": "allowed-model"},
+        )
+        == "allowed-model"
+    )
+
+
+@pytest.mark.parametrize(
+    "route, expected",
+    [
+        ("/openai/deployments/denied-model/chat/completions", ["allowed-model", "denied-model"]),
+        ("/openai/deployments/denied-model/completions", ["allowed-model", "denied-model"]),
+        ("/openai/deployments/denied-model/embeddings", ["allowed-model", "denied-model"]),
+        ("/engines/denied-model/chat/completions", ["allowed-model", "denied-model"]),
+        # {model:path} may contain slashes
+        ("/openai/deployments/org/denied-model/chat/completions", ["allowed-model", "org/denied-model"]),
+    ],
+)
+def test_get_model_from_request_includes_deployment_path_model(route, expected):
+    """The ``{model}`` path segment is bound to the handler and routed from even when
+    the body carries a different model, so it is validated alongside the body."""
+    assert get_model_from_request(request_data={"model": "allowed-model"}, route=route) == expected
+
+
+@pytest.mark.parametrize("route", ["/v1/messages", "/v1/responses"])
+def test_get_model_from_request_ignores_query_model_on_routes_that_do_not_route_from_it(route):
+    """/v1/messages and /v1/responses serve the body model regardless of ``?model=``,
+    so the query value is not a candidate there (unchanged behaviour)."""
+    assert (
+        get_model_from_request(
+            request_data={"model": "allowed-model"},
+            route=route,
+            request_query_params={"model": "denied-model"},
+        )
+        == "allowed-model"
+    )
+
+
+def test_get_model_from_request_ignores_routing_header_on_chat_completions():
+    """``x-litellm-model`` is only honoured on the managed-resource routes; the chat
+    handler never routes from it, so it must not become a candidate (control)."""
+    assert (
+        get_model_from_request(
+            request_data={"model": "allowed-model"},
+            route="/v1/chat/completions",
+            request_headers={"x-litellm-model": "denied-model"},
+        )
+        == "allowed-model"
+    )
