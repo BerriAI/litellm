@@ -38566,6 +38566,7 @@
           "type": "object"
         },
         "SCIMMultiValuedAttribute": {
+          "additionalProperties": true,
           "properties": {
             "display": {
               "anyOf": [
@@ -38601,13 +38602,17 @@
               "title": "Type"
             },
             "value": {
-              "title": "Value",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Value"
             }
           },
-          "required": [
-            "value"
-          ],
           "title": "SCIMMultiValuedAttribute",
           "type": "object"
         },
