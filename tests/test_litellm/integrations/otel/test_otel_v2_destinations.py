@@ -84,9 +84,6 @@ def isolate_published_provider(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def forget_otel_v2_flag_after_each_test():
-    """``is_otel_v2_enabled`` caches its first answer. Tests here flip ``LITELLM_OTEL_V2``
-    through monkeypatch, which restores the env but not the cache, so the next module
-    on the worker would keep seeing v2 on."""
     yield
     is_otel_v2_enabled.cache_clear()
 
@@ -393,10 +390,6 @@ class TestRoutingMode:
 
     @pytest.mark.parametrize("langfuse_first", [False, True])
     def test_two_operator_exporters_on_one_account_record_the_wider_scope(self, langfuse_first):
-        """A plain collector pointed at the Langfuse ingest with the same credentials as
-        the narrowed Langfuse exporter still sends the whole tree there. Recording
-        ``llm_only`` for that account would make additive hand a same-account team the
-        non-model spans a second time."""
         langfuse = ExporterSpec(
             kind="otlp_http",
             endpoint=self.OPERATOR_SINK[0],
@@ -1495,13 +1488,6 @@ def names(exporter: InMemorySpanExporter) -> frozenset[str]:
 
 
 class TestSpanScope:
-    """``llm_only`` keeps the model-call spans and drops the rest of the request tree.
-
-    The tenant's switch rides the destination; the operator's rides the config and
-    reaches only the exporter ``langfuse_otel`` owns. Neither reparents or promotes
-    a span, so what does get through still hangs off the same trace.
-    """
-
     @staticmethod
     def _additive(monkeypatch):
         monkeypatch.setattr(litellm, "otel_tenant_destination_mode", "additive", raising=False)
@@ -1562,8 +1548,6 @@ class TestSpanScope:
         assert names(tenant) == LLM_SPANS
 
     def test_an_operator_scope_does_not_undo_the_override(self):
-        """Under the default override mode an overridden backend stays suppressed on
-        the operator's exporter no matter what scope it carries."""
         operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
 
         self._run(self._operator_provider(operator, tenant, scope="llm_only"), (LLM_ONLY_DEST,))
@@ -1573,8 +1557,6 @@ class TestSpanScope:
 
     @staticmethod
     def _same_account_provider(shared, operator_scope):
-        """The operator's own exporter and a tenant destination naming the same account,
-        both writing one sink, with the operator's exporter narrowed to ``operator_scope``."""
         provider = TracerProvider()
         provider.add_span_processor(
             _OverriddenBackendFilter(SimpleSpanProcessor(shared), "langfuse_otel", operator_scope)
@@ -1608,10 +1590,6 @@ class TestSpanScope:
     def test_a_team_naming_the_operators_project_gets_the_wider_of_the_two_scopes_once(
         self, monkeypatch, operator_scope, tenant_scope, expected
     ):
-        """Under additive the fan-out stands down for a span the operator's exporter is
-        already sending to that account. When the operator's exporter is narrowed, the
-        spans it drops are not being sent by anyone, so the fan-out still owes them to
-        the team; and no span may land twice."""
         self._additive(monkeypatch)
         shared = InMemorySpanExporter()
 
@@ -1650,8 +1628,6 @@ class TestSpanScope:
         assert names(by_backend["arize"]) == REQUEST_TREE
 
     def test_two_views_of_one_account_share_the_exporter_but_not_the_filter(self):
-        """A full and an ``llm_only`` destination for the same account are one exporter
-        (``cache_key`` leaves the scope out), and each request is still filtered by its own scope."""
         built, tenant = [], InMemorySpanExporter()
         provider = TracerProvider()
 
@@ -1711,7 +1687,6 @@ class TestSpanScope:
         assert OpenTelemetryV2Config().langfuse_span_scope == "llm_only"
 
     def test_the_env_var_narrows_the_exporter_the_langfuse_preset_builds(self, monkeypatch):
-        """The whole operator path: env var -> preset -> provider, with a bare collector alongside."""
         monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_SPAN_SCOPE", "llm_only")
         monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
         monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
