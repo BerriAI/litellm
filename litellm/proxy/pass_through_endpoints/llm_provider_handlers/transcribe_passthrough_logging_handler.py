@@ -654,7 +654,7 @@ class TranscribePassthroughLoggingHandler:
             job_name if isinstance(job_name, str) else "",
             aws_region_name,
             cost_per_second,
-            started_transcription_job(result),
+            started_transcription_job(httpx_response.text),
         )
         payload: Final = self.transcribe_passthrough_handler(
             httpx_response=httpx_response,

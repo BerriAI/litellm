@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 import wave
 from datetime import datetime
 from pathlib import Path
@@ -39,13 +40,13 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 COST_PER_SECOND = 0.0001
 
 
-def _make_response(operation: str) -> httpx.Response:
+def _make_response(operation: str, text: str = '{"TranscriptionJob": {}}') -> httpx.Response:
     request = httpx.Request(
         "POST",
         "https://transcribe.us-west-2.amazonaws.com/",
         headers={"X-Amz-Target": f"Transcribe.{operation}"},
     )
-    return httpx.Response(200, request=request, text='{"TranscriptionJob": {}}')
+    return httpx.Response(200, request=request, text=text)
 
 
 def _make_logging_obj() -> MagicMock:
@@ -825,6 +826,48 @@ class TestStartTranscriptionJobIsLoggedAtJobCost:
 
         assert scheduled == ["litellm-job-1"]
         assert [entry["response_cost"] for entry in immediate] == [0.0]
+
+    @pytest.mark.asyncio
+    async def test_pass_through_success_handler_gives_the_pricer_the_started_job_from_the_response(self):
+        started_jobs: list[TranscriptionJobRecord | None] = []
+
+        async def job_pricer(
+            job_name: str, aws_region_name: str, cost_per_second: float, started_job: TranscriptionJobRecord | None
+        ) -> float:
+            started_jobs.append(started_job)
+            return 0.0
+
+        async def log_dispatch(**kwargs: object) -> None:
+            pass
+
+        start_response = (
+            '{"TranscriptionJob": {"TranscriptionJobName": "litellm-job-1", "TranscriptionJobStatus": "IN_PROGRESS",'
+            ' "Media": {"MediaFileUri": "s3://b/started.wav"}, "CreationTime": 5.0}}'
+        )
+        logging = PassThroughEndpointLogging(
+            TranscribePassthroughLoggingHandler(job_pricer=job_pricer), log_dispatch=log_dispatch
+        )
+
+        await logging.pass_through_async_success_handler(
+            httpx_response=_make_response("StartTranscriptionJob", text=start_response),
+            response_body=json.loads(start_response),
+            logging_obj=_make_logging_obj(),
+            url_route="https://transcribe.us-west-2.amazonaws.com/",
+            result="",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+            request_body={"TranscriptionJobName": "litellm-job-1"},
+            passthrough_logging_payload={"url": "https://transcribe.us-west-2.amazonaws.com/"},
+            custom_llm_provider="transcribe",
+        )
+        await asyncio.gather(*logging.transcribe_passthrough_logging_handler._pricing_tasks)
+
+        assert started_jobs == [
+            TranscriptionJobRecord(
+                TranscriptionJobStatus="IN_PROGRESS", CreationTime=5.0, Media={"MediaFileUri": "s3://b/started.wav"}
+            )
+        ]
 
 
 class TestIsTranscribeRoute:
