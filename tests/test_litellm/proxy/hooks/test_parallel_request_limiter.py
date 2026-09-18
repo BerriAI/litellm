@@ -233,3 +233,32 @@ async def test_team_rejection_rolls_back_key_slot_acquired_in_same_call():
     with pytest.raises(HTTPException) as second_reject:
         await admit()
     assert "rate limit type = team" in second_reject.value.detail
+
+
+@pytest.mark.asyncio
+async def test_rollback_decrements_live_bucket_instead_of_restoring_snapshot():
+    from litellm.proxy._types import CurrentItemRateLimit
+
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache)
+    )
+    bucket = "legacy-team::2026-09-18-19-00::request_count"
+    snapshot_after_own_increment = CurrentItemRateLimit(
+        current_requests=2, current_tpm=0, current_rpm=2
+    )
+    await cache.async_set_cache(
+        key=bucket,
+        value=CurrentItemRateLimit(current_requests=3, current_tpm=0, current_rpm=3),
+        local_only=True,
+    )
+
+    await handler._rollback_acquired_slots(
+        [(bucket, snapshot_after_own_increment)], parent_otel_span=None
+    )
+
+    assert await cache.async_get_cache(key=bucket) == {
+        "current_requests": 2,
+        "current_tpm": 0,
+        "current_rpm": 2,
+    }

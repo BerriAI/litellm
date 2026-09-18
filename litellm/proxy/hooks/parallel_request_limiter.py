@@ -152,16 +152,11 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         values_to_update_in_cache: Sequence[tuple[str, CurrentItemRateLimit]],
         parent_otel_span: Span | None,
     ) -> None:
-        for key, val in values_to_update_in_cache:
-            await self.internal_usage_cache.async_set_cache(
-                key,
-                CurrentItemRateLimit(
-                    current_requests=max(val["current_requests"] - 1, 0),
-                    current_tpm=val["current_tpm"],
-                    current_rpm=max(val["current_rpm"] - 1, 0),
-                ),
-                ttl=60,
+        for key, _ in values_to_update_in_cache:
+            await self._decrement_bucket(
+                request_count_api_key=key,
                 litellm_parent_otel_span=parent_otel_span,
+                undo_rpm=True,
                 local_only=True,
             )
 
@@ -775,21 +770,37 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         request_count_api_key: str,
         litellm_parent_otel_span: Span | None,
     ) -> None:
+        await self._decrement_bucket(
+            request_count_api_key=request_count_api_key,
+            litellm_parent_otel_span=litellm_parent_otel_span,
+            undo_rpm=False,
+            local_only=False,
+        )
+
+    async def _decrement_bucket(
+        self,
+        request_count_api_key: str,
+        litellm_parent_otel_span: Span | None,
+        undo_rpm: bool,
+        local_only: bool,
+    ) -> None:
         current: Final = await self.internal_usage_cache.async_get_cache(
             key=request_count_api_key,
             litellm_parent_otel_span=litellm_parent_otel_span,
+            local_only=local_only,
         ) or CurrentItemRateLimit(current_requests=1, current_tpm=0, current_rpm=0)
         new_val: Final = CurrentItemRateLimit(
             current_requests=max(current["current_requests"] - 1, 0),
             current_tpm=current["current_tpm"],
-            current_rpm=current["current_rpm"],
+            current_rpm=max(current["current_rpm"] - 1, 0) if undo_rpm else current["current_rpm"],
         )
-        self.print_verbose(f"updated_value in failure call: {new_val}")
+        self.print_verbose(f"decremented bucket {request_count_api_key}: {new_val}")
         await self.internal_usage_cache.async_set_cache(
             request_count_api_key,
             new_val,
             ttl=60,
             litellm_parent_otel_span=litellm_parent_otel_span,
+            local_only=local_only,
         )
 
     async def get_internal_user_object(
