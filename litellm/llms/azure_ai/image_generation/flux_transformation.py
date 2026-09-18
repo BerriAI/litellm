@@ -2,8 +2,17 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
+from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.llms.openai.image_generation import GPTImageGenerationConfig
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
+
+FLUX2_DROPPED_OPENAI_PARAMS: Final[tuple[OpenAIImageGenerationOptionalParams, ...]] = (
+    "background",
+    "moderation",
+    "output_compression",
+    "quality",
+    "user",
+)
 
 
 class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
@@ -81,10 +90,13 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
             "num_images",
             "guidance",
             "steps",
+            *FLUX2_DROPPED_OPENAI_PARAMS,
         ]
 
     @staticmethod
-    def _map_parameter(name: str, value: object) -> tuple[tuple[str, object], ...]:
+    def _map_parameter(name: str, value: object, model: str) -> tuple[tuple[str, object], ...]:
+        if name in FLUX2_DROPPED_OPENAI_PARAMS:
+            return ()
         if isinstance(value, str):
             if name in ("n", "num_images", "width", "height", "steps", "seed", "safety_tolerance"):
                 return (("num_images" if name == "n" else name, int(value)),)
@@ -94,11 +106,17 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
             return (("num_images", value),)
         if name != "size":
             return ((name, value),)
+        if str(value).lower() == "auto":
+            return ()
 
         try:
             width, height = (int(dimension) for dimension in str(value).lower().split("x"))
         except (TypeError, ValueError):
-            raise ValueError(f"Invalid size format '{value}'. Expected 'WxH', for example '1024x1024'.")
+            raise BadRequestError(
+                message=f"Invalid size format '{value}'. Expected 'WxH', for example '1024x1024'.",
+                model=model,
+                llm_provider="azure_ai",
+            )
         return (("width", width), ("height", height))
 
     def map_openai_params(
@@ -118,9 +136,13 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
         supported_params: Final = self.get_supported_openai_params(model)
         unsupported_params: Final = tuple(name for name in non_default_params if name not in supported_params)
         if unsupported_params and not drop_params:
-            raise ValueError(
-                f"Parameters {unsupported_params} are not supported for model {model}. "
-                f"Supported parameters are {supported_params}. Set drop_params=True to drop unsupported parameters."
+            raise UnsupportedParamsError(
+                message=(
+                    f"Parameters {unsupported_params} are not supported for model {model}. "
+                    f"Supported parameters are {supported_params}. Set drop_params=True to drop unsupported parameters."
+                ),
+                model=model,
+                llm_provider="azure_ai",
             )
 
         mapped_params: Final[Mapping[str, object]] = MappingProxyType(
@@ -128,7 +150,7 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
                 mapped_name: mapped_value
                 for name, value in non_default_params.items()
                 if name in supported_params
-                for mapped_name, mapped_value in self._map_parameter(name, value)
+                for mapped_name, mapped_value in self._map_parameter(name, value, model)
             }
         )
         return {**optional_params, **mapped_params}  # mutable-ok: inherited config contract returns a dict

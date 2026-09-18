@@ -15,7 +15,7 @@ from litellm.llms.azure_ai.image_generation.flux_transformation import (
     AzureFoundryFluxImageGenerationConfig,
 )
 from litellm.types.utils import ImageObject, ImageResponse
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.utils import _invalidate_model_cost_lowercase_map, get_optional_params_image_gen
 
 
 @pytest.fixture(autouse=True)
@@ -86,14 +86,34 @@ def test_flux2_flex_maps_openai_and_provider_parameters():
     }
 
 
-def test_flux2_flex_rejects_invalid_size():
-    with pytest.raises(ValueError, match="Expected 'WxH'"):
-        AzureFoundryFluxImageGenerationConfig().map_openai_params(
-            non_default_params={"size": "large"},
-            optional_params={},
+def test_flux2_flex_rejects_invalid_size_as_bad_request():
+    with pytest.raises(litellm.BadRequestError, match="Expected 'WxH'") as raised:
+        get_optional_params_image_gen(
             model="FLUX.2-flex",
-            drop_params=False,
+            custom_llm_provider="azure_ai",
+            provider_config=AzureFoundryFluxImageGenerationConfig(),
+            size="large",
         )
+
+    assert raised.value.status_code == 400
+
+
+@pytest.mark.parametrize("model", ("FLUX.2-pro", "FLUX.2-flex"))
+def test_flux2_accepts_and_drops_openai_only_image_parameters(model: str):
+    optional_params: Final = get_optional_params_image_gen(
+        model=model,
+        custom_llm_provider="azure_ai",
+        provider_config=AzureFoundryFluxImageGenerationConfig(),
+        n=1,
+        size="auto",
+        quality="high",
+        user="end-user-1",
+        background="transparent",
+        moderation="low",
+        output_compression=50,
+    )
+
+    assert optional_params == {"num_images": 1}
 
 
 def test_flux2_flex_model_info():

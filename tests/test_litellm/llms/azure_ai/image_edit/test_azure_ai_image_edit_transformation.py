@@ -176,3 +176,14 @@ def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[
     )
 
     assert response._hidden_params["response_cost"] == pytest.approx(5e-08 * 2048 * 1024 * 2)
+
+
+def test_flux2_image_edit_accepts_and_drops_openai_only_parameters():
+    optional_params: Final = ImageEditRequestUtils.get_optional_params_image_edit(
+        model="FLUX.2-pro",
+        image_edit_provider_config=AzureFoundryFlux2ImageEditConfig(),
+        image_edit_optional_params={"n": 1, "size": "auto", "quality": "high", "user": "end-user-1"},
+        drop_params=False,
+    )
+
+    assert optional_params == {"num_images": 1}
