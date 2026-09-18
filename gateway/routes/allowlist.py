@@ -94,6 +94,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/vertex-ai/",
     "/assemblyai/",
     "/eu.assemblyai/",
+    "/deepgram/",
     "/langfuse/",
     "/vllm/",
     "/mistral/",
