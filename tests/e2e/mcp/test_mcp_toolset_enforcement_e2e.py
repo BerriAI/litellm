@@ -75,8 +75,10 @@ class TestMcpToolsetEnforcement:
         client.await_registered(server_id)
 
         catalog_key: Final = _key(client, resources, "catalog", server_id=server_id)
-        known_wire: Final = client.await_tool(catalog_key, server_id, SEARCH_LOGS_TOOL)
-        catalog: Final = unwrap(client.list_tools(catalog_key)).tool_names_for_server(server_id)
+        snapshot: Final = client.await_tool_catalog(catalog_key, server_id, SEARCH_LOGS_TOOL)
+        known_wire: Final = snapshot.tool_name_containing(server_id, SEARCH_LOGS_TOOL)
+        assert known_wire is not None
+        catalog: Final = snapshot.tool_names_for_server(server_id)
         assert len(catalog) > 2, (
             f"the Datadog core toolset must serve more tools than the toolset names, or the "
             f"restriction has nothing to hide; got {sorted(catalog)}"
@@ -149,8 +151,10 @@ def _assert_principal_toolset(client: McpClient, resources: ResourceManager, pri
 
     for transport in client.proxy.replicas_for("/mcp-rest/tools/list").values():
         replica = McpClient(proxy=replace(client.proxy, transport=transport))
-        granted = replica.await_tool_entry(control_key, server_id, SEARCH_LOGS_TOOL)
-        catalog = unwrap(replica.list_tools(control_key)).tool_names_for_server(server_id)
+        snapshot = replica.await_tool_catalog(control_key, server_id, SEARCH_LOGS_TOOL)
+        granted = snapshot.tool_containing(server_id, SEARCH_LOGS_TOOL)
+        assert granted is not None
+        catalog = snapshot.tool_names_for_server(server_id)
         outside = sorted(catalog - {granted.name})
         assert outside, f"uncapped upstream must expose a tool outside the grant: {catalog}"
         expected = frozenset({granted.name})

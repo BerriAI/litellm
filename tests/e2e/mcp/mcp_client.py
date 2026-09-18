@@ -278,8 +278,13 @@ class McpClient:
         return self.await_tool_entry(key, server_id, needle).name
 
     def await_tool_entry(self, key: str, server_id: str, needle: str) -> McpToolEntry:
+        tool = self.await_tool_catalog(key, server_id, needle).tool_containing(server_id, needle)
+        assert tool is not None
+        return tool
+
+    def await_tool_catalog(self, key: str, server_id: str, needle: str) -> McpToolsListResponse:
         """Poll tools/list until `server_id` serves a tool matching `needle`, and
-        return the successful tool snapshot. Fails at poll_timeout.
+        return that catalog snapshot. Fails at poll_timeout.
 
         /v1/mcp/server returns as soon as the DB row is written, but the gateway
         runs the initialize + tools/list handshake against the upstream lazily on
@@ -293,7 +298,7 @@ class McpClient:
             if isinstance(result, Success):
                 tool = result.data.tool_containing(server_id, needle)
                 if tool is not None:
-                    return tool
+                    return result.data
             if time.monotonic() >= deadline:
                 raise AssertionError(
                     f"server {server_id} never served a tool matching {needle!r} within "
