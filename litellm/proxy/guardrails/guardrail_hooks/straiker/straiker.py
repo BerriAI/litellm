@@ -424,9 +424,12 @@ def _v3_payload(
 
     Request phase: the provider body itself. Response phase: the answer beside the request
     it answers, which is how Straiker classifies a tool call the model just made. Both
-    also carry the flat `prompt` / `app_response` pair. A gateway-mode integration key
-    scores only the flat pair and an api-mode key only the relayed body; each ignores the
-    other, so one payload serves whichever key the console issued, and it is one turn.
+    also carry the flat `prompt` / `app_response` pair, because which shape Straiker scores
+    depends on the integration the key belongs to. Measured on 2026-09-18: a `custom-agent`
+    connector (what Add Agent creates) scores only the flat pair and ignores the relayed
+    body; a `gateway` connector scores either; an api-mode integration scores only the
+    relayed body. Sending both is one turn on every type, so one payload serves whichever
+    integration the console issued.
     """
     context: Final = envelope.context
     request_body: Final = _v3_request_body(request_data)
