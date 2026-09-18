@@ -224,7 +224,7 @@ mod tests {
         "mistral",
     ))]
     #[case::later_rule_when_the_earlier_does_not_apply("second", PublicFailure {
-        litellm_debug_info: Some("\nModel: ocr-model\nMessages: `None`".into()),
+        litellm_debug_info: Some("\nModel: ocr-model".into()),
         ..failure(PublicKind::ApiConnection, "seen second", "mistral")
     })]
     fn the_first_applicable_rule_decides(#[case] body: &str, #[case] expected: PublicFailure) {
@@ -324,7 +324,7 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::with_debug(true, Some("\nModel: ocr-model\nMessages: `None`"))]
+    #[case::with_debug(true, Some("\nModel: ocr-model"))]
     #[case::without_debug(false, None)]
     fn debug_rules_carry_the_extra_information(
         #[case] debug: bool,
