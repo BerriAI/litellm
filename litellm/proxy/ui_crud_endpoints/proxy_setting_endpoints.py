@@ -376,7 +376,9 @@ def _derived_ui_setting_value(key: str) -> object:
     if key == APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING:
         from litellm.proxy.proxy_server import general_settings
 
-        return _apply_user_budget_to_team_keys_enabled(cast(Mapping[str, object], general_settings))
+        return _apply_user_budget_to_team_keys_enabled(
+            cast(Mapping[str, object], general_settings)  # cast-ok: proxy_server declares general_settings as bare dict
+        )
     return None
 
 
