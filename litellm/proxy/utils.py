@@ -195,6 +195,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -8206,18 +8207,23 @@ def create_model_info_response(
         "owned_by": provider,
     }
 
-    listing_info: Final = llm_router.get_model_listing_info(model_id) if llm_router is not None else None
+    alias_target: Final = (
+        resolve_model_group_alias(llm_router.model_group_alias, model_id) if llm_router is not None else None
+    )
+    lookup_model: Final = alias_target if alias_target is not None else model_id
+
+    listing_info: Final = llm_router.get_model_listing_info(lookup_model) if llm_router is not None else None
 
     # One entry per distinct model behind the listed name; (None,) when the router knows
     # nothing about it, so the listed name is resolved on its own as before.
     deployment_models: Final[tuple[str | None, ...]] = (
         listing_info.cost_map_keys if listing_info is not None and listing_info.cost_map_keys else (None,)
     )
-    listed_info: Final = _safe_get_model_info(model_id, get_model_info)
+    listed_info: Final = _safe_get_model_info(lookup_model, get_model_info)
     candidate_sets: Final = tuple(
         _resolve_listing_model_info(
             deployment_model=deployment_model,
-            listed_model=model_id,
+            listed_model=lookup_model,
             listed_info=listed_info,
             get_model_info=get_model_info,
         )
@@ -8248,7 +8254,7 @@ def create_model_info_response(
             max_output_tokens = listing_info.max_output_tokens
 
     if llm_router is not None:
-        configured_mode: Final = llm_router.get_configured_mode(model_id)
+        configured_mode: Final = llm_router.get_configured_mode(lookup_model)
         if isinstance(configured_mode, str):
             base["mode"] = configured_mode
 
