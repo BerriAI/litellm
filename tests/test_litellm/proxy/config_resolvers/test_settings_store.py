@@ -72,14 +72,25 @@ def test_settings_store_mapping_operations_match_a_plain_dict(operation: str, in
 
 def test_settings_store_keeps_unaffected_runtime_values_on_a_db_row_refresh() -> None:
     store: Final = SettingsStore("general_settings")
-    store.load_yaml({"template": "os.environ/SETTING", "changed": "config"})
-    store.apply_runtime_values({"template": "resolved", "changed": "resolved-config"})
+    store.load_yaml({"template": "os.environ/SETTING"})
+    store.apply_runtime_values({"template": "resolved", "changed": "resolved-runtime"})
 
     store.apply_db_row("general_settings", {"changed": "database"})
 
     assert store["template"] == "resolved"
     assert store["changed"] == "database"
     assert store.source("changed") == "db"
+
+
+def test_settings_store_keeps_a_config_owned_key_when_a_db_row_disagrees() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"changed": "config"})
+    store.apply_runtime_values({"changed": "resolved-config"})
+
+    store.apply_db_row("general_settings", {"changed": "database"})
+
+    assert store["changed"] == "config"
+    assert store.source("changed") == "config"
 
 
 def test_settings_store_removes_only_runtime_values_affected_by_a_cleared_db_row() -> None:
@@ -107,9 +118,9 @@ def test_settings_store_preserves_falsy_config_values_and_provenance() -> None:
 @pytest.mark.parametrize(
     ("yaml_value", "db_value", "expected_value", "expected_source"),
     (
-        ("from-config", "from-db", "from-db", "db"),
+        ("from-config", "from-db", "from-config", "config"),
         ("from-config", None, "from-config", "config"),
-        (None, "from-db", "from-db", "db"),
+        (None, "from-db", None, "config"),
         (None, None, None, "config"),
     ),
 )
@@ -127,14 +138,46 @@ def test_settings_store_resolves_a_db_row_with_provenance(
     assert store.source("ordinary") == expected_source
 
 
-def test_settings_store_applies_the_registered_config_precedence_rule() -> None:
+def test_settings_store_gives_every_config_declared_key_to_the_config_file() -> None:
     store: Final = SettingsStore("general_settings")
     store.load_yaml({"max_file_size_mb": 7, "max_parallel_requests": 3})
     store.apply_db_row("general_settings", {"max_file_size_mb": 9, "max_parallel_requests": 11})
 
-    assert dict(store) == {"max_file_size_mb": 7, "max_parallel_requests": 11}
+    assert dict(store) == {"max_file_size_mb": 7, "max_parallel_requests": 3}
     assert store.source("max_file_size_mb") == "config"
+    assert store.source("max_parallel_requests") == "config"
+
+
+def test_settings_store_gives_a_key_the_config_file_omits_to_the_database() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"max_file_size_mb": 7})
+    store.apply_db_row("general_settings", {"max_file_size_mb": 9, "max_parallel_requests": 11})
+
+    assert dict(store) == {"max_file_size_mb": 7, "max_parallel_requests": 11}
     assert store.source("max_parallel_requests") == "db"
+
+
+def test_settings_store_refuses_a_runtime_write_to_a_config_owned_key() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"max_parallel_requests": 3})
+
+    store["max_parallel_requests"] = 11
+    del store["max_parallel_requests"]
+
+    assert store["max_parallel_requests"] == 3
+    assert store.source("max_parallel_requests") == "config"
+
+
+def test_settings_store_reports_the_config_owned_keys_a_write_would_change() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"max_parallel_requests": 3, "ui_access_mode": "admin_only"})
+
+    rejected: Final = store.rejected_writes(
+        {"max_parallel_requests": 11, "ui_access_mode": "admin_only", "global_max_parallel_requests": 5}
+    )
+
+    assert rejected == ("max_parallel_requests",)
+    assert store.config_owned_keys() == frozenset({"max_parallel_requests", "ui_access_mode"})
 
 
 def test_settings_store_resolved_view_is_read_only() -> None:

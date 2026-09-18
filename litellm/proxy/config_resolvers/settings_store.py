@@ -36,6 +36,21 @@ class SettingsStore(MutableMapping[str, JsonValue]):
     def config_value(self, key: str) -> JsonValue:
         return self._yaml_values.get(key)
 
+    def owned_by_config(self, key: str) -> bool:
+        return key in self._yaml_values
+
+    def config_owned_keys(self) -> frozenset[str]:
+        return frozenset(self._yaml_values)
+
+    def rejected_writes(self, incoming: Mapping[str, JsonValue]) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                key
+                for key, value in incoming.items()
+                if self.owned_by_config(key) and value != self._yaml_values[key]
+            )
+        )
+
     def apply_db_row(self, row: DbRow, db_row: Mapping[str, JsonValue]) -> None:
         previous_row: Final = self._database_rows.get(row, _EMPTY_VALUES)
         self._database_rows = MappingProxyType({**self._database_rows, row: MappingProxyType(dict(db_row))})
@@ -62,12 +77,16 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         return resolved.value
 
     def __setitem__(self, key: str, value: JsonValue) -> None:
+        if self.owned_by_config(key):
+            return
         self._runtime_values = MappingProxyType({**self._runtime_values, key: value})
         self._deleted_runtime_keys = self._deleted_runtime_keys - frozenset((key,))
 
     def __delitem__(self, key: str) -> None:
         if key not in self:
             raise KeyError(key)
+        if self.owned_by_config(key):
+            return
         self._runtime_values = MappingProxyType(
             {key_: value for key_, value in self._runtime_values.items() if key_ != key}
         )

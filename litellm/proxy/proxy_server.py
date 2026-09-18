@@ -5041,6 +5041,7 @@ class ProxyConfig:
             else MappingProxyType({})
         )
         changed_keys, removed_keys = changed_section_keys(baseline_section, new_section)
+        self._reject_config_owned_writes(section_name=section_name, changed_keys=changed_keys)
         if not changed_keys and not removed_keys:
             return
         wrote_section: Final = await self._upsert_changed_config_section(
@@ -5052,6 +5053,27 @@ class ProxyConfig:
         if not wrote_section:
             return
         await invalidate_config_param(section_name)
+
+    def _reject_config_owned_writes(self, *, section_name: str, changed_keys: Mapping[str, JsonValue]) -> None:
+        """Refuse a write to a setting the config file owns, rather than storing a value that never applies."""
+        store: Final = self._settings_stores.get(cast(Section, section_name))
+        if store is None:
+            return
+        rejected: Final = store.rejected_writes(changed_keys)
+        if not rejected:
+            return
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"{section_name} keys {list(rejected)} are set in the config file and cannot be changed here",
+                "keys": list(rejected),
+                "section": section_name,
+                "resolution": (
+                    f"edit {user_config_file_path} to change them, "
+                    "or remove them from it to let the database own them"
+                ),
+            },
+        )
 
     async def _upsert_changed_config_section(
         self,
@@ -17207,6 +17229,20 @@ async def update_config_general_settings(
 
     ## update db
 
+    if proxy_config.settings.owned_by_config(data.field_name):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"general_settings key '{data.field_name}' is set in the config file and cannot be changed here",
+                "keys": [data.field_name],
+                "section": "general_settings",
+                "resolution": (
+                    f"edit {user_config_file_path} to change it, "
+                    "or remove it from the file to let the database own it"
+                ),
+            },
+        )
+
     field_value = data.field_value
     if data.field_name == "plugins":
         field_value = _preserve_redacted_plugin_keys(field_value, general_settings.get("plugins"))
@@ -17412,37 +17448,32 @@ async def get_config_general_settings(
             detail={"error": f"Invalid field={field_name} passed in."},
         )
 
-    ## get general settings from db
-    db_general_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
-        where={"param_name": "general_settings"}
-    )
-    ### pop the value
-
-    if db_general_settings is None or db_general_settings.param_value is None:
+    # Answer with the value the proxy resolved, not the stored row: the config file may
+    # own this key, in which case the row holds a value that never applies.
+    settings: Final = proxy_config.settings
+    if field_name not in settings:
         raise HTTPException(
             status_code=400,
-            detail={"error": f"Field name={field_name} not in DB"},
+            detail={"error": f"Field name={field_name} is not set"},
         )
-    else:
-        general_settings = dict(db_general_settings.param_value)
 
-        if field_name in general_settings:
-            field_value = _redact_general_setting_value(
-                field_name,
-                general_settings[field_name],
-                user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
-            )
-            if field_name == "plugins" and isinstance(field_value, list):
-                field_value = [
-                    ({k: ("***" if k == "plugin_key" else v) for k, v in p.items()} if isinstance(p, dict) else p)
-                    for p in field_value
-                ]
-            return ConfigFieldInfo(field_name=field_name, field_value=field_value)
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": f"Field name={field_name} not in DB"},
-            )
+    field_value = _redact_general_setting_value(
+        field_name,
+        settings[field_name],
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+    )
+    if field_name == "plugins" and isinstance(field_value, list):
+        field_value = [
+            ({k: ("***" if k == "plugin_key" else v) for k, v in p.items()} if isinstance(p, dict) else p)
+            for p in field_value
+        ]
+    source: Final = settings.source(field_name)
+    return ConfigFieldInfo(
+        field_name=field_name,
+        field_value=field_value,
+        source=source,
+        editable=source != "config",
+    )
 
 
 GeneralSettingsUILiteLLMValue = float | bool | str | None
@@ -17675,6 +17706,7 @@ async def get_config_list(
                         _stored_in_db = True
                     elif field_name in general_settings:
                         _stored_in_db = False
+                    _source = proxy_config.settings.source(field_name)
 
                     _response_obj = ConfigList(
                         field_name=field_name,
@@ -17688,6 +17720,8 @@ async def get_config_list(
                         stored_in_db=_stored_in_db,
                         field_default_value=field_info.default,
                         nested_fields=nested_fields,
+                        source=_source,
+                        editable=_source != "config",
                     )
                     return_val.append(_response_obj)
 
@@ -17700,8 +17734,9 @@ async def get_config_list(
                 elif field_name in general_settings:
                     _stored_in_db = False
 
+                _source = proxy_config.settings.source(field_name)
                 _field_value = general_settings.get(field_name, None)
-                if _field_value is None and field_name in db_general_settings_dict:
+                if _field_value is None and _source != "config" and field_name in db_general_settings_dict:
                     _field_value = db_general_settings_dict[field_name]
 
                 _response_obj = ConfigList(
@@ -17712,6 +17747,8 @@ async def get_config_list(
                     stored_in_db=_stored_in_db,
                     field_default_value=field_info.default,
                     nested_fields=nested_fields,
+                    source=_source,
+                    editable=_source != "config",
                 )
                 return_val.append(_response_obj)
 

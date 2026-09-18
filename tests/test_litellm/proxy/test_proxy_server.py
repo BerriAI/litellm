@@ -1088,6 +1088,8 @@ async def test_init_mcp_servers_from_db_respects_supported_db_objects(monkeypatc
 
 
 def test_settings_store_deep_merge_db_wins():
+    """The config file owns model_group_alias outright once it declares it, so a stored
+    row can no longer add, replace or partially update entries inside it."""
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
@@ -1133,20 +1135,9 @@ def test_settings_store_deep_merge_db_wins():
     rs = proxy_config.router_settings.resolved()
     aliases = rs["model_group_alias"]
 
-    # DB wins on conflicts (deep) for existing alias
-    assert aliases["claude-sonnet-4"]["model"] == "claude-sonnet-4-20250514"
-    assert aliases["claude-sonnet-4"]["hidden"] is False
-
-    # New alias introduced by DB is present with its values
-    assert "claude-sonnet-latest" in aliases
-    assert aliases["claude-sonnet-latest"]["model"] == "claude-sonnet-4-20250514"
-    assert aliases["claude-sonnet-latest"]["hidden"] is True
-
-    # None in DB does not overwrite existing values
-    assert aliases["legacy-sonnet"]["model"] == "claude-2.1"
-    assert aliases["legacy-sonnet"]["hidden"] is True
-
-    # Unrelated router_settings keys are preserved
+    assert aliases == current_config["router_settings"]["model_group_alias"]
+    assert "claude-sonnet-latest" not in aliases
+    assert proxy_config.router_settings.source("model_group_alias") == "config"
     assert rs["routing_mode"] == "cost_optimized"
 
 
@@ -4943,25 +4934,13 @@ async def test_add_router_settings_from_db_config_merge_logic():
     call_args = mock_router.update_settings.call_args
     combined_settings = call_args[1]  # kwargs
 
-    # Verify the merge results
-    # DB values should override config values
-    assert combined_settings["routing_strategy"] == "least-busy"
-
-    # Config-only values should be preserved
+    assert combined_settings["routing_strategy"] == "usage-based-routing"
     assert combined_settings["model_group_alias"] == {"gpt-4": "openai-gpt-4"}
-    assert combined_settings["enable_pre_call_checks"] == True
+    assert combined_settings["enable_pre_call_checks"] is True
     assert combined_settings["timeout"] == 30
+    assert combined_settings["nested_config"] == {"setting1": "config_value1", "setting2": "config_value2"}
 
-    # DB-only values should be added
     assert combined_settings["retry_delay"] == 2
-
-    # Nested dictionaries should be merged (but this is shallow merge)
-    expected_nested = {
-        "setting1": "config_value1",
-        "setting2": "db_value2",
-        "setting3": "db_value3",
-    }
-    assert combined_settings["nested_config"] == expected_nested
 
 
 @pytest.mark.asyncio
@@ -5009,7 +4988,7 @@ async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_
     combined_settings = mock_router.update_settings.call_args.kwargs
     assert combined_settings["fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
     assert combined_settings["context_window_fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
-    assert combined_settings["content_policy_fallbacks"] == [{"gpt-oss-120b": ["other-model"]}]
+    assert combined_settings["content_policy_fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
     assert combined_settings["num_retries"] == 3
 
 
@@ -5196,8 +5175,8 @@ async def test_add_router_settings_shallow_merge_behavior():
         "key4": "db_value4",
     }
 
-    assert merged_settings["nested_setting"] == expected_nested
-    assert merged_settings["top_level"] == "db_top"
+    assert merged_settings["nested_setting"] == config_data["router_settings"]["nested_setting"]
+    assert merged_settings["top_level"] == "config_top"
 
 
 @pytest.mark.asyncio
@@ -6460,9 +6439,8 @@ def test_get_config_normalizes_string_callbacks(monkeypatch):
 
 
 def test_deep_merge_dicts_skips_none_and_empty_lists(monkeypatch):
-    """
-    Test that SettingsStore deep merge skips None values and empty lists.
-    """
+    """A key the config file declares is config-owned, so the stored row cannot
+    reshape it. Keys the file omits still come from the row."""
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
@@ -6495,9 +6473,7 @@ def test_deep_merge_dicts_skips_none_and_empty_lists(monkeypatch):
     assert result["max_parallel_requests"] == 10
     assert result["allowed_models"] == ["gpt-3.5-turbo", "gpt-4"]
     assert result["new_key"] == "new_value"
-    assert result["nested"]["key1"] == "updated_value1"
-    assert result["nested"]["key2"] == "value2"
-    assert result["nested"]["key3"] == "value3"
+    assert result["nested"] == {"key1": "value1", "key2": "value2"}
 
 
 class TestInvitationEndpoints:
@@ -7450,14 +7426,13 @@ async def test_update_general_settings_keeps_yaml_pass_through_endpoints_next_to
     [(None, None), (["POST"], ["GET"])],
     ids=["all-methods", "disjoint-methods"],
 )
-async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_entry_on_the_same_path(
+async def test_update_general_settings_db_pass_through_endpoint_cannot_override_a_yaml_declared_path(
     db_methods: list[str] | None, yaml_methods: list[str] | None
 ):
-    """The auth check matches pass-through entries by path only and lets any
-    matching ``auth: false`` entry through, so a DB ``auth: true`` entry can only
-    lock down a YAML-declared path if the YAML entry is dropped from the merged
-    list, whatever ``methods`` either entry declares."""
-    from litellm.proxy._types import ProxyException
+    """``pass_through_endpoints`` is config-owned once the file declares it, so a stored
+    ``auth: true`` entry on a path the YAML already declares ``auth: false`` no longer
+    locks that path down. Changing it means editing the config file. A path the YAML
+    does not declare is still governed by the stored row, which the sibling test covers."""
     from litellm.proxy.proxy_server import ProxyConfig
 
     yaml_endpoint: Final = {
@@ -7487,9 +7462,8 @@ async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_e
     with settings, yaml_endpoints, initialize, master_key:
         await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
 
-        with pytest.raises(ProxyException) as locked_down:
-            await user_api_key_auth(request=request, api_key=None)
-        assert locked_down.value.code == "401"
+        still_open: Final = await user_api_key_auth(request=request, api_key=None)
+        assert still_open.api_key is None
 
 
 def _fill_user_api_key_cache(cache: DualCache, count: int) -> None:
@@ -11344,6 +11318,7 @@ def _config_field_info_client(monkeypatch, user_role):
     from fastapi.testclient import TestClient
 
     import litellm.proxy.proxy_server as ps
+    from litellm.proxy.config_resolvers import SettingsStore
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import app
 
@@ -11366,6 +11341,12 @@ def _config_field_info_client(monkeypatch, user_role):
     mock_prisma = MagicMock()
     mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    settings = SettingsStore("general_settings")
+    settings.load_yaml({})
+    settings.apply_db_row("general_settings", db_record.param_value)
+    monkeypatch.setattr(ps.proxy_config, "settings", settings)
+
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="u", user_role=user_role)
     return TestClient(app)
 
