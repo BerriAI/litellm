@@ -88,14 +88,15 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
     expect(hydrated.classifier_llm_config).toBeUndefined();
     expect(hydrated.jev_classifier_config).toEqual(stored.jev_classifier_config);
     const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
-    expect(saved).toMatchObject({
+    const expectedSavedConfig = {
       classifier_type: "jev",
       jev_classifier_config: stored.jev_classifier_config,
       classifier_context_window_size: 7,
       classifier_context_budget_chars: 9000,
       classifier_context_include_assistant_turns: true,
       some_future_backend_key: { nested: true },
-    });
+    };
+    expect(saved).toMatchObject(expectedSavedConfig);
     expect(saved).not.toHaveProperty("classifier_llm_config");
     const reloaded = hydrateComplexityRouterConfig(saved, undefined);
     expect(reloaded.jev_classifier_config).toEqual(hydrated.jev_classifier_config);

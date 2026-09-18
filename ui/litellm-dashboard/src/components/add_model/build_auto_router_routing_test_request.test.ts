@@ -29,6 +29,13 @@ describe("buildAutoRouterRoutingTestRequest", () => {
       fallback_tier: "DEEP",
       classifier_context_window_size: 4,
     };
+    const expectedRequest = {
+      prompt: JEV_CONNECTION_TEST_PROMPT,
+      complexity_router_config: config,
+      default_model: "strong",
+      router_name: "saved-router",
+      team_id: "team-1",
+    };
     expect(
       buildSavedJevConnectionTestRequest(
         format === "json" ? JSON.stringify(config) : config,
@@ -36,13 +43,7 @@ describe("buildAutoRouterRoutingTestRequest", () => {
         "saved-router",
         "team-1",
       ),
-    ).toEqual({
-      prompt: JEV_CONNECTION_TEST_PROMPT,
-      complexity_router_config: config,
-      default_model: "strong",
-      router_name: "saved-router",
-      team_id: "team-1",
-    });
+    ).toEqual(expectedRequest);
   });
   it.each([undefined, null, "not json", "[]", {}, { classifier_type: "llm", tiers: {} }, { classifier_type: "jev" }])(
     "does not build a JEV probe for invalid or other classifier configurations: %j",

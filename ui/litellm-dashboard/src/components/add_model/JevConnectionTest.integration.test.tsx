@@ -7,14 +7,14 @@ import {
   buildSavedJevConnectionTestRequest,
   JEV_CONNECTION_TEST_PROMPT,
 } from "./build_auto_router_routing_test_request";
-import { buildComplexityRouterConfig } from "./build_complexity_router_config";
+import { buildComplexityRouterConfig, type BuildComplexityRouterConfigParams } from "./build_complexity_router_config";
 
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
 );
 
-const config = buildComplexityRouterConfig({
+const configParams: BuildComplexityRouterConfigParams = {
   classifierType: "jev",
   jevClassifierConfig: { model: "jev-latest", timeout_ms: 3000 },
   tiers: { SIMPLE: ["fast"], MEDIUM: ["mid"], COMPLEX: ["strong"], REASONING: ["reasoner"] },
@@ -43,7 +43,8 @@ const config = buildComplexityRouterConfig({
   tierDistancePenalty: 0.5,
   adaptiveEligible: "all",
   returnRawModelName: false,
-});
+};
+const config = buildComplexityRouterConfig(configParams);
 const request = buildSavedJevConnectionTestRequest(JSON.stringify(config), "fast", "my-router");
 const targets = buildAutoRouterTestTargets({
   tiers: Object.entries(config.tiers),
@@ -92,12 +93,13 @@ describe("JEV network probes", () => {
         }),
       );
       const routingCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/auto_router/test_routing"));
-      expect(JSON.parse(String(routingCall?.[1]?.body))).toEqual({
+      const expectedRequest = {
         prompt: JEV_CONNECTION_TEST_PROMPT,
         complexity_router_config: config,
         default_model: "fast",
         router_name: "my-router",
-      });
+      };
+      expect(JSON.parse(String(routingCall?.[1]?.body))).toEqual(expectedRequest);
       expect(fetchMock).toHaveBeenCalledTimes(5);
       expect(screen.getAllByTestId("test-status-success")).toHaveLength(4);
       expect(screen.getByRole("status", { name: "JEV connection" })).toHaveTextContent(

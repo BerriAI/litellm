@@ -25,7 +25,7 @@ describe("transitionClassifierType", () => {
       adaptive: true,
     };
     const jev = transitionClassifierType(initial, "jev");
-    expect(jev).toMatchObject({
+    const expectedJevConfig = {
       classifier_type: "jev",
       jev_classifier_config: { model: "jev-latest", timeout_ms: 3000 },
       classifier_context_window_size: 8,
@@ -36,7 +36,8 @@ describe("transitionClassifierType", () => {
       enable_non_reasoning_tier: true,
       plan_mode_min_tier: "NON_REASONING",
       tiers: initial.tiers,
-    });
+    };
+    expect(jev).toMatchObject(expectedJevConfig);
     expect(jev.classifier_llm_config).toBeUndefined();
     expect(jev.classification_prompt).toBeUndefined();
     expect(jev.classification_examples).toBeUndefined();

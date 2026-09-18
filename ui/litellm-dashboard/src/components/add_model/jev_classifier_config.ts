@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const jevClassifierConfigSchema = z.object({
+const jevClassifierConfigFields = {
   model: z.string().trim().min(1).default("jev-latest"),
   timeout_ms: z.number().int().positive().default(3000),
   instructions: z
@@ -9,7 +9,9 @@ export const jevClassifierConfigSchema = z.object({
     .transform((value) => value ?? undefined),
   circuit_breaker_enabled: z.boolean().optional(),
   circuit_breaker_cooldown_seconds: z.number().finite().positive().optional(),
-});
+};
+
+export const jevClassifierConfigSchema = z.object(jevClassifierConfigFields);
 
 export type JevClassifierConfig = z.infer<typeof jevClassifierConfigSchema>;
 
