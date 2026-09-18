@@ -3563,3 +3563,12 @@ class TestDeleteAllowedIpClearsTheKeyWhenTheListEmpties:
 
         assert saved["config"]["general_settings"]["allowed_ips"] == ["198.51.100.1"]
         assert general_settings["allowed_ips"] == ["198.51.100.1"]
+
+    def test_removing_an_ip_that_was_never_added_is_rejected(self, monkeypatch):
+        general_settings, saved = self._harness(monkeypatch, ["203.0.113.77"])
+
+        resp = self._delete("198.51.100.99")
+
+        assert resp.status_code == 404
+        assert general_settings["allowed_ips"] == ["203.0.113.77"]
+        assert "config" not in saved
