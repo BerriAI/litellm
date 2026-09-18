@@ -172,11 +172,15 @@ class TestNormalizeReasoningEffortValue:
         ],
     )
     def test_unknown_effort_metadata_keeps_the_requested_tier(self, model_info, effort):
-        with patch("litellm.utils.get_model_info", return_value=model_info):
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
+            "litellm.utils.get_model_info", return_value=model_info
+        ):
             assert normalize_reasoning_effort_value(effort, "custom-registered-model", "anthropic") == effort
 
     def test_explicit_non_reasoning_still_degrades_to_the_chain_floor(self):
-        with patch("litellm.utils.get_model_info", return_value={"supports_reasoning": False}):
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
+            "litellm.utils.get_model_info", return_value={"supports_reasoning": False}
+        ):
             assert normalize_reasoning_effort_value("max", "custom-registered-model", "anthropic") == "high"
 
 

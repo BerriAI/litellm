@@ -29,9 +29,7 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
         ("max", "max"),
     ],
 )
-def test_reasoning_effort_maps_to_output_config_for_adaptive_model(
-    reasoning_effort, expected_effort
-):
+def test_reasoning_effort_maps_to_output_config_for_adaptive_model(reasoning_effort, expected_effort):
     config = AnthropicMessagesConfig()
     optional_params = {"max_tokens": 1024, "reasoning_effort": reasoning_effort}
 
@@ -139,9 +137,7 @@ def test_reasoning_effort_unsupported_tier_degrades_on_messages(model, requested
         ("invoke/us.anthropic.claude-opus-4-7", "xhigh", "xhigh"),
     ],
 )
-def test_bedrock_invoke_messages_clamps_effort_to_ceiling(
-    local_model_cost_map, model, effort, expected_effort
-):
+def test_bedrock_invoke_messages_clamps_effort_to_ceiling(local_model_cost_map, model, effort, expected_effort):
     """Bedrock Invoke /v1/messages degrades effort to the model's ceiling.
 
     Claude Code "goal mode" sends ``xhigh``; Opus 4.6 must clamp to ``max``
@@ -184,9 +180,7 @@ def test_bedrock_invoke_messages_degrades_xhigh_without_ceiling(local_model_cost
         "bedrock/invoke/us.anthropic.claude-sonnet-4-6",
     ],
 )
-def test_reasoning_effort_max_accepted_on_sonnet_46_messages(
-    local_model_cost_map, model
-):
+def test_reasoning_effort_max_accepted_on_sonnet_46_messages(local_model_cost_map, model):
     config = AnthropicMessagesConfig()
     optional_params = {"max_tokens": 1024, "reasoning_effort": "max"}
 
@@ -204,19 +198,17 @@ def test_reasoning_effort_max_accepted_on_sonnet_46_messages(
 
 def test_conflicting_unsupported_output_config_effort_is_not_forwarded():
     with (
-        patch(
+        patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.llms.anthropic.common_utils.AnthropicModelInfo._is_adaptive_thinking_model",
             return_value=True,
         ),
-        patch(
+        patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.llms.anthropic.chat.transformation.AnthropicConfig._validate_effort_for_model",
             side_effect=lambda model, effort, provider: (
-                None
-                if effort == "high"
-                else f"effort={effort!r} is not supported by this model. Got model: {model}"
+                None if effort == "high" else f"effort={effort!r} is not supported by this model. Got model: {model}"
             ),
         ),
-        patch(
+        patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.utils.get_model_info",
             return_value={
                 "supports_reasoning": True,
@@ -281,9 +273,7 @@ def test_explicit_thinking_wins_over_reasoning_effort():
 
 def test_reasoning_effort_in_supported_params():
     config = AnthropicMessagesConfig()
-    assert "reasoning_effort" in config.get_supported_anthropic_messages_params(
-        "claude-opus-4-7"
-    )
+    assert "reasoning_effort" in config.get_supported_anthropic_messages_params("claude-opus-4-7")
 
 
 @pytest.mark.parametrize(
@@ -352,9 +342,7 @@ def test_legacy_thinking_high_budget_keeps_xhigh_when_supported():
         "bedrock/invoke/us.anthropic.claude-opus-4-8",
     ],
 )
-def test_legacy_thinking_translates_to_adaptive_for_opus_48(
-    model, local_model_cost_map
-):
+def test_legacy_thinking_translates_to_adaptive_for_opus_48(model, local_model_cost_map):
     """Regression for issue #29188: Opus 4.8 requires adaptive thinking, but the
     legacy ``thinking.type='enabled'`` shape was passed through unchanged for
     Bedrock 4.8 (its cost-map entry lacked ``supports_adaptive_thinking`` and the
@@ -386,9 +374,7 @@ def test_legacy_thinking_translates_to_adaptive_for_opus_48(
         ("claude-newfamily-6", "high"),
     ],
 )
-def test_legacy_thinking_translates_to_adaptive_for_5_and_future_models(
-    local_model_cost_map, model, expected_effort
-):
+def test_legacy_thinking_translates_to_adaptive_for_5_and_future_models(local_model_cost_map, model, expected_effort):
     """The 5 families reject ``thinking.type=enabled``, so the adaptive translation
     stays the safe default for every adaptive model not flagged
     ``supports_legacy_thinking``, unmapped future ids included. An unmapped id
@@ -423,9 +409,7 @@ def test_legacy_thinking_translates_to_adaptive_for_5_and_future_models(
         (1, "low"),
     ],
 )
-def test_legacy_thinking_budget_buckets_on_opus_48(
-    local_model_cost_map, budget_tokens, expected_effort
-):
+def test_legacy_thinking_budget_buckets_on_opus_48(local_model_cost_map, budget_tokens, expected_effort):
     config = AnthropicMessagesConfig()
     optional_params = {
         "max_tokens": 1024,
@@ -512,9 +496,7 @@ def test_legacy_thinking_left_untouched_on_non_adaptive_model():
         ("claude-sonnet-4-5", False),
     ],
 )
-def test_disabled_thinking_omitted_for_always_on_models_messages(
-    local_model_cost_map, model, expected_dropped
-):
+def test_disabled_thinking_omitted_for_always_on_models_messages(local_model_cost_map, model, expected_dropped):
     """/v1/messages: ``thinking={"type": "disabled"}`` is omitted for always-on-thinking
     models and forwarded verbatim for models that accept it."""
     config = AnthropicMessagesConfig()
@@ -540,11 +522,11 @@ def _mock_model_info(**flags):
 
 def test_xhigh_degrades_to_high_for_non_adaptive_model():
     with (
-        patch(
+        patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.llms.anthropic.common_utils.AnthropicModelInfo._is_adaptive_thinking_model",
             return_value=False,
         ),
-        patch(
+        patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.utils.get_model_info",
             return_value=_mock_model_info(
                 supports_reasoning=True,
@@ -566,11 +548,11 @@ def test_xhigh_degrades_to_high_for_non_adaptive_model():
 
 def test_max_degrades_to_high_for_non_adaptive_model():
     with (
-        patch(
+        patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.llms.anthropic.common_utils.AnthropicModelInfo._is_adaptive_thinking_model",
             return_value=False,
         ),
-        patch(
+        patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.utils.get_model_info",
             return_value=_mock_model_info(
                 supports_reasoning=True,

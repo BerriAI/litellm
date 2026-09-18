@@ -93,7 +93,7 @@ def _mock_model_info(**flags):
 
 class TestMapReasoningEffortDegradation:
     def test_max_stays_max_when_supported(self):
-        with patch(
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.utils.get_model_info",
             return_value=_mock_model_info(
                 supports_reasoning=True,
@@ -110,7 +110,7 @@ class TestMapReasoningEffortDegradation:
             assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET
 
     def test_max_degrades_to_xhigh_when_only_xhigh_supported(self):
-        with patch(
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.utils.get_model_info",
             return_value=_mock_model_info(
                 supports_reasoning=True,
@@ -126,7 +126,7 @@ class TestMapReasoningEffortDegradation:
             assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET
 
     def test_max_degrades_to_high_when_neither_max_nor_xhigh_supported(self):
-        with patch(
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.utils.get_model_info",
             return_value=_mock_model_info(
                 supports_reasoning=True,
@@ -142,7 +142,7 @@ class TestMapReasoningEffortDegradation:
             assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
 
     def test_max_passthrough_for_unknown_model(self):
-        with patch(
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.utils.get_model_info",
             side_effect=Exception("model not found"),
         ):
@@ -154,7 +154,7 @@ class TestMapReasoningEffortDegradation:
             assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET
 
     def test_xhigh_stays_xhigh_when_supported(self):
-        with patch(
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.utils.get_model_info",
             return_value=_mock_model_info(
                 supports_reasoning=True,
@@ -169,7 +169,7 @@ class TestMapReasoningEffortDegradation:
             assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET
 
     def test_xhigh_degrades_to_high_when_unsupported(self):
-        with patch(
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.utils.get_model_info",
             return_value=_mock_model_info(
                 supports_reasoning=True,
@@ -184,7 +184,7 @@ class TestMapReasoningEffortDegradation:
             assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
 
     def test_xhigh_passthrough_for_unknown_model(self):
-        with patch(
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.utils.get_model_info",
             side_effect=Exception("model not found"),
         ):
@@ -196,7 +196,7 @@ class TestMapReasoningEffortDegradation:
             assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET
 
     def test_minimal_stays_minimal_when_supported(self):
-        with patch(
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.utils.get_model_info",
             return_value=_mock_model_info(
                 supports_reasoning=True,
@@ -211,7 +211,7 @@ class TestMapReasoningEffortDegradation:
             assert result["budget_tokens"] == max(DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET, 1024)
 
     def test_minimal_degrades_to_low_when_unsupported(self):
-        with patch(
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.utils.get_model_info",
             return_value=_mock_model_info(
                 supports_reasoning=True,
@@ -226,7 +226,7 @@ class TestMapReasoningEffortDegradation:
             assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
 
     def test_high_unchanged(self):
-        with patch(
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.utils.get_model_info",
             side_effect=Exception("model not found"),
         ):
@@ -238,7 +238,7 @@ class TestMapReasoningEffortDegradation:
             assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
 
     def test_medium_unchanged(self):
-        with patch(
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.utils.get_model_info",
             side_effect=Exception("model not found"),
         ):
@@ -250,7 +250,7 @@ class TestMapReasoningEffortDegradation:
             assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
 
     def test_low_unchanged(self):
-        with patch(
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.utils.get_model_info",
             side_effect=Exception("model not found"),
         ):
@@ -278,7 +278,7 @@ class TestMapReasoningEffortDegradation:
         assert result is None
 
     def test_adaptive_model_short_circuits_before_degradation(self):
-        with patch(
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.llms.anthropic.chat.transformation.AnthropicConfig._is_adaptive_thinking_model",
             return_value=True,
         ):
@@ -293,15 +293,15 @@ class TestMapReasoningEffortDegradation:
 class TestApplyOutputConfigDegradation:
     def test_max_degrades_to_high_when_unsupported(self):
         with (
-            patch(
+            patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
                 "litellm.llms.anthropic.chat.transformation.AnthropicConfig._validate_effort_for_model",
                 return_value="effort='max' is not supported by this model. Got model: test",
             ),
-            patch(
+            patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
                 "litellm.llms.anthropic.chat.transformation.AnthropicConfig._is_adaptive_thinking_model",
                 return_value=True,
             ),
-            patch(
+            patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
                 "litellm.utils.get_model_info",
                 return_value=_mock_model_info(
                     supports_reasoning=True,
@@ -318,15 +318,15 @@ class TestApplyOutputConfigDegradation:
 
     def test_xhigh_degrades_to_high_when_unsupported(self):
         with (
-            patch(
+            patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
                 "litellm.llms.anthropic.chat.transformation.AnthropicConfig._validate_effort_for_model",
                 return_value="effort='xhigh' is not supported by this model. Got model: test",
             ),
-            patch(
+            patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
                 "litellm.llms.anthropic.chat.transformation.AnthropicConfig._is_adaptive_thinking_model",
                 return_value=True,
             ),
-            patch(
+            patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
                 "litellm.utils.get_model_info",
                 return_value=_mock_model_info(
                     supports_reasoning=True,
@@ -341,7 +341,7 @@ class TestApplyOutputConfigDegradation:
             assert data["output_config"]["effort"] == "high"
 
     def test_max_stays_max_when_supported(self):
-        with patch(
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.llms.anthropic.chat.transformation.AnthropicConfig._validate_effort_for_model",
             return_value=None,
         ):
@@ -358,7 +358,7 @@ class TestApplyOutputConfigDegradation:
         assert "output_config" not in data
 
     def test_invalid_effort_value_still_raises(self):
-        with patch(
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
             "litellm.llms.anthropic.chat.transformation.AnthropicConfig._is_adaptive_thinking_model",
             return_value=True,
         ):
