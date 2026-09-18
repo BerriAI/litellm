@@ -482,8 +482,8 @@ class TestUsageAiChatCompletionRouting:
         mock_acompletion = AsyncMock(return_value=self._plain_content_response())
 
         with (
-            patch("litellm.proxy.proxy_server.llm_router", None),
-            patch(
+            patch("litellm.proxy.proxy_server.llm_router", None),  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
+            patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
                 new=mock_acompletion,
             ),
@@ -513,8 +513,8 @@ class TestUsageAiChatCompletionRouting:
         mock_acompletion = AsyncMock(return_value=self._plain_content_response())
 
         with (
-            patch("litellm.proxy.proxy_server.llm_router", mock_router),
-            patch(
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
+            patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
                 new=mock_acompletion,
             ),
@@ -544,8 +544,8 @@ class TestUsageAiChatCompletionRouting:
         mock_acompletion = AsyncMock(return_value=self._plain_content_response())
 
         with (
-            patch("litellm.proxy.proxy_server.llm_router", mock_router),
-            patch(
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
+            patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
                 new=mock_acompletion,
             ),
