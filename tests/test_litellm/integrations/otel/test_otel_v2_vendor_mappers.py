@@ -18,6 +18,7 @@ from litellm.integrations.otel.mappers import (
     WeaveMapper,
     resolve_mappers,
 )
+from litellm.integrations.otel.model.trace_controls import TraceControls
 from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
     LLMRequestParams,
@@ -135,8 +136,35 @@ def test_langfuse_mapper_observation_attrs():
 
 
 def test_langfuse_mapper_names_the_trace_from_the_caller():
-    assert LangfuseMapper().map(_llm_call(trace_name="nightly-eval"))["langfuse.trace.name"] == "nightly-eval"
-    assert "langfuse.trace.name" not in LangfuseMapper().map(_llm_call(trace_name=None))
+    named = LangfuseMapper().map(_llm_call(trace=TraceControls(name="nightly-eval")))
+    assert named["langfuse.trace.name"] == "nightly-eval"
+    assert "langfuse.trace.name" not in LangfuseMapper().map(_llm_call(trace=TraceControls()))
+
+
+def test_langfuse_mapper_carries_the_caller_user_session_and_tags():
+    controls = TraceControls(user_id="u-42", session_id="s-7", tags=("prod", "eval", "nightly"))
+    attrs = LangfuseMapper().map(_llm_call(trace=controls))
+
+    assert attrs["user.id"] == "u-42"
+    assert attrs["session.id"] == "s-7"
+    assert attrs["langfuse.trace.tags"] == ("prod", "eval", "nightly")
+    assert attrs["langfuse.trace.metadata.team_id"] == "t1"
+    assert attrs["langfuse.trace.metadata.team_alias"] == "team one"
+
+
+def test_langfuse_mapper_omits_unset_trace_controls():
+    attrs = LangfuseMapper().map(_llm_call(trace=TraceControls(user_id="", session_id=None, tags=())))
+
+    assert {"user.id", "session.id", "langfuse.trace.tags", "langfuse.trace.name"}.isdisjoint(attrs)
+
+
+def test_langfuse_trace_attributes_match_between_root_and_generation():
+    controls = TraceControls(name="n", user_id="u", session_id="s", tags=("t",))
+    generation = LangfuseMapper().map(_llm_call(trace=controls))
+
+    root = LangfuseMapper.trace_attributes(controls)
+    assert root == {"langfuse.trace.name": "n", "user.id": "u", "session.id": "s", "langfuse.trace.tags": ("t",)}
+    assert all(generation[key] == value for key, value in root.items())
 
 
 def test_langfuse_mapper_skips_when_no_messages():

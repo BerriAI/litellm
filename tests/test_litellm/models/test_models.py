@@ -2,7 +2,7 @@
 Tests for backend domain models.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from pydantic import BaseModel, TypeAdapter
@@ -70,6 +70,34 @@ class TestBudget:
         assert budget.budget_id is None
         assert budget.max_budget is None
         assert budget.allowed_models is None
+
+    def test_effective_max_budget_applies_unexpired_increase(self):
+        budget = LiteLLM_BudgetTable(
+            max_budget=100.0,
+            temp_budget_increase=50.0,
+            temp_budget_expiry=datetime(2100, 1, 1),
+        )
+        assert budget.effective_max_budget(now=datetime(2026, 1, 1, tzinfo=timezone.utc)) == 150.0
+
+    def test_effective_max_budget_ignores_expired_increase(self):
+        expiry = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        budget = LiteLLM_BudgetTable(max_budget=100.0, temp_budget_increase=50.0, temp_budget_expiry=expiry)
+        assert budget.effective_max_budget(now=datetime(2026, 1, 1, tzinfo=timezone.utc)) == 100.0
+        assert budget.effective_max_budget(now=expiry) == 100.0
+
+    def test_effective_max_budget_without_increase(self):
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        assert LiteLLM_BudgetTable(max_budget=100.0).effective_max_budget(now=now) == 100.0
+        assert LiteLLM_BudgetTable(max_budget=None, temp_budget_increase=50.0).effective_max_budget(now=now) is None
+
+    def test_active_temp_budget_increase_is_independent_of_max_budget(self):
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        bare = LiteLLM_BudgetTable(max_budget=None, temp_budget_increase=50.0, temp_budget_expiry=datetime(2100, 1, 1))
+        assert bare.active_temp_budget_increase(now=now) == 50.0
+        assert bare.effective_max_budget(now=now) is None
+        expired = LiteLLM_BudgetTable(max_budget=None, temp_budget_increase=50.0, temp_budget_expiry=now)
+        assert expired.active_temp_budget_increase(now=now) == 0.0
+        assert LiteLLM_BudgetTable(max_budget=None).active_temp_budget_increase(now=now) == 0.0
 
 
 class TestCredentials:
@@ -361,6 +389,14 @@ class TestVerificationToken:
         assert deleted.deleted_by == "admin"
         assert deleted.deleted_at is not None
         assert deleted.token == "t1"
+
+    def test_total_spend_is_carried_separately_from_resettable_spend(self):
+        token = LiteLLM_VerificationToken(token="t1", spend=0.0, total_spend=12.5)
+        assert token.model_dump()["total_spend"] == 12.5
+        assert token.model_dump()["spend"] == 0.0
+
+        deleted = LiteLLM_DeletedVerificationToken.model_validate({**token.model_dump(), "deleted_by": "admin"})
+        assert deleted.total_spend == 12.5
 
 
 class TestConfigTable:

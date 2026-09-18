@@ -87,6 +87,29 @@ CI = [".github/workflows/test-litellm-ui-unit.yml"]
         ("backend", BACKEND + CLIENT, "run"),
         ("client", BACKEND + CLIENT, "run"),
         ("ui", BACKEND + CLIENT, "run"),
+        ("cost-map-only", ["model_prices_and_context_window.json"], "run"),
+        ("cost-map-only", ["litellm/model_prices_and_context_window_backup.json"], "run"),
+        ("cost-map-only", ["model_prices_and_context_window.schema.json"], "run"),
+        (
+            "cost-map-only",
+            ["model_prices_and_context_window.json", "tests/test_litellm/test_x.py"],
+            "run",
+        ),
+        (
+            "cost-map-only",
+            ["model_prices_and_context_window.json", "tests/proxy_unit_tests/test_y.py"],
+            "run",
+        ),
+        (
+            "cost-map-only",
+            ["model_prices_and_context_window.json", "litellm/utils.py"],
+            "skip",
+        ),
+        ("cost-map-only", ["tests/test_litellm/test_x.py"], "skip"),
+        ("cost-map-only", ["model_prices_and_context_window.json", "docs/pricing.md"], "skip"),
+        ("cost-map-only", ["model_prices_and_context_window.json", "docs/foo.mdx"], "skip"),
+        ("cost-map-only", [], "skip"),
+        ("cost-map-only", DOCS, "skip"),
     ],
 )
 def test_classify_decisions(category: str, changed: list[str], expected: str) -> None:

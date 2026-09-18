@@ -22,6 +22,8 @@ model LiteLLM_BudgetTable {
   budget_duration String?
   budget_reset_at DateTime?
   allowed_models String[] @default([]) // per-member model scope; empty = inherit team models
+  temp_budget_increase Float?
+  temp_budget_expiry DateTime?
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -426,6 +428,7 @@ model LiteLLM_VerificationToken {
     key_alias   String?
     soft_budget_cooldown Boolean @default(false) // key-level state on if budget alerts need to be cooled down
     spend      Float    @default(0.0)
+    total_spend Float   @default(0.0)
     expires    DateTime?
     models     String[]
     aliases    Json  @default("{}")
@@ -528,6 +531,7 @@ model LiteLLM_DeletedVerificationToken {
     key_alias               String?
     soft_budget_cooldown    Boolean  @default(false)
     spend                   Float    @default(0.0)
+    total_spend             Float    @default(0.0)
     expires                 DateTime?
     models                  String[]
     aliases                 Json     @default("{}")
@@ -676,6 +680,7 @@ model LiteLLM_SpendLogs {
   @@index([end_user])
   @@index([session_id])
   @@index([litellm_call_id])
+  @@index([api_key, startTime])
 }
 
 model LiteLLM_BudgetWindowSpend {
@@ -1376,6 +1381,7 @@ model LiteLLM_PolicyAttachmentTable {
   keys             String[]  @default([])  // Key aliases or patterns
   models           String[]  @default([])  // Model names or patterns
   tags             String[]  @default([])  // Tag patterns (e.g., ["healthcare", "prod-*"])
+  priority         Int?                    // Explicit execution order
   created_at       DateTime  @default(now())
   created_by       String?
   updated_at       DateTime  @default(now()) @updatedAt
