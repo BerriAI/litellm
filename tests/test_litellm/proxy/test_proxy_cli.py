@@ -2892,3 +2892,76 @@ class TestLibpqSslParamTranslation:
         assert query["sslmode"] == ["require"]
         assert query["sslcert"] == ["/certs/rds-bundle.pem"]
         assert query["sslaccept"] == ["strict"]
+
+
+@pytest.mark.xdist_group("proxy_cli")
+class TestValidateConfigFlag:
+    def test_validate_config_valid_config_exits_zero(self, tmp_path, monkeypatch):
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "model_list": [
+                        {
+                            "model_name": "gpt-4o",
+                            "litellm_params": {
+                                "model": "openai/gpt-4o",
+                                "api_key": "sk-fake",
+                            },
+                        }
+                    ]
+                }
+            )
+        )
+
+        result = CliRunner().invoke(
+            run_server, ["--config", str(config_path), "--validate_config"]
+        )
+
+        assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+        assert "config OK" in result.output
+
+    def test_validate_config_invalid_mcp_server_exits_one(self, tmp_path, monkeypatch):
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "mcp_servers": {
+                        "zapier": {
+                            "url": "https://example.com/mcp",
+                            "transport": "http",
+                            "per_server_oauth_discovery": "yes",
+                        }
+                    }
+                }
+            )
+        )
+
+        result = CliRunner().invoke(
+            run_server, ["--config", str(config_path), "--validate_config"]
+        )
+
+        assert result.exit_code == 1, f"exit_code={result.exit_code}, output={result.output}"
+        assert "per_server_oauth_discovery must be a boolean" in result.output
+
+    def test_validate_config_without_config_is_usage_error(self, monkeypatch):
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        result = CliRunner().invoke(run_server, ["--validate_config"])
+
+        assert result.exit_code != 0
+        assert "--validate_config requires --config" in result.output

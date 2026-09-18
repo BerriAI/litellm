@@ -196,6 +196,25 @@ class ProxyInitializationHelpers:
         print(json.dumps(response.json(), indent=4))
 
     @staticmethod
+    def _run_config_validation(config: str | None) -> None:
+        if config is None:
+            raise click.UsageError("--validate_config requires --config <path>")
+        import asyncio
+
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        async def _load() -> int:
+            _, model_list, _ = await ProxyConfig().load_config(router=None, config_file_path=config)
+            return len(model_list)
+
+        try:
+            model_count: Final = asyncio.run(_load())
+        except Exception as error:
+            click.echo(f"LiteLLM: config validation failed: {error}", err=True)
+            raise click.exceptions.Exit(1) from error
+        click.echo(f"LiteLLM: config OK ({model_count} models)")
+
+    @staticmethod
     def _run_test_chat_completion(
         host: str,
         port: int,
@@ -866,6 +885,12 @@ class ProxyInitializationHelpers:
     help="Skip starting the server after setup (useful for migrations only)",
 )
 @click.option(
+    "--validate_config",
+    is_flag=True,
+    default=False,
+    help="Load and validate the config file (including mcp_servers) without starting the server, then exit. Exit code 1 on any config error.",
+)
+@click.option(
     "--keepalive_timeout",
     default=None,
     type=int,
@@ -994,6 +1019,7 @@ def run_server(
     log_config,
     use_prisma_db_push: bool,
     skip_server_startup,
+    validate_config: bool,
     keepalive_timeout,
     timeout_worker_healthcheck,
     max_requests_before_restart,
@@ -1062,6 +1088,9 @@ def run_server(
         return
     if test is True:
         ProxyInitializationHelpers._run_test_chat_completion(host, port, model, test)
+        return
+    if validate_config is True:
+        ProxyInitializationHelpers._run_config_validation(config)
         return
     else:
         if headers:
