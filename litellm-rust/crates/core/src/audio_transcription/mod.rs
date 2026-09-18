@@ -1,13 +1,14 @@
 mod error;
+pub mod types;
 pub use error::Error;
 mod client;
 mod handler;
 mod prepare;
 pub use handler::execute_audio_transcription_provider_call;
-pub use litellm_providers::audio_transcription::types;
 pub use prepare::prepare_audio_transcription_provider_call;
 use serde_json::Value;
-pub use types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
+
+use crate::audio_transcription::types::AudioTranscriptionRequest;
 
 pub async fn audio_transcription(request: AudioTranscriptionRequest<'_>) -> Result<Value, Error> {
     execute_audio_transcription_provider_call(prepare_audio_transcription_provider_call(request)?)
