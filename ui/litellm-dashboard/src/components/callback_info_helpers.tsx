@@ -124,6 +124,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       langfuse_secret_key: "password",
       langfuse_host: "text",
       langfuse_environment: "text",
+      langfuse_span_scope: "select",
     },
     description: "Langfuse v3 OTEL Logging Integration",
   },

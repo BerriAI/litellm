@@ -12,6 +12,7 @@ from litellm.integrations.otel.model.baggage import (
     DEFAULT_BAGGAGE_METADATA_KEYS,
     DEFAULT_BAGGAGE_TEAM_METADATA_KEYS,
 )
+from litellm.types.utils import OtelSpanScope
 
 #: Master feature-flag env var. The logger is inert until this is truthy.
 OTEL_V2_ENV: Final = "LITELLM_OTEL_V2"
@@ -163,6 +164,15 @@ class OpenTelemetryV2Config(BaseSettings):
         validation_alias=AliasChoices("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"),
     )
     legacy_compat: bool = Field(default=True, validation_alias=AliasChoices("LITELLM_OTEL_LEGACY_COMPAT"))
+    langfuse_span_scope: OtelSpanScope = Field(
+        default="full",
+        validation_alias=AliasChoices("langfuse_span_scope", "LITELLM_OTEL_LANGFUSE_SPAN_SCOPE"),
+        description=(
+            "``llm_only`` keeps just the model-call spans on the operator's own Langfuse "
+            "exporter (the spec whose owner is ``langfuse_otel``). Other exporters and "
+            "key/team destinations are not affected."
+        ),
+    )
 
     # ----- explicit multi-destination / vocabulary configuration ------------ #
 
