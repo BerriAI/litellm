@@ -218,7 +218,9 @@ _OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "resp
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call_output": "output", "message": "content"}
 )
-_ITEM_TYPE_ROLES: Final[Mapping[str, str]] = MappingProxyType({"function_call_output": "tool", "function_call": "assistant"})
+_ITEM_TYPE_ROLES: Final[Mapping[str, str]] = MappingProxyType(
+    {"function_call_output": "tool", "function_call": "assistant"}
+)
 
 _EMPTY_RESPONSES_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {}
 
