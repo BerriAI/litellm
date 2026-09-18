@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel
@@ -66,8 +65,10 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) ->
     return _callback
 
 
-guardrail_initializer_registry: Final = MappingProxyType(
-    {SupportedGuardrailIntegrations.TYPESAFE.value: initialize_guardrail}
-)
+guardrail_initializer_registry: Final = {  # mutable-ok: guardrail_registry discovery checks isinstance(registry, dict)
+    SupportedGuardrailIntegrations.TYPESAFE.value: initialize_guardrail,
+}
 
-guardrail_class_registry: Final = MappingProxyType({SupportedGuardrailIntegrations.TYPESAFE.value: TypeSafeGuardrail})
+guardrail_class_registry: Final = {  # mutable-ok: guardrail_registry discovery checks isinstance(registry, dict)
+    SupportedGuardrailIntegrations.TYPESAFE.value: TypeSafeGuardrail,
+}
