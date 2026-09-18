@@ -844,6 +844,13 @@ def _is_streaming_response_for_correlation(result: object) -> bool:
     return isinstance(result, CustomStreamWrapper)
 
 
+def _is_converted_stream_result(result: object) -> bool:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    return isinstance(result, (CustomStreamWrapper, BaseResponsesAPIStreamingIterator))
+
+
 # Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
 def function_setup(
     original_function: str,
@@ -1882,6 +1889,9 @@ def client(original_function):
                     _caching_handler_response.cached_result is not None
                     and _caching_handler_response.final_embedding_cached_response is None
                 ):
+                    if _is_converted_stream_result(_caching_handler_response.cached_result):
+                        logging_obj.stream = True
+                        logging_obj.model_call_details["stream"] = True
                     return _caching_handler_response.cached_result
 
                 elif _caching_handler_response.embedding_all_elements_cache_hit is True:
@@ -1939,10 +1949,9 @@ def client(original_function):
                 raise
             end_time = datetime.datetime.now()
 
-            if _is_streaming_request(
-                kwargs=kwargs,
-                call_type=call_type,
-            ):
+            if _is_streaming_request(kwargs=kwargs, call_type=call_type) or _is_converted_stream_result(result):
+                logging_obj.stream = True
+                logging_obj.model_call_details["stream"] = True
                 if "complete_response" in kwargs and kwargs["complete_response"] is True:
                     chunks: Final = []
                     for idx, chunk in enumerate(result):

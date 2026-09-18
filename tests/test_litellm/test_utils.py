@@ -20,6 +20,8 @@ from jsonschema import validate
 
 import litellm
 from litellm._internal_context import is_internal_call
+from litellm.caching.caching import Cache
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm._logging import (
     CorrelationContextFilter,
@@ -31,6 +33,7 @@ from litellm._logging import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.proxy.utils import is_valid_api_key
+from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
 from litellm.types.utils import (
     CallTypes,
     Delta,
@@ -43,6 +46,7 @@ from litellm.types.utils import (
 from litellm.types.utils import all_litellm_params, bedrock_batch_litellm_params
 from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.utils import (
+    CustomStreamWrapper,
     ProviderConfigManager,
     TextCompletionStreamWrapper,
     _check_provider_match,
@@ -5168,6 +5172,208 @@ async def test_wrapper_async_restores_originating_task_context_after_success(mon
     finally:
         trace_id_var.set("")
         session_id_var.set("")
+
+
+class _ConvertStreamDeploymentHook(CustomLogger):
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict[str, object] | None:
+        if not kwargs.get("stream"):
+            return None
+        return {**kwargs, "stream": False, HEADROOM_CONVERTED_STREAM_KEY: True}
+
+
+class _SuccessKwargsCapture(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.success_kwargs: list[dict[str, object]] = []
+        self.stream_event_responses: list[object] = []
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.success_kwargs.append(kwargs)
+
+    async def async_log_stream_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.stream_event_responses.append(response_obj)
+
+
+def _install_converted_stream_callbacks(monkeypatch: pytest.MonkeyPatch) -> _SuccessKwargsCapture:
+    capture: Final = _SuccessKwargsCapture()
+    monkeypatch.setattr(litellm, "callbacks", [_ConvertStreamDeploymentHook(), capture])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    return capture
+
+
+async def _wait_for_success_kwargs(capture: _SuccessKwargsCapture, count: int = 1) -> dict[str, object]:
+    for _ in range(50):
+        if len(capture.success_kwargs) >= count and not _PENDING_CACHE_WRITES:
+            break
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.2)
+    assert len(capture.success_kwargs) == count
+    return capture.success_kwargs[-1]
+
+
+def _assert_cache_hit_logged_as_stream(capture: _SuccessKwargsCapture, success_kwargs: dict[str, object]) -> None:
+    standard_logging_object: Final = success_kwargs["standard_logging_object"]
+    assert isinstance(standard_logging_object, dict)
+    assert standard_logging_object["cache_hit"] is True
+    assert standard_logging_object["stream"] is True
+    assert success_kwargs["stream"] is True
+    assert capture.stream_event_responses == []
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_logs_converted_chat_stream_with_standard_logging_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capture: Final = _install_converted_stream_callbacks(monkeypatch)
+
+    response: Final = await litellm.acompletion(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        mock_response="converted stream body",
+        num_retries=0,
+    )
+    assert isinstance(response, CustomStreamWrapper)
+    chunks: Final = [chunk async for chunk in response]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "converted stream body"
+
+    success_kwargs: Final = await _wait_for_success_kwargs(capture)
+    standard_logging_object: Final = success_kwargs["standard_logging_object"]
+    assert isinstance(standard_logging_object, dict)
+    assert standard_logging_object["response_cost"] > 0
+    assert standard_logging_object["stream"] is True
+    assert success_kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_wrapper_async_logs_converted_responses_stream_with_standard_logging_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    capture: Final = _install_converted_stream_callbacks(monkeypatch)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx.post("https://api.openai.com/v1/responses").respond(
+        json={
+            "id": "resp_converted",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_converted",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "converted stream body", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
+        }
+    )
+
+    response: Final = await litellm.aresponses(
+        model="openai/gpt-5.6", input="hi", stream=True, api_key="sk-test", num_retries=0
+    )
+    assert isinstance(response, BaseResponsesAPIStreamingIterator)
+    events: Final = [event async for event in response]
+    assert events[-1].type == "response.completed"
+
+    success_kwargs: Final = await _wait_for_success_kwargs(capture)
+    standard_logging_object: Final = success_kwargs["standard_logging_object"]
+    assert isinstance(standard_logging_object, dict)
+    assert standard_logging_object["response_cost"] > 0
+    assert standard_logging_object["stream"] is True
+    assert success_kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_replays_cached_converted_chat_stream_as_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capture: Final = _install_converted_stream_callbacks(monkeypatch)
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    request: Final = {
+        "model": "gpt-5.6",
+        "messages": [{"role": "user", "content": "replay me from cache"}],
+        "stream": True,
+        "mock_response": "converted stream body",
+        "num_retries": 0,
+    }
+
+    first: Final = await litellm.acompletion(**request)
+    first_chunks: Final = [chunk async for chunk in first]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in first_chunks) == "converted stream body"
+    await _wait_for_success_kwargs(capture)
+
+    replay: Final = await litellm.acompletion(**request)
+    assert isinstance(replay, CustomStreamWrapper)
+    replay_chunks: Final = [chunk async for chunk in replay]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in replay_chunks) == "converted stream body"
+
+    _assert_cache_hit_logged_as_stream(capture, await _wait_for_success_kwargs(capture, count=2))
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_wrapper_async_replays_cached_converted_responses_stream_as_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    capture: Final = _install_converted_stream_callbacks(monkeypatch)
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    route: Final = respx.post("https://api.openai.com/v1/responses").respond(
+        json={
+            "id": "resp_cached_converted",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_cached_converted",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "converted stream body", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
+        }
+    )
+    request: Final = {
+        "model": "openai/gpt-5.6",
+        "input": "replay me from cache",
+        "stream": True,
+        "api_key": "sk-test",
+        "num_retries": 0,
+    }
+
+    first: Final = await litellm.aresponses(**request)
+    assert [event async for event in first][-1].type == "response.completed"
+    await _wait_for_success_kwargs(capture)
+
+    replay: Final = await litellm.aresponses(**request)
+    assert isinstance(replay, BaseResponsesAPIStreamingIterator)
+    assert [event async for event in replay][-1].type == "response.completed"
+    assert route.call_count == 1
+
+    _assert_cache_hit_logged_as_stream(capture, await _wait_for_success_kwargs(capture, count=2))
 
 
 def test_function_setup_failure_after_logging_construction_restores_context(monkeypatch):
