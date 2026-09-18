@@ -57,7 +57,11 @@ import {
 import { activeTierName, activeTierRows, getCustomTierRowsError, resolveComplexityDefaultModel } from "./tier_rows";
 import { tierRowLabel } from "./complexity_router_tiers";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
-import AutoRouterConnectionTest from "./auto_router_connection_test";
+import { AutoRouterConnectionTestDialog } from "./auto_router_connection_test";
+import {
+  buildAutoRouterRoutingTestRequest,
+  JEV_CONNECTION_TEST_PROMPT,
+} from "./build_auto_router_routing_test_request";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
 import { toast } from "@/lib/toast";
 import {
@@ -405,6 +409,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     classificationMode: complexityRouterConfig.classification_mode,
     tierLabels: complexityRouterConfig.tier_labels,
     classifierType: complexityRouterConfig.classifier_type,
+    jevClassifierConfig: complexityRouterConfig.jev_classifier_config,
     capabilityClassifierConfig: complexityRouterConfig.capability_classifier_config,
     llmV2Config: complexityRouterConfig.llm_v2_config,
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
@@ -839,41 +844,31 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         </DialogContent>
       </Dialog>
 
-      <Dialog
+      <AutoRouterConnectionTestDialog
         open={isTestModalVisible}
-        onOpenChange={(open) => {
-          if (!open) {
-            setIsTestModalVisible(false);
-            setIsTestingConnection(false);
-          }
+        onClose={() => {
+          setIsTestModalVisible(false);
+          setIsTestingConnection(false);
         }}
-      >
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
-          <DialogHeader>
-            <DialogTitle>Connection Test Results</DialogTitle>
-          </DialogHeader>
-          {isTestModalVisible && (
-            <AutoRouterConnectionTest
-              key={connectionTestId}
-              accessToken={accessToken}
-              targets={testTargets}
-              onTestComplete={() => setIsTestingConnection(false)}
-            />
-          )}
-          <DialogFooter>
-            {" "}
-            <Button
-              variant="outline"
-              onClick={() => {
-                setIsTestModalVisible(false);
-                setIsTestingConnection(false);
-              }}
-            >
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        testId={connectionTestId}
+        accessToken={accessToken}
+        targets={testTargets}
+        jevRequest={
+          effectiveClassifierType(complexityRouterConfig) === "jev"
+            ? buildAutoRouterRoutingTestRequest({
+                prompt: JEV_CONNECTION_TEST_PROMPT,
+                config: buildComplexityRouterConfig(complexityRouterConfigParams),
+                defaultModel: resolveComplexityDefaultModel(
+                  complexityRouterConfig,
+                  complexityRouterConfig.default_model,
+                ),
+                routerName: watchedName,
+                teamId: requiresTeamScope ? watchedTeamId ?? undefined : undefined,
+              })
+            : undefined
+        }
+        onTestComplete={() => setIsTestingConnection(false)}
+      />
     </TooltipProvider>
   );
 };

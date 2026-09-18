@@ -1,4 +1,5 @@
 import AutoRouterClassifierTabs from "../add_model/AutoRouterClassifierTabs";
+import { defaultJevClassifierConfig, jevClassifierConfigSchema } from "../add_model/jev_classifier_config";
 import type { StoredComplexityRouterConfig } from "../add_model/build_complexity_router_config";
 export type { StoredComplexityRouterConfig } from "../add_model/build_complexity_router_config";
 import {
@@ -129,7 +130,12 @@ export const hydrateComplexityRouterConfig = (
     classifier_type: parsedConfig.classifier_type || "heuristic",
     capability_classifier_config: capabilitySettingsSchema.safeParse(parsedConfig.capability_classifier_config).data,
     llm_v2_config: fuseSettingsSchema.safeParse(parsedConfig.llm_v2_config).data,
-    classifier_llm_config: parsedConfig.classifier_llm_config,
+    classifier_llm_config: parsedConfig.classifier_type === "jev" ? undefined : parsedConfig.classifier_llm_config,
+    jev_classifier_config:
+      parsedConfig.classifier_type === "jev"
+        ? jevClassifierConfigSchema.safeParse(parsedConfig.jev_classifier_config ?? {}).data ??
+          defaultJevClassifierConfig()
+        : undefined,
     classifier_context_window_size:
       typeof parsedConfig.classifier_context_window_size === "number"
         ? parsedConfig.classifier_context_window_size
@@ -219,6 +225,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "capability_classifier_config",
   "llm_v2_config",
   "classifier_llm_config",
+  "jev_classifier_config",
   "classifier_context_window_size",
   "classifier_context_budget_chars",
   "classifier_context_include_assistant_turns",
@@ -329,6 +336,7 @@ export const buildUpdatedComplexityRouterConfig = (
     classificationMode: value.classification_mode,
     tierLabels: value.tier_labels,
     classifierType: value.classifier_type,
+    jevClassifierConfig: value.jev_classifier_config,
     capabilityClassifierConfig: value.capability_classifier_config,
     llmV2Config: value.llm_v2_config,
     classifierLlmConfig: value.classifier_llm_config,
