@@ -227,6 +227,57 @@ class _ChatToolCallDict(ChatCompletionToolCallChunk, total=False):
     provider_specific_fields: Mapping[str, object]
 
 
+_ResponsesOutputItemPhase = Literal["commentary", "final_answer"]
+
+
+def _phase_from_output_item(item: object) -> _ResponsesOutputItemPhase | None:
+    if not isinstance(item, Mapping):
+        return None
+    phase: Final[object] = item.get("phase")
+    if phase == "commentary":
+        return "commentary"
+    if phase == "final_answer":
+        return "final_answer"
+    return None
+
+
+def _output_index(parsed_chunk: Mapping[str, object]) -> int | None:
+    output_index: Final[object] = parsed_chunk.get("output_index")
+    return output_index if isinstance(output_index, int) else None
+
+
+def _remember_output_item_phase(
+    parsed_chunk: Mapping[str, object],
+    output_item_phases: dict[  # mutable-ok: per-stream Responses output state
+        tuple[Literal["id", "index"], str | int], _ResponsesOutputItemPhase
+    ],
+) -> None:
+    phase: Final = _phase_from_output_item(parsed_chunk.get("item")) or _phase_from_output_item(parsed_chunk)
+    if phase is None:
+        return
+
+    item: Final = parsed_chunk.get("item")
+    if isinstance(item, Mapping) and isinstance(item_id := item.get("id"), str):
+        output_item_phases[("id", item_id)] = phase
+    if (output_index := _output_index(parsed_chunk)) is not None:
+        output_item_phases[("index", output_index)] = phase
+
+
+def _phase_for_output_text_delta(
+    parsed_chunk: Mapping[str, object],
+    output_item_phases: Mapping[tuple[Literal["id", "index"], str | int], _ResponsesOutputItemPhase],
+) -> _ResponsesOutputItemPhase | None:
+    if isinstance(item_id := parsed_chunk.get("item_id"), str):
+        phase = output_item_phases.get(("id", item_id))
+        if phase is not None:
+            return phase
+    if (output_index := _output_index(parsed_chunk)) is not None:
+        phase = output_item_phases.get(("index", output_index))
+        if phase is not None:
+            return phase
+    return _phase_from_output_item(parsed_chunk)
+
+
 def tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _ChatToolCallDict:
     """Convert a ``function_call`` or ``custom_tool_call`` output item dict to a chat
     completions tool_call dict. Custom (grammar/freeform) tool calls carry their raw
@@ -1330,6 +1381,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         super().__init__(streaming_response, sync_stream, json_mode)
         self._chat_completion_id: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
+        self._output_item_phases: dict[  # mutable-ok: per-stream Responses output state
+            tuple[Literal["id", "index"], str | int], _ResponsesOutputItemPhase
+        ] = {}
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -1370,6 +1424,10 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def translate_responses_chunk_to_openai_stream(
         parsed_chunk: dict | BaseModel,
         tool_call_index_map: dict[int, int] | None = None,  # mutable-ok: per-stream state, remapped in place
+        output_item_phases: dict[  # mutable-ok: per-stream Responses output state
+            tuple[Literal["id", "index"], str | int], _ResponsesOutputItemPhase
+        ]
+        | None = None,  # mutable-ok: per-stream state, preserved across output item events
     ) -> "ModelResponseStream":
         """
         Translate a Responses API streaming chunk to OpenAI chat completion streaming format.
@@ -1377,6 +1435,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         Args:
             parsed_chunk: Dict containing the Responses API event chunk
             tool_call_index_map: Per-stream output_index -> sequential tool_call index map
+            output_item_phases: Per-stream output item identity -> phase map
 
         Returns:
             ModelResponseStream: OpenAI-formatted streaming chunk
@@ -1404,6 +1463,12 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         event_type = parsed_chunk.get("type")
         if isinstance(event_type, ResponsesAPIStreamEvents):
             event_type = event_type.value
+
+        if output_item_phases is not None and event_type in (
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        ):
+            _remember_output_item_phase(parsed_chunk, output_item_phases)
 
         if parsed_chunk.get("object") == "chat.completion.chunk" or (
             event_type is None and isinstance(parsed_chunk.get("choices"), list) and parsed_chunk.get("choices")
@@ -1545,6 +1610,19 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             # Content part added to output
             content_part = parsed_chunk.get("delta", None)
             if content_part is not None:
+                if (
+                    output_item_phases is not None
+                    and _phase_for_output_text_delta(parsed_chunk, output_item_phases) == "commentary"
+                ):
+                    return ModelResponseStream(
+                        choices=[
+                            StreamingChoices(
+                                index=0,
+                                delta=Delta(content=""),
+                                finish_reason=None,
+                            )
+                        ]
+                    )
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(
@@ -1636,7 +1714,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         verbose_logger.debug("Chat provider: transform_streaming_response called with chunk: %s", chunk)
         return self._with_stream_scoped_id(
             OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
-                chunk, tool_call_index_map=self._tool_call_index_map
+                chunk,
+                tool_call_index_map=self._tool_call_index_map,
+                output_item_phases=self._output_item_phases,
             )
         )
 
