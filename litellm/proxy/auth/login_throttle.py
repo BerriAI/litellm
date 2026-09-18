@@ -35,7 +35,7 @@ from litellm.constants import (
     LOGIN_THROTTLE_UNKNOWN_SOURCE,
 )
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
-from litellm.proxy.auth.network import TrustedProxyConfig, normalize_cidr_ranges, resolve_client_ip
+from litellm.proxy.auth.network import TrustedProxyConfig, resolve_client_ip
 from litellm.secret_managers.main import get_secret_bool
 
 DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS_PER_SOURCE: Final = 10
@@ -54,6 +54,7 @@ TRUSTED_PROXY_RANGES_KEY: Final = "trusted_proxy_ranges"
 _REDIS_FAILURES: Final = (RedisError, RedisCircuitBreakerOpenError, OSError, asyncio.TimeoutError)
 _LOCAL_BLOCK_EXPIRY: Final = TypeAdapter[float | None](float | None)
 _SOURCE_LIMIT_OVERRIDES: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
+_RANGE_ENTRIES: Final = TypeAdapter[tuple[object, ...]](tuple[object, ...])
 
 Scope: TypeAlias = Literal["user", "source"]
 
@@ -134,13 +135,27 @@ def declared_proxy_ranges(settings: Mapping[str, object]) -> tuple[str, ...] | N
     An unset key, a value that is not a list of ranges, or a list with an entry that is not an address
     or range leaves it unknown and the source scope off.
     """
-    raw_ranges: Final = settings.get(TRUSTED_PROXY_RANGES_KEY)
-    if isinstance(raw_ranges, (list, tuple, set)) and not raw_ranges:
-        return ()
-    cidrs: Final = tuple(normalize_cidr_ranges(raw_ranges, setting_name=TRUSTED_PROXY_RANGES_KEY))
-    if not cidrs or any(_parse_network(cidr, TRUSTED_PROXY_RANGES_KEY) is None for cidr in cidrs):
+    entries: Final = _configured_range_entries(settings.get(TRUSTED_PROXY_RANGES_KEY))
+    if entries is None or any(_parse_network(entry, TRUSTED_PROXY_RANGES_KEY) is None for entry in entries):
         return None
-    return cidrs
+    return entries
+
+
+def _configured_range_entries(raw_ranges: object) -> tuple[str, ...] | None:
+    """Every configured entry, blanks included, so a stray empty string fails validation like any other typo."""
+    if raw_ranges is None:
+        return None
+    if isinstance(raw_ranges, str):
+        return tuple(part.strip() for part in raw_ranges.split(","))
+    try:
+        return tuple(str(entry).strip() for entry in _RANGE_ENTRIES.validate_python(raw_ranges))
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "Invalid %s value: expected a list of address ranges, got %s",
+            TRUSTED_PROXY_RANGES_KEY,
+            type(raw_ranges).__name__,
+        )
+        return None
 
 
 def _positive_int(raw: object, key: str, default: int) -> int:
