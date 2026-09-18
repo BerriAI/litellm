@@ -560,6 +560,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "bit-set"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
+dependencies = [
+ "bit-vec",
+]
+
+[[package]]
+name = "bit-vec"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
+
+[[package]]
 name = "bitflags"
 version = "2.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1164,6 +1179,17 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener",
  "pin-project-lite",
+]
+
+[[package]]
+name = "fancy-regex"
+version = "0.19.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d301f5bf187b3c295fce6468d3875037a0bccc5f6b151c63cac2f85babf21912"
+dependencies = [
+ "bit-set",
+ "regex-automata",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -2002,32 +2028,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-callbacks"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "litellm-callbacks-legacy"
+version = "0.1.0"
+dependencies = [
+ "litellm-callbacks",
+ "litellm-host-python",
+ "pyo3",
+ "rstest",
+ "serde_json",
+]
+
+[[package]]
 name = "litellm-core"
 version = "0.1.0"
 dependencies = [
- "aws-smithy-eventstream",
- "aws-smithy-types",
  "base64 0.22.1",
  "bytes",
- "data-url",
  "futures-util",
  "litellm-auth",
  "litellm-auth-aws",
- "litellm-auth-azure",
- "litellm-auth-gcp",
- "litellm-framing",
- "litellm-providers",
+ "litellm-callbacks",
+ "litellm-core-utils",
+ "litellm-llms",
+ "litellm-types",
  "mime_guess",
  "moka",
  "rand 0.8.7",
  "reqwest 0.12.28",
  "rstest",
+ "rstest_reuse",
  "rustls 0.23.42",
  "rustls-native-certs",
  "serde",
  "serde_json",
- "serde_path_to_error",
- "serde_with",
  "sha2 0.10.9",
  "strum",
  "subtle",
@@ -2037,6 +2079,21 @@ dependencies = [
  "tokio-tungstenite",
  "url",
  "veil",
+]
+
+[[package]]
+name = "litellm-core-utils"
+version = "0.1.0"
+dependencies = [
+ "fancy-regex",
+ "litellm-types",
+ "rstest",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_with",
+ "thiserror 2.0.19",
+ "url",
 ]
 
 [[package]]
@@ -2054,15 +2111,48 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-providers"
+name = "litellm-host-python"
 version = "0.1.0"
 dependencies = [
- "litellm-auth",
- "litellm-auth-aws",
+ "futures-util",
+ "litellm-callbacks",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "pythonize",
  "rstest",
  "serde",
  "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "litellm-llms"
+version = "0.1.0"
+dependencies = [
+ "aws-smithy-eventstream",
+ "aws-smithy-types",
+ "base64 0.22.1",
+ "bytes",
+ "data-url",
+ "futures-util",
+ "litellm-auth",
+ "litellm-auth-aws",
+ "litellm-auth-azure",
+ "litellm-auth-gcp",
+ "litellm-callbacks",
+ "litellm-core-utils",
+ "litellm-framing",
+ "litellm-types",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_with",
  "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -2073,27 +2163,18 @@ dependencies = [
  "criterion",
  "futures-util",
  "litellm-auth",
+ "litellm-callbacks-legacy",
  "litellm-core",
- "litellm-python-interop",
+ "litellm-host-python",
+ "litellm-llms",
  "litellm-token-counter",
+ "litellm-types",
  "pyo3",
  "pyo3-async-runtimes",
  "rstest",
- "serde",
  "serde_json",
  "tokio",
  "tokio-tungstenite",
-]
-
-[[package]]
-name = "litellm-python-interop"
-version = "0.1.0"
-dependencies = [
- "pyo3",
- "pythonize",
- "rstest",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -2112,6 +2193,14 @@ dependencies = [
  "thiserror 2.0.19",
  "tokenizers",
  "unicode-normalization-alignments",
+]
+
+[[package]]
+name = "litellm-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3007,6 +3096,17 @@ dependencies = [
  "rustc_version",
  "syn 2.0.119",
  "unicode-ident",
+]
+
+[[package]]
+name = "rstest_reuse"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3a8fb4672e840a587a66fc577a5491375df51ddb88f2a2c2a792598c326fe14"
+dependencies = [
+ "quote",
+ "rand 0.8.7",
+ "syn 2.0.119",
 ]
 
 [[package]]

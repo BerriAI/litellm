@@ -43,6 +43,16 @@ const NUMERIC_INPUT_WIDTH = "w-36";
 
 const toNumericValue = (raw: string): number | null => (raw === "" ? null : Number(raw));
 
+const toListValue = (raw: string): string[] | null => {
+  const items = raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item !== "");
+  return items.length === 0 ? null : items;
+};
+
+const fromListValue = (value: unknown): string => (Array.isArray(value) ? value.join(", ") : "");
+
 const SettingValueEditor: React.FC<{
   setting: generalSettingsItem;
   onChange: (fieldName: string, newValue: any) => void;
@@ -91,6 +101,17 @@ const SettingValueEditor: React.FC<{
           onChange={(event) => onChange(setting.field_name, toNumericValue(event.target.value))}
         />
       </InputGroup>
+    );
+  }
+  if (setting.field_type === "List") {
+    return (
+      <Input
+        key={String(setting.stored_in_db)}
+        aria-label={setting.field_name}
+        placeholder="Comma-separated values"
+        defaultValue={fromListValue(setting.field_value)}
+        onChange={(event) => onChange(setting.field_name, toListValue(event.target.value))}
+      />
     );
   }
   if (setting.field_type === "Select") {
@@ -228,7 +249,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     const fieldValue = setting?.field_value;
 
     if (fieldValue == null) {
-      if (setting?.field_type === "Select") handleResetField(fieldName);
+      if (setting?.field_type === "Select" || setting?.field_type === "List") handleResetField(fieldName);
       return;
     }
     try {
