@@ -2809,6 +2809,61 @@ async def test_failed_window_spend_commit_requeues_the_increments_and_continues_
     assert requeued == (transaction,)
 
 
+class _DailySpendFakeDB(_WindowSpendFakeDB):
+    """Records the daily rollup upserts it is handed and fails the ones aimed at one table."""
+
+    def __init__(self, failing_table: str | None) -> None:
+        super().__init__()
+        self.failing_table = failing_table
+        self.execute_raw_calls: list[Statement] = []
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        if self.failing_table is not None and self.failing_table in query:
+            raise Exception("connection reset")
+        self.execute_raw_calls.append((query, args))
+        return len(args)
+
+
+def _daily_upserts(db: _DailySpendFakeDB, table: str) -> list[Statement]:
+    return [statement for statement in db.execute_raw_calls if table in statement[0]]
+
+
+@pytest.mark.asyncio
+async def test_failed_daily_spend_commit_requeues_the_rows_and_flushes_the_other_tables():
+    """With the Redis buffer off, a daily batch that failed to commit was discarded along
+    with the tick's exception, so the Usage page stayed short of LiteLLM_SpendLogs for good.
+    The uncommitted rows must go back on their queue and land on the next tick, and the
+    other daily tables must still be flushed on the failing tick."""
+    db_writer = DBSpendUpdateWriter()
+    await db_writer.daily_spend_update_queue.add_update({"user-key": _daily_txn(user_id="user-1")})
+    team_txn = {key: value for key, value in _daily_txn().items() if key != "user_id"} | {"team_id": "team-1"}
+    await db_writer.daily_team_spend_update_queue.add_update({"team-key": team_txn})
+    db = _DailySpendFakeDB(failing_table="LiteLLM_DailyUserSpend")
+    db_writer._flush_tool_discovery_queue = AsyncMock()
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db), n_retry_times=0, proxy_logging_obj=proxy_logging_obj
+    )
+
+    assert _daily_upserts(db, "LiteLLM_DailyUserSpend") == []
+    (team_upsert,) = _daily_upserts(db, "LiteLLM_DailyTeamSpend")
+    assert _row_values(team_upsert, "team_id") == ["team-1"]
+    db_writer._flush_tool_discovery_queue.assert_called_once()
+
+    db.failing_table = None
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db), n_retry_times=0, proxy_logging_obj=proxy_logging_obj
+    )
+
+    (user_upsert,) = _daily_upserts(db, "LiteLLM_DailyUserSpend")
+    assert _row_values(user_upsert, "user_id") == ["user-1"]
+    assert _row_values(user_upsert, "spend") == [0.1]
+    assert len(_daily_upserts(db, "LiteLLM_DailyTeamSpend")) == 1
+    assert db_writer.daily_spend_update_queue.update_queue.empty()
+
+
 @pytest.mark.asyncio
 async def test_failed_window_spend_commit_from_redis_is_restored_to_redis():
     """The Redis drain is destructive, so a failed window commit has to push

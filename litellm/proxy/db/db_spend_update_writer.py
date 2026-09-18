@@ -15,7 +15,7 @@ import traceback
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, overload
 from urllib.parse import quote, unquote
 
 from typing_extensions import ReadOnly, TypedDict
@@ -141,6 +141,20 @@ class _SpendTransactionManager(Protocol):
     async def __aenter__(self) -> _SpendTransaction: ...
 
     async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+
+
+_DailySpendTransactionT = TypeVar("_DailySpendTransactionT", bound=BaseDailySpendTransaction)
+
+
+class _DailySpendCommit(Protocol[_DailySpendTransactionT]):
+    async def __call__(
+        self,
+        *,
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: dict[str, _DailySpendTransactionT],
+    ) -> None: ...
 
 
 def _timed_request_duration_ms(
@@ -1288,6 +1302,34 @@ class DBSpendUpdateWriter:
                     cronjob_id=DB_SPEND_UPDATE_JOB_NAME,
                 )
 
+    async def _flush_daily_spend_queue(
+        self,
+        queue: DailySpendUpdateQueue,
+        entity_type: Literal["user", "team", "org", "end_user", "agent"],
+        commit: _DailySpendCommit[_DailySpendTransactionT],
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+    ) -> None:
+        transactions: Final = await queue.flush_and_get_aggregated_daily_spend_update_transactions()
+        try:
+            await commit(
+                n_retry_times=n_retry_times,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                daily_spend_transactions=cast(dict[str, _DailySpendTransactionT], transactions),
+            )
+        except Exception as e:  # noqa: BLE001  # the uncommitted rows go back on the queue; the other tables must still flush
+            spend_log_error(
+                "Spend tracking - failed to commit daily %s spend updates. "
+                "Re-queued %d rows for retry on next tick. Error: %s",
+                entity_type,
+                len(transactions),
+                str(e),
+                exc=e,
+            )
+            await queue.add_update(transactions)
+
     async def _commit_spend_updates_to_db_without_redis_buffer(
         self,
         prisma_client: PrismaClient,
@@ -1316,74 +1358,59 @@ class DBSpendUpdateWriter:
 
         ################## Daily Spend Update Transactions ##################
         # Aggregate all in memory daily spend transactions and commit to db
-        daily_spend_update_transactions: Final = cast(
-            dict[str, DailyUserSpendTransaction],
-            await self.daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
-        )
-
-        await DBSpendUpdateWriter.update_daily_user_spend(
+        await self._flush_daily_spend_queue(
+            queue=self.daily_spend_update_queue,
+            entity_type="user",
+            commit=DBSpendUpdateWriter.update_daily_user_spend,
             n_retry_times=n_retry_times,
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
-            daily_spend_transactions=daily_spend_update_transactions,
         )
 
         ################## Daily Team Spend Update Transactions ##################
         # Aggregate all in memory daily team spend transactions and commit to db
-        daily_team_spend_update_transactions: Final = cast(
-            dict[str, DailyTeamSpendTransaction],
-            await self.daily_team_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
-        )
-
-        await DBSpendUpdateWriter.update_daily_team_spend(
+        await self._flush_daily_spend_queue(
+            queue=self.daily_team_spend_update_queue,
+            entity_type="team",
+            commit=DBSpendUpdateWriter.update_daily_team_spend,
             n_retry_times=n_retry_times,
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
-            daily_spend_transactions=daily_team_spend_update_transactions,
         )
 
         ################## Daily Organization Spend Update Transactions ##################
         # Aggregate all in memory daily org spend transactions and commit to db
-        daily_org_spend_update_transactions: Final = cast(
-            dict[str, DailyOrganizationSpendTransaction],
-            await self.daily_org_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
-        )
-
-        await DBSpendUpdateWriter.update_daily_org_spend(
+        await self._flush_daily_spend_queue(
+            queue=self.daily_org_spend_update_queue,
+            entity_type="org",
+            commit=DBSpendUpdateWriter.update_daily_org_spend,
             n_retry_times=n_retry_times,
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
-            daily_spend_transactions=daily_org_spend_update_transactions,
         )
 
         # NOTE: Daily tag spend is committed by a separate scheduler job.
 
         ################## Daily End-User Spend Update Transactions ##################
         # Aggregate all in memory daily end-user spend transactions and commit to db
-        daily_end_user_spend_update_transactions: Final = cast(
-            dict[str, DailyEndUserSpendTransaction],
-            await self.daily_end_user_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
-        )
-
-        await DBSpendUpdateWriter.update_daily_end_user_spend(
+        await self._flush_daily_spend_queue(
+            queue=self.daily_end_user_spend_update_queue,
+            entity_type="end_user",
+            commit=DBSpendUpdateWriter.update_daily_end_user_spend,
             n_retry_times=n_retry_times,
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
-            daily_spend_transactions=daily_end_user_spend_update_transactions,
         )
 
         ################## Daily Agent Spend Update Transactions ##################
         # Aggregate all in memory daily agent spend transactions and commit to db
-        daily_agent_spend_update_transactions: Final = cast(
-            dict[str, DailyAgentSpendTransaction],
-            await self.daily_agent_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
-        )
-
-        await DBSpendUpdateWriter.update_daily_agent_spend(
+        await self._flush_daily_spend_queue(
+            queue=self.daily_agent_spend_update_queue,
+            entity_type="agent",
+            commit=DBSpendUpdateWriter.update_daily_agent_spend,
             n_retry_times=n_retry_times,
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
-            daily_spend_transactions=daily_agent_spend_update_transactions,
         )
 
         ################## Budget Window Spend Update Transactions ##################
