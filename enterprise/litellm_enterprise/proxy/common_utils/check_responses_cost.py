@@ -205,7 +205,6 @@ class CheckResponsesCost:
                 f"Marked {len(completed_jobs)} response jobs as completed"
             )
 
-        # Mark expired jobs (provider returned 404) in the database
         if len(expired_jobs) > 0:
             await self.prisma_client.db.litellm_managedobjecttable.update_many(
                 where={"id": {"in": [job.id for job in expired_jobs]}},
