@@ -158,17 +158,25 @@ def test_handler_add_ons_scale_with_channels_like_the_base_rate():
     assert stereo_redacted - stereo_plain == pytest.approx(_registry_cost("streaming/redact", 120.0))
 
 
-def test_handler_falls_back_to_the_prerecorded_rate_for_a_model_without_a_streaming_entry():
-    assert "deepgram/streaming/nova-2" not in litellm.model_cost
+@pytest.mark.parametrize(
+    "upstream_url",
+    [
+        pytest.param("wss://api.deepgram.com/v1/listen?model=nova-2", id="only a pre-recorded entry"),
+        pytest.param("wss://api.deepgram.com/v1/listen?model=nova-99-not-in-registry", id="no entry at all"),
+    ],
+)
+def test_handler_never_substitutes_another_rate_for_a_missing_streaming_entry(monkeypatch, upstream_url):
+    """The route refuses these sessions up front; should the registry change under a live one, the spend row
+    keeps the duration and carries no cost, rather than the pre-recorded rate or any other stand-in."""
+    monkeypatch.delitem(litellm.model_cost, "deepgram/streaming/nova-2", raising=False)
+    assert "deepgram/nova-2" in litellm.model_cost
 
     handler_result = DeepgramListenPassthroughLoggingHandler().deepgram_listen_passthrough_handler(
-        websocket_messages=(_metadata(60.0),),
-        logging_obj=_logging_obj(),
-        upstream_url="wss://api.deepgram.com/v1/listen?model=nova-2",
+        websocket_messages=(_metadata(60.0),), logging_obj=_logging_obj(), upstream_url=upstream_url
     )
 
-    assert handler_result["kwargs"]["model"] == "nova-2"
-    assert handler_result["kwargs"]["response_cost"] == pytest.approx(_registry_cost("nova-2", 60.0))
+    assert handler_result["kwargs"]["response_cost"] is None
+    assert handler_result["result"]._hidden_params["audio_transcription_duration"] == 60.0
 
 
 def test_handler_falls_back_to_results_frames_when_the_stream_ends_without_metadata():
@@ -220,18 +228,6 @@ def test_handler_bills_the_declared_channels_when_the_stream_dies_before_any_fra
 
     assert handler_result["result"]._hidden_params["audio_transcription_duration"] == 30.0
     assert handler_result["kwargs"]["response_cost"] == pytest.approx(_registry_cost("streaming/nova-3", 30.0))
-
-
-def test_handler_keeps_the_spend_row_but_no_cost_for_an_unpriced_model():
-    handler_result = DeepgramListenPassthroughLoggingHandler().deepgram_listen_passthrough_handler(
-        websocket_messages=(_metadata(12.5),),
-        logging_obj=_logging_obj(),
-        upstream_url="wss://api.deepgram.com/v1/listen?model=nova-99-not-in-registry",
-    )
-
-    assert handler_result["kwargs"]["model"] == "nova-99-not-in-registry"
-    assert handler_result["kwargs"]["response_cost"] is None
-    assert handler_result["result"]._hidden_params["audio_transcription_duration"] == 12.5
 
 
 class _CapturingLogger(CustomLogger):
