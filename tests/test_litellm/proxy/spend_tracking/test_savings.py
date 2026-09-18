@@ -1570,3 +1570,78 @@ def test_marks_gateway_injection_credits_only_the_deployment_that_was_injected()
     assert marks_gateway_injection({"litellm_gateway_injected_cache": ""}, None) is True
     assert marks_gateway_injection({"litellm_call_id": "c1"}, "dep-a") is False
     assert marks_gateway_injection({"litellm_gateway_injected_cache": True}, "dep-a") is False
+
+
+def _usage_with_cached(cached: int) -> Usage:
+    """A continuing-conversation request whose whole prompt came from cache."""
+    return Usage(
+        prompt_tokens=cached,
+        completion_tokens=0,
+        total_tokens=cached,
+        prompt_tokens_details={"cached_tokens": cached, "cache_creation_tokens": 0, "text_tokens": 0},
+        cache_read_input_tokens=cached,
+    )
+
+
+def _usage_with_written(written: int) -> Usage:
+    """A first-turn request whose whole prompt was written to cache."""
+    return Usage(
+        prompt_tokens=written,
+        completion_tokens=0,
+        total_tokens=written,
+        prompt_tokens_details={"cached_tokens": 0, "cache_creation_tokens": written, "text_tokens": 0},
+        cache_creation_input_tokens=written,
+    )
+
+
+def test_zero_cache_read_rate_is_free_only_when_the_model_actually_caches():
+    """A `0.0` read rate is a real price on a caching model and a placeholder otherwise.
+
+    `tensormesh/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8` prices cache reads at `0` and
+    sets `supports_prompt_caching`, so its reads really are free and stay in the read
+    bucket. `gemini/gemini-robotics-er-1.5-preview` carries the same `0` with
+    `supports_prompt_caching` false: it has no cache at all, so those tokens are its
+    plain input and must move to `text_tokens`. Reading the zero as a price either way
+    billed 20,000 baseline tokens at `$0.00` instead of `$0.006`.
+    """
+    caches = litellm.get_model_info(model="tensormesh/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8")
+    does_not = litellm.get_model_info(model="gemini/gemini-robotics-er-1.5-preview")
+    assert caches["cache_read_input_token_cost"] == 0 and caches["supports_prompt_caching"]
+    assert does_not["cache_read_input_token_cost"] == 0 and not does_not["supports_prompt_caching"]
+
+    free = _baseline_usage(_usage_with_cached(20_000), conversation_continuing=True, baseline_info=caches)
+    assert free.prompt_tokens_details.cached_tokens == 20_000
+    assert (free.prompt_tokens_details.text_tokens or 0) == 0
+
+    unpriced = _baseline_usage(_usage_with_cached(20_000), conversation_continuing=True, baseline_info=does_not)
+    assert unpriced.prompt_tokens_details.cached_tokens == 0
+    assert unpriced.prompt_tokens_details.text_tokens == 20_000
+    # 20,000 at the plain input rate is the $0.006 the buggy read dropped to $0.00.
+    assert 20_000 * (does_not["input_cost_per_token"] or 0.0) == pytest.approx(0.006)
+
+
+def test_zero_cache_write_rate_still_inherits_input_pricing():
+    """A `0.0` cache-creation price means writes bill at input, not that they are free.
+
+    36 cost-map entries rely on that inheritance, `deepseek/deepseek-chat` among them.
+    Treating the zero as a real price moved a 10,000 token first-turn baseline from
+    `$0.0028` to `$0.00`.
+    """
+    info = litellm.get_model_info(model="deepseek/deepseek-chat")
+    assert info["cache_creation_input_token_cost"] == 0.0
+
+    baseline = _baseline_usage(_usage_with_written(10_000), conversation_continuing=False, baseline_info=info)
+    assert (baseline.prompt_tokens_details.cache_creation_tokens or 0) == 0
+    assert baseline.prompt_tokens_details.text_tokens == 10_000
+    assert 10_000 * (info["input_cost_per_token"] or 0.0) == pytest.approx(0.0028)
+
+
+def test_a_missing_cache_rate_is_still_not_a_free_bucket():
+    """The original guard: absent rates fall back to plain input, and `None` info prices both."""
+    from litellm.proxy.spend_tracking.savings import _baseline_cache_rate_keys
+
+    assert _baseline_cache_rate_keys({}) == (False, False)
+    assert _baseline_cache_rate_keys(None) == (True, True)
+    assert _baseline_cache_rate_keys(
+        {"cache_read_input_token_cost": 1e-07, "supports_prompt_caching": True, "cache_creation_input_token_cost": 2e-07}
+    ) == (True, True)

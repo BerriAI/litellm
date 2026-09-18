@@ -212,12 +212,29 @@ def _baseline_cache_rate_keys(baseline_info: ModelInfo | None) -> tuple[bool, bo
     Gemini entry for cache writes, would carry the whole prompt for nothing and turn a
     profitable route into a reported loss. Such a model pays its plain input rate for
     those tokens, so the buckets it cannot price become ordinary input below.
+
+    The two buckets need different tests, because a `0.0` means something different in
+    each and the cost map proves it.
+
+    Reads: an explicit `0.0` is a real "cache reads are free" price, so absence rather
+    than truthiness is the right test. It only means that on a model that actually
+    caches, though. Six entries pair `cache_read_input_token_cost` of `0` with
+    `supports_prompt_caching` of `False`, `gemini-robotics-er-1.5-preview` and
+    `openrouter/z-ai/glm-4.7` among them, where the zero is a placeholder for a model
+    that has no cache rather than a free one. Honouring it priced 20,000 baseline tokens
+    at `$0.00` instead of `$0.006`.
+
+    Writes: truthiness stays. A `0.0` cache-creation price is not free, it means writes
+    bill at the plain input rate, and 36 entries rely on that inheritance including
+    `deepseek/deepseek-chat`. Reading it as a real price dropped a 10,000 token
+    first-turn baseline from `$0.0028` to `$0.00`.
     """
     if baseline_info is None:
         return True, True
-    return bool(baseline_info.get("cache_read_input_token_cost")), bool(
-        baseline_info.get("cache_creation_input_token_cost")
+    prices_reads: Final = baseline_info.get("cache_read_input_token_cost") is not None and bool(
+        baseline_info.get("supports_prompt_caching")
     )
+    return prices_reads, bool(baseline_info.get("cache_creation_input_token_cost"))
 
 
 def _baseline_usage(usage: Usage, conversation_continuing: bool, baseline_info: ModelInfo | None = None) -> Usage:
