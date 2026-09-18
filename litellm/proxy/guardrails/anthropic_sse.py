@@ -344,7 +344,5 @@ def anthropic_sse_chunks_from_body(body: Mapping[str, object]) -> tuple[bytes, .
         FakeAnthropicMessagesStreamIterator,
     )
 
-    typed: Final = cast(  # noqa: TID251  # AnthropicMessagesResponse is a total=False TypedDict; validating through it drops provider fields
-        "AnthropicMessagesResponse", dict(body)
-    )
+    typed: Final = cast("AnthropicMessagesResponse", dict(body))
     return tuple(FakeAnthropicMessagesStreamIterator(response=typed).chunks)
