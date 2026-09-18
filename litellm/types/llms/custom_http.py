@@ -31,7 +31,6 @@ class httpxSpecialProvider(str, Enum):
     UI = "ui"
     Sandbox = "sandbox"
     ModelCostMap = "model_cost_map"
-    PasswordBreachCheck = "password_breach_check"
 
 
 VerifyTypes = str | bool | ssl.SSLContext

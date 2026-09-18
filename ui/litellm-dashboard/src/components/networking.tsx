@@ -383,7 +383,7 @@ export const handleError = async (errorData: string | any) => {
       clearTokenCookies();
       const browserLocation = getWindowLocation();
       if (browserLocation) {
-        window.location.href = browserLocation.pathname;
+        window.location.href = browserLocation.pathname + browserLocation.search + browserLocation.hash;
       }
     }
     lastErrorTime = currentTime;
@@ -1675,20 +1675,6 @@ export const claimOnboardingToken = async (
     console.error("Failed to delete key:", error);
     throw error;
   }
-};
-
-export const changePasswordCall = async (
-  accessToken: string,
-  currentPassword: string,
-  newPassword: string,
-): Promise<{ user_id: string; message: string }> => {
-  return await apiClient.post(`/user/password/change`, {
-    accessToken,
-    body: {
-      current_password: currentPassword,
-      new_password: newPassword,
-    },
-  });
 };
 
 export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: string, formData: any) => {

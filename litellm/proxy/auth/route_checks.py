@@ -1,5 +1,5 @@
 import re
-from collections.abc import Sequence
+from collections.abc import Collection
 from typing import Final
 
 from fastapi import HTTPException, Request, status
@@ -24,10 +24,14 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES: Final = frozenset(
     [
         # user
         "/user/new",
+        "/management/v1/users/bulk",
         "/user/delete",
+        "/management/v1/users/bulk_delete",
         "/user/bulk_update",
         # team
         "/team/new",
+        "/management/v1/teams/{team_id}/members/bulk_delete",
+        "/management/v1/teams/{team_id}/members/bulk_update",
         "/team/update",
         "/team/delete",
         "/team/block",
@@ -136,6 +140,9 @@ class RouteChecks:
                     #  For llm_api_routes, also check registered pass-through endpoints
                     ################################################
                     if allowed_route == "llm_api_routes":
+                        if route == "/auto_router/session" and RouteChecks._get_request_method(request) == "GET":
+                            return True
+
                         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
                             InitPassThroughEndpointHelpers,
                         )
@@ -186,16 +193,6 @@ class RouteChecks:
 
         if denied_auth_enforced_pass_through_route:
             raise RouteChecks._auth_pass_through_denied_exception(route=route)
-
-        if valid_token.metadata.get("password_reset_required") is True:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    "This account's password must be changed before the session can be used: "
-                    "it was either found in a known data breach or set by an admin. "
-                    "Change it via POST /user/password/change (UI: /ui/change-password), then log in again."
-                ),
-            )
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -594,7 +591,7 @@ class RouteChecks:
         return False
 
     @staticmethod
-    def check_route_access(route: str, allowed_routes: Sequence[str]) -> bool:
+    def check_route_access(route: str, allowed_routes: Collection[str]) -> bool:
         """
         Check if a route has access by checking both exact matches and patterns
 
@@ -765,9 +762,13 @@ class RouteChecks:
     _ADMIN_VIEWER_BLOCKED_WRITE_ROUTES = frozenset(
         [
             "/user/new",
+            "/management/v1/users/bulk",
             "/user/delete",
+            "/management/v1/users/bulk_delete",
             "/user/bulk_update",
             "/team/new",
+            "/management/v1/teams/{team_id}/members/bulk_delete",
+            "/management/v1/teams/{team_id}/members/bulk_update",
             "/team/update",
             "/team/delete",
             "/model/new",
@@ -806,8 +807,7 @@ class RouteChecks:
              in the codebase is automatically readable by Admin Viewer
              without needing to remember to add it to an allowlist.
           3. Unsafe HTTP method (POST/PUT/PATCH/DELETE):
-             - Allow `/user/update` only when restricted to user_email.
-             - Allow `/user/password/change` (endpoint only writes the caller's own row).
+             - Allow `/user/update` only when restricted to user_email/password.
              - Block all explicit writes in `_ADMIN_VIEWER_BLOCKED_WRITE_ROUTES`.
              - Otherwise allow only if the route is in admin_viewer_routes /
                global_spend_tracking_routes (legacy explicit-allow set).
@@ -827,12 +827,12 @@ class RouteChecks:
                 if request_data is not None and isinstance(request_data, dict):
                     _params_updated: Final = request_data.keys()
                     for param in _params_updated:
-                        if param != "user_email":
+                        if param not in ["user_email", "password"]:
                             raise HTTPException(
                                 status_code=status.HTTP_403_FORBIDDEN,
-                                detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email can be updated",
+                                detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email and password can be updated",
                             )
-            elif route in _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES or (
+            elif RouteChecks.check_route_access(route=route, allowed_routes=_PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES) or (
                 route.startswith("/key/") and route.endswith(_PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES)
             ):
                 # Block write operations for PROXY_ADMIN_VIEW_ONLY
@@ -849,31 +849,27 @@ class RouteChecks:
             return
 
         # ── Unsafe HTTP method: explicit checks ──────────────────────────
-        # Allow `/user/update` for self-service email change.
+        # Allow `/user/update` for self-service email / password change.
         if route == "/user/update":
             if request_data is not None and isinstance(request_data, dict):
                 for param in request_data:
-                    if param != "user_email":
+                    if param not in ["user_email", "password"]:
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
                             detail=(
                                 f"user not allowed to access this route, role= {_user_role}. "
                                 f"Trying to access: {route} and updating invalid param: {param}. "
-                                "only user_email can be updated"
+                                "only user_email and password can be updated"
                             ),
                         )
-            return
-
-        # Self-service password change; the endpoint only writes the caller's own row.
-        if route == "/user/password/change":
             return
 
         # Hard-block known write routes regardless of HTTP method (defensive
         # — these are POSTs in practice, but pinning them here protects
         # against future GET-shaped writes).
-        if route in RouteChecks._ADMIN_VIEWER_BLOCKED_WRITE_ROUTES or (
-            route.startswith("/key/") and route.endswith("/regenerate")
-        ):
+        if RouteChecks.check_route_access(
+            route=route, allowed_routes=RouteChecks._ADMIN_VIEWER_BLOCKED_WRITE_ROUTES
+        ) or (route.startswith("/key/") and route.endswith("/regenerate")):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",

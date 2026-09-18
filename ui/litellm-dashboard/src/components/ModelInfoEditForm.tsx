@@ -271,6 +271,7 @@ const displayCost = (localModelData: any, field: TouchedPricingField): string =>
 interface ModelInfoEditFormProps {
   localModelData: any;
   modelData: { model_info: { team_id?: string | null } & Record<string, unknown> };
+  teamAlias: string | null;
   accessToken: string | null;
   isEditing: boolean;
   isSaving: boolean;
@@ -341,6 +342,7 @@ const ChipList: React.FC<{ values: unknown; emptyLabel: string }> = ({ values, e
 const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
   localModelData,
   modelData,
+  teamAlias,
   accessToken,
   isEditing,
   isSaving,
@@ -799,8 +801,12 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
             </div>
 
             <div>
-              <FieldLabel>Team ID</FieldLabel>
-              <Display>{modelData.model_info.team_id || "Not Set"}</Display>
+              <FieldLabel>Team</FieldLabel>
+              <Display>
+                {teamAlias
+                  ? `${teamAlias} (${modelData.model_info.team_id})`
+                  : modelData.model_info.team_id || "Not Set"}
+              </Display>
             </div>
           </div>
 

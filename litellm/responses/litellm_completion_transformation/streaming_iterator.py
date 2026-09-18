@@ -8,6 +8,7 @@ from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     build_tool_call_item_kwargs,
     extract_custom_tool_names,
+    is_custom_tool_call,
     serialize_tool_call_arguments,
 )
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -166,7 +167,17 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return tool_name, namespace
         return fn_name, None
 
+    def _tool_call_item_kwargs(self, call_id: str, fn_name: str, arguments: str, status: str) -> dict[str, str]:
+        item_kwargs: Final = build_tool_call_item_kwargs(call_id, fn_name, arguments, status, self._custom_tool_names)
+        if is_custom_tool_call(fn_name, self._custom_tool_names):
+            return item_kwargs
+        tool_name, tool_namespace = self._responses_namespace_tool_call_fields(fn_name)
+        namespace_kwargs: Final = {"namespace": tool_namespace} if tool_namespace else {}
+        return {**item_kwargs, "name": tool_name, **namespace_kwargs}
+
     def _is_reasoning_end(self, chunk):
+        if not chunk.choices:
+            return False
         delta: Final = chunk.choices[0].delta
 
         # if this indicates reasoning content, don't consider reasoning ended
@@ -244,17 +255,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             else:
                 fn_name = str(getattr(fn, "name", "") or "")
                 fn_args_delta = serialize_tool_call_arguments(getattr(fn, "arguments", ""))
-            tool_name, tool_namespace = self._responses_namespace_tool_call_fields(fn_name)
             output_index = self._get_or_assign_tool_output_index(call_id)
 
             if call_id not in self._tool_args_by_call_id:
                 self._tool_args_by_call_id[call_id] = ""
                 self._sequence_number += 1
-                names = self._custom_tool_names
-                item_kwargs = build_tool_call_item_kwargs(call_id, tool_name, "", "in_progress", names)
+                item_kwargs = self._tool_call_item_kwargs(call_id, fn_name, "", "in_progress")
                 self._tool_item_id_by_call_id[call_id] = item_kwargs["id"]
-                if tool_namespace:
-                    item_kwargs["namespace"] = tool_namespace
                 event = OutputItemAddedEvent(
                     type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                     output_index=output_index,
@@ -315,7 +322,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             else:
                 fn_name = str(getattr(fn, "name", "") or "")
                 fn_args = serialize_tool_call_arguments(getattr(fn, "arguments", ""))
-            tool_name, tool_namespace = self._responses_namespace_tool_call_fields(fn_name)
             web_search_call = self._web_search_calls.get(call_id)
             if web_search_call is not None:
                 if call_id not in self._queued_web_search_call_ids:
@@ -330,11 +336,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             if is_new_tool_call:
                 self._tool_args_by_call_id[call_id] = ""
                 self._sequence_number += 1
-                names = self._custom_tool_names
-                item_kwargs = build_tool_call_item_kwargs(call_id, tool_name, "", "in_progress", names)
+                item_kwargs = self._tool_call_item_kwargs(call_id, fn_name, "", "in_progress")
                 self._tool_item_id_by_call_id[call_id] = item_kwargs["id"]
-                if tool_namespace:
-                    item_kwargs["namespace"] = tool_namespace
                 event = OutputItemAddedEvent(
                     type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                     output_index=output_index,
@@ -376,11 +379,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._pending_tool_events.append(done_event)
 
             self._sequence_number += 1
-            names = self._custom_tool_names
-            item_kwargs = build_tool_call_item_kwargs(call_id, tool_name, final_args, "completed", names)
+            item_kwargs = self._tool_call_item_kwargs(call_id, fn_name, final_args, "completed")
             item_kwargs["id"] = self._tool_item_id_by_call_id.setdefault(call_id, item_kwargs["id"])
-            if tool_namespace:
-                item_kwargs["namespace"] = tool_namespace
             item_done_event = OutputItemDoneEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 output_index=output_index,
@@ -899,6 +899,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         # Change: Never return a value, just enqueue output item events
         if self.sent_output_item_added_event:
             return
+        if not chunk.choices:
+            return
         delta: Final = chunk.choices[0].delta
 
         self._sequence_number += 1
@@ -1226,6 +1228,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
         It's unclear how users expect litellm to translate multiple-choices-per-chunk to the responses API output.
         """
+        if not choices:
+            return ""
         choice: Final = choices[0]
         chat_completion_delta: Final[ChatCompletionDelta] = choice.delta
         return chat_completion_delta.content or ""

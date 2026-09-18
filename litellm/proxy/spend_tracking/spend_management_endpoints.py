@@ -176,6 +176,7 @@ class _SessionSpendRow(TypedDict):
     api_key: ReadOnly[str]
     session_total_count: ReadOnly[int]
     session_total_spend: float
+    session_total_duration_ms: ReadOnly[int]
     mcp_tool_call_count: int
     mcp_tool_call_spend: float
     session_cache_hit_count: ReadOnly[int]
@@ -194,6 +195,7 @@ _SESSION_MODEL_NAME_MAX_LEN: Final = 256
 class _SessionSpendStats(NamedTuple):
     session_total_count: int
     session_total_spend: float
+    session_total_duration_ms: int
     mcp_tool_call_count: int
     mcp_tool_call_spend: float
     session_cache_hit_count: int
@@ -4543,6 +4545,12 @@ async def _build_ui_spend_logs_response(
                     SELECT session_id, api_key,
                            COUNT(*)::int AS session_total_count,
                            COALESCE(SUM(spend), 0)::double precision AS session_total_spend,
+                           COALESCE(SUM(
+                               COALESCE(
+                                   request_duration_ms,
+                                   (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER
+                               )
+                           ), 0)::bigint AS session_total_duration_ms,
                            COUNT(*) FILTER (
                                WHERE call_type IN {_MCP_CALL_TYPES_SQL}
                            )::int AS mcp_tool_call_count,
@@ -4584,6 +4592,7 @@ async def _build_ui_spend_logs_response(
                 (row["session_id"], row["api_key"]): _SessionSpendStats(
                     session_total_count=int(row.get("session_total_count") or 0),
                     session_total_spend=float(row.get("session_total_spend") or 0.0),
+                    session_total_duration_ms=int(row.get("session_total_duration_ms") or 0),
                     mcp_tool_call_count=int(row.get("mcp_tool_call_count") or 0),
                     mcp_tool_call_spend=float(row.get("mcp_tool_call_spend") or 0.0),
                     session_cache_hit_count=int(row.get("session_cache_hit_count") or 0),
@@ -4615,6 +4624,7 @@ async def _build_ui_spend_logs_response(
             row_dict["session_total_count"] = session_stats.session_total_count if session_stats else 1
             if session_stats:
                 row_dict["session_total_spend"] = session_stats.session_total_spend
+                row_dict["session_total_duration_ms"] = session_stats.session_total_duration_ms
                 if session_stats.mcp_tool_call_count:
                     row_dict["mcp_tool_call_count"] = session_stats.mcp_tool_call_count
                     row_dict["mcp_tool_call_spend"] = session_stats.mcp_tool_call_spend

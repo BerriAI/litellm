@@ -3,6 +3,7 @@
 import logging
 from collections.abc import Iterator
 from itertools import chain
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
 from typing_extensions import TypedDict, Unpack
@@ -120,7 +121,7 @@ async def acompletion_with_mcp(
             **kwargs,
         )
 
-    context: Final = MCPRequestContext.resolve(kwargs=kwargs, tools=tools)
+    context: Final = MCPRequestContext.resolve(kwargs=MappingProxyType({**kwargs, "model": model}), tools=tools)
     user_api_key_auth: Final[UserAPIKeyAuth | None] = context.user_api_key_auth
     request_tags: Final = list(context.request_tags) if context.request_tags else None
     mcp_auth_header: Final = context.mcp_auth_header
@@ -474,6 +475,7 @@ async def acompletion_with_mcp(
                             litellm_call_id=self.litellm_call_id,
                             litellm_trace_id=self.litellm_trace_id,
                             request_tags=self.request_tags,
+                            guardrail_context=context.guardrail_context,
                         )
 
             async def _prepare_follow_up_call(self):
@@ -646,6 +648,7 @@ async def acompletion_with_mcp(
         litellm_call_id=context.litellm_call_id,
         litellm_trace_id=context.litellm_trace_id,
         request_tags=request_tags,
+        guardrail_context=context.guardrail_context,
     )
 
     if not tool_results:

@@ -249,6 +249,10 @@
           "type": "number",
           "minimum": 0
         },
+        "input_cost_per_audio_token_batches": {
+          "type": "number",
+          "minimum": 0
+        },
         "input_cost_per_audio_token_priority": {
           "type": "number",
           "minimum": 0,
@@ -273,6 +277,10 @@
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
         "input_cost_per_image_token": {
+          "type": "number",
+          "minimum": 0
+        },
+        "input_cost_per_image_token_batches": {
           "type": "number",
           "minimum": 0
         },
@@ -375,6 +383,14 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
+        "input_cost_per_video_token": {
+          "type": "number",
+          "minimum": 0
+        },
+        "input_cost_per_video_token_batches": {
+          "type": "number",
+          "minimum": 0
+        },
         "input_dbu_cost_per_token": {
           "type": "number",
           "minimum": 0
@@ -411,6 +427,7 @@
             "chat",
             "completion",
             "embedding",
+            "evaluation",
             "guardrail",
             "image_edit",
             "image_generation",
@@ -698,6 +715,9 @@
           "type": "boolean"
         },
         "supports_embedding_image_input": {
+          "type": "boolean"
+        },
+        "supports_fast_mode": {
           "type": "boolean"
         },
         "supports_forced_tool_use": {

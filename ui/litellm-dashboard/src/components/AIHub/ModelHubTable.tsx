@@ -660,12 +660,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                       ))}
                     </div>
                   </div>
-                  {selectedModel.description && (
-                    <div className="col-span-2">
-                      <p className="font-medium">Description:</p>
-                      <p className="mt-1">{selectedModel.description}</p>
-                    </div>
-                  )}
                 </div>
               </div>
 
