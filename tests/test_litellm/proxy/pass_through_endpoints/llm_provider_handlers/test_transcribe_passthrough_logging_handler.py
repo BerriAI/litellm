@@ -40,13 +40,26 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 COST_PER_SECOND = 0.0001
 
 
-def _make_response(operation: str, text: str = '{"TranscriptionJob": {}}') -> httpx.Response:
+def _make_response(operation: str) -> httpx.Response:
     request = httpx.Request(
         "POST",
         "https://transcribe.us-west-2.amazonaws.com/",
         headers={"X-Amz-Target": f"Transcribe.{operation}"},
     )
-    return httpx.Response(200, request=request, text=text)
+    return httpx.Response(200, request=request, text='{"TranscriptionJob": {}}')
+
+
+async def _relayed_response(operation: str, body: bytes) -> httpx.Response:
+    response = httpx.Response(
+        200,
+        request=_make_response(operation).request,
+        headers={"content-type": "application/x-amz-json-1.1"},
+        stream=httpx.ByteStream(body),
+    )
+    async for _ in response.aiter_bytes():
+        pass
+    await response.aclose()
+    return response
 
 
 def _make_logging_obj() -> MagicMock:
@@ -332,7 +345,7 @@ class TestPriceTranscriptionJob:
         get_job, seen = _missing_job("BadRequestException")
         media_seconds, measured = _media_probe(17.577)
         started = started_transcription_job(
-            '{"TranscriptionJob": {"Media": {"MediaFileUri": "s3://b/started.wav"}, "CreationTime": 5.0}}'
+            {"TranscriptionJob": {"Media": {"MediaFileUri": "s3://b/started.wav"}, "CreationTime": 5.0}}
         )
 
         cost = await price_transcription_job(
@@ -450,16 +463,22 @@ class TestMediaFileSeconds:
 class TestStartedTranscriptionJob:
     def test_reads_the_media_and_creation_time_from_the_start_response(self):
         started = started_transcription_job(
-            '{"TranscriptionJob": {"TranscriptionJobName": "j", "Media": {"MediaFileUri": "s3://b/a.wav"},'
-            ' "CreationTime": 1.5, "TranscriptionJobStatus": "IN_PROGRESS"}}'
+            {
+                "TranscriptionJob": {
+                    "TranscriptionJobName": "j",
+                    "Media": {"MediaFileUri": "s3://b/a.wav"},
+                    "CreationTime": 1.5,
+                    "TranscriptionJobStatus": "IN_PROGRESS",
+                }
+            }
         )
 
         assert started == TranscriptionJobRecord(
             TranscriptionJobStatus="IN_PROGRESS", CreationTime=1.5, Media={"MediaFileUri": "s3://b/a.wav"}
         )
 
-    @pytest.mark.parametrize("body", ["not json", "[]", '{"TranscriptionJob": {"CreationTime": "soon"}}'])
-    def test_unreadable_start_response_yields_no_record(self, body: str):
+    @pytest.mark.parametrize("body", [None, {"Message": "throttled"}, {"TranscriptionJob": {"CreationTime": "soon"}}])
+    def test_unreadable_start_response_yields_no_record(self, body: dict[str, object] | None):
         assert started_transcription_job(body) is None
 
 
@@ -744,6 +763,7 @@ class TestStartTranscriptionJobIsLoggedAtJobCost:
         logging_obj = _make_logging_obj()
         task = handler.schedule_priced_job_logging(
             httpx_response=_make_response("StartTranscriptionJob"),
+            response_body={"TranscriptionJob": {}},
             logging_obj=logging_obj,
             url_route="https://transcribe.us-west-2.amazonaws.com/",
             result='{"TranscriptionJob": {}}',
@@ -778,6 +798,7 @@ class TestStartTranscriptionJobIsLoggedAtJobCost:
         monkeypatch.delitem(litellm.model_cost, "transcribe/StartTranscriptionJob")
         await TranscribePassthroughLoggingHandler(job_pricer=job_pricer).schedule_priced_job_logging(
             httpx_response=_make_response("StartTranscriptionJob"),
+            response_body={"TranscriptionJob": {}},
             logging_obj=_make_logging_obj(),
             url_route="https://transcribe.us-west-2.amazonaws.com/",
             result='{"TranscriptionJob": {}}',
@@ -828,29 +849,34 @@ class TestStartTranscriptionJobIsLoggedAtJobCost:
         assert [entry["response_cost"] for entry in immediate] == [0.0]
 
     @pytest.mark.asyncio
-    async def test_pass_through_success_handler_gives_the_pricer_the_started_job_from_the_response(self):
+    async def test_pass_through_success_handler_prices_a_relayed_start_response_from_its_parsed_body(self):
         started_jobs: list[TranscriptionJobRecord | None] = []
+        logged_costs: list[object] = []
 
         async def job_pricer(
             job_name: str, aws_region_name: str, cost_per_second: float, started_job: TranscriptionJobRecord | None
         ) -> float:
             started_jobs.append(started_job)
-            return 0.0
+            return 18 * COST_PER_SECOND
 
         async def log_dispatch(**kwargs: object) -> None:
-            pass
+            logged_costs.append(kwargs["response_cost"])
 
-        start_response = (
-            '{"TranscriptionJob": {"TranscriptionJobName": "litellm-job-1", "TranscriptionJobStatus": "IN_PROGRESS",'
-            ' "Media": {"MediaFileUri": "s3://b/started.wav"}, "CreationTime": 5.0}}'
-        )
+        start_response = {
+            "TranscriptionJob": {
+                "TranscriptionJobName": "litellm-job-1",
+                "TranscriptionJobStatus": "IN_PROGRESS",
+                "Media": {"MediaFileUri": "s3://b/started.wav"},
+                "CreationTime": 5.0,
+            }
+        }
         logging = PassThroughEndpointLogging(
             TranscribePassthroughLoggingHandler(job_pricer=job_pricer), log_dispatch=log_dispatch
         )
 
         await logging.pass_through_async_success_handler(
-            httpx_response=_make_response("StartTranscriptionJob", text=start_response),
-            response_body=json.loads(start_response),
+            httpx_response=await _relayed_response("StartTranscriptionJob", json.dumps(start_response).encode()),
+            response_body=start_response,
             logging_obj=_make_logging_obj(),
             url_route="https://transcribe.us-west-2.amazonaws.com/",
             result="",
@@ -868,6 +894,7 @@ class TestStartTranscriptionJobIsLoggedAtJobCost:
                 TranscriptionJobStatus="IN_PROGRESS", CreationTime=5.0, Media={"MediaFileUri": "s3://b/started.wav"}
             )
         ]
+        assert logged_costs == [pytest.approx(18 * COST_PER_SECOND)]
 
 
 class TestIsTranscribeRoute:

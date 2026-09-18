@@ -374,6 +374,7 @@ class PassThroughEndpointLogging:
         ):
             self.transcribe_passthrough_logging_handler.schedule_priced_job_logging(
                 httpx_response=httpx_response,
+                response_body=response_body if isinstance(response_body, dict) else None,
                 logging_obj=logging_obj,
                 url_route=url_route,
                 result=result,
