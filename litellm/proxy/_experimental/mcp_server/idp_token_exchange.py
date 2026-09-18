@@ -7,9 +7,10 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Final, Protocol
+from typing import Final, Literal, Protocol
 
 from fastapi import HTTPException, Request
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import SubjectIdentity, SubjectTokenRefusal
@@ -22,6 +23,11 @@ REJECTED_SUBJECT_TOKEN: Final = "subject_token was rejected by the gateway's JWT
 SUBJECT_TOKEN_CHECK_UNAVAILABLE: Final = (
     "the gateway could not verify subject_token because its identity provider or database is unavailable; retry"
 )
+SUBJECT_TOKEN_CHECK_FAULTED: Final = (
+    "the gateway could not verify subject_token because its database reported a fault that is not a transient "
+    "outage; retrying will not help until the gateway deployment is repaired"
+)
+GatewayOutage = Literal["retryable", "faulted"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,9 +154,9 @@ async def identity_from_subject_token(
     RFC 8693 section 2.2.2 prescribes for an invalid or unacceptable subject token, and a
     check the gateway could not complete (the IdP's JWKS unreachable with no cached copy,
     the auth database down) as ``temporarily_unavailable``, so the client retries instead
-    of treating a valid token as bad. The reason stays in the proxy log: this endpoint is
-    public and JWT auth's own wording can name the JWKS URL it fetched or quote the IdP's
-    response."""
+    of treating a valid token as bad, worded by whether retrying can help. The reason stays
+    in the proxy log: this endpoint is public and JWT auth's own wording can name the JWKS
+    URL it fetched or quote the IdP's response."""
     unmet: Final = prerequisites.refusal()
     if unmet is not None:
         return unmet
@@ -171,20 +177,34 @@ async def identity_from_subject_token(
 
 
 def _refusal_for(denied: Exception, reason: object) -> SubjectTokenRefusal:
-    if _gateway_could_not_verify(denied):
-        verbose_proxy_logger.error("token exchange could not verify a subject_token, retryable: %s", reason)
-        return SubjectTokenRefusal(error="temporarily_unavailable", description=SUBJECT_TOKEN_CHECK_UNAVAILABLE)
-    verbose_proxy_logger.warning("token exchange refused a subject_token: %s", reason)
-    return SubjectTokenRefusal(error="invalid_request", description=REJECTED_SUBJECT_TOKEN)
+    outage: Final = _gateway_could_not_verify(denied)
+    if outage is None:
+        verbose_proxy_logger.warning("token exchange refused a subject_token: %s", reason)
+        return SubjectTokenRefusal(error="invalid_request", description=REJECTED_SUBJECT_TOKEN)
+    verbose_proxy_logger.error("token exchange could not verify a subject_token, %s: %s", outage, reason)
+    return SubjectTokenRefusal(error="temporarily_unavailable", description=_check_unavailable_description(outage))
 
 
-def _gateway_could_not_verify(denied: Exception) -> bool:
-    """A 5xx from JWT auth (the IdP's JWKS unreachable with no cached copy) or a database
-    outage anywhere in the chain (``get_user_object`` wraps prisma failures in a bare
-    ``ValueError``) is the gateway failing, not the token."""
-    if _is_server_error(denied):
-        return True
-    return PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(denied) is not None
+def _check_unavailable_description(outage: GatewayOutage) -> str:
+    match outage:
+        case "retryable":
+            return SUBJECT_TOKEN_CHECK_UNAVAILABLE
+        case "faulted":
+            return SUBJECT_TOKEN_CHECK_FAULTED
+        case _:
+            assert_never(outage)
+
+
+def _gateway_could_not_verify(denied: Exception) -> GatewayOutage | None:
+    """A database fault anywhere in the chain (``get_user_object`` wraps prisma failures in a
+    bare ``ValueError``) or a 5xx from JWT auth (the IdP's JWKS unreachable with no cached
+    copy) is the gateway failing, not the token. A fault retrying cannot clear (a missing or
+    version-skewed query engine) is named as such, the way the mint path words it, so the
+    client is not told to wait on a deployment that needs repair."""
+    fault: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(denied)
+    if fault is not None:
+        return "faulted" if PrismaDBExceptionHandler.is_permanent_database_fault(fault) else "retryable"
+    return "retryable" if _is_server_error(denied) else None
 
 
 def _is_server_error(denied: Exception) -> bool:
