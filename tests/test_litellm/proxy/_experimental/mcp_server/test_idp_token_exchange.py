@@ -2,12 +2,14 @@ import logging
 
 import pytest
 from fastapi import HTTPException
+from prisma.engine.errors import BinaryNotFoundError
 from prisma.errors import DataError
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import SubjectIdentity, SubjectTokenRefusal
 from litellm.proxy._experimental.mcp_server.idp_token_exchange import (
     REJECTED_SUBJECT_TOKEN,
+    SUBJECT_TOKEN_CHECK_FAULTED,
     SUBJECT_TOKEN_CHECK_UNAVAILABLE,
     TokenExchangePrerequisites,
     identity_from_subject_token,
@@ -212,3 +214,24 @@ async def test_an_idp_or_gateway_outage_is_reported_as_retryable_not_as_a_bad_to
     refusal = await _identity(_Authorizer(raises=raised))
     assert refusal == SubjectTokenRefusal(error="temporarily_unavailable", description=SUBJECT_TOKEN_CHECK_UNAVAILABLE)
     assert reason in caplog.text
+
+
+def _user_lookup_wrapping_a_fault_retrying_cannot_clear():
+    try:
+        raise BinaryNotFoundError("query engine binary not found")
+    except BinaryNotFoundError as fault:
+        try:
+            raise ValueError(f"User doesn't exist in db. 'user_id'=u1. Got error - {fault}")
+        except ValueError as wrapped:
+            return wrapped
+
+
+@pytest.mark.asyncio
+async def test_a_database_fault_retrying_cannot_clear_is_not_reported_as_a_transient_outage(caplog):
+    """The status stays 503 (the only OAuth error a client reads as the server's fault, and what
+    the mint path answers to the same fault) but the wording must not tell the client to wait."""
+    caplog.set_level(logging.ERROR, logger="LiteLLM Proxy")
+    refusal = await _identity(_Authorizer(raises=_user_lookup_wrapping_a_fault_retrying_cannot_clear()))
+    assert refusal == SubjectTokenRefusal(error="temporarily_unavailable", description=SUBJECT_TOKEN_CHECK_FAULTED)
+    assert "retrying will not help" in refusal.description
+    assert "faulted: " in caplog.text and "query engine binary not found" in caplog.text
