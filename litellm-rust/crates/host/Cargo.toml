@@ -8,7 +8,7 @@ repository.workspace = true
 [dependencies]
 litellm-auth.workspace = true
 serde_json.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 rstest.workspace = true
-tokio = { workspace = true, features = ["macros"] }

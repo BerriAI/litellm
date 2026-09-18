@@ -6,6 +6,7 @@ use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host::{
     event::{MachineEvent, RawResponse, RequestContext, WireRequest},
     host::{Demand, Host},
+    machine::{HostChannel, MachineFault, RouteMachine},
     route::Route,
 };
 use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
@@ -18,10 +19,7 @@ use super::{
     prepare::prepare_provider_request,
     types::MessagesRequest,
 };
-use crate::{
-    constants::ANTHROPIC_MESSAGES_PROVIDER,
-    machine::{HostChannel, MachineFault, RouteMachine},
-};
+use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessagesOp {
