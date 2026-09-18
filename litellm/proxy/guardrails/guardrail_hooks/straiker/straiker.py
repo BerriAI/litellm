@@ -491,7 +491,7 @@ def _v3_answer_json(
     response: Final = _v3_answer(request_data, model)
     if response:
         return json.dumps(response, default=str)
-    texts: Final = tuple(t for t in (inputs.get("texts") or []) if isinstance(t, str) and t)
+    texts: Final = tuple(t for t in (inputs.get("texts") or []) if t)
     if not texts:
         return None
     message: Final = _frozen((("role", "assistant"), ("content", "\n".join(texts))))
@@ -690,7 +690,7 @@ def _v3_response(body: Mapping[str, object]) -> StraikerWebhookResponse:
     return StraikerWebhookResponse(
         action="BLOCKED" if blocked else "NONE",
         blocked_reason=reason,
-        turnId=verdict.get("turn_id") or body.get("turn_id"),
+        turnId=_as_optional_str(verdict.get("turn_id")) or _as_optional_str(body.get("turn_id")),
     )
 
 
@@ -877,7 +877,7 @@ class StraikerGuardrail(CustomGuardrail):
             )
 
         url: Final = self._webhook_url()
-        headers: Final = {**self._headers(), **(headers or {})}
+        merged_headers: Final = {**self._headers(), **(headers or {})}
         attempts: Final = self.max_retries + 1
         last_failure: _WebhookFailure | None = None
 
@@ -895,7 +895,7 @@ class StraikerGuardrail(CustomGuardrail):
             )
 
         for attempt in range(attempts):
-            parsed, last_failure = await self._attempt(url, body, headers)
+            parsed, last_failure = await self._attempt(url, body, merged_headers)
             if last_failure is None or not last_failure.retryable:
                 return parsed, last_failure
             if attempt < attempts - 1:
@@ -905,7 +905,7 @@ class StraikerGuardrail(CustomGuardrail):
         return None, last_failure or _WebhookFailure("unknown error", is_unreachable=True)
 
     async def _attempt(
-        self, url: str, body: bytes, headers: Mapping[str, str]
+        self, url: str, body: bytes, headers: dict[str, str]
     ) -> tuple[StraikerWebhookResponse | None, _WebhookFailure | None]:
         try:
             resp: Final = await self.async_handler.post(url, content=body, headers=headers, timeout=self.timeout)
@@ -915,6 +915,8 @@ class StraikerGuardrail(CustomGuardrail):
             return None, _WebhookFailure(f"{type(e).__name__}: {e}", is_unreachable=True, retryable=True)
         except (json.JSONDecodeError, TypeError, ValueError) as e:
             return None, _WebhookFailure(f"{type(e).__name__}: {e}", is_unreachable=False)
+        if resp is None:
+            return None, _WebhookFailure("no response", is_unreachable=True, retryable=True)
         if resp.status_code == 200:
             return self._parse_verdict(resp)
         return None, _status_failure(resp.status_code, resp.text)
