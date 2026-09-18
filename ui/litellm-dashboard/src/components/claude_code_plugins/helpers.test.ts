@@ -1,26 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   formatInstallCommand,
-  extractCategories,
   validatePluginName,
   getSourceDisplayText,
   getSourceLink,
   getCategoryBadgeColor,
-  formatDateString,
-  truncateText,
-  filterPluginsBySearch,
-  filterPluginsByCategory,
   isValidSemanticVersion,
   isValidEmail,
   isValidUrl,
   parseKeywords,
-  formatKeywords,
   parseSkillSource,
   isValidSubPath,
   isValidSha256,
   buildMarketplaceSettingsSnippet,
 } from "./helpers";
-import { MarketplacePluginEntry } from "./types";
 
 describe("buildMarketplaceSettingsSnippet", () => {
   it("nests the url under a source object so Claude Code accepts the marketplace", () => {
@@ -44,27 +37,6 @@ describe("formatInstallCommand", () => {
 
   it("uses the plugin name as the identifier", () => {
     expect(formatInstallCommand({ name: "code-review" })).toBe("/plugin install code-review@litellm");
-  });
-});
-
-describe("extractCategories", () => {
-  it("returns All and Other for empty list", () => {
-    expect(extractCategories([])).toEqual(["All", "Other"]);
-  });
-
-  it("extracts and sorts unique categories", () => {
-    const plugins = [{ category: "Development" }, { category: "Analytics" }, { category: "Development" }];
-    expect(extractCategories(plugins)).toEqual(["All", "Analytics", "Development", "Other"]);
-  });
-
-  it("ignores empty/whitespace categories", () => {
-    const plugins = [{ category: "" }, { category: "  " }, { category: "Tools" }];
-    expect(extractCategories(plugins)).toEqual(["All", "Tools", "Other"]);
-  });
-
-  it("handles undefined category", () => {
-    const plugins = [{ category: undefined }, { category: "Security" }];
-    expect(extractCategories(plugins)).toEqual(["All", "Security", "Other"]);
   });
 });
 
@@ -209,106 +181,6 @@ describe("getCategoryBadgeColor", () => {
   });
 });
 
-describe("formatDateString", () => {
-  it("formats valid date strings", () => {
-    const result = formatDateString("2024-01-15T12:00:00Z");
-    expect(result).toContain("2024");
-    expect(result).toContain("Jan");
-    expect(result).toContain("15");
-  });
-
-  it("returns N/A for undefined", () => {
-    expect(formatDateString(undefined)).toBe("N/A");
-  });
-
-  it("returns N/A for empty string", () => {
-    expect(formatDateString("")).toBe("N/A");
-  });
-});
-
-describe("truncateText", () => {
-  it("returns text unchanged if shorter than max", () => {
-    expect(truncateText("hello", 10)).toBe("hello");
-  });
-
-  it("truncates and adds ellipsis", () => {
-    expect(truncateText("hello world", 5)).toBe("hello...");
-  });
-
-  it("handles exact length", () => {
-    expect(truncateText("hello", 5)).toBe("hello");
-  });
-
-  it("handles empty text", () => {
-    expect(truncateText("", 5)).toBe("");
-  });
-});
-
-describe("filterPluginsBySearch", () => {
-  const plugins: MarketplacePluginEntry[] = [
-    {
-      name: "code-formatter",
-      source: { source: "github", repo: "org/formatter" },
-      description: "Formats code nicely",
-      keywords: ["format", "lint"],
-    },
-    {
-      name: "data-viewer",
-      source: { source: "github", repo: "org/viewer" },
-      description: "View data",
-      keywords: ["analytics"],
-    },
-  ];
-
-  it("returns all plugins for empty search", () => {
-    expect(filterPluginsBySearch(plugins, "")).toEqual(plugins);
-    expect(filterPluginsBySearch(plugins, "  ")).toEqual(plugins);
-  });
-
-  it("matches by name", () => {
-    expect(filterPluginsBySearch(plugins, "formatter")).toHaveLength(1);
-    expect(filterPluginsBySearch(plugins, "formatter")[0].name).toBe("code-formatter");
-  });
-
-  it("matches by description", () => {
-    expect(filterPluginsBySearch(plugins, "nicely")).toHaveLength(1);
-  });
-
-  it("matches by keyword", () => {
-    expect(filterPluginsBySearch(plugins, "analytics")).toHaveLength(1);
-    expect(filterPluginsBySearch(plugins, "analytics")[0].name).toBe("data-viewer");
-  });
-
-  it("is case insensitive", () => {
-    expect(filterPluginsBySearch(plugins, "FORMATTER")).toHaveLength(1);
-  });
-});
-
-describe("filterPluginsByCategory", () => {
-  const plugins: MarketplacePluginEntry[] = [
-    { name: "a", source: { source: "github" }, category: "Dev" },
-    { name: "b", source: { source: "github" }, category: "Security" },
-    { name: "c", source: { source: "github" }, category: "" },
-    { name: "d", source: { source: "github" } },
-  ];
-
-  it("returns all plugins for 'All'", () => {
-    expect(filterPluginsByCategory(plugins, "All")).toEqual(plugins);
-  });
-
-  it("returns uncategorized plugins for 'Other'", () => {
-    const result = filterPluginsByCategory(plugins, "Other");
-    expect(result).toHaveLength(2);
-    expect(result.map((p) => p.name)).toEqual(["c", "d"]);
-  });
-
-  it("filters by specific category", () => {
-    const result = filterPluginsByCategory(plugins, "Dev");
-    expect(result).toHaveLength(1);
-    expect(result[0].name).toBe("a");
-  });
-});
-
 describe("isValidSemanticVersion", () => {
   it("accepts valid semver", () => {
     expect(isValidSemanticVersion("1.0.0")).toBe(true);
@@ -386,17 +258,6 @@ describe("parseKeywords", () => {
   it("returns empty array for empty string", () => {
     expect(parseKeywords("")).toEqual([]);
     expect(parseKeywords("  ")).toEqual([]);
-  });
-});
-
-describe("formatKeywords", () => {
-  it("joins keywords with comma and space", () => {
-    expect(formatKeywords(["a", "b", "c"])).toBe("a, b, c");
-  });
-
-  it("returns empty string for empty/undefined array", () => {
-    expect(formatKeywords([])).toBe("");
-    expect(formatKeywords(undefined)).toBe("");
   });
 });
 

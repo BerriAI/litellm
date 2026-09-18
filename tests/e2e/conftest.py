@@ -38,6 +38,7 @@ from e2e_config import (
 from e2e_db import RESET_OPT_IN_ENV, reset_spend_logs, run_spend_log_cleanup
 from e2e_http import unwrap
 from fixture_mode import fixture_mode_collection_error, fixture_report_lines
+from fixture_mode import pytest_fixture_setup as pytest_fixture_setup
 from idp import Identity, Keycloak, keycloak_from_env
 from junit_properties import attach_result_properties
 from lifecycle import ProxyClientProvider, ResourceManager
@@ -126,8 +127,7 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
-        "cli_determinism: drives the real claude CLI for several seconds, which widens the window in which "
-        "another test's in-flight upstream call is attributed to it; deselected unless E2E_CLI_DETERMINISM is set",
+        "cli_determinism: drives the real claude CLI for several seconds; deselected unless E2E_CLI_DETERMINISM is set",
     )
     config.addinivalue_line(
         "markers",

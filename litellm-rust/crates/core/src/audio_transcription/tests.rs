@@ -1,11 +1,13 @@
-use std::io::{Read, Write};
-use std::net::TcpListener;
-use std::thread;
+use std::{
+    io::{Read, Write},
+    net::TcpListener,
+    thread,
+};
 
 use serde_json::{Map, json};
 
 use super::audio_transcription;
-use super::types::AudioTranscriptionRequest;
+use crate::audio_transcription::types::AudioTranscriptionRequest;
 
 #[tokio::test]
 async fn bedrock_request_is_signed_and_contains_audio() {

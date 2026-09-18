@@ -9,6 +9,7 @@ from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequenc
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import groupby
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 from urllib.parse import urlencode, urlparse
 
@@ -72,7 +73,9 @@ from litellm.proxy.auth.auth_utils import request_dispatched_to_pass_through_end
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
+    log_llm_api_exception,
     open_sse_before_first_byte,
+    resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
@@ -80,6 +83,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
+    litellm_call_id_headers,
     openai_error_param,
     openai_error_type,
 )
@@ -196,14 +200,15 @@ async def chat_completion_pass_through_endpoint(
         version,
     )
 
-    data = {}
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+    data = {"litellm_call_id": litellm_call_id}
     try:
         body: Final = await request.body()
         body_str: Final = body.decode()
         try:
-            data = ast.literal_eval(body_str)
+            data = ast.literal_eval(body_str) | data
         except Exception:
-            data = json.loads(body_str)
+            data = json.loads(body_str) | data
 
         data["adapter_id"] = adapter_id
 
@@ -290,9 +295,7 @@ async def chat_completion_pass_through_endpoint(
         response_cost: Final = hidden_params.get("response_cost", None) or ""
 
         ### ALERTING ###
-        asyncio.create_task(
-            proxy_logging_obj.update_request_status(litellm_call_id=data.get("litellm_call_id", ""), status="success")
-        )
+        asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
 
         verbose_proxy_logger.debug("final response: %s", response)
 
@@ -313,12 +316,13 @@ async def chat_completion_pass_through_endpoint(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.completion(): Exception occured - %s", e)
+        log_llm_api_exception(e, litellm_call_id)
         error_msg: Final = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=openai_error_type(e, error_status_code(e, 500)),
             param=openai_error_param(e),
+            headers=litellm_call_id_headers(litellm_call_id),
             code=error_status_code(e, 500),
         )
 
@@ -988,7 +992,7 @@ async def pass_through_request(
         )
         upstream_headers: Final = _with_trace_context(headers, parent_span=user_api_key_dict.parent_otel_span)
 
-        requested_query_params: dict | None = query_params or dict(request.query_params)
+        requested_query_params: dict | None = query_params or dict(request.query_params) or None
 
         endpoint_type: Final[EndpointType] = HttpPassThroughEndpointHelpers.get_endpoint_type(str(url))
 
@@ -1190,7 +1194,7 @@ async def pass_through_request(
                 query=urlencode(
                     HttpPassThroughEndpointHelpers.get_merged_query_parameters(
                         existing_url=url,
-                        request_query_params=requested_query_params,
+                        request_query_params=requested_query_params or MappingProxyType({}),
                         default_query_params=default_query_params,
                     )
                 ).encode("ascii")

@@ -17,6 +17,7 @@ def main() -> int:
     parser.add_argument("group", choices=tuple(GROUPS))
     parser.add_argument("--results", type=Path, default=Path("test-results/integration"))
     parser.add_argument("--seed", type=int, default=int(os.environ.get("INTEGRATION_SEED", "4106601")))
+    parser.add_argument("--order-seed", type=int, default=int(os.environ.get("INTEGRATION_ORDER_SEED", "0")))
     options: Final = parser.parse_args()
     root: Final = Path(__file__).resolve().parents[2]
     selected: Final = tuple(
@@ -53,6 +54,7 @@ def main() -> int:
             "--timeout=90",
             "--durations=15",
             f"--hypothesis-seed={options.seed}",
+            f"--integration-order-seed={options.order_seed}",
             f"--junitxml={output / 'junit.xml'}",
         ],
         cwd=root,

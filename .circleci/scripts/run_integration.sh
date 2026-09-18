@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ "${GITHUB_ACTIONS:-}" = true ]; then
+  echo "Integration contracts are owned by CircleCI" >&2
+  exit 1
+fi
+
 suite="${1:?integration suite required}"
 results="test-results/integration-${suite}"
 mkdir -p "$results"
@@ -65,7 +70,13 @@ export INTEGRATION_PROXY_URL=http://127.0.0.1:4000
 export INTEGRATION_PEER_URL=""
 export INTEGRATION_UPSTREAM_URL=http://127.0.0.1:8190
 export INTEGRATION_MASTER_KEY="$LITELLM_MASTER_KEY"
-export INTEGRATION_SEED="$((16#$(git rev-parse --short=8 HEAD)))"
+export LITELLM_UI_PATH="$PWD/litellm/proxy/_experimental/out"
+if [ "$suite" = browser ]; then
+  export LITELLM_UI_PATH="$PWD/ui/litellm-dashboard/out"
+  test -f "$LITELLM_UI_PATH/index.html"
+fi
+export INTEGRATION_SEED="$(.venv/bin/python -c 'import hashlib,os; print(int(hashlib.sha256((os.environ.get("CIRCLE_SHA1", "local") + os.environ.get("CIRCLE_WORKFLOW_ID", "local")).encode()).hexdigest()[:8],16))')"
+export INTEGRATION_ORDER_SEED="$INTEGRATION_SEED"
 
 uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma > "$results/prisma-generate.log" 2>&1
 
@@ -102,7 +113,7 @@ start_proxy() {
   local log_name="$2"
   setsid env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" INTEGRATION_RUN_ID="$integration_identity" \
     DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
-    LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" LITELLM_SALT_KEY="$LITELLM_SALT_KEY" \
+    LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" LITELLM_SALT_KEY="$LITELLM_SALT_KEY" LITELLM_UI_PATH="$LITELLM_UI_PATH" PROXY_BASE_URL="http://127.0.0.1:$port" \
     LITELLM_MODE=PRODUCTION LITELLM_LOCAL_MODEL_COST_MAP=True STORE_MODEL_IN_DB=True \
     AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \
     .venv/bin/python -m integration._support.proxy --config tests/integration/proxy_config.yaml \
@@ -131,6 +142,19 @@ if [ "$suite" = providers ]; then
     --junitxml="$results/replay-controls.xml"
 fi
 
+if [ "$suite" = browser ]; then
+  export E2E_UI_BASE_URL="$INTEGRATION_PROXY_URL" E2E_UI_ARTIFACT_DIR="$PWD/$results"
+  export INTEGRATION_PYTHON="$PWD/.venv/bin/python"
+  timeout --signal=TERM --kill-after=20s 3m env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
+    INTEGRATION_RUN_ID="$integration_identity" DATABASE_URL="$DATABASE_URL" \
+    INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" INTEGRATION_PYTHON="$INTEGRATION_PYTHON" \
+    E2E_UI_BASE_URL="$E2E_UI_BASE_URL" E2E_UI_ARTIFACT_DIR="$E2E_UI_ARTIFACT_DIR" \
+    LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" CI=true \
+    node tests/e2e/ui/node_modules/@playwright/test/cli.js test --config tests/e2e/ui/integration.config.ts
+  .venv/bin/python .circleci/scripts/verify_integration_browser.py "$results/browser-results.json"
+  exit 0
+fi
+
 timeout --signal=TERM --kill-after=20s 11m env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_RUN_ID="$integration_identity" \
   DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
@@ -138,5 +162,6 @@ timeout --signal=TERM --kill-after=20s 11m env -i PATH="$PATH" HOME="$HOME" PYTH
   INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
   INTEGRATION_MASTER_KEY="$INTEGRATION_MASTER_KEY" LITELLM_MODE=PRODUCTION \
   INTEGRATION_SEED="$INTEGRATION_SEED" \
+  INTEGRATION_ORDER_SEED="$INTEGRATION_ORDER_SEED" \
   LITELLM_LOCAL_MODEL_COST_MAP=True AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \
   .venv/bin/python tests/integration/run.py "$suite" --results "$results"

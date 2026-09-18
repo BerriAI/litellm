@@ -2927,6 +2927,7 @@ if MCP_AVAILABLE:
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
         host_progress_callback: Callable | None = None,
+        guardrail_context: Mapping[str, object] | None = None,
         **kwargs: Any,
     ) -> CallToolResult:
         """
@@ -3115,6 +3116,7 @@ if MCP_AVAILABLE:
                 server=mcp_server,
                 raw_headers=raw_headers,
                 litellm_logging_obj=litellm_logging_obj,
+                guardrail_context=guardrail_context,
             )
             # `pre_call_tool_check` may return guardrail-modified
             # arguments; honor them on the local path too.
@@ -3168,6 +3170,7 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 litellm_logging_obj=litellm_logging_obj,
+                guardrail_context=guardrail_context,
                 host_progress_callback=host_progress_callback,
             )
 
@@ -3221,6 +3224,7 @@ if MCP_AVAILABLE:
                     server=prefix_server,
                     raw_headers=raw_headers,
                     litellm_logging_obj=litellm_logging_obj,
+                    guardrail_context=guardrail_context,
                 )
                 if "arguments" in hook_result:
                     arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
@@ -3598,6 +3602,7 @@ if MCP_AVAILABLE:
         raw_headers: dict[str, str] | None = None,
         litellm_logging_obj: LiteLLMLoggingObj | None = None,
         host_progress_callback: Callable | None = None,
+        guardrail_context: Mapping[str, object] | None = None,
     ) -> CallToolResult:
         """Handle tool execution for managed server tools"""
         # Import here to avoid circular import
@@ -3615,6 +3620,7 @@ if MCP_AVAILABLE:
             proxy_logging_obj=proxy_logging_obj,
             host_progress_callback=host_progress_callback,
             litellm_logging_obj=litellm_logging_obj,
+            guardrail_context=guardrail_context,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result

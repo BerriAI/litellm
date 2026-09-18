@@ -51,6 +51,7 @@ from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
+    AzureSpillover,
     CallTypes,
     CostBreakdown,
     EmbeddingResponse,
@@ -483,6 +484,7 @@ class LiteLLMRoutes(enum.Enum):
         "/eu.assemblyai",
         "/vllm",
         "/mistral",
+        "/typesafe",
         "/milvus",
         "/gigachat",
         "/watsonx",
@@ -844,9 +846,13 @@ class LiteLLMRoutes(enum.Enum):
     )
 
     self_managed_routes = [
+        # update_team resolves proxy/org/team admin itself and filters team admins
+        # through the team_admin_editable_team_fields setting
+        "/team/update",
         "/team/member_add",
         "/team/member_delete",
         "/management/v1/teams/{team_id}/members/bulk_delete",
+        "/management/v1/teams/{team_id}/members/bulk_update",
         "/team/member_update",
         "/team/{team_id}/member/{user_id}/reset_spend",
         "/team/permissions_list",
@@ -2417,6 +2423,8 @@ class ConfigList(LiteLLMPydanticObjectBase):
     nested_fields: list[FieldDetail] | None = None  # For nested dictionary or Pydantic fields
     field_options: list[str] | None = None  # Allowed values, for field_type == "Select"
     field_tab: str | None = None  # Admin UI sub-tab this field renders under; None groups it with the rest
+    source: Literal["config", "db", "env", "default", "unset"] = "unset"
+    editable: bool = True
 
 
 class UserHeaderMapping(LiteLLMPydanticObjectBase):
@@ -3687,6 +3695,8 @@ class InvitationClaim(LiteLLMPydanticObjectBase):
 class ConfigFieldInfo(LiteLLMPydanticObjectBase):
     field_name: str
     field_value: Any
+    source: Literal["config", "db", "env", "default", "unset"] = "unset"
+    editable: bool = True
 
 
 class CallbackOnUI(LiteLLMPydanticObjectBase):
@@ -3892,6 +3902,7 @@ class SpendLogsMetadata(TypedDict):
     autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed
     litellm_gateway_injected_cache: ReadOnly[str | None]
     router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
+    azure_spillover: ReadOnly[AzureSpillover | None]  # None = Azure did not report spillover
 
 
 class SpendLogsPayload(TypedDict):
@@ -4467,6 +4478,29 @@ class TeamInfoMember(Member):
     user_alias: str | None = None
 
 
+class TeamEditUnrestricted(BaseModel):
+    kind: Literal["unrestricted"] = "unrestricted"
+
+
+class TeamEditAsTeamAdmin(BaseModel):
+    kind: Literal["team_admin"] = "team_admin"
+    editable_fields: tuple[str, ...]
+
+
+class TeamEditAsTeamAdminDisabled(BaseModel):
+    kind: Literal["team_admin_disabled"] = "team_admin_disabled"
+
+
+class TeamEditNone(BaseModel):
+    kind: Literal["none"] = "none"
+
+
+TeamEditAccess = Annotated[
+    TeamEditUnrestricted | TeamEditAsTeamAdmin | TeamEditAsTeamAdminDisabled | TeamEditNone,
+    Field(discriminator="kind"),
+]
+
+
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     members_with_roles: tuple[TeamInfoMember, ...] = ()
     team_member_budget_table: LiteLLM_BudgetTableFull | None = None
@@ -4479,6 +4513,7 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.
     organization_models: list[str] | None = None
     model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
+    caller_edit_access: TeamEditAccess = Field(default_factory=TeamEditNone)
 
 
 class TeamInfoResponseObject(TypedDict):

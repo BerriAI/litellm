@@ -8,28 +8,28 @@ import pytest
 
 from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.logging_utils import (
-    _format_base64_size,
+    format_base64_size,
     _truncate_base64_in_string,
     truncate_base64_in_messages,
     truncate_base64_in_messages_async,
 )
 
 # ---------------------------------------------------------------------------
-# _format_base64_size
+# format_base64_size
 # ---------------------------------------------------------------------------
 
 
 class TestFormatBase64Size:
     def test_bytes_range(self):
-        assert _format_base64_size(4) == "3B"
+        assert format_base64_size(4) == "3B"
 
     def test_kb_range(self):
         # 2000 base64 chars ~ 1500 bytes ~ 1.5KB
-        assert "KB" in _format_base64_size(2000)
+        assert "KB" in format_base64_size(2000)
 
     def test_mb_range(self):
         # 2_000_000 base64 chars ~ 1.5MB
-        result = _format_base64_size(2_000_000)
+        result = format_base64_size(2_000_000)
         assert "MB" in result
 
 
