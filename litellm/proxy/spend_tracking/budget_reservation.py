@@ -688,16 +688,22 @@ async def _get_team_member_budget_counter(
     elif isinstance(cached_team_membership, dict):
         team_membership = LiteLLM_TeamMembership(**cached_team_membership)
 
+    member_budget_row: Final = team_membership.litellm_budget_table if team_membership is not None else None
+    now: Final = datetime.now(timezone.utc)
     team_member_budget: float | None = None
-    if team_membership is not None and team_membership.litellm_budget_table is not None:
-        team_member_budget = team_membership.litellm_budget_table.max_budget
+    if member_budget_row is not None and member_budget_row.max_budget is not None:
+        team_member_budget = member_budget_row.effective_max_budget(now=now)
     else:
         default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
         if isinstance(default_budget_id, str):
             default_budget: Final = await user_api_key_cache.async_get_cache(
                 key=f"team_member_default_budget:{default_budget_id}",
             )
-            team_member_budget = _to_float(_get_value(default_budget, "max_budget"))
+            default_cap: Final = _to_float(_get_value(default_budget, "max_budget"))
+            if default_cap is not None and default_cap > 0:
+                team_member_budget = default_cap + (
+                    member_budget_row.active_temp_budget_increase(now=now) if member_budget_row is not None else 0.0
+                )
 
     if team_member_budget is None or team_member_budget <= 0:
         return None
@@ -959,8 +965,9 @@ async def _set_reserved_entries_actual_cost(
 
 async def _reseed_reserved_entry(item: _EntryAdjustment, actual_cost: float) -> None:
     """Post-call reconcile / release of a counter that was flushed, expired or reseeded between reservation and
-    reconcile: the optimistic delta no longer applies, so reseed from the DB floor (which cannot include this
-    request's cost yet) and add the settled cost, since increment_spend_counters skips reserved keys."""
+    reconcile: the optimistic delta no longer applies, so reseed from the DB floor and add the settled cost, since
+    increment_spend_counters skips reserved keys. The reconcile runs before this request's spend is enqueued to the
+    DB, so the reseeded floor excludes it."""
     from litellm.proxy.proxy_server import _increment_spend_counter_cache, reseed_spend_counter_from_db
 
     reseeded: Final = await reseed_spend_counter_from_db(counter_key=item.counter_key)

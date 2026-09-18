@@ -22,7 +22,7 @@ import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol
 
 from fastapi import (
     APIRouter,
@@ -170,6 +170,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
         admitted_user_context,
         build_effective_auth_contexts,
+        can_access_mcp_server,
         is_ui_session_credential,
     )
     from litellm.proxy._types import (
@@ -219,6 +220,7 @@ if MCP_AVAILABLE:
         MCP_ADMIN_CONFIG_CREDENTIAL_KEYS,
         MCPAuth,
         MCPCredentials,
+        MCPGatewaySessionsResponse,
         normalize_upstream_header_name,
     )
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -1253,7 +1255,7 @@ if MCP_AVAILABLE:
         """
         user_mcp_management_mode: Final = _get_user_mcp_management_mode()
 
-        if user_mcp_management_mode == "view_all":
+        if user_mcp_management_mode == "view_all" and not _is_restricted_virtual_key_request(user_api_key_dict):
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(server_ids=server_ids)
             return [{"server_id": server.server_id, "status": server.status} for server in servers]
 
@@ -1344,6 +1346,32 @@ if MCP_AVAILABLE:
             )
         # Do NOT add to runtime registry — pending servers are not active
         return _redact_mcp_credentials(new_mcp_server)
+
+    @router.get(
+        "/sessions",
+        description="Live stateful MCP gateway sessions on this proxy worker, grouped by AI client and by user.",
+        dependencies=(Depends(user_api_key_auth),),
+        response_model=MCPGatewaySessionsResponse,
+    )
+    @management_endpoint_wrapper
+    async def get_mcp_gateway_sessions(
+        user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    ) -> MCPGatewaySessionsResponse:
+        if user_api_key_dict.user_role not in (
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={  # mutable-ok: HTTPException detail must be a plain mapping to keep this route's {"error": ...} response shape
+                    "error": "Admin access required to view MCP gateway sessions."
+                },
+            )
+        from litellm.proxy._experimental.mcp_server.server import (
+            get_mcp_gateway_sessions_report,
+        )
+
+        return get_mcp_gateway_sessions_report()
 
     @router.get(
         "/server/submissions",
@@ -2483,10 +2511,11 @@ if MCP_AVAILABLE:
                 )
             return server
 
-        allowed_server_ids: Final[set[str]] = set()
-        for auth_context in await build_effective_auth_contexts(user_api_key_dict):
-            allowed_server_ids.update(await global_mcp_server_manager.get_allowed_mcp_servers(auth_context))
-        if server is None or server.server_id not in allowed_server_ids:
+        if server is None or not await can_access_mcp_server(
+            user_api_key_dict,
+            server.server_id,
+            global_mcp_server_manager.get_allowed_mcp_servers,
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
