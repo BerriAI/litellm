@@ -40,6 +40,10 @@ class _FakeConfigTable:
         self.rows[where["param_name"]] = data["update"]["param_value"]
         return _FakeConfigRow(where["param_name"], data["update"]["param_value"])
 
+    async def find_unique(self, *, where: dict[str, str]) -> _FakeConfigRow | None:
+        stored = self.rows.get(where["param_name"])
+        return None if stored is None else _FakeConfigRow(where["param_name"], stored)
+
 
 class _FakeDb:
     """Per-key rows are ``{date: updated_at}`` with a fake database clock that ticks per query,
@@ -68,11 +72,15 @@ class _FakeDb:
         if day in self._prisma.failing_days:
             raise RuntimeError(f"day {day} exploded")
         self._prisma.reconciled.append(day)
+        landing = self._prisma.marker_landing_on_day.get(day)
+        if landing is not None:
+            self.litellm_config.rows[DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM] = landing
         return 1
 
 
 class _FakePrisma:
-    """Enough of PrismaClient for the reconcile: per-key dates, a config table, and execute_raw."""
+    """Enough of PrismaClient for the reconcile: per-key dates, a config table, and execute_raw.
+    ``marker_landing_on_day`` stores another pod's marker the moment this run rewrites that day."""
 
     def __init__(
         self, user_days: tuple[str, ...], failing_days: frozenset[str] = frozenset(), today: date = TODAY
@@ -81,6 +89,7 @@ class _FakePrisma:
         self.today = today
         self.user_rows: dict[str, str] = {d: "clock-0000" for d in user_days}
         self.failing_days = failing_days
+        self.marker_landing_on_day: dict[str, str] = {}
         self.reconciled: list[str] = []
         self.db = _FakeDb(self)
 
@@ -219,6 +228,25 @@ async def test_the_next_run_resumes_from_the_failed_day():
 
     assert result.days_reconciled == ("2026-09-01", "2026-09-02", "2026-09-03")
     assert await reconciled_through(prisma) == "2026-09-03"
+
+
+@pytest.mark.asyncio
+async def test_a_slower_overlapping_run_never_rewinds_the_marker_a_faster_run_stored():
+    """Two pods can reconcile at once (Redis unreachable, or the lock expired on a long backfill).
+    When the faster one has already stored a later marker, the slower one may only add to it. Putting
+    its own older prefix back, or dropping the scan time, would send usage reads for every day in
+    between back to the per-key table until the next run."""
+    prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-02", "2026-09-03"), failing_days=frozenset({"2026-09-03"}))
+    prisma.marker_landing_on_day = {
+        "2026-09-02": '{"reconciled_through": "2026-09-14", "scanned_at": "clock-0009"}',
+    }
+
+    result = await run_daily_global_spend_reconcile(prisma)
+
+    assert result.days_reconciled == ("2026-09-01", "2026-09-02")
+    assert result.reconciled_through == "2026-09-14"
+    marker = await read_marker(prisma)
+    assert marker is not None and (marker.reconciled_through, marker.scanned_at) == ("2026-09-14", "clock-0009")
 
 
 @pytest.mark.asyncio
