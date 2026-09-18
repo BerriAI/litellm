@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 import importlib.metadata
 import importlib.util
 import json
@@ -9,15 +10,19 @@ from typing import Final
 import unittest
 
 
+from packaging.utils import canonicalize_name
+
+
+def installed_versions(distributions: Iterable[importlib.metadata.Distribution]) -> dict[str, str]:
+    return {canonicalize_name(distribution.metadata["Name"]): distribution.version for distribution in distributions}
+
+
 def main(profile: str, environment: Path) -> None:
     import litellm
 
     package: Final = Path(litellm.__file__).resolve()
     assert package.is_relative_to(environment.resolve()), f"wrong wheel import: {package}"
-    installed: Final = {
-        distribution.metadata["Name"].lower().replace("_", "-"): distribution.version
-        for distribution in importlib.metadata.distributions()
-    }
+    installed: Final = installed_versions(importlib.metadata.distributions())
     if profile == "core":
         assert all(importlib.util.find_spec(name) is None for name in ("mcp", "mcp_types", "httpx2", "httpcore2"))
     else:
