@@ -366,16 +366,25 @@ class TestCheckResponsesCost:
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_marks_404_response_stale_expired(
-        self, check_responses_cost_instance, mock_prisma_client
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
     ):
-        """A provider 404 (e.g. dropped store=false/ZDR response) marks the row stale_expired."""
+        """A provider 404 on a response polled through its deployment marks the row stale_expired."""
         import litellm
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        encoded_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="deployment-404",
+            response_id="resp_upstream_404",
+        )
 
         mock_job = MagicMock()
-        mock_job.unified_object_id = "resp_test_404"
+        mock_job.unified_object_id = encoded_response_id
         mock_job.created_by = "test-user"
         mock_job.id = "job-404"
-        mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_404"}
+        mock_job.file_object = {"model": "gpt-4o", "id": encoded_response_id}
+
+        mock_llm_router.get_deployment.return_value = {"model_id": "deployment-404"}
 
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
             return_value=[mock_job]
@@ -396,6 +405,46 @@ class TestCheckResponsesCost:
         update_many.assert_awaited_once()
         assert update_many.call_args.kwargs["where"] == {"id": {"in": ["job-404"]}}
         assert update_many.call_args.kwargs["data"] == {"status": "stale_expired"}
+
+    @pytest.mark.asyncio
+    async def test_check_responses_cost_404_without_router_deployment_keeps_row_for_retry(
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """A 404 while polling without a resolved deployment skips the row for retry."""
+        import litellm
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        encoded_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="deployment-gone",
+            response_id="resp_upstream_gone",
+        )
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = encoded_response_id
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-404-fallback"
+        mock_job.file_object = {"model": "gpt-4o", "id": encoded_response_id}
+
+        mock_llm_router.get_deployment.return_value = None
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+
+        check_responses_cost_instance._get_response = AsyncMock(
+            side_effect=litellm.NotFoundError(
+                message="Response not found", model="gpt-5", llm_provider="openai"
+            )
+        )
+
+        await check_responses_cost_instance.check_responses_cost()
+
+        update_many = mock_prisma_client.db.litellm_managedobjecttable.update_many
+        assert update_many.call_args_list == []
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_non_404_error_keeps_row_for_retry(

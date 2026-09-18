@@ -41,10 +41,15 @@ class CheckResponsesCost:
         self.prisma_client: PrismaClient = prisma_client
         self.llm_router: Router = llm_router
 
+    def _resolve_deployment(self, response_id: str) -> bool:
+        model_id: Optional[str] = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
+        return model_id is not None and self.llm_router.get_deployment(model_id=model_id) is not None
+
     async def _get_response(
         self,
         response_id: str,
         litellm_metadata: Dict[str, str],
+        via_router: bool,
     ) -> ResponsesAPIResponse:
         """Fetch the upstream response, using deployment credentials when available.
 
@@ -55,8 +60,7 @@ class CheckResponsesCost:
         sees provider env vars, so it fails for every deployment whose credentials
         live in the config; the row then never leaves ``queued``.
         """
-        model_id: Optional[str] = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
-        if model_id is None or self.llm_router.get_deployment(model_id=model_id) is None:
+        if not via_router:
             return await litellm.aget_responses(response_id=response_id, litellm_metadata=litellm_metadata)
         router_response = await self.llm_router.aget_responses(
             response_id=response_id, litellm_metadata=litellm_metadata
@@ -120,7 +124,8 @@ class CheckResponsesCost:
         - Cost is tracked by the get-responses call, billed because the poll is stamped
           with BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
         - Mark responses in a terminal state as complete in the database
-        - Mark responses the provider no longer has (404) as stale_expired
+        - Mark responses the provider no longer has (404 through a resolved
+          deployment) as stale_expired
         """
         try:
             await self._cleanup_stale_managed_objects()
@@ -144,6 +149,7 @@ class CheckResponsesCost:
 
         for job in jobs:
             unified_object_id = job.unified_object_id
+            via_router = False
 
             try:
                 from litellm.proxy.hooks.responses_id_security import (
@@ -168,9 +174,11 @@ class CheckResponsesCost:
                     litellm_metadata["model"] = model_name
                     litellm_metadata["model_group"] = model_name  # Use same value for model_group
                 
+                via_router = self._resolve_deployment(responses_id_security)
                 response = await self._get_response(
                     response_id=responses_id_security,
                     litellm_metadata=litellm_metadata,
+                    via_router=via_router,
                 )
                 
                 verbose_proxy_logger.debug(
@@ -178,6 +186,11 @@ class CheckResponsesCost:
                 )
                 
             except litellm.NotFoundError as e:
+                if not via_router:
+                    verbose_proxy_logger.warning(
+                        f"Skipping job {unified_object_id} due to error: {e}"
+                    )
+                    continue
                 verbose_proxy_logger.info(
                     f"Response {unified_object_id} no longer available at provider (404), marking stale_expired: {e}"
                 )
