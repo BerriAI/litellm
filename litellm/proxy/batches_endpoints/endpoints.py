@@ -238,7 +238,11 @@ async def create_batch(
             )
 
             add_openai_project_header(
-                cast(dict[str, object], _create_batch_data), request, cast(str, credentials["custom_llm_provider"])
+                cast(dict[str, object], _create_batch_data),  # cast-ok: TypedDict is a dict at runtime
+                request,
+                cast(  # cast-ok: router credentials identify the provider
+                    str, credentials["custom_llm_provider"]
+                ),
             )
 
             # Create batch using model credentials
@@ -332,7 +336,11 @@ async def create_batch(
                 )
 
                 add_openai_project_header(
-                    cast(dict[str, object], _create_batch_data), request, cast(str, credentials["custom_llm_provider"])
+                    cast(dict[str, object], _create_batch_data),  # cast-ok: TypedDict is a dict at runtime
+                    request,
+                    cast(  # cast-ok: router credentials identify the provider
+                        str, credentials["custom_llm_provider"]
+                    ),
                 )
 
                 # Create batch using model credentials
@@ -353,7 +361,9 @@ async def create_batch(
                     custom_llm_provider=custom_llm_provider,
                 )
                 add_openai_project_header(
-                    cast(dict[str, object], _create_batch_data), request, cast(str, custom_llm_provider)
+                    cast(dict[str, object], _create_batch_data),  # cast-ok: TypedDict is a dict at runtime
+                    request,
+                    cast(str, custom_llm_provider),  # cast-ok: TypedDict is a dict and provider selection is a string
                 )
                 _raise_not_found_when_openai_fallback_unservable(
                     requested_provider=requested_provider,

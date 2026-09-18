@@ -287,7 +287,11 @@ async def route_create_file(
 
         if request is not None:
             add_openai_project_header(
-                cast(dict[str, object], _create_file_request), request, cast(str, credentials["custom_llm_provider"])
+                cast(dict[str, object], _create_file_request),  # cast-ok: TypedDict is a dict at runtime
+                request,
+                cast(  # cast-ok: router credentials identify the provider
+                    str, credentials["custom_llm_provider"]
+                ),
             )
 
         # Create the file with model credentials
@@ -359,7 +363,11 @@ async def route_create_file(
             _create_file_request.update(llm_provider_config)
         _create_file_request.pop("custom_llm_provider", None)
         if request is not None:
-            add_openai_project_header(cast(dict[str, object], _create_file_request), request, custom_llm_provider)
+            add_openai_project_header(
+                cast(dict[str, object], _create_file_request),  # cast-ok: TypedDict is a dict at runtime
+                request,
+                custom_llm_provider,
+            )
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)
 
@@ -675,9 +683,11 @@ async def create_file(
             **data,
         )
 
-        project_in_body = cast(dict[str, object], request_body).get("project")
+        project_in_body = cast(dict[str, object], request_body).get("project")  # cast-ok: parsed form fields are a dict
         if isinstance(project_in_body, str):
-            cast(dict[str, object], _create_file_request)["project"] = project_in_body
+            cast(dict[str, object], _create_file_request)["project"] = (  # cast-ok: TypedDict is a dict at runtime
+                project_in_body
+            )
 
         response = await route_create_file(
             llm_router=llm_router,

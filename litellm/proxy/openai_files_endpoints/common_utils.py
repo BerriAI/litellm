@@ -48,7 +48,12 @@ def add_openai_project_header(data: dict[str, object], request: "Request", provi
     configured_project = data.pop("project", None)
     project = configured_project if isinstance(configured_project, str) else None
     raw_headers = data.get("extra_headers")
-    extra_headers = cast(dict[str, str], raw_headers) if isinstance(raw_headers, dict) else {}
+    if isinstance(raw_headers, dict):
+        extra_headers = cast(  # cast-ok: request API types extra_headers as string pairs
+            dict[str, str], raw_headers
+        )
+    else:
+        extra_headers = {}  # mutable-ok: the SDK requires a per-request header dict
     if project is None:
         project = next(
             (value for key, value in extra_headers.items() if key.lower() == "openai-project"),
@@ -56,8 +61,10 @@ def add_openai_project_header(data: dict[str, object], request: "Request", provi
         )
     project = project or request.headers.get("openai-project") or request.query_params.get("project")
     if project:
-        data["extra_headers"] = {
-            **{key: value for key, value in extra_headers.items() if key.lower() != "openai-project"},
+        data["extra_headers"] = {  # mutable-ok: the SDK requires a per-request header dict
+            **{  # mutable-ok: remove duplicate casing from request headers
+                key: value for key, value in extra_headers.items() if key.lower() != "openai-project"
+            },
             "OpenAI-Project": project,
         }
 
