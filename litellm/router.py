@@ -2574,6 +2574,16 @@ class Router:
                         llm_provider="",
                     )
 
+            ## CHECK MAPPED FINISH REASON ERROR ##
+            if isinstance(response, ModelResponse):
+                if self._should_raise_mapped_finish_reason_error(model=model, response=response, kwargs=kwargs):
+                    raise self._finish_reason_failure_error(
+                        model=model, reason=self._get_mapped_finish_reason(response)
+                    )
+                self._account_mapped_finish_reason_failure(
+                    model=model, deployment=deployment, response=response, kwargs=kwargs
+                )
+
             if (
                 isinstance(response, CustomStreamWrapper)
                 and response.completion_stream is None
@@ -3697,6 +3707,16 @@ class Router:
                             model=model,
                             llm_provider="",
                         )
+
+                ## CHECK MAPPED FINISH REASON ERROR ##
+                if isinstance(response, ModelResponse):
+                    if self._should_raise_mapped_finish_reason_error(model=model, response=response, kwargs=kwargs):
+                        raise self._finish_reason_failure_error(
+                            model=model, reason=self._get_mapped_finish_reason(response)
+                        )
+                    self._account_mapped_finish_reason_failure(
+                        model=model, deployment=deployment, response=response, kwargs=kwargs
+                    )
 
                 if (
                     isinstance(response, CustomStreamWrapper)
