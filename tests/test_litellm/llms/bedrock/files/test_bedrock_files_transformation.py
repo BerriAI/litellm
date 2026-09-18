@@ -2271,6 +2271,19 @@ class TestBedrockFileContentTransformation:
         authorization = litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]["Authorization"]
         assert "/eu-west-1/s3/aws4_request" in authorization
 
+    def test_s3_request_target_uses_configured_endpoint_url(self):
+        from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        lp = get_litellm_params(
+            aws_region_name="us-east-1",
+            s3_endpoint_url="https://bucket.vpce-abc.s3.us-east-1.vpce.amazonaws.com",
+        )
+
+        assert BedrockFilesConfig()._s3_request_target(
+            optional_params={}, litellm_params=lp
+        ).endpoint_url == "https://bucket.vpce-abc.s3.us-east-1.vpce.amazonaws.com"
+
     def test_validate_environment_merges_and_pops_signed_get_headers(self):
         from litellm.llms.bedrock.files.transformation import (
             S3_SIGNED_REQUEST_HEADERS_PARAM,
@@ -2627,6 +2640,100 @@ def test_sign_s3_request_without_body_assumes_role_with_external_id(monkeypatch)
 
     authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
     assert "ASIAFILESGETROLE" in authorization
+
+
+class _SessionTagGatedSTSClient:
+    """Mimics a trust policy with an aws:RequestTag condition: assume_role only succeeds with the expected tags."""
+
+    def __init__(self, expected_tags, access_key_id):
+        self.expected_tags = expected_tags
+        self.access_key_id = access_key_id
+
+    def get_caller_identity(self):
+        return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+    def assume_role(self, **params):
+        import datetime
+
+        from botocore.exceptions import ClientError
+
+        if list(params.get("Tags") or ()) != self.expected_tags:
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:TagSession"}},
+                "AssumeRole",
+            )
+        return {
+            "Credentials": {
+                "AccessKeyId": self.access_key_id,
+                "SecretAccessKey": "assumed-secret",
+                "SessionToken": "assumed-session-token",
+                "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+            }
+        }
+
+
+def test_sign_s3_request_assumes_role_with_session_tags():
+    """The deployment's aws_session_tags must reach STS when signing the S3 upload, not only on chat calls."""
+    from unittest.mock import patch
+
+    import boto3
+
+    from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+    expected_tags = [{"Key": "team", "Value": "genai"}]
+    optional_params = {
+        "aws_region_name": "us-east-1",
+        "aws_access_key_id": "AKIAFILESPUTCALLER",
+        "aws_secret_access_key": "pod-caller-secret",
+        "aws_role_name": "arn:aws:iam::999999999999:role/litellm-files-put-role",
+        "aws_session_name": "litellm-files-put-session",
+        "aws_session_tags": [{"Key": "team", "Value": "genai"}],
+    }
+
+    with patch.object(boto3, "client", return_value=_SessionTagGatedSTSClient(expected_tags, "ASIAFILESPUTTAGGED")):
+        signed_headers, _signed_body = BedrockFilesConfig()._sign_s3_request(
+            content='{"custom_id": "req-1"}',
+            api_base="https://s3.us-east-1.amazonaws.com/safe-bucket/litellm-bedrock-files-model-id-abc.jsonl",
+            optional_params=optional_params,
+        )
+
+    authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
+    assert "ASIAFILESPUTTAGGED" in authorization
+
+
+def test_sign_s3_request_without_body_assumes_role_with_session_tags():
+    """The deployment's aws_session_tags must reach STS when signing the S3 download too."""
+    from unittest.mock import patch
+
+    import boto3
+
+    from litellm.llms.bedrock.files.transformation import (
+        BedrockFilesConfig,
+        _BedrockS3RequestParams,
+    )
+
+    expected_tags = [{"Key": "team", "Value": "genai"}]
+    request_params = _BedrockS3RequestParams.model_validate(
+        {
+            "aws_region_name": "us-east-1",
+            "aws_access_key_id": "AKIAFILESGETCALLER",
+            "aws_secret_access_key": "pod-caller-secret",
+            "aws_role_name": "arn:aws:iam::999999999999:role/litellm-files-get-role",
+            "aws_session_name": "litellm-files-get-session",
+            "aws_session_tags": [{"Key": "team", "Value": "genai"}],
+        }
+    )
+
+    with patch.object(boto3, "client", return_value=_SessionTagGatedSTSClient(expected_tags, "ASIAFILESGETTAGGED")):
+        signed_headers = BedrockFilesConfig()._sign_s3_request_without_body(
+            method="GET",
+            api_base="https://s3.us-east-1.amazonaws.com/safe-bucket/litellm-bedrock-files-model-id-abc.jsonl",
+            aws_region_name="us-east-1",
+            request_params=request_params,
+        )
+
+    authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
+    assert "ASIAFILESGETTAGGED" in authorization
 
 
 def _s3_signature_for(method: str, url: str, headers: Mapping[str, str]) -> str:

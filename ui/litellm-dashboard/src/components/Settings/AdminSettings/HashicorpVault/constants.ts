@@ -3,6 +3,8 @@ export const SENSITIVE_FIELDS = new Set(["vault_token", "approle_secret_id", "cl
 export const FIELD_LABELS: Record<string, string> = {
   vault_addr: "Vault Address",
   vault_namespace: "Namespace",
+  vault_login_namespace: "Login Namespace",
+  vault_secret_namespace: "Secret Namespace",
   vault_mount_name: "KV Mount Name",
   vault_path_prefix: "Path Prefix",
   vault_token: "Token",
