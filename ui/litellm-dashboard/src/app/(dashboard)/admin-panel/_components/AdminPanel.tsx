@@ -17,6 +17,7 @@ import SCIMConfig from "@/components/SCIM";
 import LoggingSettings from "@/components/Settings/AdminSettings/LoggingSettings/LoggingSettings";
 import SSOSettings from "@/components/Settings/AdminSettings/SSOSettings/SSOSettings";
 import UISettings from "@/components/Settings/AdminSettings/UISettings/UISettings";
+import TeamAdminEditableFieldsSettings from "@/components/Settings/AdminSettings/UISettings/TeamAdminEditableFieldsSettings";
 import UserBannerSettings from "@/components/Settings/AdminSettings/UserBannerSettings/UserBannerSettings";
 import CyberArk from "@/components/Settings/AdminSettings/CyberArk/CyberArk";
 import HashicorpVault from "@/components/Settings/AdminSettings/HashicorpVault/HashicorpVault";
@@ -382,6 +383,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
       children: (
         <div className="flex flex-col gap-4">
           <UISettings />
+          <TeamAdminEditableFieldsSettings />
           <UserBannerSettings />
         </div>
       ),

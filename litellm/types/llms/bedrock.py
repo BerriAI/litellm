@@ -232,7 +232,7 @@ class CacheDetailBlock(TypedDict):
 class ConverseTokenUsageBlock(TypedDict, total=False):
     inputTokens: Required[ReadOnly[int]]
     outputTokens: Required[ReadOnly[int]]
-    totalTokens: Required[ReadOnly[int]]
+    totalTokens: ReadOnly[int]
     cacheReadInputTokenCount: ReadOnly[int]
     cacheReadInputTokens: ReadOnly[int]
     cacheWriteInputTokenCount: ReadOnly[int]
@@ -1108,6 +1108,11 @@ class BedrockTag(TypedDict):
     value: str
 
 
+class AwsSessionTag(TypedDict):
+    Key: str  # writable-ok: boto3's STS stubs type assume_role Tags as writable TagTypeDef, which rejects ReadOnly
+    Value: str  # writable-ok: boto3's STS stubs type assume_role Tags as writable TagTypeDef, which rejects ReadOnly
+
+
 class AwsAuthParams(BaseModel):
     """Every credential-shaped aws_* param BaseAWSLLM.get_credentials accepts; region is resolved separately."""
 
@@ -1122,6 +1127,7 @@ class AwsAuthParams(BaseModel):
     aws_web_identity_token: str | None = None
     aws_sts_endpoint: str | None = None
     aws_external_id: str | None = None
+    aws_session_tags: object = None
 
 
 AWS_AUTH_PARAM_KEYS: Final[tuple[str, ...]] = tuple(AwsAuthParams.model_fields)

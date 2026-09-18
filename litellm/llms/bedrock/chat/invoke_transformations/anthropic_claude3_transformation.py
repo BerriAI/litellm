@@ -18,6 +18,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 )
 from litellm.llms.bedrock.common_utils import (
     apply_bedrock_invoke_structured_output,
+    bedrock_supports_tool_search,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
@@ -265,7 +266,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         if tool_search_used and not (programmatic_tool_calling_used or input_examples_used):
             beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
-            if "opus-4" in model.lower() or "opus_4" in model.lower():
+            if bedrock_supports_tool_search(model):
                 beta_set.add("tool-search-tool-2025-10-19")
 
         auto_beta_list: Final = filter_and_transform_beta_headers(

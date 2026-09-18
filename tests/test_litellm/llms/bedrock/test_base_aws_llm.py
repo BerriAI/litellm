@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 from botocore.awsrequest import AWSPreparedRequest, AWSRequest
 from botocore.auth import SigV4Auth
 from botocore.credentials import Credentials
-from botocore.exceptions import NoCredentialsError
+from botocore.exceptions import ClientError, NoCredentialsError
 
 import litellm
 from litellm.llms.bedrock.base_aws_llm import (
@@ -2408,6 +2408,283 @@ def test_assume_role_without_external_id():
         )
 
 
+_SESSION_TAGS = ({"Key": "team", "Value": "genai"}, {"Key": "env", "Value": "prod"})
+_SORTED_SESSION_TAGS = ({"Key": "env", "Value": "prod"}, {"Key": "team", "Value": "genai"})
+_TAGGED_ROLE_ARN = "arn:aws:iam::123456789012:role/TaggedRole"
+
+
+class _TagAwareSTSClient:
+    """STS stand-in for a trust policy that only admits sessions carrying exactly the expected tags."""
+
+    def __init__(self, expected_tags: tuple = (), access_key: str = "ASIATAGGEDSESSION") -> None:
+        self.expected_tags = expected_tags
+        self.access_key = access_key
+        self.assume_role_calls: list = []
+
+    def get_caller_identity(self):
+        return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+    def assume_role_with_web_identity(self, **params):
+        return {
+            "Credentials": {
+                "AccessKeyId": "ASIAIRSATEMP",
+                "SecretAccessKey": "irsa-temp-secret-key",
+                "SessionToken": "irsa-temp-session-token",
+                "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+            }
+        }
+
+    def assume_role(self, **params):
+        self.assume_role_calls.append(params)
+        if tuple(params.get("Tags", ())) != self.expected_tags:
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:TagSession"}},
+                "AssumeRole",
+            )
+        return {
+            "Credentials": {
+                "AccessKeyId": self.access_key,
+                "SecretAccessKey": "assumed-secret-key",
+                "SessionToken": "assumed-session-token",
+                "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+            }
+        }
+
+
+def _irsa_env(tmp_path, irsa_role_arn: str) -> dict:
+    token_file = tmp_path / "web-identity-token"
+    token_file.write_text("test-web-identity-token")
+    return {
+        "AWS_WEB_IDENTITY_TOKEN_FILE": str(token_file),
+        "AWS_ROLE_ARN": irsa_role_arn,
+        "AWS_REGION": "us-east-1",
+    }
+
+
+def test_assume_role_sends_session_tags():
+    """The STS session carries the configured tags, so a trust policy gated on sts:TagSession admits it."""
+    sts = _TagAwareSTSClient(expected_tags=_SESSION_TAGS)
+
+    with patch("boto3.client", return_value=sts):
+        credentials, _ttl = BaseAWSLLM()._auth_with_aws_role(
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_session_token=None,
+            aws_role_name=_TAGGED_ROLE_ARN,
+            aws_session_name="test-session",
+            aws_session_tags=list(_SESSION_TAGS),
+        )
+
+    assert credentials.access_key == "ASIATAGGEDSESSION"
+    assert sts.assume_role_calls == [
+        {"RoleArn": _TAGGED_ROLE_ARN, "RoleSessionName": "test-session", "Tags": _SESSION_TAGS}
+    ]
+
+
+def test_assume_role_sends_session_tags_alongside_external_id():
+    sts = _TagAwareSTSClient(expected_tags=_SESSION_TAGS)
+
+    with patch("boto3.client", return_value=sts):
+        credentials, _ttl = BaseAWSLLM()._auth_with_aws_role(
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_session_token=None,
+            aws_role_name=_TAGGED_ROLE_ARN,
+            aws_session_name="test-session",
+            aws_external_id="UniqueExternalID123",
+            aws_session_tags=_SESSION_TAGS,
+        )
+
+    assert credentials.access_key == "ASIATAGGEDSESSION"
+    assert sts.assume_role_calls == [
+        {
+            "RoleArn": _TAGGED_ROLE_ARN,
+            "RoleSessionName": "test-session",
+            "ExternalId": "UniqueExternalID123",
+            "Tags": _SESSION_TAGS,
+        }
+    ]
+
+
+@pytest.mark.parametrize("aws_session_tags", [None, [], ()], ids=["none", "empty-list", "empty-tuple"])
+def test_assume_role_omits_the_tags_key_without_session_tags(aws_session_tags):
+    """Nothing configured means the AssumeRole request looks exactly as it did before tags existed."""
+    sts = _TagAwareSTSClient(expected_tags=())
+
+    with patch("boto3.client", return_value=sts):
+        credentials, _ttl = BaseAWSLLM()._auth_with_aws_role(
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_session_token=None,
+            aws_role_name=_TAGGED_ROLE_ARN,
+            aws_session_name="test-session",
+            aws_session_tags=aws_session_tags,
+        )
+
+    assert credentials.access_key == "ASIATAGGEDSESSION"
+    assert sts.assume_role_calls == [{"RoleArn": _TAGGED_ROLE_ARN, "RoleSessionName": "test-session"}]
+
+
+def test_irsa_cross_account_assume_role_sends_session_tags(tmp_path):
+    irsa_role_arn = "arn:aws:iam::111111111111:role/eks-service-account-role"
+    sts = _TagAwareSTSClient(expected_tags=_SESSION_TAGS)
+
+    with patch.dict(os.environ, _irsa_env(tmp_path, irsa_role_arn)), patch("boto3.client", return_value=sts):
+        credentials, _ttl = BaseAWSLLM()._auth_with_aws_role(
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_session_token=None,
+            aws_role_name=_TAGGED_ROLE_ARN,
+            aws_session_name="test-session",
+            aws_session_tags=_SESSION_TAGS,
+        )
+
+    assert credentials.access_key == "ASIATAGGEDSESSION"
+    assert sts.assume_role_calls == [
+        {"RoleArn": _TAGGED_ROLE_ARN, "RoleSessionName": "test-session", "Tags": _SESSION_TAGS}
+    ]
+
+
+def test_irsa_same_account_assume_role_sends_session_tags(tmp_path):
+    sts = _TagAwareSTSClient(expected_tags=_SESSION_TAGS)
+
+    with patch.dict(os.environ, _irsa_env(tmp_path, _TAGGED_ROLE_ARN)), patch("boto3.client", return_value=sts):
+        credentials, _ttl = BaseAWSLLM()._auth_with_aws_role(
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_session_token=None,
+            aws_role_name=_TAGGED_ROLE_ARN,
+            aws_session_name="test-session",
+            aws_session_tags=_SESSION_TAGS,
+        )
+
+    assert credentials.access_key == "ASIATAGGEDSESSION"
+    assert sts.assume_role_calls == [
+        {"RoleArn": _TAGGED_ROLE_ARN, "RoleSessionName": "test-session", "Tags": _SESSION_TAGS}
+    ]
+
+
+def test_get_credentials_canonicalizes_session_tag_order_for_the_cache():
+    """Two deployments listing the same tags in a different order share one STS session."""
+    base_aws_llm = BaseAWSLLM()
+    sts = _TagAwareSTSClient(expected_tags=_SORTED_SESSION_TAGS)
+
+    with patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True), patch("boto3.client", return_value=sts):
+        first = base_aws_llm.get_credentials(
+            aws_role_name=_TAGGED_ROLE_ARN,
+            aws_session_name="team-session",
+            aws_session_tags=list(_SESSION_TAGS),
+        )
+        second = base_aws_llm.get_credentials(
+            aws_role_name=_TAGGED_ROLE_ARN,
+            aws_session_name="team-session",
+            aws_session_tags=list(reversed(_SESSION_TAGS)),
+        )
+
+    assert first.access_key == second.access_key == "ASIATAGGEDSESSION"
+    assert sts.assume_role_calls == [
+        {"RoleArn": _TAGGED_ROLE_ARN, "RoleSessionName": "team-session", "Tags": _SORTED_SESSION_TAGS}
+    ]
+
+
+def test_get_credentials_scopes_the_cache_per_session_tag_set():
+    """Different tag sets are different principals to AWS, so each gets its own STS session."""
+    base_aws_llm = BaseAWSLLM()
+    mock_sts_client = _assume_role_sts_mock()
+    mock_sts_client.assume_role.side_effect = [
+        {
+            "Credentials": {
+                "AccessKeyId": f"assumed-access-key-{team}",
+                "SecretAccessKey": "assumed-secret-key",
+                "SessionToken": f"assumed-session-token-{team}",
+                "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+            }
+        }
+        for team in ("genai", "platform")
+    ]
+
+    with (
+        patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True),
+        patch("boto3.client", return_value=mock_sts_client),
+    ):
+        genai = base_aws_llm.get_credentials(
+            aws_role_name=_TAGGED_ROLE_ARN,
+            aws_session_name="team-session",
+            aws_session_tags=[{"Key": "team", "Value": "genai"}],
+        )
+        platform = base_aws_llm.get_credentials(
+            aws_role_name=_TAGGED_ROLE_ARN,
+            aws_session_name="team-session",
+            aws_session_tags=[{"Key": "team", "Value": "platform"}],
+        )
+
+    assert genai.access_key == "assumed-access-key-genai"
+    assert platform.access_key == "assumed-access-key-platform"
+    assert [call.kwargs["Tags"] for call in mock_sts_client.assume_role.call_args_list] == [
+        ({"Key": "team", "Value": "genai"},),
+        ({"Key": "team", "Value": "platform"},),
+    ]
+
+
+@pytest.mark.parametrize(
+    "aws_session_tags",
+    [
+        "team=genai",
+        {"team": "genai"},
+        [["team", "genai"]],
+        [{"key": "team", "value": "genai"}],
+        [{"Key": "team"}],
+        [{"Key": 1, "Value": "genai"}],
+    ],
+    ids=["string", "flat-dict", "pair-list", "lowercase-keys", "missing-value", "non-string-key"],
+)
+def test_get_credentials_rejects_malformed_session_tags(aws_session_tags):
+    with pytest.raises(ValueError, match="Invalid 'aws_session_tags' value"):
+        BaseAWSLLM().get_credentials(
+            aws_role_name=_TAGGED_ROLE_ARN,
+            aws_session_name="team-session",
+            aws_session_tags=aws_session_tags,
+        )
+
+
+def test_get_boto_credentials_from_optional_params_consumes_session_tags():
+    """Tags feed the STS call and must not linger in optional_params to be serialized into the body."""
+    sts = _TagAwareSTSClient(expected_tags=_SORTED_SESSION_TAGS)
+    optional_params = {
+        "aws_region_name": "us-east-1",
+        "aws_role_name": _TAGGED_ROLE_ARN,
+        "aws_session_name": "team-session",
+        "aws_session_tags": list(_SESSION_TAGS),
+    }
+
+    with patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True), patch("boto3.client", return_value=sts):
+        target = BaseAWSLLM()._get_boto_credentials_from_optional_params(optional_params)
+
+    assert target.credentials.access_key == "ASIATAGGEDSESSION"
+    assert "aws_session_tags" not in optional_params
+
+
+def test_sign_request_signs_with_the_tagged_sts_session():
+    sts = _TagAwareSTSClient(expected_tags=_SORTED_SESSION_TAGS)
+    optional_params = {
+        "aws_region_name": "us-east-1",
+        "aws_role_name": _TAGGED_ROLE_ARN,
+        "aws_session_name": "team-session",
+        "aws_session_tags": list(_SESSION_TAGS),
+    }
+
+    with patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True), patch("boto3.client", return_value=sts):
+        headers, _body = BaseAWSLLM()._sign_request(
+            service_name="bedrock",
+            headers={},
+            optional_params=optional_params,
+            request_data={"prompt": "hi"},
+            api_base="https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-opus-5/invoke",
+        )
+
+    assert "Credential=ASIATAGGEDSESSION/" in headers["Authorization"]
+
+
 def test_converse_handler_external_id_extraction():
     """Test that BedrockConverseLLM properly extracts and passes aws_external_id parameter"""
     from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
@@ -3329,6 +3606,7 @@ def test_resolve_credentials_forwards_static_keys_role_session_and_external_id()
         aws_session_name="litellm-session",
         aws_external_id="litellm-external-id",
         aws_sts_endpoint="https://custom-sts.example",
+        aws_session_tags=[{"Key": "team", "Value": "genai"}, {"Key": "cost-center", "Value": "42"}],
     )
     recorded: Dict[str, Any] = {}
 
@@ -3345,7 +3623,41 @@ def test_resolve_credentials_forwards_static_keys_role_session_and_external_id()
     assert recorded["assume_role"]["RoleArn"] == "arn:aws:iam::123456789012:role/litellm-target"
     assert recorded["assume_role"]["RoleSessionName"] == "litellm-session"
     assert recorded["assume_role"]["ExternalId"] == "litellm-external-id"
+    assert recorded["assume_role"]["Tags"] == (
+        {"Key": "cost-center", "Value": "42"},
+        {"Key": "team", "Value": "genai"},
+    )
     assert credentials.access_key == "ASIAASSUMED"
+
+
+@pytest.mark.parametrize(
+    "malformed_tags",
+    [
+        "team=genai",
+        {"team": "genai"},
+        [{"key": "team", "value": "genai"}],
+        [{"Key": "team"}],
+    ],
+)
+def test_resolve_credentials_rejects_malformed_session_tags(malformed_tags):
+    """A struct built from raw config must surface the friendly session-tag error before STS is called."""
+    from litellm.types.llms.bedrock import AwsAuthParams
+
+    auth_params = AwsAuthParams(
+        aws_role_name="arn:aws:iam::123456789012:role/litellm-target",
+        aws_session_name="litellm-session",
+        aws_session_tags=malformed_tags,
+    )
+    recorded: Dict[str, Any] = {}
+
+    with (
+        patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True),
+        patch("boto3.client", side_effect=_recording_boto3_client(recorded)),
+    ):
+        with pytest.raises(ValueError, match="Invalid 'aws_session_tags' value"):
+            BaseAWSLLM().resolve_credentials(auth_params, "us-east-1")
+
+    assert "assume_role" not in recorded
 
 
 def test_resolve_credentials_forwards_web_identity_token():

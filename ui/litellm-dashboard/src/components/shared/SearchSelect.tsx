@@ -21,8 +21,8 @@ export interface SearchSelectOption {
 
 interface SearchSelectProps {
   options: SearchSelectOption[];
-  value?: string;
-  onValueChange: (value: string) => void;
+  value?: string | null;
+  onValueChange: (value: string | null) => void;
   placeholder?: string;
   emptyText?: string;
   disabled?: boolean;
@@ -51,9 +51,7 @@ export function SearchSelect({
   "aria-label": ariaLabel,
 }: SearchSelectProps) {
   const selected =
-    value === undefined || value === ""
-      ? null
-      : options.find((option) => option.value === value) ?? { label: value, value };
+    value == null || value === "" ? null : options.find((option) => option.value === value) ?? { label: value, value };
   const items =
     selected !== null && !options.some((option) => option.value === selected.value) ? [selected, ...options] : options;
 
@@ -61,7 +59,7 @@ export function SearchSelect({
     <Combobox
       items={items}
       value={selected}
-      onValueChange={(item: SearchSelectOption | null) => onValueChange(item?.value ?? "")}
+      onValueChange={(item: SearchSelectOption | null) => onValueChange(item?.value ?? null)}
       isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
       itemToStringLabel={(item: SearchSelectOption) => item.label}
       filter={matchesQuery}

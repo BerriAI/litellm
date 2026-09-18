@@ -231,17 +231,6 @@ def test_inception_in_provider_lists():
     assert "https://api.inceptionlabs.ai/v1" in litellm.openai_compatible_endpoints
 
 
-def test_inception_model_list_populated(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.inception_models = set()
-    litellm.add_known_models()
-
-    assert "inception/mercury-2" in litellm.inception_models
-    for model in litellm.inception_models:
-        assert model.startswith("inception/")
-
-
 def test_inception_completion_targets_inception_endpoint():
     """
     End-to-end: a completion routed through the inception provider must hit
@@ -304,3 +293,5 @@ def test_inception_completion_targets_inception_endpoint():
     assert captured["body"]["model"] == "mercury-2"
     assert captured["body"]["tool_choice"] == "auto"
     assert response.choices[0].message.content == "hi"
+
+

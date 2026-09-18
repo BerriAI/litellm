@@ -9,6 +9,8 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
+from litellm.llms.bedrock.batches.transformation import titan_embedding_usage_from_batch_output
+from litellm.llms.vertex_ai.batches.transformation import vertex_prompt_tokens_details
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import token_counter
@@ -356,6 +358,7 @@ def calculate_vertex_ai_batch_cost_and_usage(
             prompt_tokens=_prompt,
             completion_tokens=_completion,
             total_tokens=_total,
+            prompt_tokens_details=vertex_prompt_tokens_details(usage_metadata),
         )
 
         try:
@@ -671,6 +674,11 @@ def _get_batch_job_usage_from_response_body(
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
         from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
+        titan_usage: Final = (
+            titan_embedding_usage_from_batch_output(response_body) if custom_llm_provider == "bedrock" else None
+        )
+        if titan_usage is not None:
+            return titan_usage
         usage_object: Final = response_body.get("usage", None) or {}
         if custom_llm_provider == "bedrock" and AmazonConverseConfig.is_converse_usage_shape(usage_object):
             return AmazonConverseConfig().usage_from_batch_output(usage_object)
