@@ -198,7 +198,7 @@ async def test_request_body_shape_and_truncation():
     assert len(exchange["result"]) == 50
     assert exchange["result"].startswith(TOOL_OUTPUT_LONG[:10])
     assert exchange["result"].endswith(TOOL_OUTPUT_LONG[-11:])
-    assert exchange["tool_calls"] == [{"name": "web_search", "arguments": '{"query": "ev"}'}]
+    assert list(exchange["tool_calls"]) == [{"name": "web_search", "arguments": '{"query": "ev"}'}]
 
 
 @pytest.mark.asyncio

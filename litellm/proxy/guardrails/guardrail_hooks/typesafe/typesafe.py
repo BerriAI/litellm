@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal
 
 import httpx
@@ -120,19 +121,20 @@ def _question_instructions(question_id: str) -> str:
     )
 
 
-def _tool_call_entries(assistant_message: Mapping[str, object]) -> list[dict[str, object]]:
+def _tool_call_entry(tool_call: object) -> dict[str, object] | None:
+    parsed_call = _as_str_object_dict(tool_call)
+    if parsed_call is None:
+        return None
+    function = _as_str_object_dict(parsed_call.get("function"))
+    fn = function if function is not None else parsed_call
+    return {"name": fn.get("name"), "arguments": fn.get("arguments")}  # mutable-ok: serialized to JSON
+
+
+def _tool_call_entries(assistant_message: Mapping[str, object]) -> tuple[dict[str, object], ...]:
     tool_calls: Final = _as_object_list(assistant_message.get("tool_calls"))
     if tool_calls is None:
-        return []
-    entries: Final[list[dict[str, object]]] = []
-    for tool_call in tool_calls:
-        parsed_call = _as_str_object_dict(tool_call)
-        if parsed_call is None:
-            continue
-        function = _as_str_object_dict(parsed_call.get("function"))
-        fn = function if function is not None else parsed_call
-        entries.append({"name": fn.get("name"), "arguments": fn.get("arguments")})
-    return entries
+        return ()
+    return tuple(entry for tool_call in tool_calls if (entry := _tool_call_entry(tool_call)) is not None)
 
 
 def _protected_indices(messages: Sequence[Mapping[str, object]]) -> frozenset[int]:
@@ -199,30 +201,32 @@ class TypeSafeGuardrail(CustomGuardrail):
             )
             return
         verbose_proxy_logger.error("TypeSafe: %s. detail=%s", error, log_detail)
-        raise HTTPException(status_code=502, detail={"error": error})
+        raise HTTPException(status_code=502, detail={"error": error})  # mutable-ok: FastAPI wants a dict detail
 
-    def _candidate_exchanges(self, messages: list[dict[str, object]]) -> list[tuple[int, ...]]:
+    def _candidate_exchanges(self, messages: Sequence[dict[str, object]]) -> tuple[tuple[int, ...], ...]:
         """Completed tool exchanges eligible for evaluation: unprotected, and long enough to be worth a call."""
         protected: Final = _protected_indices(messages)
-        candidates: Final[list[tuple[int, ...]]] = []
-        for group in group_tool_exchanges(messages):
-            if len(group) < 2:
-                continue
-            if messages[group[0]].get("role") != "assistant":
-                continue
-            if any(member in protected for member in group):
-                continue
-            tool_text = "".join(
-                content_to_text(messages[index].get("content"))
-                for index in group[1:]
-                if messages[index].get("role") in ("tool", "function")
-            )
-            if not tool_text or len(tool_text) < self.min_chars_to_evaluate:
-                continue
-            candidates.append(group)
+        candidates: Final = tuple(
+            group
+            for group in group_tool_exchanges(messages)
+            if len(group) >= 2
+            and messages[group[0]].get("role") == "assistant"
+            and not any(member in protected for member in group)
+            and len(self._exchange_tool_text(messages, group)) >= self.min_chars_to_evaluate
+        )
         return candidates[-_MAX_EXCHANGES_EVALUATED:]
 
-    def _build_state(self, messages: list[dict[str, object]], candidates: list[tuple[int, ...]]) -> dict[str, object]:
+    @staticmethod
+    def _exchange_tool_text(messages: Sequence[dict[str, object]], group: tuple[int, ...]) -> str:
+        return "".join(
+            content_to_text(messages[index].get("content"))
+            for index in group[1:]
+            if messages[index].get("role") in ("tool", "function")
+        )
+
+    def _build_state(
+        self, messages: Sequence[dict[str, object]], candidates: tuple[tuple[int, ...], ...]
+    ) -> dict[str, object]:
         task: Final = next(
             (
                 content_to_text(messages[index].get("content"))
@@ -234,26 +238,29 @@ class TypeSafeGuardrail(CustomGuardrail):
         system: Final = "\n\n".join(
             content_to_text(message.get("content")) for message in messages if message.get("role") == "system"
         )
-        tool_exchanges: Final[dict[str, object]] = {}
-        for ordinal, group in enumerate(candidates):
-            result_text = "".join(
-                content_to_text(messages[index].get("content"))
-                for index in group[1:]
-                if messages[index].get("role") in ("tool", "function")
-            )
-            tool_exchanges[f"e{ordinal}"] = {
+        tool_exchanges: Final = {  # mutable-ok: accumulated once, serialized to JSON
+            f"e{ordinal}": {  # mutable-ok: serialized to JSON
                 "tool_calls": _tool_call_entries(messages[group[0]]),
-                "result": _truncate_for_state(result_text, self.max_result_chars_in_state),
+                "result": _truncate_for_state(
+                    self._exchange_tool_text(messages, group), self.max_result_chars_in_state
+                ),
             }
-        return {"task": task, "system": system, "tool_exchanges": tool_exchanges}
+            for ordinal, group in enumerate(candidates)
+        }
+        return {"task": task, "system": system, "tool_exchanges": tool_exchanges}  # mutable-ok: serialized to JSON
 
-    async def _call_systemone(self, state: dict[str, object], question_ids: list[str]) -> _JevSystemOneResponse | None:
+    async def _call_systemone(
+        self, state: dict[str, object], question_ids: Sequence[str]
+    ) -> _JevSystemOneResponse | None:
         """Returns the response, or None when the service failed and fail_open applies."""
-        payload: Final[dict[str, object]] = {
+        payload: Final[dict[str, object]] = {  # mutable-ok: serialized to JSON by httpx
             "model": self.jev_model,
             "state": state,
-            "questions": {
-                question_id: {"type": "noul", "instructions": _question_instructions(question_id)}
+            "questions": {  # mutable-ok: serialized to JSON
+                question_id: {
+                    "type": "noul",
+                    "instructions": _question_instructions(question_id),
+                }  # mutable-ok: serialized to JSON
                 for question_id in question_ids
             },
         }
@@ -261,7 +268,7 @@ class TypeSafeGuardrail(CustomGuardrail):
             raw_response: HttpxResponse = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.post is untyped
                 url=f"{self.typesafe_api_base}/v1/systemone",
                 json=payload,
-                headers={
+                headers={  # mutable-ok: httpx header contract is a dict
                     "Authorization": f"Bearer {self.typesafe_api_key}",
                     "Content-Type": "application/json",
                 },
@@ -271,21 +278,24 @@ class TypeSafeGuardrail(CustomGuardrail):
             raise
         except Exception as e:
             detail: Final[dict[str, object]] = (
-                {
+                {  # mutable-ok: log detail record
                     "error_type": type(e).__name__,
                     "detail": str(e),
                     "status_code": e.response.status_code,
                     "body": _safe_response_text(e.response),
                 }
                 if isinstance(e, httpx.HTTPStatusError)
-                else {"error_type": type(e).__name__, "detail": str(e)}
+                else {"error_type": type(e).__name__, "detail": str(e)}  # mutable-ok: log detail record
             )
             self._handle_failure("TypeSafe evaluation service request failed", detail)
             return None
         if not 200 <= raw_response.status_code < 300:
             self._handle_failure(
                 "TypeSafe evaluation service returned an error",
-                {"status_code": raw_response.status_code, "body": _safe_response_text(raw_response)},
+                {
+                    "status_code": raw_response.status_code,
+                    "body": _safe_response_text(raw_response),
+                },  # mutable-ok: log detail record
             )
             return None
         try:
@@ -293,7 +303,7 @@ class TypeSafeGuardrail(CustomGuardrail):
         except (ValueError, httpx.DecodingError, RecursionError):
             self._handle_failure(
                 "TypeSafe evaluation service returned an unreadable response",
-                {"body": _safe_response_text(raw_response)},
+                {"body": _safe_response_text(raw_response)},  # mutable-ok: log detail record
             )
             return None
         try:
@@ -301,7 +311,7 @@ class TypeSafeGuardrail(CustomGuardrail):
         except ValidationError:
             self._handle_failure(
                 "TypeSafe evaluation service returned unexpected response shape",
-                {"body": _safe_response_text(raw_response)},
+                {"body": _safe_response_text(raw_response)},  # mutable-ok: log detail record
             )
             return None
 
@@ -319,17 +329,17 @@ class TypeSafeGuardrail(CustomGuardrail):
         structured_messages: Final = _as_object_list(inputs.get("structured_messages"))
         if not structured_messages:
             return inputs
-        parsed_messages: Final = [_as_str_object_dict(m) for m in structured_messages]
+        parsed_messages: Final = tuple(_as_str_object_dict(m) for m in structured_messages)
         if any(m is None for m in parsed_messages):
             return inputs
-        messages: Final = [m for m in parsed_messages if m is not None]
+        messages: Final = tuple(m for m in parsed_messages if m is not None)
 
         candidates: Final = self._candidate_exchanges(messages)
         if not candidates:
             verbose_proxy_logger.debug("TypeSafe: no completed tool exchanges eligible for evaluation")
             return inputs
 
-        question_ids: Final = [f"e{ordinal}" for ordinal in range(len(candidates))]
+        question_ids: Final = tuple(f"e{ordinal}" for ordinal in range(len(candidates)))
         state: Final = self._build_state(messages, candidates)
 
         start_time: Final = time.monotonic()
@@ -337,10 +347,12 @@ class TypeSafeGuardrail(CustomGuardrail):
         end_time: Final = time.monotonic()
         if response is None:
             self.add_standard_logging_guardrail_information_to_request_data(  # pyright: ignore[reportUnknownMemberType]  # untyped base helper
-                guardrail_json_response={
-                    "error": "TypeSafe evaluation unavailable; request forwarded uncompacted",
-                    "model": self.jev_model,
-                },
+                guardrail_json_response=MappingProxyType(
+                    {
+                        "error": "TypeSafe evaluation unavailable; request forwarded uncompacted",
+                        "model": self.jev_model,
+                    }
+                ),
                 request_data=request_data,
                 guardrail_status="guardrail_failed_to_respond",
                 guardrail_provider="typesafe",
@@ -365,8 +377,10 @@ class TypeSafeGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("TypeSafe: all evaluated exchanges still relevant; request unchanged")
             return inputs
 
-        compacted_messages: Final = [
-            {**message, "content": DROPPED_RESULT_TEXT} if index in dropped_tool_indices else message
+        compacted_messages: Final = [  # mutable-ok: structured_messages contract is a list of dicts
+            {**message, "content": DROPPED_RESULT_TEXT}
+            if index in dropped_tool_indices
+            else message  # mutable-ok: JSON message row
             for index, message in enumerate(messages)
         ]
         chars_removed: Final = sum(
@@ -381,12 +395,14 @@ class TypeSafeGuardrail(CustomGuardrail):
             chars_removed,
         )
         self.add_standard_logging_guardrail_information_to_request_data(  # pyright: ignore[reportUnknownMemberType]  # untyped base helper
-            guardrail_json_response={
-                "exchanges_evaluated": len(candidates),
-                "exchanges_dropped": exchanges_dropped,
-                "chars_removed": chars_removed,
-                "model": self.jev_model,
-            },
+            guardrail_json_response=MappingProxyType(
+                {
+                    "exchanges_evaluated": len(candidates),
+                    "exchanges_dropped": exchanges_dropped,
+                    "chars_removed": chars_removed,
+                    "model": self.jev_model,
+                }
+            ),
             request_data=request_data,
             guardrail_status="success",
             guardrail_provider="typesafe",
@@ -394,7 +410,7 @@ class TypeSafeGuardrail(CustomGuardrail):
             end_time=end_time,
             duration=end_time - start_time,
         )
-        return {**inputs, "structured_messages": compacted_messages}  # pyright: ignore[reportReturnType]  # plain dicts satisfy AllMessageValues at runtime
+        return {**inputs, "structured_messages": compacted_messages}  # pyright: ignore[reportReturnType]  # mutable-ok: inputs protocol is a plain dict  # plain dicts satisfy AllMessageValues at runtime
 
     @staticmethod
     def get_config_model() -> type[TypeSafeGuardrailConfigModel] | None:
