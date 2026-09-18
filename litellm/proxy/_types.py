@@ -34,6 +34,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.mcp import (
+    MCPAllowedClient,
     MCPAuth,
     MCPAuthType,
     MCPCredentials,
@@ -2899,9 +2900,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).",
     )
-    mcp_allowed_clients: list[str] | None = Field(
+    mcp_allowed_clients: list[MCPAllowedClient] | None = Field(
         None,
-        description="MCP client applications admitted by the gateway. When set, every MCP request must carry a client identity that matches one of these values exactly: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.",
+        description="MCP client applications admitted by the gateway, each an {alias, value} pair where alias is the name shown in the dashboard and logs and value is the identity that must match exactly. When set, every MCP request must carry a client identity equal to one of the values: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.",
     )
     mcp_client_id_header: str | None = Field(
         None,

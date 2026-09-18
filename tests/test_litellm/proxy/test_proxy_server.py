@@ -14272,10 +14272,14 @@ def test_settings_store_exposes_dashboard_saved_mcp_client_allowlist_to_the_mcp_
     assert load_mcp_client_allowlist(settings) is None
 
     settings.apply_db_row(
-        "general_settings", {"mcp_allowed_clients": ["antigravity-cli"], "mcp_client_id_header": "X-MCP-Client"}
+        "general_settings",
+        {
+            "mcp_allowed_clients": [{"alias": "Antigravity CLI", "value": "antigravity-cli"}],
+            "mcp_client_id_header": "X-MCP-Client",
+        },
     )
     assert load_mcp_client_allowlist(settings) == MCPClientAllowlist(
-        allowed_clients=frozenset({"antigravity-cli"}), jwt_field="azp", header="x-mcp-client"
+        aliases_by_value={"antigravity-cli": "Antigravity CLI"}, jwt_field="azp", header="x-mcp-client"
     )
 
     settings.apply_db_row("general_settings", {"mcp_client_id_header": "X-MCP-Client"})

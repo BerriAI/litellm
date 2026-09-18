@@ -23,6 +23,17 @@ vi.mock("@/lib/toast", () => ({
 
 const renderSettings = () => render(<MCPNetworkSettings accessToken="tok" />);
 
+const ANTIGRAVITY = { alias: "Antigravity CLI", value: "antigravity-cli" };
+const CODEX = { alias: "Codex", value: "codex-mcp-client" };
+
+const addClient = async (alias: string, value: string) => {
+  await userEvent.click(screen.getByRole("button", { name: "Add client" }));
+  const aliases = screen.getAllByRole("textbox", { name: /^Client \d+ alias$/ });
+  const values = screen.getAllByRole("textbox", { name: /^Client \d+ value$/ });
+  fireEvent.change(aliases[aliases.length - 1], { target: { value: alias } });
+  fireEvent.change(values[values.length - 1], { target: { value } });
+};
+
 describe("MCPNetworkSettings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -128,47 +139,122 @@ describe("MCPNetworkSettings", () => {
     expect(updateConfigFieldSetting).not.toHaveBeenCalled();
   });
 
-  it("renders the stored allowed client IDs once settings load", async () => {
+  it("labels the section Allowed Clients and renders each stored client as an alias and value row", async () => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([
-      { field_name: "mcp_allowed_clients", field_value: ["antigravity-cli", "codex-mcp-client"] },
+      { field_name: "mcp_allowed_clients", field_value: [ANTIGRAVITY, CODEX] },
     ]);
 
     renderSettings();
 
-    expect(await screen.findByText("antigravity-cli")).toBeInTheDocument();
-    expect(screen.getByText("codex-mcp-client")).toBeInTheDocument();
+    expect(await screen.findByText("Allowed Clients")).toBeVisible();
+    expect(screen.queryByText(/Allowed Client IDs/)).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Client 1 alias" })).toHaveValue("Antigravity CLI");
+    expect(screen.getByRole("textbox", { name: "Client 1 value" })).toHaveValue("antigravity-cli");
+    expect(screen.getByRole("textbox", { name: "Client 2 alias" })).toHaveValue("Codex");
+    expect(screen.getByRole("textbox", { name: "Client 2 value" })).toHaveValue("codex-mcp-client");
   });
 
-  it("adds typed client IDs on Enter and saves them under mcp_allowed_clients", async () => {
+  it("ignores a stored allowlist in the old plain-string shape instead of rendering it", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      { field_name: "mcp_allowed_clients", field_value: ["antigravity-cli"] },
+    ]);
+
     renderSettings();
-    const input = await screen.findByRole("textbox", { name: "Allowed client IDs" });
 
-    await userEvent.type(input, "antigravity-cli, codex-mcp-client{Enter}");
+    await screen.findByText("Allowed Clients");
+    expect(screen.queryByRole("textbox", { name: "Client 1 value" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/every client is denied/)).not.toBeInTheDocument();
+  });
 
-    expect(screen.getByText("antigravity-cli")).toBeInTheDocument();
-    expect(screen.getByText("codex-mcp-client")).toBeInTheDocument();
-    expect(input).toHaveValue("");
+  it("adds clients as alias and value pairs and saves them under mcp_allowed_clients", async () => {
+    renderSettings();
+    await screen.findByText("Allowed Clients");
 
+    await addClient(" Antigravity CLI ", " antigravity-cli ");
+    await addClient("Codex", "codex-mcp-client");
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
 
     await waitFor(() =>
-      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", [
-        "antigravity-cli",
-        "codex-mcp-client",
-      ]),
+      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", [ANTIGRAVITY, CODEX]),
     );
     expect(deleteConfigFieldSetting).not.toHaveBeenCalledWith("tok", "mcp_allowed_clients");
   });
 
-  it("removes a client ID and clears the setting when the list becomes empty", async () => {
+  it("edits a stored client's value in place and saves the new value", async () => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([
-      { field_name: "mcp_allowed_clients", field_value: ["claude-code"] },
+      { field_name: "mcp_allowed_clients", field_value: [ANTIGRAVITY] },
     ]);
 
     renderSettings();
-    await userEvent.click(await screen.findByRole("button", { name: "Remove claude-code" }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "Client 1 value" }), {
+      target: { value: "0oa1b2c3d4e5f6g7h8i9" },
+    });
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
 
-    expect(screen.queryByText("claude-code")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", [
+        { alias: "Antigravity CLI", value: "0oa1b2c3d4e5f6g7h8i9" },
+      ]),
+    );
+  });
+
+  it("refuses to save a client that has an alias but no value, and reports why", async () => {
+    renderSettings();
+    await screen.findByText("Allowed Clients");
+
+    await addClient("Antigravity CLI", "");
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() =>
+      expect(toast.fromError).toHaveBeenCalledWith(new Error("Every allowed client needs both an alias and a value")),
+    );
+    expect(updateConfigFieldSetting).not.toHaveBeenCalled();
+    expect(deleteConfigFieldSetting).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("drops rows left completely blank instead of saving or failing on them", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      { field_name: "mcp_allowed_clients", field_value: [ANTIGRAVITY] },
+    ]);
+
+    renderSettings();
+    await screen.findByText("Allowed Clients");
+    await userEvent.click(screen.getByRole("button", { name: "Add client" }));
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("MCP network settings saved"));
+    expect(updateConfigFieldSetting).not.toHaveBeenCalled();
+    expect(deleteConfigFieldSetting).not.toHaveBeenCalled();
+  });
+
+  it("removes the right client from the middle of the list", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      {
+        field_name: "mcp_allowed_clients",
+        field_value: [ANTIGRAVITY, { alias: "Claude Code", value: "claude-code" }, CODEX],
+      },
+    ]);
+
+    renderSettings();
+    await userEvent.click(await screen.findByRole("button", { name: "Remove client Claude Code" }));
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() =>
+      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", [ANTIGRAVITY, CODEX]),
+    );
+    expect(screen.queryByDisplayValue("claude-code")).not.toBeInTheDocument();
+  });
+
+  it("removes a client and clears the setting when the list becomes empty", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      { field_name: "mcp_allowed_clients", field_value: [{ alias: "Claude Code", value: "claude-code" }] },
+    ]);
+
+    renderSettings();
+    await userEvent.click(await screen.findByRole("button", { name: "Remove client Claude Code" }));
+
+    expect(screen.queryByDisplayValue("claude-code")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
 
@@ -265,18 +351,16 @@ describe("MCPNetworkSettings", () => {
   it("keeps the private ranges and the allowed clients as independent settings on save", async () => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([
       { field_name: "mcp_internal_ip_ranges", field_value: ["10.0.0.0/8"] },
-      { field_name: "mcp_allowed_clients", field_value: ["antigravity-cli"] },
+      { field_name: "mcp_allowed_clients", field_value: [ANTIGRAVITY] },
     ]);
 
     renderSettings();
-    await userEvent.type(await screen.findByRole("textbox", { name: "Allowed client IDs" }), "codex-mcp-client{Enter}");
+    await screen.findByText("Allowed Clients");
+    await addClient("Codex", "codex-mcp-client");
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
 
     await waitFor(() =>
-      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", [
-        "antigravity-cli",
-        "codex-mcp-client",
-      ]),
+      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", [ANTIGRAVITY, CODEX]),
     );
     expect(updateConfigFieldSetting).not.toHaveBeenCalledWith("tok", "mcp_internal_ip_ranges", expect.anything());
     expect(deleteConfigFieldSetting).not.toHaveBeenCalled();
@@ -291,12 +375,10 @@ describe("MCPNetworkSettings", () => {
 
     renderSettings();
     await userEvent.click(await screen.findByRole("button", { name: "Remove 10.0.0.0/8" }));
-    await userEvent.type(screen.getByRole("textbox", { name: "Allowed client IDs" }), "codex-mcp-client{Enter}");
+    await addClient("Codex", "codex-mcp-client");
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
 
-    await waitFor(() =>
-      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", ["codex-mcp-client"]),
-    );
+    await waitFor(() => expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", [CODEX]));
     await waitFor(() => expect(toast.fromError).toHaveBeenCalledWith(rangeFailure));
     expect(toast.success).not.toHaveBeenCalled();
   });
@@ -317,7 +399,7 @@ describe("MCPNetworkSettings", () => {
 
     renderSettings();
     await userEvent.click(await screen.findByText("203.0.113.0/24"));
-    await userEvent.type(screen.getByRole("textbox", { name: "Allowed client IDs" }), "codex-mcp-client{Enter}");
+    await addClient("Codex", "codex-mcp-client");
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
 
     await waitFor(() =>
@@ -326,9 +408,7 @@ describe("MCPNetworkSettings", () => {
     expect(updateConfigFieldSetting).not.toHaveBeenCalledWith("tok", "mcp_allowed_clients", expect.anything());
 
     finishRangeWrite?.();
-    await waitFor(() =>
-      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", ["codex-mcp-client"]),
-    );
+    await waitFor(() => expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", [CODEX]));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith("MCP network settings saved"));
   });
 });

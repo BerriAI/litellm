@@ -4316,7 +4316,7 @@ class TestV1ResolvedOauth2Gate:
 
 
 _CLIENT_ALLOWLIST_SETTINGS: Final[dict[str, object]] = {
-    "mcp_allowed_clients": ["antigravity-cli"],
+    "mcp_allowed_clients": [{"alias": "Antigravity CLI", "value": "antigravity-cli"}],
     "litellm_jwtauth": {"mcp_client_id_jwt_field": "azp"},
     "mcp_client_id_header": "x-mcp-client",
 }
