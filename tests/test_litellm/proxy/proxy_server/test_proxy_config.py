@@ -3877,13 +3877,36 @@ async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stor
 
     assert resolved["general_settings"] == {
         "max_file_size_mb": 7,
-        "max_parallel_requests": 11,
-        "alerting": ["config", "db"],
-        "pass_through_endpoints": [{"path": "/db"}, {"path": "/config"}],
+        "max_parallel_requests": 3,
+        "alerting": ["config"],
+        "pass_through_endpoints": [{"path": "/config"}],
         "maximum_spend_logs_cleanup_batch_size": 10,
     }
-    assert resolved["router_settings"] == {"fallbacks": ["config"], "num_retries": 2}
+    assert resolved["router_settings"] == {"fallbacks": ["config"], "num_retries": 1}
     assert pc.settings.source("max_file_size_mb") == "config"
+    assert pc.settings.source("max_parallel_requests") == "config"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omits(monkeypatch):
+    pc = ProxyConfig()
+    config = {"general_settings": {"max_file_size_mb": 7}, "router_settings": {"num_retries": 1}}
+    db_values = {
+        "general_settings": {"max_file_size_mb": 9, "max_parallel_requests": 11},
+        "router_settings": {"fallbacks": ["db"], "num_retries": 2},
+    }
+
+    async def get_config_param(_, param_name):
+        value = db_values.get(param_name)
+        return SimpleNamespace(param_name=param_name, param_value=value) if value is not None else None
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_config_param", get_config_param)
+    pc._load_yaml_settings_stores(config)
+
+    resolved = await pc._update_config_from_db(MagicMock(), config, store_model_in_db=True)
+
+    assert resolved["general_settings"] == {"max_file_size_mb": 7, "max_parallel_requests": 11}
+    assert resolved["router_settings"] == {"num_retries": 1, "fallbacks": ["db"]}
     assert pc.settings.source("max_parallel_requests") == "db"
 
 
