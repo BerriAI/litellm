@@ -23,6 +23,7 @@ pub enum LifecycleStep {
 pub enum PublicValue<'a> {
     Response(&'a Py<PyAny>),
     Error(&'a PyErr),
+    Chunk(&'a Py<PyAny>),
 }
 
 /// One consumer of a call's lifecycle on the Python side. The driver calls the steps in
@@ -109,6 +110,13 @@ pub trait RouteHost: Send + Sync {
         &mut self,
         py: Python<'_>,
         response: <Self::Route as Route>::Response,
+    ) -> PyResult<Py<PyAny>>;
+
+    /// One streamed chunk as the caller receives it.
+    fn chunk(
+        &mut self,
+        py: Python<'_>,
+        chunk: <Self::Route as Route>::Chunk,
     ) -> PyResult<Py<PyAny>>;
 
     fn classify(

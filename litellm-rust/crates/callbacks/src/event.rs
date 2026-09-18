@@ -60,6 +60,10 @@ pub enum CallEvent {
     ResponseReceived {
         raw: RawResponse,
     },
+    /// The call streams and its stream was handed to the caller.
+    Opened,
+    /// One chunk of an open stream reached the caller.
+    Delivered,
     Succeeded {
         timing: Timing,
     },

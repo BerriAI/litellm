@@ -198,6 +198,8 @@ fn event_name(event: &CallEvent) -> &'static str {
         CallEvent::ResponseReceived { .. } => "response",
         CallEvent::Succeeded { .. } => "success",
         CallEvent::Failed { .. } => "failure",
+        CallEvent::Opened => "opened",
+        CallEvent::Delivered => "delivered",
     }
 }
 

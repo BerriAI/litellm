@@ -125,6 +125,10 @@ impl RouteHost for OcrRouteHost {
             .map(Bound::unbind)
     }
 
+    fn chunk(&mut self, _: Python<'_>, chunk: std::convert::Infallible) -> PyResult<Py<PyAny>> {
+        match chunk {}
+    }
+
     fn classify(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
         Ok(self.map_failure(py, ocr_error_to_pyerr(error)))
     }

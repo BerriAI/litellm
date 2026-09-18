@@ -16,6 +16,7 @@ pub(crate) enum LegacyPython {
     Wrapper(Wrapper),
     Logging(Logging),
     DeploymentHooks(DeploymentHooks),
+    Streaming(Streaming),
 }
 
 /// The `@client` wrapper around the call: `function_setup`, limits, credentials,
@@ -76,12 +77,25 @@ pub(crate) enum DeploymentHooks {
     AfterDeploymentFailure,
 }
 
+/// The Messages stream iterator's logging: the stream flag, the end-of-stream billing
+/// from the delivered chunks, and the partial-usage failure path.
+#[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq, VariantArray)]
+pub(crate) enum Streaming {
+    #[strum(serialize = "stream_opened")]
+    Opened,
+    #[strum(serialize = "stream_success")]
+    Success,
+    #[strum(serialize = "stream_failure")]
+    Failure,
+}
+
 impl LegacyPython {
     fn name(self) -> &'static str {
         match self {
             Self::Wrapper(function) => function.into(),
             Self::Logging(function) => function.into(),
             Self::DeploymentHooks(function) => function.into(),
+            Self::Streaming(function) => function.into(),
         }
     }
 
@@ -111,6 +125,15 @@ impl Logging {
     }
 }
 
+impl Streaming {
+    pub(crate) fn call<'py, A>(self, py: Python<'py>, args: A) -> PyResult<Bound<'py, PyAny>>
+    where
+        A: pyo3::call::PyCallArgs<'py>,
+    {
+        LegacyPython::Streaming(self).call(py, args)
+    }
+}
+
 impl DeploymentHooks {
     pub(crate) fn call<'py, A>(self, py: Python<'py>, args: A) -> PyResult<Bound<'py, PyAny>>
     where
@@ -126,7 +149,7 @@ mod tests {
 
     use strum::VariantArray;
 
-    use super::{DeploymentHooks, LegacyPython, Logging, Wrapper};
+    use super::{DeploymentHooks, LegacyPython, Logging, Streaming, Wrapper};
     use crate::test_support::PYTHON_CONTRACT;
 
     #[test]
@@ -146,6 +169,11 @@ mod tests {
                 DeploymentHooks::VARIANTS
                     .iter()
                     .map(|&function| LegacyPython::DeploymentHooks(function)),
+            )
+            .chain(
+                Streaming::VARIANTS
+                    .iter()
+                    .map(|&function| LegacyPython::Streaming(function)),
             )
             .map(LegacyPython::name)
             .collect();

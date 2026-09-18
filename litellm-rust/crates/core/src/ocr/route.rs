@@ -39,6 +39,8 @@ impl Route for Ocr {
     type Error = Error;
     type Op = OcrOp;
     type OpResult = OcrOpResult;
+    type Chunk = std::convert::Infallible;
+    type StreamHead = std::convert::Infallible;
 }
 
 impl TokenRoute for Ocr {
