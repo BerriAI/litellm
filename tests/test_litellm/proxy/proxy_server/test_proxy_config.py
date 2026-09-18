@@ -1245,6 +1245,25 @@ async def test_ProxyConfig_save_config_db_persists_environment_variables_when_op
     assert table.upserted_param_names == ["environment_variables"]
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_persists_unchanged_environment_variables_when_opted_in(monkeypatch):
+    proxy_config, table = _db_backed_proxy_config(monkeypatch, {})
+    config: Final = {
+        "litellm_settings": {},
+        "environment_variables": {"OPENAI_API_KEY": "sk-explicit"},
+    }
+
+    await proxy_config.save_config(config)
+
+    assert table.rows == {}
+    assert table.upserted_param_names == []
+
+    await proxy_config.save_config(config, include_env_vars=True)
+
+    assert set(table.rows["environment_variables"]) == {"OPENAI_API_KEY"}
+    assert table.upserted_param_names == ["environment_variables"]
+
+
 def _install_fake_config_repo(monkeypatch, existing_row):
     """Route ProxyConfig's ConfigRepository through an in-memory fake that
     records the value written to the environment_variables row."""
