@@ -1,16 +1,18 @@
 use std::future::Future;
-use std::sync::Arc;
 
-use serde::Serialize;
-use serde::de::DeserializeOwned;
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::call_arguments::CallArguments;
-use crate::ocr::OcrClient;
-use crate::ocr::hooks::OcrHooks;
-use crate::ocr::types::{
-    LiteLLMOcrResponse, OcrConnection, OcrCredentialInputs, OcrDocument, OcrResponseFormat,
-    PreparedOcrRequest, ResolvedOcrCredentials,
+use crate::{
+    call_arguments::CallArguments,
+    ocr::{
+        OcrClient,
+        route::OcrHost,
+        types::{
+            LiteLLMOcrResponse, OcrConnection, OcrCredentialInputs, OcrDocument, OcrResponseFormat,
+            PreparedOcrRequest, ResolvedOcrCredentials,
+        },
+    },
 };
 
 const HEALTH_CHECK_PDF_DATA_URI: &str = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9UeXBlIC9QYWdlCi9QYXJlbnQgMSAwIFIKL01lZGlhQm94IFswIDAgNjEyIDc5Ml0KL0NvbnRlbnRzIDQgMCBSCi9SZXNvdXJjZXMgPDwvRm9udCA8PC9GMSAyIDAgUj4+Pj4+PgplbmRvYmoKNCAwIG9iago8PC9MZW5ndGggNDQ+PgpzdHJlYW0KQlQKL0YxIDI0IFRmCjEwMCA3MDAgVGQKKHRlc3QpIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKMiAwIG9iago8PC9UeXBlIC9Gb250Ci9TdWJ0eXBlIC9UeXBlMQovQmFzZUZvbnQgL0hlbHZldGljYT4+CmVuZG9iagoxIDAgb2JqCjw8L1R5cGUgL1BhZ2VzCi9LaWRzIFszIDAgUl0KL0NvdW50IDE+PgplbmRvYmoKNSAwIG9iago8PC9UeXBlIC9DYXRhbG9nCi9QYWdlcyAxIDAgUj4+CmVuZG9iagp0cmFpbGVyCjw8L1NpemUgNgovUm9vdCA1IDAgUj4+CnN0YXJ0eHJlZgozMjQKJSVFT0Y=";
@@ -37,7 +39,7 @@ pub(crate) struct OcrRequestContext<'a> {
 pub(crate) struct OcrResponseContext<'a> {
     pub client: &'a OcrClient,
     pub connection: &'a OcrConnection,
-    pub hooks: &'a Arc<dyn OcrHooks>,
+    pub host: &'a OcrHost,
     pub request_format: OcrResponseFormat,
     pub url: &'a str,
     pub headers: &'a [(String, String)],
@@ -133,7 +135,7 @@ pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
                 context.connection.max_response_bytes,
             )
             .await?;
-            crate::ocr::handler::post_call(context.hooks, &bytes).await?;
+            crate::ocr::handler::emit_response_received(context.host, &bytes).await?;
             self.transform_ocr_response(model, &bytes, context.request_format)
         }
     }

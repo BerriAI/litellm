@@ -3,16 +3,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::transformation::VertexAiOcrConfig;
-use crate::call_arguments::CallArguments;
-use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
-use crate::ocr::OcrClient;
-use crate::ocr::prepare::credential_env;
-use crate::ocr::types::{
-    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage, OcrUsageInfo,
-    PreparedOcrRequest,
+use crate::{
+    call_arguments::CallArguments,
+    llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext},
+    ocr::{
+        OcrClient,
+        prepare::credential_env,
+        types::{
+            LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage,
+            OcrUsageInfo, PreparedOcrRequest,
+        },
+    },
+    params::OpaqueParams,
+    url_utils::ApiUrl,
 };
-use crate::params::OpaqueParams;
-use crate::url_utils::ApiUrl;
 
 const DEFAULT_API_BASE: &str = "https://aiplatform.googleapis.com";
 const MODEL_PREFIX: &str = "deepseek-ai/";
@@ -456,8 +460,7 @@ mod tests {
 
     use rstest::rstest;
 
-    use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
-    use crate::ocr::types::OcrDocument;
+    use crate::{llms::base_llm::ocr::transformation::BaseOcrConfig, ocr::types::OcrDocument};
 
     fn document() -> OcrDocument {
         serde_json::from_value(json!({"type":"image_url","image_url":"gs://bucket/a.png"})).unwrap()

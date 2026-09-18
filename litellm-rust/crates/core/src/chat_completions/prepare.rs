@@ -1,16 +1,18 @@
+use litellm_providers::base_llm::chat::transformation::{BaseConfig, ChatCompletionsAuth};
 use serde_json::Value;
 
-use super::Error;
-use super::common_utils::{chat_completions_provider_config, string_headers};
-use super::types::{
-    ChatCompletionsRequest, ChatMessage, ProviderChatCompletionsRequest,
-    ResolvedChatCompletionsRequest,
+use super::{
+    Error,
+    common_utils::{chat_completions_provider_config, string_headers},
+    types::{
+        ChatCompletionsRequest, ChatMessage, ProviderChatCompletionsRequest,
+        ResolvedChatCompletionsRequest,
+    },
 };
-use crate::http_utils::has_header;
-use crate::litellm_core_utils::get_llm_provider_logic::{
-    CustomLlmProvider, get_custom_llm_provider,
+use crate::{
+    http_utils::has_header,
+    litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider},
 };
-use crate::llms::base_llm::chat::transformation::{BaseConfig, ChatCompletionsAuth};
 
 pub(super) fn resolve_provider_config<'a>(
     model: &'a str,

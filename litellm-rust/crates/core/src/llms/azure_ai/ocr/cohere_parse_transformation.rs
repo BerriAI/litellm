@@ -1,13 +1,22 @@
 use serde_json::Value;
 
-use crate::call_arguments::CallArguments;
-use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
-use crate::llms::cohere::ocr::transformation::{CohereParseConfig, CohereRequest};
-use crate::llms::cohere::ocr::{CohereOptions, validate_document};
-use crate::ocr::OcrClient;
-use crate::ocr::document::{inline_remote_document, validate_inline_document};
-use crate::ocr::types::{LiteLLMOcrResponse, OcrDocument, PreparedOcrRequest};
-use crate::url_utils::ApiUrl;
+use crate::{
+    call_arguments::CallArguments,
+    llms::{
+        base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext},
+        cohere::ocr::{
+            CohereOptions,
+            transformation::{CohereParseConfig, CohereRequest},
+            validate_document,
+        },
+    },
+    ocr::{
+        OcrClient,
+        document::{inline_remote_document, validate_inline_document},
+        types::{LiteLLMOcrResponse, OcrDocument, PreparedOcrRequest},
+    },
+    url_utils::ApiUrl,
+};
 
 #[derive(Default)]
 pub(crate) struct AzureAICohereParseConfig;
