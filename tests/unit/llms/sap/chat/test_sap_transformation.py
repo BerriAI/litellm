@@ -6,19 +6,22 @@ import pytest
 from pydantic import ValidationError
 
 
+def _make_config():
+    from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+    cfg = GenAIHubOrchestrationConfig()
+    cfg.token_creator = lambda: "Bearer TEST_TOKEN"
+    cfg._base_url = "https://api.test-sap.com"
+    cfg._resource_group = "test-group"
+    return cfg
+
+
 class TestSAPTransformationIntegration:
     """Integration tests for SAP transformation."""
 
     @pytest.fixture
     def mock_config(self):
-        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
-
-        config = GenAIHubOrchestrationConfig()
-        config.token_creator = lambda: "Bearer TEST_TOKEN"
-        config._base_url = "https://api.test-sap.com"
-        config._resource_group = "test-group"
-
-        return config
+        return _make_config()
 
     def test_parameter_classification_in_transform_request(self, mock_config):
         """Test parameter classification within the actual transform_request method."""
@@ -649,9 +652,7 @@ class TestCacheControl:
     """Unit tests for cache_control preservation on message content parts."""
 
     def _transform(self, model: str, messages: list) -> dict:
-        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
-
-        cfg = GenAIHubOrchestrationConfig()
+        cfg = _make_config()
         return cfg.transform_request(
             model=model,
             messages=messages,
@@ -743,9 +744,7 @@ class TestCacheControl:
             "cache_control": {"type": "ephemeral"},
         }
         messages = [{"role": "user", "content": "Hi"}]
-        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
-
-        cfg = GenAIHubOrchestrationConfig()
+        cfg = _make_config()
         body = cfg.transform_request(
             model="anthropic--claude-3-5-sonnet",
             messages=messages,
@@ -766,9 +765,7 @@ class TestCacheControl:
             },
         }
         messages = [{"role": "user", "content": "Hi"}]
-        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
-
-        cfg = GenAIHubOrchestrationConfig()
+        cfg = _make_config()
         body = cfg.transform_request(
             model="anthropic--claude-3-5-sonnet",
             messages=messages,
