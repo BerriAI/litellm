@@ -16,6 +16,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
     resolve,
     rule_for,
 )
+from litellm.proxy.config_resolvers.settings_store import SettingsStore
 
 _SECTIONS: Final[tuple[Section, ...]] = (
     "general_settings",
@@ -24,9 +25,6 @@ _SECTIONS: Final[tuple[Section, ...]] = (
     "environment_variables",
 )
 
-# One route per shape the resolver has to serve: a key that used to be database-owned,
-# one that was already config-owned, the collection keys that used to merge, a key
-# carried by a different stored row, another section, and a key with no rule at all.
 _ROUTES: Final[tuple[tuple[Section, str], ...]] = (
     ("general_settings", "max_parallel_requests"),
     ("general_settings", "max_file_size_mb"),
@@ -66,17 +64,11 @@ _DB_VALUES: Final[tuple[SettingValue, ...]] = (
     [{"path": "/shared", "target": "db"}],
 )
 
-_CONFIG_OWNED_MATRIX: Final = tuple(
+_MATRIX: Final = tuple(
     (section, key, config_value, db_value)
     for (section, key), config_value, db_value in itertools.product(_ROUTES, _CONFIG_VALUES, _DB_VALUES)
-    if not is_absent(config_value)
-)
-_DB_FALLBACK_MATRIX: Final = tuple(
-    (section, key, db_value) for (section, key), db_value in itertools.product(_ROUTES, _DB_VALUES)
 )
 
-# Keys the database used to win outright. The flip is the breaking change this PR ships,
-# so each one is named rather than generated: a revert has to fail here.
 _PREVIOUSLY_DB_WINS: Final[tuple[str, ...]] = (
     "max_parallel_requests",
     "global_max_parallel_requests",
@@ -99,46 +91,72 @@ _PREVIOUSLY_DB_WINS: Final[tuple[str, ...]] = (
 )
 
 
-@pytest.mark.parametrize(("section", "key", "config_value", "db_value"), _CONFIG_OWNED_MATRIX)
-def test_a_key_the_config_file_declares_always_resolves_to_the_config_value(
+def _store_for(section: Section, key: str, config_value: SettingValue, db_value: SettingValue) -> SettingsStore:
+    store: Final = SettingsStore(section)
+    store.load_yaml({} if is_absent(config_value) else {key: config_value})
+    if not is_absent(db_value):
+        store.apply_db_row(rule_for(section, key).db_row, {key: db_value})
+    return store
+
+
+@pytest.mark.parametrize(("section", "key", "config_value", "db_value"), _MATRIX)
+def test_the_store_resolves_every_config_and_stored_value_combination(
     section: Section, key: str, config_value: SettingValue, db_value: SettingValue
 ) -> None:
-    resolved: Final = resolve(rule_for(section, key), config_value, db_value)
+    store: Final = _store_for(section, key, config_value, db_value)
 
-    assert resolved.value == config_value
-    assert resolved.source == "config"
-
-
-@pytest.mark.parametrize(("section", "key", "db_value"), _DB_FALLBACK_MATRIX)
-def test_a_key_the_config_file_omits_falls_back_to_the_stored_value(
-    section: Section, key: str, db_value: SettingValue
-) -> None:
-    resolved: Final = resolve(rule_for(section, key), ABSENT, db_value)
-
-    if is_absent(db_value) or db_value is None:
-        assert isinstance(resolved.value, Absent)
-        assert resolved.source == "unset"
+    if not is_absent(config_value):
+        assert store[key] == config_value
+        assert store.source(key) == "config"
+    elif is_absent(db_value) or db_value is None:
+        assert key not in store
+        assert store.source(key) == "unset"
     else:
-        assert resolved.value == db_value
-        assert resolved.source == "db"
+        assert store[key] == db_value
+        assert store.source(key) == "db"
+
+
+@pytest.mark.parametrize(("section", "key", "config_value", "db_value"), _MATRIX)
+def test_the_store_and_the_resolver_never_disagree(
+    section: Section, key: str, config_value: SettingValue, db_value: SettingValue
+) -> None:
+    resolved: Final = resolve(config_value, db_value)
+    store: Final = _store_for(section, key, config_value, db_value)
+
+    assert store.source(key) == resolved.source
+    if isinstance(resolved.value, Absent):
+        assert key not in store
+    else:
+        assert store[key] == resolved.value
+
+
+@pytest.mark.parametrize(("section", "key"), _ROUTES)
+def test_a_stored_row_the_key_does_not_belong_to_never_reaches_it(section: Section, key: str) -> None:
+    other_row: Final = "ui_settings" if rule_for(section, key).db_row != "ui_settings" else "general_settings"
+    store: Final = SettingsStore(section)
+    store.load_yaml({})
+    store.apply_db_row(other_row, {key: "from-the-wrong-row"})
+
+    assert key not in store
+    assert store.source(key) == "unset"
 
 
 @pytest.mark.parametrize("key", _PREVIOUSLY_DB_WINS)
 def test_keys_the_database_used_to_win_now_resolve_to_the_config_value(key: str) -> None:
-    resolved: Final = resolve(rule_for("general_settings", key), "from-config", "from-db")
+    store: Final = _store_for("general_settings", key, "from-config", "from-db")
 
-    assert resolved.value == "from-config"
-    assert resolved.source == "config"
+    assert store[key] == "from-config"
+    assert store.source(key) == "config"
 
 
 @pytest.mark.parametrize("key", _PREVIOUSLY_DB_WINS)
 def test_a_falsy_stored_value_cannot_erase_a_config_value(key: str) -> None:
     falsy: Final[tuple[JsonValue, ...]] = (None, False, 0, "", [], {})
 
-    resolved: Final = tuple(resolve(rule_for("general_settings", key), "from-config", value) for value in falsy)
+    stores: Final = tuple(_store_for("general_settings", key, "from-config", value) for value in falsy)
 
-    assert {entry.value for entry in resolved} == {"from-config"}
-    assert {entry.source for entry in resolved} == {"config"}
+    assert {store[key] for store in stores} == {"from-config"}
+    assert {store.source(key) for store in stores} == {"config"}
 
 
 @pytest.mark.parametrize(
@@ -162,7 +180,7 @@ def test_every_registered_rule_routes_to_a_known_row() -> None:
 
 
 def test_a_config_value_of_none_is_still_config_owned() -> None:
-    resolved: Final = resolve(rule_for("general_settings", "ui_access_mode"), None, "from-db")
+    resolved: Final = resolve(None, "from-db")
 
     assert resolved.value is None
     assert resolved.source == "config"

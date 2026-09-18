@@ -26389,10 +26389,21 @@ export interface components {
         };
         /** ConfigFieldInfo */
         ConfigFieldInfo: {
+            /**
+             * Editable
+             * @default true
+             */
+            editable: boolean;
             /** Field Name */
             field_name: string;
             /** Field Value */
             field_value: unknown;
+            /**
+             * Source
+             * @default unset
+             * @enum {string}
+             */
+            source: "config" | "db" | "env" | "default" | "unset";
         };
         /** ConfigFieldUpdate */
         ConfigFieldUpdate: {
@@ -26874,6 +26885,11 @@ export interface components {
         };
         /** ConfigList */
         ConfigList: {
+            /**
+             * Editable
+             * @default true
+             */
+            editable: boolean;
             /** Field Default Value */
             field_default_value: unknown;
             /** Field Description */
@@ -26895,6 +26911,12 @@ export interface components {
              * @default false
              */
             premium_field: boolean;
+            /**
+             * Source
+             * @default unset
+             * @enum {string}
+             */
+            source: "config" | "db" | "env" | "default" | "unset";
             /** Stored In Db */
             stored_in_db: boolean | null;
         };
