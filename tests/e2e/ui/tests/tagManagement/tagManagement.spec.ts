@@ -31,10 +31,11 @@ test.describe("Tag management", () => {
 
         await expect
           .poll(async () => {
-            const response = await readBack<
-              Record<string, Record<string, unknown>>
-            >(page, "/tag/list");
-            return Object.values(response).some((tag) => tag.name === tagName);
+            const response = await readBack<Array<{ name: string }>>(
+              page,
+              "/tag/list",
+            );
+            return response.some((tag) => tag.name === tagName);
           })
           .toBe(true);
         await expect(page.getByText(tagName, { exact: true })).toBeVisible();
