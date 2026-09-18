@@ -25,7 +25,7 @@ import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filt
 import { ChevronDown, Info } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { type Control, useForm, useWatch, type UseFormSetValue } from "react-hook-form";
-import { rolesWithWriteAccess } from "../../utils/roles";
+import { isProxyAdminRole, rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import SkillSelector from "../skills/SkillSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
@@ -52,6 +52,7 @@ import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
+import { END_USER_BUDGET_HINT, EndUserBudgetSelect } from "../key_team_helpers/EndUserBudgetSelect";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import { ModelMaxBudget, ModelMaxBudgetEditor } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { TagRateLimitEditor, TagRateLimitEntry } from "../key_team_helpers/TagRateLimitEditor";
@@ -1068,6 +1069,30 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           availableModels={modelsToPick}
                         />
                       </Field>
+                      {keyOwner === "service_account" && isProxyAdminRole(userRole ?? "") && (
+                        <MountedFormField
+                          className="mt-4"
+                          label={
+                            <span>
+                              Default Customer Budget{" "}
+                              <SimpleTooltip content={END_USER_BUDGET_HINT}>
+                                <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                              </SimpleTooltip>
+                            </span>
+                          }
+                          name="end_user_budget_id"
+                        >
+                          {(control) => (
+                            <EndUserBudgetSelect
+                              id={control.id}
+                              accessToken={accessToken}
+                              value={typeof control.value === "string" ? control.value : null}
+                              onChange={control.onChange}
+                              canEdit
+                            />
+                          )}
+                        </MountedFormField>
+                      )}
                       <MountedFormField
                         className="mt-4"
                         label={
