@@ -331,15 +331,19 @@ def on_pre_call(args):
 }
 
 #[test]
-fn post_call_receives_the_raw_response_the_route_key_and_the_body_pre_call_saw() {
+fn post_call_receives_the_raw_response_the_route_key_and_the_body_and_headers_pre_call_saw() {
     before_send(
         c"
 def check():
     original_response, api_key, additional_args = logger.post
     assert original_response == 'raw response', original_response
     assert api_key == logger.pre_api_key == 'route-key', (api_key, logger.pre_api_key)
-    assert additional_args == {'complete_input_dict': logger.pre['complete_input_dict']}, additional_args
+    assert additional_args == {
+        'complete_input_dict': logger.pre['complete_input_dict'],
+        'headers': logger.pre['headers'],
+    }, additional_args
     assert additional_args['complete_input_dict'] is logger.pre['complete_input_dict']
+    assert additional_args['headers'] is logger.pre['headers']
 ",
         json!({"document": document(DOCUMENT)}),
     );
