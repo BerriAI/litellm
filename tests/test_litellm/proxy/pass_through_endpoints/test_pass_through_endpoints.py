@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from fastapi import Request, Response, UploadFile
+from pydantic import ValidationError
 from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -1187,6 +1188,25 @@ def test_resolve_llm_passthrough_timeout_reads_stream_by_truthiness(stream: obje
         )
         == expected
     )
+
+
+@pytest.mark.parametrize(
+    "kwargs, litellm_params, expected",
+    [
+        ({"stream": True, "stream_timeout": 1800, "timeout": httpx.Timeout(30.0)}, {}, 1800.0),
+        ({"stream": False}, {"stream_timeout": httpx.Timeout(30.0), "timeout": 90}, 90.0),
+        ({"timeout": 45}, {"request_timeout": httpx.Timeout(30.0)}, 45.0),
+    ],
+)
+def test_resolve_llm_passthrough_timeout_validates_only_the_winning_value(
+    kwargs: dict[str, object], litellm_params: dict[str, object], expected: float
+):
+    assert resolve_llm_passthrough_timeout(kwargs=kwargs, litellm_params=litellm_params) == expected
+
+
+def test_resolve_llm_passthrough_timeout_rejects_a_non_numeric_winner():
+    with pytest.raises(ValidationError):
+        resolve_llm_passthrough_timeout(kwargs={"timeout": httpx.Timeout(30.0)})
 
 
 @pytest.mark.asyncio

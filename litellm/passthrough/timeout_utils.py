@@ -1,18 +1,14 @@
 import sys
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import TypeAdapter
 
 DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS: Final = 600.0
 
-
-class _TimeoutFields(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    stream_timeout: float | None = None
-    timeout: float | None = None
-    request_timeout: float | None = None
+_SECONDS: Final = TypeAdapter(float)
+_NO_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def resolve_pass_through_request_timeout(
@@ -59,20 +55,24 @@ def resolve_llm_passthrough_timeout(
     any generic timeout, matching ``Router._get_stream_timeout`` on the completion route:
     kwargs stream_timeout -> litellm_params stream_timeout -> router_stream_timeout, then the
     non-streaming chain above.
+
+    Only the first set value is validated as seconds, so a value in a lower-precedence
+    field never fails the call.
     """
-    streaming: Final = bool((kwargs or {}).get("stream"))
-    request: Final = _TimeoutFields.model_validate(kwargs or {})
-    deployment: Final = _TimeoutFields.model_validate(litellm_params or {})
+    request: Final = kwargs if kwargs is not None else _NO_PARAMS
+    deployment: Final = litellm_params if litellm_params is not None else _NO_PARAMS
     stream_candidates: Final = (
-        (request.stream_timeout, deployment.stream_timeout, router_stream_timeout) if streaming else ()
+        (request.get("stream_timeout"), deployment.get("stream_timeout"), router_stream_timeout)
+        if request.get("stream")
+        else ()
     )
     candidates: Final = (
         *stream_candidates,
-        request.timeout,
-        request.request_timeout,
-        deployment.timeout,
-        deployment.request_timeout,
+        request.get("timeout"),
+        request.get("request_timeout"),
+        deployment.get("timeout"),
+        deployment.get("request_timeout"),
         router_timeout,
     )
-    resolved: Final = next((float(val) for val in candidates if val is not None), None)
-    return resolved if resolved is not None else resolve_pass_through_request_timeout()
+    winner: Final = next((val for val in candidates if val is not None), None)
+    return resolve_pass_through_request_timeout() if winner is None else _SECONDS.validate_python(winner)
