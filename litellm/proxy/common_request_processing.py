@@ -94,7 +94,11 @@ from litellm.proxy.common_utils.sse_keepalive import (
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.route_llm_request import route_request
-from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
+from litellm.proxy.utils import (
+    ProxyLogging,
+    _check_and_merge_model_level_guardrails,
+    _merge_guardrails_with_existing,
+)
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_utils.common_utils import resolve_model_group_alias
@@ -1934,6 +1938,7 @@ class ProxyBaseLLMRequestProcessing:
         user_api_base: str | None = None,
         model: str | None = None,
         llm_router: Router | None = None,
+        requested_model_guardrails: list | None = None,
     ) -> tuple[dict, LiteLLMLoggingObj]:
         start_time: Final = datetime.now()  # start before calling guardrail hooks
 
@@ -2098,7 +2103,11 @@ class ProxyBaseLLMRequestProcessing:
         # could otherwise spoof an unguarded model_info.id while requesting
         # a guarded alias and bypass guardrails (veria-ai HIGH on #29654).
         self.data = _check_and_merge_model_level_guardrails(
-            data=self.data,
+            data=(
+                self.data
+                if requested_model_guardrails is None
+                else _merge_guardrails_with_existing(data=self.data, model_level_guardrails=requested_model_guardrails)
+            ),
             llm_router=llm_router,
             trust_client_model_info=False,
         )
@@ -2163,7 +2172,7 @@ class ProxyBaseLLMRequestProcessing:
 
         configured_fallbacks: Final = (
             self._configured_fallbacks(llm_router=llm_router, user_api_key_dict=user_api_key_dict)
-            if llm_router is not None and not self.data.get("disable_fallbacks")
+            if llm_router is not None
             else None
         )
         pristine: Final = independent_snapshot(self.data) if configured_fallbacks else None
@@ -2208,6 +2217,7 @@ class ProxyBaseLLMRequestProcessing:
                 original_model,
                 fallback_models,
             )
+            requested_model_guardrails: Final = self._request_guardrails(rate_limited_data)
 
             try:
                 for fallback_model in fallback_models:
@@ -2231,6 +2241,7 @@ class ProxyBaseLLMRequestProcessing:
                             model=fallback_model,
                             route_type=route_type,
                             llm_router=llm_router,
+                            requested_model_guardrails=requested_model_guardrails,
                         )
                     except ProxyRateLimitError:
                         continue
@@ -2240,6 +2251,12 @@ class ProxyBaseLLMRequestProcessing:
 
             self.data = rate_limited_data
             raise original_exc
+
+    @staticmethod
+    def _request_guardrails(data: dict) -> list | None:
+        metadata: Final = data.get("metadata")
+        guardrails: Final = metadata.get("guardrails") if isinstance(metadata, dict) else None
+        return guardrails if isinstance(guardrails, list) else None
 
     @staticmethod
     def _configured_fallbacks(llm_router: Router, user_api_key_dict: UserAPIKeyAuth) -> list | None:
