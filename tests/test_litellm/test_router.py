@@ -5538,6 +5538,65 @@ def test_update_kwargs_with_deployment_uses_pass_through_request_timeout():
     assert kwargs["timeout"] == 6.0
 
 
+def _passthrough_timeout(router: litellm.Router, deployment: dict, stream: bool) -> float:
+    kwargs: Final[dict] = {"stream": stream}
+    router._update_kwargs_with_deployment(
+        deployment=deployment,
+        kwargs=kwargs,
+        function_name="_ageneric_api_call_with_fallbacks",
+    )
+    return kwargs["timeout"]
+
+
+def test_update_kwargs_with_deployment_passthrough_honors_stream_timeout():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "anthropic-with-stream-timeout",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    "api_key": "fake-key",
+                    "timeout": 60,
+                    "stream_timeout": 1800,
+                },
+            },
+            {
+                "model_name": "anthropic-router-default",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    "api_key": "fake-key",
+                    "timeout": 60,
+                },
+            },
+        ],
+        timeout=120,
+        stream_timeout=900,
+    )
+    per_deployment, router_default = router.model_list
+
+    assert _passthrough_timeout(router, per_deployment, stream=True) == 1800.0
+    assert _passthrough_timeout(router, router_default, stream=True) == 900.0
+    assert _passthrough_timeout(router, per_deployment, stream=False) == 60.0
+    assert _passthrough_timeout(router, router_default, stream=False) == 60.0
+
+
+def test_update_kwargs_with_deployment_passthrough_router_stream_timeout_sources():
+    deployment: Final[dict] = {
+        "model_name": "anthropic-router-default",
+        "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "fake-key"},
+    }
+    string_router = litellm.Router(model_list=[deployment], timeout=120, stream_timeout="900")
+    default_router = litellm.Router(
+        model_list=[deployment],
+        timeout=120,
+        default_litellm_params={"stream_timeout": 700},
+    )
+
+    assert _passthrough_timeout(string_router, string_router.model_list[0], stream=True) == 900.0
+    assert _passthrough_timeout(default_router, default_router.model_list[0], stream=True) == 700.0
+    assert _passthrough_timeout(default_router, default_router.model_list[0], stream=False) == 120.0
+
+
 @pytest.mark.asyncio
 async def test_router_acompletion_with_unknown_model_and_default_fallback():
     """
@@ -8228,6 +8287,16 @@ class TestRouterRequestTimeoutPropagation:
             )
             == 60
         )
+
+    def test_passthrough_prefers_request_timeout_over_router_timeout(self, explicit_request_timeout):
+        router = self._make_router(timeout=330)
+        deployment: Final = router.model_list[0]
+        assert _passthrough_timeout(router, deployment, stream=False) == 300.0
+        assert _passthrough_timeout(router, deployment, stream=True) == 300.0
+
+    def test_passthrough_stream_timeout_still_wins_over_request_timeout(self, explicit_request_timeout):
+        router = self._make_router(timeout=330, stream_timeout=45)
+        assert _passthrough_timeout(router, router.model_list[0], stream=True) == 45.0
 
 
 # ---------------------------------------------------------------------------

@@ -1372,6 +1372,7 @@ async def test_create_team_member_add_team_admin(
     from fastapi import Request
 
     from litellm.proxy._types import (
+        LiteLLM_TeamMembership,
         LiteLLM_TeamTableCachedObj,
         LiteLLM_UserTable,
         Member,
@@ -1454,6 +1455,10 @@ async def test_create_team_member_add_team_admin(
         team_mock_client.update = AsyncMock(
             return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
         )
+        membership_mock_client = AsyncMock()
+        membership_mock_client.upsert = AsyncMock(
+            return_value=LiteLLM_TeamMembership(user_id="1234", team_id=_team_id)
+        )
 
         tx_cm = _member_add_tx_cm(team_mock_client)
 
@@ -1462,6 +1467,11 @@ async def test_create_team_member_add_team_admin(
                 litellm.proxy.proxy_server.prisma_client.db,
                 "litellm_teamtable",
                 team_mock_client,
+            ),
+            patch.object(  # test-quality-ok: legacy test swaps the prisma table on the module-level client
+                litellm.proxy.proxy_server.prisma_client.db,
+                "litellm_teammembership",
+                membership_mock_client,
             ),
             patch.object(
                 litellm.proxy.proxy_server.prisma_client,

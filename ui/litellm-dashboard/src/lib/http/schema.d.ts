@@ -1612,6 +1612,82 @@ export interface paths {
         patch: operations["azure_proxy_route_azure_ai__endpoint__patch"];
         trace?: never;
     };
+    "/azure_speech/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Azure Speech Proxy Route
+         * @description Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.
+         *     `POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`
+         *     with the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.
+         *
+         *     The body is forwarded byte for byte and the proxy injects its own
+         *     `Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key
+         *     and is never forwarded.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
+         */
+        get: operations["azure_speech_proxy_route_azure_speech__endpoint__get"];
+        /**
+         * Azure Speech Proxy Route
+         * @description Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.
+         *     `POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`
+         *     with the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.
+         *
+         *     The body is forwarded byte for byte and the proxy injects its own
+         *     `Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key
+         *     and is never forwarded.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
+         */
+        put: operations["azure_speech_proxy_route_azure_speech__endpoint__put"];
+        /**
+         * Azure Speech Proxy Route
+         * @description Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.
+         *     `POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`
+         *     with the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.
+         *
+         *     The body is forwarded byte for byte and the proxy injects its own
+         *     `Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key
+         *     and is never forwarded.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
+         */
+        post: operations["azure_speech_proxy_route_azure_speech__endpoint__post"];
+        /**
+         * Azure Speech Proxy Route
+         * @description Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.
+         *     `POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`
+         *     with the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.
+         *
+         *     The body is forwarded byte for byte and the proxy injects its own
+         *     `Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key
+         *     and is never forwarded.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
+         */
+        delete: operations["azure_speech_proxy_route_azure_speech__endpoint__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Azure Speech Proxy Route
+         * @description Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.
+         *     `POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`
+         *     with the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.
+         *
+         *     The body is forwarded byte for byte and the proxy injects its own
+         *     `Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key
+         *     and is never forwarded.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
+         */
+        patch: operations["azure_speech_proxy_route_azure_speech__endpoint__patch"];
+        trace?: never;
+    };
     "/batches": {
         parameters: {
             query?: never;
@@ -19037,7 +19113,7 @@ export interface paths {
         post: operations["store_mcp_oauth_user_credential_v1_mcp_server__server_id__oauth_user_credential_post"];
         /**
          * Delete Mcp Oauth User Credential
-         * @description Revoke the calling user's stored OAuth2 token for an MCP server
+         * @description Revoke the calling user's stored OAuth2 token for an MCP server. A proxy admin may pass user_id to revoke another user's stored token.
          */
         delete: operations["delete_mcp_oauth_user_credential_v1_mcp_server__server_id__oauth_user_credential_delete"];
         options?: never;
@@ -19101,9 +19177,29 @@ export interface paths {
         post: operations["store_mcp_user_credential_v1_mcp_server__server_id__user_credential_post"];
         /**
          * Delete Mcp User Credential
-         * @description Delete the calling user's stored API key for a BYOK MCP server
+         * @description Delete the calling user's stored API key for a BYOK MCP server. A proxy admin may pass user_id to revoke another user's stored key.
          */
         delete: operations["delete_mcp_user_credential_v1_mcp_server__server_id__user_credential_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/server/{server_id}/user-credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Mcp Server User Credentials
+         * @description List every user's stored BYOK or OAuth2 credential for an MCP server (admin only, no secrets)
+         */
+        get: operations["list_mcp_server_user_credentials_v1_mcp_server__server_id__user_credentials_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -19151,7 +19247,11 @@ export interface paths {
         get: operations["get_mcp_gateway_sessions_v1_mcp_sessions_get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Mcp Gateway Sessions
+         * @description Force-close live stateful MCP gateway sessions on this proxy worker, selected by session id prefix and/or by the LiteLLM user that opened them (proxy admin only).
+         */
+        delete: operations["delete_mcp_gateway_sessions_v1_mcp_sessions_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -26693,6 +26793,16 @@ export interface components {
              */
             enforce_fallback_model_access?: boolean | null;
             /**
+             * Failed Login Block Seconds
+             * @description How long a blocked source address, or source address and username, stays blocked. Every attempt from a blocked key, right or wrong, is refused with 429 before the password is checked; the block is not extended by refused attempts. Set under `general_settings` in config.yaml. Defaults to 300
+             */
+            failed_login_block_seconds?: number | null;
+            /**
+             * Failed Login Window Seconds
+             * @description Fixed window in seconds over which failed Admin UI sign-in attempts are counted. The window starts at the first failure and is not extended by later ones. Set under `general_settings` in config.yaml. Defaults to 60
+             */
+            failed_login_window_seconds?: number | null;
+            /**
              * Forward Client Headers To Llm Api
              * @description If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.
              */
@@ -26736,6 +26846,18 @@ export interface components {
              * @description max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider
              */
             max_batch_file_size_mb?: number | null;
+            /**
+             * Max Failed Login Attempts Per Source
+             * @description Failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`. One more blocks that address for `failed_login_block_seconds`. Half this value, rounded down but at least 1, is the allowance for one username from that address; one more blocks that address for that username only, and its further failures stop counting toward the address limit, so a script stuck on one account does not block everyone behind a shared address. The per-address limit is only enforced when `trusted_proxy_ranges` is set: to the proxies in front of LiteLLM, or to an empty list when clients connect directly. Left unset, the peer address may be a shared ingress and only the per-username half runs. IPv6 addresses are grouped by /64. Set under `general_settings` in config.yaml. Defaults to 10
+             */
+            max_failed_login_attempts_per_source?: number | null;
+            /**
+             * Max Failed Login Attempts Per Source Overrides
+             * @description Per-address overrides of `max_failed_login_attempts_per_source`, keyed by IP address or CIDR range, e.g. {'1.2.3.4': 200, '5.6.0.0/24': 500}. The most specific matching range wins (between equivalent keys such as '1.2.3.4' and '1.2.3.4/32', an exemption wins, then the higher limit), and the per-username allowance for that address follows as half the override. A value of 0 exempts the address from both limits. Set under `general_settings` in config.yaml
+             */
+            max_failed_login_attempts_per_source_overrides?: {
+                [key: string]: number;
+            } | null;
             /**
              * Max File Size Mb
              * @description max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider
@@ -26916,7 +27038,7 @@ export interface components {
             transcribe_media_buckets?: string[] | null;
             /**
              * Trusted Proxy Ranges
-             * @description CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler.
+             * @description CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler, and whose X-Forwarded-For is used to attribute Admin UI sign-in attempts to a source address. Set it to an empty list when clients connect directly, so the peer address is the source. Left unset, or containing an entry that is not an address or CIDR range, the per-source sign-in limit is off.
              */
             trusted_proxy_ranges?: string[] | null;
             /**
@@ -27694,6 +27816,11 @@ export interface components {
         /** DailySpendMetadata */
         DailySpendMetadata: {
             /**
+             * Api Key Limit
+             * @description When set, api_keys and every api_key_breakdown list at most this many keys, ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.
+             */
+            api_key_limit?: number | null;
+            /**
              * Has More
              * @default false
              */
@@ -27703,6 +27830,11 @@ export interface components {
              * @default 1
              */
             page: number;
+            /**
+             * Total Api Keys
+             * @description Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key lists are truncated to the highest-spend keys.
+             */
+            total_api_keys?: number | null;
             /**
              * Total Api Requests
              * @default 0
@@ -32622,6 +32754,18 @@ export interface components {
             worker_pid: number;
         };
         /**
+         * MCPGatewaySessionsTerminateResponse
+         * @description Stateful sessions an administrator force-closed on this proxy worker.
+         */
+        MCPGatewaySessionsTerminateResponse: {
+            /** Sessions */
+            sessions?: components["schemas"]["MCPGatewaySession"][];
+            /** Terminated Sessions */
+            terminated_sessions: number;
+            /** Worker Pid */
+            worker_pid: number;
+        };
+        /**
          * MCPOAuthUserCredentialRequest
          * @description Stores a user's OAuth2 token for an OpenAPI MCP server.
          */
@@ -32724,6 +32868,25 @@ export interface components {
             values: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * MCPServerUserCredentialListItem
+         * @description One user's stored credential for an MCP server, as an admin sees it. Never carries the secret.
+         */
+        MCPServerUserCredentialListItem: {
+            /** Connected At */
+            connected_at?: string | null;
+            /**
+             * Credential Type
+             * @enum {string}
+             */
+            credential_type: "oauth2" | "byok";
+            /** Expires At */
+            expires_at?: string | null;
+            /** Updated At */
+            updated_at: string;
+            /** User Id */
+            user_id: string;
         };
         /** MCPSubmissionsSummary */
         MCPSubmissionsSummary: {
@@ -43772,6 +43935,161 @@ export interface operations {
         };
     };
     azure_proxy_route_azure_ai__endpoint__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    azure_speech_proxy_route_azure_speech__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    azure_speech_proxy_route_azure_speech__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    azure_speech_proxy_route_azure_speech__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    azure_speech_proxy_route_azure_speech__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    azure_speech_proxy_route_azure_speech__endpoint__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -65693,7 +66011,9 @@ export interface operations {
     };
     delete_mcp_oauth_user_credential_v1_mcp_server__server_id__oauth_user_credential_delete: {
         parameters: {
-            query?: never;
+            query?: {
+                user_id?: string | null;
+            };
             header?: never;
             path: {
                 server_id: string;
@@ -65825,7 +66145,9 @@ export interface operations {
     };
     delete_mcp_user_credential_v1_mcp_server__server_id__user_credential_delete: {
         parameters: {
-            query?: never;
+            query?: {
+                user_id?: string | null;
+            };
             header?: never;
             path: {
                 server_id: string;
@@ -65841,6 +66163,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MCPUserCredentialResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_mcp_server_user_credentials_v1_mcp_server__server_id__user_credentials_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPServerUserCredentialListItem"][];
                 };
             };
             /** @description Validation Error */
@@ -65967,6 +66320,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MCPGatewaySessionsResponse"];
+                };
+            };
+        };
+    };
+    delete_mcp_gateway_sessions_v1_mcp_sessions_delete: {
+        parameters: {
+            query?: {
+                session_id_prefix?: string | null;
+                user_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPGatewaySessionsTerminateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
