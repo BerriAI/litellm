@@ -421,6 +421,36 @@ def test_deepgram_listen_authorizes_the_model_it_will_actually_send_upstream(que
     assert relay.calls == []
 
 
+def test_deepgram_listen_strips_a_second_model_that_would_outrank_the_authorized_one(monkeypatch):
+    """Deepgram honours the last repeated ``model``; auth and pricing read the first. A key allowed only ``nova-2``
+    must not smuggle ``nova-3`` past authorization behind an authorized first value."""
+    monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "max_budget", 0.0)
+    _price_nova_2_streaming(monkeypatch)
+    cache = asyncio.run(_cache_restricted_key("sk-only-nova-2", ["nova-2"]))
+    relay = _FakeRelay()
+    client = TestClient(_app_with_relay(relay))
+
+    with (
+        patch(GET_CREDENTIALS, return_value="dg-provider-key"),
+        patch.multiple(  # test-quality-ok: the real key auth path reads these proxy_server globals and has no injection seam
+            "litellm.proxy.proxy_server",
+            master_key="sk-master",
+            prisma_client=MagicMock(),
+            user_api_key_cache=cache,
+            llm_model_list=None,
+            llm_router=None,
+        ),
+    ):
+        with client.websocket_connect(
+            "/deepgram/v1/listen?model=nova-2&language=en&model=nova-3&language=multi",
+            headers={"Authorization": "Bearer sk-only-nova-2"},
+        ):
+            pass
+
+    assert [call.target for call in relay.calls] == ["wss://api.deepgram.com/v1/listen?model=nova-2&language=en"]
+
+
 def test_deepgram_listen_echoes_the_browser_subprotocol_that_carries_the_litellm_key(monkeypatch):
     """Browsers cannot set headers, so they send the key as a subprotocol and abort the handshake unless the
     server echoes that subprotocol back; the key itself must still stay off the upstream connection."""
