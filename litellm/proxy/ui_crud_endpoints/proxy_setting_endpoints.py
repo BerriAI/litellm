@@ -14,8 +14,8 @@ from typing import (
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
-from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, create_model
-from pydantic.fields import FieldInfo
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, create_model
+from pydantic.fields import FieldInfo, PydanticUndefined
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._experimental.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.config_resolvers import SettingsSource, SettingsStore, source_for
 from litellm.proxy.config_resolvers.sso import (
     SSO_FIELD_ENV_VARS,
     SSO_SECRET_FIELDS,
@@ -33,7 +34,10 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 )
-from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
+from litellm.proxy.spend_tracking.ptu_feature_flag import (
+    PTU_COST_ATTRIBUTION_ENV_VAR,
+    is_ptu_cost_attribution_enabled,
+)
 from litellm.proxy.utils import invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -43,6 +47,7 @@ from litellm.repositories.table_repositories import (
     UISettingsRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
+from litellm.secret_managers.main import get_secret
 from litellm.types.mcp import MCPToolSearchSettings
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -197,6 +202,11 @@ class SettingsResponse(BaseModel):
     """Schema information including descriptions and property types for UI display"""
 
 
+class _SettingsWithSchema(BaseModel):
+    values: dict[str, object]
+    field_schema: dict[str, object]
+
+
 class SSOSettingsResponse(SettingsResponse):
     """Response model for SSO settings"""
 
@@ -326,6 +336,8 @@ class UISettings(BaseModel):
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
+
+    source: dict[str, SettingsSource]
 
 
 # Allowlist of UI settings that can be stored
@@ -656,6 +668,25 @@ def _root_schema(settings_class: type[BaseModel]) -> _RootSchema:
         nested_defs=raw_schema.get("definitions", _EMPTY_SCHEMA_DEFS),
         defs=raw_schema["$defs"] if "$defs" in raw_schema else raw_schema.get("definitions", _EMPTY_SCHEMA_DEFS),
     )
+
+
+def _model_field_default(settings_class: type[BaseModel], field_name: str) -> object:
+    field_info: Final = settings_class.model_fields.get(field_name)
+    if field_info is None or field_info.default is PydanticUndefined:
+        return None
+    return cast(object, field_info.default)  # cast-ok: Pydantic field defaults are untyped
+
+
+def _ui_setting_source(
+    key: str,
+    value: object,
+    settings: SettingsStore,
+    settings_class: type[BaseModel],
+) -> SettingsSource:
+    if key == ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING:
+        configured_value: Final = get_secret(PTU_COST_ATTRIBUTION_ENV_VAR, None)
+        return "config" if configured_value is not None or value is True else "default"
+    return source_for(settings, key, _model_field_default(settings_class, key))
 
 
 async def _get_settings_with_schema(
@@ -1527,7 +1558,7 @@ async def get_ui_settings():
     Get UI-specific configuration flags.
     All authenticated users can fetch these settings for client-side behavior.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
 
     if prisma_client is None:
         raise HTTPException(
@@ -1546,26 +1577,40 @@ async def get_ui_settings():
     ui_settings: Final = {k: v for k, v in parsed.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
     apply_runtime_general_settings_flags(ui_settings)
+    proxy_config.settings.apply_db_row("ui_settings", ui_settings)
 
     # Refresh DualCache so other code paths (e.g. /user/filter/ui) see fresh values
     from litellm.proxy.proxy_server import user_api_key_cache
 
     await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
 
-    # Build config-like object for schema helper
-    config: Final[dict[str, object]] = {"litellm_settings": {"ui_settings": ui_settings}}
-
-    settings: Final = await _get_settings_with_schema(
-        settings_key="ui_settings",
-        settings_class=_get_effective_ui_settings_class(),
-        config=config,
+    effective_ui_settings: Final = {
+        **{key: proxy_config.settings[key] for key in ALLOWED_UI_SETTINGS_FIELDS if key in proxy_config.settings},
+        **ui_settings,
+    }
+    config: Final[dict[str, object]] = {"litellm_settings": {"ui_settings": effective_ui_settings}}
+    settings_class: Final = _get_effective_ui_settings_class()
+    resolved_settings: Final = _SettingsWithSchema.model_validate(
+        await _get_settings_with_schema(
+            settings_key="ui_settings",
+            settings_class=settings_class,
+            config=config,
+        )
     )
+    values: Final = {
+        **resolved_settings.values,
+        ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: is_ptu_cost_attribution_enabled(),
+    }
+    source: Final[dict[str, SettingsSource]] = {
+        key: (
+            "db" if key in ui_settings else _ui_setting_source(key, values[key], proxy_config.settings, settings_class)
+        )
+        for key in values
+    }
     return UISettingsResponse(
-        values={
-            **settings["values"],
-            ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: is_ptu_cost_attribution_enabled(),
-        },
-        field_schema=settings["field_schema"],
+        values=values,
+        field_schema=resolved_settings.field_schema,
+        source=source,
     )
 
 

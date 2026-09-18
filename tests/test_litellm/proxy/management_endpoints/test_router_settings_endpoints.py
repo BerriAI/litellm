@@ -76,6 +76,36 @@ class TestRouterSettingsEndpoints:
         assert len(routing_strategy_field["options"]) > 0
 
     @pytest.mark.asyncio
+    async def test_get_router_settings_reports_sources(self, monkeypatch):
+        from litellm.proxy.config_resolvers import SettingsStore
+
+        store = SettingsStore("router_settings")
+        store.load_yaml({"routing_strategy": "simple-shuffle"})
+        store.apply_db_row("router_settings", {"num_retries": 3})
+        monkeypatch.setattr(proxy_server.proxy_config, "router_settings", store)
+        monkeypatch.setattr(proxy_server, "llm_router", None)
+
+        async def fake_get_config(self, config_file_path=None):
+            return {
+                "router_settings": {
+                    "routing_strategy": "simple-shuffle",
+                    "num_retries": 3,
+                }
+            }
+
+        monkeypatch.setattr(
+            proxy_server.ProxyConfig, "get_config", fake_get_config, raising=True
+        )
+
+        admin_user = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-x"
+        )
+        response = await get_router_settings(user_api_key_dict=admin_user)
+
+        assert response.source["routing_strategy"] == "config"
+        assert response.source["num_retries"] == "db"
+
+    @pytest.mark.asyncio
     async def test_get_router_settings_includes_routing_groups_from_live_router(
         self, monkeypatch
     ):
@@ -116,6 +146,8 @@ class TestRouterSettingsEndpoints:
         response = await get_router_settings(user_api_key_dict=admin_user)
 
         assert response.current_values.get("routing_groups") == groups
+        assert response.current_values["timeout"] is not None
+        assert response.source["timeout"] == "default"
 
         rg_field = next(f for f in response.fields if f.field_name == "routing_groups")
         assert rg_field.field_value == groups
