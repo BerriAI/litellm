@@ -241,12 +241,11 @@ BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
 def get_spend_logs_id(call_type: str, response_obj: dict, kwargs: dict) -> str | None:
     standard_logging_payload = kwargs.get("standard_logging_object")
     litellm_params = kwargs.get("litellm_params")
-    litellm_params_dict: Final = litellm_params if isinstance(litellm_params, dict) else {}
     candidate_ids: Final = (
         response_obj.get("id"),
         standard_logging_payload.get("id") if isinstance(standard_logging_payload, dict) else None,
         kwargs.get("litellm_call_id"),
-        litellm_params_dict.get("litellm_call_id"),
+        litellm_params.get("litellm_call_id") if isinstance(litellm_params, dict) else None,
     )
     resolved_id: Final = next(
         (candidate for candidate in candidate_ids if isinstance(candidate, str) and candidate), None
