@@ -348,6 +348,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "audio_transcription",
             "audio_speech",
             "responses",
+            "evaluation",
             "ocr",
             "realtime",
         ]
@@ -3073,6 +3074,12 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     cold_storage_object_key: str | None  # S3/GCS object key for cold storage retrieval
     team_alias: str | None
     team_id: str | None
+
+
+class AzureSpillover(TypedDict):
+    """Spillover Azure reports in its response headers for a request it served from pay-as-you-go capacity."""
+
+    from_deployment: ReadOnly[str | None]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):

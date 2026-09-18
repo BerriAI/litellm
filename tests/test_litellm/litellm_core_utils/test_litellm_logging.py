@@ -7229,3 +7229,155 @@ def test_add_dynamic_callback_registers_once_per_list_without_touching_the_calle
     assert logging_obj.dynamic_async_failure_callbacks == [callback]
     assert LitellmLogging._with_dynamic_callback(None, callback) == [callback]
     assert LitellmLogging._with_dynamic_callback((callback,), callback) == [callback]
+
+
+class TestAzurePTUSpilloverCost:
+    """Azure PTU deployments price tokens at zero because the reservation is billed flat.
+
+    A request Azure spills onto pay-as-you-go capacity must bill per token instead, so
+    the zeroed custom pricing has to be skipped when the provider reports spillover.
+    """
+
+    ROUTER_MODEL_ID: Final = "ptu-spill-router-model-id"
+    SERVED_MODEL: Final = "azure/spill-served-model-ptu"
+    PTU_MODEL_INFO: Final = {
+        "id": ROUTER_MODEL_ID,
+        "team_id": "team-1",
+        "ptu_count": 100,
+        "cost_per_ptu_per_hour": 1.0,
+        "ptu_effective_from": "2026-01-01",
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    }
+    EXPECTED_SPILL_COST: Final = 100 * 2e-6 + 50 * 8e-6
+
+    @staticmethod
+    def _register_models() -> None:
+        litellm.register_model(
+            model_cost={
+                TestAzurePTUSpilloverCost.ROUTER_MODEL_ID: {
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                    "litellm_provider": "azure",
+                    "mode": "chat",
+                },
+                TestAzurePTUSpilloverCost.SERVED_MODEL: {
+                    "input_cost_per_token": 2e-6,
+                    "output_cost_per_token": 8e-6,
+                    "litellm_provider": "azure",
+                    "mode": "chat",
+                },
+            }
+        )
+
+    @staticmethod
+    def _unregister_models() -> None:
+        litellm.model_cost.pop(TestAzurePTUSpilloverCost.ROUTER_MODEL_ID, None)
+        litellm.model_cost.pop(TestAzurePTUSpilloverCost.SERVED_MODEL, None)
+
+    def _logging_obj(self, model_info: dict, *, flag: str, litellm_rate: float, monkeypatch) -> LitellmLogging:
+        monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", flag)
+        obj = LitellmLogging(
+            model=self.SERVED_MODEL,
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="ptu-spill-1",
+            function_id="f",
+        )
+        obj.update_environment_variables(
+            model=self.SERVED_MODEL,
+            user="",
+            optional_params={},
+            litellm_params={
+                "api_base": "",
+                "metadata": {"model_info": model_info},
+                "input_cost_per_token": litellm_rate,
+                "output_cost_per_token": litellm_rate,
+            },
+            custom_llm_provider="azure",
+        )
+        return obj
+
+    @staticmethod
+    def _response() -> ModelResponse:
+        from litellm.types.utils import Usage
+
+        return ModelResponse(
+            id="chatcmpl-spill-1",
+            created=1234567890,
+            model="spill-served-model-ptu",
+            choices=[
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        )
+
+    def test_spillover_via_response_additional_headers_bills_per_token(self, monkeypatch) -> None:
+        self._register_models()
+        try:
+            obj = self._logging_obj(dict(self.PTU_MODEL_INFO), flag="True", litellm_rate=0.0, monkeypatch=monkeypatch)
+            response = self._response()
+            response._hidden_params["additional_headers"] = {"llm_provider-x-ms-is-spilled-over": "true"}
+
+            assert obj._response_cost_calculator(result=response) == pytest.approx(self.EXPECTED_SPILL_COST)
+        finally:
+            self._unregister_models()
+
+    def test_spillover_via_streaming_response_headers_bills_per_token(self, monkeypatch) -> None:
+        self._register_models()
+        try:
+            obj = self._logging_obj(dict(self.PTU_MODEL_INFO), flag="True", litellm_rate=0.0, monkeypatch=monkeypatch)
+            obj.model_call_details["response_headers"] = {
+                "x-ms-is-spilled-over": "true",
+                "x-ms-spillover-from-deployment": "ptu-dep",
+            }
+
+            assert obj._response_cost_calculator(result=self._response()) == pytest.approx(self.EXPECTED_SPILL_COST)
+        finally:
+            self._unregister_models()
+
+    def test_non_spilled_ptu_request_stays_zero_priced(self, monkeypatch) -> None:
+        self._register_models()
+        try:
+            obj = self._logging_obj(dict(self.PTU_MODEL_INFO), flag="True", litellm_rate=0.0, monkeypatch=monkeypatch)
+
+            assert obj._response_cost_calculator(result=self._response()) == 0.0
+        finally:
+            self._unregister_models()
+
+    def test_spillover_header_without_the_flag_stays_zero_priced(self, monkeypatch) -> None:
+        self._register_models()
+        try:
+            obj = self._logging_obj(dict(self.PTU_MODEL_INFO), flag="", litellm_rate=0.0, monkeypatch=monkeypatch)
+            response = self._response()
+            response._hidden_params["additional_headers"] = {"llm_provider-x-ms-is-spilled-over": "true"}
+
+            assert obj._response_cost_calculator(result=response) == 0.0
+        finally:
+            self._unregister_models()
+
+    def test_spillover_header_does_not_touch_non_ptu_custom_pricing(self, monkeypatch) -> None:
+        self._register_models()
+        custom_model_id: Final = "non-ptu-custom-router-model-id"
+        litellm.model_cost[custom_model_id] = {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 1e-6,
+            "litellm_provider": "azure",
+            "mode": "chat",
+        }
+        try:
+            model_info: Final = {"id": custom_model_id, "input_cost_per_token": 1e-6}
+            obj = self._logging_obj(model_info, flag="True", litellm_rate=1e-6, monkeypatch=monkeypatch)
+            response = self._response()
+            response._hidden_params["additional_headers"] = {"llm_provider-x-ms-is-spilled-over": "true"}
+
+            assert obj._response_cost_calculator(result=response) == pytest.approx(150 * 1e-6)
+        finally:
+            litellm.model_cost.pop(custom_model_id, None)
+            self._unregister_models()

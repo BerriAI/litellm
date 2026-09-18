@@ -51,6 +51,7 @@ from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
+    AzureSpillover,
     CallTypes,
     CostBreakdown,
     EmbeddingResponse,
@@ -483,6 +484,7 @@ class LiteLLMRoutes(enum.Enum):
         "/eu.assemblyai",
         "/vllm",
         "/mistral",
+        "/typesafe",
         "/milvus",
         "/gigachat",
         "/watsonx",
@@ -3896,6 +3898,7 @@ class SpendLogsMetadata(TypedDict):
     autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed
     litellm_gateway_injected_cache: ReadOnly[str | None]
     router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
+    azure_spillover: ReadOnly[AzureSpillover | None]  # None = Azure did not report spillover
 
 
 class SpendLogsPayload(TypedDict):

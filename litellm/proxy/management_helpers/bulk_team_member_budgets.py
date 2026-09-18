@@ -7,11 +7,20 @@ cap never moves another member's.
 """
 
 from collections.abc import Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
+from pydantic import BaseModel, ConfigDict
+
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy._types import (
+    LiteLLM_TeamTable,
+    LitellmTableNames,
+    LitellmUserRoles,
+    Member,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.auth_checks import invalidate_team_member_spend_state
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
@@ -21,6 +30,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage]  # the single-member write, shared so the two surfaces cannot drift
     member_budget_patch,
 )
+from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.management_helpers.bulk_user_deletion import (
     _duplicate_member_indexes,  # pyright: ignore[reportPrivateUsage]  # same duplicate rule as members/bulk_delete
     _eq_filter,  # pyright: ignore[reportPrivateUsage]  # same prisma filter shape as members/bulk_delete
@@ -77,6 +87,54 @@ async def _shared_budget_ids(tx: "Prisma", budget_ids: frozenset[str]) -> frozen
     return frozenset(budget_id for budget_id in budget_ids if sum(1 for row in rows if row.budget_id == budget_id) > 1)
 
 
+class _AuditedMemberBudget(BaseModel):
+    """One member's limits as the audit log's before/after values record them."""
+
+    model_config = ConfigDict(frozen=True)
+
+    user_id: str
+    budget_id: str | None = None
+    max_budget: float | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    budget_duration: str | None = None
+    budget_reset_at: datetime | None = None
+    allowed_models: tuple[str, ...] | None = None
+
+
+class _AuditedMemberBudgets(BaseModel):
+    """The audit-log columns hold a JSON object, so the per-member list is nested under a key."""
+
+    model_config = ConfigDict(frozen=True)
+
+    team_member_budgets: tuple[_AuditedMemberBudget, ...]
+
+
+def _audited_member_budget(row: "prisma_models.LiteLLM_TeamMembership") -> _AuditedMemberBudget:
+    budget: Final = row.litellm_budget_table
+    if budget is None:
+        return _AuditedMemberBudget(user_id=row.user_id, budget_id=row.budget_id)
+    return _AuditedMemberBudget(
+        user_id=row.user_id,
+        budget_id=row.budget_id,
+        max_budget=budget.max_budget,
+        tpm_limit=budget.tpm_limit,
+        rpm_limit=budget.rpm_limit,
+        budget_duration=budget.budget_duration,
+        budget_reset_at=budget.budget_reset_at,
+        allowed_models=tuple(budget.allowed_models),
+    )
+
+
+def _limits_audit_value(rows: "Sequence[prisma_models.LiteLLM_TeamMembership]") -> str:
+    """Serialize the members' limits for an audit-log value, dropping the limits they do not set."""
+    return safe_dumps(
+        _AuditedMemberBudgets(
+            team_member_budgets=tuple(_audited_member_budget(row) for row in sorted(rows, key=lambda row: row.user_id))
+        ).model_dump(exclude_none=True, mode="json")
+    )
+
+
 def _result(
     member: TeamMemberBudgetPatch,
     user_id: str | None,
@@ -114,6 +172,8 @@ async def bulk_update_team_member_budgets(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
+    litellm_proxy_admin_name: str,
+    litellm_changed_by: str | None = None,
 ) -> tuple[TeamMemberBudgetUpdateResult, ...]:
     """Apply one merge patch of per-member limits per requested member, in one transaction."""
     team: Final = await TeamRepository(WriterPinnedClient(prisma_client.db)).find_by_id(team_id)
@@ -151,7 +211,7 @@ async def bulk_update_team_member_budgets(
     team_members_filter: Final = _team_users_filter(team_id, user_ids)
 
     async with prisma_client.tx(timeout=_BATCH_TX_TIMEOUT) as tx:
-        memberships: Final = await _membership_tx_db(tx).find_many(where=team_members_filter)
+        memberships: Final = await _membership_tx_db(tx).find_many(where=team_members_filter, include=_WITH_BUDGET)
         budget_id_of: Final = MappingProxyType({m.user_id: m.budget_id for m in memberships})
         shared: Final = await _shared_budget_ids(
             tx, frozenset(budget_id for budget_id in budget_id_of.values() if budget_id is not None)
@@ -178,6 +238,17 @@ async def bulk_update_team_member_budgets(
         await invalidate_team_member_spend_state(
             user_id=user_id, team_id=team_id, user_api_key_cache=user_api_key_cache
         )
+
+    await create_object_audit_log(
+        object_id=team_id,
+        action="updated",
+        litellm_changed_by=litellm_changed_by,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
+        table_name=LitellmTableNames.TEAM_TABLE_NAME,
+        before_value=_limits_audit_value(memberships),
+        after_value=_limits_audit_value(written),
+    )
 
     budget_of: Final = MappingProxyType({m.user_id: m.litellm_budget_table for m in written})
     return tuple(
