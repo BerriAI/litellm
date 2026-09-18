@@ -6372,16 +6372,17 @@ def test_response_format_tool_path_skips_forced_tool_choice_when_unsupported(loc
     assert "tool_choice" not in result
 
 
-def _eager_chat_tool(**extra):
+def _eager_chat_function(**extra: object) -> dict[str, object]:
     return {
-        "type": "function",
-        "function": {
-            "name": "write_file",
-            "description": "Write a file",
-            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
-        },
+        "name": "write_file",
+        "description": "Write a file",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
         **extra,
     }
+
+
+def _eager_chat_tool(**extra: object) -> dict[str, object]:
+    return {"type": "function", "function": _eager_chat_function(), **extra}
 
 
 @pytest.mark.parametrize("flag", [True, False])
@@ -6398,10 +6399,9 @@ def test_eager_input_streaming_passed_through_from_tool_top_level(flag):
 
 
 def test_eager_input_streaming_passed_through_from_function():
-    tool = _eager_chat_tool()
-    tool["function"]["eager_input_streaming"] = True
-
-    mapped_tool, _ = AnthropicConfig()._map_tool_helper(tool)
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(
+        {"type": "function", "function": _eager_chat_function(eager_input_streaming=True)}
+    )
 
     assert mapped_tool["eager_input_streaming"] is True
     assert "eager_input_streaming" not in mapped_tool["input_schema"]

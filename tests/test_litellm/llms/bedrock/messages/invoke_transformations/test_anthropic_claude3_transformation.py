@@ -4,6 +4,7 @@ import json
 import os
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import Mock
 
 import pytest
@@ -3246,10 +3247,12 @@ def test_bedrock_messages_strips_effort_but_keeps_format_for_sonnet_4_5(local_mo
     assert result.get("output_config") == {"format": schema_format}
 
 
-FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14"
+FINE_GRAINED_TOOL_STREAMING_BETA: Final = "fine-grained-tool-streaming-2025-05-14"
 
 
-def _invoke_request_with_tools(tools, headers=None):
+def _invoke_request_with_tools(
+    tools: list[dict[str, object]], headers: dict[str, str] | None = None
+) -> dict[str, object]:
     from litellm.types.router import GenericLiteLLMParams
 
     return AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
@@ -3261,7 +3264,7 @@ def _invoke_request_with_tools(tools, headers=None):
     )
 
 
-def _eager_invoke_tool(name, eager_input_streaming):
+def _eager_invoke_tool(name: str, eager_input_streaming: bool) -> dict[str, object]:
     return {
         "name": name,
         "description": f"{name} tool",
