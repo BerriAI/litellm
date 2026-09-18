@@ -9,6 +9,7 @@ import socket
 import subprocess
 import time
 import types
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
@@ -7464,6 +7465,69 @@ async def test_update_general_settings_db_pass_through_endpoint_cannot_override_
 
         still_open: Final = await user_api_key_auth(request=request, api_key=None)
         assert still_open.api_key is None
+
+
+@pytest.mark.asyncio
+async def test_deleting_the_stored_pass_through_row_takes_the_route_out_of_service():
+    """A pass-through route the database declared has to stop serving when that row is
+    deleted. The proxy's own registry of live pass-through routes is what decides whether
+    a request is routed upstream or falls through to the auth error, so it has to lose the
+    entry on the reload rather than at the next process restart."""
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    path: Final = f"/v1/deleted-{uuid.uuid4().hex[:8]}"
+    db_endpoint: Final = {"id": "db-1", "path": path, "target": "https://example.com/post"}
+
+    def live_routes() -> set[str]:
+        return {route for route in InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes() if path in route}
+
+    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {})  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", None)  # test-quality-ok: module global holding the YAML endpoints; this case has none
+    with settings, yaml_endpoints:
+        pc = ProxyConfig()
+        await pc._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
+        assert live_routes(), "the stored endpoint should be serving before the row is deleted"
+
+        await pc._update_general_settings(db_general_settings={})
+
+        assert live_routes() == set()
+
+
+@pytest.mark.asyncio
+async def test_a_stored_pass_through_row_never_disturbs_the_config_declared_routes():
+    """``pass_through_endpoints`` is config-owned once the file declares it, so writing and then
+    deleting a stored row resolves to the same list both times and the config file's routes keep
+    serving untouched. The stored entry never gets a route of its own."""
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+        initialize_pass_through_endpoints,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    marker: Final = uuid.uuid4().hex[:8]
+    config_path: Final = f"/v1/kept-{marker}"
+    db_path: Final = f"/v1/ignored-{marker}"
+    config_endpoint: Final = {"id": f"cfg-{marker}", "path": config_path, "target": "https://example.com/post"}
+    db_endpoint: Final = {"id": f"db-{marker}", "path": db_path, "target": "https://example.com/post"}
+
+    def live_paths() -> set[str]:
+        registered: Final = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
+        return {path for path in (config_path, db_path) if any(path in route for route in registered)}
+
+    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [config_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [config_endpoint])  # test-quality-ok: module global holding the YAML endpoints the reload merges in
+    with settings, yaml_endpoints:
+        await initialize_pass_through_endpoints(pass_through_endpoints=[config_endpoint])
+        assert live_paths() == {config_path}
+
+        pc = ProxyConfig()
+        await pc._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
+        assert live_paths() == {config_path}
+
+        await pc._update_general_settings(db_general_settings={})
+
+        assert live_paths() == {config_path}
 
 
 def _fill_user_api_key_cache(cache: DualCache, count: int) -> None:

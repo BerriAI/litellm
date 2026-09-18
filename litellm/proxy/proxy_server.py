@@ -7188,12 +7188,14 @@ class ProxyConfig:
             self.settings.load_yaml(_as_settings_mapping(general_settings))
         cache_size_was_db: Final = self.settings.source("user_api_key_cache_max_size") == "db"
         previous_retention_values: Final = self._resolved_retention_values()
+        previous_pass_through_endpoints: Final = self.settings.get("pass_through_endpoints")
         self.settings.apply_db_row("general_settings", db_general_settings)
         _bind_general_settings_store(self.settings)
         await self._apply_general_settings_side_effects(
             db_general_settings,
             cache_size_was_db,
             previous_retention_values,
+            previous_pass_through_endpoints,
         )
 
     def _resolved_retention_values(self) -> tuple[SettingsJsonValue | None, ...]:
@@ -7211,10 +7213,11 @@ class ProxyConfig:
         db_values: Mapping[str, SettingsJsonValue],
         cache_size_was_db: bool,
         previous_retention_values: tuple[SettingsJsonValue | None, ...],
+        previous_pass_through_endpoints: SettingsJsonValue | None,
     ) -> None:
         effects: Final = (
             self._apply_alerting_settings,
-            self._apply_pass_through_settings,
+            partial(self._apply_pass_through_settings, previous_endpoints=previous_pass_through_endpoints),
             self._apply_boolean_settings,
             partial(self._apply_cache_size_setting, cache_size_was_db=cache_size_was_db),
             self._apply_store_model_in_db_setting,
@@ -7247,10 +7250,18 @@ class ProxyConfig:
         if "plugins" in db_values and self.settings.source("plugins") == "db":
             register_plugins_from_config(self.settings)
 
-    async def _apply_pass_through_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
+    async def _apply_pass_through_settings(
+        self,
+        db_values: Mapping[str, SettingsJsonValue],
+        previous_endpoints: SettingsJsonValue | None,
+    ) -> None:
+        del db_values
         resolved_endpoints: Final = self.settings.get("pass_through_endpoints")
-        if "pass_through_endpoints" in db_values and isinstance(resolved_endpoints, list):
-            await initialize_pass_through_endpoints(pass_through_endpoints=resolved_endpoints)
+        if resolved_endpoints == previous_endpoints:
+            return
+        await initialize_pass_through_endpoints(
+            pass_through_endpoints=resolved_endpoints if isinstance(resolved_endpoints, list) else []
+        )
 
     async def _apply_boolean_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         for key in (
