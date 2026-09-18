@@ -1,4 +1,4 @@
-name: Label Claude Code issues
+name: Issue label claude code
 
 on:
   issues:

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { GitHubApi } from "./auto-close-duplicates";
 import { MANIFEST, manifestLabels, type Manifest } from "./issue-labels";
-import { readConfig, syncLabels, syncPlan, type GitHubLabel } from "./sync-labels";
+import { readConfig, syncLabels, syncPlan, type GitHubLabel } from "./sync-issue-labels";
 
 const small: Manifest = {
   domain: { caching: { color: "1C6E5B", description: "Response cache" } },

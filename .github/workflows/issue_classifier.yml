@@ -13,7 +13,7 @@ on:
       - .github/workflows/issue_classifier.yml
       - .github/prompts/issue-classifier.md
       - .github/prompts/issue-classifier.schema.json
-      - .github/labels.json
+      - .github/issue-labels.json
       - .github/ISSUE_TEMPLATE/bug_report.yml
       - .github/ISSUE_TEMPLATE/feature_request.yml
       - scripts/classify-issue.ts
@@ -31,7 +31,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  classifier-tests:
+  classify-issue-tests:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
