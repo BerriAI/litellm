@@ -1728,6 +1728,16 @@ class MCPUserCredentialListItem(LiteLLMPydanticObjectBase):
     connected_at: str | None = None  # ISO-8601
 
 
+class MCPServerUserCredentialListItem(LiteLLMPydanticObjectBase):
+    """One user's stored credential for an MCP server, as an admin sees it. Never carries the secret."""
+
+    user_id: str
+    credential_type: Literal["oauth2", "byok"]
+    expires_at: str | None = None
+    connected_at: str | None = None
+    updated_at: str
+
+
 class MCPUserEnvVarsRequest(LiteLLMPydanticObjectBase):
     """Payload for storing the calling user's per-user env var values."""
 
