@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 /// Seconds since the Unix epoch, on one clock for every host.
 pub fn epoch_seconds() -> f64 {
@@ -33,34 +33,10 @@ pub struct RequestContext {
     pub custom_llm_provider: String,
     /// The route's parameters before the provider transformation.
     pub optional_params: Value,
-    pub passthrough_fields: Passthrough,
     /// Optional-param names that carry credentials and must be redacted when logged.
     pub secret_fields: Vec<String>,
-}
-
-/// Body keys whose values are the caller's inputs, unchanged by the route. The only way to
-/// build one is to compare the two, so a route cannot name a key it rewrote.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Passthrough(Vec<String>);
-
-impl Passthrough {
-    pub fn unchanged(caller: &Map<String, Value>, body: &Value) -> Self {
-        Self(
-            caller
-                .iter()
-                .filter(|(name, value)| body.get(name.as_str()) == Some(*value))
-                .map(|(name, _)| name.clone())
-                .collect(),
-        )
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &str> {
-        self.0.iter().map(String::as_str)
-    }
-
-    pub fn contains(&self, name: &str) -> bool {
-        self.0.iter().any(|field| field == name)
-    }
+    /// The credential the route resolved for the provider call.
+    pub api_key: Option<litellm_auth::SecretValue>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,6 +54,9 @@ pub enum FailureOrigin {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CallEvent {
+    Started {
+        start_time: f64,
+    },
     ResponseReceived {
         raw: RawResponse,
     },
@@ -88,48 +67,4 @@ pub enum CallEvent {
         timing: Timing,
         origin: FailureOrigin,
     },
-}
-
-#[cfg(test)]
-mod tests {
-    use rstest::rstest;
-    use serde_json::json;
-
-    use super::*;
-
-    #[rstest]
-    #[case::unchanged_scalar(json!({"pages": [0]}), json!({"pages": [0]}), &["pages"])]
-    #[case::unchanged_explicit_null(json!({"pages": null}), json!({"pages": null}), &["pages"])]
-    #[case::unchanged_nested_object(
-        json!({"document": {"type": "document_url", "document_url": "https://a/b.pdf"}}),
-        json!({"document": {"type": "document_url", "document_url": "https://a/b.pdf"}, "model": "m"}),
-        &["document"]
-    )]
-    #[case::rewritten_value(
-        json!({"document": {"type": "document_url", "document_url": "https://a/b.pdf"}}),
-        json!({"document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}}),
-        &[]
-    )]
-    #[case::dropped_nested_field(
-        json!({"document": {"type": "image_url", "image_url": "https://a/b.png", "document_name": "b.png"}}),
-        json!({"document": {"type": "image_url", "image_url": "https://a/b.png"}}),
-        &[]
-    )]
-    #[case::added_nested_field(
-        json!({"document": {"type": "image_url", "image_url": "https://a/b.png"}}),
-        json!({"document": {"type": "image_url", "image_url": "https://a/b.png", "detail": "high"}}),
-        &[]
-    )]
-    #[case::reordered_array(json!({"pages": [0, 1]}), json!({"pages": [1, 0]}), &[])]
-    #[case::consumed_by_the_route(json!({"api_key": "k", "pages": [0]}), json!({"pages": [0]}), &["pages"])]
-    #[case::added_by_the_route(json!({}), json!({"model": "m"}), &[])]
-    #[case::non_object_body(json!({"pages": [0]}), json!([{"pages": [0]}]), &[])]
-    fn passthrough_is_exactly_the_callers_unchanged_keys(
-        #[case] caller: Value,
-        #[case] body: Value,
-        #[case] expected: &[&str],
-    ) {
-        let passthrough = Passthrough::unchanged(caller.as_object().unwrap(), &body);
-        assert_eq!(passthrough.iter().collect::<Vec<_>>(), expected);
-    }
 }

@@ -4,7 +4,7 @@
 
 use litellm_callbacks::event::{CallEvent, FailureOrigin, RequestContext, Timing, WireRequest};
 use litellm_host_python::{
-    AdapterStep, CallbackAdapter, PublicValue, from_py, missing_state, to_py,
+    LifecycleStep, PublicValue, PythonLifecycle, from_py, missing_state, to_py,
 };
 use pyo3::{
     exceptions::{PyBaseException, PyException},
@@ -12,6 +12,7 @@ use pyo3::{
     prelude::*,
     types::PyDict,
 };
+use serde_json::Value;
 
 use crate::{
     DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger,
@@ -43,7 +44,7 @@ pub struct LegacyLogging {
     response: Option<Py<PyAny>>,
     error: Option<Py<PyBaseException>>,
     body: Option<Py<PyDict>>,
-    headers: Option<Py<PyDict>>,
+    context: Option<RequestContext>,
     asynchronous: bool,
     internal: bool,
     pending: Option<Pending>,
@@ -76,7 +77,7 @@ impl LegacyLogging {
             response: None,
             error: None,
             body: None,
-            headers: None,
+            context: None,
             asynchronous,
             internal: false,
             pending: None,
@@ -85,8 +86,8 @@ impl LegacyLogging {
 
     /// Deployment hooks are awaited, and Python's synchronous `@client` wrapper never
     /// runs them.
-    fn deployment_hooks(&self, py: Python<'_>) -> PyResult<bool> {
-        Ok(self.asynchronous && DeploymentHooks::needed(py)?)
+    fn runs_deployment_hooks(&self) -> bool {
+        self.asynchronous
     }
 
     fn logger(&self) -> PyResult<&PythonLogger> {
@@ -95,13 +96,13 @@ impl LegacyLogging {
         })
     }
 
-    fn prepare(&mut self, py: Python<'_>) -> PyResult<AdapterStep> {
+    fn prepare(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
         let prepared = prepare(py, self.call.kwargs().bind(py), self.logger()?)?.unbind();
         self.call.set_kwargs(prepared);
-        Ok(AdapterStep::Arguments(self.call.kwargs().clone_ref(py)))
+        Ok(LifecycleStep::Arguments(self.call.kwargs().clone_ref(py)))
     }
 
-    fn finalize(&mut self, py: Python<'_>) -> PyResult<AdapterStep> {
+    fn finalize(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
         finalize(
             py,
             &self.response,
@@ -112,7 +113,7 @@ impl LegacyLogging {
         )?;
         self.response
             .as_ref()
-            .map(|response| AdapterStep::Response(response.clone_ref(py)))
+            .map(|response| LifecycleStep::Response(response.clone_ref(py)))
             .ok_or_else(missing_state)
     }
 
@@ -145,9 +146,7 @@ impl LegacyLogging {
                 .get_item("fallbacks")?
                 .is_none_or(|value| value.is_none())
         {
-            if !logger.callbacks_needed(py, "async_success")? {
-                logger.success_bookkeeping(py, &self.response, &self.start, &self.end, true)?;
-            } else if logger.defers_async_logging(py) {
+            if logger.defers_async_logging(py) {
                 let pending = Py::new(
                     py,
                     PendingLogging {
@@ -165,12 +164,12 @@ impl LegacyLogging {
     /// The sync failure handler, then the async one for async calls. Ordinary handler
     /// errors never replace the selected failure or suppress the other family; a
     /// cancellation does end the call.
-    fn dispatch_failure(&mut self, py: Python<'_>) -> PyResult<AdapterStep> {
+    fn dispatch_failure(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
         let (Some(logger), Some(error)) = (&self.logger, &self.error) else {
-            return Ok(AdapterStep::Done);
+            return Ok(LifecycleStep::Done);
         };
         if self.asynchronous && self.internal {
-            return Ok(AdapterStep::Done);
+            return Ok(LifecycleStep::Done);
         }
         if let Err(failure) = logger.failure(py, error, &self.start, &self.end, false)
             && is_cancellation(py, &failure)
@@ -178,27 +177,27 @@ impl LegacyLogging {
             return Err(failure);
         }
         if !self.asynchronous {
-            return Ok(AdapterStep::Done);
+            return Ok(LifecycleStep::Done);
         }
         match logger.failure(py, error, &self.start, &self.end, true) {
             Ok(Some(awaitable)) => {
                 self.pending = Some(Pending::AsyncFailure);
-                Ok(AdapterStep::Await(awaitable))
+                Ok(LifecycleStep::Await(awaitable))
             }
-            Ok(None) => Ok(AdapterStep::Done),
+            Ok(None) => Ok(LifecycleStep::Done),
             Err(failure) if is_cancellation(py, &failure) => Err(failure),
-            Err(_) => Ok(AdapterStep::Done),
+            Err(_) => Ok(LifecycleStep::Done),
         }
     }
 }
 
-impl CallbackAdapter for LegacyLogging {
+impl PythonLifecycle for LegacyLogging {
     fn begin(
         &mut self,
         py: Python<'_>,
         arguments: Py<PyDict>,
         started_at: f64,
-    ) -> PyResult<AdapterStep> {
+    ) -> PyResult<LifecycleStep> {
         self.call.set_kwargs(arguments);
         self.start = datetime(py, started_at)?;
         self.internal = is_internal_call(py)?;
@@ -212,9 +211,9 @@ impl CallbackAdapter for LegacyLogging {
         )?;
         self.logger = Some(result.logger()?);
         self.call.set_kwargs(result.kwargs()?);
-        if self.deployment_hooks(py)? {
+        if self.runs_deployment_hooks() {
             self.pending = Some(Pending::DeploymentPreCall);
-            return Ok(AdapterStep::Await(DeploymentHooks::before_call(
+            return Ok(LifecycleStep::Await(DeploymentHooks::before_call(
                 py,
                 self.call.kwargs(),
                 self.surface.call_type,
@@ -228,18 +227,16 @@ impl CallbackAdapter for LegacyLogging {
         py: Python<'_>,
         wire: Box<WireRequest>,
         context: &RequestContext,
-    ) -> PyResult<AdapterStep> {
+    ) -> PyResult<LifecycleStep> {
         let logger = self.logger()?;
         logger.update_from_kwargs(py, self.call.kwargs(), &wire, context)?;
-        if !logger.callbacks_needed(py, "payload")? {
-            logger.record_api_call_start(py)?;
-            return Ok(AdapterStep::Wire(wire));
-        }
         let body = to_py(py, &wire.body)?
             .into_bound(py)
             .cast_into::<PyDict>()?;
-        for name in context.passthrough_fields.iter() {
-            if let Some(value) = self.call.lookup(py, name)? {
+        for (name, sent) in wire.body.as_object().into_iter().flatten() {
+            if let Some(value) = self.call.lookup(py, name)?
+                && from_py::<Value>(&value).is_ok_and(|caller| caller == *sent)
+            {
                 body.set_item(name, value)?;
             }
         }
@@ -248,12 +245,11 @@ impl CallbackAdapter for LegacyLogging {
             headers.set_item(name, value)?;
         }
         self.body = Some(body.clone().unbind());
-        self.headers = Some(headers.clone().unbind());
-        let api_key = self.call.lookup(py, "api_key")?;
+        self.context = Some(context.clone());
         self.logger()?.pre_call(
             py,
             self.surface.input_description,
-            api_key.as_ref(),
+            context.api_key.as_ref().map(|api_key| api_key.expose()),
             &body,
             &headers,
             &wire.url,
@@ -262,7 +258,7 @@ impl CallbackAdapter for LegacyLogging {
             .iter()
             .map(|(name, value)| Ok((name.extract::<String>()?, value.extract::<String>()?)))
             .collect::<PyResult<Vec<_>>>()?;
-        Ok(AdapterStep::Wire(Box::new(WireRequest {
+        Ok(LifecycleStep::Wire(Box::new(WireRequest {
             body: from_py(&body)?,
             headers,
             ..*wire
@@ -274,12 +270,12 @@ impl CallbackAdapter for LegacyLogging {
         py: Python<'_>,
         response: Py<PyAny>,
         timing: Timing,
-    ) -> PyResult<AdapterStep> {
+    ) -> PyResult<LifecycleStep> {
         self.end = Some(datetime(py, timing.end_time)?);
         self.response = Some(response);
-        if self.deployment_hooks(py)? {
+        if self.runs_deployment_hooks() {
             self.pending = Some(Pending::DeploymentPostCall);
-            return Ok(AdapterStep::Await(DeploymentHooks::after_success(
+            return Ok(LifecycleStep::Await(DeploymentHooks::after_success(
                 py,
                 self.call.kwargs(),
                 &self.response,
@@ -294,31 +290,35 @@ impl CallbackAdapter for LegacyLogging {
         py: Python<'_>,
         event: &CallEvent,
         public: Option<PublicValue<'_>>,
-    ) -> PyResult<AdapterStep> {
+    ) -> PyResult<LifecycleStep> {
         match (event, public) {
+            (CallEvent::Started { .. }, _) => Ok(LifecycleStep::Done),
             (CallEvent::ResponseReceived { raw }, _) => {
-                let logger = self.logger()?;
-                if logger.callbacks_needed(py, "payload")? {
-                    logger.post_call(py, &raw.body, self.body.as_ref(), self.headers.as_ref())?;
-                }
-                Ok(AdapterStep::Done)
+                let api_key = self
+                    .context
+                    .as_ref()
+                    .and_then(|context| context.api_key.as_ref())
+                    .map(|api_key| api_key.expose());
+                self.logger()?
+                    .post_call(py, &raw.body, api_key, self.body.as_ref())?;
+                Ok(LifecycleStep::Done)
             }
             (CallEvent::Succeeded { timing }, Some(PublicValue::Response(response))) => {
                 self.end = Some(datetime(py, timing.end_time)?);
                 self.response = Some(response.clone_ref(py));
                 self.dispatch_success(py)?;
-                Ok(AdapterStep::Done)
+                Ok(LifecycleStep::Done)
             }
             (CallEvent::Failed { timing, origin }, Some(PublicValue::Error(error))) => {
                 self.end = Some(datetime(py, timing.end_time)?);
                 self.error = Some(error.clone_ref(py).into_value(py));
                 if *origin == FailureOrigin::Call
                     && self.logger.is_some()
-                    && self.deployment_hooks(py)?
+                    && self.runs_deployment_hooks()
                 {
                     let error = self.error.as_ref().ok_or_else(missing_state)?;
                     self.pending = Some(Pending::DeploymentFailure);
-                    return Ok(AdapterStep::Await(DeploymentHooks::after_failure(
+                    return Ok(LifecycleStep::Await(DeploymentHooks::after_failure(
                         py,
                         self.call.kwargs(),
                         error,
@@ -331,7 +331,7 @@ impl CallbackAdapter for LegacyLogging {
         }
     }
 
-    fn resume(&mut self, py: Python<'_>, result: PyResult<Py<PyAny>>) -> PyResult<AdapterStep> {
+    fn resume(&mut self, py: Python<'_>, result: PyResult<Py<PyAny>>) -> PyResult<LifecycleStep> {
         match self.pending.take().ok_or_else(missing_state)? {
             Pending::DeploymentPreCall => {
                 self.call
@@ -345,7 +345,7 @@ impl CallbackAdapter for LegacyLogging {
             Pending::DeploymentFailure => self.dispatch_failure(py),
             Pending::AsyncFailure => match result {
                 Err(failure) if is_cancellation(py, &failure) => Err(failure),
-                _ => Ok(AdapterStep::Done),
+                _ => Ok(LifecycleStep::Done),
             },
         }
     }
@@ -357,7 +357,7 @@ impl CallbackAdapter for LegacyLogging {
             error.write_unraisable(py, None);
         }
         self.body = None;
-        self.headers = None;
+        self.context = None;
     }
 
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
@@ -369,8 +369,7 @@ impl CallbackAdapter for LegacyLogging {
         visit.call(&self.end)?;
         visit.call(&self.response)?;
         visit.call(&self.error)?;
-        visit.call(&self.body)?;
-        visit.call(&self.headers)
+        visit.call(&self.body)
     }
 }
 

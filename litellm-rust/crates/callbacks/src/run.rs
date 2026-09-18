@@ -11,6 +11,7 @@ where
     H: Host<M::Route>,
 {
     let start_time = epoch_seconds();
+    let _ = host.emit(&CallEvent::Started { start_time }).await;
     let mut result = None;
     let outcome = loop {
         let step = match machine.resume(result.take()).await {
@@ -102,6 +103,7 @@ mod tests {
 
         async fn emit(&self, event: &CallEvent) -> Result<(), &'static str> {
             self.seen.lock().unwrap().push(match event {
+                CallEvent::Started { .. } => "started".into(),
                 CallEvent::Succeeded { .. } => "succeeded".into(),
                 CallEvent::Failed { .. } => "failed".into(),
                 other => format!("{other:?}"),
@@ -124,7 +126,7 @@ mod tests {
         assert_eq!(outcome, Ok(()));
         assert_eq!(
             *host.seen.lock().unwrap(),
-            ["route:project", "route:send", "succeeded"]
+            ["started", "route:project", "route:send", "succeeded"]
         );
     }
 
@@ -133,7 +135,7 @@ mod tests {
         let host = Recording::default();
         let outcome = run(scripted(&[], Err("boom")), &host).await;
         assert_eq!(outcome, Err("boom"));
-        assert_eq!(*host.seen.lock().unwrap(), ["failed"]);
+        assert_eq!(*host.seen.lock().unwrap(), ["started", "failed"]);
 
         let host = Recording {
             fail: Some("send"),
@@ -143,7 +145,35 @@ mod tests {
         assert_eq!(outcome, Err("host failed"));
         assert_eq!(
             *host.seen.lock().unwrap(),
-            ["route:project", "route:send", "failed"]
+            ["started", "route:project", "route:send", "failed"]
         );
+    }
+
+    struct StartTimes(Mutex<Vec<f64>>);
+
+    impl Host<Unit> for StartTimes {
+        async fn route(&self, _: &'static str) -> Result<(), &'static str> {
+            Ok(())
+        }
+
+        async fn emit(&self, event: &CallEvent) -> Result<(), &'static str> {
+            if let CallEvent::Started { start_time }
+            | CallEvent::Succeeded {
+                timing: Timing { start_time, .. },
+            } = event
+            {
+                self.0.lock().unwrap().push(*start_time);
+            }
+            Err("observer failed")
+        }
+    }
+
+    #[tokio::test]
+    async fn started_opens_the_call_at_the_terminal_start_time_and_cannot_fail_it() {
+        let host = StartTimes(Mutex::default());
+        assert_eq!(run(scripted(&["project"], Ok(())), &host).await, Ok(()));
+        let times = host.0.lock().unwrap();
+        assert_eq!(times.len(), 2);
+        assert_eq!(times[0], times[1]);
     }
 }

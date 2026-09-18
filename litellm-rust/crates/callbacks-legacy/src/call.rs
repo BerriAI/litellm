@@ -4,7 +4,7 @@
 //! this crate holds them.
 
 use litellm_callbacks::{machine::Machine, route::Route};
-use litellm_host_python::{RouteHost, run_call};
+use litellm_host_python::{RouteHost, lookup, run_call};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
@@ -63,21 +63,6 @@ impl PublicCall {
     }
 }
 
-/// The caller's own object for a public argument, as every legacy reader resolves it: the
-/// keyword if given, even an explicit `None`, else the bound request's attribute. A route
-/// host projecting from the prepared keyword view uses the same rule, so the callbacks
-/// and the provider see one object per argument.
-pub fn lookup<'py>(
-    kwargs: &Bound<'py, PyDict>,
-    request: &Bound<'py, PyAny>,
-    name: &str,
-) -> PyResult<Option<Bound<'py, PyAny>>> {
-    if let Some(value) = kwargs.get_item(name)? {
-        return Ok(Some(value));
-    }
-    request.getattr_opt(name)
-}
-
 /// Runs one native call under the legacy `Logging` contract: the route host projects from
 /// the keyword view the contract prepares, and the contract observes the call.
 pub fn run_legacy_call<H, M>(
@@ -119,32 +104,6 @@ mod tests {
             .unwrap();
         let call = PublicCall::capture(&request, &PyTuple::empty(py), &kwargs).unwrap();
         (call, locals)
-    }
-
-    #[test]
-    fn lookup_prefers_the_keyword_even_when_none_and_falls_back_to_the_request() {
-        Python::initialize();
-        Python::attach(|py| {
-            let (call, locals) = capture(
-                py,
-                c"
-key = object()
-document = {'type': 'document_url'}
-class Request:
-    api_key = 'from-request'
-    api_base = 'from-request'
-    document = document
-request = Request()
-kwargs = {'api_key': key, 'api_base': None}
-",
-            );
-            let key = locals.get_item("key").unwrap().unwrap();
-            let document = locals.get_item("document").unwrap().unwrap();
-            assert!(call.lookup(py, "api_key").unwrap().unwrap().is(&key));
-            assert!(call.lookup(py, "api_base").unwrap().unwrap().is_none());
-            assert!(call.lookup(py, "document").unwrap().unwrap().is(&document));
-            assert!(call.lookup(py, "model").unwrap().is_none());
-        });
     }
 
     #[test]

@@ -3,9 +3,9 @@ use std::{sync::OnceLock, time::Duration};
 use bytes::{Bytes, BytesMut};
 use futures_util::future::BoxFuture;
 use litellm_auth_gcp::VertexAuth;
-use litellm_callbacks::event::{Passthrough, WireRequest};
+use litellm_callbacks::event::WireRequest;
 use serde::{Serialize, de::DeserializeOwned};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::{
     base_llm::ocr::{
@@ -26,11 +26,7 @@ use crate::{
 /// The route's view of one call, handed to provider code that has to reach the
 /// caller's hooks mid-flight (guardrails on the outgoing body, raw response events).
 pub trait CallHooks<E>: Send + Sync {
-    fn before_send(
-        &self,
-        wire: WireRequest,
-        passthrough_fields: Passthrough,
-    ) -> BoxFuture<'_, Result<WireRequest, E>>;
+    fn before_send(&self, wire: WireRequest) -> BoxFuture<'_, Result<WireRequest, E>>;
 
     fn response_received<'a>(&'a self, body: &'a [u8]) -> BoxFuture<'a, Result<(), E>>;
 }
@@ -231,9 +227,8 @@ pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
         config.get_supported_ocr_params(&request.model),
     )?;
     config.validate_request_body(&composed)?;
-    let passthrough_fields = Passthrough::unchanged(&caller_inputs(request)?, &composed);
     let changed = hooks
-        .before_send(wire_request(url, headers, composed), passthrough_fields)
+        .before_send(wire_request(url, headers, composed))
         .await?;
     if !changed.body.is_object() {
         return Err(Error::RequestField {
@@ -250,21 +245,6 @@ fn wire_request(url: &str, headers: &[(String, String)], body: Value) -> WireReq
         headers: headers.to_vec(),
         body,
     }
-}
-
-fn caller_inputs(request: &PreparedOcrRequest) -> Result<Map<String, Value>, Error> {
-    let document = request
-        .caller_document
-        .then(|| serde_json::to_value(&request.document))
-        .transpose()
-        .map_err(|_| Error::RequestField {
-            path: "document".into(),
-        })?;
-    let params: Map<String, Value> = request.optional_params.clone().into();
-    Ok(params
-        .into_iter()
-        .chain(document.map(|document| ("document".to_string(), document)))
-        .collect())
 }
 
 pub fn build_http_request<B: Serialize>(
@@ -294,9 +274,7 @@ pub async fn guardrail_document(
     let body = serde_json::to_value(&request.document).map_err(|_| Error::RequestField {
         path: "document".into(),
     })?;
-    let changed = hooks
-        .before_send(wire_request(url, headers, body), Passthrough::default())
-        .await?;
+    let changed = hooks.before_send(wire_request(url, headers, body)).await?;
     let document = decode_request_value(changed.body, "guardrail.document")?;
     Ok((document, changed.headers))
 }

@@ -2031,6 +2031,7 @@ dependencies = [
 name = "litellm-callbacks"
 version = "0.1.0"
 dependencies = [
+ "litellm-auth",
  "rstest",
  "serde_json",
  "tokio",
@@ -2040,11 +2041,13 @@ dependencies = [
 name = "litellm-callbacks-legacy"
 version = "0.1.0"
 dependencies = [
+ "litellm-auth",
  "litellm-callbacks",
  "litellm-host-python",
  "pyo3",
  "rstest",
  "serde_json",
+ "strum",
 ]
 
 [[package]]
