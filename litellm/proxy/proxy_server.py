@@ -307,6 +307,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.proxy._experimental.mcp_server.byok_credential_cache import byok_credential_cache
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
@@ -7535,7 +7536,7 @@ class ProxyConfig:
         subscriber: Final = AuthCacheInvalidationSubscriber(
             redis_cache=redis_cache,
             user_api_key_cache=user_api_key_cache,
-            additional_in_memory_caches=(spend_counter_cache.in_memory_cache,),
+            additional_in_memory_caches=(spend_counter_cache.in_memory_cache, byok_credential_cache),
         )
         self.auth_cache_invalidation_subscriber = subscriber
         subscriber.start()

@@ -13919,3 +13919,74 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
         ]
     finally:
         litellm.utils._select_custom_tokenizer_helper.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_auth_cache_invalidation_subscriber_evicts_byok_credentials_cached_by_this_worker():
+    """A peer worker's BYOK revocation broadcast must reach this worker's BYOK credential cache."""
+    from redis.asyncio import Redis
+
+    from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
+        byok_credential_cache,
+        byok_credential_cache_key,
+        cache_byok_credential,
+        get_cached_byok_credential,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    class _QueuePubSub:
+        def __init__(self, messages: list[object]) -> None:
+            self.queue: asyncio.Queue[object] = asyncio.Queue()
+            for message in messages:
+                self.queue.put_nowait(message)
+
+        async def subscribe(self, *channels: str) -> None:
+            return None
+
+        async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> object | None:
+            try:
+                return await asyncio.wait_for(self.queue.get(), timeout)
+            except asyncio.TimeoutError:
+                return None
+
+        async def aclose(self) -> None:
+            return None
+
+    class _PubSubRedisClient(Redis):
+        def __init__(self, pubsub: _QueuePubSub) -> None:
+            self._scripted_pubsub = pubsub
+
+        def pubsub(self) -> _QueuePubSub:
+            return self._scripted_pubsub
+
+    class _FakeRedisCache:
+        namespace = None
+
+        def __init__(self, client: object) -> None:
+            self._client = client
+
+        def init_async_client(self) -> object:
+            return self._client
+
+    byok_credential_cache.flush_cache()
+    cache_byok_credential("mallory", "srv-byok", "sk-revoked-elsewhere")
+    message: Final = {
+        "type": "message",
+        "data": json.dumps({"cache_key": byok_credential_cache_key("mallory", "srv-byok")}).encode(),
+    }
+    proxy_config: Final = proxy_server_module.ProxyConfig()
+    proxy_config.start_auth_cache_invalidation_subscriber(
+        redis_cache=_FakeRedisCache(_PubSubRedisClient(_QueuePubSub([message]))),  # pyright: ignore[reportArgumentType]  # fake pub/sub capable redis; no live redis in this unit test
+        user_api_key_cache=UserApiKeyCache(),
+    )
+    try:
+        for _ in range(200):
+            if get_cached_byok_credential("mallory", "srv-byok") is None:
+                break
+            await asyncio.sleep(0.01)
+        evicted: Final = get_cached_byok_credential("mallory", "srv-byok") is None
+    finally:
+        await proxy_config.stop_auth_cache_invalidation_subscriber()
+        byok_credential_cache.flush_cache()
+
+    assert evicted, "the subscriber does not evict the BYOK credential cache on a peer worker's broadcast"
