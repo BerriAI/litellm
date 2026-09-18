@@ -31,22 +31,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
     """
 
     def get_supported_openai_params(self, model: str) -> list:
-        """
-        FLUX 2 supports a subset of OpenAI image edit params
-        """
-        return [
-            "n",
-            "size",
-            "width",
-            "height",
-            "num_images",
-            "seed",
-            "safety_tolerance",
-            "output_format",
-            "aspect_ratio",
-            "guidance",
-            "steps",
-        ]
+        return AzureFoundryFluxImageGenerationConfig().get_supported_openai_params(model)
 
     def map_openai_params(
         self,
