@@ -484,7 +484,7 @@ async def update_tag(
             if spend_counter_cache.redis_cache is not None:
                 try:
                     await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=tag.spend, ttl=60)
-                except Exception as redis_err:
+                except Exception as redis_err:  # noqa: BLE001  # best-effort refresh: a Redis failure must not fail the request
                     verbose_proxy_logger.warning(
                         "Failed to update spend counter %s in Redis after tag spend update: %s. "
                         "Budget checks may use stale value until counter expires.",
