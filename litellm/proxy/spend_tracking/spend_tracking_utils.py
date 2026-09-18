@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     is_valid_sha256_hash,
     request_model_access_groups_from_litellm_params,
 )
+from litellm.litellm_core_utils.ptu_pricing import azure_spillover
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsRouterMetadata
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
@@ -47,6 +48,7 @@ from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params
 from litellm.types.utils import (
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
+    AzureSpillover,
     CallTypes,
     CostBreakdown,
     LlmProviders,
@@ -133,6 +135,9 @@ def _get_router_metadata_for_spend_log(
     )
 
 
+_STAMPED_METADATA_KEYS: Final = frozenset(("router_metadata", "azure_spillover"))
+
+
 def _get_spend_logs_metadata(
     metadata: dict | None,
     applied_guardrails: list[str] | None = None,
@@ -150,6 +155,7 @@ def _get_spend_logs_metadata(
     litellm_call_id: str | None = None,
     autorouter_savings: float | None = None,
     router_metadata: SpendLogsRouterMetadata | None = None,
+    azure_spillover: AzureSpillover | None = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -191,6 +197,7 @@ def _get_spend_logs_metadata(
             litellm_gateway_injected_cache=None,
             litellm_call_id=litellm_call_id,
             router_metadata=router_metadata,
+            azure_spillover=azure_spillover,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: " + str(list(metadata.keys()))
@@ -198,8 +205,9 @@ def _get_spend_logs_metadata(
 
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata: Final = SpendLogsMetadata(
-        **{key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key != "router_metadata"},
+        **{key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key not in _STAMPED_METADATA_KEYS},
         router_metadata=router_metadata,
+        azure_spillover=azure_spillover,
     )
     _raw_key: Final = clean_metadata.get("user_api_key")
     _trusted_hash: Final = metadata.get("user_api_key_hash")
@@ -572,6 +580,15 @@ def get_logging_payload(
             selected_model=model_name,
             selected_provider=custom_llm_provider,
             router_correlation_id=litellm_call_id,
+        ),
+        azure_spillover=azure_spillover(
+            response_headers=kwargs.get("response_headers")
+            if isinstance(kwargs.get("response_headers"), Mapping)
+            else None,
+            additional_headers=standard_logging_payload["hidden_params"].get("additional_headers")
+            if standard_logging_payload is not None
+            and isinstance(standard_logging_payload.get("hidden_params"), Mapping)
+            else None,
         ),
     )
 

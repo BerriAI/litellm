@@ -1,18 +1,18 @@
 use serde_json::{Map, Value, json};
 
-use crate::chat_completions::Error;
-use crate::chat_completions::conversation::{Conversation, build_conversation};
-use crate::chat_completions::response_utils::{finish_reason_for, unix_now, usage_from_parts};
-use crate::chat_completions::types::{
-    ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse, ChatMessage,
-    ProviderChatRequestData, ProviderChatResponseData,
-};
-use crate::constants::ANTHROPIC_OAUTH_TOKEN_PREFIX;
-use crate::llms::anthropic::experimental_pass_through::messages::transformation::{
+use crate::anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX;
+use crate::anthropic::experimental_pass_through::messages::transformation::{
     complete_anthropic_url, resolve_anthropic_api_key,
 };
-use crate::llms::base_llm::chat::transformation::{
+use crate::base_llm::chat::transformation::{
     BaseConfig, ChatCompletionsAuth, Unsupported, unsupported_message, unsupported_param,
+};
+use crate::chat::Error;
+use crate::chat::conversation::{Conversation, build_conversation};
+use crate::chat::response_utils::{finish_reason_for, unix_now, usage_from_parts};
+use crate::chat::types::{
+    ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse, ChatMessage,
+    ProviderChatRequestData, ProviderChatResponseData,
 };
 
 /// Anthropic parameter names, post `map_openai_params`, that the Rust path can

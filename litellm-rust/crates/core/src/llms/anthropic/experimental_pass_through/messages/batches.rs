@@ -3,9 +3,9 @@ use serde_json::Value;
 use time::OffsetDateTime;
 use url::Url;
 
-use crate::llms::anthropic::experimental_pass_through::messages::transformation::resolve_anthropic_api_base;
 use crate::messages::Error;
 use crate::messages::types::AnthropicMessagesResponse;
+use litellm_providers::anthropic::experimental_pass_through::messages::transformation::resolve_anthropic_api_base;
 
 const BATCHES_PATH_SUFFIX: &str = "/v1/messages/batches";
 
