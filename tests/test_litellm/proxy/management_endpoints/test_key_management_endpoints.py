@@ -19697,12 +19697,16 @@ async def test_project_assignment_to_unassigned_key_on_same_team():
         token="project-assign-token", project_id=None, team_id="team-lit-5823", models=["model-orbit"]
     )
     cache: Final = await _cache_with_project("project-orbit", ["model-orbit"])
+    data: Final = UpdateKeyRequest(key=existing.token, project_id="project-orbit")
 
     await _validate_update_key_data(
-        UpdateKeyRequest(key=existing.token, project_id="project-orbit"), existing,
+        data, existing,
         UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
         None, False, _project_assignment_prisma(), cache,
     )
+
+    update: Final = await prepare_key_update_data(data=data, existing_key_row=existing)
+    assert update["project_id"] == "project-orbit"
 
 
 @pytest.mark.asyncio
