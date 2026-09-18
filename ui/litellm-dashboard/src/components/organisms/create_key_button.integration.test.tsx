@@ -16,7 +16,7 @@ const state = vi.hoisted(() => ({
   can: {} as Record<string, boolean>,
   uiSettings: {} as Record<string, unknown>,
   tags: {} as Record<string, { name: string }>,
-  teams: [] as { team_id: string; team_alias: string; models: string[] }[],
+  teams: [] as { team_id: string; team_alias: string; models: string[]; organization_id?: string }[],
   organizations: [] as { organization_id: string; organization_alias: string }[],
   accessGroups: [] as { access_group_id: string; access_group_name: string }[],
   projects: [] as { project_id: string; project_alias: string; team_id?: string; models?: string[] }[],
@@ -84,6 +84,13 @@ vi.mock("../networking", async (importOriginal) => {
     getPossibleUserRoles: vi.fn().mockResolvedValue({}),
     userFilterUICall: vi.fn().mockResolvedValue([]),
     getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
+    getClaudeCodePluginsList: vi.fn().mockResolvedValue({
+      plugins: [
+        { name: "public-skill", enabled: true },
+        { name: "private-skill", enabled: false },
+      ],
+      count: 2,
+    }),
     getPassThroughEndpointsCall: vi.fn().mockResolvedValue({ endpoints: [] }),
     vectorStoreListCall: vi.fn().mockResolvedValue({ data: [] }),
     listMCPTools: vi.fn().mockResolvedValue(emptyMcpTools),
@@ -109,6 +116,7 @@ const OPENAPI_SCHEMA = {
 const SECTIONS = {
   mcp: /MCP Settings/i,
   agent: /Agent Settings/i,
+  skill: /Skill Settings/i,
   logging: /Logging Settings/i,
   router: /Router Settings/i,
   aliases: /Model Aliases/i,
@@ -135,6 +143,7 @@ const OPTIONAL_OPEN_PAYLOAD = {
   tpm_limit_type: null,
   rpm_limit: undefined,
   rpm_limit_type: null,
+  tpd_limit: undefined,
   throttle_on_budget_exceeded: undefined,
   enable_prompt_caching: undefined,
   guardrails: undefined,
@@ -164,6 +173,7 @@ const ROUTER_SETTINGS_DEFAULT = {
 const SECTION_PAYLOAD_ADDITIONS: Record<keyof typeof SECTIONS, Record<string, unknown>> = {
   mcp: { allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] } },
   agent: { allowed_agents_and_groups: undefined },
+  skill: {},
   logging: {},
   router: { router_settings: ROUTER_SETTINGS_DEFAULT },
   aliases: {},
@@ -329,6 +339,21 @@ describe("CreateKey", () => {
       expect(Object.keys(serialised).sort()).toStrictEqual([...wireKeys].sort());
     });
 
+    it("moves a picked private skill under object_permission.skills and off the top level", async () => {
+      await openModal();
+      await nameTheKey();
+      await openSection(/Optional Settings/i);
+      await openSection(SECTIONS.skill);
+      await userEvent.click(await screen.findByRole("combobox", { name: "Select skills (optional)" }));
+      await userEvent.click(await screen.findByRole("option", { name: "private-skill (private)" }));
+      await userEvent.keyboard("{Escape}");
+      await submit();
+
+      const payload = await createdPayload();
+      expect(payload.object_permission).toStrictEqual({ skills: ["private-skill"] });
+      expect(payload).not.toHaveProperty("allowed_skills");
+    });
+
     it("omits a budget typed into a section the user closed again, rather than sending it as null", async () => {
       await openModal();
       await nameTheKey();
@@ -371,6 +396,7 @@ describe("CreateKey", () => {
     it.each([
       ["Tokens per minute Limit (TPM)", "tpm_limit"],
       ["Requests per minute Limit (RPM)", "rpm_limit"],
+      ["Tokens per day Limit (TPD)", "tpd_limit"],
     ])("routes a typed %s into the %s payload key", async (label, key) => {
       await openModal();
       await nameTheKey();
@@ -544,6 +570,37 @@ describe("CreateKey", () => {
 
       expect((await createdPayload()).metadata).toBe('{"team":"research"}');
     });
+
+    it("carries the typed key alias and the chosen team onto the wire", async () => {
+      state.teams = [{ team_id: "team-1", team_alias: "Team One", models: [] }];
+      await openModal({ teams: state.teams as unknown as Team[] });
+      await nameTheKey("wire-alias");
+      await userEvent.click(await screen.findByLabelText("Team"));
+      await userEvent.click(await screen.findByRole("option", { name: /Team One/ }));
+      await submit();
+
+      expect(await createdPayload()).toMatchObject({ key_alias: "wire-alias", team_id: "team-1" });
+    });
+
+    it("sends team_id as an explicit null when no team is chosen", async () => {
+      await openModal();
+      await nameTheKey();
+      await submit();
+
+      expect(await createdPayload()).toHaveProperty("team_id", null);
+    });
+
+    it.fails(
+      "adds no keys for an Optional Settings section the user opened but never filled (expected to fail until the forms revamp, tri-state PATCH tracker)",
+      async () => {
+        await openModal();
+        await nameTheKey();
+        await openSection(/Optional Settings/i);
+        await submit();
+
+        expect(await createdPayload()).toStrictEqual(ALL_CLOSED_PAYLOAD);
+      },
+    );
   });
 
   describe("key ownership", () => {
@@ -749,6 +806,36 @@ describe("CreateKey", () => {
       await submit();
 
       expect((await createdPayload()).organization_id).toBe("org-1");
+    });
+
+    it("discards the old project and team when the organization changes", async () => {
+      state.uiSettings = { enable_projects_ui: true };
+      state.organizations = [
+        { organization_id: "scope-silver", organization_alias: "Silver" },
+        { organization_id: "scope-copper", organization_alias: "Copper" },
+      ];
+      state.teams = [{ team_id: "group-maple", team_alias: "Maple", organization_id: "scope-silver", models: [] }];
+      state.projects = [{ project_id: "project-orbit", project_alias: "Orbit", team_id: "group-maple", models: [] }];
+      await openModal({ teams: state.teams as Team[] });
+      await nameTheKey();
+      await userEvent.click(await screen.findByLabelText("Organization"));
+      await userEvent.click(await screen.findByRole("option", { name: /Silver/ }));
+      await userEvent.click(await screen.findByLabelText("Project"));
+      await userEvent.click(await screen.findByRole("option", { name: /Orbit/ }));
+      await waitFor(() => expect(screen.getByLabelText("Team")).toHaveValue("Maple"));
+      expect(screen.getByLabelText("Team")).toBeDisabled();
+
+      await userEvent.click(screen.getByLabelText("Organization"));
+      await userEvent.click(await screen.findByRole("option", { name: /Copper/ }));
+      expect(screen.getByLabelText("Project")).toHaveValue("");
+      expect(screen.getByLabelText("Team")).toHaveValue("");
+      expect(screen.getByLabelText("Team")).toBeEnabled();
+      await submit();
+
+      const payload = JSON.parse(JSON.stringify(await createdPayload()));
+      expect(payload.organization_id).toBe("scope-copper");
+      expect(payload.team_id).toBeNull();
+      expect(payload).not.toHaveProperty("project_id");
     });
 
     it("drops organization_id when the chosen organization is cleared again", async () => {

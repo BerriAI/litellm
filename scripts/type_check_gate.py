@@ -71,7 +71,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BUDGET_PATH = REPO_ROOT / "basedpyright-code-budget.json"
 PYRIGHT_CONFIG = REPO_ROOT / "pyrightconfig.json"
 UV_LOCK = REPO_ROOT / "uv.lock"
-DEFAULT_BASE = "origin/litellm_internal_staging"
 CACHE_FILE_PREFIX = "basedpyright-base-"
 CACHE_KEEP_ENTRIES = 8
 ARTIFACT_NAME_PREFIX = "basedpyright-counts-"
@@ -578,7 +577,7 @@ def ratcheted_budget(
     }
 
 
-def cmd_update(current: Mapping[str, int], base_ref: str = DEFAULT_BASE) -> None:
+def cmd_update(current: Mapping[str, int], base_ref: str) -> None:
     """Ratchet each rule's limit down by the errors this branch fixed.
 
     `current` is the working-tree count; the reference count comes
@@ -666,12 +665,14 @@ def cmd_check(head: Mapping[str, int], base_ref: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", default=DEFAULT_BASE)
+    parser.add_argument("--base", help="Comparison ref (default: origin's current default branch)")
     parser.add_argument("--update", action="store_true")
     parser.add_argument("--emit-counts-dir", type=Path)
     args = parser.parse_args()
+    from default_branch import resolve_base_ref
     from gate_slot_lock import held_slot
 
+    base_ref: Final = None if args.emit_counts_dir is not None else resolve_base_ref(args.base, REPO_ROOT)
     with held_slot():
         ensure_typecheck_env()
         head = count_basedpyright(run_basedpyright())
@@ -679,10 +680,8 @@ def main() -> None:
             cmd_emit_counts(
                 head, args.emit_counts_dir, _run(["git", "rev-parse", "HEAD"]).strip()
             )
-        elif args.update:
-            cmd_update(head, args.base)
-        else:
-            cmd_check(head, args.base)
+        elif base_ref is not None:
+            cmd_update(head, base_ref) if args.update else cmd_check(head, base_ref)
 
 
 if __name__ == "__main__":

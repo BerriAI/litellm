@@ -10,8 +10,8 @@ opt-in. none is opt-out everywhere except the azure gpt-5 family, whose config r
 UnsupportedParamsError without an explicit true.
 
 xhigh is gated on the request path by the openai and azure gpt-5 configs. max is not gated there at
-all: every entry carrying supports_max_reasoning_effort is Claude-family, and
-anthropic/chat/transformation.py gates max on the output_config path while its reasoning_effort
+all: outside the gpt-6-astra rows every entry carrying supports_max_reasoning_effort is Claude-family,
+and anthropic/chat/transformation.py gates max on the output_config path while its reasoning_effort
 path maps any level to a thinking budget. Making max opt-in is a deliberate trade, then, since an
 explicit flag is the only signal that the tier is a real one rather than litellm rounding the level
 to a budget, and a missing flag costs advisory metadata rather than a rejected request.

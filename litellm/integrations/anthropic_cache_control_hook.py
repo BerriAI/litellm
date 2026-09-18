@@ -16,6 +16,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
 
+from pydantic import TypeAdapter, ValidationError
+
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
@@ -23,6 +25,7 @@ from litellm.integrations.prompt_management_base import PromptManagementClient
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     with_prompt_cache_breakpoint,
 )
+from litellm.llms.anthropic.common_utils import is_claude_code_one_shot_subagent_request
 from litellm.types.integrations.anthropic_cache_control_hook import (
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
     GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT,
@@ -62,8 +65,24 @@ OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES: Final = frozenset(
 )
 OPENAI_API_HOST: Final = "api.openai.com"
 OPENAI_API_BASE_ENV_VARS: Final = ("OPENAI_BASE_URL", "OPENAI_API_BASE")
+_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
+_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 
 AllToolParamValues = ChatCompletionToolParam | AllAnthropicToolsValues
+
+
+def _validated_object_mapping(value: object) -> dict[object, object] | None:
+    try:
+        return _OBJECT_MAPPING_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _validated_object_list(value: object) -> list[object] | None:
+    try:
+        return _OBJECT_LIST_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
 
 
 def supports_openai_prompt_cache_breakpoint(model: str) -> bool:
@@ -114,6 +133,36 @@ CARRY_UNMATCHED_MESSAGE_POINTS: Final = "_litellm_carry_unmatched_cache_control_
 
 
 class AnthropicCacheControlHook(CustomPromptManagement):
+    @staticmethod
+    def _request_value(request_kwargs: object, key: str) -> object:
+        request_mapping: Final = _validated_object_mapping(request_kwargs)
+        if request_mapping is None:
+            return None
+        return request_mapping.get(key)
+
+    @staticmethod
+    def _request_user_agent(request_kwargs: object) -> str | None:
+        proxy_server_request: Final = AnthropicCacheControlHook._request_value(request_kwargs, "proxy_server_request")
+        proxy_server_request_mapping: Final = _validated_object_mapping(proxy_server_request)
+        if proxy_server_request_mapping is None:
+            return None
+        headers: Final = proxy_server_request_mapping.get("headers")
+        headers_mapping: Final = _validated_object_mapping(headers)
+        if headers_mapping is None:
+            return None
+        user_agent: Final = next(
+            (value for key, value in headers_mapping.items() if isinstance(key, str) and key.lower() == "user-agent"),
+            None,
+        )
+        return user_agent if isinstance(user_agent, str) else None
+
+    @staticmethod
+    def _request_system(request_kwargs: object) -> str | list[object] | None:
+        system: Final = AnthropicCacheControlHook._request_value(request_kwargs, "system")
+        if isinstance(system, str):
+            return system
+        return _validated_object_list(system)
+
     def get_chat_completion_prompt(
         self,
         model: str,
@@ -520,12 +569,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         points: Sequence[CacheControlInjectionPoint],
         messages: list[AllMessageValues],
         tools: list[object] | None,
+        cache_control: object,
         model: str,
         custom_llm_provider: str | None,
         api_base: object,
         prompt_cache_options: object,
     ) -> Sequence[Mapping[str, object]] | None:
-        if AnthropicCacheControlHook._should_stand_down(points, messages, None, tools):
+        if AnthropicCacheControlHook._should_stand_down(points, messages, None, tools, cache_control):
             return None
         return AnthropicCacheControlHook._stamped_with_dialect(
             points, model, custom_llm_provider, api_base, prompt_cache_options
@@ -561,6 +611,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         messages: list[AllMessageValues],
         system: str | list | None,
         tools: list | None,
+        cache_control: object = None,
     ) -> bool:
         """Whether configured injection points must yield to client-set cache_control.
 
@@ -573,13 +624,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         """
         if all(point.get("_litellm_judged") for point in points):
             return False
-        return AnthropicCacheControlHook._request_has_cache_control(messages, system, tools)
+        return AnthropicCacheControlHook._request_has_cache_control(messages, system, tools, cache_control)
 
     @staticmethod
     def _request_has_cache_control(
         messages: list[AllMessageValues],
         system: str | list | None,
         tools: list | None = None,
+        cache_control: object = None,
     ) -> bool:
         """Return True if the request already carries any client-supplied cache_control.
 
@@ -591,6 +643,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         carry the mark either at the top level (Anthropic shape) or nested under
         ``function`` (OpenAI shape); the Anthropic chat transform accepts both.
         """
+        if cache_control is not None:
+            return True
         if AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system) > 0:
             return True
         if tools is not None:
@@ -612,6 +666,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         custom_llm_provider: str | None,
         tools: list | None = None,
         enable_prompt_caching: bool | None = None,
+        cache_control: object = None,
+        request_kwargs: object = None,
     ) -> list[CacheControlInjectionPoint]:
         """Default breakpoints when ``litellm.enable_anthropic_prompt_caching`` is on.
 
@@ -649,7 +705,12 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not supports_prompt_caching(model=model, custom_llm_provider=provider):
             return []
 
-        if AnthropicCacheControlHook._request_has_cache_control(messages, system, tools):
+        if AnthropicCacheControlHook._request_has_cache_control(messages, system, tools, cache_control):
+            return []
+
+        if is_claude_code_one_shot_subagent_request(
+            messages, system, tools, AnthropicCacheControlHook._request_user_agent(request_kwargs)
+        ):
             return []
 
         control: Final = AnthropicCacheControlHook._default_control()
@@ -665,6 +726,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         models: Iterable[str],
         tools: list[AllToolParamValues] | None = None,
         enable_prompt_caching: bool | None = None,
+        request_kwargs: object = None,
     ) -> list[AllMessageValues]:
         """Return the messages auto prompt caching will send, default breakpoints included.
 
@@ -681,11 +743,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 for candidate in (
                     AnthropicCacheControlHook.get_default_injection_points(
                         messages=messages,
-                        system=None,
                         model=model,
                         custom_llm_provider=None,
                         tools=tools,
                         enable_prompt_caching=enable_prompt_caching,
+                        system=AnthropicCacheControlHook._request_system(request_kwargs),
+                        cache_control=AnthropicCacheControlHook._request_value(request_kwargs, "cache_control"),
+                        request_kwargs=request_kwargs,
                     )
                     for model in models
                 )
@@ -730,6 +794,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 non_default_params["cache_control_injection_points"],
                 messages,
                 tools,
+                non_default_params.get("cache_control"),
                 model,
                 custom_llm_provider,
                 api_base,
@@ -747,6 +812,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             custom_llm_provider=custom_llm_provider,
             tools=tools,
             enable_prompt_caching=enable_prompt_caching,
+            cache_control=non_default_params.get("cache_control"),
+            request_kwargs=non_default_params,
         )
         if points:
             non_default_params["cache_control_injection_points"] = points
@@ -853,10 +920,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         enable_prompt_caching: Final = cast(  # cast-ok: kwargs is untyped; key stamped as bool by the proxy
             bool | None, kwargs.pop("enable_prompt_caching", None)
         )
+        cache_control: Final = kwargs.get("cache_control")
         configured: Final = cast(  # cast-ok: kwargs is untyped; this key only holds the documented injection-point list
             list[CacheControlInjectionPoint] | None, kwargs.pop("cache_control_injection_points", None)
         )
-        if configured and AnthropicCacheControlHook._should_stand_down(configured, typed_messages, system, tools):
+        if configured and AnthropicCacheControlHook._should_stand_down(
+            configured, typed_messages, system, tools, cache_control
+        ):
             return messages, system
         injection_points: list[CacheControlInjectionPoint] = configured or []
         if not injection_points and model is not None:
@@ -867,6 +937,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 enable_prompt_caching=enable_prompt_caching,
+                cache_control=cache_control,
+                request_kwargs=kwargs,
             )
         if not injection_points:
             return messages, system

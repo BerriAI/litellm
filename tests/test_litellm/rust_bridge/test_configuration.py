@@ -10,7 +10,6 @@ from typing import Final
 import pytest
 
 from litellm.rust_bridge import configuration
-from litellm.rust_bridge import ocr as rust_ocr
 
 
 @pytest.fixture(autouse=True)
@@ -19,125 +18,108 @@ def _isolated_configuration(  # pyright: ignore[reportUnusedFunction]  # pytest 
 ) -> Generator[None]:
     configuration.reset_rust_configuration()
     monkeypatch.delenv("LITELLM_RUST", raising=False)
-    monkeypatch.delenv("LITELLM_USE_RUST_OCR", raising=False)
-    rust_ocr.set_rust_ocr(ocr=None, aocr=None)
     yield
     configuration.reset_rust_configuration()
-    rust_ocr.set_rust_ocr(ocr=None, aocr=None)
+
+
+Rollout: Final = configuration.Rollout
+Decision: Final = configuration.Decision
 
 
 @pytest.mark.parametrize(
-    ("request_override", "process", "environment", "legacy_environment", "release_default", "expected"),
+    ("rollout", "process", "environment", "expected"),
     (
-        (False, True, True, True, True, False),
-        (True, False, False, False, False, True),
-        (None, False, True, True, True, False),
-        (None, True, False, False, False, True),
-        (None, None, False, True, True, False),
-        (None, None, True, False, False, True),
-        (None, None, None, False, True, False),
-        (None, None, None, True, False, True),
-        (None, None, None, None, False, False),
-        (None, None, None, None, True, True),
+        (Rollout.PYTHON_ONLY, True, True, Decision.PYTHON),
+        (Rollout.RUST_REQUIRED, False, False, Decision.RUST_REQUIRED),
+        (Rollout.RUST_OPT_IN, None, None, Decision.PYTHON),
+        (Rollout.RUST_OPT_IN, None, True, Decision.RUST_WITH_FALLBACK),
+        (Rollout.RUST_OPT_IN, True, None, Decision.RUST_WITH_FALLBACK),
+        (Rollout.RUST_OPT_IN, True, False, Decision.PYTHON),
+        (Rollout.RUST_OPT_IN, False, True, Decision.RUST_WITH_FALLBACK),
+        (Rollout.RUST_OPT_OUT, None, None, Decision.RUST_WITH_FALLBACK),
+        (Rollout.RUST_OPT_OUT, None, False, Decision.PYTHON),
+        (Rollout.RUST_OPT_OUT, False, None, Decision.PYTHON),
+        (Rollout.RUST_OPT_OUT, False, True, Decision.RUST_WITH_FALLBACK),
+        (Rollout.RUST_OPT_OUT, True, False, Decision.PYTHON),
     ),
 )
-def test_resolution_precedence(
-    request_override: bool | None,
+def test_decide_precedence(
+    rollout: configuration.Rollout,
     process: bool | None,
     environment: bool | None,
-    legacy_environment: bool | None,
-    release_default: bool,
-    expected: bool,
+    expected: configuration.Decision,
 ) -> None:
-    assert (
-        configuration.resolve_rust_enabled(
-            request_override=request_override,
-            process_override=process,
-            environment_override=environment,
-            legacy_environment_override=legacy_environment,
-            release_default=release_default,
-        )
-        is expected
+    assert configuration.decide(rollout, process_override=process, environment_override=environment) is expected
+
+
+def test_release_default_keeps_opt_in_routes_on_python() -> None:
+    assert configuration.decision(Rollout.RUST_OPT_IN) is Decision.PYTHON
+    assert configuration.decision(Rollout.RUST_OPT_OUT) is Decision.RUST_WITH_FALLBACK
+    assert configuration.rust_enabled() is False
+
+
+@pytest.mark.parametrize("process", (None, False, True))
+@pytest.mark.parametrize("environment", (None, "0", "1", "off"))
+def test_opt_out_route_configuration(
+    monkeypatch: pytest.MonkeyPatch, process: bool | None, environment: str | None
+) -> None:
+    if environment is not None:
+        monkeypatch.setenv("LITELLM_RUST", environment)
+    if process is not None:
+        configuration.rust(process)
+
+    expected: Final = (
+        Decision.RUST_WITH_FALLBACK
+        if environment == "1" or (environment is None and process is not False)
+        else Decision.PYTHON
     )
+    assert configuration.decision(Rollout.RUST_OPT_OUT) is expected
 
 
-def test_release_default_remains_disabled() -> None:
-    assert configuration.DEFAULT_RUST_ENABLED is False
-    assert configuration.rust_enabled() is False
+@pytest.mark.parametrize(
+    ("environment", "process", "expected"),
+    (
+        *((value, True, False) for value in ("0", "false", "False", "no", "off", "f", "n", " 0 ")),
+        *((value, False, True) for value in ("1", "true", "TRUE", "yes", "on", "t", "y", " 1 ")),
+    ),
+)
+def test_environment_wins_over_process_override(
+    monkeypatch: pytest.MonkeyPatch, environment: str, process: bool, expected: bool
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", environment)
+    configuration.rust(process)
+
+    assert configuration.rust_enabled() is expected
 
 
-def test_process_override_wins_over_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_RUST", "0")
+def test_process_override_applies_when_environment_is_unset() -> None:
     configuration.rust(True)
 
     assert configuration.rust_enabled() is True
-    assert configuration.rust_enabled(request_override=False) is False
-
-
-def test_global_environment_accepts_explicit_false(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_RUST", "off")
-
-    assert configuration.rust_enabled() is False
 
 
 @pytest.mark.parametrize("value", ("", " ", "sometimes", "2"))
-def test_invalid_environment_value_disables_rust(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+def test_invalid_environment_value_is_ignored(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.setenv("LITELLM_RUST", value)
-    monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
 
     assert configuration.rust_enabled() is False
-    assert configuration.rust_ocr_enabled() is False
-
-
-@pytest.mark.parametrize("value", ("", " ", "sometimes", "2"))
-def test_invalid_legacy_environment_value_disables_rust(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
-    monkeypatch.setenv("LITELLM_USE_RUST_OCR", value)
-
-    with pytest.warns(DeprecationWarning, match="LITELLM_USE_RUST_OCR is deprecated"):
-        assert configuration.rust_enabled() is False
-
-
-def test_process_override_and_reset_apply_to_existing_threads(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_RUST", "1")
-
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        assert executor.submit(configuration.rust_enabled).result() is True
-        configuration.rust(False)
-        assert executor.submit(configuration.rust_enabled).result() is False
-        assert executor.submit(configuration.rust_ocr_enabled).result() is False
-        configuration.reset_rust_configuration()
-        assert executor.submit(configuration.rust_enabled).result() is True
-        assert executor.submit(configuration.rust_ocr_enabled).result() is True
-
-
-def test_explicit_override_precedes_invalid_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_RUST", "sometimes")
-
-    assert configuration.rust_enabled(request_override=False) is False
+    assert configuration.decision(Rollout.RUST_OPT_OUT) is Decision.RUST_WITH_FALLBACK
     configuration.rust(True)
     assert configuration.rust_enabled() is True
 
 
-def test_legacy_ocr_environment_is_deprecated_and_global(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
-
-    with pytest.warns(DeprecationWarning, match="LITELLM_USE_RUST_OCR is deprecated"):
-        assert configuration.rust_enabled() is True
-    with pytest.warns(DeprecationWarning, match="LITELLM_USE_RUST_OCR is deprecated"):
-        assert configuration.rust_ocr_enabled() is True
-
-
-def test_global_environment_precedes_legacy_ocr_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_RUST", "0")
-    monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
-
-    assert configuration.rust_enabled() is False
+def test_process_override_and_reset_apply_to_existing_threads() -> None:
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        assert executor.submit(configuration.rust_enabled).result() is False
+        configuration.rust(True)
+        assert executor.submit(configuration.rust_enabled).result() is True
+        configuration.reset_rust_configuration()
+        assert executor.submit(configuration.rust_enabled).result() is False
 
 
-@pytest.mark.parametrize("environment_name", ("LITELLM_RUST", "LITELLM_USE_RUST_OCR"))
 @pytest.mark.parametrize(("value", "expected"), (("1", "True"), ("0", "False")))
-def test_environment_controls_startup(environment_name: str, value: str, expected: str) -> None:
-    environment: Final = {**os.environ, environment_name: value}
+def test_environment_controls_startup(value: str, expected: str) -> None:
+    environment: Final = {**os.environ, "LITELLM_RUST": value}
     result: Final = subprocess.run(
         (
             sys.executable,

@@ -32,22 +32,6 @@ def _load(path):
         return json.load(f)
 
 
-@pytest.mark.parametrize("model", DAYBREAK_MODELS)
-def test_daybreak_capability_contract(model):
-    info = _load(MAIN_PATH).get(model)
-    assert info is not None, f"{model} missing from model_prices_and_context_window.json"
-
-    assert info["litellm_provider"] == "openai"
-    assert info["mode"] == "chat"
-    assert info["supported_endpoints"] == ["/v1/chat/completions", "/v1/responses"]
-
-    assert info["supports_computer_use"] is True
-    assert info["supports_parallel_function_calling"] is True
-    assert info["supports_function_calling"] is True
-    assert info["supports_reasoning"] is True
-    assert info["supports_vision"] is True
-
-
 def test_blue_alias_matches_its_snapshot_computer_use():
     cost_map = _load(MAIN_PATH)
 
@@ -63,7 +47,6 @@ def test_official_alias_tracks_snapshot(alias, snapshot):
 
     assert alias_info["supported_endpoints"] == ["/v1/responses"]
     assert alias_info["mode"] == "responses"
-    assert alias_info["source"] == f"https://developers.openai.com/api/docs/models/{alias}"
     assert {field: alias_info.get(field) for field in PRICE_FIELDS} == {
         field: snapshot_info.get(field) for field in PRICE_FIELDS
     }

@@ -139,6 +139,35 @@ class TestProxyInitializationHelpers:
             )
             assert args["timeout_worker_healthcheck"] == 15
 
+    @staticmethod
+    def _uvicorn_access_info_enabled(args: dict) -> bool:
+        import logging
+
+        loggers = tuple(logging.getLogger(n) for n in ("uvicorn", "uvicorn.error", "uvicorn.access", "uvicorn.asgi"))
+        saved = tuple((lg, lg.handlers[:], lg.level, lg.propagate) for lg in loggers)
+        try:
+            uvicorn.Config(**args).configure_logging()
+            return logging.getLogger("uvicorn.access").isEnabledFor(logging.INFO)
+        finally:
+            for lg, handlers, level, propagate in saved:
+                lg.handlers[:] = handlers
+                lg.setLevel(level)
+                lg.propagate = propagate
+
+    def test_litellm_log_error_silences_uvicorn_info_lines(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_LOG", "ERROR")
+        args = ProxyInitializationHelpers._get_default_unvicorn_init_args("localhost", 8000)
+
+        assert "log_config" not in args
+        assert self._uvicorn_access_info_enabled(args) is False
+
+    def test_unset_litellm_log_keeps_uvicorn_default_info_lines(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_LOG", raising=False)
+        args = ProxyInitializationHelpers._get_default_unvicorn_init_args("localhost", 8000)
+
+        assert "log_level" not in args
+        assert self._uvicorn_access_info_enabled(args) is True
+
     def test_installed_uvicorn_supports_worker_flags(self):
         params = inspect.signature(uvicorn.Config.__init__).parameters
         assert "timeout_worker_healthcheck" in params
@@ -1525,7 +1554,12 @@ class TestProxyInitializationHelpers:
         def capture_run(self):
             captured["options"] = dict(self.options)
 
-        with patch("gunicorn.app.base.BaseApplication.run", capture_run):
+        with (
+            patch("gunicorn.app.base.BaseApplication.run", capture_run),
+            patch(  # test-quality-ok: option tests must not start a thread or change the pytest worker's child ownership
+                "litellm.proxy.proxy_cli.start_query_engine_reaper"
+            ),
+        ):
             ProxyInitializationHelpers._run_gunicorn_server(
                 host="127.0.0.1",
                 port=4010,
@@ -1553,6 +1587,9 @@ class TestProxyInitializationHelpers:
         with (
             patch("gunicorn.app.base.BaseApplication.run", capture_run),
             patch("builtins.print") as mock_print,
+            patch(  # test-quality-ok: option tests must not start a thread or change the pytest worker's child ownership
+                "litellm.proxy.proxy_cli.start_query_engine_reaper"
+            ),
         ):
             ProxyInitializationHelpers._run_gunicorn_server(
                 host="127.0.0.1",
@@ -1931,6 +1968,66 @@ class TestRunServerDbSetup:
             mock_setup_database.assert_called_with(
                 use_migrate=False, use_v2_resolver=False
             )
+
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    def test_migrations_run_when_the_prisma_cli_is_not_on_path(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_setup_database,
+        mock_atexit_register,
+        tmp_path,
+        capsys,
+    ):
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_should_update_schema.return_value = True
+        empty_bin = tmp_path / "emptybin"
+        empty_bin.mkdir()
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+        clean_env["PATH"] = str(empty_bin)
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(  # test-quality-ok: same isolation as the sibling CLI tests above
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
+
+        assert "prisma CLI is neither on PATH" not in capsys.readouterr().out
+        mock_setup_database.assert_called_once_with(
+            use_migrate=True, use_v2_resolver=False
+        )
 
     @patch("subprocess.run")
     @patch("atexit.register")

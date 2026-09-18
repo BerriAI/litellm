@@ -6,11 +6,15 @@ Vertex AI Anthropic models don't support URL sources for images.
 LiteLLM should convert image URLs to base64 when using Vertex AI Anthropic.
 """
 
+import json
+import sys
 from unittest.mock import patch, MagicMock
 
+import httpx
 import pytest
 
-
+import litellm
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
@@ -371,3 +375,59 @@ class TestToolMessageImageURLHandling:
                                 assert item["source"]["type"] == "url"
                                 return
         pytest.fail("Could not find image in tool result")
+
+
+async def test_vertex_ai_anthropic_async_completion_inlines_https_images_off_the_event_loop(async_only_image_fetch):
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    image_url = f"https://img.example/{uuid.uuid4()}.png"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "Green"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    vertexai = MagicMock()
+    vertexai.preview.language_models = MagicMock()
+
+    with (
+        patch.dict(sys.modules, {"vertexai": vertexai}),
+        patch.object(  # test-quality-ok: litellm.acompletion has no seam for Vertex token minting
+            litellm.main.vertex_partner_models_chat_completion,
+            "_ensure_access_token",
+            return_value=("token", "test-project"),
+        ),
+    ):
+        response = await litellm.acompletion(
+            model="vertex_ai/claude-sonnet-4-6",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What colour is this?"},
+                        {"type": "image_url", "image_url": {"url": image_url}},
+                    ],
+                }
+            ],
+            vertex_project="test-project",
+            vertex_location="us-east5",
+            client=client,
+        )
+
+    assert response.choices[0].message.content == "Green"
+    assert async_only_image_fetch.fetched == [image_url]
+    sources = [part["source"] for part in captured["body"]["messages"][0]["content"] if part["type"] == "image"]
+    assert sources == [{"type": "base64", "media_type": "image/png", "data": async_only_image_fetch.base64_png}]

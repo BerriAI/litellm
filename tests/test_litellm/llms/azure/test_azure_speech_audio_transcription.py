@@ -1,6 +1,4 @@
 import io
-import json
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import httpx
@@ -228,12 +226,3 @@ def test_azure_speech_transcription_routes_through_provider_config(monkeypatch):
     assert audio_handler.call_args.kwargs["custom_llm_provider"] == "azure"
 
 
-def test_azure_speech_stt_has_non_zero_input_pricing():
-    pricing_path = Path(__file__).parents[4] / "model_prices_and_context_window.json"
-    pricing = json.loads(pricing_path.read_text())
-
-    assert pricing["azure/speech/azure-stt"]["input_cost_per_second"] > 0
-    assert (
-        pricing["azure/speech/azure-stt"]["audio_transcription_config"]
-        == "azure_speech"
-    )

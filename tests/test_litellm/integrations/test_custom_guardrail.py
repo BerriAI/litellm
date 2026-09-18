@@ -1,6 +1,7 @@
 import asyncio
-from typing import TYPE_CHECKING, Literal, Optional
-from unittest.mock import AsyncMock
+import datetime as dt
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
@@ -9,8 +10,16 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
-from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailTracingDetail
+from litellm.types.guardrails import GuardrailEventHooks, Mode
+from litellm.types.utils import (
+    Choices,
+    GenericGuardrailAPIInputs,
+    GuardrailTracingDetail,
+    Message,
+    ModelResponse,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1841,12 +1850,14 @@ class _ApplyStyleGuardrail(CustomGuardrail):
         self.block = block
         self.apply_called = False
         self.seen_texts = None
+        self.seen_request_data = None
 
     async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
         from fastapi import HTTPException
 
         self.apply_called = True
         self.seen_texts = inputs.get("texts")
+        self.seen_request_data = request_data
         if self.block:
             raise HTTPException(status_code=400, detail={"error": "Violated moderation policy"})
         return inputs
@@ -2342,6 +2353,57 @@ class TestUndecoratedApplyGuardrailIsLogged:
 
         assert _Labelled.seen_label == "docs-style"
 
+    @pytest.mark.asyncio
+    async def test_post_call_recorded_outside_decorator_reaches_standard_logging_object(self):
+        """LIT-7608 regression: the auto-wrapped pre_call apply_guardrail copies the request bucket
+        into logging_obj.litellm_params["metadata"]. A post_call entry recorded later without the
+        decorator (the Bedrock streaming hook) must not be shadowed by that stale copy."""
+        messages: Final = [{"role": "user", "content": "hello there"}]
+        litellm_metadata: Final[dict] = {"user_api_key_user_id": "u1"}
+        logging_obj: Final = Logging(
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=messages,
+            stream=True,
+            call_type=CallTypes.acompletion.value,
+            start_time=dt.datetime.now(),
+            litellm_call_id="call-1",
+            function_id="fn-1",
+        )
+        logging_obj.update_environment_variables(
+            litellm_params={"litellm_metadata": litellm_metadata},
+            optional_params={},
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            custom_llm_provider="bedrock",
+        )
+        request_data: Final = {
+            "model": "bedrock-haiku",
+            "messages": messages,
+            "litellm_metadata": litellm_metadata,
+            "litellm_logging_obj": logging_obj,
+        }
+        guardrail: Final = _UndecoratedGuardrail(guardrail_name="bedrock-pre", event_hook=GuardrailEventHooks.pre_call)
+
+        await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["hello there"]),
+            request_data=request_data,
+            input_type="request",
+            logging_obj=logging_obj,
+        )
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"action": "NONE"},
+            request_data=request_data,
+            guardrail_status="success",
+            event_type=GuardrailEventHooks.post_call,
+        )
+        await logging_obj.async_success_handler(
+            result=ModelResponse(choices=[Choices(message=Message(role="assistant", content="general kenobi"))]),
+            start_time=dt.datetime.now(),
+            end_time=dt.datetime.now(),
+        )
+
+        entries: Final = logging_obj.model_call_details["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_mode"] for e in entries] == ["pre_call", "post_call"]
+
 
 class _ApplyOnlyObserver(CustomGuardrail):
     """Overrides only apply_guardrail, like panw_prisma_airs; inherits async_logging_hook."""
@@ -2378,10 +2440,107 @@ def _logged_call(messages: list | str) -> tuple[dict, object]:
     return kwargs, response
 
 
+class _NativeApplyGuardrail(_InheritedApplyGuardrail):
+    use_native_lifecycle_hooks: ClassVar[bool] = True
+
+
+@pytest.mark.parametrize("guardrail_type", (CustomGuardrail, _NativeApplyGuardrail, _InheritedApplyGuardrail))
+@pytest.mark.parametrize(
+    "event_hook",
+    (
+        GuardrailEventHooks.logging_only,
+        "logging_only",
+        [GuardrailEventHooks.pre_call, GuardrailEventHooks.logging_only],
+        ["pre_call", "logging_only"],
+        Mode(tags={"audit": "logging_only"}, default="pre_call"),
+        Mode(tags={"audit": ["pre_call", "logging_only"]}),
+        Mode(tags={"enforce": "pre_call"}, default="logging_only"),
+        Mode(tags={}, default=["pre_call", "logging_only"]),
+    ),
+)
+def test_logging_only_requires_framework_support_or_explicit_declaration(
+    guardrail_type: type[CustomGuardrail],
+    event_hook: GuardrailEventHooks | str | list[GuardrailEventHooks] | list[str] | Mode,
+) -> None:
+    supported: Final = [GuardrailEventHooks.pre_call]
+    if guardrail_type is _InheritedApplyGuardrail:
+        guardrail: Final = guardrail_type(event_hook=event_hook, supported_event_hooks=supported)
+        assert guardrail.event_hook == event_hook
+        assert supported == [GuardrailEventHooks.pre_call]
+    else:
+        with pytest.raises(ValueError, match=r"logging_only.*not in the supported event hooks"):
+            guardrail_type(event_hook=event_hook, supported_event_hooks=supported)
+
+    explicitly_supported: Final = guardrail_type(
+        event_hook=event_hook,
+        supported_event_hooks=[GuardrailEventHooks.pre_call, GuardrailEventHooks.logging_only],
+    )
+    assert explicitly_supported.event_hook == event_hook
+
+
+@pytest.mark.parametrize(
+    "event_hook",
+    (
+        GuardrailEventHooks.post_call,
+        "post_call",
+        [GuardrailEventHooks.logging_only, GuardrailEventHooks.post_call],
+        ["logging_only", "post_call"],
+        Mode(tags={"enforce": "post_call"}, default="logging_only"),
+        Mode(tags={"enforce": ["logging_only", "post_call"]}),
+        Mode(tags={"audit": "logging_only"}, default="post_call"),
+        Mode(tags={}, default=["logging_only", "post_call"]),
+    ),
+)
+def test_framework_logging_only_does_not_allow_other_unsupported_modes(
+    event_hook: GuardrailEventHooks | str | list[GuardrailEventHooks] | list[str] | Mode,
+) -> None:
+    with pytest.raises(ValueError, match=r"post_call.*not in the supported event hooks"):
+        _InheritedApplyGuardrail(event_hook=event_hook, supported_event_hooks=[GuardrailEventHooks.pre_call])
+
+
 class TestLoggingOnlyApplyGuardrail:
     """LIT-4876 regression: a guardrail in mode logging_only that implements only
     apply_guardrail must still run against the logged request and response and
     record guardrail_information, instead of inheriting the CustomLogger no-op."""
+
+    @pytest.mark.parametrize(
+        "event_hook",
+        (
+            GuardrailEventHooks.logging_only,
+            "logging_only",
+            [GuardrailEventHooks.pre_call, GuardrailEventHooks.logging_only],
+            ["pre_call", "logging_only"],
+            Mode(tags={"audit": "logging_only"}, default="pre_call"),
+            Mode(tags={"audit": ["pre_call", "logging_only"]}),
+            Mode(tags={"enforce": "pre_call"}, default="logging_only"),
+            Mode(tags={}, default=["pre_call", "logging_only"]),
+        ),
+    )
+    @pytest.mark.asyncio
+    async def test_content_filter_accepts_logging_only_and_records_detection(
+        self, event_hook: GuardrailEventHooks | str | list[GuardrailEventHooks] | list[str] | Mode
+    ) -> None:
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+            ContentFilterGuardrail,
+        )
+        from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
+
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="content-review",
+            event_hook=event_hook,
+            default_on=True,
+            blocked_words=[BlockedWord(keyword="hello", action=ContentFilterAction.BLOCK)],
+        )
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+
+        out_kwargs, out_response = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert out_response is response
+        assert out_kwargs["messages"] == kwargs["messages"]
+        assert (
+            out_kwargs["standard_logging_object"]["guardrail_information"][0]["guardrail_status"]
+            == "guardrail_intervened"
+        )
 
     @pytest.mark.asyncio
     async def test_runs_apply_guardrail_observe_only_and_records_verdict(self):
@@ -2466,7 +2625,7 @@ class TestLoggingOnlyApplyGuardrail:
         assert [e["guardrail_status"] for e in entries] == ["success"]
 
     @pytest.mark.asyncio
-    async def test_native_lifecycle_hook_guardrail_is_left_alone(self):
+    async def test_native_lifecycle_hook_guardrail_scans_in_logging_only(self):
         class _NativeHooks(_ApplyOnlyObserver):
             use_native_lifecycle_hooks = True
 
@@ -2475,9 +2634,9 @@ class TestLoggingOnlyApplyGuardrail:
 
         out_kwargs, out_response = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
 
-        assert guardrail.calls == []
-        assert out_kwargs is kwargs
+        assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
         assert out_response is response
+        assert out_kwargs["standard_logging_object"]["guardrail_information"]
 
     @pytest.mark.asyncio
     async def test_aresponses_scans_logged_messages_when_input_is_cleared(self):
@@ -2508,6 +2667,78 @@ class TestLoggingOnlyApplyGuardrail:
         assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
         entries = out_kwargs["standard_logging_object"]["guardrail_information"]
         assert [e["guardrail_status"] for e in entries] == ["success", "success"]
+
+    @pytest.mark.asyncio
+    async def test_anthropic_messages_response_scan_gets_chat_shaped_request_context(self):
+        class _ContextObserver(_ApplyOnlyObserver):
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                self.calls.append((input_type, inputs.get("structured_messages"), inputs.get("tools")))
+                return inputs
+
+        guardrail = _ContextObserver()
+        kwargs, response = _logged_call(
+            [
+                {"role": "user", "content": "What is the capital of France?"},
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "lookup", "input": {}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "Paris"}]},
+            ]
+        )
+        kwargs["optional_params"] = {"tools": [{"name": "lookup", "input_schema": {"type": "object", "properties": {}}}]}
+
+        await guardrail.async_logging_hook(kwargs, response, CallTypes.anthropic_messages.value)
+
+        expected_request = [
+            {"role": "user", "content": "What is the capital of France?"},
+            {"role": "assistant", "content": None, "tool_calls": [ANY], "thinking_blocks": None},
+            {"role": "tool", "tool_call_id": "toolu_01", "content": "Paris"},
+        ]
+        expected_tools = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}}}]
+        assert guardrail.calls == [
+            ("request", expected_request, expected_tools),
+            ("response", [*expected_request, {"role": "assistant", "content": "general kenobi"}], expected_tools),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_anthropic_messages_response_scan_keeps_reply_when_scoping_empties_request(self):
+        class _ContextObserver(_ApplyOnlyObserver):
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                self.calls.append((input_type, inputs.get("structured_messages"), inputs.get("tools")))
+                return inputs
+
+        guardrail = _ContextObserver()
+        guardrail.scan_only_tool_results = True
+        kwargs, response = _logged_call([{"role": "user", "content": "What is the capital of France?"}])
+
+        await guardrail.async_logging_hook(kwargs, response, CallTypes.anthropic_messages.value)
+
+        assert guardrail.calls == [("response", [{"role": "assistant", "content": "general kenobi"}], None)]
+
+    @pytest.mark.asyncio
+    async def test_anthropic_messages_response_scan_keeps_midturn_system_when_skip_system(self):
+        class _ContextObserver(_ApplyOnlyObserver):
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                self.calls.append((input_type, [m["role"] for m in inputs.get("structured_messages") or []]))
+                return inputs
+
+        guardrail = _ContextObserver()
+        guardrail.skip_system_message_in_guardrail = True
+        kwargs, response = _logged_call(
+            [
+                {"role": "user", "content": "hi"},
+                {"role": "system", "content": "mid-turn note"},
+                {"role": "user", "content": "What is the capital of France?"},
+            ]
+        )
+
+        await guardrail.async_logging_hook(kwargs, response, CallTypes.anthropic_messages.value)
+
+        assert guardrail.calls == [
+            ("request", ["user", "system", "user"]),
+            ("response", ["user", "system", "user", "assistant"]),
+        ]
 
     @pytest.mark.asyncio
     async def test_async_success_handler_records_verdict_in_standard_logging_object(self):
@@ -2547,6 +2778,91 @@ class TestCustomGuardrailPostCallSuccessDeploymentHook:
     None made the utils.py dispatcher treat the guardrail as having modified the response,
     which starved every later callback in litellm.callbacks (notably the lazily-appended
     VectorStorePreCallHook that attaches provider_specific_fields["search_results"])."""
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_retains_request_identity(self) -> None:
+        from litellm.types.guardrails import GuardrailEventHooks
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        guardrail: Final = _ApplyStyleGuardrail(block=False)
+        guardrail.event_hook = GuardrailEventHooks.post_call
+        request_data: Final = {"guardrails": ["apply-style-guardrail"]}
+        response: Final = ModelResponse(choices=[Choices(message=Message(content="review me"))])
+
+        await guardrail.async_post_call_success_deployment_hook(
+            request_data=request_data, response=response, call_type=CallTypes.acompletion
+        )
+
+        assert guardrail.seen_request_data is request_data
+        assert guardrail.seen_texts == ["review me"]
+        assert "guardrail_to_apply" not in request_data
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call_type", (None, CallTypes.acompletion))
+    async def test_apply_guardrail_masks_response_and_records_metadata(self, call_type: CallTypes | None) -> None:
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+            ContentFilterGuardrail,
+        )
+        from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="response-filter",
+            event_hook=GuardrailEventHooks.post_call,
+            blocked_words=[BlockedWord(keyword="secret", action=ContentFilterAction.MASK)],
+        )
+        request_data: Final = {"guardrails": ["response-filter"]}
+        response: Final = ModelResponse(choices=[Choices(message=Message(content="a secret"))])
+
+        result: Final = await guardrail.async_post_call_success_deployment_hook(
+            request_data=request_data, response=response, call_type=call_type
+        )
+
+        assert isinstance(result, ModelResponse)
+        assert result.choices[0].message.content == f"a {guardrail.keyword_redaction_tag}"
+        entries: Final = _guardrail_entries(request_data)
+        assert len(entries) == 1
+        assert entries[0]["guardrail_name"] == "response-filter"
+        assert entries[0]["guardrail_mode"] == "post_call"
+        assert "guardrail_to_apply" not in request_data
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error_type", (None, RuntimeError, asyncio.CancelledError))
+    async def test_dispatch_cleans_up_request_on_every_exit(self, error_type: type[BaseException] | None) -> None:
+        from contextlib import nullcontext
+
+        from litellm.integrations.custom_logger import CustomLogger
+        from litellm.types.utils import LLMResponseTypes, ModelResponse
+
+        error: Final = error_type("dispatch interrupted") if error_type is not None else None
+
+        class Dispatch(CustomLogger):
+            request_data: dict[str, object] | None = None
+
+            async def async_post_call_success_hook(
+                self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
+            ) -> LLMResponseTypes:
+                self.request_data = data
+                if error is not None:
+                    raise error
+                return response
+
+        dispatch: Final = Dispatch()
+
+        class Guardrail(_ApplyStyleGuardrail):
+            def _deployment_hook_target(self) -> CustomLogger:
+                return dispatch
+
+        guardrail: Final = Guardrail(block=False)
+        guardrail.event_hook = GuardrailEventHooks.post_call
+        request_data: Final = {"guardrails": ["apply-style-guardrail"]}
+        with pytest.raises(error_type) if error_type is not None else nullcontext():
+            await guardrail.async_post_call_success_deployment_hook(
+                request_data=request_data, response=ModelResponse(), call_type=CallTypes.acompletion
+            )
+
+        assert dispatch.request_data is request_data
+        assert "guardrail_to_apply" not in request_data
 
     @pytest.mark.asyncio
     async def test_returns_none_when_request_has_no_guardrails(self):
@@ -2610,3 +2926,298 @@ class TestCustomGuardrailPostCallSuccessDeploymentHook:
         )
 
         assert result is replacement
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_interface_modifies_deployment_response(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+        from litellm.types.utils import ModelResponse
+
+        class ReplacingGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional["LiteLLMLoggingObj"] = None,
+            ) -> GenericGuardrailAPIInputs:
+                assert input_type == "response"
+                return {**inputs, "texts": ["filtered response"]}
+
+        guardrail = ReplacingGuardrail(
+            guardrail_name="test-guardrail",
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        response = ModelResponse(choices=[{"message": {"role": "assistant", "content": "original response"}}])
+        request_data = {"guardrails": ["test-guardrail"]}
+
+        result = await guardrail.async_post_call_success_deployment_hook(
+            request_data=request_data,
+            response=response,
+            call_type=CallTypes.acompletion,
+        )
+
+        assert result is response
+        assert response.choices[0].message.content == "filtered response"
+        assert "guardrail_to_apply" not in request_data
+        assert len(_guardrail_entries(request_data)) == 1
+
+
+class _NativeLifecycleLoggingGuardrail(CustomGuardrail):
+    """Native lifecycle guardrail that also implements apply_guardrail, like the azure guards."""
+
+    use_native_lifecycle_hooks: ClassVar[bool] = True
+
+    def __init__(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        super().__init__(
+            guardrail_name="native-logging-guardrail",
+            event_hook=GuardrailEventHooks.logging_only,
+        )
+        self.calls: list[tuple[Literal["request", "response"], list[str]]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.calls.append((input_type, list(inputs.get("texts") or [])))
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_native_lifecycle_guardrail_logging_only_scans_assembled_response():
+    """A use_native_lifecycle_hooks guardrail accepts mode logging_only and its
+    async_logging_hook scans kwargs["async_complete_streaming_response"], not the raw result."""
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    guardrail = _NativeLifecycleLoggingGuardrail()
+    assembled = ModelResponse(
+        choices=[Choices(message=Message(role="assistant", content="assembled stream text"))]
+    )
+    sentinel_result = object()
+    kwargs = {
+        "model": "gpt-5.4-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "litellm_call_id": "call-1",
+        "litellm_params": {"metadata": {}},
+        "optional_params": {},
+        "standard_logging_object": {"guardrail_information": None},
+        "async_complete_streaming_response": assembled,
+    }
+
+    out_kwargs, out_result = await guardrail.async_logging_hook(
+        kwargs=kwargs, result=sentinel_result, call_type=CallTypes.acompletion.value
+    )
+
+    assert out_result is sentinel_result
+    assert ("response", ["assembled stream text"]) in guardrail.calls
+    assert out_kwargs["standard_logging_object"]["guardrail_information"]
+
+
+class TestPreCallHookResponseIsNotLoggedVerbatim:
+    """Regression for LIT-6935: a pre_call hook returning the request payload leaked the prompt
+    into ``guardrail_response`` and from there onto OTEL guardrail spans."""
+
+    @staticmethod
+    def _logged_response(request_data: dict[str, object]) -> object:
+        metadata = request_data["litellm_metadata"]
+        assert isinstance(metadata, dict)
+        entries = metadata["standard_logging_guardrail_information"]
+        assert len(entries) == 1
+        return entries[0]["guardrail_response"]
+
+    @staticmethod
+    def _request() -> dict[str, object]:
+        return {
+            "model": "gpt-4.1-mini",
+            "input": "SECRET_PROMPT",
+            "messages": [{"role": "user", "content": "SECRET_PROMPT"}],
+            "litellm_metadata": {},
+        }
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_returning_request_logs_allow(self):
+        class PassthroughGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> dict[str, object]:
+                return data
+
+        data = self._request()
+        await PassthroughGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="aresponses"
+        )
+
+        assert self._logged_response(data) == "allow"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_returning_modified_copy_logs_mask(self):
+        class MaskingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> dict[str, object]:
+                return {**data, "input": "[MASKED]"}
+
+        data = self._request()
+        await MaskingGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="aresponses"
+        )
+
+        assert self._logged_response(data) == "mask"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_mutating_request_in_place_logs_mask(self):
+        class InPlaceMaskingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> dict[str, object]:
+                messages = data["messages"]
+                assert isinstance(messages, list)
+                messages[0]["content"] = "[MASKED]"
+                return data
+
+        data = self._request()
+        await InPlaceMaskingGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="acompletion"
+        )
+
+        assert self._logged_response(data) == "mask"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_returning_rejection_string_logs_that_string(self):
+        class RejectingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> str:
+                return "Blocked by policy"
+
+        data = self._request()
+        result = await RejectingGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="acompletion"
+        )
+
+        assert result == "Blocked by policy"
+        assert self._logged_response(data) == "Blocked by policy"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_removing_legacy_functions_in_place_logs_mask(self):
+        class FunctionStrippingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> dict[str, object]:
+                data["functions"] = []
+                data["function_call"] = "none"
+                return data
+
+        data = {**self._request(), "functions": [{"name": "delete_db"}], "function_call": "auto"}
+        await FunctionStrippingGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="acompletion"
+        )
+
+        assert self._logged_response(data) == "mask"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_adding_tools_logs_mask(self):
+        class ToolInjectingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> dict[str, object]:
+                return {**data, "tools": [{"type": "function", "function": {"name": "guardrail_injected_tool"}}]}
+
+        data = self._request()
+        await ToolInjectingGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="acompletion"
+        )
+
+        assert self._logged_response(data) == "mask"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_adding_tools_logs_mask(self):
+        class ToolInjectingGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional["LiteLLMLoggingObj"] = None,
+            ) -> GenericGuardrailAPIInputs:
+                return {**inputs, "tools": [{"type": "function", "function": {"name": "guardrail_injected_tool"}}]}
+
+        data = self._request()
+        await ToolInjectingGuardrail(guardrail_name="g").apply_guardrail(
+            inputs={"texts": ["SECRET_PROMPT"]}, request_data=data, input_type="request"
+        )
+
+        assert self._logged_response(data) == "mask"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_masking_inputs_in_place_logs_mask(self):
+        class InPlaceMaskingGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional["LiteLLMLoggingObj"] = None,
+            ) -> GenericGuardrailAPIInputs:
+                inputs["texts"] = ["<REDACTED>"]
+                return inputs
+
+        data = self._request()
+        await InPlaceMaskingGuardrail(guardrail_name="g").apply_guardrail(
+            inputs={"texts": ["SECRET_PROMPT"]}, request_data=data, input_type="request"
+        )
+
+        assert self._logged_response(data) == "mask"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_adding_only_stream_holdback_logs_allow(self):
+        class HoldbackOnlyGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional["LiteLLMLoggingObj"] = None,
+            ) -> GenericGuardrailAPIInputs:
+                return {**inputs, "stream_holdback_chars": [6]}
+
+        data = self._request()
+        await HoldbackOnlyGuardrail(guardrail_name="g").apply_guardrail(
+            inputs={"texts": ["SECRET_PROMPT"]}, request_data=data, input_type="response"
+        )
+
+        assert self._logged_response(data) == "allow"

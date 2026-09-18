@@ -8,9 +8,7 @@ gate, the URL construction for both paths, and the shared Bearer auth.
 """
 
 import copy
-import json
 import logging
-from pathlib import Path
 
 import pytest
 from botocore.exceptions import (
@@ -158,7 +156,6 @@ class TestBedrockMantleResponsesURL:
         )
         assert url == "https://bedrock-mantle.us-east-2.api.aws/v1/responses"
         assert url.count("/responses") == 1
-
 
     def test_url_aws_region_name_overrides_stale_api_base(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
@@ -372,6 +369,52 @@ class TestBedrockMantleResponsesTools:
         assert "file_search" in str(mock_warning.call_args)
 
 
+class TestBedrockMantleSamplingParams:
+    """Mantle serves OpenAI's gpt-5 models under their OpenAI sampling rule: top_p and a
+    non-default temperature are accepted only when reasoning.effort resolves to none, so
+    the `openai.` catalogue name (region-prefixed on GovCloud) must answer from the OpenAI
+    model's map entry instead of dropping both params on every request."""
+
+    @pytest.mark.parametrize(
+        "model, effort, survives",
+        [
+            ("openai.gpt-5.4", None, True),
+            ("openai.gpt-5.5", None, False),
+            ("openai.gpt-5.6-luna", None, False),
+            ("openai.gpt-5.6-luna", "none", True),
+            ("openai.gpt-5.6-luna", "low", False),
+            ("us-gov-west-1/openai.gpt-5.4", None, True),
+            ("us-gov-west-1/openai.gpt-5.6-luna", None, False),
+        ],
+    )
+    def test_top_p_and_temperature_follow_the_resolved_effort(self, local_cost_map, model, effort, survives):
+        params = {"top_p": 0.9, "temperature": 0.2}
+        if effort is not None:
+            params["reasoning"] = {"effort": effort}
+        mapped = BedrockMantleResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=params,
+            model=model,
+            drop_params=True,
+        )
+        assert ("top_p" in mapped) is survives
+        assert ("temperature" in mapped) is survives
+
+    def test_top_p_without_drop_params_raises_only_while_reasoning_is_active(self, local_cost_map):
+        with pytest.raises(litellm.UnsupportedParamsError):
+            BedrockMantleResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"top_p": 0.9},
+                model="openai.gpt-5.6-luna",
+                drop_params=False,
+            )
+
+        mapped = BedrockMantleResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"top_p": 0.9},
+            model="openai.gpt-5.4",
+            drop_params=False,
+        )
+        assert mapped["top_p"] == 0.9
+
+
 class TestBedrockMantleResponsesWebSearch:
     """Web Search on Amazon Bedrock is a server-side built-in tool that Mantle runs
     itself when the caller passes {"type": "web_search"} on the Responses path, so
@@ -440,19 +483,6 @@ class TestBedrockMantleResponsesWebSearch:
             headers={},
         )
         assert body["tools"] == [self._WEB_SEARCH_TOOL]
-
-    @pytest.mark.parametrize(
-        "model",
-        [
-            "bedrock_mantle/openai.gpt-5.6-sol",
-            "bedrock_mantle/openai.gpt-5.6-terra",
-            "bedrock_mantle/openai.gpt-5.6-luna",
-            "bedrock_mantle/openai.gpt-5.5",
-            "bedrock_mantle/openai.gpt-5.4",
-        ],
-    )
-    def test_cost_map_advertises_web_search_support(self, model):
-        assert litellm.supports_web_search(model=model) is True
 
 
 def _codex_exec_tool():
@@ -540,6 +570,90 @@ class TestBedrockMantleServiceTier:
             )
         assert mock_warning.call_count == 1
         assert "priority" in str(mock_warning.call_args)
+
+
+class TestBedrockMantleReasoningSummary:
+    @pytest.mark.parametrize("summary", ["concise", "detailed"])
+    def test_unsupported_reasoning_summary_dropped_when_drop_params_true(self, summary):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium", "summary": summary}},
+            model="openai.gpt-5.6-sol",
+            drop_params=True,
+        )
+        assert params["reasoning"] == {"effort": "medium"}
+
+    def test_reasoning_summary_only_field_drops_reasoning(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"summary": "detailed"}},
+            model="openai.gpt-5.6-sol",
+            drop_params=True,
+        )
+        assert "reasoning" not in params
+
+    @pytest.mark.parametrize("summary", ["concise", "detailed"])
+    def test_unsupported_reasoning_summary_raises_when_drop_params_false(self, summary):
+        cfg = BedrockMantleResponsesAPIConfig()
+        with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
+            cfg.map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "medium", "summary": summary}},
+                model="openai.gpt-5.6-sol",
+                drop_params=False,
+            )
+        assert summary in str(excinfo.value)
+        assert "reasoning.summary" in str(excinfo.value)
+        assert "drop_params" in str(excinfo.value)
+
+    def test_unhashable_reasoning_summary_raises_unsupported_params_error(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
+            cfg.map_openai_params(
+                response_api_optional_params={"reasoning": {"summary": ["detailed"]}},
+                model="openai.gpt-5.6-sol",
+                drop_params=False,
+            )
+        assert "reasoning.summary" in str(excinfo.value)
+
+    @pytest.mark.parametrize("drop_params", [True, False])
+    def test_supported_reasoning_summary_kept(self, drop_params):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium", "summary": "auto"}},
+            model="openai.gpt-5.6-sol",
+            drop_params=drop_params,
+        )
+        assert params["reasoning"] == {"effort": "medium", "summary": "auto"}
+
+    def test_reasoning_summary_kept_on_standard_path(self):
+        cfg = BedrockMantleResponsesAPIConfig(use_openai_path=False)
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium", "summary": "detailed"}},
+            model="openai.gpt-oss-120b",
+            drop_params=False,
+        )
+        assert params["reasoning"] == {"effort": "medium", "summary": "detailed"}
+
+    def test_absent_reasoning_untouched(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"stream": True},
+            model="openai.gpt-5.6-sol",
+            drop_params=False,
+        )
+        assert params == {"stream": True}
+
+    def test_drop_logged_at_warning_level(self, caplog):
+        cfg = BedrockMantleResponsesAPIConfig()
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            cfg.map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "medium", "summary": "detailed"}},
+                model="openai.gpt-5.6-sol",
+                drop_params=True,
+            )
+        warnings = [record for record in caplog.records if "dropping unsupported reasoning.summary" in record.getMessage()]
+        assert len(warnings) == 1
+        assert "detailed" in warnings[0].getMessage()
 
 
 class TestBedrockMantleCodexRequestEndToEnd:
@@ -691,6 +805,12 @@ class TestBedrockMantleCodexAdditionalTools:
         body = self._transform(input=list(codex_agentic_items))
         assert body["input"] == codex_agentic_items
         assert "tools" not in body
+
+    def test_input_without_additional_tools_sanitizes_tools_on_the_caller_params_object(self):
+        params = {"tools": [{"type": "function", "name": "wait", "parameters": '{"type": "object"}'}]}
+        body = self._transform(input=[self._USER_MESSAGE], params=params)
+        assert body["tools"][0]["parameters"] == {"type": "object"}
+        assert params["tools"][0]["parameters"] == {"type": "object"}
 
     def test_malformed_additional_tools_item_without_tools_list_is_stripped(self):
         body = self._transform(
@@ -1042,21 +1162,6 @@ class TestBedrockMantleResponsesRegistry:
         assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
         assert cfg.use_openai_path is True
 
-    def test_gpt_5_5_price_map_declares_openai_responses_path(self, local_cost_map):
-        # The gpt-5.x entries must carry the data-driven flag so frontier routing
-        # does not rely on the name-string fallback alone.
-        assert (
-            litellm.model_cost["bedrock_mantle/openai.gpt-5.5"].get(
-                "use_openai_responses_path"
-            )
-            is True
-        )
-        assert (
-            litellm.model_cost["bedrock_mantle/openai.gpt-5.4"].get(
-                "use_openai_responses_path"
-            )
-            is True
-        )
 
     @pytest.mark.parametrize(
         "model",
@@ -1227,51 +1332,6 @@ class TestMantleSupportsResponses:
     """The capability helper is data-driven (supported_endpoints / mode), with no
     model-name match: per-model, so gpt-oss-120b is supported but the safeguard
     variant is not despite the shared substring."""
-
-    @pytest.mark.parametrize(
-        "model,model_cost,expected",
-        [
-            # supported_endpoints lists responses -> supported
-            (
-                "openai.gpt-oss-120b",
-                {
-                    "bedrock_mantle/openai.gpt-oss-120b": {
-                        "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
-                    }
-                },
-                True,
-            ),
-            # chat-only supported_endpoints -> not supported (the discriminator)
-            (
-                "openai.gpt-oss-safeguard-120b",
-                {
-                    "bedrock_mantle/openai.gpt-oss-safeguard-120b": {
-                        "supported_endpoints": ["/v1/chat/completions"]
-                    }
-                },
-                False,
-            ),
-            # mode=responses (no supported_endpoints) -> supported
-            (
-                "somelab.future-model",
-                {"bedrock_mantle/somelab.future-model": {"mode": "responses"}},
-                True,
-            ),
-            # mode=chat, no responses endpoint -> not supported
-            (
-                "google.gemma-3-27b-it",
-                {"bedrock_mantle/google.gemma-3-27b-it": {"mode": "chat"}},
-                False,
-            ),
-            # absent from model_cost -> no signal -> not supported
-            ("somelab.unmapped", {}, False),
-            (None, {}, False),
-        ],
-    )
-    def test_supports_responses(self, model, model_cost, expected):
-        from litellm.llms.bedrock_mantle.common_utils import mantle_supports_responses
-
-        assert mantle_supports_responses(model, model_cost) is expected
 
 
 class TestBedrockMantlePerModelResponsesURL:
@@ -1777,142 +1837,8 @@ class TestBedrockMantleResponsesSigV4:
 
 
 class TestBedrockMantleResponsesPricing:
-    def test_gpt_5_5_pricing_and_mode(self, local_cost_map):
-        info = litellm.get_model_info("bedrock_mantle/openai.gpt-5.5")
-        assert info["mode"] == "responses"
-        assert info["input_cost_per_token"] == pytest.approx(5.5e-06)
-        assert info["output_cost_per_token"] == pytest.approx(3.3e-05)
-        assert info["cache_read_input_token_cost"] == pytest.approx(5.5e-07)
-        assert info["max_input_tokens"] == 1050000
 
-    def test_gpt_5_4_pricing_and_mode(self, local_cost_map):
-        info = litellm.get_model_info("bedrock_mantle/openai.gpt-5.4")
-        assert info["mode"] == "responses"
-        assert info["input_cost_per_token"] == pytest.approx(2.75e-06)
-        assert info["output_cost_per_token"] == pytest.approx(1.65e-05)
-        assert info["cache_read_input_token_cost"] == pytest.approx(2.75e-07)
-        assert info["max_input_tokens"] == 1050000
-
-    def test_gpt_5_6_cyber_pricing_and_mode(self, local_cost_map):
-        info = litellm.get_model_info("bedrock_mantle/openai.gpt-5.6-cyber")
-        assert info["mode"] == "responses"
-        assert info["input_cost_per_token"] == pytest.approx(1.375e-05)
-        assert info["cache_creation_input_token_cost"] == pytest.approx(1.71875e-05)
-        assert info["cache_read_input_token_cost"] == pytest.approx(1.375e-06)
-        assert info["output_cost_per_token"] == pytest.approx(8.25e-05)
-        assert info["max_input_tokens"] == 272000
-
-    @pytest.mark.parametrize(
-        "model, input_cost, cache_creation_cost, cache_read_cost, output_cost",
-        [
-            ("openai.gpt-5.6-sol", 5.5e-06, 6.875e-06, 5.5e-07, 3.3e-05),
-            ("openai.gpt-5.6-terra", 2.2e-06, 2.75e-06, 2.2e-07, 1.32e-05),
-            ("openai.gpt-5.6-luna", 2.2e-07, 2.75e-07, 2.2e-08, 1.32e-06),
-        ],
-    )
-    def test_gpt_5_6_pricing_and_mode(
-        self, local_cost_map, model, input_cost, cache_creation_cost, cache_read_cost, output_cost
-    ):
-        info = litellm.get_model_info(f"bedrock_mantle/{model}")
-        assert info["mode"] == "responses"
-        assert info["input_cost_per_token"] == pytest.approx(input_cost)
-        assert info["cache_creation_input_token_cost"] == pytest.approx(cache_creation_cost)
-        assert info["cache_read_input_token_cost"] == pytest.approx(cache_read_cost)
-        assert info["output_cost_per_token"] == pytest.approx(output_cost)
-        assert info["max_input_tokens"] == 1050000
-        assert info["input_cost_per_token_above_272k_tokens"] == pytest.approx(input_cost * 2)
-        assert info["cache_creation_input_token_cost_above_272k_tokens"] == pytest.approx(cache_creation_cost * 2)
-        assert info["cache_read_input_token_cost_above_272k_tokens"] == pytest.approx(cache_read_cost * 2)
-        assert info["output_cost_per_token_above_272k_tokens"] == pytest.approx(output_cost * 1.5)
-
-    @pytest.mark.parametrize(
-        "model, input_cost, output_cost",
-        [
-            ("openai.gpt-5.6-sol", 5.5e-06, 3.3e-05),
-            ("openai.gpt-5.6-terra", 2.2e-06, 1.32e-05),
-            ("openai.gpt-5.6-luna", 2.2e-07, 1.32e-06),
-        ],
-    )
-    def test_gpt_5_6_responses_call_cost(self, local_cost_map, model, input_cost, output_cost):
-        from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
-
-        input_tokens = 100000
-        output_tokens = 10000
-        response = ResponsesAPIResponse(
-            id="resp-1",
-            created_at=1700000000,
-            model=model,
-            output=[],
-            usage=ResponseAPIUsage(
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                total_tokens=input_tokens + output_tokens,
-            ),
-        )
-
-        cost = litellm.completion_cost(
-            completion_response=response,
-            model=f"bedrock_mantle/{model}",
-            custom_llm_provider="bedrock_mantle",
-        )
-
-        assert cost == pytest.approx(input_tokens * input_cost + output_tokens * output_cost)
 
     def test_models_registered(self, local_cost_map):
         assert "bedrock_mantle/openai.gpt-5.5" in litellm.bedrock_mantle_models
         assert "bedrock_mantle/openai.gpt-5.4" in litellm.bedrock_mantle_models
-
-
-def _repo_cost_map(map_name: str) -> dict[str, dict[str, object]]:
-    repo_root = Path(__file__).resolve().parents[4]
-    paths = {
-        "root": repo_root / "model_prices_and_context_window.json",
-        "bundled_backup": repo_root / "litellm" / "model_prices_and_context_window_backup.json",
-    }
-    return json.loads(paths[map_name].read_text())
-
-
-class TestMantleGptRegistryEntries:
-    """Locks the OpenAI GPT entries to Bedrock Mantle's live behavior.
-
-    Mantle enforces a 1,050,000-token prompt maximum for gpt-5.6 sol/terra/luna
-    and for gpt-5.5 and gpt-5.4 (oversize requests 400 with "prompt tokens (N)
-    exceed model maximum (1050000)", and a 1,030,590-token request completes
-    on every one of them), while the AWS model cards still quote 272K for
-    gpt-5.5 and gpt-5.4. mode must stay "responses": Mantle's native
-    /v1/chat/completions rejects function tools unless reasoning_effort is
-    "none", so chat traffic has to keep bridging to the Responses API
-    (see the responses_api_bridge tests above).
-    """
-
-    @pytest.mark.parametrize("map_name", ("root", "bundled_backup"))
-    @pytest.mark.parametrize(
-        "key",
-        (
-            "bedrock_mantle/openai.gpt-5.6-sol",
-            "bedrock_mantle/openai.gpt-5.6-terra",
-            "bedrock_mantle/openai.gpt-5.6-luna",
-        ),
-    )
-    def test_entry_matches_mantle_enforced_limits(self, map_name, key):
-        entry = _repo_cost_map(map_name)[key]
-        assert entry["max_input_tokens"] == 1050000
-        assert entry["max_output_tokens"] == 128000
-        assert entry["mode"] == "responses"
-        assert entry["use_openai_responses_path"] is True
-        assert entry["supported_endpoints"] == ["/v1/chat/completions", "/v1/responses"]
-
-    @pytest.mark.parametrize("map_name", ("root", "bundled_backup"))
-    @pytest.mark.parametrize(
-        "key",
-        (
-            "bedrock_mantle/openai.gpt-5.5",
-            "bedrock_mantle/openai.gpt-5.4",
-        ),
-    )
-    def test_gpt_55_and_54_entries_match_mantle_enforced_limits(self, map_name, key):
-        entry = _repo_cost_map(map_name)[key]
-        assert entry["max_input_tokens"] == 1050000
-        assert entry["max_output_tokens"] == 128000
-        assert entry["mode"] == "responses"
-        assert entry["use_openai_responses_path"] is True

@@ -157,6 +157,8 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
         "prompt_caching_savings_spend": 0.0,
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
+        "total_response_time_ms": 0,
+        "timed_requests": 0,
         "failed_requests": 0,
     }
     mock_rows = [
@@ -492,7 +494,7 @@ async def test_get_api_key_metadata_recovers_double_hashed_key_via_reverse_hash(
 
 @pytest.mark.asyncio
 async def test_get_api_key_metadata_permanent_miss_never_pages_tokens_or_reads_spend_logs():
-    """A dirty key no table can explain costs two digest lookups, never a token page walk or a SpendLogs scan."""
+    """Without a spend-log window a dirty key no table can explain costs two digest lookups and never a token page walk."""
     from litellm.proxy.utils import hash_token
 
     double_hashed = hash_token("b" * 64)
@@ -518,6 +520,93 @@ async def test_get_api_key_metadata_permanent_miss_never_pages_tokens_or_reads_s
     assert all("take" not in call.kwargs and "skip" not in call.kwargs for call in token_lookups)
 
 
+def _spend_log_transaction(mock_prisma: MagicMock, rows: list[dict[str, str | None]]) -> AsyncMock:
+    transaction = MagicMock()
+    transaction.execute_raw = AsyncMock(return_value=0)
+    transaction.query_raw = AsyncMock(return_value=rows)
+    mock_prisma.db.tx.return_value.__aenter__.return_value = transaction
+    return transaction.query_raw
+
+
+def _spend_log_row(digest: str, key_alias: str, user_id: str) -> dict[str, str | None]:
+    return {
+        "digest": digest,
+        "first_alias": key_alias,
+        "last_alias": key_alias,
+        "first_team": None,
+        "last_team": None,
+        "first_owner": user_id,
+        "last_owner": user_id,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_api_key_metadata_permanent_miss_with_a_window_reads_spend_logs_once_within_it():
+    from litellm.proxy.utils import hash_token
+
+    double_hashed = hash_token("permanent-miss-with-window-6852")
+    window = (datetime(2024, 1, 1), datetime(2024, 1, 4))
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    spend_log_query_raw = _spend_log_transaction(mock_prisma, [])
+
+    result = await get_api_key_metadata(prisma_client=mock_prisma, api_keys={double_hashed}, spend_logs_window=window)
+
+    assert double_hashed not in result
+    assert mock_prisma.db.query_raw.await_count == 2
+    ((_, digests, start, end),) = [call.args for call in spend_log_query_raw.call_args_list]
+    assert digests == [double_hashed]
+    assert (start, end) == window
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_recovers_a_session_key_alias_from_spend_logs_around_the_page_dates():
+    from litellm.proxy.utils import hash_token
+
+    session_digest = hash_token("cli-session-daily-activity-6852")
+    records = [_daily_user_spend_record(user_id="session-user", api_key=session_digest, spend=1.5)]
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_table = MagicMock()
+    mock_table.count = AsyncMock(return_value=len(records))
+    mock_table.find_many = AsyncMock(return_value=records)
+    mock_prisma.db.litellm_dailyuserspend = mock_table
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="session-user", user_email="session@example.com")]
+    )
+
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    spend_log_query_raw = _spend_log_transaction(
+        mock_prisma, [_spend_log_row(session_digest, "cli-session-alias", "session-user")]
+    )
+
+    result = await get_daily_activity(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=1000,
+    )
+
+    key_metadata = result.results[0].breakdown.api_keys[session_digest].metadata
+    assert key_metadata.key_alias == "cli-session-alias"
+    assert key_metadata.user_email == "session@example.com"
+    ((_, digests, start, end),) = [call.args for call in spend_log_query_raw.call_args_list]
+    assert digests == [session_digest]
+    assert (start, end) == (datetime(2023, 12, 31), datetime(2024, 1, 3))
+
+
 def test_key_metadata_includes_recovered_user_email():
     from litellm.proxy.management_endpoints.common_daily_activity import _key_metadata
 
@@ -526,6 +615,7 @@ def test_key_metadata_includes_recovered_user_email():
             "dirty-key": {
                 "key_alias": "batch-worker",
                 "team_id": "team-1",
+                "user_id": "alice",
                 "user_email": "alice@example.com",
             }
         },
@@ -533,6 +623,7 @@ def test_key_metadata_includes_recovered_user_email():
     )
 
     assert meta.key_alias == "batch-worker"
+    assert meta.user_id == "alice"
     assert meta.user_email == "alice@example.com"
 
 
@@ -558,6 +649,8 @@ def test_update_breakdown_metrics_includes_user_email():
         prompt_caching_savings_spend=0,
         gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
+        total_response_time_ms=0,
+        timed_requests=0,
         total_tokens=2,
         api_requests=1,
         successful_requests=1,
@@ -633,6 +726,8 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_1.prompt_caching_savings_spend = 0.0
     mock_record_1.gateway_injected_caching_savings_spend = 0.0
     mock_record_1.autorouter_savings_spend = 0.0
+    mock_record_1.total_response_time_ms = 18_000
+    mock_record_1.timed_requests = 9
     mock_record_1.api_requests = 10
     mock_record_1.successful_requests = 9
     mock_record_1.failed_requests = 1
@@ -657,6 +752,8 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_2.prompt_caching_savings_spend = 0.0
     mock_record_2.gateway_injected_caching_savings_spend = 0.0
     mock_record_2.autorouter_savings_spend = 0.0
+    mock_record_2.total_response_time_ms = 2_500
+    mock_record_2.timed_requests = 5
     mock_record_2.api_requests = 5
     mock_record_2.successful_requests = 5
     mock_record_2.failed_requests = 0
@@ -689,6 +786,8 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     assert result.metadata.total_successful_requests == 14  # 9 + 5
     assert result.metadata.total_failed_requests == 1
     assert result.metadata.total_tokens == 1100  # (500+200) + (300+100)
+    assert result.metadata.total_response_time_ms == 20_500
+    assert result.metadata.total_timed_requests == 14
 
     # Verify breakdown still works
     assert len(result.results) == 1
@@ -697,6 +796,10 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     assert "staging" in daily.breakdown.entities
     assert daily.breakdown.entities["production"].metrics.spend == 25.0
     assert daily.breakdown.entities["staging"].metrics.spend == 5.0
+    assert daily.breakdown.models["gpt-4"].metrics.total_response_time_ms == 18_000
+    assert daily.breakdown.models["gpt-4"].metrics.timed_requests == 9
+    assert daily.breakdown.models["gpt-3.5-turbo"].metrics.total_response_time_ms == 2_500
+    assert daily.breakdown.models["gpt-3.5-turbo"].metrics.timed_requests == 5
 
 
 @pytest.mark.asyncio
@@ -721,6 +824,8 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
         "prompt_caching_savings_spend": 0.0,
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
+        "total_response_time_ms": 0,
+        "timed_requests": 0,
         "failed_requests": 0,
     }
     mock_rows = [
@@ -761,9 +866,11 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     mock_deleted_key.token = "deleted-key-hash"
     mock_deleted_key.key_alias = "toto-test-2"
     mock_deleted_key.team_id = "69cd4b77-b095-4489-8c46-4f2f31d840a2"
+    mock_deleted_key.user_id = "deleted-key-owner"
 
     mock_prisma.db.litellm_deletedverificationtoken = MagicMock()
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[mock_deleted_key])
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
 
     result = await get_daily_activity_aggregated(
         prisma_client=mock_prisma,
@@ -784,6 +891,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     key_data = chat_endpoint.api_key_breakdown["deleted-key-hash"]
     assert key_data.metadata.key_alias == "toto-test-2"
     assert key_data.metadata.team_id == "69cd4b77-b095-4489-8c46-4f2f31d840a2"
+    assert key_data.metadata.user_id == "deleted-key-owner"
     assert key_data.metrics.spend == 10.0
 
 
@@ -808,6 +916,8 @@ def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_gr
         prompt_caching_savings_spend=0.0,
         gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
+        total_response_time_ms=0,
+        timed_requests=0,
         api_requests=1,
         successful_requests=1,
         failed_requests=0,
@@ -1241,6 +1351,8 @@ async def test_get_daily_activity_aggregated_empty_result_set():
             "prompt_caching_savings_spend": None,
             "gateway_injected_caching_savings_spend": None,
             "autorouter_savings_spend": None,
+            "total_response_time_ms": None,
+            "timed_requests": None,
             "api_requests": None,
             "successful_requests": None,
             "failed_requests": None,
@@ -1286,6 +1398,8 @@ def _no_spend_record():
         prompt_caching_savings_spend=None,
         gateway_injected_caching_savings_spend=None,
         autorouter_savings_spend=None,
+        total_response_time_ms=None,
+        timed_requests=None,
         api_requests=None,
         successful_requests=None,
         failed_requests=None,
@@ -1373,6 +1487,55 @@ class TestEverySavingsDriverSurvivesTheReadPath:
             )
 
 
+class TestResponseTimeSurvivesTheReadPath:
+    """The dashboard averages total_response_time_ms over timed_requests, so both halves
+    of the pair must be summed by the rollup query, accumulated across rows, carried by
+    a single-row conversion, and coalesced when a NULL aggregate comes back."""
+
+    _FIELDS = ("total_response_time_ms", "timed_requests")
+
+    def test_both_halves_are_summed_by_the_rollup_query(self):
+        sql, _ = _build_aggregated_sql_query(
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id="user-1",
+            start_date="2026-09-01",
+            end_date="2026-09-30",
+            model=None,
+            api_key=None,
+            timezone_offset_minutes=None,
+        )
+        for field in self._FIELDS:
+            assert f"SUM({field})" in sql, f"{field} is never summed, so the average reads as zero"
+
+    def test_accumulating_rows_keeps_sum_and_count_paired(self):
+        first = _no_spend_record()
+        first.total_response_time_ms = 1500
+        first.timed_requests = 2
+        second = _no_spend_record()
+        second.total_response_time_ms = 500
+        second.timed_requests = 1
+        metrics = update_metrics(update_metrics(SpendMetrics(), first), second)
+        assert metrics.total_response_time_ms == 2000
+        assert metrics.timed_requests == 3
+
+    def test_single_row_conversion_carries_both_halves(self):
+        record = _no_spend_record()
+        record.total_response_time_ms = 1234
+        record.timed_requests = 4
+        metrics = _record_to_spend_metrics(record)
+        assert metrics.total_response_time_ms == 1234
+        assert metrics.timed_requests == 4
+
+    def test_null_aggregates_read_as_zero(self):
+        metrics = _record_to_spend_metrics(_no_spend_record())
+        assert metrics.total_response_time_ms == 0
+        assert metrics.timed_requests == 0
+        accumulated = update_metrics(SpendMetrics(), _no_spend_record())
+        assert accumulated.total_response_time_ms == 0
+        assert accumulated.timed_requests == 0
+
+
 @pytest.fixture
 def ptu_cost_attribution_enabled(monkeypatch):
     monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
@@ -1396,6 +1559,8 @@ def _spend_record(api_key, *, model="gpt-4o-mini-ptu", spend=0.0, ptu_flat_cost=
         prompt_caching_savings_spend=0,
         gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
+        total_response_time_ms=0,
+        timed_requests=0,
         total_tokens=0,
         api_requests=0,
         successful_requests=0,
@@ -1462,6 +1627,8 @@ def _grouping_row(
         prompt_caching_savings_spend=0.0,
         gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
+        total_response_time_ms=0,
+        timed_requests=0,
         api_requests=0,
         successful_requests=0,
         failed_requests=0,
@@ -1622,6 +1789,8 @@ def test_update_breakdown_metrics_covers_mcp_endpoint_and_entity(ptu_cost_attrib
         prompt_caching_savings_spend=0,
         gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
+        total_response_time_ms=0,
+        timed_requests=0,
         total_tokens=0,
         api_requests=0,
         successful_requests=0,
@@ -2026,6 +2195,8 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
         "prompt_caching_savings_spend": 0.0,
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
+        "total_response_time_ms": 0,
+        "timed_requests": 0,
         "failed_requests": 0,
         "prompt_tokens": 0,
         "completion_tokens": 0,
@@ -2105,3 +2276,48 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
     # Rollups with the entity bit set must still land in their usual buckets
     assert daily.breakdown.models["gpt-4o"].metrics.spend == 18.0
     assert daily.breakdown.api_keys["key-1"].metrics.spend == 12.0
+
+
+@pytest.mark.asyncio
+async def test_get_api_key_metadata_resolves_session_key_via_spend_log_window():
+    from litellm.proxy.utils import hash_token
+
+    session_digest = hash_token("cli-session-user-42")
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="user-42", user_email="user42@example.com")]
+    )
+
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    spend_log_query_raw = _spend_log_transaction(
+        mock_prisma, [_spend_log_row(session_digest, "cli-session-user-42", "user-42")]
+    )
+
+    result = await get_api_key_metadata(
+        prisma_client=mock_prisma,
+        api_keys={session_digest},
+        spend_logs_window=(datetime(2026, 9, 7), datetime(2026, 9, 10)),
+    )
+
+    assert result[session_digest]["key_alias"] == "cli-session-user-42"
+    assert result[session_digest]["user_id"] == "user-42"
+    assert result[session_digest]["user_email"] == "user42@example.com"
+    ((_, digests, start, end),) = [call.args for call in spend_log_query_raw.call_args_list]
+    assert digests == [session_digest]
+    assert (start, end) == (datetime(2026, 9, 7), datetime(2026, 9, 10))
+
+
+def test_spend_logs_window_pads_min_minus_one_day_and_max_plus_two_days():
+    from litellm.proxy.management_endpoints.common_daily_activity import _spend_logs_window
+
+    window = _spend_logs_window({"2026-09-08", "2026-09-05", "not-a-date"})
+
+    assert window == (datetime(2026, 9, 4), datetime(2026, 9, 10))
+
+
+def test_spend_logs_window_is_none_when_no_date_parses():
+    from litellm.proxy.management_endpoints.common_daily_activity import _spend_logs_window
+
+    assert _spend_logs_window({"garbage", ""}) is None
