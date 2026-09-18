@@ -1,16 +1,13 @@
 """The cost-calculation matrix: the model set derived from the test cost map,
 the request/response cases from ``cases.json``, and the loaders both use.
 
-Three data files drive the suite; nothing in Python lists models or cases:
+Two data files drive the suite; nothing in Python lists models or cases:
 - ``tests/e2e/cost_map.json`` is the proxy's ENTIRE model cost map
   (LITELLM_MODEL_COST_MAP_URL); every entry becomes a deployment under test.
-- ``tests/e2e/cost_calculation/cases.json`` is the case list; each case runs
-  for a model when the entry carries the rates it exercises (``requires_rates``)
-  and the wire can report the token kinds involved (``requires_caps`` /
-  ``wires``).
-- ``tests/e2e/cost_calculation/expected.json`` holds the reviewed goldens; the
-  tests assert them verbatim and never compute a price themselves. The rate
-  arithmetic that proposes goldens lives in ``generate_expected.py``, not here.
+- ``tests/e2e/cost_calculation/cases.json`` is the case list plus the reviewed
+  goldens: each exact-spend case carries an ``expected`` cell per map key it
+  runs against, each recount case carries its ``models`` list, so matrix
+  membership and expected values are literal data read side by side.
 """
 
 from __future__ import annotations
@@ -26,13 +23,11 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from scripted_provider import Scenario, ScriptedOutput, ScriptedToolCall, ScriptedUsage, Wire
 
 COST_MAP_PATH: Final = Path(__file__).resolve().parent.parent / "cost_map.json"
 CASES_PATH: Final = Path(__file__).resolve().parent / "cases.json"
-EXPECTED_PATH: Final = Path(__file__).resolve().parent / "expected.json"
-
 
 class SearchContextCostPerQuery(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -88,10 +83,20 @@ class DeploymentSpec(BaseModel):
     base_model: str | None = None
 
 
+class ExpectedCell(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    spend: float
+    input_cost: float
+    output_cost: float
+    prompt_tokens: int
+    completion_tokens: int
+
+
 class Case(BaseModel):
-    """One request/response shape from cases.json; gated onto a model by
-    ``requires_rates`` (entry must carry each rate field), ``requires_caps``
-    (the wire must report the token kind) and ``wires`` (shape is wire-specific)."""
+    """One request/response shape from cases.json. An exact-spend case names
+    its models implicitly by carrying one ``expected`` golden per map key; a
+    recount case (``exact_spend=False``) names them in ``models`` instead."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -105,19 +110,16 @@ class Case(BaseModel):
     tool_call: bool = False
     image_input: bool = False
     terminal: Literal["completed", "incomplete", "unvalidated", "prompt_blocked"] = "completed"
-    requires_rates: tuple[str, ...] = ()
-    requires_caps: tuple[str, ...] = ()
-    wires: tuple[Wire, ...] | None = None
+    expected: Mapping[str, ExpectedCell] = Field(default_factory=lambda: MappingProxyType({}))
+    models: tuple[str, ...] = ()
 
     def applies_to(self, model: FrontierModel) -> bool:
-        if self.wires is not None and model.wire not in self.wires:
-            return False
-        caps: Final = _WIRE_CAPS[model.wire]
-        if not frozenset(self.requires_caps) <= caps:
-            return False
-        return all(
-            getattr(model.rates, field, None) is not None for field in self.requires_rates
-        )
+        if self.exact_spend:
+            return model.map_key in self.expected
+        return model.map_key in self.models
+
+    def expected_for(self, model: FrontierModel) -> ExpectedCell:
+        return self.expected[model.map_key]
 
     def scenario(self, scenario_id: str, model: FrontierModel, text: str) -> Scenario:
         return Scenario(
@@ -309,64 +311,6 @@ def _frontier() -> tuple[FrontierModel, ...]:
 
 FRONTIER_MODELS: Final[tuple[FrontierModel, ...]] = _frontier()
 
-# Token kinds each wire can report, gating which pricing cases apply.
-_WIRE_CAPS: Final[Mapping[str, frozenset[str]]] = MappingProxyType({
-    "openai_chat": frozenset(
-        {
-            "cache_read", "cache_write_5m", "cache_write_1h", "reasoning", "audio",
-            "web_search", "response_model", "absent_usage", "tool_call", "image_input",
-        }
-    ),
-    "openai_responses": frozenset(
-        {
-            "cache_read", "reasoning", "web_search", "response_model", "absent_usage",
-            "tool_call", "image_input", "responses_terminal",
-        }
-    ),
-    "anthropic_messages": frozenset(
-        {
-            "cache_read", "cache_write_5m", "cache_write_1h", "web_search",
-            "response_model", "absent_usage", "tool_call", "image_input",
-        }
-    ),
-    "gemini_generate": frozenset(
-        {
-            "cache_read", "reasoning", "audio", "web_search", "response_model",
-            "absent_usage", "tool_call", "image_input", "prompt_blocked",
-        }
-    ),
-    "together_chat": frozenset(
-        {
-            "cache_read", "cache_write_5m", "cache_write_1h", "reasoning", "audio",
-            "web_search", "response_model", "absent_usage", "tool_call", "image_input",
-        }
-    ),
-    "fireworks_chat": frozenset(
-        {
-            "cache_read", "cache_write_5m", "cache_write_1h", "reasoning", "audio",
-            "web_search", "response_model", "absent_usage", "tool_call", "image_input",
-        }
-    ),
-    "azure_chat": frozenset(
-        {
-            "cache_read", "cache_write_5m", "cache_write_1h", "reasoning", "audio",
-            "web_search", "response_model", "absent_usage", "tool_call", "image_input",
-        }
-    ),
-    "bedrock_converse": frozenset(
-        {
-            "cache_read", "cache_write_5m", "cache_write_1h", "absent_usage",
-            "tool_call", "image_input",
-        }
-    ),
-    "vertex_generate": frozenset(
-        {
-            "cache_read", "reasoning", "audio", "web_search", "response_model",
-            "absent_usage", "tool_call", "image_input", "prompt_blocked",
-        }
-    ),
-})
-
 TOOL_CALL_ARGUMENTS: Final = json.dumps({
     "city": "Berlin",
     "days": 7,
@@ -415,64 +359,43 @@ def image_input_data_url() -> str:
 IMAGE_INPUT_DATA_URL: Final = image_input_data_url()
 
 
-class ExpectedCell(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    spend: float
-    input_cost: float
-    output_cost: float
-    prompt_tokens: int
-    completion_tokens: int
-
-
-_EXPECTED_ADAPTER: Final = TypeAdapter(dict[str, ExpectedCell])
-EXPECTED: Final[Mapping[str, ExpectedCell]] = MappingProxyType(
-    _EXPECTED_ADAPTER.validate_python(json.loads(EXPECTED_PATH.read_text()))
-    if EXPECTED_PATH.exists()
-    else {}
-)
-
-
-def expected_key(model: FrontierModel, case: Case) -> str:
-    return f"{model.map_key}|{case.name}"
-
-
 def matrix_data_errors() -> tuple[str, ...]:
-    """Freshness findings for the data files, as human-readable strings.
+    """Consistency findings for the data files, as human-readable strings.
 
-    Called at collection time by the e2e suite; also usable from
-    generate_expected.py's context without importing pytest.
+    Called at collection time by the e2e suite, so a map key named by a case
+    but absent from cost_map.json fails the suite's collection loudly.
     """
-    derived: Final = {
-        expected_key(model, case)
-        for model in FRONTIER_MODELS
-        for case in cases_for(model)
-        if case.exact_spend
-    }
-    golden: Final = set(EXPECTED)
     unknown_deployments: Final = sorted(
         spec.map_key for spec in CASES_FILE.deployments if spec.map_key not in COST_MAP
     )
-    unknown_rates: Final = sorted(
-        {field for case in CASES for field in case.requires_rates} - set(CostMapEntry.model_fields)
+    unknown_case_models: Final = sorted(
+        {
+            map_key
+            for case in CASES
+            for map_key in (*case.expected, *case.models)
+            if map_key not in COST_MAP
+        }
+    )
+    misshapen_cases: Final = sorted(
+        case.name
+        for case in CASES
+        if case.exact_spend == bool(case.models) or case.exact_spend != bool(case.expected)
     )
     input_rates: Final = tuple(entry.input_cost_per_token for entry in COST_MAP.values())
     findings: Final = (
-        (
-            "expected.json is out of sync with the derived matrix; run "
-            "uv run python tests/e2e/cost_calculation/generate_expected.py "
-            f"(missing: {sorted(derived - golden)}; stale: {sorted(golden - derived)})"
-        )
-        if derived != golden
-        else None,
         (
             f"deployments entries name map keys absent from cost_map.json: {unknown_deployments}"
             if unknown_deployments
             else None
         ),
         (
-            f"requires_rates names that are not CostMapEntry fields: {unknown_rates}"
-            if unknown_rates
+            f"case expected/models name map keys absent from cost_map.json: {unknown_case_models}"
+            if unknown_case_models
+            else None
+        ),
+        (
+            f"cases must carry expected xor models (exact_spend matches the field): {misshapen_cases}"
+            if misshapen_cases
             else None
         ),
         (
