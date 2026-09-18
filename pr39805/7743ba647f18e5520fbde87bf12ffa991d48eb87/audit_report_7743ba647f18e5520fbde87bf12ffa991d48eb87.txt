@@ -1,0 +1,773 @@
+MCP scope audit
+
+Verdict: BLOCKED BY HUMAN
+The dashboard scope fix and real machine-to-machine authentication work at the audited head. This is not a complete passing audit. Restricted full-admin submissions now remove additional fields and need explicit maintainer acceptance. No such approval is recorded. Cold authorization, health reporting and the first dashboard attempt have failed cells. CI is not green, and the unrun inventory below remains unverified
+
+Target: https://github.com/BerriAI/litellm/pull/39805
+Ticket: LIT-6978
+PR base: main
+Date: 2026-09-18 UTC
+Before: 0594dd7caf9dca8e4236c399c3a07736f74cd8a2
+After: 7743ba647f18e5520fbde87bf12ffa991d48eb87
+Primary run: audit-7743ba647f18e5520fbde87bf12ffa991d48eb87
+
+Rig and evidence boundaries
+
+Two isolated PostgreSQL 16.2 databases, four Uvicorn workers per proxy, store_model_in_db enabled, no Redis, ports 16410 and 16411. Environment credentials were loaded privately. No detailed_debug, mock responses, patched product dependencies, fake tokens, or recorded upstream fixtures were used
+
+The MCP destination is a local service built with the official MCP Python SDK. It validates real Entra JWT signatures, issuer, audience and expiry, then calls the real Azure Resource Manager subscriptions endpoint. It is not a vendor-operated MCP deployment. Forwarding recorders captured Entra token, MCP and ARM request/response boundaries. JWKS fetches were real but did not have their own recorder. No LLM inference was applicable to this administrative-response change
+
+Four serving workers were proved through established client sockets, not parent/listener counts. Initial base workers: 11672, 11673, 11675, 11677. Initial head workers: 11671, 11674, 11676, 11678. New four-worker serving sets were recorded after worker replacement and proxy restart
+
+Primary recorder windows were frozen before the merge-candidate run. File names, exclusive line bounds and SHA-256 hashes are in wire-windows.json. The recorder symlinks continue receiving later traffic, so those links alone must not be treated as an immutable primary capture
+
+Dependency walk and implemented corrections
+
+Administrative redactor -> create/detail/update/submissions response DTOs -> dashboard settings and request echoes
+Registry table projection -> server list -> selected dashboard card -> Settings -> save/reopen
+Scopes-only payload -> stored-identity inheritance -> preview/OAuth session -> authorization redirect or real client-credentials token grant
+Role classification -> submissions redaction -> non-admin sanitizer first, restricted-full-admin sanitizer second
+Public listing, user environment DTOs and review lifecycle are sibling readers exercised separately
+The generic legacy OTel management-response consumer is inventoried but not exercised
+
+The final diff changes two product files and their two mapped test files. The manager adds only a scopes projection. The administrative redactor accepts a nonempty list of nonempty strings, preserves the existing non-secret resource/header settings and drops identity/tokens. A scopes-only echo no longer prevents stored-identity inheritance. Returned response objects are copied rather than overwriting the stored credentials
+
+Restricted-admin submissions sanitization was added in 67e770087029e6e80170b53d5283a1bdc04fddc3. That intermediate ordering selected a weaker sanitizer for restricted viewers. The populated spec_path unit regression failed in both restricted variants, then passed after 7743ba647f18e5520fbde87bf12ffa991d48eb87 restored non-admin precedence. No populated-spec_path live fixture was run
+
+Named behavior changes
+
+1. Full administrators receive credentials.scopes in administrative reads where base returned null
+2. The list-backed Settings form shows the saved scope, while client ID and client secret remain blank
+3. A scopes-only session/preview echo inherits stored identity; supplied scope configuration wins when merged
+4. Route-restricted full-admin submissions retain status 200, review counts and JSON keys but change url, static_headers, env_vars, token_url, mcp_info, created_at, created_by, updated_at and updated_by to null in the observed row. Credentials remain null and env remains empty in this fixture
+5. Non-full-admin callers still take the stricter sanitizer, including spec_path removal, before the restricted-key branch
+
+Item 4 remains a FAIL_APPROVAL_REQUIRED compatibility row, not an undocumented passing difference. The security projection is retained; a maintainer must accept the additional field removals before shipping. No approval owner or approval link exists yet
+
+Observed primary results
+
+146 paired API cases: 96 whole-observable matches, 43 differences confined to the named scope/config projection, and 7 REVIEW rows retained for explicit adjudication below. MATCH describes observed parity, not proof that shared behavior is correct
+
+Both administrative create calls returned 201. Detail/list returned 200. Preview, runtime list/call and OAuth session creation returned 200. Save returned 202. Both runtime tool calls returned isError:false and exactly one recorded real ARM 200. The tool's subscription_count agreed with the ARM result, rather than asserting an account-specific count. Scopes-only updates preserved stored identity fingerprints and did not leave the real secret in plaintext
+
+Missing/null/empty scopes were accepted. Empty string, integer and mixed-type list returned 422. Empty-member, duplicate and 5 KB scope lists were accepted and read back. Every unauthenticated create variant returned 401. Accepted edge objects were deleted. credentials:null update returned 202
+
+Role reads used full admin, view-only admin, ordinary team user and a restricted key for each role. Restricted live keys used llm_api_routes. Both llm_api_routes and mcp_routes variants are covered by mapped tests, not both live. Ordinary/restricted-ordinary submissions returned 403; full/restricted admin and viewer submissions returned 200 with the role-specific projection. Approve/reject succeeded once, repeated transitions returned 400, unknown IDs returned 404, and later reapproval succeeded. Role fixtures were cleaned up
+
+Dashboard evidence and rerun history
+
+The first primary dashboard attempt is retained in ui-1789761838. Base completed; head showed Failed to fetch MCP tools and timed out selecting a tool. Both proxy logs have tools-list 403s during that attempt. Its failed JSON response body and worker were not captured, so the cause remains unresolved
+
+Unchanged authorization source depends on each worker's registry even for an admin or allow_all_keys server. Missing local registry entries can lead to access_denied. This supports registry lag as a hypothesis, not an observed root cause; generic permission-cache propagation was not established
+
+Both complete dashboard flows were repeated without a code change in ui-1789761990. Login, list selection, Settings, save 202, reopen and real MCP Tools call 200 all passed. Base scopes stayed blank; head showed https://management.azure.com/.default. Stored identity fingerprints remained unchanged. Only scopes in the save request and response differ after normalization
+
+Four full-page screenshots and an annotated ten-step WebP are published beside this report. Account/license material is masked. The animation is assembled from inspected step screenshots, not a continuous unedited recording. Private Playwright WebM recordings were not published because they may contain account/license information. No vendor portal screenshot or public full-flow continuous recording is supplied
+
+Seven comparison decisions
+
+echo-preview: PASS_VENDOR_VARIATION
+The recorded Entra response differs in a CSP nonce and x-ms-ests-server region. The remaining normalized client request, response, and forwarded request compare equal except for the named scopes echo. These are upstream response headers, not altered proxy request headers
+
+runtime-call: PASS_VENDOR_VARIATION
+The ARM response x-msedge-ref differs. Both calls produce one real ARM 200 and equal normalized tool results and outbound requests. The trace header was not silently discarded from the raw diff
+
+interactive-authorize-0: FAIL_PREEXISTING
+Base 400 missing_client_id; head 307. Across eight cold requests base has six 400s and head five. The same failure occurs on both exact SHAs. After same-worker detail warming, all 32 requests per side redirect 307 with the stored identity and expected scope across four actual workers. This is not proof of cold-worker safety or interactive token exchange
+
+interactive-authorize-2: FAIL_PREEXISTING
+Base 400 missing_client_id; head 307. Adjudicated together with the complete cold and warm session records, not as an improvement attributed to this PR
+
+interactive-authorize-3: FAIL_PREEXISTING
+Base 307; head 400 missing_client_id. Both sides exhibit the same cold-worker failure class; warm same-worker redirects pass. This row remains a failed cold-session contract, not a passing caveat
+
+role-R-A-submissions: FAIL_APPROVAL_REQUIRED
+Both return HTTP 200 and unchanged review counts. Head changes url, env_vars, static_headers, token_url, mcp_info, created_at, created_by, updated_at and updated_by to null. The JSON keys remain present. Credentials stay null and env stays empty in this baseline/head fixture. Non-admin sanitization still has precedence, including spec_path clearing
+
+public-hub: FAIL_PREEXISTING_IMMEDIATE_CONSISTENCY
+The initial base response contains the server and head is empty. A retained-socket follow-up proves one writer worker initially sees the published server and three other workers do not, on both SHAs. All four workers converge after 21.959 seconds on base and 21.627 seconds on head. This proves eventual convergence in this run, not immediate consistency or a maximum propagation bound
+
+Cold authorization is not signed off: base returned missing_client_id 400 on 6/8 requests, head on 5/8. In the separate same-worker warmed run, both sides returned 307 on 32/32 requests, used stored identity and the expected scope, and covered all four serving workers. Warming does not prove cross-worker session sharing, TTL expiry, human consent or token exchange
+
+The retained-socket public-hub follow-up initially showed only the writer worker's entry on both sides. All four converged in 21.959 seconds on base and 21.627 seconds on head. The initial inconsistent result remains a failed immediate-consistency contract, not a scope regression. These timings are observations, not maximum propagation guarantees
+
+Chaos at the exact primary SHAs
+
+All calls used POST /mcp-rest/tools/call with list_subscription_count and a unique arguments.audit_request_id. The local MCP service forwards that UUID as ARM x-ms-client-request-id, allowing destination correlation for successful and failed client responses. The batch captures use nonoverlapping before/after recorder windows, not overlapping per-call slices
+
+Phase | Base successful clients | Head successful clients | ARM calls per side | Result
+Healthy recovery | 20/20 | 20/20 | 20 | PASS
+Destination SIGTERM midburst | 0/20 | 4/20 | 20 | Response loss on both sides
+Destination recovery | 20/20 | 20/20 | 20 | PASS
+Destination SIGSTOP then SIGCONT | 20/20 | 20/20 | 20 | PASS
+Worker SIGKILL midburst | 15/20 | 16/20 | 20 | Response loss on both sides
+Worker replacement recovery | 20/20 | 20/20 | 20 | PASS
+Proxy SIGTERM midburst | 20/20 | 20/20 | 20 | PASS for this graceful stop timing
+Proxy restart recovery | 20/20 | 20/20 | 20 | PASS
+
+All 320 correlated requests reached ARM once, with no duplicate UUIDs. The destination-outage failures were HTTP 200 carrying isError:true and RemoteProtocolError text. Worker-loss failures were client disconnects. Every successful response had exactly one ARM event. All 20 requests had already reached ARM in each destination-outage burst; this does not cover a burst begun after the destination is fully unavailable. Victim-worker routing was not controlled, so 15 versus 16 successful responses is not an improvement or regression claim
+
+Health is a failed contract on both sides: GET /v1/mcp/server/health?server_ids=<id> returned HTTP 200 and status unknown during destination outage and after recovery, rather than reporting unhealthy. The harness did not fail its exit code on this response; audit grading does
+
+Exact primary scripts/entrypoints executed
+
+Working directory: the owned head worktree; Python: head/.venv/bin/python
+The initial runner invoked final_rig.py followed by final_suite.py. final_suite executed startup(base/head), pinned_matrix.normal(), pinned_matrix.edges(), then ui_v3.main() and stopped on the first UI assertion
+The recorded continuation invoked startup(base/head), ui_v3.main(), sessions_v3_batched.main(), roles_v3.main(), explicit role projection assertions, public_workers_v3.main(), and chaos_resume_v3.main() sequentially. It completed with FINAL_SUITE_COMPLETE
+All API rows below were produced by pinned_matrix.call using httpx.AsyncClient; method and exact path are recorded per side. The original request/query bodies, response bodies/headers, wire requests/responses and timings remain in private cells.jsonl. Those raw files contain sensitive operational context and are not published
+Warm sessions: python sessions_v3_batched.py
+Public worker probe: python public_workers_v3.py
+Chaos: python chaos_resume_v3.py
+UI: python ui_v3.py using a privately launched Playwright Chromium, not a shared browser session
+
+These scripts resolve active-run.txt, so do not execute them blindly against the later merge run. Recreate the two pinned trees/configurations first. No credentials are embedded in this report
+
+Manual reproduction supporting the screenshots
+
+Set BASE to the relevant local proxy URL, AUTH to a real authorized key, and SID to the created MCP server ID. Configure a real OAuth MCP destination and valid provider credentials privately
+curl -sS "$BASE/v1/mcp/server/$SID" -H "Authorization: Bearer $AUTH"
+curl -sS "$BASE/v1/mcp/server" -H "Authorization: Bearer $AUTH"
+curl -sS -X PUT "$BASE/v1/mcp/server" -H "Authorization: Bearer $AUTH" -H 'Content-Type: application/json' --data "{\"server_id\":\"$SID\",\"credentials\":{\"scopes\":[\"https://management.azure.com/.default\"]}}"
+curl -sS "$BASE/mcp-rest/tools/list?server_id=$SID" -H "Authorization: Bearer $AUTH"
+curl -sS -X POST "$BASE/mcp-rest/tools/call" -H "Authorization: Bearer $AUTH" -H 'Content-Type: application/json' --data "{\"server_id\":\"$SID\",\"name\":\"list_subscription_count\",\"arguments\":{}}"
+These are wire-equivalent reproduction commands, not a claim that the recorded httpx requests were run through curl
+
+API matrix
+
+Each row gives case/occurrence, actual method and route, base/head HTTP statuses, token/MCP/ARM event counts and whole-observable grade. Authentication roles are encoded in the case name above. All rows use the exact primary Before/After hashes, not the merge candidate
+
+create [0] | PASS_NAMED_CHANGE
+  base: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+
+detail-0 [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651 | HTTP 200 | token/MCP/ARM 0/0/0
+
+list-0 [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+
+detail-1 [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651 | HTTP 200 | token/MCP/ARM 0/0/0
+
+list-1 [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+
+detail-2 [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651 | HTTP 200 | token/MCP/ARM 0/0/0
+
+list-2 [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+
+detail-3 [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651 | HTTP 200 | token/MCP/ARM 0/0/0
+
+list-3 [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+
+detail-4 [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651 | HTTP 200 | token/MCP/ARM 0/0/0
+
+list-4 [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+
+detail-5 [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651 | HTTP 200 | token/MCP/ARM 0/0/0
+
+list-5 [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+
+detail-6 [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651 | HTTP 200 | token/MCP/ARM 0/0/0
+
+list-6 [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+
+detail-7 [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651 | HTTP 200 | token/MCP/ARM 0/0/0
+
+list-7 [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+
+echo-preview [0] | PASS_VENDOR_VARIATION
+  base: POST /mcp-rest/test/tools/list | HTTP 200 | token/MCP/ARM 1/3/0
+  head: POST /mcp-rest/test/tools/list | HTTP 200 | token/MCP/ARM 1/3/0
+
+runtime-list [0] | PASS_PARITY
+  base: GET /mcp-rest/tools/list?server_id=d6a74252-f054-4c9d-93c8-4db30cf063c0 | HTTP 200 | token/MCP/ARM 0/3/0
+  head: GET /mcp-rest/tools/list?server_id=73d38884-2892-4116-af47-150a5f4bb651 | HTTP 200 | token/MCP/ARM 0/3/0
+
+runtime-call [0] | PASS_VENDOR_VARIATION
+  base: POST /mcp-rest/tools/call | HTTP 200 | token/MCP/ARM 0/4/1
+  head: POST /mcp-rest/tools/call | HTTP 200 | token/MCP/ARM 0/4/1
+
+echo-session [0] | PASS_NAMED_CHANGE
+  base: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+
+post-session-preview [0] | PASS_NAMED_CHANGE
+  base: POST /mcp-rest/test/tools/list | HTTP 200 | token/MCP/ARM 0/3/0
+  head: POST /mcp-rest/test/tools/list | HTTP 200 | token/MCP/ARM 0/3/0
+
+put-scopes-only [0] | PASS_NAMED_CHANGE
+  base: PUT /v1/mcp/server | HTTP 202 | token/MCP/ARM 0/0/0
+  head: PUT /v1/mcp/server | HTTP 202 | token/MCP/ARM 0/0/0
+
+interactive-create [0] | PASS_NAMED_CHANGE
+  base: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+
+interactive-session-0 [0] | PASS_NAMED_CHANGE
+  base: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+
+interactive-authorize-0 [0] | FAIL_PREEXISTING
+  base: GET /v1/mcp/server/oauth/c47d790c-dfcf-46ff-b891-04d8704261f4/authorize | HTTP 400 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/oauth/a57d73d9-b2c1-400a-866a-6e545f253b66/authorize | HTTP 307 | token/MCP/ARM 0/0/0
+
+interactive-session-1 [0] | PASS_NAMED_CHANGE
+  base: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+
+interactive-authorize-1 [0] | PASS_PARITY
+  base: GET /v1/mcp/server/oauth/c47d790c-dfcf-46ff-b891-04d8704261f4/authorize | HTTP 307 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/oauth/a57d73d9-b2c1-400a-866a-6e545f253b66/authorize | HTTP 307 | token/MCP/ARM 0/0/0
+
+interactive-session-2 [0] | PASS_NAMED_CHANGE
+  base: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+
+interactive-authorize-2 [0] | FAIL_PREEXISTING
+  base: GET /v1/mcp/server/oauth/c47d790c-dfcf-46ff-b891-04d8704261f4/authorize | HTTP 400 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/oauth/a57d73d9-b2c1-400a-866a-6e545f253b66/authorize | HTTP 307 | token/MCP/ARM 0/0/0
+
+interactive-session-3 [0] | PASS_NAMED_CHANGE
+  base: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+
+interactive-authorize-3 [0] | FAIL_PREEXISTING
+  base: GET /v1/mcp/server/oauth/c47d790c-dfcf-46ff-b891-04d8704261f4/authorize | HTTP 307 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/oauth/a57d73d9-b2c1-400a-866a-6e545f253b66/authorize | HTTP 400 | token/MCP/ARM 0/0/0
+
+interactive-session-4 [0] | PASS_NAMED_CHANGE
+  base: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+
+interactive-authorize-4 [0] | FAIL_PREEXISTING
+  base: GET /v1/mcp/server/oauth/c47d790c-dfcf-46ff-b891-04d8704261f4/authorize | HTTP 400 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/oauth/a57d73d9-b2c1-400a-866a-6e545f253b66/authorize | HTTP 400 | token/MCP/ARM 0/0/0
+
+interactive-session-5 [0] | PASS_NAMED_CHANGE
+  base: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+
+interactive-authorize-5 [0] | FAIL_PREEXISTING
+  base: GET /v1/mcp/server/oauth/c47d790c-dfcf-46ff-b891-04d8704261f4/authorize | HTTP 400 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/oauth/a57d73d9-b2c1-400a-866a-6e545f253b66/authorize | HTTP 400 | token/MCP/ARM 0/0/0
+
+interactive-session-6 [0] | PASS_NAMED_CHANGE
+  base: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+
+interactive-authorize-6 [0] | FAIL_PREEXISTING
+  base: GET /v1/mcp/server/oauth/c47d790c-dfcf-46ff-b891-04d8704261f4/authorize | HTTP 400 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/oauth/a57d73d9-b2c1-400a-866a-6e545f253b66/authorize | HTTP 400 | token/MCP/ARM 0/0/0
+
+interactive-session-7 [0] | PASS_NAMED_CHANGE
+  base: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server/oauth/session | HTTP 200 | token/MCP/ARM 0/0/0
+
+interactive-authorize-7 [0] | FAIL_PREEXISTING
+  base: GET /v1/mcp/server/oauth/c47d790c-dfcf-46ff-b891-04d8704261f4/authorize | HTTP 400 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/oauth/a57d73d9-b2c1-400a-866a-6e545f253b66/authorize | HTTP 400 | token/MCP/ARM 0/0/0
+
+edge-missing-auth-True [0] | PASS_PARITY
+  base: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+
+edge-missing-read [0] | PASS_PARITY
+  base: GET /v1/mcp/server/8c0b3ee4-a5ac-4f63-a1fe-c90d7c76299e | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/20ed7ccf-8a8a-4f68-834c-1a8a79e8b41b | HTTP 200 | token/MCP/ARM 0/0/0
+
+edge-missing-delete [0] | PASS_PARITY
+  base: DELETE /v1/mcp/server/8c0b3ee4-a5ac-4f63-a1fe-c90d7c76299e | HTTP 202 | token/MCP/ARM 0/0/0
+  head: DELETE /v1/mcp/server/20ed7ccf-8a8a-4f68-834c-1a8a79e8b41b | HTTP 202 | token/MCP/ARM 0/0/0
+
+edge-missing-auth-False [0] | PASS_PARITY
+  base: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+
+edge-null-auth-True [0] | PASS_PARITY
+  base: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+
+edge-null-read [0] | PASS_PARITY
+  base: GET /v1/mcp/server/5aeabeca-2f6d-40bd-a5e7-63e49a90f56e | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/d3bcf74a-0833-449f-b2ac-39ce19a0b4c9 | HTTP 200 | token/MCP/ARM 0/0/0
+
+edge-null-delete [0] | PASS_PARITY
+  base: DELETE /v1/mcp/server/5aeabeca-2f6d-40bd-a5e7-63e49a90f56e | HTTP 202 | token/MCP/ARM 0/0/0
+  head: DELETE /v1/mcp/server/d3bcf74a-0833-449f-b2ac-39ce19a0b4c9 | HTTP 202 | token/MCP/ARM 0/0/0
+
+edge-null-auth-False [0] | PASS_PARITY
+  base: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+
+edge-empty-auth-True [0] | PASS_PARITY
+  base: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+
+edge-empty-read [0] | PASS_PARITY
+  base: GET /v1/mcp/server/78c7c3ca-5ab3-43ad-922f-3f1eae72078f | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/ed6cdb77-66e5-4455-b54a-530ac7a87713 | HTTP 200 | token/MCP/ARM 0/0/0
+
+edge-empty-delete [0] | PASS_PARITY
+  base: DELETE /v1/mcp/server/78c7c3ca-5ab3-43ad-922f-3f1eae72078f | HTTP 202 | token/MCP/ARM 0/0/0
+  head: DELETE /v1/mcp/server/ed6cdb77-66e5-4455-b54a-530ac7a87713 | HTTP 202 | token/MCP/ARM 0/0/0
+
+edge-empty-auth-False [0] | PASS_PARITY
+  base: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+
+edge-string-auth-True [0] | PASS_PARITY
+  base: POST /v1/mcp/server | HTTP 422 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 422 | token/MCP/ARM 0/0/0
+
+edge-string-auth-False [0] | PASS_PARITY
+  base: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+
+edge-integer-auth-True [0] | PASS_PARITY
+  base: POST /v1/mcp/server | HTTP 422 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 422 | token/MCP/ARM 0/0/0
+
+edge-integer-auth-False [0] | PASS_PARITY
+  base: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+
+edge-mixed-auth-True [0] | PASS_PARITY
+  base: POST /v1/mcp/server | HTTP 422 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 422 | token/MCP/ARM 0/0/0
+
+edge-mixed-auth-False [0] | PASS_PARITY
+  base: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+
+edge-empty-member-auth-True [0] | PASS_PARITY
+  base: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+
+edge-empty-member-read [0] | PASS_PARITY
+  base: GET /v1/mcp/server/e4ebc5f0-8efd-449e-82ca-57790c851394 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/c4ef2abe-6b57-4456-bf7c-c3574164e43a | HTTP 200 | token/MCP/ARM 0/0/0
+
+edge-empty-member-delete [0] | PASS_PARITY
+  base: DELETE /v1/mcp/server/e4ebc5f0-8efd-449e-82ca-57790c851394 | HTTP 202 | token/MCP/ARM 0/0/0
+  head: DELETE /v1/mcp/server/c4ef2abe-6b57-4456-bf7c-c3574164e43a | HTTP 202 | token/MCP/ARM 0/0/0
+
+edge-empty-member-auth-False [0] | PASS_PARITY
+  base: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+
+edge-duplicate-auth-True [0] | PASS_NAMED_CHANGE
+  base: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+
+edge-duplicate-read [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server/64d80f6f-226e-4283-987c-774275746ec5 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/94024318-6fb8-43ea-9e7e-e94ec92bc35d | HTTP 200 | token/MCP/ARM 0/0/0
+
+edge-duplicate-delete [0] | PASS_PARITY
+  base: DELETE /v1/mcp/server/64d80f6f-226e-4283-987c-774275746ec5 | HTTP 202 | token/MCP/ARM 0/0/0
+  head: DELETE /v1/mcp/server/94024318-6fb8-43ea-9e7e-e94ec92bc35d | HTTP 202 | token/MCP/ARM 0/0/0
+
+edge-duplicate-auth-False [0] | PASS_PARITY
+  base: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+
+edge-large-auth-True [0] | PASS_NAMED_CHANGE
+  base: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+
+edge-large-read [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server/536f1eaf-7b0f-4d9b-9354-c931a8a4ecd8 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/2938e766-7778-4f78-bec2-e1c4d357c16f | HTTP 200 | token/MCP/ARM 0/0/0
+
+edge-large-delete [0] | PASS_PARITY
+  base: DELETE /v1/mcp/server/536f1eaf-7b0f-4d9b-9354-c931a8a4ecd8 | HTTP 202 | token/MCP/ARM 0/0/0
+  head: DELETE /v1/mcp/server/2938e766-7778-4f78-bec2-e1c4d357c16f | HTTP 202 | token/MCP/ARM 0/0/0
+
+edge-large-auth-False [0] | PASS_PARITY
+  base: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 401 | token/MCP/ARM 0/0/0
+
+null-clear-create [0] | PASS_NAMED_CHANGE
+  base: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server | HTTP 201 | token/MCP/ARM 0/0/0
+
+credentials-null-put [0] | PASS_PARITY
+  base: PUT /v1/mcp/server | HTTP 202 | token/MCP/ARM 0/0/0
+  head: PUT /v1/mcp/server | HTTP 202 | token/MCP/ARM 0/0/0
+
+null-clear-delete [0] | PASS_PARITY
+  base: DELETE /v1/mcp/server/53db5580-3945-43e6-b494-accd832e0e50 | HTTP 202 | token/MCP/ARM 0/0/0
+  head: DELETE /v1/mcp/server/27786597-0a7a-402f-8210-418089c4787d | HTTP 202 | token/MCP/ARM 0/0/0
+
+role-create-admin [0] | PASS_PARITY
+  base: POST /user/new | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /user/new | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-create-viewer [0] | PASS_PARITY
+  base: POST /user/new | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /user/new | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-create-user [0] | PASS_PARITY
+  base: POST /user/new | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /user/new | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-create-team [0] | PASS_PARITY
+  base: POST /team/new | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /team/new | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-key-A [0] | PASS_PARITY
+  base: POST /key/generate | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /key/generate | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-key-info-A [0] | PASS_PARITY
+  base: GET /key/info | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /key/info | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-key-V [0] | PASS_PARITY
+  base: POST /key/generate | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /key/generate | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-key-info-V [0] | PASS_PARITY
+  base: GET /key/info | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /key/info | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-key-U [0] | PASS_PARITY
+  base: POST /key/generate | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /key/generate | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-key-info-U [0] | PASS_PARITY
+  base: GET /key/info | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /key/info | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-key-R-U [0] | PASS_PARITY
+  base: POST /key/generate | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /key/generate | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-key-info-R-U [0] | PASS_PARITY
+  base: GET /key/info | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /key/info | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-key-R-A [0] | PASS_PARITY
+  base: POST /key/generate | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /key/generate | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-key-info-R-A [0] | PASS_PARITY
+  base: GET /key/info | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /key/info | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-key-R-V [0] | PASS_PARITY
+  base: POST /key/generate | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /key/generate | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-key-info-R-V [0] | PASS_PARITY
+  base: GET /key/info | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /key/info | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-register [0] | PASS_NAMED_CHANGE
+  base: POST /v1/mcp/server/register | HTTP 201 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/server/register | HTTP 201 | token/MCP/ARM 0/0/0
+
+role-A-list [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-A-connected [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server?connected_app_view=true | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server?connected_app_view=true | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-A-team [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server?team_id=f7b813c8-5a87-40ca-affe-ac52274c6914 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server?team_id=07dd8e44-b815-425c-810c-d1323c29d50e | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-A-detail [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651 | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-A-submissions [0] | PASS_NAMED_CHANGE
+  base: GET /v1/mcp/server/submissions | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/submissions | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-A-env [0] | PASS_PARITY
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0/user-env-vars | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651/user-env-vars | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-A-env-status [0] | PASS_PARITY
+  base: GET /v1/mcp/user-env-vars/status | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/user-env-vars/status | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-V-list [0] | PASS_PARITY
+  base: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-V-connected [0] | PASS_PARITY
+  base: GET /v1/mcp/server?connected_app_view=true | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server?connected_app_view=true | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-V-team [0] | PASS_PARITY
+  base: GET /v1/mcp/server?team_id=f7b813c8-5a87-40ca-affe-ac52274c6914 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server?team_id=07dd8e44-b815-425c-810c-d1323c29d50e | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-V-detail [0] | PASS_PARITY
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651 | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-V-submissions [0] | PASS_PARITY
+  base: GET /v1/mcp/server/submissions | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/submissions | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-V-env [0] | PASS_PARITY
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0/user-env-vars | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651/user-env-vars | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-V-env-status [0] | PASS_PARITY
+  base: GET /v1/mcp/user-env-vars/status | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/user-env-vars/status | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-U-list [0] | PASS_PARITY
+  base: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-U-connected [0] | PASS_PARITY
+  base: GET /v1/mcp/server?connected_app_view=true | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server?connected_app_view=true | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-U-team [0] | PASS_PARITY
+  base: GET /v1/mcp/server?team_id=f7b813c8-5a87-40ca-affe-ac52274c6914 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server?team_id=07dd8e44-b815-425c-810c-d1323c29d50e | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-U-detail [0] | PASS_PARITY
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651 | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-U-submissions [0] | PASS_PARITY
+  base: GET /v1/mcp/server/submissions | HTTP 403 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/submissions | HTTP 403 | token/MCP/ARM 0/0/0
+
+role-U-env [0] | PASS_PARITY
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0/user-env-vars | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651/user-env-vars | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-U-env-status [0] | PASS_PARITY
+  base: GET /v1/mcp/user-env-vars/status | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/user-env-vars/status | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-R-U-list [0] | PASS_PARITY
+  base: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-R-U-connected [0] | PASS_PARITY
+  base: GET /v1/mcp/server?connected_app_view=true | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server?connected_app_view=true | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-R-U-team [0] | PASS_PARITY
+  base: GET /v1/mcp/server?team_id=f7b813c8-5a87-40ca-affe-ac52274c6914 | HTTP 403 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server?team_id=07dd8e44-b815-425c-810c-d1323c29d50e | HTTP 403 | token/MCP/ARM 0/0/0
+
+role-R-U-detail [0] | PASS_PARITY
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651 | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-R-U-submissions [0] | PASS_PARITY
+  base: GET /v1/mcp/server/submissions | HTTP 403 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/submissions | HTTP 403 | token/MCP/ARM 0/0/0
+
+role-R-U-env [0] | PASS_PARITY
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0/user-env-vars | HTTP 403 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651/user-env-vars | HTTP 403 | token/MCP/ARM 0/0/0
+
+role-R-U-env-status [0] | PASS_PARITY
+  base: GET /v1/mcp/user-env-vars/status | HTTP 403 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/user-env-vars/status | HTTP 403 | token/MCP/ARM 0/0/0
+
+role-R-A-list [0] | PASS_PARITY
+  base: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-R-A-connected [0] | PASS_PARITY
+  base: GET /v1/mcp/server?connected_app_view=true | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server?connected_app_view=true | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-R-A-team [0] | PASS_PARITY
+  base: GET /v1/mcp/server?team_id=f7b813c8-5a87-40ca-affe-ac52274c6914 | HTTP 403 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server?team_id=07dd8e44-b815-425c-810c-d1323c29d50e | HTTP 403 | token/MCP/ARM 0/0/0
+
+role-R-A-detail [0] | PASS_PARITY
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651 | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-R-A-submissions [0] | FAIL_APPROVAL_REQUIRED
+  base: GET /v1/mcp/server/submissions | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/submissions | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-R-A-env [0] | PASS_PARITY
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0/user-env-vars | HTTP 403 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651/user-env-vars | HTTP 403 | token/MCP/ARM 0/0/0
+
+role-R-A-env-status [0] | PASS_PARITY
+  base: GET /v1/mcp/user-env-vars/status | HTTP 403 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/user-env-vars/status | HTTP 403 | token/MCP/ARM 0/0/0
+
+role-R-V-list [0] | PASS_PARITY
+  base: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-R-V-connected [0] | PASS_PARITY
+  base: GET /v1/mcp/server?connected_app_view=true | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server?connected_app_view=true | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-R-V-team [0] | PASS_PARITY
+  base: GET /v1/mcp/server?team_id=f7b813c8-5a87-40ca-affe-ac52274c6914 | HTTP 403 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server?team_id=07dd8e44-b815-425c-810c-d1323c29d50e | HTTP 403 | token/MCP/ARM 0/0/0
+
+role-R-V-detail [0] | PASS_PARITY
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0 | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651 | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-R-V-submissions [0] | PASS_PARITY
+  base: GET /v1/mcp/server/submissions | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/submissions | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-R-V-env [0] | PASS_PARITY
+  base: GET /v1/mcp/server/d6a74252-f054-4c9d-93c8-4db30cf063c0/user-env-vars | HTTP 403 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/server/73d38884-2892-4116-af47-150a5f4bb651/user-env-vars | HTTP 403 | token/MCP/ARM 0/0/0
+
+role-R-V-env-status [0] | PASS_PARITY
+  base: GET /v1/mcp/user-env-vars/status | HTTP 403 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/user-env-vars/status | HTTP 403 | token/MCP/ARM 0/0/0
+
+role-approve [0] | PASS_NAMED_CHANGE
+  base: PUT /v1/mcp/server/49391446-b6c4-49de-9a0f-1015969a7e62/approve | HTTP 200 | token/MCP/ARM 0/0/0
+  head: PUT /v1/mcp/server/b9a253e5-2440-44d2-aa29-570dff9cb230/approve | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-approve [1] | PASS_PARITY
+  base: PUT /v1/mcp/server/49391446-b6c4-49de-9a0f-1015969a7e62/approve | HTTP 400 | token/MCP/ARM 0/0/0
+  head: PUT /v1/mcp/server/b9a253e5-2440-44d2-aa29-570dff9cb230/approve | HTTP 400 | token/MCP/ARM 0/0/0
+
+role-reject [0] | PASS_NAMED_CHANGE
+  base: PUT /v1/mcp/server/49391446-b6c4-49de-9a0f-1015969a7e62/reject | HTTP 200 | token/MCP/ARM 0/0/0
+  head: PUT /v1/mcp/server/b9a253e5-2440-44d2-aa29-570dff9cb230/reject | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-reject [1] | PASS_PARITY
+  base: PUT /v1/mcp/server/49391446-b6c4-49de-9a0f-1015969a7e62/reject | HTTP 400 | token/MCP/ARM 0/0/0
+  head: PUT /v1/mcp/server/b9a253e5-2440-44d2-aa29-570dff9cb230/reject | HTTP 400 | token/MCP/ARM 0/0/0
+
+role-approve [2] | PASS_NAMED_CHANGE
+  base: PUT /v1/mcp/server/49391446-b6c4-49de-9a0f-1015969a7e62/approve | HTTP 200 | token/MCP/ARM 0/0/0
+  head: PUT /v1/mcp/server/b9a253e5-2440-44d2-aa29-570dff9cb230/approve | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-unknown-approve [0] | PASS_PARITY
+  base: PUT /v1/mcp/server/806995b9-7374-4d45-b927-91775a3c994c/approve | HTTP 404 | token/MCP/ARM 0/0/0
+  head: PUT /v1/mcp/server/2eb3b391-1651-4d45-9664-ecac3796a089/approve | HTTP 404 | token/MCP/ARM 0/0/0
+
+role-unknown-reject [0] | PASS_PARITY
+  base: PUT /v1/mcp/server/84c99783-8324-4607-b535-24cdc4b17ef3/reject | HTTP 404 | token/MCP/ARM 0/0/0
+  head: PUT /v1/mcp/server/d41b82d7-100d-4c4b-abfb-9a0cf4f493dd/reject | HTTP 404 | token/MCP/ARM 0/0/0
+
+public-whitelist [0] | PASS_PARITY
+  base: POST /v1/mcp/make_public | HTTP 202 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/make_public | HTTP 202 | token/MCP/ARM 0/0/0
+
+public-hub [0] | FAIL_PREEXISTING_IMMEDIATE_CONSISTENCY
+  base: GET /public/mcp_hub | HTTP 200 | token/MCP/ARM 0/0/0
+  head: GET /public/mcp_hub | HTTP 200 | token/MCP/ARM 0/0/0
+
+public-registry-disabled [0] | PASS_PARITY
+  base: GET /v1/mcp/registry.json | HTTP 404 | token/MCP/ARM 0/0/0
+  head: GET /v1/mcp/registry.json | HTTP 404 | token/MCP/ARM 0/0/0
+
+public-whitelist-clear [0] | PASS_PARITY
+  base: POST /v1/mcp/make_public | HTTP 202 | token/MCP/ARM 0/0/0
+  head: POST /v1/mcp/make_public | HTTP 202 | token/MCP/ARM 0/0/0
+
+role-delete-submission [0] | PASS_PARITY
+  base: DELETE /v1/mcp/server/49391446-b6c4-49de-9a0f-1015969a7e62 | HTTP 202 | token/MCP/ARM 0/0/0
+  head: DELETE /v1/mcp/server/b9a253e5-2440-44d2-aa29-570dff9cb230 | HTTP 202 | token/MCP/ARM 0/0/0
+
+role-delete-team [0] | PASS_PARITY
+  base: POST /team/delete | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /team/delete | HTTP 200 | token/MCP/ARM 0/0/0
+
+role-delete-users [0] | PASS_PARITY
+  base: POST /user/delete | HTTP 200 | token/MCP/ARM 0/0/0
+  head: POST /user/delete | HTTP 200 | token/MCP/ARM 0/0/0
+
+Normalization disclosure
+
+Generated fixture IDs, side-specific names, host ports, secrets, timestamps, masked generated key names and role-team aliases were normalized. Repeated transition occurrences were not collapsed. Content-length, date, request/call/trace headers were treated as volatile. Created/updated/review/submission metadata values were normalized while preserving field presence/nullness. Request bodies and query parameters, full response shapes, outbound attempts, request bodies/header sets and outbound response bodies/header sets were compared. Token material was redacted; successful real grants establish usability, not byte equality of independently minted tokens. Raw vendor nonce/routing header differences remain in the seven-row review record
+
+Unverified inventory, one cell per line
+
+Config-only server detail fallback: not run in the final configuration
+Enabled public registry and network-context configuration: only disabled-registry 404 and public hub were run
+Redis-backed configuration/session propagation: primary configuration intentionally had no Redis
+Single-worker control: not run, and cannot substitute for the four-worker proof
+Concurrent scope updates during traffic: not run
+Metadata/session TTL expiry: not run; no expiry-window guarantee
+Distinct caller-supplied OAuth identity precedence: not run with a second real identity
+Legacy OTel management-response consumer: no live export/read-back cell
+Human interactive authorization consent: no human login/consent completed
+Interactive authorization-code token exchange: no real completed user authorization
+Vendor destination portal UI: no vendor portal screenshot obtained
+Populated spec_path restricted-viewer live row: unit-proven only
+mcp_routes restricted-key live row: unit-tested only; live matrix used llm_api_routes
+Dedicated JWKS recorder: fetches were real but that boundary was not recorded
+Burst beginning with destination already fully stopped: outage occurred during in-flight calls instead
+Victim-worker-pinned loss comparison: worker selection was verified, request assignment was not forced
+Public continuous full-flow recording: private videos retained, only sanitized step animation published
+LLM endpoint streaming/SDK matrix: not applicable to this MCP administrative-response change
+Spend-log queue flush: not applicable to the changed code; no spend durability claim
+
+Local checks and CI
+
+Mapped suites: 1034 passed, 11 warnings on the corrected tree committed as 7743ba647f18e5520fbde87bf12ffa991d48eb87. Focused submissions tests: 15 passed. These are regression checks, not UI evidence
+make check exited 2. Product/test lint, strict/type/test-quality budgets, basedpyright, circular imports and scoped formatting passed. Dashboard API-type generation produced no tracked change. E2E checks and dashboard lint were skipped because their paths were outside the change scope. The failing gate is an OpenAPI snapshot RateLimitError description indentation reflow, reproduced on baseline and not committed
+CI snapshot: 81 successful, 1 in progress, 1 skipped, 3 failed. The failures are code-quality, documentation and osv-scan. Docs validation reproduced on main and a later main commit fixed its parser. The untouched lockfile pins anyio 4.13.0; the OSV advisories GHSA-5p39-cfhj-2xmp and GHSA-82r6-8w77-94w6 require 4.14.2. No dependency or docs change was added to this scoped PR
+Greptile's edited summary still names the original reviewed head, not this final head. No current Greptile approval is claimed. CodSpeed reviewed the final head without benchmark changes and Codecov reported changed coverable lines covered; neither substitutes for live coverage or green CI. No PR comment or review request was posted
+
+Separate merge-ref integration check
+
+Candidate: 2b7bd1fa5a5455251ea6e5aac57f2f2e43534b17
+Parents: 6b54238083a5e95b47b8845a0d29a7ae6b57c0f2 and 7743ba647f18e5520fbde87bf12ffa991d48eb87
+Control remains the primary baseline 0594dd7caf9dca8e4236c399c3a07736f74cd8a2, not a new current-main baseline
+Evidence lives separately in audit-merge-2b7bd1fa5a5455251ea6e5aac57f2f2e43534b17
+
+The actual served GitHub merge ref ran four workers per side. Normal create/read/preview/runtime/session/save and role checks completed, with 226 API records. Cold authorization failures still occurred on both sides. First dashboard attempt failed on base tools access_denied 403 and on merge list visibility. Captured merge list returned only the two older fixtures while the new server was missing. Both entire UI flows passed on a second attempt with scopes, stored identity and real tool execution verified. MERGE_TOP_COMPLETE recorded UI_COMPLETE True. No merge chaos or full edge matrix was run
+
+At the remote-ref check, GitHub still served this merge ref while main had advanced to 88e150bb5966ae9f8b4ac051785aa9aa8f44c337. Therefore this is proof of the named merge candidate, not a promise about every later main commit. The primary screenshots remain at 0594/7743 and are not relabeled as merge evidence
+
+Disposition
+
+The product fix is pushed on the existing PR branch and the PR targets main. Keep it open. The audit does not authorize merging. Restricted-admin compatibility acceptance, unresolved failures, unrun coverage and required CI/review gates remain explicit. Do not check the final no-regressions attestation
+
+Cleanup
+
+After freezing both evidence windows, eight owned normal/interactive server fixtures were deleted with HTTP 202. The two proxy parents, four owned MCP destinations and twelve forwarding recorders were stopped after PID/command/port checks. Their listeners were verified clear. PostgreSQL data and private evidence are retained; no unrelated service or worktree was removed
