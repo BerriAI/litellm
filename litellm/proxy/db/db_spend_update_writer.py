@@ -31,6 +31,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
+    DB_CONNECTION_ERROR_TYPES,
     DB_RETRY_SAFE_ERROR_TYPES,
     BaseDailySpendTransaction,
     DailyAgentSpendTransaction,
@@ -64,6 +65,7 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     WindowSpendTransaction,
     WindowSpendUpdateQueue,
 )
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
@@ -155,6 +157,16 @@ class _DailySpendCommit(Protocol[_DailySpendTransactionT]):
         proxy_logging_obj: ProxyLogging,
         daily_spend_transactions: dict[str, _DailySpendTransactionT],
     ) -> None: ...
+
+
+_DATA_REJECTED_SQLSTATE_CLASSES: Final = frozenset({"22", "23"})
+
+
+def _daily_spend_commit_failure_is_requeue_safe(e: Exception) -> bool:
+    if isinstance(e, DB_CONNECTION_ERROR_TYPES):
+        return isinstance(e, DB_RETRY_SAFE_ERROR_TYPES)
+    sqlstate: Final = PrismaDBExceptionHandler.postgres_sqlstate(e)
+    return sqlstate is None or sqlstate[:2] not in _DATA_REJECTED_SQLSTATE_CLASSES
 
 
 def _timed_request_duration_ms(
@@ -1319,7 +1331,17 @@ class DBSpendUpdateWriter:
                 proxy_logging_obj=proxy_logging_obj,
                 daily_spend_transactions=cast(dict[str, _DailySpendTransactionT], transactions),
             )
-        except Exception as e:  # noqa: BLE001  # the uncommitted rows go back on the queue; the other tables must still flush
+        except Exception as e:  # noqa: BLE001  # whatever failed here, the other tables must still flush
+            if not _daily_spend_commit_failure_is_requeue_safe(e):
+                spend_log_error(
+                    "Spend tracking - dropped %d daily %s spend rows: the failed commit may have applied "
+                    "or the database refused the data, so re-sending it is not safe. Error: %s",
+                    len(transactions),
+                    entity_type,
+                    str(e),
+                    exc=e,
+                )
+                return
             spend_log_error(
                 "Spend tracking - failed to commit daily %s spend updates. "
                 "Re-queued %d rows for retry on next tick. Error: %s",
