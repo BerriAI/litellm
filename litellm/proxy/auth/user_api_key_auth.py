@@ -2901,7 +2901,7 @@ async def _run_centralized_common_checks(
 
     await _inherit_org_identity(
         user_api_key_auth_obj=user_api_key_auth_obj,
-        team_object=cast(LiteLLM_TeamTableCachedObj | None, team_object),
+        team_object=team_object,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         parent_otel_span=parent_otel_span,
