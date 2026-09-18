@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from typing import Final
 
 import httpx
@@ -17,13 +16,9 @@ KEY: Final = "lyceum-test-key"
 
 
 @pytest.fixture(autouse=True)
-def lyceum_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def lyceum_environment(monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None) -> None:
     monkeypatch.setenv("LYCEUM_API_KEY", KEY)
     monkeypatch.delenv("LYCEUM_API_BASE", raising=False)
-    model_cost: Final = json.loads(
-        (Path(__file__).resolve().parents[4] / "model_prices_and_context_window.json").read_text()
-    )
-    monkeypatch.setattr(litellm, "model_cost", model_cost)
 
 
 @pytest.mark.parametrize("remote_model", [REMOTE_MODEL, "lyceum/simple"])
