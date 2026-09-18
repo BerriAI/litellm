@@ -279,7 +279,7 @@ async def test_async_post_call_failure_hook_tracks_config_defined_pass_through_r
         request_route="/azure-search",
     )
 
-    with patch(
+    with patch(  # test-quality-ok: this regression asserts the spend writer receives the pass-through failure payload
         "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
         new_callable=AsyncMock,
     ) as mock_update_database:
