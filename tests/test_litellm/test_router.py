@@ -1,11 +1,13 @@
 import asyncio
 import copy
 import functools
+import gc
 import json
 import logging
 import os
 import sys
 import threading
+import warnings
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -45,6 +47,8 @@ from litellm.router import (
     _is_retriable_anthropic_status,
 )
 from litellm.router_strategy import simple_shuffle
+from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
+from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
 from litellm.types.llms.openai import ChatCompletionRequest
 from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo, PreRoutingHookResponse, RetryPolicy
 
@@ -1517,7 +1521,9 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
             },
         }
 
-        mock_semaphore = asyncio.Semaphore(1)
+        mock_semaphore = MaxParallelRequestsLimit(
+            max_parallel_requests=1, model_id="deployment-1", model_group="gpt-3.5-turbo"
+        )
 
         with patch.object(
             router, "_update_kwargs_with_deployment"
@@ -15962,7 +15968,7 @@ def _max_parallel_router(max_parallel_requests: int) -> Router:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
-async def test_router_max_parallel_requests_bounds_in_flight_upstream_calls(
+async def test_router_max_parallel_requests_admits_the_cap_and_rejects_the_rest_with_429(
     monkeypatch: pytest.MonkeyPatch, stream: bool
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -15988,24 +15994,33 @@ async def test_router_max_parallel_requests_bounds_in_flight_upstream_calls(
             },
         )
 
-    async def one_call() -> None:
-        response = await router.acompletion(
-            model="gpt-5.6", messages=[{"role": "user", "content": "hi"}], stream=stream
-        )
+    async def one_call() -> str:
+        try:
+            response = await router.acompletion(
+                model="gpt-5.6", messages=[{"role": "user", "content": "hi"}], stream=stream
+            )
+        except litellm.RateLimitError as e:
+            return f"rejected:{e.status_code}"
         if stream:
             async for _ in response:
                 pass
+        return "ok"
 
     with respx.mock(assert_all_called=True) as respx_mock:
-        respx_mock.post("https://max-parallel.local/v1/chat/completions").mock(side_effect=upstream)
-        await asyncio.wait_for(asyncio.gather(*(one_call() for _ in range(10))), timeout=10)
+        route: Final = respx_mock.post("https://max-parallel.local/v1/chat/completions").mock(side_effect=upstream)
+        outcomes: Final = await asyncio.wait_for(asyncio.gather(*(one_call() for _ in range(10))), timeout=10)
 
-    assert tracker.peak <= 2
+    assert outcomes.count("ok") == 2
+    assert outcomes.count("rejected:429") == 8
+    assert route.call_count == 2
+    assert tracker.peak == 2
     assert tracker.current == 0
 
 
 @pytest.mark.asyncio
-async def test_router_max_parallel_requests_slot_released_when_stream_closed_early(monkeypatch: pytest.MonkeyPatch):
+async def test_router_max_parallel_requests_slot_held_until_stream_closed_then_released(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     tracker: Final = _InFlightTracker()
     router: Final = _max_parallel_router(max_parallel_requests=1)
@@ -16028,14 +16043,230 @@ async def test_router_max_parallel_requests_slot_released_when_stream_closed_ear
             async for _ in second:
                 pass
 
-        second_task: Final = asyncio.create_task(second_call())
-        await asyncio.sleep(0.05)
         assert tracker.current == 1
+        with pytest.raises(litellm.RateLimitError) as while_streaming:
+            await second_call()
+        assert while_streaming.value.status_code == 429
         await first.aclose()
-        await asyncio.wait_for(second_task, timeout=2)
+        await asyncio.wait_for(second_call(), timeout=2)
 
     assert tracker.peak == 1
     assert tracker.current == 0
+
+
+@pytest.mark.asyncio
+async def test_router_max_parallel_requests_overflow_is_429_without_cooldown_or_provider_call(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-fake",
+                    "api_base": "https://max-parallel.local/v1",
+                    "max_parallel_requests": 1,
+                },
+                "model_info": {"id": "capped-deployment"},
+            },
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-fake",
+                    "api_base": "https://max-parallel-sibling.local/v1",
+                },
+                "model_info": {"id": "sibling-deployment"},
+            },
+        ],
+        num_retries=0,
+    )
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.2)
+        return httpx.Response(
+            200,
+            json={
+                "id": "c",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-5.6",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "x"}, "finish_reason": "stop"}],
+            },
+        )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        route: Final = respx_mock.post("https://max-parallel.local/v1/chat/completions").mock(side_effect=upstream)
+        sibling_route: Final = respx_mock.post("https://max-parallel-sibling.local/v1/chat/completions").mock(
+            side_effect=upstream
+        )
+        results: Final = await asyncio.wait_for(
+            asyncio.gather(
+                *(
+                    router.acompletion(model="capped-deployment", messages=[{"role": "user", "content": "hi"}])
+                    for _ in range(3)
+                ),
+                return_exceptions=True,
+            ),
+            timeout=10,
+        )
+
+    rejected: Final = [r for r in results if isinstance(r, BaseException)]
+    assert len(rejected) == 2 and len(results) == 3
+    assert all(isinstance(r, litellm.RateLimitError) and r.status_code == 429 for r in rejected)
+    assert all("capped-deployment" in r.message and "max_parallel_requests=1" in r.message for r in rejected)
+    assert route.call_count == 1
+    assert sibling_route.call_count == 0
+    assert await _async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None) == []
+
+
+@pytest.mark.asyncio
+async def test_router_embedding_path_rejects_past_max_parallel_requests_without_orphan_coroutines(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "embed",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "sk-fake",
+                    "api_base": "https://max-parallel-embed.local/v1",
+                    "max_parallel_requests": 1,
+                },
+                "model_info": {"id": "embed-capped-deployment"},
+            }
+        ],
+        num_retries=0,
+    )
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.2)
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+        )
+
+    with respx.mock() as respx_mock, warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        route: Final = respx_mock.post("https://max-parallel-embed.local/v1/embeddings").mock(side_effect=upstream)
+        results: Final = await asyncio.wait_for(
+            asyncio.gather(
+                *(router.aembedding(model="embed", input=["hi"]) for _ in range(3)),
+                return_exceptions=True,
+            ),
+            timeout=10,
+        )
+        gc.collect()
+
+    rejected: Final = [r for r in results if isinstance(r, BaseException)]
+    assert len(rejected) == 2 and len(results) == 3
+    assert all(isinstance(r, litellm.RateLimitError) and r.status_code == 429 for r in rejected)
+    assert all("embed-capped-deployment" in r.message for r in rejected)
+    assert route.call_count == 1
+    assert [str(w.message) for w in caught if "never awaited" in str(w.message)] == []
+
+
+@pytest.mark.asyncio
+async def test_router_max_parallel_requests_overflow_takes_the_ordinary_429_fallback_path(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-fake",
+                    "api_base": "https://max-parallel-primary.local/v1",
+                    "max_parallel_requests": 1,
+                },
+                "model_info": {"id": "capped-primary-deployment"},
+            },
+            {
+                "model_name": "gpt-5.6-fallback",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-fake",
+                    "api_base": "https://max-parallel-fallback.local/v1",
+                },
+                "model_info": {"id": "fallback-deployment"},
+            },
+        ],
+        fallbacks=[{"gpt-5.6": ["gpt-5.6-fallback"]}],
+        num_retries=0,
+    )
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.2)
+        return httpx.Response(
+            200,
+            json={
+                "id": "c",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-5.6",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "x"}, "finish_reason": "stop"}],
+            },
+        )
+
+    with respx.mock() as respx_mock:
+        primary: Final = respx_mock.post("https://max-parallel-primary.local/v1/chat/completions").mock(
+            side_effect=upstream
+        )
+        fallback: Final = respx_mock.post("https://max-parallel-fallback.local/v1/chat/completions").mock(
+            side_effect=upstream
+        )
+        results: Final = await asyncio.wait_for(
+            asyncio.gather(
+                *(router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}]) for _ in range(3))
+            ),
+            timeout=10,
+        )
+
+    assert len(results) == 3
+    assert primary.call_count == 1
+    assert fallback.call_count == 2
+    assert await _async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None) == []
+
+
+@pytest.mark.asyncio
+async def test_router_deployment_slot_rejects_while_held_and_frees_slot_on_exit():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-fake",
+                    "max_parallel_requests": 1,
+                },
+                "model_info": {"id": "slot-deployment"},
+            }
+        ]
+    )
+    deployment: Final = router.get_deployment(model_id="slot-deployment")
+    assert deployment is not None
+    kwargs: Final = {"model": "gpt-5.6"}
+
+    async with router._deployment_slot(deployment=deployment.model_dump(), kwargs=kwargs, parent_otel_span=None):
+        with pytest.raises(litellm.RateLimitError) as overflow:
+            async with router._deployment_slot(deployment=deployment.model_dump(), kwargs=kwargs, parent_otel_span=None):
+                pass
+    assert overflow.value.status_code == 429
+    assert "slot-deployment" in overflow.value.message
+
+    async with router._deployment_slot(deployment=deployment.model_dump(), kwargs=kwargs, parent_otel_span=None):
+        pass
 
 
 @pytest.mark.asyncio
