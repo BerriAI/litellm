@@ -944,7 +944,12 @@ async def test_an_empty_trusted_proxy_ranges_means_the_peer_is_the_client_and_th
         ["not-a-range"],
         ["10.0.0.0/8, 172.16.0.0/12"],
         ["10.0.0.0/8", "10.0.0.0/33"],
+        ["10.0.0.0/8", " "],
+        ["10.0.0.0/8", ""],
+        ["10.0.0.0/8", None],
         "10.0.0.0/8;172.16.0.0/12",
+        "10.0.0.0/8,",
+        "",
     ],
 )
 def test_a_trusted_proxy_ranges_value_that_names_no_ranges_leaves_the_topology_unknown(configured):
