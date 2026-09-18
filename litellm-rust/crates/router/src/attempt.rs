@@ -1,25 +1,15 @@
 use std::time::Duration;
 
+use litellm_callbacks::failure::{Classified, FailureClass};
 use litellm_callbacks::machine::Machine;
 use litellm_callbacks::route::Route;
 
-use crate::plan::{DeploymentId, LogicalCallId};
-
-/// What an attempt's error means for the loop. Classification is a fact the attempt
-/// reports; the router never inspects provider errors.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AttemptDisposition {
-    /// The same deployment may be retried after backoff (429, 5xx, timeout).
-    Retryable { retry_after: Option<Duration> },
-    /// The deployment is bad for this call; try the next candidate or group.
-    Reroute { cooldown: Option<Duration> },
-    /// No attempt anywhere can succeed; stop now.
-    Fatal,
-}
+use crate::plan::DeploymentId;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttemptContext {
-    pub id: LogicalCallId,
+    /// Spans every attempt of the logical call; Python's `litellm_trace_id`.
+    pub trace_id: String,
     /// 0-based across the whole logical call.
     pub attempt_index: u32,
     pub deployment: DeploymentId,
@@ -27,24 +17,24 @@ pub struct AttemptContext {
     pub group_index: u32,
 }
 
-/// A route error that knows what it means for the loop. Implemented by each route's error
-/// type, so any machine over that route, layered or not, is an [`Attempt`].
-pub trait AttemptError {
-    fn disposition(&self) -> AttemptDisposition;
-}
-
-/// One provider attempt: a route machine whose errors carry their own disposition.
+/// One provider attempt: a route machine whose errors say what kind of failure they are.
 pub trait Attempt: Machine {
-    fn disposition(error: &<Self::Route as Route>::Error) -> AttemptDisposition;
+    fn class(error: &<Self::Route as Route>::Error) -> FailureClass;
+
+    fn retry_after(error: &<Self::Route as Route>::Error) -> Option<Duration>;
 }
 
 impl<M> Attempt for M
 where
     M: Machine,
-    <M::Route as Route>::Error: AttemptError,
+    <M::Route as Route>::Error: Classified,
 {
-    fn disposition(error: &<M::Route as Route>::Error) -> AttemptDisposition {
-        error.disposition()
+    fn class(error: &<M::Route as Route>::Error) -> FailureClass {
+        error.class()
+    }
+
+    fn retry_after(error: &<M::Route as Route>::Error) -> Option<Duration> {
+        error.retry_after()
     }
 }
 

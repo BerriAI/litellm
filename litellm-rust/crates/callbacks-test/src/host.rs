@@ -1,3 +1,5 @@
+use litellm_callbacks::event::AttemptInfo;
+use litellm_callbacks::failure::FailureClass;
 use litellm_callbacks::host::{HostOp, HostResult};
 use litellm_callbacks::machine::{HostFailure, Machine, MachineStep};
 use litellm_callbacks::route::{Layered, LayeredOp, LayeredResult, Route};
@@ -11,12 +13,15 @@ pub enum Answer<E> {
     Fail(E),
 }
 
-/// The host side of one route: answers its ops and owns the trace. [`drain`] handles
-/// `BeforeSend` and `Emit` itself, so a host only decides route ops.
+/// The host side of one route: answers its ops and owns the trace. [`drain`] records
+/// `BeforeSend`, `Emit`, chunks and attempt failures itself, so a host only decides route
+/// ops and, when it keeps a cooldown table, what an attempt failure does to it.
 pub trait Answers<R: Route> {
     fn trace(&mut self) -> &mut Trace;
 
     fn route(&mut self, op: R::Op) -> Result<R::OpResult, R::Error>;
+
+    fn attempt_failed(&mut self, _attempt: &AttemptInfo, _class: FailureClass) {}
 }
 
 /// Answers route ops through a closure and records everything, so a test controls the
@@ -89,6 +94,10 @@ where
             LayeredOp::Inner(op) => self.inner.route(op).map(LayeredResult::Inner),
         }
     }
+
+    fn attempt_failed(&mut self, attempt: &AttemptInfo, class: FailureClass) {
+        self.inner.attempt_failed(attempt, class);
+    }
 }
 
 /// Drives a machine to completion against the host, recording the trace. Like a language
@@ -100,6 +109,7 @@ pub async fn drain<M, H>(
 ) -> Result<M::Complete, <M::Route as Route>::Error>
 where
     M: Machine,
+    <M::Route as Route>::Chunk: std::fmt::Display,
     H: Answers<M::Route>,
 {
     let outcome = drive(machine, host).await;
@@ -117,12 +127,18 @@ async fn drive<M, H>(
 ) -> Result<M::Complete, <M::Route as Route>::Error>
 where
     M: Machine,
+    <M::Route as Route>::Chunk: std::fmt::Display,
     H: Answers<M::Route>,
 {
     let mut result = None;
     loop {
         let op = match machine.resume(result.take()).await {
             Ok(MachineStep::Complete(complete)) => return Ok(complete),
+            Ok(MachineStep::Yield(chunk)) => {
+                host.trace().0.push(Observed::Yield(chunk.to_string()));
+                result = Some(HostResult::Consumed);
+                continue;
+            }
             Ok(MachineStep::Host(op)) => op,
             Err(error) => return Err(error),
         };
@@ -138,6 +154,14 @@ where
             HostOp::Emit(event) => {
                 host.trace().0.push(Observed::Emit(event_name(&event)));
                 HostResult::Emitted
+            }
+            HostOp::AttemptFailed { attempt, class, .. } => {
+                host.trace().0.push(Observed::AttemptFailed {
+                    index: attempt.index,
+                    class,
+                });
+                host.attempt_failed(&attempt, class);
+                HostResult::Recorded
             }
         });
     }

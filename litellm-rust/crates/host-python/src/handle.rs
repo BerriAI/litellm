@@ -8,6 +8,8 @@ use pyo3::prelude::*;
 pub enum ExecutionStep {
     Return(Py<PyAny>),
     Await(Py<PyAny>),
+    /// One chunk for the consumer; the execution resumes when it asks for the next.
+    Yield(Py<PyAny>),
 }
 
 pub trait ExecutionBody: Send + Sync {
@@ -64,6 +66,7 @@ impl Execution {
             let step = body.resume(result)?;
             let (tag, value, suspended) = match step {
                 ExecutionStep::Await(value) => ("Await", value, true),
+                ExecutionStep::Yield(value) => ("Yield", value, true),
                 ExecutionStep::Return(value) => ("Complete", value, false),
             };
             let step = py

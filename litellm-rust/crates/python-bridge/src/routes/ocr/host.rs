@@ -128,3 +128,78 @@ impl RouteHost for OcrRouteHost {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[rstest::rstest]
+    #[case::acquired(true)]
+    #[case::provider_raised(false)]
+    fn closing_releases_the_token_provider(#[case] succeeds: bool) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("succeeds", succeeds).unwrap();
+            py.run(
+                c"
+import gc
+import weakref
+class Provider:
+    def __call__(self):
+        if succeeds:
+            return 'caller-token'
+        raise ValueError('unavailable')
+provider = Provider()
+reference = weakref.ref(provider)
+kwargs = {
+    'model': 'azure_ai/mistral-ocr-latest',
+    'custom_llm_provider': None,
+    'document': {'type': 'document_url', 'document_url': 'https://example.com/a.pdf'},
+    'api_key': None,
+    'api_base': None,
+    'extra_headers': None,
+    'timeout': None,
+    'azure_ad_token_provider': provider,
+}
+del provider
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+            let kwargs = locals
+                .get_item("kwargs")
+                .unwrap()
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            let mut host = OcrRouteHost::new(py.None());
+            let projected = host.invoke(py, &kwargs, OcrOp::ProjectRequest).unwrap();
+            assert!(matches!(
+                projected,
+                OcrOpResult::Request {
+                    caller_token: true,
+                    ..
+                }
+            ));
+            locals.del_item("kwargs").unwrap();
+            drop(kwargs);
+            assert_eq!(
+                host.invoke(py, &PyDict::new(py), OcrOp::AcquireAzureAdToken)
+                    .is_ok(),
+                succeeds
+            );
+            let alive = || {
+                py.run(c"gc.collect()", Some(&locals), Some(&locals))
+                    .unwrap();
+                !py.eval(c"reference()", Some(&locals), Some(&locals))
+                    .unwrap()
+                    .is_none()
+            };
+            assert!(alive());
+            host.close(py);
+            assert!(!alive());
+        });
+    }
+}

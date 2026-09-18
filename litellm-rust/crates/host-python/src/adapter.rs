@@ -1,4 +1,5 @@
-use litellm_callbacks::event::{CallEvent, RequestContext, Timing, WireRequest};
+use litellm_callbacks::event::{AttemptInfo, CallEvent, RequestContext, Timing, WireRequest};
+use litellm_callbacks::failure::FailureClass;
 use litellm_callbacks::route::Route;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::gc::{PyTraverseError, PyVisit};
@@ -30,6 +31,11 @@ pub enum PublicValue<'a> {
 /// `after_success` and one terminal `emit` after it completes. Whenever a step returns
 /// [`AdapterStep::Await`], the driver awaits it in the caller's task and continues the
 /// same step through `resume`.
+///
+/// Under a loop of attempts the driver also emits `AttemptStarted` before each attempt,
+/// which the adapter may answer with [`AdapterStep::Arguments`] to give that attempt its
+/// own keyword view, and calls `attempt_failed` for each attempt that fails before the
+/// loop decides what to do next.
 ///
 /// A step that fails with an ordinary exception fails the call with that exception,
 /// except on a terminal event, where the adapter is expected to report and swallow its
@@ -64,6 +70,21 @@ pub trait CallbackAdapter: Send + Sync {
         public: Option<PublicValue<'_>>,
     ) -> PyResult<AdapterStep>;
 
+    /// One attempt of the call failed with `error`, already mapped to its public
+    /// exception. An adapter that does not observe attempts cannot run under a loop of
+    /// them, which is what the default says.
+    fn attempt_failed(
+        &mut self,
+        _py: Python<'_>,
+        _attempt: &AttemptInfo,
+        _class: FailureClass,
+        _error: &PyErr,
+    ) -> PyResult<AdapterStep> {
+        Err(PyRuntimeError::new_err(
+            "this callback adapter does not observe attempt failures",
+        ))
+    }
+
     fn resume(&mut self, py: Python<'_>, result: PyResult<Py<PyAny>>) -> PyResult<AdapterStep>;
 
     fn close(&mut self, py: Python<'_>);
@@ -91,6 +112,16 @@ pub trait RouteHost: Send + Sync {
         py: Python<'_>,
         response: <Self::Route as Route>::Response,
     ) -> PyResult<Py<PyAny>>;
+
+    /// One chunk of a streaming response as the object the consumer receives. Routes
+    /// that never stream keep the default, which no machine of theirs can reach.
+    fn chunk(
+        &mut self,
+        _py: Python<'_>,
+        _chunk: <Self::Route as Route>::Chunk,
+    ) -> PyResult<Py<PyAny>> {
+        Err(PyRuntimeError::new_err("this route does not stream"))
+    }
 
     fn native_error(error: <Self::Route as Route>::Error) -> PyErr;
 

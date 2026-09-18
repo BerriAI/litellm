@@ -15,3 +15,4 @@
   - Dispatch errors never replay provider work or trigger the opposite outcome; the proxy's acceptance or rejection releases deferred success at most once
   - Delivery follows the registry, not the callable's type: direct, awaited, executor-submitted, logging-worker and deferred paths stay distinct
 - Traverse every retained Python edge; `close` is idempotent and restores the correlation context once
+- Under a loop of attempts every attempt is its own `@client` call: `AttemptStarted` after the first restores the previous attempt's context and runs `function_setup` again on the caller's keywords with a fresh call id and the shared trace id, the attempt's failure families run when the loop reports the failure, and the terminal failure of a call whose last attempt was already reported dispatches nothing more

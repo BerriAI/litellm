@@ -1,13 +1,22 @@
 use std::marker::PhantomData;
 
-/// One public call surface: what a completed call produces, how it fails, and the
-/// route-specific operations only its host can perform (request projection, file reads,
-/// token acquisition).
+/// One public call surface: what a completed call produces, how it fails, what it yields
+/// while streaming, and the route-specific operations only its host can perform (request
+/// projection, file reads, token acquisition).
 pub trait Route: Send + Sync + 'static {
     type Response: Send + 'static;
     type Error: Clone + Send + Sync + 'static;
     type Op: Send + 'static;
     type OpResult: Send + 'static;
+    /// What a streaming call yields before it completes. A route that never streams uses
+    /// [`std::convert::Infallible`], and its `Yield` step is unreachable.
+    type Chunk: Send + 'static;
+
+    /// A completed response as the chunks a streaming caller would have seen, so a cache hit
+    /// on a streaming request replays it. Routes that never stream keep the default.
+    fn replay(_response: &Self::Response) -> Vec<Self::Chunk> {
+        Vec::new()
+    }
 }
 
 /// The route a layer presents when it has ops of its own: the layer's ops beside the
@@ -33,4 +42,5 @@ impl<Outer: Route, Inner: Route> Route for Layered<Outer, Inner> {
     type Error = Inner::Error;
     type Op = LayeredOp<Outer::Op, Inner::Op>;
     type OpResult = LayeredResult<Outer::OpResult, Inner::OpResult>;
+    type Chunk = Inner::Chunk;
 }

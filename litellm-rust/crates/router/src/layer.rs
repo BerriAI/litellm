@@ -6,12 +6,13 @@ use crate::router::Router;
 use crate::routing::{Picker, PlanSource};
 
 /// Wraps an attempt factory in a [`Router`]. Applied once per logical call, so the layer
-/// owns the plan source, the picker and the seed.
+/// owns the plan source, the picker, the seed and the trace id the host supplied.
 pub struct RouterLayer<C: Clock> {
     plan: PlanSource,
     picker: Picker,
     clock: C,
     seed: u64,
+    trace_id: Option<String>,
 }
 
 impl<C: Clock> RouterLayer<C> {
@@ -21,7 +22,13 @@ impl<C: Clock> RouterLayer<C> {
             picker,
             clock,
             seed,
+            trace_id: None,
         }
+    }
+
+    /// The trace id the host already has for this call; minted from the seed otherwise.
+    pub fn with_trace_id(self, trace_id: Option<String>) -> Self {
+        Self { trace_id, ..self }
     }
 }
 
@@ -35,6 +42,7 @@ impl<F: AttemptFactory, C: Clock + Clone> Layer<F> for RouterLayer<C> {
             factory,
             self.clock.clone(),
             self.seed,
+            self.trace_id.clone(),
         )
     }
 }

@@ -34,6 +34,9 @@ mod azure_document_intelligence_tests;
 #[path = "../../tests/deepseek_ocr.rs"]
 mod deepseek_tests;
 #[cfg(test)]
+#[path = "../../tests/ocr/passthrough.rs"]
+mod passthrough_tests;
+#[cfg(test)]
 #[path = "../../tests/reducto_ocr.rs"]
 mod reducto_tests;
 #[cfg(test)]

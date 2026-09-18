@@ -286,6 +286,49 @@ async fn facade_omits_native_response_by_default_and_preserves_auth_priority() {
 }
 
 #[tokio::test]
+async fn native_format_retains_the_provider_response() {
+    let raw = json!({
+        "result":{"chunks":[{"content":"native OCR response"}]},
+        "usage":{"num_pages":1}
+    });
+    let (base, _, server) = mock_server(vec![MockResponse::json(raw.clone())]).await;
+    let request = super::test_support::with_source(
+        wire_request("reducto/parse-v3", &base, json!({"req_format":"native"})),
+        "reducto://ready.pdf",
+    );
+
+    let response = perform_ocr(request).await.unwrap();
+    server.await.unwrap();
+
+    assert_eq!(response.pages[0].markdown, "native OCR response");
+    assert_eq!(response.provider_native_response.as_ref(), raw.as_object());
+}
+
+#[tokio::test]
+async fn unknown_model_reaches_parse_and_keeps_its_name() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({
+        "result":{"chunks":[{"content":"future model response"}]}
+    }))])
+    .await;
+    let request = super::test_support::with_source(
+        wire_request("reducto/future-parse-model", &base, json!({})),
+        "reducto://ready.pdf",
+    );
+
+    let response = perform_ocr(request).await.unwrap();
+    server.await.unwrap();
+
+    assert_eq!(response.model, "future-parse-model");
+    assert_eq!(response.pages[0].markdown, "future model response");
+    let requests = seen.lock().unwrap();
+    assert!(requests[0].starts_with("POST /parse "));
+    assert_eq!(
+        request_body(&requests[0]),
+        json!({"input":"reducto://ready.pdf"})
+    );
+}
+
+#[tokio::test]
 async fn guardrail_rewrites_document_before_upload() {
     let (base, seen, server) =
         mock_server(vec![MockResponse::json(json!({"result":{"chunks":[]}}))]).await;

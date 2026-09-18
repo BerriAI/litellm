@@ -619,6 +619,22 @@ mod tests {
     }
 
     #[rstest]
+    fn environment_keeps_extra_headers_after_the_bearer_key(
+        #[with(Some("explicit"), vec![("X-Trace".into(), "trace-1".into())])]
+        connection: OcrConnection,
+    ) {
+        assert_eq!(
+            MistralOcrConfig
+                .resolve_headers(&connection, &|_| None)
+                .unwrap(),
+            [
+                ("Authorization".to_string(), "Bearer explicit".to_string()),
+                ("X-Trace".to_string(), "trace-1".to_string()),
+            ]
+        );
+    }
+
+    #[rstest]
     fn environment_rejects_missing_key(connection: OcrConnection) {
         assert!(matches!(
             MistralOcrConfig.resolve_headers(&connection, &|_| None),

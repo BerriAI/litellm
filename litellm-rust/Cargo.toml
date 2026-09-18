@@ -30,6 +30,7 @@ pythonize = "0.29.0"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls", "http2", "stream"] }
 rstest = "0.26.1"
+rstest_reuse = "0.7.0"
 proptest = "1.6"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"

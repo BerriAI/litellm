@@ -462,6 +462,133 @@ document = Document()
         });
     }
 
+    #[rstest::rstest]
+    #[case::missing(c"{}")]
+    #[case::non_string(c"{'type': 1}")]
+    #[case::list(c"[]")]
+    fn malformed_document_discriminators_are_bad_requests_naming_the_field(
+        #[case] document: &std::ffi::CStr,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = project_document(&py.eval(document, None, None).unwrap()).unwrap_err();
+            let value = error.value(py);
+            assert!(error.is_instance_of::<PyValueError>(py));
+            assert_eq!(
+                value.to_string(),
+                "invalid OCR request field: document.type"
+            );
+            assert_eq!(
+                value
+                    .getattr("status_code")
+                    .unwrap()
+                    .extract::<u16>()
+                    .unwrap(),
+                400
+            );
+        });
+    }
+
+    fn request_and_kwargs<'py>(
+        py: Python<'py>,
+        kwargs: &std::ffi::CStr,
+    ) -> (Bound<'py, PyAny>, Bound<'py, PyDict>) {
+        let locals = eval(
+            py,
+            c"
+class Request:
+    model = 'mistral/mistral-ocr-latest'
+    custom_llm_provider = 'mistral'
+    document = {'type': 'document_url', 'document_url': 'https://example.com/request.pdf'}
+    api_key = None
+    api_base = 'https://request.example.com'
+    extra_headers = {'x-source': 'request'}
+    timeout = 1
+request = Request()
+",
+        );
+        py.run(kwargs, Some(&locals), Some(&locals)).unwrap();
+        (
+            locals.get_item("request").unwrap().unwrap(),
+            locals
+                .get_item("kwargs")
+                .unwrap()
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn unconsumed_kwargs_stay_out_of_optional_params_and_response_limit_goes_to_transport() {
+        Python::initialize();
+        Python::attach(|py| {
+            stub_timeout_conversion(py);
+            let (request, kwargs) = request_and_kwargs(
+                py,
+                c"
+kwargs = {
+    'model': 'mistral/mistral-ocr-latest',
+    'custom_llm_provider': None,
+    'pages': [0],
+    'max_response_bytes': 1234,
+    'metadata': {'user_api_key_auth': 'auth'},
+    'ocr_cost_per_page': 0.05,
+    'shared_session': object(),
+    'guardrails': ['guard'],
+    'opaque': object(),
+}
+",
+            );
+            let (projected, _) = project_request(&request, &kwargs).unwrap();
+            assert_eq!(
+                projected.optional_params.keys().collect::<Vec<_>>(),
+                ["pages"]
+            );
+            assert_eq!(projected.transport.max_response_bytes, 1234);
+        });
+    }
+
+    #[test]
+    fn replacement_kwargs_project_provider_connection_and_timeout() {
+        Python::initialize();
+        Python::attach(|py| {
+            stub_timeout_conversion(py);
+            let (request, kwargs) = request_and_kwargs(
+                py,
+                c"
+kwargs = {
+    'model': 'mistral-ocr-latest',
+    'custom_llm_provider': 'azure_ai',
+    'document': {'type': 'document_url', 'document_url': 'https://example.com/kwargs.pdf'},
+    'api_base': 'https://kwargs.example.com',
+    'extra_headers': {'x-source': 'kwargs'},
+    'timeout': 5,
+}
+",
+            );
+            let (projected, handles) = project_request(&request, &kwargs).unwrap();
+            assert_eq!(handles.provider, "azure_ai");
+            assert_eq!(projected.model, "mistral-ocr-latest");
+            assert_eq!(
+                projected.document,
+                url_document("https://example.com/kwargs.pdf")
+            );
+            assert_eq!(
+                projected.credentials.api_base.unwrap().value(),
+                "https://kwargs.example.com"
+            );
+            assert_eq!(
+                projected.transport.extra_headers,
+                [("x-source".to_string(), "kwargs".to_string())]
+            );
+            assert_eq!(
+                projected.transport.timeout,
+                std::time::Duration::from_secs(5)
+            );
+        });
+    }
+
     #[test]
     fn document_classification_happens_once() {
         Python::initialize();

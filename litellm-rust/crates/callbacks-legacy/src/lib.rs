@@ -15,6 +15,9 @@ mod callbacks;
 mod deferred;
 mod logger;
 mod preparation;
+#[cfg(test)]
+#[path = "../tests/support.rs"]
+mod test_support;
 
 pub use adapter::LegacySurface;
 pub use call::{PublicCall, lookup, run_legacy_call};

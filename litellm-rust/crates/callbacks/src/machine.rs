@@ -6,6 +6,9 @@ use crate::route::Route;
 
 pub enum MachineStep<R: Route, C> {
     Host(HostOp<R>),
+    /// One chunk of a streaming response. The host hands it to the consumer and resumes
+    /// with [`HostResult::Consumed`].
+    Yield(R::Chunk),
     Complete(C),
 }
 
@@ -45,7 +48,8 @@ impl<E> HostFailure<E> {
 }
 
 /// A resumable call. Core implements it per route; a host drives it. Every suspension
-/// point is an op the host performs and answers with a result.
+/// point is an op the host performs and answers with a result, or a chunk the host
+/// consumes.
 pub trait Machine: Send {
     type Route: Route;
     type Complete: Send + 'static;

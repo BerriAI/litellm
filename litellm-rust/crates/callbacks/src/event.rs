@@ -1,6 +1,6 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// Seconds since the Unix epoch, on one clock for every host.
 pub fn epoch_seconds() -> f64 {
@@ -33,10 +33,34 @@ pub struct RequestContext {
     pub custom_llm_provider: String,
     /// The route's parameters before the provider transformation.
     pub optional_params: Value,
-    /// Body keys whose values are the caller's inputs, unchanged by the route.
-    pub passthrough_fields: Vec<String>,
+    pub passthrough_fields: Passthrough,
     /// Optional-param names that carry credentials and must be redacted when logged.
     pub secret_fields: Vec<String>,
+}
+
+/// Body keys whose values are the caller's inputs, unchanged by the route. The only way to
+/// build one is to compare the two, so a route cannot name a key it rewrote.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Passthrough(Vec<String>);
+
+impl Passthrough {
+    pub fn unchanged(caller: &Map<String, Value>, body: &Value) -> Self {
+        Self(
+            caller
+                .iter()
+                .filter(|(name, value)| body.get(name.as_str()) == Some(*value))
+                .map(|(name, _)| name.clone())
+                .collect(),
+        )
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().map(String::as_str)
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.0.iter().any(|field| field == name)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,8 +78,11 @@ pub enum FailureOrigin {
 
 /// One provider attempt of a logical call, as the loop that runs attempts identifies it.
 /// `deployment` is the host's own handle; the event stream never sees model strings.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttemptInfo {
+    /// Spans every attempt of one logical call: Python's `litellm_trace_id`. Each attempt's
+    /// own call id is the host's to mint, as the `@client` wrapper does per call.
+    pub trace_id: String,
     /// 0-based across the whole logical call.
     pub index: u32,
     /// 0 is the primary group; n > 0 is fallback depth.
@@ -71,15 +98,6 @@ pub enum CallEvent {
     ResponseReceived {
         raw: RawResponse,
     },
-    /// Per-attempt failure, the signal cooldown and health tables consume. User-facing
-    /// failure callbacks fire once, on `Failed`, not here.
-    AttemptFailed {
-        attempt: AttemptInfo,
-        /// The same deployment may be tried again after backoff.
-        retryable: bool,
-        /// The deployment should be taken out of rotation for this long.
-        cooldown: Option<Duration>,
-    },
     Succeeded {
         timing: Timing,
     },
@@ -87,4 +105,48 @@ pub enum CallEvent {
         timing: Timing,
         origin: FailureOrigin,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::json;
+
+    use super::*;
+
+    #[rstest]
+    #[case::unchanged_scalar(json!({"pages": [0]}), json!({"pages": [0]}), &["pages"])]
+    #[case::unchanged_explicit_null(json!({"pages": null}), json!({"pages": null}), &["pages"])]
+    #[case::unchanged_nested_object(
+        json!({"document": {"type": "document_url", "document_url": "https://a/b.pdf"}}),
+        json!({"document": {"type": "document_url", "document_url": "https://a/b.pdf"}, "model": "m"}),
+        &["document"]
+    )]
+    #[case::rewritten_value(
+        json!({"document": {"type": "document_url", "document_url": "https://a/b.pdf"}}),
+        json!({"document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}}),
+        &[]
+    )]
+    #[case::dropped_nested_field(
+        json!({"document": {"type": "image_url", "image_url": "https://a/b.png", "document_name": "b.png"}}),
+        json!({"document": {"type": "image_url", "image_url": "https://a/b.png"}}),
+        &[]
+    )]
+    #[case::added_nested_field(
+        json!({"document": {"type": "image_url", "image_url": "https://a/b.png"}}),
+        json!({"document": {"type": "image_url", "image_url": "https://a/b.png", "detail": "high"}}),
+        &[]
+    )]
+    #[case::reordered_array(json!({"pages": [0, 1]}), json!({"pages": [1, 0]}), &[])]
+    #[case::consumed_by_the_route(json!({"api_key": "k", "pages": [0]}), json!({"pages": [0]}), &["pages"])]
+    #[case::added_by_the_route(json!({}), json!({"model": "m"}), &[])]
+    #[case::non_object_body(json!({"pages": [0]}), json!([{"pages": [0]}]), &[])]
+    fn passthrough_is_exactly_the_callers_unchanged_keys(
+        #[case] caller: Value,
+        #[case] body: Value,
+        #[case] expected: &[&str],
+    ) {
+        let passthrough = Passthrough::unchanged(caller.as_object().unwrap(), &body);
+        assert_eq!(passthrough.iter().collect::<Vec<_>>(), expected);
+    }
 }

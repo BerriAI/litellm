@@ -1,6 +1,6 @@
-use litellm_callbacks::event::{RequestContext, WireRequest};
+use litellm_callbacks::event::{Passthrough, RequestContext, WireRequest};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::OcrClient;
 use super::route::OcrHost;
@@ -23,16 +23,7 @@ where
         request.config.get_supported_ocr_params(&request.model),
     )?;
     validate(&composed)?;
-    let passthrough_fields = request
-        .optional_params
-        .keys()
-        .filter(|name| composed.get(*name).is_some())
-        .cloned()
-        .chain(
-            (request.caller_document && composed.get("document").is_some())
-                .then(|| "document".to_string()),
-        )
-        .collect();
+    let passthrough_fields = Passthrough::unchanged(&caller_inputs(request)?, &composed);
     let changed = request
         .host
         .before_send(
@@ -57,9 +48,24 @@ fn wire_request(url: &str, headers: &[(String, String)], body: Value) -> WireReq
     }
 }
 
+fn caller_inputs(request: &PreparedOcrRequest) -> Result<Map<String, Value>, super::Error> {
+    let document = request
+        .caller_document
+        .then(|| serde_json::to_value(&request.document))
+        .transpose()
+        .map_err(|_| super::Error::RequestField {
+            path: "document".into(),
+        })?;
+    let params: Map<String, Value> = request.optional_params.clone().into();
+    Ok(params
+        .into_iter()
+        .chain(document.map(|document| ("document".to_string(), document)))
+        .collect())
+}
+
 fn request_context(
     request: &PreparedOcrRequest,
-    passthrough_fields: Vec<String>,
+    passthrough_fields: Passthrough,
 ) -> RequestContext {
     RequestContext {
         model: request.model.clone(),
@@ -105,7 +111,7 @@ pub(crate) async fn guardrail_document(
         .host
         .before_send(
             wire_request(url, headers, body),
-            request_context(request, Vec::new()),
+            request_context(request, Passthrough::default()),
         )
         .await?;
     let document = super::json::decode_request_value(changed.body, "guardrail.document")?;

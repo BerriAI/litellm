@@ -13,7 +13,7 @@ mod marshal;
 
 pub use adapter::{AdapterStep, CallbackAdapter, PublicValue, RouteHost, missing_state};
 pub use callable::wrap_failure;
-pub use driver::run_call;
+pub use driver::{run_call, run_stream};
 pub use execution::{poll_async_value, run_async, run_async_value, run_sync, run_sync_value};
 pub use gil::{release_count, release_gil};
 pub use handle::{Execution, ExecutionBody, ExecutionStep};

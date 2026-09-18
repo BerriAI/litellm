@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use litellm_callbacks::event::epoch_seconds;
@@ -11,11 +12,15 @@ use serde::de::DeserializeOwned;
 use crate::base_cache::CacheKwargs;
 use crate::caching::{CacheBackend, CacheControls, CacheEntry};
 
+type ChunkOf<M> = <<M as Machine>::Route as Route>::Chunk;
+
 /// Serves a call from the cache or stores its result, around one machine.
 ///
 /// Sits inside the router, around each attempt, which is where Python's `@client` put it:
 /// a hit completes the attempt without a provider call, a miss runs it and stores on
-/// success. Cache errors never fail the call; they degrade to a miss or a skipped store.
+/// success. A hit on a streaming request is replayed as the chunks the route says the
+/// response would have streamed. Cache errors never fail the call; they degrade to a miss
+/// or a skipped store.
 pub struct Cached<M: Machine> {
     inner: M,
     backend: CacheBackend,
@@ -23,11 +28,16 @@ pub struct Cached<M: Machine> {
     controls: CacheControls,
     kwargs: CacheKwargs,
     max_age: Option<Duration>,
-    state: State,
+    stream: bool,
+    state: State<M>,
 }
 
-enum State {
+enum State<M: Machine> {
     Lookup,
+    Replaying {
+        chunks: VecDeque<ChunkOf<M>>,
+        complete: Option<M::Complete>,
+    },
     Running,
     Done,
 }
@@ -35,6 +45,7 @@ enum State {
 impl<M> Cached<M>
 where
     M: Machine,
+    M::Route: Route<Response = M::Complete>,
     M::Complete: Serialize + DeserializeOwned,
 {
     fn lookup(&self) -> impl std::future::Future<Output = Option<M::Complete>> + Send {
@@ -83,16 +94,39 @@ where
         loop {
             match std::mem::replace(&mut self.state, State::Done) {
                 State::Lookup => {
-                    if let Some(hit) = self.lookup().await {
+                    let Some(hit) = self.lookup().await else {
+                        self.state = State::Running;
+                        continue;
+                    };
+                    if !self.stream {
                         return Ok(MachineStep::Complete(hit));
                     }
-                    self.state = State::Running;
+                    self.state = State::Replaying {
+                        chunks: M::Route::replay(&hit).into(),
+                        complete: Some(hit),
+                    };
+                }
+                State::Replaying {
+                    mut chunks,
+                    complete,
+                } => {
+                    if let Some(chunk) = chunks.pop_front() {
+                        self.state = State::Replaying { chunks, complete };
+                        return Ok(MachineStep::Yield(chunk));
+                    }
+                    return Ok(MachineStep::Complete(
+                        complete.expect("a replayed hit completes once"),
+                    ));
                 }
                 State::Running => {
                     return match self.inner.resume(result).await {
                         Ok(MachineStep::Host(op)) => {
                             self.state = State::Running;
                             Ok(MachineStep::Host(op))
+                        }
+                        Ok(MachineStep::Yield(chunk)) => {
+                            self.state = State::Running;
+                            Ok(MachineStep::Yield(chunk))
                         }
                         Ok(MachineStep::Complete(complete)) => {
                             self.store(&complete).await;
@@ -118,6 +152,7 @@ async fn put(backend: &CacheBackend, key: &str, entry: CacheEntry, kwargs: Cache
 impl<M> Machine for Cached<M>
 where
     M: Machine,
+    M::Route: Route<Response = M::Complete>,
     M::Complete: Serialize + DeserializeOwned,
 {
     type Route = M::Route;
@@ -141,7 +176,8 @@ where
 }
 
 /// Per-call cache configuration: the key is computed by the host from the typed request
-/// (`cache_key`), the controls from the call's cache kwargs and the global setting.
+/// (`cache_key`), the controls from the call's cache kwargs and the global setting, and
+/// `stream` says whether a hit must be replayed as chunks.
 #[derive(Clone)]
 pub struct CacheLayer {
     backend: CacheBackend,
@@ -149,6 +185,7 @@ pub struct CacheLayer {
     controls: CacheControls,
     kwargs: CacheKwargs,
     max_age: Option<Duration>,
+    stream: bool,
 }
 
 impl CacheLayer {
@@ -159,6 +196,7 @@ impl CacheLayer {
             controls,
             kwargs: CacheKwargs::default(),
             max_age: None,
+            stream: false,
         }
     }
 
@@ -169,11 +207,16 @@ impl CacheLayer {
     pub fn with_max_age(self, max_age: Option<Duration>) -> Self {
         Self { max_age, ..self }
     }
+
+    pub fn with_stream(self, stream: bool) -> Self {
+        Self { stream, ..self }
+    }
 }
 
 impl<M> Layer<M> for CacheLayer
 where
     M: Machine,
+    M::Route: Route<Response = M::Complete>,
     M::Complete: Serialize + DeserializeOwned,
 {
     type Output = Cached<M>;
@@ -186,6 +229,7 @@ where
             controls: self.controls,
             kwargs: self.kwargs.clone(),
             max_age: self.max_age,
+            stream: self.stream,
             state: State::Lookup,
         }
     }
@@ -262,10 +306,16 @@ mod tests {
         type Error = &'static str;
         type Op = &'static str;
         type OpResult = ();
+        type Chunk = String;
+
+        fn replay(response: &String) -> Vec<String> {
+            response.split(' ').map(String::from).collect()
+        }
     }
 
     struct Provider {
         calls: Arc<Mutex<u32>>,
+        chunks: Vec<String>,
         response: String,
     }
 
@@ -277,6 +327,9 @@ mod tests {
             Box::pin(async move {
                 if result.is_none() {
                     return Ok(MachineStep::Host(HostOp::Route("send")));
+                }
+                if !self.chunks.is_empty() {
+                    return Ok(MachineStep::Yield(self.chunks.remove(0)));
                 }
                 *self.calls.lock().unwrap() += 1;
                 Ok(MachineStep::Complete(self.response.clone()))
@@ -302,7 +355,15 @@ mod tests {
     }
 
     async fn drain<M: Machine<Route = Unit, Complete = String>>(machine: &mut M) -> (u32, String) {
+        let (ops, _, value) = drain_stream(machine).await;
+        (ops, value)
+    }
+
+    async fn drain_stream<M: Machine<Route = Unit, Complete = String>>(
+        machine: &mut M,
+    ) -> (u32, Vec<String>, String) {
         let mut ops = 0;
+        let mut chunks = Vec::new();
         let mut result = None;
         loop {
             match machine.resume(result.take()).await.unwrap() {
@@ -311,7 +372,11 @@ mod tests {
                     result = Some(HostResult::Route(()));
                 }
                 MachineStep::Host(_) => unreachable!(),
-                MachineStep::Complete(value) => return (ops, value),
+                MachineStep::Yield(chunk) => {
+                    chunks.push(chunk);
+                    result = Some(HostResult::Consumed);
+                }
+                MachineStep::Complete(value) => return (ops, chunks, value),
             }
         }
     }
@@ -319,7 +384,15 @@ mod tests {
     fn provider(calls: &Arc<Mutex<u32>>, response: &str) -> Provider {
         Provider {
             calls: Arc::clone(calls),
+            chunks: Vec::new(),
             response: response.into(),
+        }
+    }
+
+    fn streaming(calls: &Arc<Mutex<u32>>, chunks: &[&str]) -> Provider {
+        Provider {
+            chunks: chunks.iter().map(|chunk| (*chunk).into()).collect(),
+            ..provider(calls, &chunks.join(" "))
         }
     }
 
@@ -360,6 +433,48 @@ mod tests {
         let mut machine = Stack::new(provider(&calls, "b")).layer(no_read).build();
         assert_eq!(drain(&mut machine).await, (1, "b".into()));
         assert_eq!(*memory.gets.lock().unwrap(), gets_before);
+    }
+
+    #[tokio::test]
+    async fn streaming_misses_pass_chunks_through_and_hits_replay_them() {
+        let backend: CacheBackend = Arc::new(MemoryBackend::default());
+        let layer =
+            CacheLayer::new(backend.clone(), "k".into(), controls(true, true)).with_stream(true);
+        let calls = Arc::new(Mutex::new(0));
+
+        let mut miss = Stack::new(streaming(&calls, &["hello", "world"]))
+            .layer(layer.clone())
+            .build();
+        assert_eq!(
+            drain_stream(&mut miss).await,
+            (
+                1,
+                vec!["hello".into(), "world".into()],
+                "hello world".into()
+            )
+        );
+
+        let mut hit = Stack::new(streaming(&calls, &["unused"]))
+            .layer(layer)
+            .build();
+        assert_eq!(
+            drain_stream(&mut hit).await,
+            (
+                0,
+                vec!["hello".into(), "world".into()],
+                "hello world".into()
+            )
+        );
+        assert_eq!(*calls.lock().unwrap(), 1);
+
+        let plain = CacheLayer::new(backend, "k".into(), controls(true, true));
+        let mut hit = Stack::new(streaming(&calls, &["unused"]))
+            .layer(plain)
+            .build();
+        assert_eq!(
+            drain_stream(&mut hit).await,
+            (0, vec![], "hello world".into())
+        );
     }
 
     #[tokio::test]

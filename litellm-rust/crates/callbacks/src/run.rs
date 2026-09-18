@@ -13,18 +13,28 @@ where
     let start_time = epoch_seconds();
     let mut result = None;
     let outcome = loop {
-        let step = match machine.resume(result.take()).await {
+        let answer = match machine.resume(result.take()).await {
             Ok(MachineStep::Complete(complete)) => break Ok(complete),
-            Ok(MachineStep::Host(op)) => op,
-            Err(error) => break Err(error),
-        };
-        let answer = match step {
-            HostOp::Route(op) => host.route(op).await.map(HostResult::Route),
-            HostOp::BeforeSend { wire, context } => host
+            Ok(MachineStep::Yield(chunk)) => {
+                host.consume(chunk).await.map(|()| HostResult::Consumed)
+            }
+            Ok(MachineStep::Host(HostOp::Route(op))) => host.route(op).await.map(HostResult::Route),
+            Ok(MachineStep::Host(HostOp::BeforeSend { wire, context })) => host
                 .before_send(*wire, &context)
                 .await
                 .map(|wire| HostResult::BeforeSend(Box::new(wire))),
-            HostOp::Emit(event) => host.emit(&event).await.map(|()| HostResult::Emitted),
+            Ok(MachineStep::Host(HostOp::Emit(event))) => {
+                host.emit(&event).await.map(|()| HostResult::Emitted)
+            }
+            Ok(MachineStep::Host(HostOp::AttemptFailed {
+                attempt,
+                class,
+                error,
+            })) => host
+                .attempt_failed(&attempt, class, &error)
+                .await
+                .map(|()| HostResult::Recorded),
+            Err(error) => break Err(error),
         };
         match answer {
             Ok(answer) => result = Some(answer),
@@ -60,12 +70,14 @@ mod tests {
         type Error = &'static str;
         type Op = &'static str;
         type OpResult = ();
+        type Chunk = &'static str;
     }
 
     struct Flag(bool);
 
     struct Scripted {
         ops: Vec<&'static str>,
+        chunks: Vec<&'static str>,
         outcome: Result<bool, &'static str>,
     }
 
@@ -77,6 +89,9 @@ mod tests {
             Box::pin(async move {
                 if !self.ops.is_empty() {
                     return Ok(MachineStep::Host(HostOp::Route(self.ops.remove(0))));
+                }
+                if !self.chunks.is_empty() {
+                    return Ok(MachineStep::Yield(self.chunks.remove(0)));
                 }
                 self.outcome.map(|flag| MachineStep::Complete(Flag(flag)))
             })
@@ -114,11 +129,17 @@ mod tests {
             });
             Ok(())
         }
+
+        async fn consume(&self, chunk: &'static str) -> Result<(), &'static str> {
+            self.seen.lock().unwrap().push(format!("chunk:{chunk}"));
+            Ok(())
+        }
     }
 
     fn scripted(ops: &[&'static str], outcome: Result<bool, &'static str>) -> Scripted {
         Scripted {
             ops: ops.to_vec(),
+            chunks: Vec::new(),
             outcome,
         }
     }
@@ -131,6 +152,22 @@ mod tests {
         assert_eq!(
             *host.seen.lock().unwrap(),
             ["route:project", "route:send", "succeeded"]
+        );
+    }
+
+    #[tokio::test]
+    async fn chunks_reach_the_consumer_in_order_before_the_terminal() {
+        let host = Recording::default();
+        let machine = Scripted {
+            ops: vec!["send"],
+            chunks: vec!["a", "b"],
+            outcome: Ok(true),
+        };
+        let outcome = run(machine, &host).await;
+        assert!(outcome.is_ok_and(|flag| flag.0));
+        assert_eq!(
+            *host.seen.lock().unwrap(),
+            ["route:send", "chunk:a", "chunk:b", "succeeded"]
         );
     }
 

@@ -41,3 +41,4 @@ veil.workspace = true
 aws-smithy-eventstream = "=0.61.1"
 aws-smithy-types = "1.6.1"
 rstest.workspace = true
+rstest_reuse.workspace = true

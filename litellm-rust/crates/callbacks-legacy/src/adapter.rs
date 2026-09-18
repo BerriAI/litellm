@@ -2,7 +2,10 @@
 //! raises is answered with the same `Logging` calls, in the same order, as the Python
 //! `@client` path makes them.
 
-use litellm_callbacks::event::{CallEvent, FailureOrigin, RequestContext, Timing, WireRequest};
+use litellm_callbacks::event::{
+    AttemptInfo, CallEvent, FailureOrigin, RequestContext, Timing, WireRequest, epoch_seconds,
+};
+use litellm_callbacks::failure::FailureClass;
 use litellm_host_python::{
     AdapterStep, CallbackAdapter, PublicValue, from_py, missing_state, to_py,
 };
@@ -45,6 +48,9 @@ pub struct LegacyLogging {
     asynchronous: bool,
     internal: bool,
     pending: Option<Pending>,
+    /// The current attempt's failure already reached the failure callbacks, so the
+    /// terminal failure that follows it dispatches nothing more.
+    attempt_dispatched: bool,
 }
 
 fn datetime(py: Python<'_>, epoch_seconds: f64) -> PyResult<Py<PyAny>> {
@@ -78,7 +84,31 @@ impl LegacyLogging {
             asynchronous,
             internal: false,
             pending: None,
+            attempt_dispatched: false,
         }
+    }
+
+    /// A later attempt of the same call. In Python each attempt is its own `@client`
+    /// call: the previous attempt's context is restored, `function_setup` runs again on
+    /// the caller's keywords with a fresh call id and the shared trace id, and the
+    /// deployment hook and limits run for the new attempt.
+    fn restart(&mut self, py: Python<'_>, attempt: &AttemptInfo) -> PyResult<AdapterStep> {
+        if let Some(logger) = self.logger.take() {
+            logger.restore_context(py)?;
+        }
+        let fresh = self.call.kwargs().bind(py).copy()?;
+        for stale in ["litellm_call_id", "litellm_logging_obj"] {
+            if fresh.contains(stale)? {
+                fresh.del_item(stale)?;
+            }
+        }
+        fresh.set_item("litellm_trace_id", &attempt.trace_id)?;
+        self.response = None;
+        self.error = None;
+        self.body = None;
+        self.headers = None;
+        self.attempt_dispatched = false;
+        self.begin(py, fresh.unbind(), epoch_seconds())
     }
 
     /// Deployment hooks are awaited, and Python's synchronous `@client` wrapper never
@@ -133,15 +163,6 @@ impl LegacyLogging {
             end: self.end.as_ref().map(|value| value.clone_ref(py)),
         };
         if !self.asynchronous {
-            if !logger.callbacks_needed(py, "sync_success")? {
-                return logger.success_bookkeeping(
-                    py,
-                    &self.response,
-                    &self.start,
-                    &self.end,
-                    false,
-                );
-            }
             return pending().sync(py);
         }
         if !self.internal
@@ -245,10 +266,8 @@ impl CallbackAdapter for LegacyLogging {
         let body = to_py(py, &wire.body)?
             .into_bound(py)
             .cast_into::<PyDict>()?;
-        for name in &context.passthrough_fields {
-            if body.contains(name)?
-                && let Some(value) = self.call.lookup(py, name)?
-            {
+        for name in context.passthrough_fields.iter() {
+            if let Some(value) = self.call.lookup(py, name)? {
                 body.set_item(name, value)?;
             }
         }
@@ -305,6 +324,16 @@ impl CallbackAdapter for LegacyLogging {
         public: Option<PublicValue<'_>>,
     ) -> PyResult<AdapterStep> {
         match (event, public) {
+            (CallEvent::AttemptStarted { attempt }, _) if attempt.index == 0 => {
+                Ok(AdapterStep::Done)
+            }
+            (CallEvent::AttemptStarted { attempt }, _) => self.restart(py, attempt),
+            (CallEvent::Failed { timing, .. }, Some(PublicValue::Error(_)))
+                if self.attempt_dispatched =>
+            {
+                self.end = Some(datetime(py, timing.end_time)?);
+                Ok(AdapterStep::Done)
+            }
             (CallEvent::ResponseReceived { raw }, _) => {
                 let logger = self.logger()?;
                 if logger.callbacks_needed(py, "payload")? {
@@ -338,6 +367,31 @@ impl CallbackAdapter for LegacyLogging {
             }
             _ => Err(missing_state()),
         }
+    }
+
+    /// The attempt's failure families, exactly as the terminal failure of a lone call
+    /// runs them: the deployment failure hook, then the sync and async handlers.
+    fn attempt_failed(
+        &mut self,
+        py: Python<'_>,
+        _attempt: &AttemptInfo,
+        _class: FailureClass,
+        error: &PyErr,
+    ) -> PyResult<AdapterStep> {
+        self.end = Some(datetime(py, epoch_seconds())?);
+        self.error = Some(error.clone_ref(py).into_value(py));
+        self.attempt_dispatched = true;
+        if self.logger.is_some() && self.deployment_hooks(py)? {
+            let error = self.error.as_ref().ok_or_else(missing_state)?;
+            self.pending = Some(Pending::DeploymentFailure);
+            return Ok(AdapterStep::Await(DeploymentHooks::after_failure(
+                py,
+                self.call.kwargs(),
+                error,
+                self.surface.call_type,
+            )?));
+        }
+        self.dispatch_failure(py)
     }
 
     fn resume(&mut self, py: Python<'_>, result: PyResult<Py<PyAny>>) -> PyResult<AdapterStep> {
@@ -384,167 +438,14 @@ impl CallbackAdapter for LegacyLogging {
 }
 
 #[cfg(test)]
-mod tests {
-    use pyo3::types::PyTuple;
-
-    use super::*;
-
-    fn adapter(
-        py: Python<'_>,
-        logger: Py<PyAny>,
-        response: Py<PyAny>,
-        asynchronous: bool,
-    ) -> LegacyLogging {
-        LegacyLogging {
-            surface: LegacySurface {
-                call_type: "test",
-                input_description: "test input",
-            },
-            call: PublicCall::capture(
-                &py.None().into_bound(py),
-                &PyTuple::empty(py),
-                &PyDict::new(py),
-            )
-            .unwrap(),
-            logger: Some(logger.extract(py).unwrap()),
-            start: py.None(),
-            end: Some(py.None()),
-            response: Some(response),
-            error: None,
-            body: None,
-            headers: None,
-            asynchronous,
-            internal: false,
-            pending: None,
-        }
-    }
-
-    #[test]
-    fn success_dispatch_reports_ordinary_failures_without_replacing_response() {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = PyDict::new(py);
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-import sys
-
-response = object()
-failure = ValueError('terminal diagnostic')
-diagnostics = []
-old_hook = sys.unraisablehook
-sys.unraisablehook = lambda event: diagnostics.append(event.exc_value)
-
-class Logger:
-    def handle_sync_success_callbacks_for_async_calls(self, *args):
-        raise failure
-
-logger = Logger()
-"#
-                ),
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-            let response = locals.get_item("response").unwrap().unwrap().unbind();
-            let mut logging = adapter(
-                py,
-                locals.get_item("logger").unwrap().unwrap().unbind(),
-                response.clone_ref(py),
-                true,
-            );
-            logging.internal = true;
-            logging.dispatch_success(py).unwrap();
-            assert!(logging.response.as_ref().unwrap().is(&response));
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-assert diagnostics == [failure]
-sys.unraisablehook = old_hook
-"#
-                ),
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-        });
-    }
-
-    #[test]
-    fn failure_dispatch_keeps_the_selected_error_and_runs_both_families_once() {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = PyDict::new(py);
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-import sys
-import types
-
-module = types.ModuleType('litellm.rust_bridge.legacy_callbacks')
-module.failure_bookkeeping = lambda *args: None
-sys.modules.setdefault('litellm', types.ModuleType('litellm'))
-sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bridge'))
-sys.modules['litellm.rust_bridge.legacy_callbacks'] = module
-
-selected = ValueError('selected')
-observed = []
-
-class Logger:
-    _native_callback_fast_path = False
-
-    def failure_handler(self, exception, trace, start, end):
-        observed.append(('sync', exception))
-        raise RuntimeError('handler failed')
-
-    def async_failure_handler(self, exception, trace, start, end):
-        observed.append(('async', exception))
-        return object()
-
-logger = Logger()
-"#
-                ),
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-            let mut logging = adapter(
-                py,
-                locals.get_item("logger").unwrap().unwrap().unbind(),
-                py.None(),
-                true,
-            );
-            let selected = locals.get_item("selected").unwrap().unwrap();
-            let step = logging
-                .emit(
-                    py,
-                    &CallEvent::Failed {
-                        timing: Timing {
-                            start_time: 0.0,
-                            end_time: 1.0,
-                        },
-                        origin: FailureOrigin::Host,
-                    },
-                    Some(PublicValue::Error(&PyErr::from_value(selected.clone()))),
-                )
-                .unwrap();
-            assert!(matches!(step, AdapterStep::Await(_)));
-            assert!(matches!(
-                logging.resume(py, Ok(py.None())).unwrap(),
-                AdapterStep::Done
-            ));
-            assert!(logging.error.as_ref().unwrap().bind(py).is(&selected));
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-assert [name for name, _ in observed] == ['sync', 'async']
-assert all(error is selected for _, error in observed)
-"#
-                ),
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-        });
-    }
-}
+#[path = "../tests/attempts.rs"]
+mod attempts_tests;
+#[cfg(test)]
+#[path = "../tests/deployment_hooks.rs"]
+mod deployment_hooks_tests;
+#[cfg(test)]
+#[path = "../tests/payload.rs"]
+mod payload_tests;
+#[cfg(test)]
+#[path = "../tests/terminal.rs"]
+mod terminal_tests;

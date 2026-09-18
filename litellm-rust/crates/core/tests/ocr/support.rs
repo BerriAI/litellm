@@ -28,9 +28,23 @@ pub(crate) async fn perform_ocr_with(
 }
 
 pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> LiteLLMOcrRequest {
+    wire_request_with_document(
+        model,
+        base,
+        json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
+        options,
+    )
+}
+
+pub(crate) fn wire_request_with_document(
+    model: &str,
+    base: &str,
+    document: Value,
+    options: Value,
+) -> LiteLLMOcrRequest {
     decode_request(OcrWireRequest {
         model: model.into(),
-        document: json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
+        document,
         api_key: Some("test-key".into()),
         api_base: Some(base.into()),
         custom_llm_provider: None,
@@ -54,6 +68,32 @@ pub(crate) fn with_source(request: LiteLLMOcrRequest, source: &str) -> LiteLLMOc
     let request = resolved_request(request);
     let document = request.document.clone().with_source(source.into());
     request.with_document(document.into())
+}
+
+pub(crate) fn request_body(request: &str) -> Value {
+    serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
+}
+
+pub(crate) const SERVED_DOCUMENT: &[u8] = b"\x89PNG served document";
+
+/// Serves [`SERVED_DOCUMENT`] as `image/png` to every connection until aborted.
+pub(crate) async fn document_server() -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0u8; 4096];
+            let _ = socket.read(&mut buffer).await.unwrap();
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                SERVED_DOCUMENT.len()
+            );
+            socket.write_all(head.as_bytes()).await.unwrap();
+            socket.write_all(SERVED_DOCUMENT).await.unwrap();
+        }
+    });
+    (base, task)
 }
 
 pub(crate) struct MockResponse {
@@ -128,4 +168,14 @@ pub(crate) async fn mock_server(
         }
     });
     (base, requests, task)
+}
+
+pub(crate) fn header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
+    request
+        .lines()
+        .take_while(|line| !line.is_empty())
+        .find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.eq_ignore_ascii_case(name).then(|| value.trim())
+        })
 }
