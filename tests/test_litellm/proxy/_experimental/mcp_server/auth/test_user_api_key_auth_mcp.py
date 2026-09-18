@@ -9444,15 +9444,11 @@ class TestScopedSessionAdmission:
 
 
 def _jwt_auth(scope, **fields):
-    """A JWT-authenticated caller with NO key row and NO team row: the only thing it carries is the
-    decoded token, whose ``scope`` claim is what the scope mappings are evaluated against."""
     return UserAPIKeyAuth(user_id="oidc-sub", jwt_claims={"sub": "oidc-sub", "scope": scope}, **fields)
 
 
 @contextlib.contextmanager
 def _jwt_scope_mappings(*mappings):
-    """A real ``JWTHandler`` configured with the given ``scope_mappings``, installed where the MCP
-    resolver reads it, alongside the proxy globals the key/team resolvers touch."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth, ScopeMapping
     from litellm.proxy.auth.handle_jwt import JWTHandler
@@ -9479,6 +9475,8 @@ def _jwt_scope_mappings(*mappings):
 _ALPHA_SCOPE = {"scope": "litellm.mcp.alpha", "mcp_servers": ["math_alpha"]}
 _BETA_ADD_SCOPE = {"scope": "litellm.mcp.beta_add", "mcp_tool_permissions": {"math_beta": ["add"]}}
 _OPS_GROUP_SCOPE = {"scope": "litellm.mcp.ops", "mcp_access_groups": ["ops-tools"]}
+_BETA_ALL_SCOPE = {"scope": "litellm.mcp.beta", "mcp_servers": ["math_beta"]}
+_BETA_MULTIPLY_SCOPE = {"scope": "litellm.mcp.beta_mul", "mcp_tool_permissions": {"math_beta": ["multiply"]}}
 
 
 def test_scope_mapping_accepts_mcp_fields():
@@ -9494,9 +9492,6 @@ def test_scope_mapping_accepts_mcp_fields():
 
 @pytest.mark.asyncio
 class TestJwtScopeMcpGrants:
-    """LIT-4505: ``litellm_jwtauth.scope_mappings`` can name MCP servers, access groups, and tools, and a
-    JWT caller with no key or team row in the DB gets exactly what its ``scope`` claim maps to."""
-
     async def test_scope_grants_server_to_caller_with_no_key_or_team_row(self):
         with _jwt_scope_mappings(_ALPHA_SCOPE, _BETA_ADD_SCOPE):
             access = await MCPRequestHandler.get_mcp_server_access(_jwt_auth("openid litellm.mcp.alpha"))
@@ -9526,6 +9521,38 @@ class TestJwtScopeMcpGrants:
             beta_tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
         assert sorted(servers) == ["math_alpha", "math_beta"]
         assert beta_tools == ["add"]
+
+    async def test_tool_scopes_on_one_server_union_their_allowlists(self):
+        with _jwt_scope_mappings(_BETA_ADD_SCOPE, _BETA_MULTIPLY_SCOPE):
+            auth = _jwt_auth("litellm.mcp.beta_add litellm.mcp.beta_mul")
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
+        assert sorted(tools) == ["add", "multiply"]
+
+    async def test_whole_server_scope_is_not_narrowed_by_another_scopes_tool_allowlist(self):
+        with _jwt_scope_mappings(_BETA_ALL_SCOPE, _BETA_ADD_SCOPE):
+            auth = _jwt_auth("litellm.mcp.beta litellm.mcp.beta_add")
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
+            can_multiply = await MCPRequestHandler.is_tool_allowed_for_server("multiply", "math_beta", auth)
+        assert tools is None, "grants are additive: the whole-server scope keeps every tool"
+        assert can_multiply is True
+
+    async def test_whole_server_grant_through_access_group_is_not_narrowed_by_tool_scope(self):
+        with (
+            _jwt_scope_mappings(_OPS_GROUP_SCOPE, _BETA_ADD_SCOPE),
+            patch.object(  # test-quality-ok: stub the DB access-group loader, same seam as the key/team tests above
+                MCPRequestHandler,
+                "_get_mcp_servers_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=["math_beta"],
+            ),
+        ):
+            auth = _jwt_auth("litellm.mcp.ops litellm.mcp.beta_add")
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
+            only_tool_scope = await MCPRequestHandler.get_allowed_tools_for_server(
+                "math_beta", _jwt_auth("litellm.mcp.beta_add")
+            )
+        assert tools is None
+        assert only_tool_scope == ["add"]
 
     @pytest.mark.parametrize("scope", ["openid profile", "", "litellm.mcp.alph", "LITELLM.MCP.ALPHA"])
     async def test_unmatched_scopes_grant_nothing(self, scope):

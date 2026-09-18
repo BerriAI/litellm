@@ -1404,23 +1404,15 @@ class JWTAuthManager:
     def mcp_permissions_from_scopes(
         scope_mappings: Sequence[ScopeMapping],
         scopes: Sequence[str],
-    ) -> LiteLLM_ObjectPermissionBase:
-        """Union the MCP grants of every scope mapping the token's scopes match, shaped like a key's
-        object_permission so the MCP resolver can expand it the same way."""
-        matched: Final = tuple(sm for sm in scope_mappings if sm.scope in scopes)
-        servers: Final = tuple(server for sm in matched for server in (sm.mcp_servers or ()))
-        access_groups: Final = tuple(group for sm in matched for group in (sm.mcp_access_groups or ()))
-        tool_servers: Final = frozenset(server for sm in matched for server in (sm.mcp_tool_permissions or {}))
-        tool_permissions: Final = {
-            server: sorted(
-                {tool for sm in matched for tool in (sm.mcp_tool_permissions or {}).get(server, ())},
+    ) -> tuple[LiteLLM_ObjectPermissionBase, ...]:
+        return tuple(
+            LiteLLM_ObjectPermissionBase(
+                mcp_servers=sm.mcp_servers,
+                mcp_access_groups=sm.mcp_access_groups,
+                mcp_tool_permissions=sm.mcp_tool_permissions,
             )
-            for server in sorted(tool_servers)
-        }
-        return LiteLLM_ObjectPermissionBase(
-            mcp_servers=sorted(set(servers)) or None,
-            mcp_access_groups=sorted(set(access_groups)) or None,
-            mcp_tool_permissions=tool_permissions or None,
+            for sm in scope_mappings
+            if sm.scope in scopes and (sm.mcp_servers or sm.mcp_access_groups or sm.mcp_tool_permissions)
         )
 
     @staticmethod
