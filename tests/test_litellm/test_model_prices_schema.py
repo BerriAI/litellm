@@ -274,3 +274,31 @@ def test_every_bedrock_openai_gpt_row_advertises_xhigh(prices: dict):
         and "xhigh" not in (resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) or ())
     ]
     assert missing == []
+
+
+def is_active_priced_mistral_chat_row(name: str, entry: dict) -> bool:
+    return (
+        name.startswith("mistral/")
+        and entry.get("mode") == "chat"
+        and entry.get("deprecation_date") is None
+        and (entry.get("input_cost_per_token") or 0) > 0
+    )
+
+
+def test_active_mistral_chat_rows_price_cache_reads_below_input(prices: dict):
+    """A Mistral chat row without a cache-read rate bills cached prompt tokens at zero, so every
+    active priced row must carry one, and it must be cheaper than a fresh input token. Mistral
+    bills cached tokens at 10% of the input price for every model (docs.mistral.ai/studio/
+    conversations/advanced/prompt-caching, read 2026-09-18), so the ratio is checked as well."""
+    drifted: Final = [
+        f"{name}: cache_read={entry.get('cache_read_input_token_cost')} input={entry['input_cost_per_token']}"
+        for name, entry in prices.items()
+        if isinstance(entry, dict)
+        and is_active_priced_mistral_chat_row(name, entry)
+        and not (
+            isinstance(entry.get("cache_read_input_token_cost"), float)
+            and 0 < entry["cache_read_input_token_cost"] < entry["input_cost_per_token"]
+            and entry["cache_read_input_token_cost"] == pytest.approx(entry["input_cost_per_token"] / 10)
+        )
+    ]
+    assert drifted == []
