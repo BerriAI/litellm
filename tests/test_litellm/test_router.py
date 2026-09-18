@@ -16925,3 +16925,41 @@ def test_deployment_id_grant_does_not_widen_when_granted_deployment_is_unavailab
         )
         == []
     )
+
+
+def test_request_user_api_key_auth_is_read_from_either_metadata_bucket():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    auth = UserAPIKeyAuth(api_key="hashed-key", models=["azure-gpt-4-id"])
+
+    assert Router._request_user_api_key_auth({"metadata": {"user_api_key_auth": auth}}) is auth
+    assert Router._request_user_api_key_auth({"litellm_metadata": {"user_api_key_auth": auth}}) is auth
+    assert Router._request_user_api_key_auth({"metadata": {}, "litellm_metadata": None}) is None
+    assert Router._request_user_api_key_auth({}) is None
+
+
+def test_grant_strings_keeps_only_string_grants():
+    assert Router._grant_strings(["gpt-4", 3, None, "azure-gpt-4-id"]) == frozenset({"gpt-4", "azure-gpt-4-id"})
+    assert Router._grant_strings(None) == frozenset()
+
+
+def test_restrict_to_granted_deployment_ids_only_narrows_deployment_id_grants():
+    router = _same_name_router_for_deployment_id_grants()
+    deployments = router.model_list
+    model_group_ids = frozenset({"openai-gpt-4-id", "azure-gpt-4-id"})
+
+    def restrict(grants: set[str]) -> set[str]:
+        return {
+            d["model_info"]["id"]
+            for d in Router._restrict_to_granted_deployment_ids(
+                model="gpt-4",
+                deployments=deployments,
+                grants=frozenset(grants),
+                model_group_ids=model_group_ids,
+            )
+        }
+
+    assert restrict({"azure-gpt-4-id"}) == {"azure-gpt-4-id"}
+    assert restrict({"azure-gpt-4-id", "openai-gpt-4-id"}) == {"azure-gpt-4-id", "openai-gpt-4-id"}
+    for broad in ({"gpt-4", "azure-gpt-4-id"}, {"*"}, {"all-proxy-models"}, {"claude"}, set()):
+        assert restrict(broad) == {"openai-gpt-4-id", "azure-gpt-4-id"}
