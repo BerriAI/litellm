@@ -5692,3 +5692,22 @@ def test_get_model_info_gemini(monkeypatch):
             assert info.get("rpm") is not None, f"{model} does not have rpm"
 
 
+@pytest.mark.parametrize(
+    "model, expects_native_config",
+    [
+        ("gemini-2.5-flash", True),
+        ("xai/grok-4.6", False),
+        ("claude-haiku-4-5@20251001", False),
+        ("openai/gpt-oss-120b-maas", False),
+    ],
+)
+def test_vertex_generate_content_config_follows_model_route(model, expects_native_config):
+    from litellm.llms.vertex_ai.google_genai.transformation import VertexAIGoogleGenAIConfig
+
+    config: Final = ProviderConfigManager.get_provider_google_genai_generate_content_config(
+        model=model, provider=litellm.LlmProviders.VERTEX_AI
+    )
+    if expects_native_config:
+        assert isinstance(config, VertexAIGoogleGenAIConfig)
+    else:
+        assert config is None
