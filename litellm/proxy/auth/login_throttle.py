@@ -39,7 +39,6 @@ from litellm.proxy.auth.network import TrustedProxyConfig, normalize_cidr_ranges
 from litellm.secret_managers.main import get_secret_bool
 
 DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS_PER_SOURCE: Final = 10
-DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS_PER_USER: Final = 5
 DEFAULT_FAILED_LOGIN_WINDOW_SECONDS: Final = 60
 DEFAULT_FAILED_LOGIN_BLOCK_SECONDS: Final = 300
 
@@ -47,7 +46,6 @@ IPV6_SOURCE_PREFIX_LENGTH: Final = 64
 
 SOURCE_LIMIT_KEY: Final = "max_failed_login_attempts_per_source"
 SOURCE_LIMIT_OVERRIDES_KEY: Final = "max_failed_login_attempts_per_source_overrides"
-USER_LIMIT_KEY: Final = "max_failed_login_attempts_per_user"
 WINDOW_KEY: Final = "failed_login_window_seconds"
 BLOCK_KEY: Final = "failed_login_block_seconds"
 TRUSTED_PROXY_RANGES_KEY: Final = "trusted_proxy_ranges"
@@ -204,6 +202,11 @@ def _source_limit(settings: Mapping[str, object], client_ip: str) -> int:
     return matches[-1][1] if matches else default
 
 
+def user_limit_for(source_limit: int) -> int:
+    """Failures allowed for one username from one address: half the address allowance, rounded up."""
+    return (source_limit + 1) // 2
+
+
 def source_group(client_ip: str) -> str:
     """The bucket an address is counted in: IPv4 as is, IPv6 by its /64, so one prefix holder cannot rotate."""
     address: Final = _parse_address(client_ip)
@@ -233,6 +236,7 @@ class LoginThrottle:
 
     ``source_limit`` is None when the source scope is off: ``trusted_proxy_ranges`` is unset, so the peer
     address may be a shared ingress. An empty list means clients connect directly and the peer is the source.
+    ``user_limit`` is derived from the address allowance either way, see ``user_limit_for``.
     """
 
     client_ip: str
@@ -257,10 +261,11 @@ class LoginThrottle:
         resolved, _ = resolve_client_ip(
             request, TrustedProxyConfig(use_forwarded_for=bool(proxies), trusted_proxy_cidrs=proxies or ())
         )
+        source_limit: Final = _source_limit(settings, resolved or LOGIN_THROTTLE_UNKNOWN_SOURCE)
         return cls(
             client_ip=resolved or LOGIN_THROTTLE_UNKNOWN_SOURCE,
-            source_limit=_source_limit(settings, resolved) if proxies is not None and resolved is not None else None,
-            user_limit=_int_setting(settings, USER_LIMIT_KEY, DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS_PER_USER),
+            source_limit=source_limit if proxies is not None and resolved is not None else None,
+            user_limit=user_limit_for(source_limit),
             window_seconds=_int_setting(settings, WINDOW_KEY, DEFAULT_FAILED_LOGIN_WINDOW_SECONDS),
             block_seconds=_int_setting(settings, BLOCK_KEY, DEFAULT_FAILED_LOGIN_BLOCK_SECONDS),
             counters=_COUNTERS,
