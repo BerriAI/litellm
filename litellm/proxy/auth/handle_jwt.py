@@ -2380,7 +2380,7 @@ class JWTAuthManager:
         return JWTIdentity(user_id=user_id if is_admin else canonical_id, user_object=user, agent_id=agent_id)
 
     @staticmethod
-    async def authorize_jwt(
+    async def authorize_jwt(  # noqa: C901  # preserves the established JWT authorization flow split from auth_builder
         api_key: str,
         jwt_handler: JWTHandler,
         request_data: dict[str, object],
