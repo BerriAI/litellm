@@ -1,12 +1,15 @@
 use std::future::Future;
 
-use crate::event::{CallEvent, WireRequest};
+use crate::event::{CallEvent, RequestContext, WireRequest};
 use crate::route::Route;
 
 /// One suspension point of a native call, performed by the host.
 pub enum HostOp<R: Route> {
     Route(R::Op),
-    BeforeSend(Box<WireRequest>),
+    BeforeSend {
+        wire: Box<WireRequest>,
+        context: Box<RequestContext>,
+    },
     Emit(CallEvent),
 }
 
@@ -21,7 +24,7 @@ impl<R: Route> HostOp<R> {
     pub fn map_op<T: Route>(self, embed: impl FnOnce(R::Op) -> T::Op) -> HostOp<T> {
         match self {
             Self::Route(op) => HostOp::Route(embed(op)),
-            Self::BeforeSend(wire) => HostOp::BeforeSend(wire),
+            Self::BeforeSend { wire, context } => HostOp::BeforeSend { wire, context },
             Self::Emit(event) => HostOp::Emit(event),
         }
     }
@@ -57,6 +60,7 @@ pub trait Host<R: Route>: Send + Sync {
     fn before_send(
         &self,
         wire: WireRequest,
+        _context: &RequestContext,
     ) -> impl Future<Output = Result<WireRequest, R::Error>> + Send {
         async move { Ok(wire) }
     }

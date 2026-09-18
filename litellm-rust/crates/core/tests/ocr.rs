@@ -198,7 +198,7 @@ fn recording_host(
 ) -> LocalOcrHost {
     let before_send_events = events.clone();
     LocalOcrHost::new(request)
-        .with_before_send(move |wire| {
+        .with_before_send(move |wire, _| {
             before_send_events.lock().unwrap().push("before_send");
             if block {
                 return Err(crate::ocr::Error::InvalidRequest("blocked".into()));
@@ -212,7 +212,7 @@ fn recording_host(
 async fn lifecycle_sends_headers_returned_by_the_before_send_operation() {
     let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
     let host = LocalOcrHost::new(wire_request("mistral/model", &base, json!({}))).with_before_send(
-        |mut wire| {
+        |mut wire, _| {
             wire.headers
                 .push(("x-core-callback".into(), "edited".into()));
             Ok(wire)
@@ -226,7 +226,7 @@ async fn lifecycle_sends_headers_returned_by_the_before_send_operation() {
 }
 
 #[tokio::test]
-async fn before_send_names_caller_owned_fields_and_secrets() {
+async fn before_send_context_names_passthrough_fields_and_secrets() {
     let (base, _, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
     let observed = Arc::new(Mutex::new(None));
     let captured = observed.clone();
@@ -235,19 +235,19 @@ async fn before_send_names_caller_owned_fields_and_secrets() {
         &base,
         json!({"pages": [0], "req_format": "native"}),
     ))
-    .with_before_send(move |wire| {
-        *captured.lock().unwrap() = Some(wire.clone());
+    .with_before_send(move |wire, context| {
+        *captured.lock().unwrap() = Some((wire.clone(), context.clone()));
         Ok(wire)
     });
     perform_ocr_with(host).await.unwrap();
     server.await.unwrap();
-    let wire = observed.lock().unwrap().take().unwrap();
-    assert_eq!(wire.custom_llm_provider, "mistral");
-    assert_eq!(wire.model, "model");
+    let (wire, context) = observed.lock().unwrap().take().unwrap();
+    assert_eq!(context.custom_llm_provider, "mistral");
+    assert_eq!(context.model, "model");
     assert_eq!(wire.body["pages"], json!([0]));
-    assert_eq!(wire.caller_fields, ["pages", "document"]);
-    assert!(wire.secret_fields.is_empty());
-    assert_eq!(wire.optional_params["req_format"], "native");
+    assert_eq!(context.passthrough_fields, ["pages", "document"]);
+    assert!(context.secret_fields.is_empty());
+    assert_eq!(context.optional_params["req_format"], "native");
 
     let (base, _, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
     let observed = Arc::new(Mutex::new(None));
@@ -262,15 +262,15 @@ async fn before_send_names_caller_owned_fields_and_secrets() {
         file_name: None,
         mime_type: Some("application/pdf".into()),
     });
-    let host = LocalOcrHost::new(request).with_before_send(move |wire| {
-        *captured.lock().unwrap() = Some(wire.clone());
+    let host = LocalOcrHost::new(request).with_before_send(move |wire, context| {
+        *captured.lock().unwrap() = Some(context.clone());
         Ok(wire)
     });
     perform_ocr_with(host).await.unwrap();
     server.await.unwrap();
-    let wire = observed.lock().unwrap().take().unwrap();
-    assert!(!wire.caller_fields.contains(&"document".to_string()));
-    assert_eq!(wire.secret_fields, ["client_secret"]);
+    let context = observed.lock().unwrap().take().unwrap();
+    assert!(!context.passthrough_fields.contains(&"document".to_string()));
+    assert_eq!(context.secret_fields, ["client_secret"]);
 }
 
 #[tokio::test]
@@ -356,7 +356,7 @@ async fn drive_until(
                     .map(HostResult::Route)
                     .map_err(HostFailure::Error)
             }
-            HostOp::BeforeSend(wire) => {
+            HostOp::BeforeSend { wire, .. } => {
                 ops.push("BeforeSend");
                 intercept(*wire).map(|wire| HostResult::BeforeSend(Box::new(wire)))
             }
@@ -590,7 +590,7 @@ async fn missing_host_result_preserves_pending_operation() {
             })))
             .await
             .unwrap(),
-        MachineStep::Host(HostOp::BeforeSend(_))
+        MachineStep::Host(HostOp::BeforeSend { .. })
     ));
 }
 
@@ -759,7 +759,9 @@ async fn interrupt_drops_provider_captures_before_returning() {
                 step = machine.resume(result.take()) => {
                     result = Some(match step.unwrap() {
                         MachineStep::Host(HostOp::Route(op)) => HostResult::Route(host.route(op).await.unwrap()),
-                        MachineStep::Host(HostOp::BeforeSend(wire)) => HostResult::BeforeSend(wire),
+                        MachineStep::Host(HostOp::BeforeSend { wire, .. }) => {
+                            HostResult::BeforeSend(wire)
+                        }
                         MachineStep::Host(HostOp::Emit(_)) => HostResult::Emitted,
                         MachineStep::Complete(_) => panic!("pending provider completed"),
                     });

@@ -2,7 +2,7 @@
 //! raises is answered with the same `Logging` calls, in the same order, as the Python
 //! `@client` path makes them.
 
-use litellm_callbacks::event::{CallEvent, FailureOrigin, Timing, WireRequest};
+use litellm_callbacks::event::{CallEvent, FailureOrigin, RequestContext, Timing, WireRequest};
 use litellm_host_python::{
     AdapterStep, CallbackAdapter, PublicValue, from_py, missing_state, to_py,
 };
@@ -230,9 +230,14 @@ impl CallbackAdapter for LegacyLogging {
         self.prepare(py)
     }
 
-    fn before_send(&mut self, py: Python<'_>, wire: Box<WireRequest>) -> PyResult<AdapterStep> {
+    fn before_send(
+        &mut self,
+        py: Python<'_>,
+        wire: Box<WireRequest>,
+        context: &RequestContext,
+    ) -> PyResult<AdapterStep> {
         let logger = self.logger()?;
-        logger.update_from_kwargs(py, self.call.kwargs(), &wire)?;
+        logger.update_from_kwargs(py, self.call.kwargs(), &wire, context)?;
         if !logger.callbacks_needed(py, "payload")? {
             logger.record_api_call_start(py)?;
             return Ok(AdapterStep::Wire(wire));
@@ -240,7 +245,7 @@ impl CallbackAdapter for LegacyLogging {
         let body = to_py(py, &wire.body)?
             .into_bound(py)
             .cast_into::<PyDict>()?;
-        for name in &wire.caller_fields {
+        for name in &context.passthrough_fields {
             if body.contains(name)?
                 && let Some(value) = self.call.lookup(py, name)?
             {

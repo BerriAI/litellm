@@ -68,7 +68,7 @@ async fn facade_acquires_supplied_entra_token_for_final_request() {
 #[tokio::test]
 async fn rejects_non_inline_body_after_guardrails() {
     let request = wire_request("azure_ai/model", "http://127.0.0.1:1", json!({}));
-    let host = LocalOcrHost::new(request).with_before_send(|mut wire| {
+    let host = LocalOcrHost::new(request).with_before_send(|mut wire, _| {
         wire.body["document"] = json!({
             "type":"document_url",
             "document_url":"https://example.com/not-inline.pdf"

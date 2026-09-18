@@ -290,7 +290,7 @@ async fn guardrail_rewrites_document_before_upload() {
     let (base, seen, server) =
         mock_server(vec![MockResponse::json(json!({"result":{"chunks":[]}}))]).await;
     let host = LocalOcrHost::new(wire_request("reducto/parse-v3", &base, json!({})))
-        .with_before_send(|wire| {
+        .with_before_send(|wire, _| {
             assert_eq!(
                 wire.body["document_url"],
                 "data:application/pdf;base64,YWJj"

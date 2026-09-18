@@ -1,4 +1,4 @@
-use litellm_callbacks::event::{CallEvent, Timing, WireRequest};
+use litellm_callbacks::event::{CallEvent, RequestContext, Timing, WireRequest};
 use litellm_callbacks::route::Route;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::gc::{PyTraverseError, PyVisit};
@@ -43,7 +43,12 @@ pub trait CallbackAdapter: Send + Sync {
         started_at: f64,
     ) -> PyResult<AdapterStep>;
 
-    fn before_send(&mut self, py: Python<'_>, wire: Box<WireRequest>) -> PyResult<AdapterStep>;
+    fn before_send(
+        &mut self,
+        py: Python<'_>,
+        wire: Box<WireRequest>,
+        context: &RequestContext,
+    ) -> PyResult<AdapterStep>;
 
     fn after_success(
         &mut self,

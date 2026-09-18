@@ -131,7 +131,7 @@ where
                 Ok(answer) => HostResult::Route(answer),
                 Err(error) => return machine.interrupt(HostFailure::Error(error)).await,
             },
-            HostOp::BeforeSend(wire) => {
+            HostOp::BeforeSend { wire, .. } => {
                 host.trace().0.push(Observed::BeforeSend);
                 HostResult::BeforeSend(wire)
             }

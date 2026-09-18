@@ -1,4 +1,4 @@
-use litellm_callbacks::event::WireRequest;
+use litellm_callbacks::event::{RequestContext, WireRequest};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -23,7 +23,7 @@ where
         request.config.get_supported_ocr_params(&request.model),
     )?;
     validate(&composed)?;
-    let caller_fields = request
+    let passthrough_fields = request
         .optional_params
         .keys()
         .filter(|name| composed.get(*name).is_some())
@@ -35,7 +35,10 @@ where
         .collect();
     let changed = request
         .host
-        .before_send(wire_request(request, url, headers, composed, caller_fields))
+        .before_send(
+            wire_request(url, headers, composed),
+            request_context(request, passthrough_fields),
+        )
         .await?;
     if !changed.body.is_object() {
         return Err(super::Error::RequestField {
@@ -46,21 +49,23 @@ where
     build_http_request(client, request, url, &changed.headers, &changed.body)
 }
 
-fn wire_request(
-    request: &PreparedOcrRequest,
-    url: &str,
-    headers: &[(String, String)],
-    body: Value,
-    caller_fields: Vec<String>,
-) -> WireRequest {
+fn wire_request(url: &str, headers: &[(String, String)], body: Value) -> WireRequest {
     WireRequest {
-        model: request.model.clone(),
-        custom_llm_provider: request.provider_name().into(),
         url: url.into(),
         headers: headers.to_vec(),
         body,
+    }
+}
+
+fn request_context(
+    request: &PreparedOcrRequest,
+    passthrough_fields: Vec<String>,
+) -> RequestContext {
+    RequestContext {
+        model: request.model.clone(),
+        custom_llm_provider: request.provider_name().into(),
         optional_params: Value::Object(request.optional_params.clone().into()),
-        caller_fields,
+        passthrough_fields,
         secret_fields: request
             .optional_params
             .keys()
@@ -98,7 +103,10 @@ pub(crate) async fn guardrail_document(
     })?;
     let changed = request
         .host
-        .before_send(wire_request(request, url, headers, body, Vec::new()))
+        .before_send(
+            wire_request(url, headers, body),
+            request_context(request, Vec::new()),
+        )
         .await?;
     let document = super::json::decode_request_value(changed.body, "guardrail.document")?;
     Ok((document, changed.headers))

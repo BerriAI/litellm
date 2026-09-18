@@ -2,7 +2,7 @@
 //! the deferred and worker-submitted success paths, and the sync-callbacks-for-async-calls
 //! duplication. All of it expires with the legacy callback contract.
 
-use litellm_callbacks::event::WireRequest;
+use litellm_callbacks::event::{RequestContext, WireRequest};
 use litellm_host_python::to_py;
 use pyo3::exceptions::PyBaseException;
 use pyo3::prelude::*;
@@ -20,6 +20,7 @@ pub trait LegacyCallbacks {
         py: Python<'_>,
         kwargs: &Py<PyDict>,
         wire: &WireRequest,
+        context: &RequestContext,
     ) -> PyResult<()>;
 
     fn record_api_call_start(&self, py: Python<'_>) -> PyResult<()>;
@@ -102,16 +103,17 @@ impl LegacyCallbacks for PythonLogger {
         py: Python<'_>,
         kwargs: &Py<PyDict>,
         wire: &WireRequest,
+        context: &RequestContext,
     ) -> PyResult<()> {
-        let secret_fields: Vec<&str> = wire.secret_fields.iter().map(String::as_str).collect();
+        let secret_fields: Vec<&str> = context.secret_fields.iter().map(String::as_str).collect();
         let update = PyDict::new(py);
         update.set_item("kwargs", redact(py, kwargs.bind(py), &secret_fields)?)?;
-        update.set_item("model", &wire.model)?;
+        update.set_item("model", &context.model)?;
         update.set_item(
             "optional_params",
             redact(
                 py,
-                &to_py(py, &wire.optional_params)?
+                &to_py(py, &context.optional_params)?
                     .into_bound(py)
                     .cast_into::<PyDict>()?,
                 &secret_fields,
@@ -136,7 +138,7 @@ impl LegacyCallbacks for PythonLogger {
             }
         }
         update.set_item("litellm_params", params)?;
-        update.set_item("custom_llm_provider", &wire.custom_llm_provider)?;
+        update.set_item("custom_llm_provider", &context.custom_llm_provider)?;
         self.object(py)
             .call_method("update_from_kwargs", (), Some(&update))?;
         Ok(())

@@ -19,14 +19,22 @@ pub struct Timing {
 /// The provider request as it is about to leave, offered to the host for rewriting.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WireRequest {
-    pub model: String,
-    pub custom_llm_provider: String,
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Value,
+}
+
+/// What the route knows about the request it is sending, for a host that logs it. The
+/// route owns these facts; a host reads them beside the wire request and never rewrites
+/// them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RequestContext {
+    pub model: String,
+    pub custom_llm_provider: String,
+    /// The route's parameters before the provider transformation.
     pub optional_params: Value,
-    /// Body keys whose values are the caller's own inputs, unchanged by the route.
-    pub caller_fields: Vec<String>,
+    /// Body keys whose values are the caller's inputs, unchanged by the route.
+    pub passthrough_fields: Vec<String>,
     /// Optional-param names that carry credentials and must be redacted when logged.
     pub secret_fields: Vec<String>,
 }

@@ -252,15 +252,17 @@ where
                     .invoke(py, arguments.bind(py), op)
                     .map(HostResult::Route)
             }
-            HostOp::BeforeSend(wire) => match self.adapter.before_send(py, wire) {
-                Ok(AdapterStep::Wire(wire)) => Ok(HostResult::BeforeSend(wire)),
-                Ok(AdapterStep::Await(awaitable)) => {
-                    self.pending = Some(Pending::Adapter(Expect::Wire));
-                    return Ok(Next::Return(ExecutionStep::Await(awaitable)));
+            HostOp::BeforeSend { wire, context } => {
+                match self.adapter.before_send(py, wire, &context) {
+                    Ok(AdapterStep::Wire(wire)) => Ok(HostResult::BeforeSend(wire)),
+                    Ok(AdapterStep::Await(awaitable)) => {
+                        self.pending = Some(Pending::Adapter(Expect::Wire));
+                        return Ok(Next::Return(ExecutionStep::Await(awaitable)));
+                    }
+                    Ok(_) => return Err(missing_state()),
+                    Err(error) => Err(error),
                 }
-                Ok(_) => return Err(missing_state()),
-                Err(error) => Err(error),
-            },
+            }
             HostOp::Emit(event) => match self.adapter.emit(py, &event, None) {
                 Ok(AdapterStep::Done) => Ok(HostResult::Emitted),
                 Ok(AdapterStep::Await(awaitable)) => {
@@ -448,7 +450,7 @@ where
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use litellm_callbacks::event::WireRequest;
+    use litellm_callbacks::event::{RequestContext, WireRequest};
     use litellm_callbacks::machine::{Interrupted, Step};
     use pyo3::exceptions::{PyBaseException, PyValueError};
     use pyo3::types::PyDict;
@@ -505,13 +507,18 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
 
     fn wire() -> WireRequest {
         WireRequest {
-            model: "model".into(),
-            custom_llm_provider: "provider".into(),
             url: "https://example.invalid".into(),
             headers: Vec::new(),
             body: serde_json::json!({}),
+        }
+    }
+
+    fn context() -> RequestContext {
+        RequestContext {
+            model: "model".into(),
+            custom_llm_provider: "provider".into(),
             optional_params: serde_json::json!({}),
-            caller_fields: Vec::new(),
+            passthrough_fields: Vec::new(),
             secret_fields: Vec::new(),
         }
     }
@@ -626,7 +633,12 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             Ok(AdapterStep::Arguments(arguments))
         }
 
-        fn before_send(&mut self, _: Python<'_>, wire: Box<WireRequest>) -> PyResult<AdapterStep> {
+        fn before_send(
+            &mut self,
+            _: Python<'_>,
+            wire: Box<WireRequest>,
+            _: &RequestContext,
+        ) -> PyResult<AdapterStep> {
             self.log.push("before_send");
             Ok(AdapterStep::Wire(Box::new(WireRequest {
                 url: "rewritten".into(),
@@ -720,7 +732,10 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         ScriptedMachine {
             ops: vec![
                 HostOp::Route("project"),
-                HostOp::BeforeSend(Box::new(wire())),
+                HostOp::BeforeSend {
+                    wire: Box::new(wire()),
+                    context: Box::new(context()),
+                },
                 HostOp::Emit(CallEvent::ResponseReceived {
                     raw: litellm_callbacks::event::RawResponse { body: "raw".into() },
                 }),

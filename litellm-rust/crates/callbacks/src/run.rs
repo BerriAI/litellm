@@ -20,8 +20,8 @@ where
         };
         let answer = match step {
             HostOp::Route(op) => host.route(op).await.map(HostResult::Route),
-            HostOp::BeforeSend(wire) => host
-                .before_send(*wire)
+            HostOp::BeforeSend { wire, context } => host
+                .before_send(*wire, &context)
                 .await
                 .map(|wire| HostResult::BeforeSend(Box::new(wire))),
             HostOp::Emit(event) => host.emit(&event).await.map(|()| HostResult::Emitted),

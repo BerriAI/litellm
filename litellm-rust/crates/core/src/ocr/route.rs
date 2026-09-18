@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use litellm_auth::ResolvedCredential;
-use litellm_callbacks::event::{CallEvent, WireRequest};
+use litellm_callbacks::event::{CallEvent, RequestContext, WireRequest};
 use litellm_callbacks::route::Route;
 
 use super::handler::perform_ocr_request;
@@ -112,7 +112,8 @@ async fn prepare_request_document(
 }
 
 type Reader = Box<dyn Fn() -> Result<OcrFileContent, Error> + Send + Sync>;
-type BeforeSend = Box<dyn Fn(WireRequest) -> Result<WireRequest, Error> + Send + Sync>;
+type BeforeSend =
+    Box<dyn Fn(WireRequest, &RequestContext) -> Result<WireRequest, Error> + Send + Sync>;
 type Observer = Box<dyn Fn(&CallEvent) + Send + Sync>;
 
 /// The in-process host for a request that is already in hand: the request answers
@@ -146,7 +147,10 @@ impl LocalOcrHost {
 
     pub fn with_before_send(
         self,
-        before_send: impl Fn(WireRequest) -> Result<WireRequest, Error> + Send + Sync + 'static,
+        before_send: impl Fn(WireRequest, &RequestContext) -> Result<WireRequest, Error>
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
         Self {
             before_send: Some(Box::new(before_send)),
@@ -189,9 +193,13 @@ impl litellm_callbacks::host::Host<Ocr> for LocalOcrHost {
         }
     }
 
-    async fn before_send(&self, wire: WireRequest) -> Result<WireRequest, Error> {
+    async fn before_send(
+        &self,
+        wire: WireRequest,
+        context: &RequestContext,
+    ) -> Result<WireRequest, Error> {
         match &self.before_send {
-            Some(before_send) => before_send(wire),
+            Some(before_send) => before_send(wire, context),
             None => Ok(wire),
         }
     }

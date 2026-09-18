@@ -9,7 +9,7 @@ use std::pin::Pin;
 
 use tokio::sync::{mpsc, oneshot};
 
-use litellm_callbacks::event::{CallEvent, WireRequest};
+use litellm_callbacks::event::{CallEvent, RequestContext, WireRequest};
 use litellm_callbacks::host::{HostOp, HostResult};
 use litellm_callbacks::machine::{HostFailure, Interrupted, Machine, MachineStep, Step};
 use litellm_callbacks::route::Route;
@@ -78,11 +78,19 @@ where
         }
     }
 
-    pub async fn before_send(&self, wire: WireRequest) -> Result<WireRequest, R::Error> {
+    pub async fn before_send(
+        &self,
+        wire: WireRequest,
+        context: RequestContext,
+    ) -> Result<WireRequest, R::Error> {
         if self.ops.is_none() {
             return Ok(wire);
         }
-        match self.invoke(HostOp::BeforeSend(Box::new(wire))).await? {
+        let op = HostOp::BeforeSend {
+            wire: Box::new(wire),
+            context: Box::new(context),
+        };
+        match self.invoke(op).await? {
             HostResult::BeforeSend(wire) => Ok(*wire),
             _ => Err(MachineFault::Mismatch.into()),
         }
