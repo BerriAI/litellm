@@ -10,7 +10,17 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Final, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, RootModel, model_serializer, model_validator
+from e2e_http import PartialBody
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    RootModel,
+    model_serializer,
+    model_validator,
+)
 
 # ---------- keys ----------
 
@@ -55,6 +65,7 @@ class KeyMetadata(BaseModel):
 class ObjectPermission(BaseModel):
     mcp_servers: list[str] | None = None
     mcp_access_groups: list[str] | None = None
+    mcp_toolsets: list[str] | None = None
 
 
 class KeyGenerateBody(BaseModel):
@@ -65,6 +76,7 @@ class KeyGenerateBody(BaseModel):
     budget_duration: str | None = None
     user_id: str | None = None
     team_id: str | None = None
+    project_id: str | None = None
     organization_id: str | None = None
     budget_id: str | None = None
     key_alias: str | None = None
@@ -77,11 +89,12 @@ class KeyGenerateBody(BaseModel):
     allowed_passthrough_routes: list[str] | None = None
     metadata: KeyMetadata | None = None
     object_permission: ObjectPermission | None = None
-    router_settings: "RouterSettingsOverride | None" = None
+    router_settings: RouterSettingsOverride | None = None
 
 
 class KeyGenerateResponse(BaseModel):
     key: str
+    token: str | None = None
     key_alias: str | None = None
     models: list[str] = []
     max_budget: float | None = None
@@ -123,10 +136,13 @@ class LiteLLMBudgetTable(BaseModel):
 
 class KeyInfo(BaseModel):
     key_alias: str | None = None
+    status: str | None = None
     metadata: KeyMetadata | None = None
     models: list[str] = []
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    project_id: str | None = None
+    organization_id: str | None = None
     team_id: str | None = None
     blocked: bool | None = None
     spend: float | None = None
@@ -176,6 +192,7 @@ class ImageUrl(BaseModel):
 class TextContentPart(BaseModel):
     type: str = "text"
     text: str
+    cache_control: "CacheControl | None" = None
 
 
 class ImageContentPart(BaseModel):
@@ -268,10 +285,15 @@ class ChatToolResultTurn(BaseModel):
 type ChatTurn = ChatMessage | ChatAssistantTurn | ChatToolResultTurn
 
 
+class ChatStreamOptions(BaseModel):
+    include_usage: bool
+
+
 class ChatBody(BaseModel):
     model: str
     messages: Sequence[ChatTurn]
     stream: bool = False
+    stream_options: ChatStreamOptions | None = None
     max_tokens: int | None = None
     max_completion_tokens: int | None = None
     temperature: float | None = None
@@ -289,20 +311,39 @@ class ChatBody(BaseModel):
     cache: dict[str, bool] | None = {"no-cache": True}
 
 
+RoutingStrategy = Literal[
+    "simple-shuffle",
+    "least-busy",
+    "usage-based-routing-v2",
+    "latency-based-routing",
+    "cost-based-routing",
+]
+
+
 class RouterSettingsOverride(BaseModel):
     """Router settings a test scopes below the global config: sent per request as
     `router_settings_override` in a /chat/completions body (the reliability suite's
-    fallback and retry knobs) or stored on a key as `router_settings` at
-    /key/generate (the auto-router suite's tag filtering switch). Serialized
-    exclude_none, so an override sets only the knobs a test exercises. Each
-    fallbacks map is model_name -> the ordered fallback model_names to try."""
+    fallback, retry, routing-strategy, and deadline knobs) or stored on a key as
+    `router_settings` at /key/generate (the auto-router suite's tag filtering
+    switch). Serialized exclude_none, so an override sets only the knobs a test
+    exercises. Each fallbacks map is model_name -> the ordered fallback model_names
+    to try."""
 
     fallbacks: list[dict[str, list[str]]] | None = None
     context_window_fallbacks: list[dict[str, list[str]]] | None = None
     content_policy_fallbacks: list[dict[str, list[str]]] | None = None
     num_retries: int | None = None
+    routing_strategy: RoutingStrategy | None = None
     model_group_retry_policy: dict[str, dict[str, int]] | None = None
     enable_tag_filtering: bool | None = None
+
+
+class DeploymentExtraBody(BaseModel):
+    """`litellm_params.extra_body` of a deployment whose upstream is another LiteLLM
+    proxy: forwarded verbatim in every request body, so the inner proxy honors the
+    same per-request router knobs an end user could send it."""
+
+    router_settings_override: RouterSettingsOverride | None = None
 
 
 class ReliabilityChatBody(ChatBody):
@@ -473,12 +514,18 @@ class AnthropicToolResultTurn(BaseModel):
 type AnthropicMessage = ChatMessage | AnthropicAssistantTurn | AnthropicToolResultTurn
 
 
+class AnthropicToolChoice(BaseModel):
+    type: Literal["auto", "any", "tool", "none"]
+    name: str | None = None
+
+
 class AnthropicMessagesBody(BaseModel):
     model: str
     messages: list[AnthropicMessage]
     max_tokens: int
     stream: bool | None = None
     tools: list[AnthropicTool] | None = None
+    tool_choice: AnthropicToolChoice | None = None
     guardrails: list[str] | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
 
@@ -516,6 +563,15 @@ class CountTokensResponse(BaseModel):
 # ---------- mcp servers ----------
 
 
+class McpInfo(BaseModel):
+    """The `mcp_info` display block stored on an MCP server; only the fields the
+    lifecycle test writes and reads back."""
+
+    server_name: str | None = None
+    description: str | None = None
+    logo_url: str | None = None
+
+
 class McpServerCreateBody(BaseModel):
     """POST /v1/mcp/server. For a gateway-managed OAuth server, `auth_type` is
     `oauth2` and `oauth2_flow` is `authorization_code`; the upstream endpoints
@@ -530,6 +586,18 @@ class McpServerCreateBody(BaseModel):
     oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
     authorization_url: str | None = None
     token_url: str | None = None
+    server_name: str | None = None
+    description: str | None = None
+    mcp_info: McpInfo | None = None
+
+
+class McpServerUpdateBody(PartialBody):
+    """PUT /v1/mcp/server: a field left unset keeps its stored value, a field set
+    to None is cleared."""
+
+    server_id: str
+    alias: str | None = None
+    description: str | None = None
 
 
 class McpServerInfo(BaseModel):
@@ -541,6 +609,54 @@ class McpServerInfo(BaseModel):
     auth_type: str | None = None
     oauth2_flow: str | None = None
     allow_all_keys: bool | None = None
+
+
+class McpServerRow(McpServerInfo):
+    """A stored MCP server as the create, get, and list routes return it: the
+    fields the lifecycle test asserts survive the round trip."""
+
+    server_name: str | None = None
+    transport: str | None = None
+    description: str | None = None
+    mcp_info: McpInfo | None = None
+
+
+class McpServerListResponse(RootModel[list[McpServerRow]]):
+    """GET /v1/mcp/server answers with a bare array of servers."""
+
+
+class ToolsetTool(BaseModel):
+    server_id: str
+    tool_name: str
+
+
+class ToolsetCreateBody(BaseModel):
+    toolset_name: str
+    description: str | None = None
+    tools: list[ToolsetTool]
+
+
+class ToolsetUpdateBody(PartialBody):
+    """PUT /v1/mcp/toolset: a field left unset keeps its stored value, a field set
+    to None is cleared."""
+
+    toolset_id: str
+    description: str | None = None
+    tools: list[ToolsetTool] | None = None
+
+
+class ToolsetRow(BaseModel):
+    """A stored toolset as POST /v1/mcp/toolset, GET /v1/mcp/toolset/{toolset_id},
+    and each row of GET /v1/mcp/toolset return it."""
+
+    toolset_id: str
+    toolset_name: str
+    description: str | None = None
+    tools: list[ToolsetTool] = Field(default_factory=list)
+
+
+class ToolsetListResponse(RootModel[list[ToolsetRow]]):
+    """GET /v1/mcp/toolset answers with a bare array of toolsets."""
 
 
 class EmbedBody(BaseModel):
@@ -601,6 +717,7 @@ class GuardrailRunRecord(BaseModel):
 
 
 class SpendLogMetadata(BaseModel):
+    user_api_key_alias: str | None = None
     applied_guardrails: list[str] | None = None
     guardrail_information: list[GuardrailRunRecord] | None = None
 
@@ -622,6 +739,7 @@ class SpendLogRow(BaseModel):
     total_tokens: int | None = None
     request_tags: list[str] | None = None
     metadata: SpendLogMetadata | None = None
+    proxy_server_request: JsonValue = None
 
 
 class SpendLogs(RootModel[list[SpendLogRow]]):
@@ -759,6 +877,17 @@ class ModelInfoResponse(BaseModel):
     data: list[ModelInfoEntry] = []
 
 
+class RouterCurrentValues(BaseModel):
+    """The `current_values` block of GET /router/settings: the router knobs the
+    proxy is actually running with (only the ones a test preconditions on)."""
+
+    optional_pre_call_checks: tuple[str, ...] = ()
+
+
+class RouterSettingsResponse(BaseModel):
+    current_values: RouterCurrentValues
+
+
 class CostMapEntry(BaseModel):
     model_config = ConfigDict(extra="ignore")
     litellm_provider: str | None = None
@@ -823,6 +952,7 @@ class LiteLLMParamsBody(BaseModel):
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_region_name: str | None = None
+    aws_bedrock_runtime_endpoint: str | None = None
     vertex_project: str | None = None
     vertex_location: str | None = None
     vertex_credentials: str | None = None
@@ -849,10 +979,14 @@ class LiteLLMParamsBody(BaseModel):
     auto_router_default_model: str | None = None
     auto_router_embedding_model: str | None = None
     tags: list[str] | None = None
-    mock_response: str | None = None
+    mock_response: str | list[float] | None = None
     timeout: float | None = None
+    max_retries: int | None = None
+    cooldown_time: float | None = None
+    extra_body: DeploymentExtraBody | None = None
     tpm: int | None = None
     weight: int | None = None
+    order: int | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
@@ -972,6 +1106,7 @@ class KeyUpdateBody(BaseModel):
     clears `budget_reset_at` with it), and `metadata` replaces the stored metadata wholesale."""
 
     key: str
+    project_id: str | Cleared | None = None
     models: list[str] | None = None
     key_alias: str | None = None
     tpm_limit: int | None = None
@@ -1002,13 +1137,13 @@ class UiLoginBody(BaseModel):
 
 
 class UiLoginResponse(BaseModel):
-    token: str
+    token: str = Field(repr=False)
     redirect_url: str
 
 
 class UiSessionClaims(BaseModel):
     user_id: str
-    key: str
+    key: str = Field(repr=False)
     user_role: str
     login_method: Literal["sso", "username_password"]
     exp: int
@@ -1046,6 +1181,7 @@ class TeamInfoParams(BaseModel):
 
 
 class TeamData(BaseModel):
+    organization_id: str | None = None
     team_alias: str | None = None
     models: list[str] = []
     members_with_roles: list[TeamMemberEntry] = []
@@ -1086,6 +1222,7 @@ class UserNewBody(BaseModel):
     user_email: str
     user_role: UserRole
     user_id: str | None = None
+    auto_create_key: bool | None = None
 
 
 class UserNewResponse(BaseModel):
@@ -1098,7 +1235,7 @@ class UserUpdateBody(BaseModel):
 
 
 class UserInfoParams(BaseModel):
-    user_id: str
+    user_id: str | None = None
 
 
 class UserData(BaseModel):
@@ -1151,14 +1288,34 @@ class OrgInfoParams(BaseModel):
     organization_id: str
 
 
+class OrgMembership(BaseModel):
+    user_id: str
+    user_role: str
+
+
 class OrgInfoResponse(BaseModel):
     organization_id: str
     organization_alias: str | None = None
     models: list[str] = []
+    members: tuple[OrgMembership, ...] = ()
+
+
+class OrgMemberEntry(BaseModel):
+    user_id: str
+    role: Literal["org_admin", "internal_user"]
+
+
+class OrgMemberAddBody(BaseModel):
+    organization_id: str
+    member: OrgMemberEntry
 
 
 class OrgDeleteBody(BaseModel):
     organization_ids: list[str]
+
+
+class OrgDeleteResponse(RootModel[tuple[OrgInfoResponse, ...]]):
+    pass
 
 
 # ---------- tags (management) ----------
@@ -1185,6 +1342,19 @@ class TagListResponse(RootModel[list[TagListEntry]]):
 
 
 # ---------- health / lifecycle ----------
+
+
+class ProcessMemory(BaseModel):
+    ram_usage_mb: float | None = None
+    system_memory_percent: float | None = None
+    error: str | None = None
+
+
+class MemorySummaryResponse(BaseModel):
+    worker_pid: int
+    hostname: str | None = None
+    status: str
+    memory: ProcessMemory
 
 
 class ReadinessResponse(BaseModel):

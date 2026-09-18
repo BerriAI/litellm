@@ -8,7 +8,21 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { CircleHelp } from "lucide-react";
 import type { ComponentProps } from "react";
-import { TeamData } from "./TeamInfo";
+import { TeamData, TeamMembership } from "./TeamInfo";
+
+export const seedMemberBudgetFields = (
+  record: Member,
+  budget: TeamMembership["litellm_budget_table"] | undefined,
+): Member => ({
+  ...record,
+  max_budget_in_team: budget?.max_budget ?? null,
+  tpm_limit: budget?.tpm_limit ?? null,
+  rpm_limit: budget?.rpm_limit ?? null,
+  budget_duration: budget?.budget_duration || null,
+  allowed_models: budget?.allowed_models || [],
+  temp_budget_increase: budget?.temp_budget_increase ?? null,
+  temp_budget_expiry: budget?.temp_budget_expiry ?? null,
+});
 
 interface TeamMemberTabProps {
   teamData: TeamData;
@@ -108,7 +122,7 @@ export default function TeamMemberTab({
         </span>
       ),
       key: "model_scope",
-      render: (_: unknown, record: Member) => {
+      render: (record: Member) => {
         const models = getUserAllowedModels(record.user_id);
         if (!models) {
           return <span className="text-muted-foreground">(all team models)</span>;
@@ -141,9 +155,8 @@ export default function TeamMemberTab({
         </span>
       ),
       key: "spend",
-      render: (_: unknown, record: Member) => (
-        <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={2} />
-      ),
+      sortValue: (record: Member) => getUserCurrentCycleSpend(record.user_id),
+      render: (record: Member) => <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={2} />,
     },
     {
       title: (
@@ -155,19 +168,22 @@ export default function TeamMemberTab({
         </span>
       ),
       key: "total_spend",
-      render: (_: unknown, record: Member) => <MoneyCell value={getUserTotalSpend(record.user_id)} decimals={2} />,
+      sortValue: (record: Member) => getUserTotalSpend(record.user_id),
+      render: (record: Member) => <MoneyCell value={getUserTotalSpend(record.user_id)} decimals={2} />,
     },
     {
       title: "Team Member Budget (USD)",
       key: "budget",
-      render: (_: unknown, record: Member) => (
+      sortValue: (record: Member) => getUserBudget(record.user_id),
+      render: (record: Member) => (
         <MoneyCell value={getUserBudget(record.user_id)} decimals={2} emptyText="Unlimited" showZero />
       ),
     },
     {
       title: "Budget Reset",
       key: "budget_reset",
-      render: (_: unknown, record: Member) => <DateCell value={getUserBudgetReset(record.user_id)} precision="date" />,
+      sortValue: (record: Member) => getUserBudgetReset(record.user_id),
+      render: (record: Member) => <DateCell value={getUserBudgetReset(record.user_id)} precision="date" />,
     },
     {
       title: (
@@ -179,25 +195,18 @@ export default function TeamMemberTab({
         </span>
       ),
       key: "rate_limits",
-      render: (_: unknown, record: Member) => <span>{getUserRateLimits(record.user_id)}</span>,
+      render: (record: Member) => <span>{getUserRateLimits(record.user_id)}</span>,
     },
   ];
 
   return (
     <MemberTable
+      key={teamData.team_id}
       members={teamData.team_info.members_with_roles}
       canEdit={canEditTeam}
       onEdit={(record) => {
         const membership = teamData.team_memberships.find((tm) => tm.user_id === record.user_id);
-        const enhancedMember = {
-          ...record,
-          max_budget_in_team: membership?.litellm_budget_table?.max_budget ?? null,
-          tpm_limit: membership?.litellm_budget_table?.tpm_limit ?? null,
-          rpm_limit: membership?.litellm_budget_table?.rpm_limit ?? null,
-          budget_duration: membership?.litellm_budget_table?.budget_duration || null,
-          allowed_models: membership?.litellm_budget_table?.allowed_models || [],
-        };
-        setSelectedEditMember(enhancedMember);
+        setSelectedEditMember(seedMemberBudgetFields(record, membership?.litellm_budget_table));
         setIsEditMemberModalVisible(true);
       }}
       onDelete={handleMemberDelete}

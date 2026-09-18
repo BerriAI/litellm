@@ -4,6 +4,7 @@ Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation
 
 
 import pytest
+from typing import Final
 
 
 import litellm
@@ -1123,6 +1124,80 @@ class TestToolReferenceStripping:
         assert request["messages"][2]["content"] == ""
 
 
+class TestSystemMessagesFirst:
+    """With litellm.openai_system_messages_first on, requests bound for OpenAI put system and
+    developer messages ahead of the conversation, keeping each group's order, so the instruction
+    prefix stays byte-stable for OpenAI's prefix-matched prompt cache."""
+
+    MESSAGES: Final = (
+        {"role": "user", "content": "first turn"},
+        {"role": "system", "content": "sys 1"},
+        {"role": "assistant", "content": "reply"},
+        {"role": "developer", "content": "dev"},
+        {"role": "user", "content": "second turn"},
+        {"role": "system", "content": "sys 2"},
+    )
+    ORIGINAL_ORDER: Final = ("first turn", "sys 1", "reply", "dev", "second turn", "sys 2")
+    ORDERED: Final = ("sys 1", "dev", "sys 2", "first turn", "reply", "second turn")
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    def _messages(self):
+        return [dict(m) for m in self.MESSAGES]
+
+    def _transform(self, provider):
+        return self.config.transform_request(
+            model="gpt-4.1",
+            messages=self._messages(),
+            optional_params={},
+            litellm_params={"custom_llm_provider": provider},
+            headers={},
+        )
+
+    def test_default_off_keeps_caller_order(self, monkeypatch):
+        monkeypatch.setattr(litellm, "openai_system_messages_first", False)
+        assert tuple(m["content"] for m in self._transform("openai")["messages"]) == self.ORIGINAL_ORDER
+
+    def test_moves_system_and_developer_messages_first_for_openai(self, monkeypatch):
+        monkeypatch.setattr(litellm, "openai_system_messages_first", True)
+        assert tuple(m["content"] for m in self._transform("openai")["messages"]) == self.ORDERED
+
+    def test_leaves_openai_compatible_providers_alone(self, monkeypatch):
+        monkeypatch.setattr(litellm, "openai_system_messages_first", True)
+        assert tuple(m["content"] for m in self._transform("deepseek")["messages"]) == self.ORIGINAL_ORDER
+
+    def test_does_not_mutate_caller_messages(self, monkeypatch):
+        monkeypatch.setattr(litellm, "openai_system_messages_first", True)
+        messages = self._messages()
+        self.config.transform_request(
+            model="gpt-4.1",
+            messages=messages,
+            optional_params={},
+            litellm_params={"custom_llm_provider": "openai"},
+            headers={},
+        )
+        assert tuple(m["content"] for m in messages) == self.ORIGINAL_ORDER
+
+    @pytest.mark.asyncio
+    async def test_async_transform_request_moves_system_messages_first(self, monkeypatch):
+        class UninstantiatedOpenAIGPTConfig(OpenAIGPTConfig):
+            _is_base_class = True
+
+            def __init__(self) -> None:
+                pass
+
+        monkeypatch.setattr(litellm, "openai_system_messages_first", True)
+        request = await UninstantiatedOpenAIGPTConfig().async_transform_request(
+            model="gpt-4.1",
+            messages=self._messages(),
+            optional_params={},
+            litellm_params={"custom_llm_provider": "openai"},
+            headers={},
+        )
+        assert tuple(m["content"] for m in request["messages"]) == self.ORDERED
+
+
 class TestOpenAIPromptCacheBreakpointChatPath:
     """Chat-path shape for OpenAI explicit prompt caching (#37509)."""
 
@@ -1166,6 +1241,9 @@ class TestOpenAIPromptCacheBreakpointChatPath:
         assert request["messages"][1]["content"] == [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]
         assert request["extra_body"] == {"prompt_cache_options": self.EXPLICIT}
         assert "prompt_cache_options" not in request
+
+
+_ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 
 
 class TestToolSchemaCombinatorFlatteningForOpenAI:
@@ -1281,3 +1359,50 @@ class TestToolSchemaCombinatorFlatteningForOpenAI:
         parameters = request["tools"][0]["function"]["parameters"]
         assert "anyOf" not in parameters
         assert set(parameters["properties"]) == {"id", "enabled", "schedule"}
+
+    @staticmethod
+    def _artifact_tool():
+        return {
+            "type": "function",
+            "function": {
+                "name": "Artifact",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"field": {"type": "string", "pattern": _ARTIFACT_FIELD_PATTERN}},
+                    "required": ["field"],
+                },
+            },
+        }
+
+    def test_drops_non_python_regex_pattern_for_hosted_openai(self):
+        tool = self._artifact_tool()
+
+        request = self._transform(self.config, "gpt-4o", {"custom_llm_provider": "openai", "api_base": None}, [tool])
+
+        assert request["tools"][0]["function"]["parameters"] == {
+            "type": "object",
+            "properties": {"field": {"type": "string"}},
+            "required": ["field"],
+        }
+        assert tool == self._artifact_tool()
+
+    def test_custom_api_base_drops_non_python_regex_pattern_but_keeps_union(self):
+        tool = self._anyof_tool()
+        tool["function"]["parameters"]["properties"]["id"]["pattern"] = _ARTIFACT_FIELD_PATTERN
+
+        request = self._transform(
+            self.config, "gpt-4o", {"custom_llm_provider": "openai", "api_base": "http://localhost:8000/v1"}, [tool]
+        )
+
+        parameters = request["tools"][0]["function"]["parameters"]
+        assert parameters["properties"]["id"] == {"type": "string"}
+        assert parameters["anyOf"] == self._anyof_tool()["function"]["parameters"]["anyOf"]
+
+    def test_non_openai_provider_keeps_non_python_regex_pattern(self):
+        tool = self._artifact_tool()
+
+        request = self._transform(
+            self.config, "some-oss-model", {"custom_llm_provider": "groq", "api_base": None}, [tool]
+        )
+
+        assert request["tools"][0] is tool

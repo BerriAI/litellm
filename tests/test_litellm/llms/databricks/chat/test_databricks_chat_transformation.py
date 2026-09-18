@@ -5,11 +5,23 @@ from fastapi.testclient import TestClient
 
 from unittest.mock import MagicMock, patch
 
+import litellm
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+)
 from litellm.llms.databricks.chat.transformation import (
     DatabricksChatResponseIterator,
     DatabricksConfig,
     _sanitize_empty_content,
 )
+
+
+@pytest.fixture()
+def _use_local_model_cost_map(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
 
 def test_transform_choices():
@@ -253,6 +265,19 @@ def test_transform_messages_sanitizes_empty_content():
     result = config._transform_messages(messages=messages, model="databricks-claude", is_async=False)
     assert "content" not in result[0]
     assert result[1]["content"] == "Hi"
+
+
+def test_transform_request_preserves_unity_model_service_name():
+    config = DatabricksConfig()
+    result = config.transform_request(
+        model="system.ai.kimi-k3",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["model"] == "system.ai.kimi-k3"
 
 
 def test_transform_request_strips_thinking_blocks_and_reasoning_content():
@@ -519,6 +544,115 @@ def test_map_openai_params_upgrades_legacy_thinking_on_adaptive_only_claude(
     assert mapped.get("output_config") == expected_output_config
 
 
+def _map_reasoning_effort(model: str, reasoning_effort: str):
+    return DatabricksConfig().map_openai_params(
+        non_default_params={"reasoning_effort": reasoning_effort},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+
+def test_claude_translates_reasoning_effort_to_thinking(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-claude-3-7-sonnet", "low")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_adaptive_claude_translates_reasoning_effort_to_output_config(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-claude-opus-4-7", "high")
+    assert params.get("thinking") == {"type": "adaptive", "display": "summarized"}
+    assert params.get("output_config") == {"effort": "high"}
+    assert "reasoning_effort" not in params
+
+
+def test_unmapped_claude_endpoint_still_translates(_use_local_model_cost_map):
+    params = _map_reasoning_effort("my-claude-serving-endpoint", "low")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_low_translates_to_thinking_budget(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-5-flash", "low")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_medium_translates_to_thinking_budget(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-5-flash", "medium")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_high_translates_to_thinking_budget(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-5-flash", "high")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_pro_translates_to_thinking_budget(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-5-pro", "high")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_with_dot_notation_translates(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2.5-flash", "low")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_0_does_not_match(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-0-flash", "low")
+    assert "thinking" not in params
+    assert params.get("reasoning_effort") == "low"
+
+
+def test_gemini_2_5_none_drops_thinking_and_reasoning_effort(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-5-flash", "none")
+    assert "thinking" not in params
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_3_passes_reasoning_effort_through(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-3-1-pro", "low")
+    assert params.get("reasoning_effort") == "low"
+    assert "thinking" not in params
+
+
+def test_gpt_5_passes_reasoning_effort_through(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gpt-5-1", "low")
+    assert params.get("reasoning_effort") == "low"
+    assert "thinking" not in params
+
+
+def test_gpt_oss_passes_reasoning_effort_through(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gpt-oss-120b", "high")
+    assert params.get("reasoning_effort") == "high"
+    assert "thinking" not in params
+
+
 def _streaming_chunk(usage=None, choices=None):
     base = {
         "id": "chatcmpl-test",
@@ -590,3 +724,87 @@ def test_chunk_parser_without_usage_still_parses_content():
     assert result.id == "chatcmpl-test"
     assert result.model == "databricks-claude-sonnet-5"
     assert result.choices[0]["delta"]["content"] == "hi"
+
+
+@pytest.mark.parametrize("reasoning_key", ["reasoning_content", "reasoning"])
+def test_transform_choices_surfaces_top_level_reasoning_content(reasoning_key: str) -> None:
+    config = DatabricksConfig()
+    databricks_choices = [
+        {
+            "message": {
+                "role": "assistant",
+                "content": "391",
+                reasoning_key: "We need answer just number. 17*23=391.",
+            },
+            "index": 0,
+            "finish_reason": "stop",
+        }
+    ]
+
+    choices = config._transform_dbrx_choices(choices=databricks_choices)
+
+    assert choices[0].message.content == "391"
+    assert choices[0].message.reasoning_content == "We need answer just number. 17*23=391."
+    assert getattr(choices[0].message, "thinking_blocks", None) is None
+
+
+def test_transform_choices_parses_think_tags_in_string_content():
+    config = DatabricksConfig()
+    databricks_choices = [
+        {
+            "message": {"role": "assistant", "content": "<think>17 times 23</think>391"},
+            "index": 0,
+            "finish_reason": "stop",
+        }
+    ]
+
+    choices = config._transform_dbrx_choices(choices=databricks_choices)
+
+    assert choices[0].message.content == "391"
+    assert choices[0].message.reasoning_content == "17 times 23"
+
+
+def test_transform_choices_prefers_reasoning_blocks_over_top_level_field():
+    config = DatabricksConfig()
+    databricks_choices = [
+        {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "reasoning", "summary": [{"type": "summary_text", "text": "from block"}]},
+                    {"type": "text", "text": "391"},
+                ],
+                "reasoning_content": "from field",
+            },
+            "index": 0,
+            "finish_reason": "stop",
+        }
+    ]
+
+    choices = config._transform_dbrx_choices(choices=databricks_choices)
+
+    assert choices[0].message.reasoning_content == "from block"
+    assert choices[0].message.content == "391"
+
+
+@pytest.mark.parametrize("reasoning_key", ["reasoning_content", "reasoning"])
+def test_chunk_parser_surfaces_top_level_reasoning_delta(reasoning_key: str) -> None:
+    iterator = DatabricksChatResponseIterator(None, sync_stream=True)
+    chunk = {
+        "id": "1",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "lit-qa-deepseek-v4-flash",
+        "choices": [
+            {
+                "delta": {"role": "assistant", "content": None, reasoning_key: "We need answer"},
+                "index": 0,
+                "finish_reason": None,
+            }
+        ],
+    }
+
+    parsed = iterator.chunk_parser(chunk)
+
+    assert parsed.choices[0].delta.reasoning_content == "We need answer"
+    assert parsed.choices[0].delta.content is None

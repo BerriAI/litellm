@@ -2,7 +2,7 @@ export type MemberFieldValue = string | number | null | undefined | string[];
 
 export type MemberFormValues = Record<string, MemberFieldValue>;
 
-export type MemberFieldType = "input" | "select" | "numerical" | "multi-select" | "budget-duration";
+export type MemberFieldType = "input" | "select" | "numerical" | "multi-select" | "budget-duration" | "utc-datetime";
 
 export interface MemberAdditionalField {
   name: string;
@@ -22,7 +22,23 @@ export interface MemberFieldsConfig {
   additionalFields?: Array<MemberAdditionalField>;
 }
 
-const NULLABLE_NUMERIC_FIELDS: ReadonlySet<string> = new Set(["max_budget_in_team", "tpm_limit", "rpm_limit"]);
+const NULLABLE_NUMERIC_FIELDS: ReadonlySet<string> = new Set([
+  "max_budget_in_team",
+  "tpm_limit",
+  "rpm_limit",
+  "temp_budget_increase",
+]);
+
+export const TEMP_BUDGET_PAIR_MESSAGE = "Set both a temporary budget increase and its expiry, or neither";
+
+const isUnset = (value: MemberFieldValue): boolean => value === null || value === undefined || value === "";
+
+export const tempBudgetPairError = (values: MemberFormValues): "temp_budget_increase" | "temp_budget_expiry" | null => {
+  const increaseUnset = isUnset(values.temp_budget_increase);
+  const expiryUnset = isUnset(values.temp_budget_expiry);
+  if (increaseUnset === expiryUnset) return null;
+  return increaseUnset ? "temp_budget_increase" : "temp_budget_expiry";
+};
 
 export const memberFieldNames = (config: MemberFieldsConfig): string[] => [
   ...(config.showEmail ? ["user_email"] : []),
@@ -48,6 +64,8 @@ export const buildMemberFormValues = (
       rpm_limit: initialData.rpm_limit ?? null,
       budget_duration: initialData.budget_duration || null,
       allowed_models: initialData.allowed_models || [],
+      temp_budget_increase: initialData.temp_budget_increase ?? null,
+      temp_budget_expiry: initialData.temp_budget_expiry || null,
     };
 
     return pickFieldNames(config, seeded);
@@ -62,6 +80,7 @@ const emptyValueForType = (type: MemberFieldType | undefined): MemberFieldValue 
       return [];
     case "numerical":
     case "budget-duration":
+    case "utc-datetime":
       return null;
     default:
       return "";

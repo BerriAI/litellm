@@ -2,8 +2,8 @@ import inspect
 import asyncio
 import contextlib
 import json
-from collections.abc import Mapping
-from typing import Dict, Optional
+from collections.abc import Iterator, Mapping
+from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -30,7 +30,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.router import Router
-from litellm.types.router import Deployment, LiteLLM_Params, updateDeployment
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment, updateLiteLLMParams
 
 
 async def _passthrough_row(update_data):
@@ -391,6 +391,185 @@ class TestModelManagementAuthChecks:
                 )
             assert exc_info.value.code == "403"
             mock_update.assert_not_awaited()
+
+    def test_can_user_set_aws_session_tags_admin_success(self):
+        result = ModelManagementAuthChecks.can_user_set_aws_session_tags(
+            litellm_params=LiteLLM_Params(
+                model="bedrock/test_model", aws_session_tags=[{"Key": "team", "Value": "genai"}]
+            ),
+            user_api_key_dict=self.admin_user,
+        )
+        assert result is True
+
+    def test_can_user_set_aws_session_tags_without_tags_allows_any_role(self):
+        result = ModelManagementAuthChecks.can_user_set_aws_session_tags(
+            litellm_params=LiteLLM_Params(model="bedrock/test_model", aws_role_name="arn:aws:iam::123:role/x"),
+            user_api_key_dict=self.team_admin_user,
+        )
+        assert result is True
+
+    def test_can_user_set_aws_session_tags_team_admin_fails(self):
+        with pytest.raises(Exception, match="Only a proxy admin can set aws_session_tags") as exc_info:
+            ModelManagementAuthChecks.can_user_set_aws_session_tags(
+                litellm_params=LiteLLM_Params(
+                    model="bedrock/test_model", aws_session_tags=[{"Key": "team", "Value": "genai"}]
+                ),
+                user_api_key_dict=self.team_admin_user,
+            )
+        assert exc_info.value.code == "403"
+        assert exc_info.value.param == "aws_session_tags"
+
+    def test_can_user_set_aws_session_tags_unchanged_existing_allows_any_role(self):
+        result = ModelManagementAuthChecks.can_user_set_aws_session_tags(
+            litellm_params=LiteLLM_Params(
+                model="bedrock/test_model",
+                aws_session_tags=[{"Key": "team", "Value": "genai"}, {"Key": "env", "Value": "prod"}],
+            ),
+            user_api_key_dict=self.team_admin_user,
+            existing_litellm_params=LiteLLM_Params(
+                model="bedrock/test_model",
+                aws_session_tags=[{"Key": "env", "Value": "prod"}, {"Key": "team", "Value": "genai"}],
+            ),
+        )
+        assert result is True
+
+    def test_can_user_set_aws_session_tags_changed_value_fails_for_team_admin(self):
+        with pytest.raises(Exception, match="Only a proxy admin can set aws_session_tags") as exc_info:
+            ModelManagementAuthChecks.can_user_set_aws_session_tags(
+                litellm_params=LiteLLM_Params(
+                    model="bedrock/test_model", aws_session_tags=[{"Key": "team", "Value": "platform"}]
+                ),
+                user_api_key_dict=self.team_admin_user,
+                existing_litellm_params=LiteLLM_Params(
+                    model="bedrock/test_model", aws_session_tags=[{"Key": "team", "Value": "genai"}]
+                ),
+            )
+        assert exc_info.value.code == "403"
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_rejects_aws_session_tags_for_non_admin(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        mock_prisma = MagicMock()
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch(  # test-quality-ok: prior auth check needs a live DB; only the session tag check is under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await add_new_model(
+                    model_params=Deployment(
+                        model_name="tagged-bedrock",
+                        litellm_params=LiteLLM_Params(
+                            model="bedrock/anthropic.claude-opus-4-6-v1:0",
+                            aws_role_name="arn:aws:iam::123456789012:role/team-role",
+                            aws_session_tags=[{"Key": "team", "Value": "genai"}],
+                        ),
+                        model_info={"id": "session-tags-create-test", "team_id": "test_team"},
+                    ),
+                    user_api_key_dict=self.team_admin_user,
+                )
+            assert exc_info.value.code == "403"
+            assert exc_info.value.param == "aws_session_tags"
+            mock_prisma.db.litellm_proxymodeltable.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_patch_model_rejects_aws_session_tags_for_non_admin(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            patch_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        model_id = "session-tags-patch-test"
+        db_model = Deployment(
+            model_name="tagged-bedrock",
+            litellm_params=LiteLLM_Params(
+                model="bedrock/anthropic.claude-opus-4-6-v1:0",
+                aws_role_name="arn:aws:iam::123456789012:role/team-role",
+            ),
+            model_info={"id": model_id, "team_id": "test_team"},
+        )
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch(  # test-quality-ok: stubs the DB row fetch; only the session tag check is under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.get_db_model",
+                new=AsyncMock(return_value=db_model),
+            ),
+            patch(  # test-quality-ok: prior auth check needs a live DB; only the session tag check is under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(  # test-quality-ok: asserts the DB write is never reached on rejection
+                "litellm.proxy.management_endpoints.model_management_endpoints._update_team_model_in_db",
+                new=AsyncMock(),
+            ) as mock_update,
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await patch_model(
+                    model_id=model_id,
+                    patch_data=updateDeployment(
+                        litellm_params=updateLiteLLMParams(aws_session_tags=[{"Key": "team", "Value": "genai"}])
+                    ),
+                    user_api_key_dict=self.team_admin_user,
+                )
+            assert exc_info.value.code == "403"
+            assert exc_info.value.param == "aws_session_tags"
+            mock_update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_model_rejects_aws_session_tags_for_non_admin(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        model_id = "session-tags-put-test"
+        existing = Deployment(
+            model_name="tagged-bedrock",
+            litellm_params=LiteLLM_Params(
+                model="bedrock/anthropic.claude-opus-4-6-v1:0",
+                aws_role_name="arn:aws:iam::123456789012:role/team-role",
+            ),
+            model_info={"id": model_id, "team_id": "test_team"},
+        )
+        existing_row = MagicMock()
+        existing_row.model_dump.return_value = existing.model_dump()
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.llm_router", None),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch(  # test-quality-ok: prior auth check needs a live DB; only the session tag check is under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await update_model(
+                    model_params=updateDeployment(
+                        litellm_params=updateLiteLLMParams(aws_session_tags=[{"Key": "team", "Value": "genai"}]),
+                        model_info=ModelInfo(id=model_id),
+                    ),
+                    user_api_key_dict=self.team_admin_user,
+                )
+            assert exc_info.value.code == "403"
+            assert exc_info.value.param == "aws_session_tags"
+            mock_prisma.db.litellm_proxymodeltable.update.assert_not_awaited()
 
     def test_can_user_attach_credential_internal_user_fails(self):
         with pytest.raises(Exception, match="Only a proxy admin can attach a stored credential") as exc_info:
@@ -1225,7 +1404,7 @@ class TestTeamModelSiblingRouting:
                     side_effect=mock_add_model_to_db,
                 ),
                 patch(
-                    "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add",
+                    "litellm.proxy.management_endpoints.model_management_endpoints.append_team_models",
                     mock_team_model_add,
                 ),
             ):
@@ -1990,7 +2169,7 @@ class TestModelInfoEndpoint:
         ):
             mock_router.get_fully_blocked_model_names.return_value = set()
             mock_router.get_model_list.return_value = []
-            mock_router.get_configured_token_limits.return_value = (None, None)
+            mock_router.get_model_listing_info.return_value = None
             mock_router.get_deployment_by_model_group_name.return_value = Deployment(
                 model_name="gpt-4",
                 litellm_params=LiteLLM_Params(model="openai/gpt-4"),
@@ -2067,7 +2246,7 @@ class TestModelInfoEndpoint:
         ):
             mock_router.get_fully_blocked_model_names.return_value = set()
             mock_router.get_model_list.return_value = []
-            mock_router.get_configured_token_limits.return_value = (None, None)
+            mock_router.get_model_listing_info.return_value = None
             mock_router.get_deployment_by_model_group_name.return_value = Deployment(
                 model_name="team-model-1",
                 litellm_params=LiteLLM_Params(model="custom/team-model-1"),
@@ -3070,6 +3249,31 @@ class TestUpdateDBModelBlocked:
         assert "blocked" not in result
 
 
+class TestUpdateDBModelKeepsLegacyDropParams:
+    def test_partial_patch_keeps_encrypted_string_drop_params(self, monkeypatch):
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        legacy_row = Deployment(
+            model_name="gpt-5-nano",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-5-nano",
+                api_key=encrypt_value_helper(value="sk-old"),
+                drop_params=encrypt_value_helper(value="true"),
+            ),
+            model_info=ModelInfo(id="legacy-row"),
+        )
+
+        result = update_db_model(
+            db_model=legacy_row,
+            updated_patch=updateDeployment(litellm_params=updateLiteLLMParams(api_key="sk-new")),
+        )
+
+        stored = json.loads(result["litellm_params"])
+        assert decrypt_value_helper(value=stored["drop_params"], key="drop_params") == "true"
+
+
 def _build_db_model_with_pricing():
     """Wildcard deployment with custom pricing in litellm_params; Deployment.__init__
     mirrors SPECIAL_MODEL_INFO_PARAMS into model_info, so both blobs hold the rate."""
@@ -3084,6 +3288,99 @@ def _build_db_model_with_pricing():
         ),
         model_info=ModelInfo(id="dep-pricing-0"),
     )
+
+
+class TestUpdateDBModelCompression:
+    @pytest.mark.parametrize(
+        "compression_patch, expected",
+        [
+            (
+                {},
+                {
+                    "auto_router_routing_compression": "routing-compressor",
+                    "auto_router_model_compression": "model-compressor",
+                },
+            ),
+            ({"auto_router_routing_compression": None}, {"auto_router_model_compression": "model-compressor"}),
+            ({"auto_router_model_compression": None}, {"auto_router_routing_compression": "routing-compressor"}),
+            (
+                {"auto_router_routing_compression": "none", "auto_router_model_compression": "none"},
+                {"auto_router_routing_compression": "none", "auto_router_model_compression": "none"},
+            ),
+            (
+                {
+                    "auto_router_routing_compression": "new-compressor",
+                    "auto_router_model_compression": "new-compressor",
+                },
+                {
+                    "auto_router_routing_compression": "new-compressor",
+                    "auto_router_model_compression": "new-compressor",
+                },
+            ),
+        ],
+    )
+    def test_compression_patch_preserves_omissions_and_explicit_choices(
+        self, monkeypatch: pytest.MonkeyPatch, compression_patch: dict[str, str | None], expected: dict[str, str]
+    ):
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "synthetic-compression-salt")
+        result: Final = update_db_model(
+            db_model=Deployment(
+                model_name="synthetic-router",
+                litellm_params=LiteLLM_Params(
+                    model="auto_router/complexity_router",
+                    auto_router_routing_compression=encrypt_value_helper("routing-compressor"),
+                    auto_router_model_compression=encrypt_value_helper("model-compressor"),
+                ),
+                model_info=ModelInfo(id="compression-router"),
+            ),
+            updated_patch=updateDeployment.model_validate({"litellm_params": compression_patch}),
+        )
+        params: Final = json.loads(result["litellm_params"])
+        assert {
+            key: decrypt_value_helper(value=val, key=key)
+            for key, val in params.items()
+            if key in ("auto_router_routing_compression", "auto_router_model_compression")
+        } == expected
+
+    def test_explicit_compression_clear_removes_both_saved_overrides(self):
+        from litellm.proxy.guardrails.auto_router_compression import policy_from_litellm_params
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        db_model: Final = Deployment(
+            model_name="synthetic-router",
+            litellm_params=LiteLLM_Params(
+                model="auto_router/complexity_router",
+                auto_router_routing_compression="routing-compressor",
+                auto_router_model_compression="model-compressor",
+                api_base="http://127.0.0.1:9999/v1",
+                temperature=0,
+            ),
+            model_info=ModelInfo(id="compression-router", team_id="synthetic-team"),
+        )
+        result: Final = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment.model_validate(
+                {
+                    "litellm_params": {
+                        "auto_router_routing_compression": None,
+                        "auto_router_model_compression": None,
+                        "api_base": None,
+                    },
+                    "model_info": {"team_id": None},
+                }
+            ),
+        )
+
+        params: Final = json.loads(result["litellm_params"])
+        assert "auto_router_routing_compression" not in params
+        assert "auto_router_model_compression" not in params
+        assert policy_from_litellm_params(params) is None
+        assert params["api_base"] == "http://127.0.0.1:9999/v1"
+        assert params["temperature"] == 0
+        assert json.loads(result["model_info"])["team_id"] == "synthetic-team"
 
 
 class TestUpdateDBModelClearPricing:
@@ -3367,6 +3664,252 @@ class TestUpdateDBModelClearPricing:
         assert info["input_cost_per_token"] == 0.000001
         assert info["output_cost_per_token"] == 0.000002
         assert info["cache_creation_input_token_cost"] == 0.000003
+
+
+class TestModelInfoServerDerivedPricingFilter:
+    """LIT-5292. `/model/info` fills a deployment's missing pricing in from the cost map
+    so the Admin UI has a rate to display. Clients echo that whole blob back on save, so
+    without a write-path filter an unrelated edit persists the display value as a real
+    per-deployment override and no cost map refresh can move the deployment again.
+
+    A deployment's own pricing rides `litellm_params`, which stays writable.
+    """
+
+    def test_echoed_cost_map_pricing_is_not_persisted(self):
+        """The ticket's repro: a deployment with no override, edited for an unrelated
+        reason, must not gain one from the pricing the form was displaying."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        db_model = Deployment(
+            model_name="haiku",
+            litellm_params=LiteLLM_Params(model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+            model_info=ModelInfo(id="dep-unpriced-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(
+                    id="dep-unpriced-0",
+                    access_groups=["prod"],
+                    input_cost_per_token=0.0000008,
+                    output_cost_per_token=0.000004,
+                    cache_read_input_token_cost=0.00000008,
+                )
+            ),
+        )
+
+        info = json.loads(result["model_info"])
+        params = json.loads(result["litellm_params"])
+        assert info["access_groups"] == ["prod"]
+        for field in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"):
+            assert field not in info, f"{field} was persisted as a per-deployment override"
+            assert field not in params
+
+    def test_tiered_above_threshold_pricing_is_dropped(self):
+        """Tiered rates ride `get_model_info` on a pattern match and are declared on no
+        model, so a filter built only from the declared pricing fields would miss them."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        db_model = Deployment(
+            model_name="sonnet",
+            litellm_params=LiteLLM_Params(model="claude-sonnet-4-5"),
+            model_info=ModelInfo(id="dep-tiered-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(
+                    id="dep-tiered-0",
+                    input_cost_per_token_above_200k_tokens=0.000006,
+                    cache_creation_input_token_cost_above_1hr_above_200k_tokens=0.000012,
+                )
+            ),
+        )
+
+        info = json.loads(result["model_info"])
+        assert "input_cost_per_token_above_200k_tokens" not in info
+        assert "cache_creation_input_token_cost_above_1hr_above_200k_tokens" not in info
+
+    def test_output_vector_size_and_client_owned_fields_survive(self):
+        """`output_vector_size` sits on the pricing model but is an embedding dimension,
+        not a rate. It and the operator-owned keys stay writable."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        db_model = Deployment(
+            model_name="embed",
+            litellm_params=LiteLLM_Params(model="openai/text-embedding-3-large"),
+            model_info=ModelInfo(id="dep-embed-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(
+                    id="dep-embed-0",
+                    output_vector_size=3072,
+                    base_model="azure/text-embedding-3-large",
+                    tier="paid",
+                    team_id="team-1",
+                    access_groups=["research"],
+                    my_custom_key="my_custom_value",
+                )
+            ),
+        )
+
+        info = json.loads(result["model_info"])
+        assert info["output_vector_size"] == 3072
+        assert info["base_model"] == "azure/text-embedding-3-large"
+        assert info["tier"] == "paid"
+        assert info["team_id"] == "team-1"
+        assert info["access_groups"] == ["research"]
+        assert info["my_custom_key"] == "my_custom_value"
+
+    def test_litellm_params_pricing_still_persists(self):
+        """The supported way to set a deployment override is untouched."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="haiku",
+            litellm_params=LiteLLM_Params(model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+            model_info=ModelInfo(id="dep-priced-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(input_cost_per_token=0.00000123),
+                model_info=ModelInfo(id="dep-priced-0", input_cost_per_token=0.0000008),
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert params["input_cost_per_token"] == 0.00000123
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_drops_echoed_pricing_and_keeps_identity(self):
+        """The create path filters too, and rebuilding the blob must not mint a fresh id
+        or flip `db_model`, which would detach the row from its router deployment."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        model_id = "dep-create-0"
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name="haiku",
+            litellm_params={"model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"},
+            model_info={"id": model_id},
+            created_by="test-admin",
+            updated_by="test-admin",
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.create = AsyncMock(return_value=db_row)
+
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.add_deployment = AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None))
+
+        mock_router = MagicMock()
+        mock_router.get_model_ids.return_value = [model_id]
+
+        _PS = "litellm.proxy.proxy_server"
+        _ENCRYPT = "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.proxy_config", mock_proxy_config),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.general_settings", {}),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", mock_router),
+            patch(_ENCRYPT, side_effect=lambda value, **kwargs: value),
+        ):
+            await add_new_model(
+                model_params=Deployment(
+                    model_name="haiku",
+                    litellm_params=LiteLLM_Params(model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+                    model_info={
+                        "id": model_id,
+                        "access_groups": ["prod"],
+                        "input_cost_per_token": 0.0000008,
+                    },
+                ),
+                user_api_key_dict=UserAPIKeyAuth(user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+        written = json.loads(mock_prisma.db.litellm_proxymodeltable.create.call_args.kwargs["data"]["model_info"])
+        assert "input_cost_per_token" not in written
+        assert written["id"] == model_id, "filtering must not mint a fresh deployment id"
+        assert written["access_groups"] == ["prod"]
+
+
+class TestUpdateDBModelClearCacheControlInjectionPoints:
+    def test_explicit_null_removes_stored_injection_points(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import LiteLLM_Params, ModelInfo, updateLiteLLMParams
+
+        db_model = Deployment(
+            model_name="haiku-cached",
+            litellm_params=LiteLLM_Params(
+                model="anthropic/claude-haiku-4-5",
+                cache_control_injection_points=[{"location": "message", "role": "system"}],
+            ),
+            model_info=ModelInfo(id="dep-cache-0"),
+        )
+        patch = updateDeployment(
+            litellm_params=updateLiteLLMParams(cache_control_injection_points=None)
+        )
+
+        result = update_db_model(db_model=db_model, updated_patch=patch)
+
+        params = json.loads(result["litellm_params"])
+        assert "cache_control_injection_points" not in params
+        assert params["model"] == "anthropic/claude-haiku-4-5"
+
+    def test_omitted_key_keeps_stored_injection_points(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import LiteLLM_Params, ModelInfo, updateLiteLLMParams
+
+        db_model = Deployment(
+            model_name="haiku-cached",
+            litellm_params=LiteLLM_Params(
+                model="anthropic/claude-haiku-4-5",
+                cache_control_injection_points=[{"location": "message", "role": "system"}],
+            ),
+            model_info=ModelInfo(id="dep-cache-0"),
+        )
+        patch = updateDeployment(litellm_params=updateLiteLLMParams(tpm=10))
+
+        result = update_db_model(db_model=db_model, updated_patch=patch)
+
+        params = json.loads(result["litellm_params"])
+        assert params["cache_control_injection_points"] == [{"location": "message", "role": "system"}]
+        assert params["tpm"] == 10
 
 
 class TestGetModelInfoWithIdBlocked:
@@ -4487,6 +5030,26 @@ class TestStrategyRouterWriteValidation:
 
     _V2 = {"classifier_type": "heuristic_v2", "tiers": {"SIMPLE": "gpt-4o-mini"}}
     _V1 = {"classifier_type": "heuristic", "tiers": {"SIMPLE": "gpt-4o-mini"}}
+    _FORECAST_BASE = {
+        "classifier_llm_config": {"model": "gpt-4o-mini"},
+        "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": "gpt-4o"},
+    }
+    _CAPABILITY = {
+        **_FORECAST_BASE,
+        "classifier_type": "capability",
+        "capability_classifier_config": {
+            "efficient_tier": "SIMPLE", "capable_tier": "REASONING", "base_threshold": 0.7,
+        },
+    }
+    _FUSE = {
+        **_FORECAST_BASE,
+        "classifier_type": "llm_v2",
+        "adaptive": False,
+        "llm_v2_config": {
+            "efficient_profile": "Small solver", "capable_profile": "Large solver",
+            "harness": "One attempt", "max_quality_gap": 0.05,
+        },
+    }
     _CUSTOM_TIERS = {
         "classifier_type": "llm",
         "classifier_llm_config": {"model": "gpt-4o-mini"},
@@ -4554,6 +5117,16 @@ class TestStrategyRouterWriteValidation:
     @pytest.mark.parametrize(
         "limit,effective_params,db_models,config_config,model_id,expected",
         [
+            (1, {"model": "auto_router/complexity_router", "complexity_router_config": _CAPABILITY}, ["auto_router/complexity_router"], None, None, "refused"),
+            (1, {"model": "auto_router/complexity_router", "complexity_router_config": _CAPABILITY}, [], _CAPABILITY, None, "refused"),
+            (1, {"model": "auto_router/complexity_router", "complexity_router_config": _CAPABILITY}, [], _FUSE, None, "reserved"),
+            (1, {"model": "auto_router/complexity_router", "complexity_router_config": _CAPABILITY}, [], None, "held-id", "reserved"),
+            (None, {"model": "auto_router/complexity_router", "complexity_router_config": _CAPABILITY}, ["auto_router/complexity_router"], _CAPABILITY, None, "plain"),
+            (1, {"model": "auto_router/complexity_router", "complexity_router_config": _FUSE}, ["auto_router/complexity_router"], None, None, "refused"),
+            (1, {"model": "auto_router/complexity_router", "complexity_router_config": _FUSE}, [], _FUSE, None, "refused"),
+            (1, {"model": "auto_router/complexity_router", "complexity_router_config": _FUSE}, [], _CAPABILITY, None, "reserved"),
+            (1, {"model": "auto_router/complexity_router", "complexity_router_config": _FUSE}, [], None, "held-id", "reserved"),
+            (None, {"model": "auto_router/complexity_router", "complexity_router_config": _FUSE}, ["auto_router/complexity_router"], _FUSE, None, "plain"),
             (1, {"model": "auto_router/complexity_router", "complexity_router_config": _V2}, ["auto_router/complexity_router"], None, None, "refused"),
             (1, {"model": "auto_router/complexity_router", "complexity_router_config": _V2}, [], _V2, None, "refused"),
             (1, {"model": "auto_router/complexity_router", "complexity_router_config": _V2}, [], None, None, "reserved"),
@@ -4828,7 +5401,7 @@ class TestStrategyRouterWriteValidation:
                 lambda value, new_encryption_key=None: value,
             ),
             patch(  # test-quality-ok: the team list write is the collaborator whose ordering is asserted
-                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add",
+                "litellm.proxy.management_endpoints.model_management_endpoints.append_team_models",
                 side_effect=team_model_add,
             ),
         ):
@@ -4843,7 +5416,8 @@ class TestStrategyRouterWriteValidation:
         assert events == ["slot-enter", "slot-exit", "team_model_add"]
 
     @pytest.mark.asyncio
-    async def test_add_new_model_refuses_a_second_heuristic_v2_router_before_the_db_write(self) -> None:
+    @pytest.mark.parametrize("config", [_V2, _CAPABILITY, _FUSE])
+    async def test_add_new_model_refuses_a_second_gated_classifier_router_before_the_db_write(self, config: Mapping[str, object]) -> None:
         from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             add_new_model,
@@ -4871,7 +5445,7 @@ class TestStrategyRouterWriteValidation:
                 await add_new_model(
                     model_params=Deployment(
                         model_name="second-v2",
-                        litellm_params=LiteLLM_Params(model="auto_router/complexity_router", complexity_router_config=self._V2),
+                        litellm_params=LiteLLM_Params(model="auto_router/complexity_router", complexity_router_config=config),
                     ),
                     user_api_key_dict=admin,
                 )
@@ -4968,7 +5542,8 @@ class TestStrategyRouterWriteValidation:
         assert fake.litellm_proxymodeltable.update.await_count == 0
 
     @pytest.mark.asyncio
-    async def test_patch_model_refuses_switching_another_router_to_heuristic_v2(self) -> None:
+    @pytest.mark.parametrize("config", [_V2, _CAPABILITY, _FUSE])
+    async def test_patch_model_refuses_switching_another_router_to_gated_classifier(self, config: Mapping[str, object]) -> None:
         """patch_model relays HTTPException as-is, so the license refusal reaches the client as a plain 403."""
         from fastapi import HTTPException
 
@@ -5003,7 +5578,7 @@ class TestStrategyRouterWriteValidation:
             with pytest.raises(HTTPException) as exc_info:
                 await patch_model(
                     model_id=model_id,
-                    patch_data=updateDeployment(litellm_params=updateLiteLLMParams(complexity_router_config=self._V2)),
+                    patch_data=updateDeployment(litellm_params=updateLiteLLMParams(complexity_router_config=config)),
                     user_api_key_dict=admin,
                 )
             assert exc_info.value.status_code == 403
@@ -5011,7 +5586,8 @@ class TestStrategyRouterWriteValidation:
             fake.litellm_proxymodeltable.update.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_update_model_refuses_switching_another_router_to_heuristic_v2(self) -> None:
+    @pytest.mark.parametrize("config", [_V2, _CAPABILITY, _FUSE])
+    async def test_update_model_refuses_switching_another_router_to_gated_classifier(self, config: Mapping[str, object]) -> None:
         from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             update_model,
@@ -5047,7 +5623,7 @@ class TestStrategyRouterWriteValidation:
             with pytest.raises(ProxyException) as exc_info:
                 await update_model(
                     model_params=updateDeployment(
-                        litellm_params=updateLiteLLMParams(complexity_router_config=self._V2),
+                        litellm_params=updateLiteLLMParams(complexity_router_config=config),
                         model_info=ModelInfo(id=model_id),
                     ),
                     user_api_key_dict=admin,
@@ -5530,11 +6106,27 @@ class TestBlockModelResponseSerialization:
 
 
 class TestAccessGroupModelSync:
-    """A rename or delete of a deployment must land in every unified access group that names it."""
+    """A rename or delete of a deployment must land in every access group and models allowlist that names it."""
 
     _PS = "litellm.proxy.proxy_server"
     _MOD = "litellm.proxy.management_endpoints.model_management_endpoints"
     _INVALIDATE = "litellm.proxy.management_helpers.access_group_model_sync.invalidate_access_group_caches"
+    _EVICT = "litellm.proxy.management_helpers.model_allowlist_rename_sync.evict_and_broadcast"
+    _ALLOWLIST_TABLES = (
+        "LiteLLM_TeamTable",
+        "LiteLLM_VerificationToken",
+        "LiteLLM_OrganizationTable",
+        "LiteLLM_ProjectTable",
+        "LiteLLM_UserTable",
+    )
+    _ALLOWLIST_ROWS = [
+        {"kind": "team", "object_id": "team-1", "team_alias": "alias-1"},
+        {"kind": "team", "object_id": "team-2", "team_alias": None},
+        {"kind": "key", "object_id": "hashed-token-1", "team_alias": None},
+        {"kind": "org", "object_id": "org-1", "team_alias": None},
+        {"kind": "project", "object_id": "proj-1", "team_alias": None},
+        {"kind": "user", "object_id": "user-1", "team_alias": None},
+    ]
 
     @staticmethod
     def _admin():
@@ -5554,7 +6146,10 @@ class TestAccessGroupModelSync:
         async def query_raw(sql, *params):
             if sql.startswith("SELECT COUNT(*)"):
                 return [{"deployment_count": deployment_count}]
-            return [{"access_group_id": "ag-1"}]
+            if sql.startswith('UPDATE "LiteLLM_AccessGroupTable"'):
+                return [{"access_group_id": "ag-1"}]
+            assert sql.startswith("WITH ")
+            return TestAccessGroupModelSync._ALLOWLIST_ROWS
 
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
@@ -5573,8 +6168,16 @@ class TestAccessGroupModelSync:
             if call.args[0].startswith('UPDATE "LiteLLM_AccessGroupTable"')
         ]
 
+    @staticmethod
+    def _allowlist_updates(mock_prisma):
+        return [
+            call
+            for call in mock_prisma.db.query_raw.await_args_list
+            if call.args[0].startswith("WITH ") and 'SET "models"' in call.args[0]
+        ]
+
     @contextlib.contextmanager
-    def _endpoint_env(self, mock_prisma, router):
+    def _endpoint_env(self, mock_prisma, router, evict=None):
         with contextlib.ExitStack() as stack:
             for target in (
                 patch(f"{self._PS}.prisma_client", mock_prisma),
@@ -5583,7 +6186,10 @@ class TestAccessGroupModelSync:
                 patch(f"{self._PS}.premium_user", True),
                 patch(f"{self._PS}.proxy_logging_obj", MagicMock()),
                 patch(f"{self._PS}.user_api_key_cache", MagicMock()),
-                patch(f"{self._MOD}.ModelManagementAuthChecks.can_user_make_model_call", new=AsyncMock(return_value=None)),
+                patch(self._EVICT, new=evict or AsyncMock()),
+                patch(
+                    f"{self._MOD}.ModelManagementAuthChecks.can_user_make_model_call", new=AsyncMock(return_value=None)
+                ),
                 patch(
                     f"{self._MOD}.clear_cache",
                     new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
@@ -5643,7 +6249,9 @@ class TestAccessGroupModelSync:
         router.get_model_ids.return_value = ["m-same"]
 
         with self._endpoint_env(mock_prisma, router) as invalidate:
-            await patch_model(model_id="m-same", patch_data=updateDeployment(blocked=True), user_api_key_dict=self._admin())
+            await patch_model(
+                model_id="m-same", patch_data=updateDeployment(blocked=True), user_api_key_dict=self._admin()
+            )
 
         mock_prisma.db.query_raw.assert_not_awaited()
         invalidate.assert_not_awaited()
@@ -5703,3 +6311,323 @@ class TestAccessGroupModelSync:
         assert "array_replace" in update_call.args[0]
         assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
         invalidate.assert_awaited_once_with(("ag-1",))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    async def test_rename_rewrites_key_team_org_project_and_user_allowlists_and_evicts_their_caches(self, endpoint):
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model, update_model
+
+        mock_prisma = self._prisma_with_row("m-rename", "gpt-5.6", deployment_count=0)
+        router = MagicMock()
+        router.get_model_ids.return_value = ["m-rename"]
+        evict = AsyncMock()
+
+        with self._endpoint_env(mock_prisma, router, evict=evict):
+            if endpoint == "patch":
+                await patch_model(
+                    model_id="m-rename",
+                    patch_data=updateDeployment(model_name="gpt-5.6-eu"),
+                    user_api_key_dict=self._admin(),
+                )
+            else:
+                await update_model(
+                    model_params=updateDeployment(
+                        model_name="gpt-5.6-eu",
+                        litellm_params=updateLiteLLMParams(model="openai/gpt-5.6"),
+                        model_info=ModelInfo(id="m-rename"),
+                    ),
+                    user_api_key_dict=self._admin(),
+                )
+
+        (update_call,) = self._allowlist_updates(mock_prisma)
+        for table in self._ALLOWLIST_TABLES:
+            assert (
+                f'UPDATE "{table}" SET "models" = array_replace(array_remove("models", $2), $1, $2) '
+                'WHERE $1 = ANY("models") RETURNING'
+            ) in update_call.args[0]
+        assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
+        evict.assert_awaited_once()
+        assert evict.await_args.args[0] == (
+            "team_id:team-1",
+            "team_alias:alias-1",
+            "team_id:team-2",
+            "hashed-token-1",
+            "org_id:org-1",
+            "org_id:org-1:with_budget",
+            "project_id:proj-1",
+            "user-1",
+        )
+
+    @pytest.mark.asyncio
+    async def test_rename_appends_to_allowlists_when_a_sibling_deployment_keeps_the_old_name(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        mock_prisma = self._prisma_with_row("m-rename", "gpt-5.6", deployment_count=1)
+        router = MagicMock()
+        router.get_model_ids.return_value = ["m-rename"]
+
+        with self._endpoint_env(mock_prisma, router):
+            await patch_model(
+                model_id="m-rename",
+                patch_data=updateDeployment(model_name="gpt-5.6-eu"),
+                user_api_key_dict=self._admin(),
+            )
+
+        (update_call,) = self._allowlist_updates(mock_prisma)
+        for table in self._ALLOWLIST_TABLES:
+            assert (
+                f'UPDATE "{table}" SET "models" = array_append("models", $2) '
+                'WHERE $1 = ANY("models") AND NOT ($2 = ANY("models")) RETURNING'
+            ) in update_call.args[0]
+        assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
+
+    @pytest.mark.asyncio
+    async def test_unchanged_name_never_touches_allowlists(self):
+        from litellm.proxy.management_helpers.model_allowlist_rename_sync import (
+            sync_model_allowlists_for_renamed_model,
+        )
+
+        mock_prisma = self._prisma_with_row("m-rename", "gpt-5.6", deployment_count=0)
+        evict = AsyncMock()
+
+        with patch(self._EVICT, new=evict):
+            await sync_model_allowlists_for_renamed_model(
+                prisma_client=mock_prisma,
+                model_id="m-rename",
+                old_name="gpt-5.6",
+                new_name="gpt-5.6",
+                llm_router=None,
+                user_api_key_cache=MagicMock(),
+            )
+
+        assert self._allowlist_updates(mock_prisma) == []
+        evict.assert_not_awaited()
+
+
+class TestTeamMemberAutoRouterWrites:
+    @pytest.fixture(autouse=True)
+    def _salt(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LITELLM_SALT_KEY", "member-router-test-salt")
+
+    @contextlib.contextmanager
+    def _environment(self, database: MagicMock, row: LiteLLM_ProxyModelTable) -> Iterator[None]:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", database),  # test-quality-ok: [TQ008] endpoint storage singleton injection
+            patch("litellm.proxy.proxy_server.llm_router", self._catalog()),  # test-quality-ok: [TQ008] inject real destination model catalog
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: [TQ008] endpoint storage mode singleton
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: [TQ008] inject licensed process state
+            patch("litellm.proxy.proxy_server._license_check.auto_router_capability_limit", return_value=None),  # test-quality-ok: [TQ008] inject unlimited license result
+            patch("litellm.proxy.management_endpoints.model_management_endpoints.publish_config_change", new=AsyncMock()),  # test-quality-ok: [TQ008] pubsub I/O boundary
+            patch("litellm.proxy.management_endpoints.model_management_endpoints.create_object_audit_log", new=AsyncMock()),  # test-quality-ok: [TQ008] audit database I/O boundary
+            patch("litellm.proxy.management_endpoints.model_management_endpoints.clear_cache", new=AsyncMock(return_value=ReconcileOutcome(  # test-quality-ok: [TQ008] model reload I/O boundary
+                still_desired=frozenset((row.model_id, "allowed-id")), live_after=frozenset((row.model_id, "allowed-id"))
+            ))),
+        ):
+            yield
+
+    @staticmethod
+    def _team(enabled: bool = True) -> LiteLLM_TeamTable:
+        return LiteLLM_TeamTable(
+            team_id="member-team",
+            models=["allowed"],
+            members_with_roles=[Member(user_id="owner", role="user"), Member(user_id="peer", role="user")],
+            team_member_permissions=["/auto_router/manage"] if enabled else [],
+        )
+
+    @staticmethod
+    def _row() -> LiteLLM_ProxyModelTable:
+        return LiteLLM_ProxyModelTable(
+            model_id="member-router",
+            model_name="model_name_member-team_stored",
+            litellm_params={
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": "allowed"}},
+                "complexity_router_default_model": "allowed",
+            },
+            model_info={
+                "id": "member-router",
+                "team_id": "member-team",
+                "team_public_model_name": "personal-router",
+                "created_by": "peer",
+                "access_groups": ["retained-admin-group"],
+            },
+            created_by="owner",
+        )
+
+    @staticmethod
+    def _database(team: LiteLLM_TeamTable, row: LiteLLM_ProxyModelTable) -> MagicMock:
+        table: Final = MagicMock(
+            find_unique=AsyncMock(return_value=row),
+            find_many=AsyncMock(return_value=[]),
+            update=AsyncMock(return_value=row),
+            create=AsyncMock(return_value=row),
+        )
+        transaction: Final = MagicMock(
+            litellm_teamtable=MagicMock(find_unique=AsyncMock(return_value=team)),
+            litellm_teammembership=MagicMock(find_unique=AsyncMock(return_value=None)),
+            litellm_proxymodeltable=table,
+            query_raw=AsyncMock(return_value=[]),
+        )
+        context: Final = MagicMock(
+            __aenter__=AsyncMock(return_value=transaction),
+            __aexit__=AsyncMock(return_value=False),
+        )
+        db: Final = MagicMock(
+            litellm_teamtable=MagicMock(find_unique=AsyncMock(return_value=team)),
+            litellm_teammembership=MagicMock(find_unique=AsyncMock(return_value=None)),
+            litellm_proxymodeltable=table,
+            tx=MagicMock(return_value=context),
+        )
+        return MagicMock(db=db, transaction=transaction)
+
+    @staticmethod
+    def _catalog() -> Router:
+        return Router(model_list=[{
+            "model_name": "allowed",
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+            "model_info": {"id": "allowed-id"},
+        }])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint,change", [("patch", "config"), ("legacy", "strategy"), ("patch", "unrelated")])
+    async def test_admin_router_changes_release_member_scope(self, endpoint: str, change: str) -> None:
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model, update_model
+
+        original: Final = self._row()
+        row: Final = original.model_copy(update={"model_info": {**original.model_info, "member_auto_router": True}})
+        database: Final = self._database(self._team(), row)
+        params: Final = {
+            "config": {"complexity_router_config": {"tiers": {"SIMPLE": "allowed"}, "session_affinity": True}},
+            "strategy": {"model": "auto_router/quality_router", "quality_router_default_model": "allowed"},
+            "unrelated": {"model": "auto_router/complexity_router", "max_tokens": 100},
+        }
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams.model_validate(params[change]),
+            model_info=ModelInfo(id=row.model_id) if endpoint == "legacy" or change == "unrelated" else None,
+        )
+        with self._environment(database, row):
+            actor: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+            if endpoint == "patch":
+                await patch_model(row.model_id, request, actor)
+            else:
+                await update_model(request, actor)
+        written: Final = database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        saved_info: Final = json.loads(written["model_info"]) if "model_info" in written else row.model_info
+        assert saved_info["member_auto_router"] is (change == "unrelated")
+        assert saved_info["team_id"] == "member-team"
+        assert saved_info["access_groups"] == ["retained-admin-group"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    @pytest.mark.parametrize("access", ["owner", "peer", "limited-key"])
+    async def test_both_update_entries_enforce_creator_and_stamp_member_scope(
+        self, endpoint: str, access: str
+    ) -> None:
+        from fastapi import HTTPException
+
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model, update_model
+
+        row: Final = self._row()
+        database: Final = self._database(self._team(), row)
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(complexity_router_config={"tiers": {"SIMPLE": "allowed"}, "session_affinity": True}),
+            model_info=ModelInfo(id=row.model_id, team_id="member-team"),
+        )
+        actor: Final = UserAPIKeyAuth(
+            user_id="peer" if access == "peer" else "owner", user_role=LitellmUserRoles.INTERNAL_USER,
+            models=["personal-router"] if access == "limited-key" else ["allowed"], config={"timeout": 60},
+        )
+        with self._environment(database, row):
+            operation: Final = patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor)
+            if access != "owner":
+                with pytest.raises((HTTPException, ProxyException)):
+                    await operation
+                database.transaction.litellm_proxymodeltable.update.assert_not_awaited()
+                return
+            await operation
+        written: Final = database.transaction.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        saved_info: Final = json.loads(written["model_info"])
+        assert saved_info["member_auto_router"] is True
+        assert saved_info["team_id"] == "member-team"
+        assert saved_info["access_groups"] == ["retained-admin-group"]
+        assert "created_by" not in written
+        assert json.loads(written["litellm_params"])["complexity_router_config"]["session_affinity"] is True
+        assert written.get("model_name", row.model_name) == row.model_name
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("changed_state", ["allowed", "revoked", "moved", "creator", "collision", "global-alias"])
+    async def test_write_slot_rechecks_authoritative_team_owner_and_names(self, changed_state: str) -> None:
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import _auto_router_capability_slot
+        from litellm.proxy.management_helpers.auto_router_permissions import MemberAutoRouterWrite, validate_member_auto_router_config
+
+        row: Final = self._row()
+        database: Final = self._database(self._team(), row)
+        if changed_state == "revoked":
+            database.transaction.litellm_teamtable.find_unique.return_value = self._team(enabled=False)
+        elif changed_state == "moved":
+            database.transaction.litellm_proxymodeltable.find_unique.return_value = row.model_copy(update={"model_info": {"team_id": "other-team"}})
+        elif changed_state == "creator":
+            database.transaction.litellm_proxymodeltable.find_unique.return_value = row.model_copy(update={"created_by": "peer"})
+        elif changed_state == "collision":
+            database.transaction.litellm_proxymodeltable.find_many.return_value = [row]
+        config: Final = validate_member_auto_router_config({"tiers": {"SIMPLE": "allowed"}})
+        grant: Final = MemberAutoRouterWrite(
+            actor=UserAPIKeyAuth(user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER, models=["allowed"]),
+            team_id="member-team", model_id=None if changed_state in ("collision", "global-alias") else row.model_id,
+            public_name="personal-router", updated_at=None, config=config, default_model="allowed",
+        )
+        with (
+            self._environment(database, row),
+            patch("litellm.model_alias_map", {"personal-router": "allowed"} if changed_state == "global-alias" else {}),  # test-quality-ok: [TQ008] inject alias namespace for collision behavior
+        ):
+            if changed_state != "allowed":
+                with pytest.raises(HTTPException) as denied:
+                    async with _auto_router_capability_slot(database, effective_params={}, model_id=grant.model_id, member_write=grant):
+                        pytest.fail("An invalidated grant reached the database writer")
+                assert denied.value.status_code == (409 if changed_state in ("collision", "global-alias") else 403)
+                return
+            async with _auto_router_capability_slot(database, effective_params={}, model_id=grant.model_id, member_write=grant) as table:
+                await table.update(where={"model_id": row.model_id}, data={"updated_by": "owner"})
+        assert database.transaction.query_raw.await_count == 2
+        database.transaction.litellm_proxymodeltable.update.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("access", ["allowed", "opt-out", "limited-key"])
+    async def test_create_entry_requires_opt_in_and_appends_only_its_router(self, access: str) -> None:
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+        row: Final = self._row()
+        database: Final = self._database(self._team(enabled=access != "opt-out"), row)
+        actor: Final = UserAPIKeyAuth(
+            user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER,
+            models=["personal-router"] if access == "limited-key" else ["allowed"], config={"timeout": 60},
+        )
+        deployment: Final = Deployment(
+            model_name="new-personal-router",
+            litellm_params=LiteLLM_Params(model="auto_router/complexity_router", complexity_router_config={"tiers": {"SIMPLE": "allowed"}}),
+            model_info=ModelInfo(id=row.model_id, team_id="member-team"),
+        )
+        with (
+            self._environment(database, row),
+            patch("litellm.proxy.proxy_server.proxy_config.add_deployment", new=AsyncMock(return_value=ReconcileOutcome(  # test-quality-ok: [TQ008] model reload I/O boundary
+                still_desired=frozenset((row.model_id, "allowed-id")), live_after=frozenset((row.model_id, "allowed-id"))
+            ))),
+            patch("litellm.proxy.management_endpoints.model_management_endpoints.append_team_models", new=AsyncMock()) as appended,  # test-quality-ok: [TQ008] persistence boundary; the appended scope is asserted
+        ):
+            if access != "allowed":
+                with pytest.raises(ProxyException) as denied:
+                    await add_new_model(deployment, actor)
+                assert denied.value.code == "403"
+                database.transaction.litellm_proxymodeltable.create.assert_not_awaited()
+                appended.assert_not_awaited()
+                return
+            await add_new_model(deployment, actor)
+        written: Final = database.transaction.litellm_proxymodeltable.create.await_args.kwargs["data"]
+        assert written["created_by"] == "owner"
+        assert json.loads(written["model_info"])["member_auto_router"] is True
+        assert appended.await_args.kwargs["data"].models == ["new-personal-router"]
+        assert appended.await_args.kwargs["data"].team_id == "member-team"
