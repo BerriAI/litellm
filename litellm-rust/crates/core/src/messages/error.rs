@@ -1,3 +1,5 @@
+use litellm_llms::base_llm::chat::transformation::Error as LlmError;
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("invalid provider: {0}")]
@@ -13,33 +15,20 @@ pub enum Error {
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
     #[error(transparent)]
-    Transport(#[from] crate::transport::Error),
+    Transport(#[from] litellm_llms::custom_httpx::transport::Error),
     #[error(transparent)]
-    Headers(#[from] crate::http_utils::HeaderError),
-    #[error("stream framing failed: {0}")]
-    StreamFraming(String),
-    #[error("Anthropic SSE frame has no data")]
-    MissingStreamData,
-    #[error("Anthropic stream event is invalid: {0}")]
-    InvalidStreamEvent(String),
-    #[error("Bedrock event payload is invalid: {0}")]
-    InvalidBedrockPayload(String),
-    #[error("Bedrock event payload has invalid base64: {0}")]
-    InvalidBedrockBase64(String),
+    Headers(#[from] litellm_llms::custom_httpx::http_handler::HeaderError),
 }
 
-impl From<litellm_providers::messages::Error> for Error {
-    fn from(error: litellm_providers::messages::Error) -> Self {
+impl From<LlmError> for Error {
+    fn from(error: LlmError) -> Self {
         match error {
-            litellm_providers::messages::Error::MissingField(field) => Self::MissingField(field),
-            litellm_providers::messages::Error::InvalidRequest(message) => {
-                Self::InvalidRequest(message)
-            }
-            litellm_providers::messages::Error::InvalidResponse(message) => {
-                Self::InvalidResponse(message)
-            }
-            litellm_providers::messages::Error::Unsupported(reason) => Self::Unsupported(reason),
-            litellm_providers::messages::Error::Auth(error) => Self::Auth(error),
+            error @ LlmError::InvalidType { .. } => Self::InvalidRequest(error.to_string()),
+            LlmError::MissingField(field) => Self::MissingField(field),
+            LlmError::InvalidRequest(message) => Self::InvalidRequest(message),
+            LlmError::InvalidResponse(message) => Self::InvalidResponse(message),
+            LlmError::Unsupported(reason) => Self::Unsupported(reason),
+            LlmError::Auth(error) => Self::Auth(error),
         }
     }
 }
@@ -58,14 +47,6 @@ impl Error {
     }
 
     pub fn is_response(&self) -> bool {
-        matches!(
-            self,
-            Self::InvalidResponse(_)
-                | Self::StreamFraming(_)
-                | Self::MissingStreamData
-                | Self::InvalidStreamEvent(_)
-                | Self::InvalidBedrockPayload(_)
-                | Self::InvalidBedrockBase64(_)
-        )
+        matches!(self, Self::InvalidResponse(_))
     }
 }
