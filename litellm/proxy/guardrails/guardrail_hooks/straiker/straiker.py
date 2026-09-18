@@ -490,7 +490,7 @@ def _v3_answer_json(
     """
     response: Final = _v3_answer(request_data, model)
     if response:
-        return json.dumps(response, default=str)
+        return json.dumps(response, default=_json_default)
     texts: Final = tuple(t for t in (inputs.get("texts") or []) if t)
     if not texts:
         return None
@@ -890,7 +890,7 @@ class StraikerGuardrail(CustomGuardrail):
                         "bytes": body_bytes,
                         "payload": payload,
                     },
-                    default=str,
+                    default=_json_default,
                 )
             )
 
@@ -933,7 +933,7 @@ class StraikerGuardrail(CustomGuardrail):
             verbose_proxy_logger.info(
                 json.dumps(
                     {"event": "straiker.webhook_response", "status_code": resp.status_code, "body": body},
-                    default=str,
+                    default=_json_default,
                 )
             )
         return parsed, None
@@ -972,7 +972,7 @@ class StraikerGuardrail(CustomGuardrail):
                     "error": error,
                     "fail_open": fail_open,
                 },
-                default=str,
+                default=_json_default,
             )
         )
         if fail_open:

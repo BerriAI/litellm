@@ -1770,3 +1770,21 @@ async def test_v3_the_keys_user_outranks_the_end_user_the_request_named():
         inputs={"texts": ["hi"]}, request_data=master_key, input_type="request", logging_obj=_logging_obj()
     )
     assert _posted_payload(g2)["original"] == {"processed": {"Meta": {"user": "alice.chen@acme-demo.com"}}}
+
+
+@pytest.mark.asyncio
+async def test_v3_verbose_log_carries_the_payload_as_json(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_hooks.straiker import straiker as module
+
+    lines = []
+    monkeypatch.setattr(module.verbose_proxy_logger, "info", lambda message, *a, **k: lines.append(message))
+    g = _make_guardrail(api_key=V3_KEY, verbose=True)
+    g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+    await g.apply_guardrail(
+        inputs={"texts": ["hi"]}, request_data=_v3_request_data(), input_type="request", logging_obj=_logging_obj()
+    )
+
+    request_log = next(json.loads(line) for line in lines if '"straiker.webhook_request"' in line)
+    assert isinstance(request_log["payload"], dict)
+    assert request_log["payload"]["original"] == {"processed": {"Meta": {"user": "alice.chen@acme-demo.com"}}}
+    assert "mappingproxy" not in json.dumps(lines)
