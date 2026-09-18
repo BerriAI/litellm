@@ -185,7 +185,6 @@ def rewrite_session_ids(value: JsonValue | Mapping[str, JsonValue], raw_id: str,
 def _owner(auth: UserAPIKeyAuth) -> str:
     if not auth.api_key:
         raise HTTPException(403, "Live sessions require an authenticated API key")
-    # codeql[py/weak-sensitive-data-hashing]
     return hashlib.sha256(auth.api_key.encode(), usedforsecurity=False).hexdigest()
 
 

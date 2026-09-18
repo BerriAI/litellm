@@ -71,8 +71,13 @@ jobs:
         if: matrix.language == 'python'
         uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
         with:
+          # These SHA-256 digests are opaque ownership/cache identifiers, not password hashes.
           patterns: |
             -litellm/llms/oci/common_utils.py:py/weak-sensitive-data-hashing
+            -litellm/proxy/_types.py:py/weak-sensitive-data-hashing
+            -litellm/proxy/realtime_endpoints/call_sessions.py:py/weak-sensitive-data-hashing
+            -litellm/proxy/realtime_endpoints/live.py:py/weak-sensitive-data-hashing
+            -litellm/proxy/utils.py:py/weak-sensitive-data-hashing
           input: sarif-results/python.sarif
           output: sarif-results/python.sarif
 

@@ -220,7 +220,6 @@ def decode_call(token: str, authorization: str) -> CodexRealtimeCall:
         raise HTTPException(403, "Invalid realtime call") from exc
     if (
         call.expires_at < time.time()
-        # codeql[py/weak-sensitive-data-hashing]
         or call.owner != hashlib.sha256(authorization.encode(), usedforsecurity=False).hexdigest()
     ):
         raise HTTPException(403, "Invalid or expired realtime call")
@@ -401,7 +400,6 @@ async def _create_codex_realtime_call(request: Request) -> Response:
             call: Final = parse_call_response(
                 response,
                 alias=model,
-                # codeql[py/weak-sensitive-data-hashing]
                 owner=hashlib.sha256(
                     f"Bearer {owner_key}".encode(), usedforsecurity=False
                 ).hexdigest(),
