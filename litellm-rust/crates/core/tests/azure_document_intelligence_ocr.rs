@@ -1,4 +1,4 @@
-use litellm_callbacks::event::CallEvent;
+use litellm_host::event::{CallEvent, MachineEvent};
 use litellm_llms::base_llm::ocr::error::Error;
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -69,7 +69,7 @@ async fn rejects_invalid_pages_features_and_format(
     let result = decode_request(OcrWireRequest {
         model: "azure_ai/doc-intelligence/prebuilt-read".into(),
         document: json!({"type":"document_url","document_url":"https://example.com/a.pdf"}),
-        api_key: Some("key".into()),
+        api_key: Some(litellm_auth::SecretValue::new("key")),
         api_base: Some(base),
         custom_llm_provider: None,
         extra_headers: None,
@@ -263,7 +263,7 @@ async fn accepted_response_emits_response_received_before_polling() {
         json!({}),
     ))
     .with_observer(move |event| {
-        let CallEvent::ResponseReceived { raw } = event else {
+        let CallEvent::Machine(MachineEvent::ResponseReceived { raw }) = event else {
             return;
         };
         match request_count.lock().unwrap().len() {
@@ -466,7 +466,7 @@ async fn model_id_is_encoded_and_dot_segments_are_rejected() {
 mod transformation {
     use std::sync::{Arc, Mutex};
 
-    use litellm_callbacks::event::CallEvent;
+    use litellm_host::event::{CallEvent, MachineEvent};
     use litellm_llms::base_llm::ocr::transformation::OcrDocument;
     use serde_json::{Value, json};
 
@@ -646,7 +646,7 @@ mod transformation {
             json!({}),
         ))
         .with_observer(move |event| {
-            if let CallEvent::ResponseReceived { raw } = event {
+            if let CallEvent::Machine(MachineEvent::ResponseReceived { raw }) = event {
                 observed
                     .lock()
                     .unwrap()
