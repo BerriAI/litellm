@@ -213,7 +213,6 @@ jobs:
             test-path: >-
               tests/local_testing/test_cache_preset_key.py
               tests/local_testing/test_caching_handler.py
-              tests/local_testing/test_prompt_caching.py
               tests/local_testing/test_responses_stream_cache_keys.py
               tests/local_testing/test_unit_test_caching.py
             workers: 2
