@@ -4065,20 +4065,20 @@ class _ConvertStreamDeploymentHook(CustomLogger):
 class _SuccessKwargsCapture(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.success_kwargs: tuple[dict[str, object], ...] = ()
+        self.success_kwargs: list[dict[str, object]] = []
         self.success_responses: tuple[object, ...] = ()
-        self.stream_event_responses: tuple[object, ...] = ()
+        self.stream_event_responses: list[object] = []
 
     async def async_log_success_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        self.success_kwargs = (*self.success_kwargs, kwargs)
+        self.success_kwargs.append(kwargs)
         self.success_responses = (*self.success_responses, response_obj)
 
     async def async_log_stream_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        self.stream_event_responses = (*self.stream_event_responses, response_obj)
+        self.stream_event_responses.append(response_obj)
 
 
 def _install_converted_stream_callbacks(monkeypatch: pytest.MonkeyPatch) -> _SuccessKwargsCapture:
