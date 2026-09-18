@@ -36,19 +36,20 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
 
     model_config = ConfigDict(protected_namespaces=())
 
-    def effective_max_budget(self, now: datetime) -> float | None:
-        if self.max_budget is None:
-            return None
+    def active_temp_budget_increase(self, now: datetime) -> float:
         if self.temp_budget_increase is None or self.temp_budget_expiry is None:
-            return self.max_budget
+            return 0.0
         expiry: Final = (
             self.temp_budget_expiry.replace(tzinfo=timezone.utc)
             if self.temp_budget_expiry.tzinfo is None
             else self.temp_budget_expiry
         )
-        if expiry <= now:
-            return self.max_budget
-        return self.max_budget + self.temp_budget_increase
+        return 0.0 if expiry <= now else self.temp_budget_increase
+
+    def effective_max_budget(self, now: datetime) -> float | None:
+        if self.max_budget is None:
+            return None
+        return self.max_budget + self.active_temp_budget_increase(now)
 
 
 class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):

@@ -497,3 +497,52 @@ async def test_team_member_reservation_counter_honours_temp_budget_increase(
     assert counter is not None
     assert counter.max_budget == expected_max_budget
     assert counter.fallback_spend == 0.5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "default_cap, expiry_offset, expected_max_budget",
+    [
+        (2.0, timedelta(days=1), 3.0),
+        (2.0, timedelta(days=-1), 2.0),
+        (0.0, timedelta(days=1), None),
+    ],
+)
+async def test_team_member_reservation_counter_adds_temp_increase_to_live_team_default(
+    default_cap: float, expiry_offset: timedelta, expected_max_budget: float | None
+) -> None:
+    user_id: Final = "member-bare"
+    team_id: Final = "team-bare"
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="team_member_default_budget:default-bare",
+        value=LiteLLM_BudgetTable(budget_id="default-bare", max_budget=default_cap),
+    )
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        value=LiteLLM_TeamMembership(
+            user_id=user_id,
+            team_id=team_id,
+            spend=0.5,
+            budget_id="budget-bare",
+            litellm_budget_table=LiteLLM_BudgetTable(
+                max_budget=None,
+                temp_budget_increase=1.0,
+                temp_budget_expiry=datetime.now(timezone.utc) + expiry_offset,
+            ),
+        ),
+    )
+
+    counter: Final = await _get_team_member_budget_counter(
+        valid_token=UserAPIKeyAuth(token="hashed", user_id=user_id, team_id=team_id),
+        team_object=LiteLLM_TeamTable(team_id=team_id, metadata={"team_member_budget_id": "default-bare"}),
+        user_object=LiteLLM_UserTable(user_id=user_id),
+        user_api_key_cache=cache,
+    )
+
+    if expected_max_budget is None:
+        assert counter is None
+        return
+    assert counter is not None
+    assert counter.max_budget == expected_max_budget
+    assert counter.fallback_spend == 0.5

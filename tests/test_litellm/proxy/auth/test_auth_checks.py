@@ -8548,3 +8548,74 @@ async def test_team_member_budget_check_temp_budget_increase_extends_cap():
             )
     assert exc_info.value.current_cost == 150.0
     assert exc_info.value.max_budget == 100.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "default_cap, expiry_offset, spend, expected_cap",
+    [
+        (0.4, timedelta(hours=1), 1.0, None),
+        (0.4, timedelta(hours=-1), 1.0, 0.4),
+        (0.0, timedelta(hours=1), 1.0, None),
+    ],
+)
+async def test_team_member_budget_check_adds_temp_increase_to_live_team_default(
+    default_cap: float, expiry_offset: timedelta, spend: float, expected_cap: float | None
+):
+    """A member row that carries only the temporary pair inherits the team default
+    cap live: the increase is added to it while active, the default alone applies
+    once it expires, and a zero default stays uncapped."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.utils import ProxyLogging
+
+    cache = DualCache()
+    await cache.async_set_cache(
+        key="team_member_default_budget:default-budget-1",
+        value=LiteLLM_BudgetTable(budget_id="default-budget-1", max_budget=default_cap),
+    )
+    team_object = LiteLLM_TeamTable(team_id="test-team", metadata={"team_member_budget_id": "default-budget-1"})
+    valid_token = UserAPIKeyAuth(token="test-token", user_id="test-user", team_id="test-team")
+    team_membership = LiteLLM_TeamMembership(
+        user_id="test-user",
+        team_id="test-team",
+        spend=spend,
+        budget_id="budget-1",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            max_budget=None,
+            temp_budget_increase=1.0,
+            temp_budget_expiry=datetime.now(timezone.utc) + expiry_offset,
+        ),
+    )
+
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return fallback_spend
+
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
+        patch(  # test-quality-ok: [TQ008] isolates the check from the DB fetch
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=team_membership,
+        ),
+    ):
+        if expected_cap is None:
+            await _check_team_member_budget(
+                team_object=team_object,
+                user_object=LiteLLM_UserTable(user_id="test-user"),
+                valid_token=valid_token,
+                prisma_client=MagicMock(),
+                user_api_key_cache=cache,
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+            )
+            return
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_team_member_budget(
+                team_object=team_object,
+                user_object=LiteLLM_UserTable(user_id="test-user"),
+                valid_token=valid_token,
+                prisma_client=MagicMock(),
+                user_api_key_cache=cache,
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+            )
+    assert exc_info.value.max_budget == expected_cap

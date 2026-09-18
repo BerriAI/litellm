@@ -480,6 +480,8 @@ _TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
     "temp_budget_expiry",
 )
 
+_TEMP_BUDGET_FIELDS: Final = frozenset({"temp_budget_increase", "temp_budget_expiry"})
+
 
 MEMBER_BUDGET_PATCH_FIELDS: Final = MappingProxyType(
     {
@@ -552,6 +554,8 @@ async def _upsert_budget_and_membership(
     ``shared_budget_ids`` extends that protection to any other row more than one
     membership points at, which a caller patching several members at once has
     already counted; a row listed there is cloned rather than written in place.
+    A patch that only touches the temporary budget pair never copies permanent
+    limits into a new row, so the member keeps inheriting the live team default.
     """
     if not budget_patch:
         return
@@ -566,6 +570,7 @@ async def _upsert_budget_and_membership(
     is_shared_default: Final = existing_budget_id is not None and (
         existing_budget_id == team_default_budget_id or existing_budget_id in (shared_budget_ids or frozenset())
     )
+    temp_only: Final = frozenset(write_data) <= _TEMP_BUDGET_FIELDS
 
     async def _disconnect():
         await tx.litellm_teammembership.update(
@@ -586,30 +591,19 @@ async def _upsert_budget_and_membership(
         )
         return
 
-    seeds_temp_budget: Final = "temp_budget_increase" in write_data or "temp_budget_expiry" in write_data
-    source_row_id: Final = (
-        existing_budget_id
-        if is_shared_default
-        else team_default_budget_id
-        if team_default_budget_id is not None and seeds_temp_budget
-        else None
-    )
     source_row: Final = (
-        await tx.litellm_budgettable.find_unique(where={"budget_id": source_row_id})
-        if source_row_id is not None
+        await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
+        if is_shared_default and not temp_only
         else None
     )
     source: Final[Mapping[str, Any]] = source_row.model_dump() if source_row is not None else MappingProxyType({})
 
-    def _seeds(field: str) -> bool:
-        if field == "max_budget" and source.get(field) == 0 and not is_shared_default:
-            return False
-        return _is_set_budget_value(source.get(field))
-
     create_data: Final[dict[str, Any]] = {  # mutable-ok: Prisma create payloads are dict-shaped
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
-        **MappingProxyType({f: source[f] for f in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS if _seeds(f)}),
+        **MappingProxyType(
+            {f: source[f] for f in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS if _is_set_budget_value(source.get(f))}
+        ),
         **write_data,
     }
 
@@ -621,7 +615,7 @@ async def _upsert_budget_and_membership(
         create_data.pop("budget_reset_at", None)
 
     if not _has_meaningful_budget_limit(create_data):
-        if existing_budget_id is not None:
+        if existing_budget_id is not None and not temp_only:
             await _disconnect()
         return
 
