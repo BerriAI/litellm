@@ -187,18 +187,16 @@ def test_settings_store_clear_removes_every_key_the_config_file_does_not_own() -
 
 @pytest.mark.timeout(10)
 def test_settings_store_clear_then_refill_matches_a_plain_dict() -> None:
-    expected: Final[dict[str, JsonValue]] = {"max_parallel_requests": 3, "alerting": ["slack"]}
+    refilled: Final[dict[str, JsonValue]] = {"alerting": ["email"], "max_parallel_requests": 11}
     store: Final = SettingsStore("general_settings")
-    store.update(expected)
+    store.update({"max_parallel_requests": 3, "alerting": ["slack"]})
 
-    expected.clear()
     store.clear()
-    expected.update({"alerting": ["email"], "max_parallel_requests": 11})
-    store.update({"alerting": ["email"], "max_parallel_requests": 11})
+    store.update(refilled)
 
-    assert dict(store) == expected
-    assert tuple(store) == tuple(expected)
-    assert len(store) == len(expected)
+    assert dict(store) == refilled
+    assert tuple(store) == tuple(refilled)
+    assert len(store) == len(refilled)
 
 
 @pytest.mark.timeout(10)
