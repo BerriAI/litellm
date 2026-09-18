@@ -1522,13 +1522,13 @@ async def websocket_live_session(websocket: WebSocket, session_id: str | None = 
             await websocket.close(code=1008, reason="Live session rejected")
         except RuntimeError:
             # The peer may have closed the socket before the rejection response.
-            pass
+            return
     except Exception:
         try:
             await websocket.close(code=1011, reason="Live upstream connection failed")
         except RuntimeError:
             # The peer may have closed the socket before the failure response.
-            pass
+            return
     finally:
         if state.connection is not None:
             await state.connection.close()

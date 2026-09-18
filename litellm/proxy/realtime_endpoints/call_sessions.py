@@ -230,12 +230,14 @@ MAX_REALTIME_OFFER_BYTES: Final = 8 * 1024 * 1024
 
 
 async def _cache_bounded_offer_body(request: Request) -> None:
+    content_length: int | None
     try:
-        if int(request.headers.get("content-length", "")) > MAX_REALTIME_OFFER_BYTES:
-            raise HTTPException(413, "Realtime offer exceeds the 8 MiB limit")
+        content_length = int(request.headers.get("content-length", ""))
     except ValueError:
         # A missing or non-numeric content length is checked while streaming below.
-        pass
+        content_length = None
+    if content_length is not None and content_length > MAX_REALTIME_OFFER_BYTES:
+        raise HTTPException(413, "Realtime offer exceeds the 8 MiB limit")
     if hasattr(request, "_body"):
         if len(request._body) > MAX_REALTIME_OFFER_BYTES:  # pyright: ignore[reportPrivateUsage]  # validate Starlette's cached body without consuming it again
             raise HTTPException(413, "Realtime offer exceeds the 8 MiB limit")
