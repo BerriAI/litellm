@@ -16,6 +16,7 @@ from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
+from litellm.utils import CustomStreamWrapper, ModelResponse
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -442,6 +443,44 @@ def _sse(event: SSEEvent) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
+async def _acompletion(
+    model: str,
+    messages: list[Mapping[str, object]],
+    tools: list[_ToolDef] | None = None,
+    stream: bool = False,
+) -> ModelResponse | CustomStreamWrapper:
+    """Route through the proxy router when it knows the model, else call litellm directly."""
+    from litellm.proxy.proxy_server import llm_router
+    from litellm.types.llms.openai import AllMessageValues
+
+    completion_messages: Final = cast(list[AllMessageValues], messages)
+    if llm_router is not None and model in llm_router.get_model_names():
+        if stream:
+            return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
+                model=model,
+                messages=completion_messages,
+                tools=tools,
+                stream=True,
+                temperature=USAGE_AI_TEMPERATURE,
+                drop_params=True,
+            )
+        return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
+            model=model,
+            messages=completion_messages,
+            tools=tools,
+            temperature=USAGE_AI_TEMPERATURE,
+            drop_params=True,
+        )
+    return await litellm.acompletion(
+        model=model,
+        messages=completion_messages,
+        tools=tools,
+        stream=stream,
+        temperature=USAGE_AI_TEMPERATURE,
+        drop_params=True,
+    )
+
+
 def _resolve_fetch_kwargs(
     fn_name: str,
     fn_args: Mapping[str, str],
@@ -534,11 +573,10 @@ async def _stream_final_response(model: str, chat_messages: list[Mapping[str, ob
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
 
-    response: Final = await litellm.acompletion(
+    response: Final = await _acompletion(
         model=model,
         messages=chat_messages,
         stream=True,
-        temperature=USAGE_AI_TEMPERATURE,
     )
     async for chunk in response:
         delta = chunk.choices[0].delta.content
@@ -563,11 +601,10 @@ async def stream_usage_ai_chat(
     try:
         yield _sse({"type": "status", "message": "Thinking..."})
         tools: Final = get_tools_for_role(is_admin)
-        response: Final = await litellm.acompletion(
+        response: Final = await _acompletion(
             model=resolved_model,
             messages=chat_messages,
             tools=tools,
-            temperature=USAGE_AI_TEMPERATURE,
         )
         choice: Final = response.choices[0]
 
