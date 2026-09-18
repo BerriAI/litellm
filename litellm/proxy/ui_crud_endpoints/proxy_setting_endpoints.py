@@ -24,7 +24,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._experimental.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.config_resolvers import SettingsSource, source_for
+from litellm.proxy.config_resolvers import SettingsSource, SettingsStore, source_for
 from litellm.proxy.config_resolvers.sso import (
     SSO_FIELD_ENV_VARS,
     SSO_SECRET_FIELDS,
@@ -34,7 +34,10 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 )
-from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
+from litellm.proxy.spend_tracking.ptu_feature_flag import (
+    PTU_COST_ATTRIBUTION_ENV_VAR,
+    is_ptu_cost_attribution_enabled,
+)
 from litellm.proxy.utils import invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -44,6 +47,7 @@ from litellm.repositories.table_repositories import (
     UISettingsRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
+from litellm.secret_managers.main import get_secret
 from litellm.types.mcp import MCPToolSearchSettings
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -670,7 +674,19 @@ def _model_field_default(settings_class: type[BaseModel], field_name: str) -> ob
     field_info: Final = settings_class.model_fields.get(field_name)
     if field_info is None or field_info.default is PydanticUndefined:
         return None
-    return cast(object, field_info.default)
+    return cast(object, field_info.default)  # cast-ok: Pydantic field defaults are untyped
+
+
+def _ui_setting_source(
+    key: str,
+    value: object,
+    settings: SettingsStore,
+    settings_class: type[BaseModel],
+) -> SettingsSource:
+    if key == ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING:
+        configured_value: Final = get_secret(PTU_COST_ATTRIBUTION_ENV_VAR, None)
+        return "config" if configured_value is not None or value is True else "default"
+    return source_for(settings, key, _model_field_default(settings_class, key))
 
 
 async def _get_settings_with_schema(
@@ -1587,13 +1603,7 @@ async def get_ui_settings():
     }
     source: Final[dict[str, SettingsSource]] = {
         key: (
-            "db"
-            if key in ui_settings
-            else source_for(
-                proxy_config.settings,
-                key,
-                _model_field_default(settings_class, key),
-            )
+            "db" if key in ui_settings else _ui_setting_source(key, values[key], proxy_config.settings, settings_class)
         )
         for key in values
     }

@@ -432,7 +432,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     model_access_group_spend_counter_key,
     tag_cache_key,
 )
-from litellm.proxy.config_resolvers import SettingsStore, resolve_fields, source_for
+from litellm.proxy.config_resolvers import SettingsSource, SettingsStore, resolve_fields, source_for
 from litellm.proxy.config_resolvers.alerting import (
     EMAIL_DESCRIPTORS,
     MS_TEAMS_DESCRIPTORS,
@@ -4820,7 +4820,7 @@ def _as_settings_mapping(value: object) -> Mapping[str, SettingsJsonValue]:
 def _get_field_default(field_info: FieldInfo) -> JsonValue:
     if field_info.default is PydanticUndefined:
         return None
-    return cast(JsonValue, field_info.default)
+    return cast(JsonValue, field_info.default)  # cast-ok: Pydantic field defaults are JSON values at runtime
 
 
 def _bind_general_settings_store(settings: SettingsStore) -> None:
@@ -15605,6 +15605,22 @@ async def model_settings():
 #### ALERTING MANAGEMENT ENDPOINTS ####
 
 
+def _nested_setting_source(
+    settings: SettingsStore,
+    db_values: Mapping[str, JsonValue],
+    parent_key: str,
+    field_name: str,
+    field_default: JsonValue,
+) -> SettingsSource:
+    db_value: Final = db_values.get(field_name)
+    if db_value is not None and db_value != []:
+        return "db"
+    parent_value: Final = settings.without_db().get(parent_key)
+    if isinstance(parent_value, Mapping) and field_name in parent_value:
+        return "config"
+    return "default" if field_default is not None else "unset"
+
+
 @router.get(
     "/alerting/settings",
     description="Return the configurable alerting param, description, and current value",
@@ -15647,8 +15663,13 @@ async def alerting_settings(
         if db_general_settings is not None and db_general_settings.param_value is not None
         else {}
     )
-    alerting_args_dict: Final = cast(dict[str, JsonValue], db_general_settings_dict.get("alerting_args", {}))
-    alerting_values: Final = cast(list[JsonValue] | None, db_general_settings_dict.get("alerting"))
+    alerting_args_value: Final = db_general_settings_dict.get("alerting_args")
+    alerting_args_dict: Final[Mapping[str, JsonValue]] = (
+        alerting_args_value if isinstance(alerting_args_value, dict) else {}
+    )
+    alerting_values: Final = cast(  # cast-ok: alerting is stored as a JSON list when present
+        list[JsonValue] | None, db_general_settings_dict.get("alerting")
+    )
 
     settings: Final = proxy_config.settings
     settings.apply_db_row("general_settings", db_general_settings_dict)
@@ -15711,7 +15732,13 @@ async def alerting_settings(
                 field_description=field_info.description or "",
                 field_value=_slack_alerting_args_dict.get(field_name, field_default),
                 stored_in_db=_stored_in_db,
-                source=source_for(settings, "alerting_args", field_default),
+                source=_nested_setting_source(
+                    settings,
+                    alerting_args_dict,
+                    "alerting_args",
+                    field_name,
+                    field_default,
+                ),
                 field_default_value=field_default,
                 premium_field=(True if field_name == "region_outage_alert_ttl" else False),
             )
@@ -17414,21 +17441,19 @@ async def get_config_general_settings(
     field_info: Final = ConfigGeneralSettings.model_fields[field_name]
     field_default: JsonValue = _get_field_default(field_info)
     settings: Final = proxy_config.settings
-    db_values: Mapping[str, JsonValue]
-    if prisma_client is None:
-        db_values = {}
-    else:
+    if prisma_client is not None:
         db_general_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
             where={"param_name": "general_settings"}
         )
-        db_values = (
+        db_values: Final[Mapping[str, JsonValue]] = (
             dict(db_general_settings.param_value)
             if db_general_settings is not None and db_general_settings.param_value is not None
             else {}
         )
         settings.apply_db_row("general_settings", db_values)
+    effective_settings: Final = settings.without_db() if prisma_client is None else settings
 
-    if field_name not in settings and field_default is None:
+    if field_name not in effective_settings and field_default is None:
         raise HTTPException(
             status_code=400,
             detail={"error": f"Field name={field_name} not in DB"},
@@ -17436,7 +17461,7 @@ async def get_config_general_settings(
 
     redacted_field_value: Final = _redact_general_setting_value(
         field_name,
-        settings.get(field_name, field_default),
+        effective_settings.get(field_name, field_default),
         user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
     )
     field_value: Final = (
@@ -17450,7 +17475,7 @@ async def get_config_general_settings(
     return ConfigFieldInfo(
         field_name=field_name,
         field_value=field_value,
-        source=source_for(settings, field_name, field_default),
+        source=source_for(effective_settings, field_name, field_default),
     )
 
 
@@ -17640,7 +17665,11 @@ async def get_config_list(
     settings: Final = proxy_config.settings
     settings.apply_db_row("general_settings", db_general_settings_dict)
     runtime_settings: Final[Mapping[str, JsonValue]] = (
-        cast(Mapping[str, JsonValue], general_settings) if not isinstance(general_settings, SettingsStore) else settings
+        cast(  # cast-ok: legacy general_settings remains a mapping at this route boundary
+            Mapping[str, JsonValue], general_settings
+        )
+        if not isinstance(general_settings, SettingsStore)
+        else settings
     )
 
     allowed_args: Final = _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES
@@ -17744,9 +17773,11 @@ async def get_config_list(
     litellm_settings_store.apply_db_row("litellm_settings", db_litellm_settings)
     for litellm_field_name, spec in _GENERAL_SETTINGS_UI_LITELLM_FIELDS.items():
         default_value: GeneralSettingsUILiteLLMValue = _general_settings_ui_litellm_default(spec)
-        current_value: GeneralSettingsUILiteLLMValue = cast(
-            GeneralSettingsUILiteLLMValue,
-            litellm_settings_store.get(litellm_field_name, default_value),
+        current_value: GeneralSettingsUILiteLLMValue = (
+            cast(  # cast-ok: UI field defaults are validated by the field spec
+                GeneralSettingsUILiteLLMValue,
+                litellm_settings_store.get(litellm_field_name, default_value),
+            )
         )
         source = source_for(litellm_settings_store, litellm_field_name, default_value)
         stored_in_db_litellm: bool | None

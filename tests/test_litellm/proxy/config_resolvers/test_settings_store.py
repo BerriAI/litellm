@@ -82,6 +82,39 @@ def test_settings_store_keeps_unaffected_runtime_values_on_a_db_row_refresh() ->
     assert store.source("changed") == "db"
 
 
+def test_settings_store_without_db_uses_yaml_without_mutating_runtime_values() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"max_parallel_requests": 5})
+    store.apply_db_row("general_settings", {"max_parallel_requests": 7})
+    store.apply_runtime_values({"max_parallel_requests": 7})
+
+    without_db: Final = store.without_db()
+
+    assert without_db["max_parallel_requests"] == 5
+    assert without_db.source("max_parallel_requests") == "config"
+    assert store["max_parallel_requests"] == 7
+    assert store.source("max_parallel_requests") == "db"
+
+
+def test_settings_store_without_db_preserves_non_db_runtime_values() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"max_parallel_requests": "os.environ/MAX_PARALLEL_REQUESTS"})
+    store.apply_runtime_values({"max_parallel_requests": 7})
+
+    without_db: Final = store.without_db()
+
+    assert without_db["max_parallel_requests"] == 7
+    assert without_db.source("max_parallel_requests") == "config"
+
+
+def test_settings_store_without_db_preserves_runtime_deletions() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"deleted": 1})
+    del store["deleted"]
+
+    assert "deleted" not in store.without_db()
+
+
 def test_settings_store_removes_only_runtime_values_affected_by_a_cleared_db_row() -> None:
     store: Final = SettingsStore("general_settings")
     store.load_yaml({"template": "os.environ/SETTING"})

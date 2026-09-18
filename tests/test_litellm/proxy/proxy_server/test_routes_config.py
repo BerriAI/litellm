@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from typing import Final
+
+from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -362,6 +365,33 @@ def test_config_field_info_happy_admin(client, auth_as, mock_prisma, monkeypatch
     }
 
 
+def test_config_field_info_clears_stale_db_source_without_connection(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    store = SettingsStore("general_settings")
+    store.load_yaml({"max_parallel_requests": 5})
+    store.apply_db_row("general_settings", {"max_parallel_requests": 7})
+    store.apply_runtime_values({"max_parallel_requests": 7})
+    monkeypatch.setattr(ps.proxy_config, "settings", store)
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/config/field/info", params={"field_name": "max_parallel_requests"})
+
+    assert response.status_code == 200
+    assert normalize(response.json()) == {
+        "field_name": "max_parallel_requests",
+        "field_value": 5,
+        "source": "config",
+    }
+    assert store["max_parallel_requests"] == 7
+
+
 def test_config_field_info_non_admin_rejected(client, auth_as, mock_prisma, monkeypatch):
     """Non-admin (INTERNAL_USER) is denied — admin-view gate fires."""
     from litellm.proxy import proxy_server as ps
@@ -608,12 +638,8 @@ def test_config_read_routes_report_effective_values_and_sources(client, auth_as,
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         list_response = client.get("/config/list", params={"config_type": "general_settings"})
-        config_only_response = client.get(
-            "/config/field/info", params={"field_name": "max_file_size_mb"}
-        )
-        db_wins_response = client.get(
-            "/config/field/info", params={"field_name": "max_parallel_requests"}
-        )
+        config_only_response = client.get("/config/field/info", params={"field_name": "max_file_size_mb"})
+        db_wins_response = client.get("/config/field/info", params={"field_name": "max_parallel_requests"})
 
     assert list_response.status_code == 200
     by_name: Final = {entry["field_name"]: entry for entry in list_response.json()}
@@ -651,9 +677,7 @@ def test_config_read_routes_report_default_source(client, auth_as, mock_prisma, 
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         list_response = client.get("/config/list", params={"config_type": "general_settings"})
-        field_response = client.get(
-            "/config/field/info", params={"field_name": "proxy_config_reload_interval_seconds"}
-        )
+        field_response = client.get("/config/field/info", params={"field_name": "proxy_config_reload_interval_seconds"})
 
     assert list_response.status_code == 200
     by_name: Final = {entry["field_name"]: entry for entry in list_response.json()}
