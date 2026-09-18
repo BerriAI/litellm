@@ -17128,6 +17128,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "disable_auto_add_proxy_admin_to_teams": "Boolean",
         "apply_user_budget_to_team_keys": "Boolean",
         "user_api_key_cache_max_size": "Integer",
+        "transcribe_media_buckets": "List",
     }
 )
 
