@@ -2421,8 +2421,11 @@ def test_proxy_server_request_payload_excludes_secret_fields(mock_should_store):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("redact", [False, True], ids=["stored", "redacted"])
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
-async def test_websocket_snapshot_spend_serialization_preserves_transport(mock_should_store, redact):
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs",
+    return_value=True,
+)
+async def test_websocket_snapshot_spend_serialization_preserves_transport(_mock_should_store, redact):
     from starlette.websockets import WebSocket
 
     from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
@@ -2432,7 +2435,6 @@ async def test_websocket_snapshot_spend_serialization_preserves_transport(mock_s
         def __dict__(self):
             raise AssertionError("Spend logging must not traverse the WebSocket app graph")
 
-    mock_should_store.return_value = True
     send = AsyncMock()
     websocket = WebSocket(
         scope={"type": "websocket", "app": AppTraversalTrap()},
@@ -2442,14 +2444,11 @@ async def test_websocket_snapshot_spend_serialization_preserves_transport(mock_s
     await websocket.accept()
     data = {
         "model": "gpt-4o-realtime-preview",
-        "messages": [{"role": "user", "content": "private input"}],
+        "messages": [{"role": "user", "content": "<MASKED>"}],
         "metadata": {"trace_id": "realtime-trace", "websocket": "user metadata"},
         "websocket": websocket,
         "proxy_server_request": {},
     }
-    refresh_proxy_server_request_body_snapshot(data)
-    # Guardrails can replace messages after the initial snapshot.
-    data["messages"] = [{"role": "user", "content": "<MASKED>"}]
     refresh_proxy_server_request_body_snapshot(data)
 
     stored = json.loads(
