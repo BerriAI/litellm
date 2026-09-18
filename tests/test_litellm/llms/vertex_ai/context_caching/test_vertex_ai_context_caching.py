@@ -26,7 +26,7 @@ class TestContextCachingEndpoints:
         # Mock is_prompt_caching_valid_prompt to return True by default.
         # This avoids token counting in unit tests. The min-token guard is
         # tested explicitly in test_check_and_create_cache_skips_when_below_min_tokens.
-        self._token_check_patcher = patch(
+        self._token_check_patcher = patch(  # test-quality-ok: isolate token validation for cache creation tests
             "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.is_prompt_caching_valid_prompt",
             return_value=True,
         )
@@ -2153,11 +2153,11 @@ class TestContextCachingMultiRegionUrls:
         }
 
         with (
-            patch(
+            patch(  # test-quality-ok: isolate message splitting for cache creation tests
                 "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages",
                 return_value=(cached_messages, non_cached_messages),
             ),
-            patch(
+            patch(  # test-quality-ok: isolate cache key generation for cache creation tests
                 "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.local_cache_obj.get_cache_key",
                 return_value="test_cache_key",
             ),
@@ -2167,7 +2167,7 @@ class TestContextCachingMultiRegionUrls:
                 "_get_token_and_url_context_caching",
                 return_value=("token", "https://test-url.com"),
             ),
-            patch(
+            patch(  # test-quality-ok: isolate request transformation for cache creation tests
                 "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.transform_openai_messages_to_gemini_context_caching",
                 return_value={"model": "gemini-1.5-pro", "contents": []},
             ),
@@ -2211,11 +2211,11 @@ class TestContextCachingMultiRegionUrls:
         }
 
         with (
-            patch(
+            patch(  # test-quality-ok: isolate message splitting for cache creation tests
                 "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages",
                 return_value=(cached_messages, non_cached_messages),
             ),
-            patch(
+            patch(  # test-quality-ok: isolate cache key generation for cache creation tests
                 "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.local_cache_obj.get_cache_key",
                 return_value="test_cache_key",
             ),
@@ -2225,7 +2225,7 @@ class TestContextCachingMultiRegionUrls:
                 "_get_token_and_url_context_caching",
                 return_value=("token", "https://test-url.com"),
             ),
-            patch(
+            patch(  # test-quality-ok: isolate request transformation for cache creation tests
                 "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.transform_openai_messages_to_gemini_context_caching",
                 return_value={"model": "gemini-1.5-pro", "contents": []},
             ),
@@ -2261,11 +2261,11 @@ class TestContextCachingMultiRegionUrls:
         non_cached_messages = [self.sample_messages[1]]
 
         with (
-            patch(
+            patch(  # test-quality-ok: isolate message splitting for cache reuse tests
                 "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages",
                 return_value=(cached_messages, non_cached_messages),
             ),
-            patch(
+            patch(  # test-quality-ok: isolate cache key generation for cache reuse tests
                 "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.local_cache_obj.get_cache_key",
                 return_value="test_cache_key",
             ),
