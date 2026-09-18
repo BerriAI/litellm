@@ -968,6 +968,12 @@ def test_finish_reason_unspecified_and_malformed_function_call():
     # Test new Gemini finish reasons
     assert finish_reason_mappings["TOO_MANY_TOOL_CALLS"] == "stop"
     assert finish_reason_mappings["MALFORMED_RESPONSE"] == "stop"
+    assert finish_reason_mappings["NO_IMAGE"] == "content_filter"
+    assert finish_reason_mappings["IMAGE_RECITATION"] == "content_filter"
+    assert finish_reason_mappings["IMAGE_OTHER"] == "content_filter"
+    assert finish_reason_mappings["ESCALATION"] == "content_filter"
+    assert finish_reason_mappings["UNEXPECTED_TOOL_CALL"] == "stop"
+    assert finish_reason_mappings["MISSING_THOUGHT_SIGNATURE"] == "stop"
 
 
 def test_vertex_ai_usage_metadata_response_token_count():
@@ -6219,3 +6225,65 @@ def test_gemini_candidate_other_finish_reasons_no_content():
     )
     assert responses_length.status == "incomplete"
     assert responses_length.incomplete_details.reason == "max_output_tokens"
+
+
+def test_gemini_candidate_with_finish_reason_no_content_streaming_chunk():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    chunk: Final = {
+        "candidates": [{"finishReason": "NO_IMAGE", "index": 0}],
+        "usageMetadata": {"promptTokenCount": 19, "candidatesTokenCount": 0, "totalTokenCount": 19},
+    }
+    iterator: Final = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=MagicMock())
+
+    streaming_chunk: Final = iterator.chunk_parser(chunk)
+
+    assert len(streaming_chunk.choices) == 1
+    assert streaming_chunk.choices[0].finish_reason == "content_filter"
+    assert streaming_chunk.choices[0].delta.content is None
+    assert streaming_chunk.choices[0].delta.tool_calls is None
+
+
+def test_gemini_multi_candidate_messages_do_not_share_state():
+    config: Final = VertexGeminiConfig()
+    completion_response: Final = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {"text": "Let me check the weather.", "thought": True},
+                        {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}},
+                    ],
+                },
+                "finishReason": "STOP",
+                "index": 0,
+            },
+            {
+                "content": {"role": "model", "parts": [{"text": "It is sunny in Paris."}]},
+                "finishReason": "STOP",
+                "index": 1,
+            },
+        ],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 20, "totalTokenCount": 30},
+    }
+
+    resp: Final = config._transform_google_generate_content_to_openai_model_response(
+        completion_response=completion_response,
+        model_response=ModelResponse(),
+        model="gemini-2.5-flash",
+        logging_obj=MagicMock(),
+        raw_response=MagicMock(headers={}),
+    )
+
+    assert len(resp.choices) == 2
+    assert resp.choices[0].finish_reason == "tool_calls"
+    assert resp.choices[0].message.tool_calls[0].function.name == "get_weather"
+    assert resp.choices[0].message.reasoning_content == "Let me check the weather."
+    assert resp.choices[1].finish_reason == "stop"
+    assert resp.choices[1].message.content == "It is sunny in Paris."
+    assert resp.choices[1].message.tool_calls is None
+    assert getattr(resp.choices[1].message, "reasoning_content", None) is None
+    assert resp.choices[1].provider_specific_fields["native_finish_reason"] == "STOP"
