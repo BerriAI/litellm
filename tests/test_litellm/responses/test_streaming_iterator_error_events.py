@@ -552,3 +552,51 @@ def test_maybe_raise_for_error_event_maps_vector_store_timeout_to_retriable_504(
     with pytest.raises(MidStreamFallbackError) as exc_info:
         iterator._maybe_raise_for_error_event(chunk)
     assert exc_info.value.status_code == 504
+
+
+def test_unrecognised_code_is_not_downgraded_to_a_client_error_by_a_generic_type():
+    """A code the table does not know is an unknown condition, and an unknown condition defaults to a
+    retriable 500 (see `totally_unknown_future_code` above). A generic type alongside it must not turn
+    that unknown into a 400: the type is strictly less specific than the code, so it may classify when
+    no code contradicts it, never to overrule one the table cannot read."""
+    assert _status_code_for_error_fields(None, "request_timeout") == 500
+    assert _status_code_for_error_fields("invalid_request_error", "request_timeout") == 500
+    assert _status_code_for_error_fields("server_error", "request_timeout") == 500
+
+
+def test_generic_type_still_classifies_when_the_event_carries_no_code():
+    assert _status_code_for_error_fields("invalid_request_error", None) == 400
+    assert _status_code_for_error_fields("server_error", None) == 500
+    assert _status_code_for_error_fields(None, None) == 500
+
+
+def test_maybe_raise_for_error_event_wraps_a_stream_cut_in_transit_for_mid_stream_fallback():
+    """A gateway reports a Responses stream cut in transit as code `request_timeout` under type
+    `invalid_request_error`. The request was accepted and served, so it must reach the caller as a
+    retriable server fault the Router can fall back on, not as a malformed request."""
+    iterator = _make_iterator()
+    chunk = _make_error_chunk(
+        "invalid_request_error",
+        "request_timeout",
+        "stream disconnected before completion: stream closed before response.completed",
+    )
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        iterator._maybe_raise_for_error_event(chunk)
+    assert exc_info.value.status_code == 500
+    assert isinstance(exc_info.value.original_exception, litellm.InternalServerError)
+    assert exc_info.value.original_exception.status_code == 500
+    assert "stream closed before response.completed" in str(exc_info.value)
+    assert "invalid_request_error" not in str(exc_info.value)
+    assert exc_info.value.generated_content == ""
+
+
+def test_a_recognised_code_keeps_the_event_type_in_the_message_for_content_policy_dispatch():
+    """The type is dropped from the message only when a code overrules it. A recognised code leaves the
+    type in place, which is what ContentPolicyViolationError dispatch matches on."""
+    iterator = _make_iterator()
+    chunk = _make_error_chunk("invalid_request_error", "content_policy_violation", "blocked")
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        iterator._maybe_raise_for_error_event(chunk)
+    assert isinstance(exc_info.value.original_exception, litellm.ContentPolicyViolationError)
+    assert exc_info.value.original_exception.body["type"] == "invalid_request_error"
+    assert exc_info.value.original_exception.body["code"] == "content_policy_violation"

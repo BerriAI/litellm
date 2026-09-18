@@ -6,6 +6,7 @@ from typing import Final
 
 import pytest
 from hypothesis import Phase, example, given, settings, strategies as st
+import openai
 from openai import OpenAI
 
 from integration._support.client import Gateway, eventually
@@ -147,3 +148,47 @@ def test_client_cancellation_releases_the_actual_provider_connection() -> None:
                 gate.set()
         assert wire.disconnected.get(timeout=5) == "/v1/chat/completions"
         assert len(wire.drain()) == 1
+
+
+def responses_frame(value: dict) -> bytes:
+    return b"event: " + value["type"].encode() + b"\ndata: " + json.dumps(value, ensure_ascii=False).encode() + b"\n\n"
+
+
+def responses_stream_cut_by(error: dict) -> tuple[bytes, ...]:
+    created: Final = {"id": "resp-cut", "object": "response", "created_at": 1, "model": "gpt-5", "status": "in_progress", "output": [], "parallel_tool_calls": False, "tool_choice": "auto", "tools": []}
+    return (
+        responses_frame({"type": "response.created", "sequence_number": 0, "response": created}),
+        responses_frame({"type": "response.output_text.delta", "sequence_number": 1, "item_id": "msg-cut", "output_index": 0, "content_index": 0, "delta": "Hello "}),
+        responses_frame({"type": "error", "sequence_number": 2, "error": error}),
+    )
+
+
+@pytest.mark.covers("other.streaming.failure.in_stream_error_code_outranks_generic_type")
+def test_responses_in_stream_error_classifies_by_code_not_generic_type() -> None:
+    """A gateway cuts a Responses stream in transit and reports it with a transport code the status table
+    does not know (`request_timeout`) under the generic type `invalid_request_error`. The request was
+    accepted and two events were already delivered, so the caller must not be told its request was
+    malformed: an unrecognised code is an unknown condition, and an unknown condition is retriable. A code
+    the table does know as a client fault still decides, under the same generic type."""
+    import litellm
+
+    cut: Final = {"type": "invalid_request_error", "code": "request_timeout", "message": "stream disconnected before completion: stream closed before response.completed", "param": None}
+    too_long: Final = {"type": "invalid_request_error", "code": "context_length_exceeded", "message": "too long", "param": None}
+    for error, status in ((cut, 500), (too_long, 400)):
+        with wire_server(lambda request, error=error: Reply(content_type="text/event-stream", chunks=responses_stream_cut_by(error))) as wire:
+            stream: Final = litellm.responses(model="openai/gpt-5", api_base=wire.url + "/v1", api_key="synthetic-stream-key", input="in-stream error control", stream=True, timeout=5, num_retries=0)
+            with pytest.raises(openai.APIError) as failure:
+                tuple(stream)
+            assert failure.value.status_code == status
+            if status == 500:
+                assert isinstance(failure.value, litellm.exceptions.MidStreamFallbackError)
+                assert isinstance(failure.value.original_exception, litellm.InternalServerError)
+                assert failure.value.generated_content == "Hello "
+                assert failure.value.is_pre_first_chunk is False
+                assert "invalid_request_error" not in str(failure.value)
+            else:
+                assert isinstance(failure.value, litellm.BadRequestError)
+                assert not isinstance(failure.value, litellm.exceptions.MidStreamFallbackError)
+                assert (failure.value.body["type"], failure.value.body["code"]) == (error["type"], error["code"])
+            assert error["message"] in str(failure.value)
+            assert len(wire.drain()) == 1
