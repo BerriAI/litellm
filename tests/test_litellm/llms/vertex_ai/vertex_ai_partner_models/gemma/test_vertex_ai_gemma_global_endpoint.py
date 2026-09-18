@@ -180,12 +180,11 @@ class TestCreateVertexURLGemma:
 # ---------------------------------------------------------------------------
 
 
-def test_gemma_maas_context_window_matches_google(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-
+def test_gemma_maas_context_window_matches_google(local_model_cost_map):
     info = litellm.get_model_info("vertex_ai/google/gemma-4-26b-a4b-it-maas")
 
+    # 262,144 context length and 128,000 maximum output per Google's model page, checked 2026-09-18:
+    # https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/maas/google/gemma-4-26b-a4b-it
     assert info["max_input_tokens"] == 262144
     assert info["max_output_tokens"] == 128000
 
