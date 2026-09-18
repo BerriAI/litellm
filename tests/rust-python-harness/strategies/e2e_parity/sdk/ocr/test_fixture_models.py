@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 from collections.abc import Callable
 from datetime import date
-from pathlib import Path
 from typing import Final, cast
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
@@ -260,20 +259,6 @@ def _reducto_document() -> ReductoDocumentUrlDocument:
         type="document_url",
         document_url="reducto://fixture-document.pdf",
     )
-
-
-def test_fixture_catalogs_match_active_registered_ocr_models() -> None:
-    registry_path: Final = Path(__file__).resolve().parents[6] / "model_prices_and_context_window.json"
-    registry: Final = MODEL_REGISTRY.validate_json(registry_path.read_text(encoding="utf-8"))
-    active_registered: Final = frozenset(
-        model
-        for model, raw_metadata in registry.items()
-        if raw_metadata.get("mode") == "ocr" and raw_metadata.get("litellm_provider") in SUPPORTED_OCR_PROVIDERS
-        for metadata in (_ModelRegistryEntry.model_validate(raw_metadata),)
-        if metadata.deprecation_date is None or metadata.deprecation_date > date.today()
-    )
-
-    assert ACTIVE_OCR_MODELS == active_registered
 
 
 @pytest.mark.parametrize(

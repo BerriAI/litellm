@@ -3,13 +3,10 @@ pub use error::Error;
 mod client;
 mod handler;
 mod prepare;
-pub mod transformation;
-pub mod types;
-
-use serde_json::Value;
-
 pub use handler::execute_audio_transcription_provider_call;
+pub use litellm_providers::audio_transcription::types;
 pub use prepare::prepare_audio_transcription_provider_call;
+use serde_json::Value;
 pub use types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
 
 pub async fn audio_transcription(request: AudioTranscriptionRequest<'_>) -> Result<Value, Error> {
