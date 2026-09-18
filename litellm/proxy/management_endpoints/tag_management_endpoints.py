@@ -485,10 +485,13 @@ async def update_tag(
                 try:
                     await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=tag.spend, ttl=60)
                 except Exception as redis_err:  # noqa: BLE001  # best-effort refresh: a Redis failure must not fail the request
+                    # tag.name is admin-supplied; strip CR/LF before it reaches the logs so it
+                    # cannot forge additional log lines.
+                    safe_counter_key: Final = counter_key.replace("\r", "").replace("\n", "")
                     verbose_proxy_logger.warning(
                         "Failed to update spend counter %s in Redis after tag spend update: %s. "
                         "Budget checks may use stale value until counter expires.",
-                        counter_key,
+                        safe_counter_key,
                         redis_err,
                     )
 
