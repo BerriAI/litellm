@@ -793,11 +793,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             }
         }
 
-        fn emit(
-            &mut self,
-            py: Python<'_>,
-            event: LifecycleEvent<'_>,
-        ) -> PyResult<LifecycleStep> {
+        fn emit(&mut self, py: Python<'_>, event: LifecycleEvent<'_>) -> PyResult<LifecycleStep> {
             self.log.push(match event {
                 LifecycleEvent::Started { .. } => "started".into(),
                 LifecycleEvent::Machine(MachineEvent::ResponseReceived { raw }) => {

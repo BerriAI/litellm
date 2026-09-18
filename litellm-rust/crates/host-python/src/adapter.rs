@@ -69,11 +69,7 @@ pub trait PythonLifecycle: Send + Sync {
         timing: Timing,
     ) -> PyResult<LifecycleStep>;
 
-    fn emit(
-        &mut self,
-        py: Python<'_>,
-        event: LifecycleEvent<'_>,
-    ) -> PyResult<LifecycleStep>;
+    fn emit(&mut self, py: Python<'_>, event: LifecycleEvent<'_>) -> PyResult<LifecycleStep>;
 
     /// The call streams and its stream was handed to the caller. The caller is not
     /// inside an await here, so this step and `delivered` cannot suspend.

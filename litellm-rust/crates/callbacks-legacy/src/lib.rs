@@ -21,7 +21,7 @@ mod preparation;
 mod test_support;
 
 pub(crate) use adapter::LegacyLogging;
-pub use adapter::LegacySurface;
+pub use adapter::{LegacySurface, PassThroughStream};
 pub use call::{PublicCall, run_legacy_call};
 pub(crate) use callbacks::{LegacyCallbacks, is_internal_call};
 pub(crate) use logger::{DeploymentHooks, PythonLogger, finalize, setup};

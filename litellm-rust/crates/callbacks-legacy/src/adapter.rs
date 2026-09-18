@@ -30,6 +30,16 @@ pub struct LegacySurface {
     pub call_type: &'static str,
     /// What `Logging.pre_call` is told the input was.
     pub input_description: &'static str,
+    /// How a streamed response is billed; `None` for a route that never streams.
+    pub stream: Option<PassThroughStream>,
+}
+
+/// The pass-through billing a streamed response goes through once its chunks are in.
+#[derive(Clone, Copy, Debug)]
+pub struct PassThroughStream {
+    pub url_route: &'static str,
+    /// A value of Python's `EndpointType`.
+    pub endpoint_type: &'static str,
 }
 
 /// What the Messages stream iterator keeps for its end-of-stream billing.
@@ -177,10 +187,13 @@ impl LegacyLogging {
 
     fn stream_success(&self, py: Python<'_>, stream: &DeliveredStream) -> PyResult<()> {
         let logger = self.logger()?;
+        let billing = self.surface.stream.ok_or_else(missing_state)?;
         let billed = Streaming::Success.call(
             py,
             (
                 logger.object(py),
+                billing.url_route,
+                billing.endpoint_type,
                 &self.body,
                 &stream.chunks,
                 &self.start,
@@ -201,14 +214,25 @@ impl LegacyLogging {
     /// partial usage. The sync path has no loop to schedule that on, so it falls back to
     /// the plain failure handler.
     fn stream_failure(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
-        let (Some(logger), Some(error), Some(stream)) = (&self.logger, &self.error, &self.stream)
+        let (Some(logger), Some(error), Some(stream), Some(billing)) =
+            (&self.logger, &self.error, &self.stream, self.surface.stream)
         else {
             return Ok(LifecycleStep::Done);
         };
         if !self.asynchronous {
             return self.dispatch_failure(py);
         }
-        match Streaming::Failure.call(py, (logger.object(py), &self.body, &stream.chunks, error)) {
+        let scheduled = Streaming::Failure.call(
+            py,
+            (
+                logger.object(py),
+                billing.endpoint_type,
+                &self.body,
+                &stream.chunks,
+                error,
+            ),
+        );
+        match scheduled {
             Ok(awaitable) => {
                 self.pending = Some(Pending::AsyncFailure);
                 Ok(LifecycleStep::Await(awaitable.unbind()))
@@ -343,11 +367,7 @@ impl PythonLifecycle for LegacyLogging {
         self.finalize(py)
     }
 
-    fn emit(
-        &mut self,
-        py: Python<'_>,
-        event: LifecycleEvent<'_>,
-    ) -> PyResult<LifecycleStep> {
+    fn emit(&mut self, py: Python<'_>, event: LifecycleEvent<'_>) -> PyResult<LifecycleStep> {
         match event {
             LifecycleEvent::Started { .. } => Ok(LifecycleStep::Done),
             LifecycleEvent::Machine(MachineEvent::ResponseReceived { raw }) => {
@@ -403,6 +423,9 @@ impl PythonLifecycle for LegacyLogging {
     }
 
     fn opened(&mut self, py: Python<'_>) -> PyResult<()> {
+        if self.surface.stream.is_none() {
+            return Err(missing_state());
+        }
         Streaming::Opened.call(py, (self.logger()?.object(py),))?;
         self.stream = Some(DeliveredStream {
             chunks: PyList::empty(py).unbind(),
