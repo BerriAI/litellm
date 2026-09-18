@@ -1330,3 +1330,162 @@ async def test_add_tag_to_deployment_model_not_found():
 
         assert exc_info.value.status_code == 500
         assert "not found in database" in str(exc_info.value.detail)
+
+
+def _grouping_set_row(*, group_level: int, date: str | None = None, spend: float = 0.0, **overrides: object) -> dict:
+    """One already-aggregated rollup row as ``LiteLLM_DailyTagSpend``'s GROUPING SETS query emits it."""
+    return {
+        "date": date,
+        "api_key": None,
+        "model": None,
+        "model_group": None,
+        "custom_llm_provider": None,
+        "mcp_namespaced_tool_name": None,
+        "endpoint": None,
+        "group_level": group_level,
+        "spend": spend,
+        "ptu_flat_cost": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "compression_saved_tokens": 0,
+        "compression_savings_spend": 0.0,
+        "prompt_caching_savings_spend": 0.0,
+        "gateway_injected_caching_savings_spend": 0.0,
+        "autorouter_savings_spend": 0.0,
+        "api_requests": 0,
+        "successful_requests": 0,
+        "failed_requests": 0,
+        **overrides,
+    }
+
+
+@pytest.mark.asyncio
+async def test_tag_daily_activity_aggregated_returns_range_totals_without_paginating():
+    """Regression for #37434.
+
+    ``/tag/daily/activity`` paginates raw ``LiteLLM_DailyTagSpend`` rows, so a caller
+    after range totals has to walk every page and add them up. The tag spend scheduler
+    inserts rows while that walk is in flight, shifting rows past the caller's offset so
+    they get served twice and the summed total drifts upward between identical reads.
+    The aggregated endpoint sums in the database against a single snapshot, so its
+    ``metadata`` already carries the whole range and there are no pages to reassemble.
+    """
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity_aggregated,
+    )
+
+    mock_user_auth = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    rollup_rows = [
+        _grouping_set_row(group_level=127, spend=7.5, api_requests=3),
+        _grouping_set_row(group_level=63, date="2025-01-01", spend=5.0, api_requests=2),
+        _grouping_set_row(group_level=63, date="2025-01-02", spend=2.5, api_requests=1),
+    ]
+    entity_rows = [
+        {**_grouping_set_row(group_level=0, date="2025-01-01", spend=5.0), "entity_id": "prod", "api_key_rolled": 1},
+        {**_grouping_set_row(group_level=0, date="2025-01-02", spend=2.5), "entity_id": "prod", "api_key_rolled": 1},
+    ]
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+        mock_db.query_raw = AsyncMock(side_effect=[rollup_rows, entity_rows])
+
+        result = await get_tag_daily_activity_aggregated(
+            tags="prod",
+            start_date="2025-01-01",
+            end_date="2025-01-02",
+            user_api_key_dict=mock_user_auth,
+        )
+
+    mock_db.litellm_dailytagspend.find_many.assert_not_called()
+    mock_db.litellm_dailytagspend.count.assert_not_called()
+
+    queries = [call.args[0] for call in mock_db.query_raw.call_args_list]
+    assert len(queries) == 2
+    assert all('"LiteLLM_DailyTagSpend"' in query for query in queries)
+    assert all("LIMIT" not in query and "OFFSET" not in query for query in queries)
+
+    assert result.metadata.total_spend == 7.5
+    assert result.metadata.total_api_requests == 3
+    assert result.metadata.page == 1
+    assert result.metadata.total_pages == 1
+    assert result.metadata.has_more is False
+    assert [day.date.isoformat() for day in result.results] == ["2025-01-02", "2025-01-01"]
+    assert result.results[0].breakdown.entities["prod"].metrics.spend == 2.5
+
+
+@pytest.mark.asyncio
+async def test_internal_user_tag_daily_activity_aggregated_is_scoped_to_their_keys():
+    """The aggregated variant must apply the same per-key scoping as the paginated one,
+    so an internal user cannot read proxy-wide tag spend through the new route."""
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity_aggregated,
+    )
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="internal-user-123",
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.tag_management_endpoints.get_daily_activity_aggregated",
+            new_callable=AsyncMock,
+        ) as mock_aggregated,
+    ):
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+
+        owned_key_record = Mock()
+        owned_key_record.token = "owned-key"
+        mock_db.litellm_verificationtoken = FakeVerificationTokenTable([owned_key_record])
+        mock_aggregated.return_value = "aggregated-response"
+
+        result = await get_tag_daily_activity_aggregated(
+            start_date="2025-01-01",
+            end_date="2025-01-31",
+            user_api_key_dict=mock_user_auth,
+        )
+
+    assert result == "aggregated-response"
+    assert mock_aggregated.await_args.kwargs["api_key"] == ["owned-key"]
+    assert mock_aggregated.await_args.kwargs["table_name"] == "litellm_dailytagspend"
+
+
+@pytest.mark.parametrize(
+    "start_date, end_date, expected_detail_fragment",
+    [
+        (None, "2025-01-31", "Please provide start_date and end_date"),
+        ("not-a-date", "2025-01-31", "valid YYYY-MM-DD dates"),
+        ("2025-02-01", "2025-01-31", "end_date must be on or after start_date"),
+        ("2020-01-01", "2026-12-31", "at most 400 days"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_tag_daily_activity_aggregated_rejects_unbounded_ranges(start_date, end_date, expected_detail_fragment):
+    """Nothing paginates this endpoint, so the range guard is the only bound on its scan."""
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity_aggregated,
+    )
+
+    mock_user_auth = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+        mock_db.query_raw = AsyncMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_tag_daily_activity_aggregated(
+                start_date=start_date,
+                end_date=end_date,
+                user_api_key_dict=mock_user_auth,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert expected_detail_fragment in exc_info.value.detail
+    mock_db.query_raw.assert_not_awaited()
