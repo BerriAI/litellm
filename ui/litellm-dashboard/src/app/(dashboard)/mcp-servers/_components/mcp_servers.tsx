@@ -1,4 +1,4 @@
-import { isAdminRole, isProxyAdminTierRole } from "@/utils/roles";
+import { isAdminRole, isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { CircleHelp, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -755,7 +755,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           )}
           {isProxyAdminTierRole(userRole) && (
             <TabsContent value="connections">
-              <MCPGatewaySessionsTab accessToken={accessToken} />
+              <MCPGatewaySessionsTab accessToken={accessToken} canTerminate={isProxyAdminRole(userRole)} />
             </TabsContent>
           )}
         </Tabs>

@@ -14,7 +14,7 @@ import time
 import traceback
 import types
 import uuid
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol
@@ -28,7 +28,11 @@ from starlette.types import Message, Receive, Scope, Send
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
+from litellm.constants import (
+    MAXIMUM_TRACEBACK_LINES_TO_LOG,
+    MCP_ADMIN_TERMINATED_SESSION_IDS_MAX,
+    MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -91,6 +95,7 @@ from litellm.types.mcp import (
     MCPGatewaySession,
     MCPGatewaySessionGroupCount,
     MCPGatewaySessionsResponse,
+    MCPGatewaySessionsTerminateResponse,
     MCPSpecVersion,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
@@ -618,6 +623,9 @@ if MCP_AVAILABLE:
     _stateful_session_locks: Final[dict[str, asyncio.Lock]] = {}
     _stateful_session_active_request_counts: Final[dict[str, int]] = {}
     _stateful_session_client_info: Final[dict[str, Implementation]] = {}  # mutable-ok: cleared on session teardown
+    _admin_terminated_session_ids: Final[deque[str]] = deque(  # mutable-ok: bounded ring, appended on admin termination
+        maxlen=MCP_ADMIN_TERMINATED_SESSION_IDS_MAX
+    )
 
     class _TerminableTransport(Protocol):
         async def terminate(self) -> None: ...
@@ -3850,7 +3858,7 @@ if MCP_AVAILABLE:
         client_info: Final = _stateful_session_client_info.get(session_id)
         key_auth: Final = auth_user.user_api_key_auth
         return MCPGatewaySession(
-            session_id_prefix=session_id[:8],
+            session_id_prefix=session_id[:MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH],
             client_name=client_info.name if client_info is not None else None,
             client_version=client_info.version if client_info is not None else None,
             user_id=key_auth.user_id if key_auth is not None else None,
@@ -3883,6 +3891,53 @@ if MCP_AVAILABLE:
             by_client=_group_session_counts(sessions, lambda session: session.client_name),
             by_user=_group_session_counts(sessions, lambda session: session.user_id),
             sessions=sessions,
+        )
+
+    def _session_matches_admin_selector(
+        session_id: str,
+        auth_user: MCPAuthenticatedUser,
+        session_id_prefix: str | None,
+        user_id: str | None,
+    ) -> bool:
+        if session_id_prefix is not None and not session_id.startswith(session_id_prefix):
+            return False
+        if user_id is None:
+            return True
+        key_auth: Final = auth_user.user_api_key_auth
+        return key_auth is not None and key_auth.user_id == user_id
+
+    async def terminate_mcp_gateway_sessions(
+        *,
+        session_id_prefix: str | None = None,
+        user_id: str | None = None,
+    ) -> MCPGatewaySessionsTerminateResponse:
+        """Force-close every live stateful session on this worker matching the selector.
+
+        The transport is terminated (open streams close), all per-session
+        tracking is dropped, and the id is remembered so a client that keeps
+        sending it receives 404 and has to ``initialize`` again, which re-runs
+        admission. Only sessions held by this worker process are affected.
+        """
+        now: Final = time.monotonic()
+        server_instances: Final = _stateful_server_instances()
+        targets: Final = tuple(
+            (session_id, auth_user)
+            for session_id, auth_user in tuple(_stateful_session_auth_contexts.items())
+            if session_id in server_instances
+            and _session_matches_admin_selector(session_id, auth_user, session_id_prefix, user_id)
+        )
+        terminated: Final = tuple(_gateway_session_for(session_id, auth_user, now) for session_id, auth_user in targets)
+        for session_id, _ in targets:
+            _admin_terminated_session_ids.append(session_id)
+            transport = server_instances.pop(session_id, None)
+            _remove_stateful_session_tracking(session_id)
+            if transport is not None:
+                await transport.terminate()
+            verbose_logger.warning("MCP session '%s' terminated by an administrator.", session_id)
+        return MCPGatewaySessionsTerminateResponse(
+            worker_pid=os.getpid(),
+            terminated_sessions=len(terminated),
+            sessions=terminated,
         )
 
     async def _read_request_body_for_routing(
@@ -4007,6 +4062,17 @@ if MCP_AVAILABLE:
                 content={"message": "Session terminated successfully"},
             )
             await success_response(scope, receive, send)
+            return True
+
+        if _session_id in _admin_terminated_session_ids:
+            terminated_response: Final = JSONResponse(
+                status_code=404,
+                content={  # mutable-ok: JSONResponse content must be a plain dict
+                    "error": "Not Found",
+                    "details": "mcp-session-id was terminated by an administrator. Send initialize to start a new session.",
+                },
+            )
+            await terminated_response(scope, receive, send)
             return True
 
         # Non-DELETE: strip stale session ID to allow new session creation

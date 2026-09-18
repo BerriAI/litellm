@@ -97,7 +97,14 @@ import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelM
 import type { ObjectPermission } from "./object_permission_types";
 import type { components } from "@/lib/http/schema";
 import { jsonFields } from "./common_components/check_openapi_schema";
-import type { MCPGatewaySessionsResponse, MCPUserEnvVarsStatus } from "./mcp_tools/types";
+import type {
+  MCPGatewaySessionSelector,
+  MCPGatewaySessionsResponse,
+  MCPGatewaySessionsTerminateResponse,
+  MCPServerUserCredentialListItem,
+  MCPServerUserCredentialType,
+  MCPUserEnvVarsStatus,
+} from "./mcp_tools/types";
 import type {
   CoordinationRedisSettings,
   CoordinationRedisSettingsResponse,
@@ -5111,6 +5118,33 @@ export const fetchMCPSubmissions = async (accessToken: string) => {
 
 export const fetchMCPGatewaySessions = async (accessToken: string): Promise<MCPGatewaySessionsResponse> =>
   apiClient.get<MCPGatewaySessionsResponse>(`/v1/mcp/sessions`, { accessToken });
+
+export const terminateMCPGatewaySessions = async (
+  accessToken: string,
+  selector: MCPGatewaySessionSelector,
+): Promise<MCPGatewaySessionsTerminateResponse> =>
+  apiClient.delete<MCPGatewaySessionsTerminateResponse>(`/v1/mcp/sessions`, { accessToken, query: { ...selector } });
+
+export const fetchMCPServerUserCredentials = async (
+  accessToken: string,
+  serverId: string,
+): Promise<MCPServerUserCredentialListItem[]> =>
+  apiClient.get<MCPServerUserCredentialListItem[]>(`/v1/mcp/server/${encodeURIComponent(serverId)}/user-credentials`, {
+    accessToken,
+  });
+
+export const revokeMCPServerUserCredential = async (
+  accessToken: string,
+  serverId: string,
+  userId: string,
+  credentialType: MCPServerUserCredentialType,
+): Promise<void> => {
+  const route = credentialType === "oauth2" ? "oauth-user-credential" : "user-credential";
+  await apiClient.delete(`/v1/mcp/server/${encodeURIComponent(serverId)}/${route}`, {
+    accessToken,
+    query: { user_id: userId },
+  });
+};
 
 export const approveMCPServer = async (accessToken: string, serverId: string) => {
   try {
