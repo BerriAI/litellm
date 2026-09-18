@@ -80,6 +80,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import (
     UI_TEAM_ID,
     CallbackDelete,
@@ -319,7 +320,6 @@ from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     can_key_call_resolved_model,
     get_team_object,
-    get_user_object,
     log_db_metrics,
 )
 from litellm.proxy.auth.auth_utils import (
@@ -2833,6 +2833,7 @@ async def increment_spend_counters(
     tags: list[str] | None = None,
     request_started_at: datetime | None = None,
     model_access_groups: Sequence[str] | None = None,
+    user_budget_limits: Sequence[BudgetLimitEntry] | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -2867,6 +2868,7 @@ async def increment_spend_counters(
             tags=tags,
             request_started_at=request_started_at,
             model_access_groups=model_access_groups,
+            user_budget_limits=user_budget_limits,
         )
 
 
@@ -2881,6 +2883,7 @@ async def _increment_spend_counters_batched(
     tags: list[str] | None,
     request_started_at: datetime | None,
     model_access_groups: Sequence[str] | None,
+    user_budget_limits: Sequence[BudgetLimitEntry] | None,
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET."""
     reserved_counter_keys: Final = await _reconcile_budget_reservation_for_counter_update(
@@ -3086,18 +3089,15 @@ async def _increment_spend_counters_batched(
             )
             return pending_window
 
-        user_obj: Final[object] = await _load_user_for_window_spend(scope_user_id)
-        if user_obj is None:
-            return user_pending
-        user_budget_limits = getattr(user_obj, "budget_limits", None) or (
-            user_obj.get("budget_limits") if isinstance(user_obj, dict) else None
+        windows: Final = (
+            user_budget_limits
+            if user_budget_limits is not None
+            else _cached_user_budget_limits(await user_api_key_cache.async_get_cache(key=scope_user_id))
         )
-        if isinstance(user_budget_limits, str):
-            user_budget_limits = json.loads(user_budget_limits)
-        if not isinstance(user_budget_limits, list):
+        if not windows:
             return user_pending
         window_pending: Final = await asyncio.gather(
-            *(_user_window_increment(window) for window in user_budget_limits), return_exceptions=True
+            *(_user_window_increment(window) for window in windows), return_exceptions=True
         )
         return user_pending + tuple(item for item in window_pending if item is not None)
 
@@ -3376,20 +3376,16 @@ async def _enqueue_window_spend_row_update(
         )
 
 
-async def _load_user_for_window_spend(user_id: str) -> object:
-    cached: Final[object] = await user_api_key_cache.async_get_cache(key=user_id)
-    if cached is not None or prisma_client is None:
-        return cached
-    try:
-        return await get_user_object(
-            user_id=user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            user_id_upsert=False,
-        )
-    except Exception as exc:
-        verbose_proxy_logger.debug("user window spend: could not load user %s from db: %s", user_id, exc)
-        return None
+def _cached_user_budget_limits(cached_user: object) -> tuple[object, ...]:
+    if cached_user is None:
+        return ()
+    raw: Final[object] = (
+        cached_user.get("budget_limits")
+        if isinstance(cached_user, dict)
+        else getattr(cached_user, "budget_limits", None)
+    )
+    parsed: Final[object] = json.loads(raw) if isinstance(raw, str) else raw
+    return tuple(parsed) if isinstance(parsed, list) else ()
 
 
 async def _prepare_window_spend_counter_increment(

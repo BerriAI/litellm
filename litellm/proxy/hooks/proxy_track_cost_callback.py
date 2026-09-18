@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
+from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
@@ -28,6 +29,7 @@ from litellm.proxy.db.db_spend_update_writer import (
     get_llm_router,
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.spend_tracking.carried_budget_state import carried_user_budget_limits
 from litellm.proxy.spend_tracking.spend_event import (
     ObjectMapping,
     SpendEventBuildError,
@@ -368,6 +370,7 @@ class _ProxyDBLogger(CustomLogger):
                         budget_reservation=budget_reservation,
                         request_tags=tags,
                         model_access_groups=model_access_groups,
+                        user_budget_limits=carried_user_budget_limits(metadata),
                     )
                     if not charged:
                         return
@@ -651,6 +654,7 @@ async def _update_database_and_spend_counters(
     budget_reservation: dict | None,
     request_tags: list[str] | None = None,
     model_access_groups: Sequence[str] | None = None,
+    user_budget_limits: Sequence[BudgetLimitEntry] | None = None,
 ) -> bool:
     if budget_reservation is not None:
         await _reconcile_budget_reservation_before_db_update(
@@ -698,6 +702,7 @@ async def _update_database_and_spend_counters(
             tags=request_tags,
             request_started_at=start_time,
             model_access_groups=model_access_groups,
+            user_budget_limits=user_budget_limits,
         )
     except Exception:
         if budget_reservation is not None:

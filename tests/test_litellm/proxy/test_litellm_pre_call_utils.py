@@ -8146,3 +8146,21 @@ def test_default_team_settings_bool_turn_off_message_logging_redacts():
         )
         is True
     )
+
+
+def test_add_user_api_key_auth_to_request_metadata_carries_user_budget_windows():
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-test-key-123",
+        user_id="test-user-123",
+        user_budget_limits=[{"budget_duration": "24h", "max_budget": 2.5, "reset_at": None}],
+    )
+
+    result = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data={"model": "gpt-4o-mini", "metadata": {}},
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name="metadata",
+    )
+
+    assert result["metadata"]["user_api_key_user_budget_limits"] == (
+        {"budget_duration": "24h", "max_budget": 2.5, "reset_at": None},
+    )

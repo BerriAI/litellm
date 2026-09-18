@@ -5050,9 +5050,7 @@ async def test_websocket_passthrough_propagates_active_trace_context(
     mock_proxy_logging.post_call_success_hook = AsyncMock()
     mock_proxy_logging.post_call_failure_hook = AsyncMock()
     mock_worker = MagicMock()
-    mock_worker.ensure_initialized_and_enqueue = MagicMock(
-        side_effect=lambda async_coroutine: async_coroutine.close()
-    )
+    mock_worker.ensure_initialized_and_enqueue = MagicMock(side_effect=lambda async_coroutine: async_coroutine.close())
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
     monkeypatch.setattr(
         "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
@@ -6280,3 +6278,29 @@ async def test_chat_completion_pass_through_endpoint_failure_carries_the_callers
     record = next(r for r in caplog.records if "Exception occured" in r.getMessage())
     assert record.litellm_call_id == call_id
     assert call_id in record.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_passthrough_carries_user_budget_windows_to_spend_counters():
+    from litellm.models.team import BudgetLimitEntry
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-token",
+        user_id="u1",
+        user_budget_limits=[{"budget_duration": "24h", "max_budget": 2.5, "reset_at": None}],
+    )
+
+    kwargs = _passthrough_kwargs_for_reservation(
+        user_api_key_dict,
+        parsed_body={
+            "litellm_metadata": {
+                "user_api_key_user_budget_limits": [{"budget_duration": "1d", "max_budget": 999.0}],
+            }
+        },
+    )
+    increment_spend_counters = await _track_cost_for_passthrough_kwargs(kwargs)
+
+    increment_spend_counters.assert_awaited_once()
+    assert increment_spend_counters.await_args.kwargs["user_budget_limits"] == (
+        BudgetLimitEntry(budget_duration="24h", max_budget=2.5, reset_at=None),
+    )

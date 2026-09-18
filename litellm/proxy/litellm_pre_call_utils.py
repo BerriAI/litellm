@@ -65,7 +65,11 @@ from litellm.proxy.common_utils.callback_utils import (
     strip_callback_config,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
-from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
+from litellm.proxy.spend_tracking.carried_budget_state import (
+    USER_BUDGET_LIMITS_METADATA_KEY,
+    carried_budget_metadata,
+    carried_user_budget_limits_metadata,
+)
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
 
 # Cache special headers as a frozenset for O(1) lookup performance
@@ -1660,6 +1664,10 @@ class LiteLLMProxyRequestSetup:
         )
         if user_api_key_dict.budget_reservation is not None:
             data[_metadata_variable_name]["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
+        if user_api_key_dict.user_budget_limits is not None:
+            data[_metadata_variable_name][USER_BUDGET_LIMITS_METADATA_KEY] = carried_user_budget_limits_metadata(
+                user_api_key_dict
+            )
         if user_api_key_dict.matched_model_access_groups:
             data[_metadata_variable_name][MODEL_ACCESS_GROUP_METADATA_KEY] = (
                 user_api_key_dict.matched_model_access_groups

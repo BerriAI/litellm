@@ -10,7 +10,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.spend_tracking.carried_budget_state import (
+    USER_BUDGET_LIMITS_METADATA_KEY,
     carried_budget_metadata,
+    carried_user_budget_limits,
+    carried_user_budget_limits_metadata,
     carry_organization_budget_state,
     carry_team_and_user_budget_state,
 )
@@ -130,3 +133,32 @@ def test_snapshots_never_reach_the_serialized_token():
     assert "user_budget_snapshot" not in dumped
     assert "org_budget_snapshot" not in dumped
     assert UserAPIKeyAuth(**dumped).team_budget_snapshot is None
+
+
+def test_user_budget_limits_round_trip_through_json_metadata():
+    import json
+
+    token = UserAPIKeyAuth(
+        token="hashed",
+        user_id="u1",
+        user_budget_limits=[
+            {"budget_duration": "24h", "max_budget": 0.5, "reset_at": RESET_AT},
+            {"budget_duration": "30d", "max_budget": 10.0, "reset_at": None},
+        ],
+    )
+
+    carried = carried_user_budget_limits_metadata(token)
+    metadata = json.loads(json.dumps({USER_BUDGET_LIMITS_METADATA_KEY: carried}))
+
+    windows = carried_user_budget_limits(metadata)
+    assert windows is not None
+    assert [(w.budget_duration, w.max_budget, w.reset_at) for w in windows] == [
+        ("24h", 0.5, RESET_AT),
+        ("30d", 10.0, None),
+    ]
+
+
+def test_user_budget_limits_absent_or_malformed_metadata_reads_as_none():
+    assert carried_user_budget_limits_metadata(UserAPIKeyAuth(token="hashed", user_id="u1")) is None
+    assert carried_user_budget_limits({}) is None
+    assert carried_user_budget_limits({USER_BUDGET_LIMITS_METADATA_KEY: [{"max_budget": "x"}]}) is None

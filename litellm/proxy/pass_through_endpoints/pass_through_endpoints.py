@@ -95,6 +95,10 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
 )
+from litellm.proxy.spend_tracking.carried_budget_state import (
+    USER_BUDGET_LIMITS_METADATA_KEY,
+    carried_user_budget_limits_metadata,
+)
 from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
@@ -599,6 +603,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
         _metadata["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
+        _metadata[USER_BUDGET_LIMITS_METADATA_KEY] = carried_user_budget_limits_metadata(user_api_key_dict)
         _metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = user_api_key_dict.matched_model_access_groups
         # The per-model budget counters are keyed off these. get_sanitized_user_information_from_key
         # returns StandardLoggingUserAPIKeyMetadata, which carries no budget field, so without this
