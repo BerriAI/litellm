@@ -624,6 +624,12 @@ class Deployment(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
+class DiscoveredDeploymentModelInfo:
+    deployment: Mapping[str, object]
+    limits: Mapping[str, int]
+
+
+@dataclass(frozen=True, slots=True)
 class DeploymentModelListingInfo:
     """What the deployments behind a model name contribute to its OpenAI-compatible listing entry.
 

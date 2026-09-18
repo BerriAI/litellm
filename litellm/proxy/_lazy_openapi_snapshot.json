@@ -20373,6 +20373,228 @@
           ]
         }
       },
+      "/typesafe/{endpoint}": {
+        "delete": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/typesafe)",
+          "operationId": "typesafe_proxy_route_typesafe__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Typesafe Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/typesafe)",
+          "operationId": "typesafe_proxy_route_typesafe__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Typesafe Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/typesafe)",
+          "operationId": "typesafe_proxy_route_typesafe__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Typesafe Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/typesafe)",
+          "operationId": "typesafe_proxy_route_typesafe__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Typesafe Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/typesafe)",
+          "operationId": "typesafe_proxy_route_typesafe__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Typesafe Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
       "/vertex_ai/discovery/{endpoint}": {
         "delete": {
           "description": "Call any vertex discovery endpoint using the proxy.\n\nJust use `{PROXY_BASE_URL}/vertex_ai/discovery/{endpoint:path}`\n\nTarget url: `https://discoveryengine.googleapis.com`",
@@ -33929,6 +34151,20 @@
               "title": "Policy Name",
               "type": "string"
             },
+            "priority": {
+              "anyOf": [
+                {
+                  "maximum": 2147483647.0,
+                  "minimum": -2147483648.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
+              "title": "Priority"
+            },
             "scope": {
               "anyOf": [
                 {
@@ -34041,6 +34277,18 @@
               "description": "Name of the attached policy.",
               "title": "Policy Name",
               "type": "string"
+            },
+            "priority": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
+              "title": "Priority"
             },
             "scope": {
               "anyOf": [
@@ -36061,6 +36309,20 @@
               "description": "Name of the policy to attach.",
               "title": "Policy Name",
               "type": "string"
+            },
+            "priority": {
+              "anyOf": [
+                {
+                  "maximum": 2147483647.0,
+                  "minimum": -2147483648.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
+              "title": "Priority"
             },
             "scope": {
               "anyOf": [
@@ -38680,8 +38942,7 @@
               "required": false,
               "schema": {
                 "default": 10,
-                "maximum": 100,
-                "minimum": 1,
+                "minimum": 0,
                 "title": "Count",
                 "type": "integer"
               }
@@ -39385,8 +39646,7 @@
               "required": false,
               "schema": {
                 "default": 10,
-                "maximum": 100,
-                "minimum": 1,
+                "minimum": 0,
                 "title": "Count",
                 "type": "integer"
               }

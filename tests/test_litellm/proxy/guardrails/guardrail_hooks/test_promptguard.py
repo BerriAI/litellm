@@ -245,6 +245,22 @@ class TestPromptGuardBlockAction:
                 )
             assert "pii_leakage" in str(exc_info.value)
 
+    @pytest.mark.asyncio
+    async def test_response_scan_sends_only_output_texts(self, promptguard_guardrail, mock_request_data):
+        resp = _make_response({"decision": "allow", "event_id": "evt-ctx", "threats": [], "latency_ms": 1.0})
+        with patch.object(promptguard_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await promptguard_guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["Paris."],
+                    "structured_messages": [*mock_request_data["messages"], {"role": "assistant", "content": "Paris."}],
+                },
+                request_data=mock_request_data,
+                input_type="response",
+            )
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["messages"] == [{"role": "user", "content": "Paris."}]
+        assert payload["direction"] == "output"
+
 
 # ---------------------------------------------------------------------------
 # Redact decision
