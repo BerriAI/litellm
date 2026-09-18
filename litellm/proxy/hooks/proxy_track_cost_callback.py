@@ -1,6 +1,6 @@
 import asyncio
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -105,6 +105,11 @@ class _ProxyDBLogger(CustomLogger):
     async def async_log_success_event(
         self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
+        # Per-line batch events emitted under store_batch_line_items_in_callbacks
+        # never touch spend: the aggregate aretrieve_batch event already bills the batch.
+        litellm_params: Final = kwargs.get("litellm_params")
+        if isinstance(litellm_params, Mapping) and litellm_params.get("batch_parent_id"):
+            return
         if self.spend_event_producer is None or not is_offloadable_success(response_obj):
             await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
             return

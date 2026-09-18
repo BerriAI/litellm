@@ -26804,6 +26804,11 @@ export interface components {
             /** @description Spreads the proxy's scheduled background jobs (spend flushes, budget resets, config reloads, exports) across a window instead of firing them together on every replica. On by default; set to tune the window, pin a job, or turn it off. */
             scheduled_job_stagger?: components["schemas"]["ScheduledJobStaggerSettings"] | null;
             /**
+             * Store Batch Line Items In Callbacks
+             * @description If True, a completed batch logged via aretrieve_batch also emits one callback event per JSONL line item (request paired with its response or error). The aggregate batch callback is unchanged. Default is False.
+             */
+            store_batch_line_items_in_callbacks?: boolean | null;
+            /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
              */

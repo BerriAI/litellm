@@ -6044,6 +6044,13 @@ class ProxyConfig:
                     litellm.use_legacy_interactions_schema = _use_legacy_interactions_schema.lower() == "true"
                 else:
                     litellm.use_legacy_interactions_schema = bool(_use_legacy_interactions_schema)
+            ### BATCH LINE ITEM CALLBACKS ###
+            _store_batch_line_items: Final = general_settings.get("store_batch_line_items_in_callbacks")
+            if _store_batch_line_items is not None:
+                if isinstance(_store_batch_line_items, str):
+                    litellm.store_batch_line_items_in_callbacks = _store_batch_line_items.lower() == "true"
+                else:
+                    litellm.store_batch_line_items_in_callbacks = bool(_store_batch_line_items)
             # Health-check-driven routing (opt-in, passes through to Router later)
             _enable_hc_routing = general_settings.get("enable_health_check_routing", False)
             _hc_staleness = general_settings.get("health_check_staleness_threshold", None)
@@ -7157,6 +7164,19 @@ class ProxyConfig:
             else:
                 # For other types, convert to bool
                 general_settings["store_prompts_in_spend_logs"] = bool(value)
+
+        if "store_batch_line_items_in_callbacks" in _general_settings:
+            store_line_items_value: Final = (
+                general_settings.get("store_batch_line_items_in_callbacks")
+                if "store_batch_line_items_in_callbacks" in self._yaml_general_settings_keys
+                else _general_settings["store_batch_line_items_in_callbacks"]
+            )
+            if store_line_items_value is not None:
+                litellm.store_batch_line_items_in_callbacks = (
+                    store_line_items_value.lower() == "true"
+                    if isinstance(store_line_items_value, str)
+                    else bool(store_line_items_value)
+                )
 
         if "disable_auto_add_proxy_admin_to_teams" in _general_settings:
             value = _general_settings["disable_auto_add_proxy_admin_to_teams"]

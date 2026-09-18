@@ -867,6 +867,7 @@ class CheckBatchCost:
             optional_params={},
             custom_llm_provider=str(llm_provider) if llm_provider else None,
         )
+        logging_obj._litellm_internal_model_credentials = MappingProxyType(dict(credentials))  # pyright: ignore[reportPrivateUsage]  # trusted credentials transport, consumed by batch_line_item_logging
 
         if not await self._claim_job_for_costing(job):
             verbose_proxy_logger.info(

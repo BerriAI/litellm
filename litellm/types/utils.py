@@ -3110,6 +3110,9 @@ class StandardLoggingHiddenParams(TypedDict):
     batch_failed_requests: ReadOnly[int | None]
     litellm_model_name: str | None  # the model name sent to the provider by litellm
     usage_object: dict | None
+    batch_id: NotRequired[ReadOnly[str | None]]
+    batch_custom_id: NotRequired[ReadOnly[str | None]]
+    batch_line_status_code: NotRequired[ReadOnly[int | None]]
 
 
 class StandardLoggingModelInformation(TypedDict):

@@ -24,7 +24,7 @@ constraints = [
     { name = "httplib2", specifier = ">=0.32.0" },
     { name = "packaging", specifier = ">=24.0" },
     { name = "setuptools", specifier = ">=83.0.0" },
-    { name = "soupsieve", specifier = ">=2.8.4" },
+    { name = "soupsieve", specifier = ">=2.9.0" },
     { name = "tornado", specifier = ">=6.5.8" },
 ]
 overrides = [
