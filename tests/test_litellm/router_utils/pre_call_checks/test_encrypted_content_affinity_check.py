@@ -2222,6 +2222,25 @@ async def test_bedrock_switch_filter_respects_opt_in(bedrock_switch_router: lite
     assert request == original
 
 
+@pytest.mark.parametrize("untrusted_origin", ["unknown-deployment", "sol"])
+async def test_bedrock_unknown_marker_uses_same_safe_path_as_untrusted_foreign_marker(
+    bedrock_switch_router: litellm.Router,
+    untrusted_origin: str,
+) -> None:
+    check: Final = EncryptedContentAffinityCheck(router=bedrock_switch_router)
+    pool: Final = [d for d in bedrock_switch_router.model_list if d["model_name"] == "luna"]
+    request: Final = {
+        "litellm_metadata": {},
+        "input": [
+            _bedrock_reasoning_item(untrusted_origin, False),
+            _bedrock_reasoning_item("luna", False),
+        ],
+    }
+
+    assert await check.async_filter_deployments("luna", pool, None, request) == pool
+    assert request["input"] == [_bedrock_reasoning_item("luna", False)]
+
+
 async def test_bedrock_cooldown_does_not_become_a_model_switch() -> None:
     router: Final = litellm.Router(
         model_list=[

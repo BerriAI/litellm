@@ -868,6 +868,13 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
+def get_bedrock_openai_model(model: object) -> str | None:
+    if not isinstance(model, str):
+        return None
+    normalized: Final = get_bedrock_base_model(model.removeprefix("bedrock_mantle/"))
+    return normalized if normalized.startswith("openai.gpt-") else None
+
+
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
     return any(
         (litellm.model_cost.get(candidate) or {}).get("supports_parallel_tool_use_config") is True
