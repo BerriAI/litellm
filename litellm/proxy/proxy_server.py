@@ -285,7 +285,6 @@ from litellm.constants import (
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
@@ -15781,7 +15780,7 @@ async def model_settings():
 async def alerting_settings(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    global proxy_logging_obj, prisma_client
+    global prisma_client
     """
     Used by UI to generate 'alerting settings' page
     {
@@ -15840,8 +15839,7 @@ async def alerting_settings(
         }
     )
 
-    _slack_alerting: Final[SlackAlerting] = proxy_logging_obj.slack_alerting_instance
-    _slack_alerting_args_dict: Final = _slack_alerting.alerting_args.model_dump()
+    config_alerting_args: Final = general_settings.get("alerting_args") or {}  # mutable-ok: empty fallback is read-only configuration
 
     return_val: Final = []
 
@@ -15864,17 +15862,21 @@ async def alerting_settings(
 
     for field_name, field_info in SlackAlertingArgs.model_fields.items():
         if field_name in allowed_args:
-            _stored_in_db: bool | None = None
             if field_name in alerting_args_dict:
+                field_value = alerting_args_dict[field_name]
                 _stored_in_db = True
-            else:
+            elif field_name in config_alerting_args:
+                field_value = config_alerting_args[field_name]
                 _stored_in_db = False
+            else:
+                field_value = None
+                _stored_in_db = None
 
             _response_obj = ConfigList(
                 field_name=field_name,
                 field_type=allowed_args[field_name],
                 field_description=field_info.description or "",
-                field_value=_slack_alerting_args_dict.get(field_name, None),
+                field_value=field_value,
                 stored_in_db=_stored_in_db,
                 field_default_value=field_info.default,
                 premium_field=(True if field_name == "region_outage_alert_ttl" else False),
