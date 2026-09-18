@@ -15839,9 +15839,7 @@ async def alerting_settings(
         }
     )
 
-    config_alerting_args: Final = (
-        general_settings.get("alerting_args") or {}
-    )  # mutable-ok: empty fallback is read-only configuration
+    config_alerting_args: Final = general_settings.get("alerting_args") or MappingProxyType({})
 
     return_val: Final = []
 
