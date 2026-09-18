@@ -951,6 +951,14 @@ def test_get_supported_endpoints_chat_completions_present(reset_endpoints_cache)
     assert len(chat["providers"]) > 0
 
 
+def test_get_supported_endpoints_includes_lyceum_chat(reset_endpoints_cache):
+    response = _make_client().get("/public/endpoints")
+    assert response.status_code == 200
+    endpoints = response.json()["endpoints"]
+    chat = next(item for item in endpoints if item["key"] == "chat_completions")
+    assert {"slug": "lyceum", "display_name": "Lyceum"} in chat["providers"]
+
+
 def test_get_supported_endpoints_display_names_have_no_slug_suffix(
     reset_endpoints_cache,
 ):

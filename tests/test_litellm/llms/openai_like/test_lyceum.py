@@ -8,7 +8,6 @@ import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
-# Endpoint and model ID: https://docs.lyceum.technology/docs/inference/serverless (2026-09-18).
 BASE: Final = "https://api.lyceum.technology/openai/v1"
 MODEL: Final = "lyceum/z-ai/glm-5.3-flash"
 REMOTE_MODEL: Final = "z-ai/glm-5.3-flash"
