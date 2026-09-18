@@ -10,6 +10,13 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import get_optional_params
 
 
+@pytest.fixture(autouse=True)
+def _use_local_cost_map(local_model_cost_map):
+    """Force the bundled in-repo cost map so DeepSeek capability checks resolve
+    against this branch instead of the network-fetched ``main`` copy, which still
+    reports ``supports_response_schema=True`` for DeepSeek."""
+
+
 def _function_tool(name: str) -> dict:
     return {
         "type": "function",

@@ -12,10 +12,21 @@ field set to ``True``.
 import json
 import os
 
+import pytest
+
 import litellm
 from litellm.utils import (
     _supports_factory,
+    supports_response_schema,
 )
+
+
+@pytest.fixture(autouse=True)
+def _use_local_cost_map(local_model_cost_map):
+    """Force the bundled in-repo cost map so the API-level assertions do not
+    depend on the network-fetched ``main`` copy, which still carries
+    ``supports_response_schema=True`` until this branch merges."""
+
 
 # ---------------------------------------------------------------------------
 # Data-level tests – verify the JSON files are in sync
