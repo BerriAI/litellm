@@ -582,8 +582,18 @@ class LiteLLMAnthropicMessagesAdapter:
         has_conversational_input = any(m.get("role") != "system" for m in replayable_messages)
         has_translated_conversation = any(m.get("role") != "system" for m in new_messages)
         if has_conversational_input and not has_translated_conversation:
+            unrecognized_block_types = sorted(
+                {
+                    str(content.get("type"))
+                    for message in replayable_messages
+                    if message.get("role") != "system" and isinstance(message.get("content"), list)
+                    for content in message["content"]
+                    if isinstance(content, dict) and content.get("type") is not None
+                }
+            )
+            type_list = ", ".join(unrecognized_block_types) or "unknown"
             raise litellm.BadRequestError(
-                message="Anthropic pass-through: every message's content blocks were of unrecognized types, so translation produced an empty conversation. Refusing to dispatch a request with no messages.",
+                message=f"Anthropic pass-through: every message's content blocks were of unrecognized types ({type_list}), so translation produced an empty conversation. Refusing to dispatch a request with no messages.",
                 model=model,
                 llm_provider="anthropic",
             )

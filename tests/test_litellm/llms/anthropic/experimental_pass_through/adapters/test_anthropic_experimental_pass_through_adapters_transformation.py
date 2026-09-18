@@ -4887,7 +4887,7 @@ def test_translate_anthropic_to_openai_rejects_all_unrecognized_content_blocks()
         "messages": [{"role": "user", "content": [{"type": "not_a_real_block", "text": "hello"}]}],
     }
 
-    with pytest.raises(litellm.BadRequestError):
+    with pytest.raises(litellm.BadRequestError, match="not_a_real_block"):
         LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
 
     with_system = {
