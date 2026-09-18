@@ -4545,9 +4545,9 @@ async def test_new_user_forwards_budget_fallbacks_into_user_persistence(mocker):
     )
     prisma_client = mocker.MagicMock()
     prisma_client.db.litellm_usertable.count = mocker.AsyncMock(return_value=0)
-        mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
-        "litellm.proxy.proxy_server.prisma_client", prisma_client)
-    ),
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
+        "litellm.proxy.proxy_server.prisma_client", prisma_client
+    )
 
     admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
     request = NewUserRequest(
