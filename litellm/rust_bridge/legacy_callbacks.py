@@ -14,9 +14,13 @@ from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Final,
+    Literal,
     Protocol,
+    TypeAlias,
     cast,  # noqa: TID251  # bounded compatibility calls into legacy Python integrations
 )
+
+from typing_extensions import assert_never
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -48,8 +52,8 @@ def setup(
     start_time: datetime.datetime,
     asynchronous: bool,
 ) -> CallSetup:
-    from litellm import utils
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.utils import Rules, function_setup
 
     arguments: Final = {  # mutable-ok: function_setup consumes an owned kwargs dict
         "litellm_call_id": str(uuid.uuid4()),
@@ -58,9 +62,7 @@ def setup(
     supplied: Final = arguments.get("litellm_logging_obj")
     if isinstance(supplied, Logging):
         return CallSetup(supplied, arguments, bridge_owned=False)
-    logger, prepared = utils.function_setup(
-        call_type, utils.Rules(), start_time, *args, is_async_call=asynchronous, **arguments
-    )
+    logger, prepared = function_setup(call_type, Rules(), start_time, *args, is_async_call=asynchronous, **arguments)
     return CallSetup(logger, prepared, bridge_owned=True)
 
 
@@ -98,7 +100,12 @@ def deployment_callbacks_needed() -> bool:
     return any(isinstance(callback, CustomLogger) for callback in litellm.callbacks)
 
 
-def callbacks_needed(logger: Logging, phase: str) -> bool:
+Phase: TypeAlias = Literal[
+    "input", "sync_success", "sync_success_async", "async_success", "sync_failure", "async_failure", "payload"
+]
+
+
+def callbacks_needed(logger: Logging, phase: Phase) -> bool:
     import litellm
     from litellm._logging import (
         _is_debugging_on,  # pyright: ignore[reportPrivateUsage]  # use the same debug gate as Logging
@@ -147,7 +154,7 @@ def callbacks_needed(logger: Logging, phase: str) -> bool:
                 or logger.dynamic_async_failure_callbacks
             )
         case _:
-            return True
+            assert_never(phase)
 
 
 def success_bookkeeping(

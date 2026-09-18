@@ -87,7 +87,10 @@ async def test_response_replacement_finalized_before_dispatch_in_caller_task(ocr
 
 
 @pytest.mark.asyncio
-async def test_metadata_failure_dispatches_only_failure_and_releases_logger(ocr_server: RecordingServer) -> None:
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_metadata_failure_dispatches_only_failure_and_releases_logger(
+    ocr_server: RecordingServer, asynchronous: bool
+) -> None:
     failure: Final = RuntimeError("metadata failed")
     seen: Final = []
 
@@ -109,14 +112,16 @@ async def test_metadata_failure_dispatches_only_failure_and_releases_logger(ocr_
             model="mistral-ocr-latest",
             messages=[],
             stream=False,
-            call_type="aocr",
+            call_type="aocr" if asynchronous else "ocr",
             start_time=datetime.datetime.now(),
             litellm_call_id="metadata",
             function_id="metadata",
         )
         reference: Final = weakref.ref(logger)
         with pytest.raises(RuntimeError) as caught:
-            await call_aocr(ocr_server, litellm_logging_obj=logger)
+            await call_aocr(ocr_server, litellm_logging_obj=logger) if asynchronous else call_ocr(
+                ocr_server, litellm_logging_obj=logger
+            )
         assert caught.value is failure
         failure.__traceback__ = None
         return reference
@@ -124,7 +129,7 @@ async def test_metadata_failure_dispatches_only_failure_and_releases_logger(ocr_
     reference: Final = await invoke()
     await drain_logging()
     gc.collect()
-    assert seen == [("sync", failure), ("async", failure)]
+    assert seen == ([("sync", failure), ("async", failure)] if asynchronous else [("sync", failure)])
     assert reference() is None
     assert len(ocr_server.requests) == 1
 

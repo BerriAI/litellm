@@ -97,8 +97,9 @@ def test_native_ocr_pre_call_header_edit_reaches_next_callback_and_provider(ocr_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_native_ocr_pre_call_nested_document_edit_updates_caller_callback_and_provider_references(
-    ocr_server: RecordingServer,
+    ocr_server: RecordingServer, asynchronous: bool
 ) -> None:
     original: Final = dict(OCR_DOCUMENT)
     replacement_url: Final = "data:application/pdf;base64,ZGVm"
@@ -121,7 +122,11 @@ async def test_native_ocr_pre_call_nested_document_edit_updates_caller_callback_
         "api_base": ocr_server.base_url,
         "callbacks": [Retain(), Edit()],
     }
-    response: Final = await call_native_aocr(ocr_server, **arguments)
+    response: Final = (
+        await call_native_aocr(ocr_server, **arguments)
+        if asynchronous
+        else call_native_ocr(ocr_server, **arguments)
+    )
 
     assert aliases == [True]
     assert retained[0]["document_url"] == replacement_url
