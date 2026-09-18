@@ -1,3 +1,5 @@
+> **SF Onsite mirror** — This repository is a copy of [BerriAI/litellm `litellm_yj_staging`](https://github.com/BerriAI/litellm/tree/litellm_yj_staging). Upstream development continues on that branch.
+
 <h1 align="center">
         🚅 LiteLLM
     </h1>
