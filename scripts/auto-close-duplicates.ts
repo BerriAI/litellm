@@ -282,6 +282,9 @@ export function githubApi(token: string): GitHubApi {
       if (!response.ok) {
         throw new Error(`${method} ${path} failed: ${response.status} ${response.statusText}`);
       }
+      if (response.status === 204) {
+        return undefined as T;
+      }
       return (await response.json()) as T;
     },
   };
