@@ -13,9 +13,12 @@ Two data files drive the suite; nothing in Python lists models or cases:
 from __future__ import annotations
 
 import base64
+import io
 import json
+import math
 import random
 import struct
+import wave
 import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -37,22 +40,41 @@ class SearchContextCostPerQuery(BaseModel):
     search_context_size_high: float | None = None
 
 
+class ProviderSpecificEntry(BaseModel):
+    """Provider-specific key rates, keyed by the named suffix litellm looks up
+    (``fast`` for Anthropic fast mode, ``us`` for US inference geography)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    fast: float | None = None
+    us: float | None = None
+
+
 class CostMapEntry(BaseModel):
     """The pricing fields of a cost-map entry the matrix reads. Shaped like a
-    ``model_prices_and_context_window.json`` entry; unmodelled keys are ignored."""
+    ``model_prices_and_context_window.json`` entry; the file is test-owned so
+    undeclared keys are forbidden rather than ignored."""
 
-    model_config = ConfigDict(frozen=True, extra="ignore")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     litellm_provider: str
     mode: str
+    max_tokens: int | None = None
+    max_input_tokens: int | None = None
+    max_output_tokens: int | None = None
+    supports_function_calling: bool | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
     cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
+    cache_read_input_token_cost_above_200k_tokens: float | None = None
+    cache_creation_input_token_cost_above_200k_tokens: float | None = None
     output_cost_per_reasoning_token: float | None = None
     input_cost_per_audio_token: float | None = None
     output_cost_per_audio_token: float | None = None
+    input_cost_per_image_token: float | None = None
+    input_cost_per_video_token: float | None = None
     input_cost_per_token_above_200k_tokens: float | None = None
     output_cost_per_token_above_200k_tokens: float | None = None
     input_cost_per_token_flex: float | None = None
@@ -61,6 +83,70 @@ class CostMapEntry(BaseModel):
     output_cost_per_token_priority: float | None = None
     search_context_cost_per_query: SearchContextCostPerQuery | None = None
     web_search_billing_unit: str | None = None
+    google_maps_grounding_cost_per_query: float | None = None
+    file_search_cost_per_1k_calls: float | None = None
+    provider_specific_entry: ProviderSpecificEntry | None = None
+
+
+_METADATA_FIELDS: Final = frozenset(
+    {
+        "litellm_provider",
+        "mode",
+        "max_tokens",
+        "max_input_tokens",
+        "max_output_tokens",
+        "supports_function_calling",
+    }
+)
+_CONTAINER_FIELDS: Final = frozenset({"search_context_cost_per_query", "provider_specific_entry"})
+
+
+def _submodel_rate_keys(
+    field: str, sub: SearchContextCostPerQuery | ProviderSpecificEntry | None
+) -> tuple[str, ...]:
+    if sub is None:
+        return ()
+    return tuple(
+        f"{field}.{name}"
+        for name in type(sub).model_fields
+        if getattr(sub, name) is not None
+    )
+
+
+def _entry_rate_keys(entry: CostMapEntry) -> frozenset[str]:
+    """Every cost key an entry carries, with container subfields expanded to
+    dotted names (``search_context_cost_per_query.search_context_size_low``).
+    ``web_search_billing_unit`` counts as a rate key whenever present,
+    for both ``per_query`` and ``per_prompt`` values."""
+    plain: Final = frozenset(
+        name
+        for name in CostMapEntry.model_fields
+        if name not in _METADATA_FIELDS
+        and name not in _CONTAINER_FIELDS
+        and getattr(entry, name) is not None
+    )
+    return (
+        plain
+        | frozenset(
+            _submodel_rate_keys("search_context_cost_per_query", entry.search_context_cost_per_query)
+        )
+        | frozenset(_submodel_rate_keys("provider_specific_entry", entry.provider_specific_entry))
+    )
+
+
+def _entry_has_rate_key(entry: CostMapEntry, rate_key: str) -> bool:
+    outer, _, inner = rate_key.partition(".")
+    if outer == "search_context_cost_per_query":
+        return f"{outer}.{inner}" in _submodel_rate_keys(outer, entry.search_context_cost_per_query)
+    if outer == "provider_specific_entry":
+        return f"{outer}.{inner}" in _submodel_rate_keys(outer, entry.provider_specific_entry)
+    value: Final[object] = getattr(entry, outer, None)
+    return value is not None
+
+
+SERVICE_TIER_REQUEST_WIRES: Final = frozenset(
+    {"openai_chat", "azure_chat", "openai_responses", "bedrock_converse"}
+)
 
 
 COST_MAP_ADAPTER: Final = TypeAdapter(dict[str, CostMapEntry])
@@ -94,22 +180,42 @@ class ExpectedCell(BaseModel):
 
 
 class Case(BaseModel):
-    """One request/response shape from cases.json. An exact-spend case names
-    its models implicitly by carrying one ``expected`` golden per map key; a
-    recount case (``exact_spend=False``) names them in ``models`` instead."""
+    """One request/response shape from cases.json.
+
+    ``family`` splits the matrix: ``pricing`` cases own cost keys (``owns``,
+    dotted subfield names allowed) or declare which keys they deliberately
+    leave absent (``fallback_for``) so every cost key in the map has exactly
+    one owning case; ``transport`` cases exercise counting/transport only and
+    run wherever they list membership. An exact-spend case names its models
+    implicitly by carrying one ``expected`` golden per map key; a recount
+    case (``exact_spend=False``) names them in ``models`` instead. The
+    feature flags drive request realism in ``_chat_body``."""
 
     model_config = ConfigDict(frozen=True)
 
     name: str
+    family: Literal["pricing", "transport"]
     usage: ScriptedUsage
+    usage_by_model: Mapping[str, ScriptedUsage] = Field(default_factory=lambda: MappingProxyType({}))
     stream: bool = False
     stream_usage: Literal["final_chunk", "absent"] = "final_chunk"
     service_tier: Literal["flex", "priority"] | None = None
+    speed: Literal["fast"] | None = None
+    inference_geo: Literal["us"] | None = None
     response_model_override: bool = False
     exact_spend: bool = True
     tool_call: bool = False
     image_input: bool = False
+    audio_input: bool = False
+    audio_output: bool = False
+    video_input: bool = False
+    reasoning: bool = False
+    web_search: Literal["low", "medium", "high"] | None = None
+    google_maps: bool = False
+    file_search: bool = False
     terminal: Literal["completed", "incomplete", "unvalidated", "prompt_blocked"] = "completed"
+    owns: tuple[str, ...] = ()
+    fallback_for: tuple[str, ...] = ()
     expected: Mapping[str, ExpectedCell] = Field(default_factory=lambda: MappingProxyType({}))
     models: tuple[str, ...] = ()
 
@@ -121,11 +227,14 @@ class Case(BaseModel):
     def expected_for(self, model: FrontierModel) -> ExpectedCell:
         return self.expected[model.map_key]
 
+    def usage_for(self, map_key: str) -> ScriptedUsage:
+        return self.usage_by_model.get(map_key, self.usage)
+
     def scenario(self, scenario_id: str, model: FrontierModel, text: str) -> Scenario:
         return Scenario(
             scenario_id=scenario_id,
             wire=model.wire,
-            usage=self.usage,
+            usage=self.usage_for(model.map_key),
             model=model.provider_model,
             output=ScriptedOutput(
                 text=text,
@@ -137,6 +246,8 @@ class Case(BaseModel):
             ),
             stream_usage=self.stream_usage,
             service_tier=self.service_tier,
+            speed=self.speed,
+            inference_geo=self.inference_geo,
         )
 
 
@@ -183,7 +294,7 @@ _PROVIDER_WIRING: Final[Mapping[tuple[str, str], _ProviderWiring]] = MappingProx
     {
         ("openai", "chat"): _ProviderWiring("openai_chat", "openai", MappingProxyType({})),
         ("openai", "responses"): _ProviderWiring(
-            "openai_responses", "openai", MappingProxyType({})
+            "openai_responses", "openai/responses", MappingProxyType({})
         ),
         ("anthropic", "chat"): _ProviderWiring(
             "anthropic_messages", "anthropic", MappingProxyType({})
@@ -226,7 +337,13 @@ class FrontierModel:
 
     @property
     def override_rates(self) -> CostMapEntry:
-        if self.base_model is not None or self.override_map_key is None:
+        # bedrock_converse responses carry no model field, so a reported-model
+        # override can never repoint pricing there, same as a base_model pin.
+        if (
+            self.base_model is not None
+            or self.wire == "bedrock_converse"
+            or self.override_map_key is None
+        ):
             return self.rates
         return COST_MAP[self.override_map_key]
 
@@ -338,6 +455,31 @@ def _png_chunk(tag: bytes, payload: bytes) -> bytes:
     return struct.pack(">I", len(payload)) + tag + payload + struct.pack(">I", zlib.crc32(tag + payload))
 
 
+def audio_input_data_url() -> str:
+    """A deterministic 0.5 s 16-bit PCM WAV (8 kHz, 220 Hz sine) as a data
+    URL, small enough to stay a fixture but real audio to the provider."""
+    frames: Final = b"".join(
+        struct.pack("<h", int(12000 * math.sin(2 * math.pi * 220 * i / 8000)))
+        for i in range(4000)
+    )
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(8000)
+        wav.writeframes(frames)
+    return "data:audio/wav;base64," + base64.b64encode(buffer.getvalue()).decode()
+
+
+def video_input_data_url() -> str:
+    """A deterministic mp4-looking blob (ftyp box plus a fixed mdat payload)
+    as a data URL; only the media type and bytes matter to the wire."""
+    ftyp: Final = struct.pack(">I4s4sI4s4s", 24, b"ftyp", b"isom", 0x200, b"isom", b"iso6")
+    mdat_payload: Final = bytes((i * 7 + 13) % 256 for i in range(4096))
+    mdat: Final = struct.pack(">I4s", 8 + len(mdat_payload), b"mdat") + mdat_payload
+    return "data:video/mp4;base64," + base64.b64encode(ftyp + mdat).decode()
+
+
 def image_input_data_url() -> str:
     """A deterministic 256x256 RGB noise PNG as a data URL; noise compresses
     poorly on purpose so the base64 payload stays well above 100 KB and would
@@ -357,6 +499,8 @@ def image_input_data_url() -> str:
 
 
 IMAGE_INPUT_DATA_URL: Final = image_input_data_url()
+AUDIO_INPUT_DATA_URL: Final = audio_input_data_url()
+VIDEO_INPUT_DATA_URL: Final = video_input_data_url()
 
 
 def matrix_data_errors() -> tuple[str, ...]:
@@ -381,6 +525,48 @@ def matrix_data_errors() -> tuple[str, ...]:
         for case in CASES
         if case.exact_spend == bool(case.models) or case.exact_spend != bool(case.expected)
     )
+    all_pairs: Final = frozenset(
+        (map_key, key)
+        for map_key, entry in COST_MAP.items()
+        for key in _entry_rate_keys(entry)
+    )
+    owned_pairs: Final = tuple(
+        (map_key, key)
+        for case in CASES
+        if case.family == "pricing"
+        for map_key in case.expected
+        for key in case.owns
+        if map_key in COST_MAP and _entry_has_rate_key(COST_MAP[map_key], key)
+    )
+    unowned_pairs: Final = sorted(
+        f"{map_key}:{key}" for map_key, key in all_pairs - frozenset(owned_pairs)
+    )
+    duplicate_pairs: Final = sorted(
+        f"{map_key}:{key}"
+        for map_key, key in set(owned_pairs)
+        if owned_pairs.count((map_key, key)) > 1
+    )
+    owns_without_holder: Final = sorted(
+        f"{case.name}:{key}"
+        for case in CASES
+        for key in case.owns
+        if not any(
+            map_key in COST_MAP and _entry_has_rate_key(COST_MAP[map_key], key)
+            for map_key in case.expected
+        )
+    )
+    fallback_violations: Final = sorted(
+        f"{case.name}:{map_key}:{key}"
+        for case in CASES
+        for key in case.fallback_for
+        for map_key in (*case.expected, *case.models)
+        if map_key in COST_MAP and _entry_has_rate_key(COST_MAP[map_key], key)
+    )
+    family_violations: Final = sorted(
+        case.name
+        for case in CASES
+        if (case.family == "transport") != (not case.owns and not case.fallback_for)
+    )
     input_rates: Final = tuple(entry.input_cost_per_token for entry in COST_MAP.values())
     findings: Final = (
         (
@@ -402,6 +588,31 @@ def matrix_data_errors() -> tuple[str, ...]:
             "two cost_map entries share input_cost_per_token; the suite relies on "
             "distinct rates so a wrong-model bill can never coincidentally match"
             if len(input_rates) != len(set(input_rates))
+            else None
+        ),
+        (
+            f"(model, rate key) pairs with no owning case: {unowned_pairs}"
+            if unowned_pairs
+            else None
+        ),
+        (
+            f"(model, rate key) pairs owned by more than one case: {duplicate_pairs}"
+            if duplicate_pairs
+            else None
+        ),
+        (
+            f"owns keys absent on all of the case's expected models: {owns_without_holder}"
+            if owns_without_holder
+            else None
+        ),
+        (
+            f"fallback_for keys a case's models actually carry: {fallback_violations}"
+            if fallback_violations
+            else None
+        ),
+        (
+            f"cases with owns/fallback_for inconsistent with family: {family_violations}"
+            if family_violations
             else None
         ),
     )

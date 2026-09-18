@@ -87,6 +87,56 @@ _TERMINAL_CAPS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
 )
 
 
+_BASE_USAGE_FIELDS: Final = frozenset({"fresh_input_tokens", "output_tokens"})
+_OPENAI_FAMILY_USAGE: Final = frozenset(
+    {
+        "cache_read_tokens",
+        "reasoning_tokens",
+        "audio_input_tokens",
+        "audio_output_tokens",
+        "web_search_calls",
+    }
+)
+_CACHE_WRITE_USAGE: Final = frozenset({"cache_write_5m_tokens", "cache_write_1h_tokens"})
+_GEMINI_USAGE: Final = frozenset(
+    {
+        "cache_read_tokens",
+        "reasoning_tokens",
+        "audio_input_tokens",
+        "audio_output_tokens",
+        "image_input_tokens",
+        "video_input_tokens",
+        "web_search_calls",
+        "google_maps_calls",
+    }
+)
+
+_USAGE_CAPS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
+    {
+        wire: usage
+        for wire, usage in (
+            ("openai_chat", _OPENAI_FAMILY_USAGE),
+            ("azure_chat", _OPENAI_FAMILY_USAGE),
+            ("together_chat", _OPENAI_FAMILY_USAGE),
+            ("fireworks_chat", _OPENAI_FAMILY_USAGE),
+            (
+                "openai_responses",
+                frozenset(
+                    {"cache_read_tokens", "reasoning_tokens", "web_search_calls", "file_search_calls"}
+                ),
+            ),
+            (
+                "anthropic_messages",
+                frozenset({"cache_read_tokens", "web_search_calls"}) | _CACHE_WRITE_USAGE,
+            ),
+            ("bedrock_converse", frozenset({"cache_read_tokens"}) | _CACHE_WRITE_USAGE),
+            ("gemini_generate", _GEMINI_USAGE),
+            ("vertex_generate", _GEMINI_USAGE),
+        )
+    }
+)
+
+
 class ScriptedToolCall(BaseModel):
     """A single function call the scripted output emits instead of text.
     ``arguments`` is the wire's JSON string (~250 chars), sliced into deltas
@@ -116,7 +166,11 @@ class ScriptedUsage(BaseModel):
     reasoning_tokens: int = 0
     audio_input_tokens: int = 0
     audio_output_tokens: int = 0
+    image_input_tokens: int = 0
+    video_input_tokens: int = 0
     web_search_calls: int = 0
+    google_maps_calls: int = 0
+    file_search_calls: int = 0
 
 
 class ScriptedOutput(BaseModel):
@@ -151,6 +205,10 @@ class Scenario(BaseModel):
     model: str
     stream_usage: StreamUsage = "final_chunk"
     service_tier: ServiceTier | None = None
+    # Anthropic fast mode and US inference geography; emitted on the anthropic
+    # usage object only (litellm reads them there), so they are response-side.
+    speed: Literal["fast"] | None = None
+    inference_geo: Literal["us"] | None = None
 
     @model_validator(mode="after")
     def _check_terminal_supported(self) -> Scenario:
@@ -160,6 +218,20 @@ class Scenario(BaseModel):
         ):
             raise ValueError(
                 f"wire {self.wire} cannot emit terminal={self.output.terminal}"
+            )
+        unsupported: Final = frozenset(
+            field
+            for field in self.usage.model_fields_set
+            if getattr(self.usage, field)
+            and field not in (_USAGE_CAPS.get(self.wire, frozenset()) | _BASE_USAGE_FIELDS)
+        )
+        if unsupported:
+            raise ValueError(
+                f"wire {self.wire} cannot express usage fields {sorted(unsupported)}"
+            )
+        if (self.speed or self.inference_geo) and self.wire != "anthropic_messages":
+            raise ValueError(
+                f"wire {self.wire} cannot emit speed/inference_geo (anthropic usage fields)"
             )
         return self
 
@@ -215,32 +287,10 @@ def _sse(events: tuple[tuple[str | None, Mapping[str, object] | str], ...]) -> b
 
 
 def _openai_usage(u: ScriptedUsage) -> Mapping[str, object]:
-    prompt_tokens: Final = (
-        u.fresh_input_tokens
-        + u.cache_read_tokens
-        + u.cache_write_5m_tokens
-        + u.cache_write_1h_tokens
-        + u.audio_input_tokens
-    )
+    prompt_tokens: Final = u.fresh_input_tokens + u.cache_read_tokens + u.audio_input_tokens
     completion_tokens: Final = u.output_tokens + u.reasoning_tokens + u.audio_output_tokens
     prompt_details: Final = _jobj_opt(
         ("cached_tokens", u.cache_read_tokens) if u.cache_read_tokens else None,
-        (
-            ("cache_write_tokens", u.cache_write_5m_tokens + u.cache_write_1h_tokens)
-            if u.cache_write_5m_tokens or u.cache_write_1h_tokens
-            else None
-        ),
-        (
-            (
-                "cache_creation_token_details",
-                _jobj(
-                    ("ephemeral_5m_input_tokens", u.cache_write_5m_tokens),
-                    ("ephemeral_1h_input_tokens", u.cache_write_1h_tokens),
-                ),
-            )
-            if u.cache_write_5m_tokens or u.cache_write_1h_tokens
-            else None
-        ),
         ("audio_tokens", u.audio_input_tokens) if u.audio_input_tokens else None,
     )
     completion_details: Final = _jobj_opt(
@@ -256,12 +306,16 @@ def _openai_usage(u: ScriptedUsage) -> Mapping[str, object]:
     )
 
 
-def _anthropic_usage(u: ScriptedUsage) -> Mapping[str, object]:
+def _anthropic_usage(scenario: Scenario) -> Mapping[str, object]:
     # Anthropic reports uncached-only input_tokens; cache reads and writes ride
     # top-level fields, with the 5m/1h write split under cache_creation.
+    u: Final = scenario.usage
     return _jobj_opt(
         ("input_tokens", u.fresh_input_tokens),
         ("output_tokens", u.output_tokens),
+        ("service_tier", scenario.service_tier) if scenario.service_tier else None,
+        ("speed", scenario.speed) if scenario.speed else None,
+        ("inference_geo", scenario.inference_geo) if scenario.inference_geo else None,
         ("cache_read_input_tokens", u.cache_read_tokens) if u.cache_read_tokens else None,
         (
             ("cache_creation_input_tokens", u.cache_write_5m_tokens + u.cache_write_1h_tokens)
@@ -287,18 +341,24 @@ def _anthropic_usage(u: ScriptedUsage) -> Mapping[str, object]:
     )
 
 
-def _gemini_usage(u: ScriptedUsage) -> Mapping[str, object]:
-    # promptTokenCount carries the cached count inside it; TEXT modality is the
-    # cached-inclusive text count so litellm's implicit-caching subtraction lands
-    # on the fresh figure. candidatesTokenCount includes reasoning + audio.
-    prompt_tokens: Final = u.fresh_input_tokens + u.cache_read_tokens + u.audio_input_tokens
-    candidates: Final = u.output_tokens + u.reasoning_tokens + u.audio_output_tokens
+def _gemini_usage(scenario: Scenario) -> Mapping[str, object]:
+    # Real generateContent accounting: promptTokenCount carries the cached count
+    # inside it (TEXT modality is the cached-inclusive text count so litellm's
+    # implicit-caching subtraction lands on the fresh figure), candidatesTokenCount
+    # excludes thoughts, thoughtsTokenCount reports them separately, and
+    # totalTokenCount sums all three. Image/video input ride promptTokensDetails.
+    u: Final = scenario.usage
+    prompt_tokens: Final = (
+        u.fresh_input_tokens + u.cache_read_tokens + u.audio_input_tokens
+        + u.image_input_tokens + u.video_input_tokens
+    )
+    candidates: Final = u.output_tokens + u.audio_output_tokens
     return _jobj_opt(
         ("promptTokenCount", prompt_tokens),
         ("candidatesTokenCount", candidates),
-        ("totalTokenCount", prompt_tokens + candidates),
-        ("cachedContentTokenCount", u.cache_read_tokens) if u.cache_read_tokens else None,
         ("thoughtsTokenCount", u.reasoning_tokens) if u.reasoning_tokens else None,
+        ("totalTokenCount", prompt_tokens + candidates + u.reasoning_tokens),
+        ("cachedContentTokenCount", u.cache_read_tokens) if u.cache_read_tokens else None,
         (
             "promptTokensDetails",
             (
@@ -308,19 +368,66 @@ def _gemini_usage(u: ScriptedUsage) -> Mapping[str, object]:
                     if u.audio_input_tokens
                     else ()
                 ),
+                *(
+                    (_jobj(("modality", "IMAGE"), ("tokenCount", u.image_input_tokens)),)
+                    if u.image_input_tokens
+                    else ()
+                ),
+                *(
+                    (_jobj(("modality", "VIDEO"), ("tokenCount", u.video_input_tokens)),)
+                    if u.video_input_tokens
+                    else ()
+                ),
             ),
         ),
         (
             (
                 "candidatesTokensDetails",
                 (
-                    _jobj(("modality", "TEXT"), ("tokenCount", u.output_tokens + u.reasoning_tokens)),
+                    _jobj(("modality", "TEXT"), ("tokenCount", u.output_tokens)),
                     _jobj(("modality", "AUDIO"), ("tokenCount", u.audio_output_tokens)),
                 ),
             )
             if u.audio_output_tokens
             else None
         ),
+        (
+            (
+                "trafficType",
+                {"flex": "ON_DEMAND_FLEX", "priority": "ON_DEMAND_PRIORITY"}[
+                    scenario.service_tier
+                ],
+            )
+            if scenario.service_tier
+            else None
+        ),
+    )
+
+
+def _gemini_grounding_metadata(scenario: Scenario) -> Mapping[str, object] | None:
+    """groundingMetadata for the search/Maps flags. Maps items carry maps
+    chunks and googleMapsWidgetContextToken so litellm bills them as Maps
+    queries, not web search."""
+    u: Final = scenario.usage
+    if not u.web_search_calls and not u.google_maps_calls:
+        return None
+    if u.google_maps_calls:
+        return _jobj(
+            (
+                "webSearchQueries",
+                tuple(f"maps query {i}" for i in range(u.google_maps_calls)),
+            ),
+            (
+                "groundingChunks",
+                tuple(
+                    _jobj(("maps", _jobj(("uri", f"https://maps.google.com/?cid={i}"))))
+                    for i in range(u.google_maps_calls)
+                ),
+            ),
+            ("googleMapsWidgetContextToken", f"token_{scenario.scenario_id}"),
+        )
+    return _jobj(
+        ("webSearchQueries", tuple(f"query {i}" for i in range(u.web_search_calls))),
     )
 
 
@@ -572,7 +679,7 @@ def _anthropic_body(scenario: Scenario, requested_model: str) -> Mapping[str, ob
         ("model", scenario.output.response_model or requested_model),
         ("content", _anthropic_content(scenario)),
         ("stop_reason", _anthropic_stop_reason(scenario)),
-        ("usage", _anthropic_usage(scenario.usage)),
+        ("usage", _anthropic_usage(scenario)),
     )
 
 
@@ -581,7 +688,7 @@ def _anthropic_sse(scenario: Scenario, requested_model: str) -> bytes:
     input_usage: Final = _jobj(
         *(
             (key, value)
-            for key, value in _anthropic_usage(scenario.usage).items()
+            for key, value in _anthropic_usage(scenario).items()
             if key != "output_tokens"
         )
     )
@@ -685,7 +792,7 @@ def _gemini_prompt_blocked_body(scenario: Scenario, requested_model: str) -> Map
                 ),
             ),
         ),
-        ("usageMetadata", _gemini_usage(scenario.usage)),
+        ("usageMetadata", _gemini_usage(scenario)),
         ("modelVersion", scenario.output.response_model or requested_model),
     )
 
@@ -728,22 +835,14 @@ def _gemini_body(scenario: Scenario, requested_model: str) -> Mapping[str, objec
                     ),
                     ("index", 0),
                     (
-                        (
-                            "groundingMetadata",
-                            _jobj(
-                                (
-                                    "webSearchQueries",
-                                    tuple(f"query {i}" for i in range(scenario.usage.web_search_calls)),
-                                )
-                            ),
-                        )
-                        if scenario.usage.web_search_calls
+                        ("groundingMetadata", _gemini_grounding_metadata(scenario))
+                        if _gemini_grounding_metadata(scenario) is not None
                         else None
                     ),
                 ),
             ),
         ),
-        ("usageMetadata", _gemini_usage(scenario.usage)),
+        ("usageMetadata", _gemini_usage(scenario)),
         ("modelVersion", scenario.output.response_model or requested_model),
     )
 
@@ -762,7 +861,7 @@ def _gemini_sse(scenario: Scenario, requested_model: str) -> bytes:
                         None,
                         _jobj(
                             ("candidates", ()),
-                            ("usageMetadata", _gemini_usage(scenario.usage)),
+                            ("usageMetadata", _gemini_usage(scenario)),
                             ("modelVersion", scenario.output.response_model or requested_model),
                         ),
                     ),
@@ -787,6 +886,16 @@ def _responses_output(scenario: Scenario) -> tuple[Mapping[str, object], ...]:
         *(
             _jobj(("type", "web_search_call"), ("id", f"ws_{i}"), ("status", "completed"))
             for i in range(scenario.usage.web_search_calls)
+        ),
+        *(
+            _jobj(
+                ("type", "file_search_call"),
+                ("id", f"fs_{i}"),
+                ("status", "completed"),
+                ("queries", (f"query {i}",)),
+                ("results", ()),
+            )
+            for i in range(scenario.usage.file_search_calls)
         ),
         _jobj(
             ("type", "function_call"),
@@ -853,9 +962,50 @@ def _responses_sse(scenario: Scenario, requested_model: str) -> bytes:
         "response.incomplete" if scenario.output.terminal == "incomplete" else "response.completed"
     )
     output_index: Final = (
-        scenario.usage.web_search_calls + (1 if scenario.output.terminal == "unvalidated" else 0)
+        scenario.usage.web_search_calls
+        + scenario.usage.file_search_calls
+        + (1 if scenario.output.terminal == "unvalidated" else 0)
     )
-    middle_events: Final[tuple[tuple[str, Mapping[str, object]], ...]] = (
+    file_search_events: Final[tuple[tuple[str, Mapping[str, object]], ...]] = tuple(
+        event
+        for i in range(scenario.usage.file_search_calls)
+        for event in (
+            (
+                "response.output_item.added",
+                _jobj(
+                    ("type", "response.output_item.added"),
+                    ("output_index", i),
+                    (
+                        "item",
+                        _jobj(
+                            ("type", "file_search_call"),
+                            ("id", f"fs_{i}"),
+                            ("status", "in_progress"),
+                            ("queries", ()),
+                        ),
+                    ),
+                ),
+            ),
+            (
+                "response.output_item.done",
+                _jobj(
+                    ("type", "response.output_item.done"),
+                    ("output_index", i),
+                    (
+                        "item",
+                        _jobj(
+                            ("type", "file_search_call"),
+                            ("id", f"fs_{i}"),
+                            ("status", "completed"),
+                            ("queries", (f"query {i}",)),
+                            ("results", ()),
+                        ),
+                    ),
+                ),
+            ),
+        )
+    )
+    call_events: Final[tuple[tuple[str, Mapping[str, object]], ...]] = (
         (
             (
                 "response.output_item.added",
@@ -910,6 +1060,10 @@ def _responses_sse(scenario: Scenario, requested_model: str) -> bytes:
                 ),
             ),
         )
+    )
+    middle_events: Final[tuple[tuple[str, Mapping[str, object]], ...]] = (
+        *file_search_events,
+        *call_events,
     )
     return _sse(
         (
@@ -976,7 +1130,7 @@ def _bedrock_content(scenario: Scenario) -> tuple[Mapping[str, object], ...]:
 
 
 def _bedrock_body(scenario: Scenario) -> Mapping[str, object]:
-    return _jobj(
+    return _jobj_opt(
         (
             "output",
             _jobj(
@@ -992,6 +1146,11 @@ def _bedrock_body(scenario: Scenario) -> Mapping[str, object]:
         ("stopReason", _bedrock_stop_reason(scenario)),
         ("usage", _bedrock_usage(scenario.usage)),
         ("metrics", _jobj(("latencyMs", 42))),
+        (
+            ("serviceTier", _jobj(("type", scenario.service_tier)))
+            if scenario.service_tier
+            else None
+        ),
     )
 
 
@@ -1083,9 +1242,14 @@ def _bedrock_eventstream(scenario: Scenario) -> bytes:
                 (
                     _aws_event_frame(
                         "metadata",
-                        _jobj(
+                        _jobj_opt(
                             ("usage", _bedrock_usage(scenario.usage)),
                             ("metrics", _jobj(("latencyMs", 42))),
+                            (
+                                ("serviceTier", _jobj(("type", scenario.service_tier)))
+                                if scenario.service_tier
+                                else None
+                            ),
                         ),
                     ),
                 )

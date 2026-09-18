@@ -16,8 +16,11 @@ from typing import Final
 
 from conftest import CostCalcClient, cost_rows, register_scenario_deployment
 from cost_matrix import (
+    AUDIO_INPUT_DATA_URL,
     FRONTIER_MODELS,
     IMAGE_INPUT_DATA_URL,
+    SERVICE_TIER_REQUEST_WIRES,
+    VIDEO_INPUT_DATA_URL,
     Case,
     FrontierModel,
     cases_for,
@@ -27,15 +30,27 @@ from cost_matrix import (
 from e2e_config import unique_marker
 from lifecycle import ResourceManager
 from models import (
+    CacheControl,
+    ChatAudio,
     ChatBody,
     ChatMessage,
     ChatStreamOptions,
     ChatTool,
     ChatToolFunction,
+    FileContentPart,
+    FileObject,
+    FileSearchTool,
+    GoogleMapsTool,
+    GoogleSearchTool,
+    HostedWebSearchTool,
     ImageContentPart,
     ImageUrl,
+    InputAudio,
+    InputAudioContentPart,
     TextContentPart,
+    WebSearchOptions,
 )
+from scripted_provider import ScriptedUsage, Wire
 
 pytestmark: Final = [pytest.mark.e2e, pytest.mark.cost_map_stack]  # mutable-ok: pytest only accepts a list for pytestmark
 
@@ -52,40 +67,131 @@ def _case_id(param: tuple[FrontierModel, Case]) -> str:
     return f"{model.map_key.replace('/', '-')}-{case.name}"
 
 
-def _chat_body(model_name: str, marker: str, case: Case) -> ChatBody:
-    return ChatBody(
-        model=model_name,
-        messages=(
-            ChatMessage(
-                role="user",
-                content=(
-                    [
-                        TextContentPart(text=f"{marker} scripted pricing call"),
-                        ImageContentPart(image_url=ImageUrl(url=IMAGE_INPUT_DATA_URL)),
-                    ]
-                    if case.image_input
-                    else f"{marker} scripted pricing call"
-                ),
-            ),
+_CACHE_WIRES: Final = frozenset({"anthropic_messages", "bedrock_converse"})
+_WEB_SEARCH_OPTION_WIRES: Final = frozenset({"openai_chat", "azure_chat", "openai_responses"})
+
+
+def _cache_control(usage: ScriptedUsage, wire: Wire) -> CacheControl | None:
+    if wire not in _CACHE_WIRES:
+        return None
+    if not (usage.cache_read_tokens or usage.cache_write_5m_tokens or usage.cache_write_1h_tokens):
+        return None
+    return CacheControl(type="ephemeral", ttl="1h" if usage.cache_write_1h_tokens else None)
+
+
+def _chat_body(model: FrontierModel, case: Case, model_name: str, marker: str) -> ChatBody:
+    usage: Final = case.usage_for(model.map_key)
+    user_parts: Final = (
+        TextContentPart(
+            text=f"{marker} summarize the attached material in one line and name the city weather",
         ),
-        stream=case.stream,
-        stream_options=ChatStreamOptions(include_usage=True) if case.stream else None,
-        service_tier=case.service_tier,
-        tools=(
+        *(
+            (ImageContentPart(image_url=ImageUrl(url=IMAGE_INPUT_DATA_URL, detail="high")),)
+            if case.image_input
+            else ()
+        ),
+        *(
+            (
+                InputAudioContentPart(
+                    input_audio=InputAudio(data=AUDIO_INPUT_DATA_URL.split(",", 1)[1], format="wav")
+                ),
+            )
+            if case.audio_input
+            else ()
+        ),
+        *(
+            (FileContentPart(file=FileObject(file_data=VIDEO_INPUT_DATA_URL, format="mp4")),)
+            if case.video_input
+            else ()
+        ),
+    )
+    tools: Final = (
+        *(
             (
                 ChatTool(
                     function=ChatToolFunction(
                         name="get_weather",
+                        description="Get the current weather and a short forecast for a city.",
                         parameters={
                             "type": "object",
-                            "properties": {"city": {"type": "string"}},
+                            "properties": {
+                                "city": {"type": "string", "description": "City name"},
+                                "days": {"type": "integer", "description": "Forecast horizon in days"},
+                                "units": {"type": "string", "enum": ["metric", "imperial"]},
+                            },
+                            "required": ["city"],
                         },
                     )
                 ),
             )
             if case.tool_call
+            else ()
+        ),
+        *(
+            (HostedWebSearchTool(type="web_search_20250305", name="web_search", max_uses=5),)
+            if case.web_search is not None and model.wire == "anthropic_messages"
+            else ()
+        ),
+        *(
+            (GoogleSearchTool(),)
+            if case.web_search is not None and model.wire in ("gemini_generate", "vertex_generate")
+            else ()
+        ),
+        *((GoogleMapsTool(),) if case.google_maps else ()),
+        *((FileSearchTool(vector_store_ids=["vs_cost_calc_fixture"]),) if case.file_search else ()),
+    )
+    return ChatBody(
+        model=model_name,
+        messages=(
+            ChatMessage(
+                role="system",
+                content=[
+                    TextContentPart(
+                        text=(
+                            "You are a deterministic pricing-harness assistant. "
+                            "Keep answers to a single short line."
+                        ),
+                        cache_control=_cache_control(usage, model.wire),
+                    )
+                ],
+            ),
+            ChatMessage(role="user", content=list(user_parts)),
+        ),
+        stream=case.stream,
+        stream_options=ChatStreamOptions(include_usage=True) if case.stream else None,
+        service_tier=(
+            case.service_tier
+            if case.service_tier is not None and model.wire in SERVICE_TIER_REQUEST_WIRES
             else None
         ),
+        reasoning_effort="medium" if case.reasoning else None,
+        modalities=(
+            ["text"] if case.audio_input else (["text", "audio"] if case.audio_output else None)
+        ),
+        audio=(
+            ChatAudio(voice="alloy", format="pcm16") if case.audio_output else None
+        ),
+        web_search_options=(
+            WebSearchOptions(search_context_size=case.web_search)
+            if case.web_search is not None and model.wire in _WEB_SEARCH_OPTION_WIRES
+            else None
+        ),
+        tools=tools or None,
+        tool_choice="auto" if case.tool_call and model.wire != "bedrock_converse" else None,
+        # The test-owned cost map carries no supports_* flags, so litellm's
+        # optional-params gate rejects the realistic request fields; allowlist
+        # exactly the ones this case sends.
+        allowed_openai_params=[
+            name
+            for name, sent in (
+                ("tool_choice", case.tool_call and model.wire != "bedrock_converse"),
+                ("modalities", case.audio_input or case.audio_output),
+                ("audio", case.audio_output),
+                ("web_search_options", case.web_search is not None),
+                ("reasoning_effort", case.reasoning),
+            )
+            if sent
+        ],
     )
 
 
@@ -105,7 +211,7 @@ class TestTokenPricing:
         response: Final = client.proxy.transport.send(
             "/chat/completions",
             headers=client.proxy.transport.bearer(scoped_key),
-            json=_chat_body(model_name, marker, case),
+            json=_chat_body(model, case, model_name, marker),
             stream=case.stream,
         )
         assert response.ok, (
