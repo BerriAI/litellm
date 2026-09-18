@@ -44,13 +44,15 @@ VIRTUAL_TOOL_NAMES: Final = frozenset(
 )
 
 
-def resolve_mcp_tool_search_enabled(user_api_key_auth: UserAPIKeyAuth) -> bool | None:
+def resolve_mcp_tool_search_enabled(user_api_key_auth: UserAPIKeyAuth | None) -> bool | None:
     """First explicitly-set ``mcp_tool_search_enabled`` down key -> team -> user.
 
     ``is not None`` is what counts as set: an explicit False on the key wins over
     a True on the team, and a caller with nothing configured resolves to None so
     the caller keeps its existing default behaviour.
     """
+    if user_api_key_auth is None:
+        return None
     for permission in (
         user_api_key_auth.object_permission,
         user_api_key_auth.team_object_permission,

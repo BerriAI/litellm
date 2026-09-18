@@ -2482,6 +2482,31 @@ async def _backfill_null_user_email(
     return updated_row
 
 
+async def _load_user_object_permission(
+    user_row: LiteLLM_UserTable,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    if not (user_row.object_permission_id and not user_row.object_permission):
+        return
+    try:
+        user_row.object_permission = await get_object_permission(
+            object_permission_id=user_row.object_permission_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # fail-open object permission lookup must not break auth
+        verbose_proxy_logger.warning(
+            "Failed to load object_permission for user with object_permission_id=%s: %s",
+            user_row.object_permission_id,
+            e,
+        )
+
+
 @log_db_metrics
 async def get_user_object(
     user_id: str | None,
@@ -2600,22 +2625,13 @@ async def get_user_object(
 
         _response = LiteLLM_UserTable.model_validate(dict(response))
 
-        # Load object_permission if object_permission_id exists but object_permission is not loaded
-        if _response.object_permission_id and not _response.object_permission:
-            try:
-                _response.object_permission = await get_object_permission(
-                    object_permission_id=_response.object_permission_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-            except Exception as e:
-                verbose_proxy_logger.warning(
-                    "Failed to load object_permission for user with object_permission_id=%s: %s",
-                    _response.object_permission_id,
-                    e,
-                )
+        await _load_user_object_permission(
+            user_row=_response,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
         _response = await _backfill_null_user_email(
             prisma_client=prisma_client,

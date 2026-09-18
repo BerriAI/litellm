@@ -484,7 +484,7 @@ describe("UserEditView", () => {
         "user_id",
         "user_role",
       ]);
-      expect(payload).toStrictEqual({
+      const expectedPayload = {
         user_id: "user-123",
         user_email: "test@example.com",
         user_alias: "Test User",
@@ -496,7 +496,8 @@ describe("UserEditView", () => {
         mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
         mcp_tool_permissions: {},
         mcp_tool_search_enabled: null,
-      });
+      };
+      expect(payload).toStrictEqual(expectedPayload);
       expect(typeof payload.max_budget).toBe("number");
     });
 
@@ -569,14 +570,15 @@ describe("UserEditView", () => {
       await waitFor(() => {
         expect(onSubmit).toHaveBeenCalled();
       });
-      expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      const expectedKeys = {
         user_id: "user-null",
         user_email: "null@example.com",
         user_alias: null,
         user_role: null,
         budget_duration: null,
         max_budget: null,
-      });
+      };
+      expect(onSubmit.mock.calls[0][0]).toMatchObject(expectedKeys);
     });
 
     it("should keep the budget input's native step constraint armed", async () => {

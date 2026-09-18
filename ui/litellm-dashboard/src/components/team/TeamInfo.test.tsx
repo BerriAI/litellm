@@ -2192,6 +2192,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     agent_access_groups: [],
     vector_stores: ["vs-1"],
     skills: [],
+    mcp_tool_search_enabled: null,
   };
 
   it("leaves every team member key out of the request body for an untouched save with both sections closed", async () => {

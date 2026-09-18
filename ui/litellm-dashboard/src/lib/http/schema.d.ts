@@ -40270,6 +40270,7 @@ export interface components {
             user_model_max_budget?: {
                 [key: string]: unknown;
             } | null;
+            user_object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             user_role?: components["schemas"]["LitellmUserRoles"] | null;
             /** User Rpm Limit */
             user_rpm_limit?: number | null;
