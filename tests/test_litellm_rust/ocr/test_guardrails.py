@@ -10,7 +10,7 @@ from litellm.types.guardrails import BlockedWord, ContentFilterAction, Guardrail
 from litellm.types.utils import CallTypes
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import OCR_RESPONSE, call_native_aocr
+from tests.test_litellm_rust.support.requests import OCR_RESPONSE, call_native, call_native_aocr
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -72,3 +72,27 @@ async def test_native_aocr_post_call_replacement_reaches_caller_and_success_call
     assert len(success_events) == 1
     assert success_events[0].response.pages[0].markdown == "Reviewed OCR"
     assert "guardrails" not in ocr_server.requests[0].body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_native_ocr_runs_deployment_hooks_only_on_asynchronous_calls(
+    ocr_server: RecordingServer, asynchronous: bool
+) -> None:
+    hooked: Final[list[CallTypes | None]] = []
+
+    class Deployment(CustomGuardrail):
+        def __init__(self) -> None:
+            super().__init__(guardrail_name="observe-deployment", event_hook=GuardrailEventHooks.pre_call)
+
+        async def async_pre_call_deployment_hook(self, kwargs, call_type):
+            hooked.append(call_type)
+            return kwargs
+
+    litellm.callbacks.append(Deployment())
+
+    response: Final = await call_native(ocr_server, asynchronous)
+
+    assert response.pages[0].markdown == "native OCR response"
+    assert hooked == ([CallTypes.aocr] if asynchronous else [])
+    assert len(ocr_server.requests) == 1

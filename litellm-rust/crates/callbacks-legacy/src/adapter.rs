@@ -81,6 +81,12 @@ impl LegacyLogging {
         }
     }
 
+    /// Deployment hooks are awaited, and Python's synchronous `@client` wrapper never
+    /// runs them.
+    fn deployment_hooks(&self, py: Python<'_>) -> PyResult<bool> {
+        Ok(self.asynchronous && DeploymentHooks::needed(py)?)
+    }
+
     fn logger(&self) -> PyResult<&PythonLogger> {
         self.logger.as_ref().ok_or_else(|| {
             pyo3::exceptions::PyRuntimeError::new_err("call logging is not initialized")
@@ -213,7 +219,7 @@ impl CallbackAdapter for LegacyLogging {
         )?;
         self.logger = Some(result.logger()?);
         self.call.set_kwargs(result.kwargs()?);
-        if DeploymentHooks::needed(py)? {
+        if self.deployment_hooks(py)? {
             self.pending = Some(Pending::DeploymentPreCall);
             return Ok(AdapterStep::Await(DeploymentHooks::before_call(
                 py,
@@ -275,7 +281,7 @@ impl CallbackAdapter for LegacyLogging {
     ) -> PyResult<AdapterStep> {
         self.end = Some(datetime(py, timing.end_time)?);
         self.response = Some(response);
-        if DeploymentHooks::needed(py)? {
+        if self.deployment_hooks(py)? {
             self.pending = Some(Pending::DeploymentPostCall);
             return Ok(AdapterStep::Await(DeploymentHooks::after_success(
                 py,
@@ -312,7 +318,7 @@ impl CallbackAdapter for LegacyLogging {
                 self.error = Some(error.clone_ref(py).into_value(py));
                 if *origin == FailureOrigin::Call
                     && self.logger.is_some()
-                    && DeploymentHooks::needed(py)?
+                    && self.deployment_hooks(py)?
                 {
                     let error = self.error.as_ref().ok_or_else(missing_state)?;
                     self.pending = Some(Pending::DeploymentFailure);
