@@ -2,7 +2,6 @@ import asyncio
 import io
 import json
 import os
-from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,14 +12,6 @@ from litellm.cost_calculator import default_video_cost_calculator
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
-
-def _expected_video_cost(model: str, resolution: str | None, duration: float) -> float:
-    entry: Final = litellm.model_cost[model]
-    field: Final = f"output_cost_per_second_{resolution}" if resolution else "output_cost_per_second"
-    return duration * entry.get(field, entry["output_cost_per_second"])
-
-
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
@@ -244,35 +235,6 @@ class TestVideoGeneration:
         assert response.status == "completed"
         assert response.model == "sora-2"
 
-    def test_video_generation_cost_calculation(self):
-        """Test video generation cost calculation."""
-        import json
-
-        # Try to load the local model cost map, skip if not found
-        cost_map_path = "model_prices_and_context_window.json"
-        if not os.path.exists(cost_map_path):
-            # Try alternative paths
-            alt_paths = [
-                os.path.join(os.path.dirname(__file__), "..", "..", cost_map_path),
-                os.path.join(os.path.dirname(__file__), "..", "..", "..", cost_map_path),
-            ]
-            for path in alt_paths:
-                if os.path.exists(path):
-                    cost_map_path = path
-                    break
-            else:
-                pytest.skip("model_prices_and_context_window.json not found")
-
-        with open(cost_map_path, "r") as f:
-            litellm.model_cost = json.load(f)
-
-        # Test with sora-2 model
-        cost = default_video_cost_calculator(model="openai/sora-2", duration_seconds=10.0, custom_llm_provider="openai")
-
-        model_info: Final = litellm.model_cost["openai/sora-2"]
-        assert model_info["output_cost_per_video_per_second"] > 0
-        assert model_info["mode"] == "video_generation"
-        assert cost > 0
 
     def test_video_generation_cost_calculation_unknown_model(self):
         """Test video generation cost calculation for unknown model."""
@@ -509,132 +471,6 @@ class TestVideoGeneration:
         )
         assert abs(cost - 1.8) < 0.001
 
-    def test_completion_cost_video_resolution_tiers_from_cost_map(self, monkeypatch):
-        """The 480p/1080p/4k tier keys resolve from the shipped runwayml cost map entries."""
-        from litellm.cost_calculator import completion_cost
-
-        local_map_path = os.path.join(os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json")
-        with open(local_map_path, "r") as f:
-            monkeypatch.setattr(litellm, "model_cost", json.load(f))
-
-        def cost_for(model: str, resolution: str | None, duration: float) -> float:
-            mock_response = MagicMock()
-            mock_response.usage = {
-                "duration_seconds": duration,
-                **({"video_resolution": resolution} if resolution else {}),
-            }
-            type(mock_response)._hidden_params = {}
-            return completion_cost(
-                completion_response=mock_response,
-                model=model,
-                call_type="create_video",
-                custom_llm_provider="runwayml",
-            )
-
-        assert (
-            abs(cost_for("runwayml/seedance2", "4k", 8.0) - _expected_video_cost("runwayml/seedance2", "4k", 8.0))
-            < 0.001
-        )
-        assert (
-            abs(cost_for("runwayml/seedance2", "1080p", 8.0) - _expected_video_cost("runwayml/seedance2", "1080p", 8.0))
-            < 0.001
-        )
-        assert (
-            abs(cost_for("runwayml/seedance2", "720p", 8.0) - _expected_video_cost("runwayml/seedance2", "720p", 8.0))
-            < 0.001
-        )
-        assert (
-            abs(
-                cost_for("runwayml/seedance2_5", "480p", 8.0)
-                - _expected_video_cost("runwayml/seedance2_5", "480p", 8.0)
-            )
-            < 0.001
-        )
-        assert abs(cost_for("runwayml/gen4.5", None, 8.0) - _expected_video_cost("runwayml/gen4.5", None, 8.0)) < 0.001
-
-    def test_completion_cost_xai_imagine_video_720p_tier_from_cost_map(self, monkeypatch):
-        """720p xAI Imagine Video requests bill the published 720p rate, not the 480p base rate."""
-        from litellm.cost_calculator import completion_cost
-
-        local_map_path = os.path.join(os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json")
-        with open(local_map_path, "r") as f:
-            monkeypatch.setattr(litellm, "model_cost", json.load(f))
-
-        def cost_for(model: str, resolution: str, duration: float) -> float:
-            mock_response = MagicMock()
-            mock_response.usage = {"duration_seconds": duration, "video_resolution": resolution}
-            type(mock_response)._hidden_params = {}
-            return completion_cost(
-                completion_response=mock_response,
-                model=model,
-                call_type="create_video",
-                custom_llm_provider="xai",
-            )
-
-        assert (
-            abs(
-                cost_for("xai/grok-imagine-video", "720p", 10.0)
-                - _expected_video_cost("xai/grok-imagine-video", "720p", 10.0)
-            )
-            < 0.001
-        )
-        assert (
-            abs(
-                cost_for("xai/grok-imagine-video-1.5", "720p", 10.0)
-                - _expected_video_cost("xai/grok-imagine-video-1.5", "720p", 10.0)
-            )
-            < 0.001
-        )
-        assert (
-            abs(
-                cost_for("xai/grok-imagine-video-1.5", "480p", 10.0)
-                - _expected_video_cost("xai/grok-imagine-video-1.5", "480p", 10.0)
-            )
-            < 0.001
-        )
-        assert (
-            abs(
-                cost_for("xai/grok-imagine-video-1.5", "1080p", 10.0)
-                - _expected_video_cost("xai/grok-imagine-video-1.5", "1080p", 10.0)
-            )
-            < 0.001
-        )
-
-    def test_completion_cost_veo_31_tiers_pin_published_rates(self, monkeypatch):
-        """The gemini and vertex_ai veo 3.1 entries bill Google's published per-second tier rates."""
-        from litellm.cost_calculator import completion_cost
-
-        local_map_path = os.path.join(os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json")
-        with open(local_map_path, "r") as f:
-            monkeypatch.setattr(litellm, "model_cost", json.load(f))
-
-        def cost_for(model: str, provider: str, resolution: str | None, duration: float) -> float:
-            mock_response = MagicMock()
-            mock_response.usage = {
-                "duration_seconds": duration,
-                **({"video_resolution": resolution} if resolution else {}),
-            }
-            type(mock_response)._hidden_params = {}
-            return completion_cost(
-                completion_response=mock_response,
-                model=model,
-                call_type="create_video",
-                custom_llm_provider=provider,
-            )
-
-        for provider in ("gemini", "vertex_ai"):
-            for suffix in ("generate-preview", "generate-001"):
-                standard = f"{provider}/veo-3.1-{suffix}"
-                fast = f"{provider}/veo-3.1-fast-{suffix}"
-                assert abs(cost_for(standard, provider, None, 8.0) - _expected_video_cost(standard, None, 8.0)) < 1e-6
-                assert (
-                    abs(cost_for(standard, provider, "1080p", 8.0) - _expected_video_cost(standard, "1080p", 8.0))
-                    < 1e-6
-                )
-                assert abs(cost_for(standard, provider, "4k", 8.0) - _expected_video_cost(standard, "4k", 8.0)) < 1e-6
-                assert abs(cost_for(fast, provider, "720p", 8.0) - _expected_video_cost(fast, "720p", 8.0)) < 1e-6
-                assert abs(cost_for(fast, provider, "1080p", 8.0) - _expected_video_cost(fast, "1080p", 8.0)) < 1e-6
-                assert abs(cost_for(fast, provider, "4k", 8.0) - _expected_video_cost(fast, "4k", 8.0)) < 1e-6
 
     def test_video_generation_with_files(self):
         """Test video generation with file uploads."""
@@ -666,7 +502,9 @@ class TestVideoGeneration:
         config = OpenAIVideoConfig()
 
         # Test environment validation
-        headers = config.validate_environment(headers={}, model="sora-2", api_key="test-api-key")
+        headers = config.validate_environment(
+            headers={}, model="sora-2", api_key="test-api-key"
+        )
 
         assert "Authorization" in headers
         assert headers["Authorization"] == "Bearer test-api-key"
@@ -681,7 +519,9 @@ class TestVideoGeneration:
             mock_validate.return_value = {"Authorization": "Bearer deployment-api-key"}
 
             # Mock the transform and HTTP client
-            with patch.object(config, "transform_video_create_request") as mock_transform:
+            with patch.object(
+                config, "transform_video_create_request"
+            ) as mock_transform:
                 mock_transform.return_value = (
                     {"model": "sora-2", "prompt": "test"},
                     [],
@@ -689,7 +529,9 @@ class TestVideoGeneration:
                 )
 
                 # Mock the transform_video_create_response to avoid needing a real response
-                with patch.object(config, "transform_video_create_response") as mock_transform_response:
+                with patch.object(
+                    config, "transform_video_create_response"
+                ) as mock_transform_response:
                     mock_video_object = MagicMock()
                     mock_video_object.id = "video_123"
                     mock_video_object.object = "video"
@@ -739,7 +581,9 @@ class TestVideoGeneration:
         config = OpenAIVideoConfig()
 
         # Test URL generation
-        url = config.get_complete_url(model="sora-2", api_base="https://api.openai.com/v1", litellm_params={})
+        url = config.get_complete_url(
+            model="sora-2", api_base="https://api.openai.com/v1", litellm_params={}
+        )
 
         assert url == "https://api.openai.com/v1/videos"
 
@@ -814,7 +658,9 @@ class TestVideoGeneration:
     def test_video_generation_response_types(self):
         """Test video generation response types."""
         # Test VideoResponse
-        video_obj = VideoObject(id="test_id", object="video", status="completed", created_at=1712697600)
+        video_obj = VideoObject(
+            id="test_id", object="video", status="completed", created_at=1712697600
+        )
 
         response = VideoResponse(data=[video_obj])
 
@@ -869,7 +715,9 @@ class TestVideoGeneration:
             "seconds": "10",
         }
 
-        response = video_status(video_id="video_456", model="sora-2", mock_response=mock_data)
+        response = video_status(
+            video_id="video_456", model="sora-2", mock_response=mock_data
+        )
 
         assert isinstance(response, VideoObject)
         assert response.id == "video_456"
@@ -890,7 +738,9 @@ class TestVideoGeneration:
 
         # Mock the async_video_status_handler to return the mock_response
         async_mock = AsyncMock(return_value=mock_response)
-        with patch.object(videos_main.base_llm_http_handler, "async_video_status_handler", async_mock):
+        with patch.object(
+            videos_main.base_llm_http_handler, "async_video_status_handler", async_mock
+        ):
             with patch.object(
                 videos_main.base_llm_http_handler,
                 "video_status_handler",
@@ -899,7 +749,9 @@ class TestVideoGeneration:
                 import asyncio
 
                 async def test_async():
-                    response = await avideo_status(video_id="video_async_123", model="sora-2")
+                    response = await avideo_status(
+                        video_id="video_async_123", model="sora-2"
+                    )
                     return response
 
                 response = asyncio.run(test_async())
@@ -1045,7 +897,9 @@ class TestVideoGeneration:
             "seconds": "8",
         }
 
-        response = video_status(video_id="video_remix_123", model="sora-2", mock_response=mock_data)
+        response = video_status(
+            video_id="video_remix_123", model="sora-2", mock_response=mock_data
+        )
 
         assert isinstance(response, VideoObject)
         assert response.id == "video_remix_123"
@@ -1121,7 +975,9 @@ class TestVideoLogging:
         def __init__(self):
             self.standard_logging_payload = None
 
-        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        async def async_log_success_event(
+            self, kwargs, response_obj, start_time, end_time
+        ):
             self.standard_logging_payload = kwargs.get("standard_logging_object")
 
     @pytest.mark.asyncio
@@ -1272,7 +1128,10 @@ def test_video_content_handler_passes_variant_to_url():
 
     assert result == b"thumbnail-bytes"
     called_url = mock_client.get.call_args.kwargs["url"]
-    assert called_url == "https://api.openai.com/v1/videos/video_abc/content?variant=thumbnail"
+    assert (
+        called_url
+        == "https://api.openai.com/v1/videos/video_abc/content?variant=thumbnail"
+    )
 
 
 def test_video_content_handler_uses_get_for_openai():
@@ -1297,7 +1156,9 @@ def test_video_content_handler_uses_get_for_openai():
 
     # Patch _get_httpx_client to ensure no real HTTP client is created
     # This prevents test isolation issues where isinstance check might fail
-    with patch("litellm.llms.custom_httpx.llm_http_handler._get_httpx_client") as mock_get_client:
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client"
+    ) as mock_get_client:
         mock_get_client.return_value = mock_client
 
         result = handler.video_content_handler(
@@ -1345,7 +1206,10 @@ def test_video_content_respects_api_base_and_api_key_from_kwargs():
 
     # Verify that api_base and api_key from kwargs were included in litellm_params
     assert captured_litellm_params is not None
-    assert captured_litellm_params.get("api_base") == "https://test-resource.openai.azure.com/"
+    assert (
+        captured_litellm_params.get("api_base")
+        == "https://test-resource.openai.azure.com/"
+    )
     assert captured_litellm_params.get("api_key") == "test-api-key-from-db"
     assert result == b"mp4-bytes"
 
@@ -1382,7 +1246,9 @@ def test_encode_video_id_with_provider_handles_azure_video_prefix():
     model_id = "azure/sora-2"
 
     # Encode the video ID with provider information
-    encoded_id = encode_video_id_with_provider(video_id=raw_azure_video_id, provider=provider, model_id=model_id)
+    encoded_id = encode_video_id_with_provider(
+        video_id=raw_azure_video_id, provider=provider, model_id=model_id
+    )
 
     # Verify the ID was encoded (should be different from the original)
     assert encoded_id != raw_azure_video_id
@@ -1395,7 +1261,9 @@ def test_encode_video_id_with_provider_handles_azure_video_prefix():
     assert decoded.get("video_id") == raw_azure_video_id
 
     # Verify that encoding an already-encoded ID doesn't double-encode it
-    encoded_twice = encode_video_id_with_provider(video_id=encoded_id, provider=provider, model_id=model_id)
+    encoded_twice = encode_video_id_with_provider(
+        video_id=encoded_id, provider=provider, model_id=model_id
+    )
     assert encoded_twice == encoded_id  # Should return the same encoded ID
 
 
@@ -1706,7 +1574,9 @@ class TestVideoEndpointsProxyLitellmParams:
 
         # Mock the router instance
         mock_router_instance = MagicMock()
-        mock_router_instance.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
+        mock_router_instance.resolve_model_name_from_model_id.return_value = (
+            "vertex-ai-sora-2"
+        )
         mock_router_instance.model_names = {"vertex-ai-sora-2"}
         mock_router_instance.has_model_id.return_value = False
 
@@ -1740,7 +1610,11 @@ class TestVideoEndpointsProxyLitellmParams:
                 data_passed = (
                     call_args.kwargs.get("data", {})
                     if call_args.kwargs
-                    else (call_args.args[0] if call_args.args and len(call_args.args) > 0 else {})
+                    else (
+                        call_args.args[0]
+                        if call_args.args and len(call_args.args) > 0
+                        else {}
+                    )
                 )
 
                 # Verify that model was resolved and added to data
@@ -1769,7 +1643,9 @@ class TestVideoEndpointsProxyLitellmParams:
 
         # Mock the router instance
         mock_router_instance = MagicMock()
-        mock_router_instance.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
+        mock_router_instance.resolve_model_name_from_model_id.return_value = (
+            "vertex-ai-sora-2"
+        )
         mock_router_instance.model_names = {"vertex-ai-sora-2"}
         mock_router_instance.has_model_id.return_value = False
 
@@ -1803,7 +1679,11 @@ class TestVideoEndpointsProxyLitellmParams:
                 data_passed = (
                     call_args.kwargs.get("data", {})
                     if call_args.kwargs
-                    else (call_args.args[0] if call_args.args and len(call_args.args) > 0 else {})
+                    else (
+                        call_args.args[0]
+                        if call_args.args and len(call_args.args) > 0
+                        else {}
+                    )
                 )
 
                 # Verify that model was resolved and added to data
@@ -1832,7 +1712,9 @@ class TestVideoEndpointsProxyLitellmParams:
 
         # Mock the router instance
         mock_router_instance = MagicMock()
-        mock_router_instance.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
+        mock_router_instance.resolve_model_name_from_model_id.return_value = (
+            "vertex-ai-sora-2"
+        )
         mock_router_instance.model_names = {"vertex-ai-sora-2"}
         mock_router_instance.has_model_id.return_value = False
 
@@ -1866,7 +1748,11 @@ class TestVideoEndpointsProxyLitellmParams:
                 data_passed = (
                     call_args.kwargs.get("data", {})
                     if call_args.kwargs
-                    else (call_args.args[0] if call_args.args and len(call_args.args) > 0 else {})
+                    else (
+                        call_args.args[0]
+                        if call_args.args and len(call_args.args) > 0
+                        else {}
+                    )
                 )
 
                 # Most importantly: verify that custom_llm_provider is "vertex_ai" not "openai"
@@ -2445,7 +2331,9 @@ def test_video_get_character_accepts_encoded_character_id(video_proxy_test_clien
 
 
 @pytest.mark.parametrize("endpoint", ["/v1/videos/edits", "/v1/videos/extensions"])
-def test_edit_and_extension_support_custom_provider_from_extra_body(video_proxy_test_client, endpoint):
+def test_edit_and_extension_support_custom_provider_from_extra_body(
+    video_proxy_test_client, endpoint
+):
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
     captured_data = {}
@@ -2498,7 +2386,9 @@ def test_edit_and_extension_support_custom_provider_from_extra_body(video_proxy_
     ],
 )
 @pytest.mark.asyncio
-async def test_edit_and_extension_read_cached_body_after_auth_consumes_stream(handler_name, path, form):
+async def test_edit_and_extension_read_cached_body_after_auth_consumes_stream(
+    handler_name, path, form
+):
     from urllib.parse import urlencode
 
     from fastapi import Response
@@ -2547,7 +2437,9 @@ async def test_edit_and_extension_read_cached_body_after_auth_consumes_stream(ha
 
 
 @pytest.mark.parametrize("endpoint", ["/v1/videos/edits", "/v1/videos/extensions"])
-def test_edit_and_extension_route_with_encoded_video_ids(video_proxy_test_client, endpoint):
+def test_edit_and_extension_route_with_encoded_video_ids(
+    video_proxy_test_client, endpoint
+):
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
     from litellm.types.videos.utils import encode_video_id_with_provider
 

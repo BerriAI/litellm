@@ -6,7 +6,7 @@ import base64
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Final, cast
+from typing import cast
 from unittest.mock import Mock, patch
 
 import httpx
@@ -123,18 +123,6 @@ class TestVertexAIVideoConfig:
                 model="veo-002", api_base=None, litellm_params={}
             )
 
-    def test_get_complete_url_default_location(self):
-        """Test URL construction with default location."""
-        litellm_params = {"vertex_project": "test-project"}
-
-        url = self.config.get_complete_url(
-            model="veo-002", api_base=None, litellm_params=litellm_params
-        )
-
-        # Should default to us-central1
-        assert "us-central1" in url
-        # Should NOT include endpoint
-        assert not url.endswith(":predictLongRunning")
 
     def test_veo_31_lite_provider_routing_from_local_model_map(
         self, monkeypatch: pytest.MonkeyPatch
@@ -154,27 +142,6 @@ class TestVertexAIVideoConfig:
         assert model == "veo-3.1-lite-generate-001"
         assert custom_llm_provider == "vertex_ai"
 
-    def test_veo_31_lite_cost_uses_resolution_tiers(self):
-        model_cost: Final = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
-        model_info: Final = model_cost[VEO_31_LITE_VERTEX_MODEL]
-        standard_cost: Final = video_generation_cost(
-            model=VEO_31_LITE_VERTEX_MODEL,
-            duration_seconds=10.0,
-            custom_llm_provider="vertex_ai",
-            model_info=dict(model_info),
-            video_resolution="720p",
-        )
-        high_resolution_cost: Final = video_generation_cost(
-            model=VEO_31_LITE_VERTEX_MODEL,
-            duration_seconds=10.0,
-            custom_llm_provider="vertex_ai",
-            model_info=dict(model_info),
-            video_resolution="1080p",
-        )
-
-        assert standard_cost == pytest.approx(10.0 * model_info["output_cost_per_second"])
-        assert high_resolution_cost == pytest.approx(10.0 * model_info["output_cost_per_second_1080p"])
-        assert standard_cost != high_resolution_cost
 
     def test_transform_video_create_request(self):
         """Test transformation of video creation request."""

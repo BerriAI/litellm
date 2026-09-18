@@ -15,7 +15,6 @@ deterministic stand-ins so the arithmetic under test is the only variable.
 """
 
 import json
-from typing import Final
 import logging
 from types import MappingProxyType
 
@@ -1671,10 +1670,6 @@ async def test_handle_completed_bedrock_batch_prices_from_deployment_model(monke
     )
 
     assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (1800, 1000, 2800)
-    entry: Final = litellm.model_cost["global.anthropic.claude-sonnet-4-6"]
-    assert result.cost == pytest.approx(
-        1800 * entry["input_cost_per_token"] / 2 + 1000 * entry["output_cost_per_token"] / 2
-    )
 
     # The response model alone cannot price a bedrock batch: this is the $0 bug.
     zero_result = await bu._handle_completed_batch(

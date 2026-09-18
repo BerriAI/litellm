@@ -23,6 +23,7 @@ TOKEN_PRICED_NAMES: Final = (
     "grok-4-20-reasoning",
     "grok-4-20-non-reasoning",
 )
+GROK_4_20_NAMES: Final = ("grok-4-20-reasoning", "grok-4-20-non-reasoning")
 CATALOG_NAMES: Final = TOKEN_PRICED_NAMES + ("whisper",)
 
 
@@ -69,6 +70,22 @@ def test_azure_ai_catalog_name_prices_the_same_in_any_casing(catalog_name: str) 
     lowercase_cost = cost_per_token(model=f"azure_ai/{catalog_name}", prompt_tokens=A_MILLION, completion_tokens=0)
     upper_cost = cost_per_token(model=f"azure_ai/{catalog_name.upper()}", prompt_tokens=A_MILLION, completion_tokens=0)
     assert upper_cost == lowercase_cost
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("catalog_name", GROK_4_20_NAMES)
+def test_azure_ai_grok_4_20_bills_cached_prompt_tokens_at_the_input_price(catalog_name: str) -> None:
+    uncached_prompt_cost, _ = cost_per_token(
+        model=f"azure_ai/{catalog_name}", prompt_tokens=A_MILLION, completion_tokens=0
+    )
+    cached_prompt_cost, _ = cost_per_token(
+        model=f"azure_ai/{catalog_name}",
+        prompt_tokens=A_MILLION,
+        completion_tokens=0,
+        cache_read_input_tokens=A_MILLION,
+    )
+    assert uncached_prompt_cost > 0
+    assert cached_prompt_cost == pytest.approx(uncached_prompt_cost)
 
 
 @pytest.mark.usefixtures("local_model_cost_map")

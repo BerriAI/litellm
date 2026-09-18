@@ -7,6 +7,7 @@ import os
 from unittest import mock
 
 import httpx
+import pytest
 
 import litellm
 from litellm.llms.inception.chat.transformation import InceptionChatConfig
@@ -305,3 +306,5 @@ def test_inception_completion_targets_inception_endpoint():
     assert captured["body"]["model"] == "mercury-2"
     assert captured["body"]["tool_choice"] == "auto"
     assert response.choices[0].message.content == "hi"
+
+

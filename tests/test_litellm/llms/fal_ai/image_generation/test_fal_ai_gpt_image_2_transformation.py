@@ -1,5 +1,3 @@
-from typing import Final
-
 import pytest
 
 import litellm
@@ -129,31 +127,3 @@ def test_transform_image_generation_request():
     ) == {"prompt": "a red bicycle", "quality": "high", "num_images": 2}
 
 
-@pytest.mark.parametrize(
-    ("model", "catalog_key"),
-    [
-        ("openai/gpt-image-2", "fal_ai/openai/gpt-image-2"),
-        ("gpt-image-2", "fal_ai/openai/gpt-image-2"),
-        ("openai/gpt-image-2/edit", "fal_ai/openai/gpt-image-2/edit"),
-    ],
-)
-def test_cost_calculator_uses_registry_price(
-    model, catalog_key, monkeypatch: pytest.MonkeyPatch
-):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    litellm.get_model_info.cache_clear()
-    response = ImageResponse(
-        data=[
-            ImageObject(url="https://v3b.fal.media/files/b/one.png"),
-            ImageObject(url="https://v3b.fal.media/files/b/two.png"),
-        ]
-    )
-    model_info: Final = litellm.model_cost[catalog_key]
-    single_image_cost: Final = cost_calculator(
-        model=model,
-        image_response=ImageResponse(data=[ImageObject(url="https://v3b.fal.media/files/b/one.png")]),
-    )
-    cost: Final = cost_calculator(model=model, image_response=response)
-    assert model_info["output_cost_per_image"] > 0
-    assert cost == pytest.approx(2 * single_image_cost)

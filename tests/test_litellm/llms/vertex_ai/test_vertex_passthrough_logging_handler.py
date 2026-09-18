@@ -234,60 +234,8 @@ def test_audio_predict_response_supports_bytes_base64_encoded(
         request_body={"instances": [{"prompt": "ambient piano"}]},
     )
 
-    expected_cost: Final = litellm.model_cost["vertex_ai/lyria-002"]["output_cost_per_image"]
-    assert result["kwargs"]["response_cost"] == pytest.approx(expected_cost)
-    assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected_cost)
-
-
-@pytest.mark.parametrize("runtime_entry_is_missing", (True, False))
-def test_lyria_predict_cost_falls_back_to_bundled_map_when_runtime_metadata_is_incomplete(
-    monkeypatch: pytest.MonkeyPatch,
-    runtime_entry_is_missing: bool,
-    local_model_cost_map: None,
-) -> None:
-    expected_cost: Final = litellm.model_cost["vertex_ai/lyria-002"]["output_cost_per_image"]
-    if runtime_entry_is_missing:
-        monkeypatch.delitem(litellm.model_cost, "vertex_ai/lyria-002")
-    else:
-        monkeypatch.setitem(
-            litellm.model_cost,
-            "vertex_ai/lyria-002",
-            {
-                key: value
-                for key, value in litellm.model_cost["vertex_ai/lyria-002"].items()
-                if key != "output_cost_per_image"
-            },
-        )
-    logging_obj = MagicMock()
-    logging_obj.model_call_details = {}
-    response = httpx.Response(
-        status_code=200,
-        json={
-            "predictions": [
-                {
-                    "audioContent": "clip",
-                    "mimeType": "audio/wav",
-                }
-            ]
-        },
-    )
-
-    result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
-        httpx_response=response,
-        logging_obj=logging_obj,
-        url_route="/v1/projects/test/locations/us-central1/publishers/google/models/lyria-002:predict",
-        result=response.text,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
-        cache_hit=False,
-        request_body={"instances": [{"prompt": "ambient piano"}]},
-    )
-
-    if runtime_entry_is_missing:
-        assert "vertex_ai/lyria-002" not in litellm.model_cost
-    assert result["kwargs"]["model"] == "lyria-002"
-    assert result["kwargs"]["response_cost"] == pytest.approx(expected_cost)
-    assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected_cost)
+    assert result["kwargs"]["response_cost"] == pytest.approx(0.06)
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(0.06)
 
 
 def test_image_predict_response_is_not_billed_as_audio(

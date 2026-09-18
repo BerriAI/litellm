@@ -4,6 +4,7 @@ import json
 import httpx
 import pytest
 
+import litellm
 from litellm.llms.gemini.audio_transcription.transformation import (
     GeminiAudioTranscriptionConfig,
 )
@@ -294,3 +295,10 @@ class TestSubtitleSynthesisThroughHandler:
             {"word": "Hello", "start": 0.1, "end": 0.4, "speaker": "spk:0"},
             {"word": "world.", "start": 0.5, "end": 0.9, "speaker": "spk:1"},
         ]
+
+
+class TestCostRegression:
+    @pytest.fixture
+    def local_cost_map(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))

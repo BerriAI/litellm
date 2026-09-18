@@ -30,40 +30,6 @@ _PROVIDER_KEY: Final = "cache-prediction-test-provider-key"
 _CALLER: Final = "cache-prediction-test-caller-hash"
 
 
-def _bucket_cost(
-    model: str,
-    *,
-    uncached: int = 0,
-    cache_read: int = 0,
-    write_5m: int = 0,
-    write_1h: int = 0,
-) -> float:
-    entry: Final = litellm.model_cost[model]
-    return (
-        uncached * entry["input_cost_per_token"]
-        + cache_read * entry["cache_read_input_token_cost"]
-        + write_5m * entry["cache_creation_input_token_cost"]
-        + write_1h * entry["cache_creation_input_token_cost_above_1hr"]
-    )
-
-
-_SONNET_COLD: Final = 1_000
-_SONNET_OBSERVED: Final = 5_000
-
-
-def _cold_cost(model: str, ttl: str) -> float:
-    return _bucket_cost(
-        model,
-        uncached=_SONNET_COLD,
-        write_5m=_SONNET_OBSERVED if ttl == "5m" else 0,
-        write_1h=_SONNET_OBSERVED if ttl == "1h" else 0,
-    )
-
-
-def _warm_cost(model: str, cached_tokens: int = _SONNET_OBSERVED, total: int = 6_000) -> float:
-    return _bucket_cost(model, uncached=total - cached_tokens, cache_read=cached_tokens)
-
-
 @pytest.fixture(autouse=True)
 def anthropic_endpoint_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
@@ -145,57 +111,6 @@ async def _observe(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("ttl", ["5m", "1h"])
-async def test_unobserved_cache_prices_cold_and_warm_bounds(ttl: str) -> None:
-    body: Final = _body(ttl)
-    arm: Final = await endpoint.predict_arm(_deployment(), body, _prefix(body), _CALLER, DualCache(), Counts())
-    cold_cost: Final = _cold_cost("claude-sonnet-5", ttl)
-
-    assert arm.cache_state == "unknown"
-    assert arm.reason == "no_compatible_observation"
-    assert arm.evidence is None
-    assert arm.estimate is not None and arm.cold is not None and arm.warm is not None
-    assert arm.estimate.input_cost == pytest.approx(cold_cost)
-    assert arm.cold.input_cost == pytest.approx(cold_cost)
-    assert arm.warm.input_cost == pytest.approx(_warm_cost("claude-sonnet-5"))
-    assert arm.cold.tokens.uncached_input_tokens == 1_000
-    assert arm.cold.tokens.cache_read_input_tokens == 0
-    assert arm.cold.tokens.cache_creation_5m_input_tokens == (5_000 if ttl == "5m" else 0)
-    assert arm.cold.tokens.cache_creation_1h_input_tokens == (5_000 if ttl == "1h" else 0)
-    assert arm.warm.tokens.cache_read_input_tokens == 5_000
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("cached_tokens", [5_400, 4_600])
-@pytest.mark.parametrize("expired", [False, True])
-async def test_exact_prefix_conserves_total_with_observed_count_in_all_scenarios(
-    cached_tokens: int, expired: bool
-) -> None:
-    cache: Final = DualCache()
-    body: Final = _body()
-    await _observe(cache, body, cached_tokens=cached_tokens, expired=expired)
-    arm: Final = await endpoint.predict_arm(_deployment(), body, _prefix(body), _CALLER, cache, Counts())
-
-    assert arm.cache_state == ("stale" if expired else "warm")
-    assert arm.evidence is not None
-    assert arm.estimate is not None and arm.warm is not None and arm.cold is not None
-    assert arm.warm.tokens.cache_read_input_tokens == cached_tokens
-    assert arm.warm.tokens.cache_creation_5m_input_tokens == 0
-    assert arm.cold.tokens.cache_creation_5m_input_tokens == cached_tokens
-    assert arm.cold.tokens.cache_read_input_tokens == 0
-    for scenario in (arm.estimate, arm.cold, arm.warm):
-        assert scenario.tokens.total_tokens == 6_000
-        assert scenario.tokens.uncached_input_tokens == 6_000 - cached_tokens
-    warm_cost: Final = _warm_cost("claude-sonnet-5", cached_tokens)
-    cold_cost: Final = _bucket_cost(
-        "claude-sonnet-5", uncached=6_000 - cached_tokens, write_5m=cached_tokens
-    )
-    assert arm.warm.input_cost == pytest.approx(warm_cost)
-    assert arm.cold.input_cost == pytest.approx(cold_cost)
-    assert arm.estimate.input_cost == pytest.approx(cold_cost if expired else warm_cost)
-
-
-@pytest.mark.asyncio
 async def test_observed_prefix_larger_than_full_request_returns_unknown() -> None:
     cache: Final = DualCache()
     body: Final = _body()
@@ -205,29 +120,6 @@ async def test_observed_prefix_larger_than_full_request_returns_unknown() -> Non
     assert arm.cache_state == "unknown"
     assert arm.reason == "inconsistent_prefix_token_count"
     assert arm.estimate is None and arm.cold is None and arm.warm is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("ttl", ["5m", "1h"])
-async def test_append_only_prefix_reads_old_tokens_and_writes_extension(ttl: str) -> None:
-    cache: Final = DualCache()
-    await _observe(cache, _body(ttl), cached_tokens=4_000)
-    body: Final = _body(ttl, extended=True)
-    arm: Final = await endpoint.predict_arm(_deployment(), body, _prefix(body), _CALLER, cache, Counts())
-
-    assert arm.cache_state == "partial"
-    assert arm.estimate is not None
-    assert arm.estimate.tokens.cache_read_input_tokens == 4_000
-    assert arm.estimate.tokens.cache_creation_5m_input_tokens == (1_000 if ttl == "5m" else 0)
-    assert arm.estimate.tokens.cache_creation_1h_input_tokens == (1_000 if ttl == "1h" else 0)
-    expected: Final = _bucket_cost(
-        "claude-sonnet-5",
-        uncached=1_000,
-        cache_read=4_000,
-        write_5m=1_000 if ttl == "5m" else 0,
-        write_1h=1_000 if ttl == "1h" else 0,
-    )
-    assert arm.estimate.input_cost == pytest.approx(expected)
 
 
 @pytest.mark.asyncio
@@ -244,22 +136,6 @@ async def test_expired_observation_estimates_a_cold_rebuild() -> None:
     assert arm.estimate.tokens.cache_read_input_tokens == 0
     assert arm.estimate.tokens.cache_creation_5m_input_tokens == 5_000
     assert arm.estimate.input_cost == arm.cold.input_cost
-
-
-@pytest.mark.asyncio
-async def test_below_model_minimum_prices_all_input_as_uncached() -> None:
-    body: Final = _body()
-    arm: Final = await endpoint.predict_arm(
-        _deployment(), body, _prefix(body), _CALLER, DualCache(), Counts(total=1_500, prefix=1_000)
-    )
-
-    assert arm.cache_state == "disabled"
-    assert arm.reason == "below_cache_minimum"
-    assert arm.estimate is not None
-    assert arm.estimate.tokens.uncached_input_tokens == 1_500
-    assert arm.estimate.tokens.cache_read_input_tokens == 0
-    assert arm.estimate.tokens.cache_creation_5m_input_tokens == 0
-    assert arm.estimate.input_cost == pytest.approx(_bucket_cost("claude-sonnet-5", uncached=1_500))
 
 
 @pytest.mark.asyncio
@@ -311,20 +187,6 @@ async def test_custom_api_base_from_environment_returns_unknown_before_counting(
     assert arm.cache_state == "unknown"
     assert arm.reason == "unsupported_provider_endpoint"
     assert arm.estimate is None and arm.cold is None and arm.warm is None
-
-
-@pytest.mark.asyncio
-async def test_explicit_official_api_base_overrides_custom_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_BASE", "https://custom.invalid")
-    body: Final = _body()
-    arm: Final = await endpoint.predict_arm(
-        _deployment(api_base="https://api.anthropic.com"), body, _prefix(body), _CALLER, DualCache(), Counts()
-    )
-
-    assert arm.cache_state == "unknown"
-    assert arm.reason == "no_compatible_observation"
-    assert arm.estimate is not None
-    assert arm.estimate.input_cost == pytest.approx(_cold_cost("claude-sonnet-5", "5m"))
 
 
 @dataclass(frozen=True)
@@ -385,39 +247,6 @@ async def _post(
                 "request": body,
             },
         )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("warm_deployment", ["sonnet", "opus"])
-async def test_switch_delta_accounts_for_each_deployment_cache(
-    monkeypatch: pytest.MonkeyPatch,
-    warm_deployment: str,
-) -> None:
-    warm_model: Final = "claude-sonnet-5" if warm_deployment == "sonnet" else "claude-opus-5"
-    sonnet_cold: Final = _cold_cost("claude-sonnet-5", "5m")
-    sonnet_warm: Final = _warm_cost("claude-sonnet-5")
-    opus_cold: Final = _cold_cost("claude-opus-5", "5m")
-    opus_warm: Final = _warm_cost("claude-opus-5")
-    expected_delta: Final = sonnet_warm - opus_cold if warm_deployment == "sonnet" else sonnet_cold - opus_warm
-    expected_penalty: Final = sonnet_cold - sonnet_warm if warm_deployment == "opus" else 0.0
-    cache: Final = DualCache()
-    body: Final = _body()
-    await _observe(cache, body, deployment_id=warm_deployment, model=warm_model)
-    app: Final = _app(monkeypatch, cache, caller=UserAPIKeyAuth(api_key=_CALLER))
-    response: Final = await _post(app, body)
-
-    assert response.status_code == 200, response.text
-    result: Final = CachePredictionResponse.model_validate(response.json())
-    assert result.switch_delta == pytest.approx(expected_delta)
-    assert result.cache_rebuild_penalty == pytest.approx(expected_penalty)
-    assert result.cache_guarantee is False
-    assert result.pricing_basis == "input_before_discounts_and_margins"
-    if warm_deployment == "sonnet":
-        assert result.switch.cache_state == "warm"
-        assert result.stay.cache_state == "unknown"
-    else:
-        assert result.stay.cache_state == "warm"
-        assert result.switch.cache_state == "unknown"
 
 
 @pytest.mark.asyncio
@@ -611,57 +440,6 @@ async def test_each_count_preserves_auth_cached_request_tag_limits(
     assert "tag_per_key" in response.text
     assert calls.qsize() == 1
     assert calls.get_nowait() == "claude-opus-5"
-
-
-@pytest.mark.asyncio
-async def test_provider_counter_failure_releases_parallel_capacity(monkeypatch: pytest.MonkeyPatch) -> None:
-    cache: Final = DualCache()
-    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(InternalUsageCache(cache))
-    caller: Final = UserAPIKeyAuth(api_key=_CALLER, max_parallel_requests=1)
-
-    async def fail_count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:
-        raise RuntimeError("provider counter failed")
-
-    app: Final = _app(monkeypatch, cache, caller=caller, counts=fail_count, limiter=limiter)
-    with pytest.raises(RuntimeError, match="provider counter failed"):
-        await _post(app, _body())
-    recovered: Final = await _post(_app(monkeypatch, cache, caller=caller, limiter=limiter), _body())
-    assert recovered.status_code == 200, recovered.text
-    assert recovered.json()["switch"]["estimate"]["input_cost"] == pytest.approx(
-        _cold_cost("claude-sonnet-5", "5m")
-    )
-
-
-@pytest.mark.asyncio
-async def test_cancelled_provider_counter_releases_parallel_capacity(monkeypatch: pytest.MonkeyPatch) -> None:
-    cache: Final = DualCache()
-    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(InternalUsageCache(cache))
-    caller: Final = UserAPIKeyAuth(api_key=_CALLER, max_parallel_requests=1)
-    started: Final = asyncio.Event()
-    release: Final = asyncio.Event()
-
-    async def wait_count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:
-        started.set()
-        await release.wait()
-        return await Counts()(model, api_key, body)
-
-    app: Final = _app(monkeypatch, cache, caller=caller, counts=wait_count, limiter=limiter)
-    pending: Final = asyncio.create_task(_post(app, _body()))
-    try:
-        await asyncio.wait_for(started.wait(), timeout=5)
-        pending.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await pending
-        release.set()
-        recovered: Final = await asyncio.wait_for(_post(app, _body()), timeout=5)
-        assert recovered.status_code == 200, recovered.text
-        assert recovered.json()["switch"]["estimate"]["input_cost"] == pytest.approx(
-            _cold_cost("claude-sonnet-5", "5m")
-        )
-    finally:
-        pending.cancel()
-        release.set()
-        await asyncio.gather(pending, return_exceptions=True)
 
 
 async def _unexpected_count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:

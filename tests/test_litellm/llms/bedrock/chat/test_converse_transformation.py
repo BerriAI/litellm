@@ -135,6 +135,7 @@ def test_bedrock_converse_1h_cache_write_billed_at_1h_rate(monkeypatch):
         16 * model_info["input_cost_per_token"] + 11632 * model_info["cache_creation_input_token_cost_above_1hr"]
     )
     assert prompt_cost == pytest.approx(expected_prompt_cost)
+    assert prompt_cost > 16 * model_info["input_cost_per_token"] + 11632 * model_info["cache_creation_input_token_cost"]
     assert completion_cost == pytest.approx(4 * model_info["output_cost_per_token"])
 
 
@@ -1188,17 +1189,18 @@ def test_get_supported_openai_params_bedrock_converse():
 
 
 @pytest.mark.parametrize(
-    "tools, expected_marker",
+    "tools, model, expected_marker",
     [
         pytest.param(
             [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}],
+            "anthropic.claude-sonnet-4-5-20250929-v1:0",
             "dep-bedrock",
             id="tools-present-so-the-cachepoint-is-placed",
         ),
-        pytest.param(None, None, id="no-tools-so-nothing-is-placed"),
+        pytest.param(None, "anthropic.claude-sonnet-4-5-20250929-v1:0", None, id="no-tools-so-nothing-is-placed"),
     ],
 )
-def test_tool_config_cachepoint_is_credited_only_where_it_is_placed(tools, expected_marker):
+def test_tool_config_cachepoint_is_credited_only_where_it_is_placed(tools, model, expected_marker):
     """Spend attribution credits the gateway for breakpoints it placed, and a tool_config
     point becomes one here or nowhere.
 
@@ -1212,7 +1214,7 @@ def test_tool_config_cachepoint_is_credited_only_where_it_is_placed(tools, expec
         optional_params["tools"] = tools
 
     data = AmazonConverseConfig()._transform_request_helper(
-        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        model=model,
         system_content_blocks=[],
         optional_params=optional_params,
         messages=[{"role": "user", "content": "hi"}],
@@ -5590,6 +5592,7 @@ def test_cache_control_injection_tool_config_drops_ttl_for_unsupported_model():
             True,
             id="unmapped-arn-keeps-emitting",
         ),
+        pytest.param("openai.gpt-oss-120b-1:0", False, id="openai-gpt-oss"),
     ],
 )
 def test_cache_points_emitted_only_for_models_that_support_prompt_caching(model, expects_cache_points, monkeypatch):

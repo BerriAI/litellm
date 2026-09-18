@@ -4,7 +4,6 @@ import json
 import os
 from datetime import datetime
 from types import SimpleNamespace
-from typing import Final
 from unittest.mock import Mock
 
 import pytest
@@ -23,6 +22,9 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+)
+from litellm.llms.anthropic.experimental_pass_through.messages.mid_conversation_system import (
+    as_system_content_blocks,
 )
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
@@ -1815,7 +1817,7 @@ async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost(
     message_delta/message_stop), final reconstructed usage + cost must still
     be consistent and non-negative.
     """
-    from litellm import completion_cost, get_model_info
+    from litellm import completion_cost
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
         AnthropicPassthroughLoggingHandler,
     )
@@ -1900,13 +1902,8 @@ async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost(
         model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
         custom_llm_provider="bedrock",
     )
-    model_info: Final = get_model_info(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", custom_llm_provider="bedrock"
-    )
     assert cost > 0
-    assert model_info["input_cost_per_token"] > 0
-    assert model_info["output_cost_per_token"] > 0
-    assert model_info["cache_read_input_token_cost"] > 0
+    assert cost == pytest.approx(0.0093951, rel=0, abs=1e-9)
 
 
 @pytest.mark.asyncio
@@ -1917,7 +1914,7 @@ async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
     same logging reconstruction as Anthropic /messages. Ensures token counts and
     completion_cost match model_prices for us.anthropic.claude-sonnet-4-6.
     """
-    from litellm import completion_cost, get_model_info
+    from litellm import completion_cost
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
         AnthropicPassthroughLoggingHandler,
     )
@@ -1975,12 +1972,7 @@ async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
         model="bedrock/us.anthropic.claude-sonnet-4-6",
         custom_llm_provider="bedrock",
     )
-    model_info: Final = get_model_info(model="us.anthropic.claude-sonnet-4-6", custom_llm_provider="bedrock")
-    assert cost > 0
-    assert model_info["input_cost_per_token"] > 0
-    assert model_info["output_cost_per_token"] > 0
-    assert model_info["cache_read_input_token_cost"] > 0
-    assert model_info["cache_creation_input_token_cost"] > 0
+    assert cost == pytest.approx(0.052150725, rel=0, abs=1e-9)
 
 
 @pytest.mark.parametrize(
@@ -2544,20 +2536,16 @@ def test_bedrock_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_
 
 
 def test_as_system_content_blocks_handles_each_shape():
-    """``_as_system_content_blocks`` normalizes every system shape: ``None`` -> empty,
+    """``as_system_content_blocks`` normalizes every system shape: ``None`` -> empty,
     a string -> a single text block, a list -> a shallow copy, and any other value
     (e.g. a bare content-block dict) -> wrapped in a single-element list."""
     block = {"type": "text", "text": "x"}
-    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(None) == []
-    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks("hello") == [
-        {"type": "text", "text": "hello"}
-    ]
+    assert as_system_content_blocks(None) == []
+    assert as_system_content_blocks("hello") == [{"type": "text", "text": "hello"}]
     blocks = [block]
-    out = AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(blocks)
+    out = as_system_content_blocks(blocks)
     assert out == blocks and out is not blocks
-    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(block) == [
-        block
-    ]
+    assert as_system_content_blocks(block) == [block]
 
 
 @pytest.mark.parametrize(

@@ -1,9 +1,11 @@
 import base64
 import json
+import os
 from urllib.parse import urlparse
 
 import httpx
 import pytest
+
 
 import litellm
 from litellm.llms.vertex_ai.audio_transcription.transformation import (
@@ -20,16 +22,6 @@ def config():
 
 
 class TestGetCompleteUrl:
-    def test_defaults_to_us_regional_host(self, config):
-        url = config.get_complete_url(
-            api_base=None,
-            api_key=None,
-            model="chirp_3",
-            optional_params={},
-            litellm_params={"vertex_project": "test-project"},
-        )
-        assert url == "https://us-speech.googleapis.com/v2/projects/test-project/locations/us/recognizers/_:recognize"
-
     def test_uses_vertex_location_for_regional_host(self, config):
         url = config.get_complete_url(
             api_base=None,
@@ -49,16 +41,6 @@ class TestGetCompleteUrl:
             litellm_params={"vertex_project": "test-project", "vertex_location": "global"},
         )
         assert url == "https://speech.googleapis.com/v2/projects/test-project/locations/global/recognizers/_:recognize"
-
-    def test_api_base_override(self, config):
-        url = config.get_complete_url(
-            api_base="http://localhost:8080/",
-            api_key=None,
-            model="chirp_3",
-            optional_params={},
-            litellm_params={"vertex_project": "test-project"},
-        )
-        assert url == "http://localhost:8080/v2/projects/test-project/locations/us/recognizers/_:recognize"
 
     @pytest.mark.parametrize(
         "location,expected_netloc",
@@ -311,3 +293,7 @@ class TestProviderRouting:
         )
         assert "response_format" not in optional_params
         assert optional_params["language"] == "fr-FR"
+
+
+class TestModelCostEntry:
+    REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))

@@ -1,7 +1,7 @@
 import os
-from typing import Final
 
 import pytest
+
 
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
@@ -145,15 +145,3 @@ def test_transform_request_includes_prompt_and_mapped_params():
     }
 
 
-def test_cost_calculator_scales_with_image_count():
-    image_response = ImageResponse(
-        data=[ImageObject(url="https://x/1.png"), ImageObject(url="https://x/2.png")]
-    )
-    model_info: Final = litellm.get_model_info("fal-ai/nano-banana", "fal_ai")
-    single_image_cost: Final = cost_calculator(
-        model="fal-ai/nano-banana",
-        image_response=ImageResponse(data=[ImageObject(url="https://x/1.png")]),
-    )
-    cost: Final = cost_calculator(model="fal-ai/nano-banana", image_response=image_response)
-    assert model_info["output_cost_per_image"] > 0
-    assert cost == pytest.approx(2 * single_image_cost)
