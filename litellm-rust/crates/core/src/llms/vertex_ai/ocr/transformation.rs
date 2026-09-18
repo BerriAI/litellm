@@ -220,10 +220,14 @@ mod tests {
         );
     }
 
+    use std::sync::{Arc, Mutex};
+
     use litellm_auth::InputSource;
     use serde_json::{Value, json};
 
-    use crate::ocr::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
+    use crate::ocr::test_support::{
+        MockResponse, RetainedFieldsHost, mock_server, perform_ocr, wire_request, with_source,
+    };
 
     fn request_body(request: &str) -> Value {
         serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
@@ -266,6 +270,48 @@ mod tests {
                 "document":{"type":"document_url","document_url":"data:application/pdf;base64,YWJj"},
                 "extract_footer":true
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_document_stays_inlined_when_the_host_restores_retained_fields() {
+        let (base, seen, server) = mock_server(vec![
+            MockResponse::json(json!({"page":"bytes"})),
+            MockResponse::json(json!({"pages":[]})),
+        ])
+        .await;
+        let source = format!("{base}/scan.pdf");
+        let retained_fields = Arc::new(Mutex::new(Vec::new()));
+        let mut request = with_source(
+            wire_request(
+                "vertex_ai/mistral-ocr-maas",
+                &base,
+                json!({"vertex_project":"project-1","vertex_location":"europe-west4"}),
+            ),
+            &source,
+        );
+        request.hooks = Arc::new(RetainedFieldsHost {
+            original_document: json!({"type":"document_url","document_url":source}),
+            retained_fields: retained_fields.clone(),
+        });
+
+        perform_ocr(request).await.unwrap();
+        server.await.unwrap();
+        assert!(
+            !retained_fields
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|name| name == "document")
+        );
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with("GET /scan.pdf "));
+        assert!(
+            request_body(&requests[1])["document"]["document_url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:application/json;base64,")
         );
     }
 

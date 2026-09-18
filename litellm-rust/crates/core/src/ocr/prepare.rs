@@ -27,12 +27,7 @@ where
         .keys()
         .filter(|name| composed.get(*name).is_some())
         .cloned()
-        .chain(
-            composed
-                .get("document")
-                .is_some()
-                .then(|| "document".to_string()),
-        )
+        .chain(retains_document(&composed, &request.document).then(|| "document".to_string()))
         .collect();
     let (body, headers) = if request.hooks.intercepts_requests() {
         let changed = request
@@ -104,6 +99,10 @@ pub(crate) async fn guardrail_document(
         .await?;
     let document = super::json::decode_request_value(changed.body, "guardrail.document")?;
     Ok((document, changed.headers))
+}
+
+fn retains_document(composed: &Value, document: &OcrDocument) -> bool {
+    body_document(composed).is_ok_and(|sent| sent.source() == document.source())
 }
 
 pub(crate) fn body_document(body: &Value) -> Result<OcrDocument, super::Error> {

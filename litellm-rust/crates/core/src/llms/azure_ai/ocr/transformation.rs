@@ -304,12 +304,15 @@ mod tests {
         );
     }
 
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
+    use base64::{Engine, engine::general_purpose::STANDARD};
     use serde_json::json;
 
     use crate::ocr::hooks::{OcrDuringCallRequest, OcrHookFuture, OcrHooks};
-    use crate::ocr::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
+    use crate::ocr::test_support::{
+        MockResponse, RetainedFieldsHost, mock_server, perform_ocr, wire_request, with_source,
+    };
 
     #[tokio::test]
     async fn facade_executes_azure_mistral_with_prepared_auth() {
@@ -371,6 +374,52 @@ mod tests {
             requests[0]
                 .to_ascii_lowercase()
                 .contains("authorization: bearer rust-owned-token\r\n")
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_document_stays_inlined_when_the_host_restores_retained_fields() {
+        let (base, seen, server) = mock_server(vec![
+            MockResponse::json(json!({"page":"bytes"})),
+            MockResponse::json(json!({
+                "pages":[{"index":0,"markdown":"hello"}],
+                "usage_info":{"pages_processed":1}
+            })),
+        ])
+        .await;
+        let source = format!("{base}/scan.pdf");
+        let retained_fields = Arc::new(Mutex::new(Vec::new()));
+        let mut request = with_source(wire_request("azure_ai/model", &base, json!({})), &source);
+        request.hooks = Arc::new(RetainedFieldsHost {
+            original_document: json!({"type":"document_url","document_url":source}),
+            retained_fields: retained_fields.clone(),
+        });
+
+        let result = perform_ocr(request).await.unwrap();
+        server.await.unwrap();
+        assert_eq!(result.pages[0].markdown, "hello");
+        assert!(
+            !retained_fields
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|name| name == "document")
+        );
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with("GET /scan.pdf "));
+        assert!(requests[1].starts_with("POST /providers/mistral/azure/ocr "));
+        let body: Value =
+            serde_json::from_str(requests[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(
+            body["document"],
+            json!({
+                "type":"document_url",
+                "document_url":format!(
+                    "data:application/json;base64,{}",
+                    STANDARD.encode(br#"{"page":"bytes"}"#)
+                )
+            })
         );
     }
 

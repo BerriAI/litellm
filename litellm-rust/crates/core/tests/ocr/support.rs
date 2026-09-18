@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
+use crate::ocr::hooks::{OcrDuringCallRequest, OcrHookFuture, OcrHooks};
 use crate::ocr::wire::{OcrWireRequest, decode_request};
 use crate::ocr::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient};
 
@@ -22,9 +23,23 @@ pub(crate) async fn perform_ocr(
 }
 
 pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> LiteLLMOcrRequest {
+    wire_request_with_document(
+        model,
+        base,
+        json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
+        options,
+    )
+}
+
+pub(crate) fn wire_request_with_document(
+    model: &str,
+    base: &str,
+    document: Value,
+    options: Value,
+) -> LiteLLMOcrRequest {
     decode_request(OcrWireRequest {
         model: model.into(),
-        document: json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
+        document,
         api_key: Some("test-key".into()),
         api_base: Some(base.into()),
         custom_llm_provider: None,
@@ -50,6 +65,34 @@ pub(crate) fn with_source(request: LiteLLMOcrRequest, source: &str) -> LiteLLMOc
     request.with_document(document.into())
 }
 
+pub(crate) struct RetainedFieldsHost {
+    pub original_document: Value,
+    pub retained_fields: Arc<Mutex<Vec<String>>>,
+}
+
+impl OcrHooks for RetainedFieldsHost {
+    fn intercepts_requests(&self) -> bool {
+        true
+    }
+
+    fn during_call(
+        &self,
+        mut request: OcrDuringCallRequest,
+    ) -> OcrHookFuture<'_, OcrDuringCallRequest> {
+        Box::pin(async move {
+            *self.retained_fields.lock().unwrap() = request.retained_fields.clone();
+            if request
+                .retained_fields
+                .iter()
+                .any(|name| name == "document")
+            {
+                request.body["document"] = self.original_document.clone();
+            }
+            Ok(request)
+        })
+    }
+}
+
 pub(crate) struct MockResponse {
     pub status: u16,
     pub headers: Vec<(&'static str, String)>,
@@ -62,6 +105,13 @@ impl MockResponse {
             status: 200,
             headers: vec![],
             body,
+        }
+    }
+
+    pub fn png(body: Value) -> Self {
+        Self {
+            headers: vec![("Content-Type", "image/png".into())],
+            ..Self::json(body)
         }
     }
 }
@@ -104,6 +154,15 @@ pub(crate) async fn mock_server(
                 .unwrap()
                 .push(String::from_utf8_lossy(&bytes).into_owned());
             let body = serde_json::to_vec(&response.body).unwrap();
+            let default_content_type = if response
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+            {
+                ""
+            } else {
+                "Content-Type: application/json\r\n"
+            };
             let headers = response
                 .headers
                 .into_iter()
@@ -112,8 +171,9 @@ pub(crate) async fn mock_server(
                 })
                 .collect::<String>();
             let head = format!(
-                "HTTP/1.1 {} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n",
+                "HTTP/1.1 {} OK\r\n{}Content-Length: {}\r\nConnection: close\r\n{}\r\n",
                 response.status,
+                default_content_type,
                 body.len(),
                 headers
             );

@@ -134,7 +134,64 @@ fn invalid_api_base() -> crate::ocr::Error {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use serde_json::json;
+
     use super::*;
+    use crate::ocr::test_support::{
+        MockResponse, RetainedFieldsHost, mock_server, perform_ocr, wire_request_with_document,
+        with_source,
+    };
+
+    #[tokio::test]
+    async fn remote_image_stays_inlined_when_the_host_restores_retained_fields() {
+        let (base, seen, server) = mock_server(vec![
+            MockResponse::png(json!("pixels")),
+            MockResponse::json(json!({"pages":[{"index":0,"markdown":{"content":"hello"}}]})),
+        ])
+        .await;
+        let source = format!("{base}/scan.png");
+        let retained_fields = Arc::new(Mutex::new(Vec::new()));
+        let mut request = with_source(
+            wire_request_with_document(
+                "azure_ai/cohere-parse-v5",
+                &base,
+                json!({"type":"image_url","image_url":"data:image/png;base64,YWJj"}),
+                json!({}),
+            ),
+            &source,
+        );
+        request.hooks = Arc::new(RetainedFieldsHost {
+            original_document: json!({"type":"image_url","image_url":source}),
+            retained_fields: retained_fields.clone(),
+        });
+
+        let result = perform_ocr(request).await.unwrap();
+        server.await.unwrap();
+        assert_eq!(result.pages[0].markdown, "hello");
+        assert!(
+            !retained_fields
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|name| name == "document")
+        );
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with("GET /scan.png "));
+        assert!(requests[1].starts_with("POST /providers/cohere/v2/parse "));
+        let body: Value =
+            serde_json::from_str(requests[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(
+            body["document"],
+            json!({
+                "type":"image_url",
+                "image_url":format!("data:image/png;base64,{}", STANDARD.encode(br#""pixels""#))
+            })
+        );
+    }
 
     #[test]
     fn completes_foundry_urls_without_duplicate_paths_and_preserves_queries() {

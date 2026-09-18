@@ -8,7 +8,9 @@ use super::hooks::{
     OcrDuringCallRequest, OcrHookFuture, OcrHooks, OcrLogFuture, OcrPostCallRequest,
     OcrPreCallRequest,
 };
-use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
+use super::test_support::{
+    MockResponse, RetainedFieldsHost, mock_server, perform_ocr, wire_request, with_source,
+};
 use super::wire::{OcrWireRequest, decode_request};
 use super::{
     NativeOutcome, NoopOcrHost, OcrAdmission, OcrCall, OcrCallStep, OcrDecline, OcrHost,
@@ -100,6 +102,34 @@ fn request_boundary_selects_mistral_and_rejects_unknown_providers() {
         })
         .is_err()
     );
+}
+
+#[tokio::test]
+async fn facade_keeps_the_host_document_when_the_url_is_sent_unchanged() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
+    let source = format!("{base}/scan.pdf");
+    let original_document = json!({
+        "type":"document_url",
+        "document_url":source,
+        "document_name":"scan.pdf"
+    });
+    let retained_fields = Arc::new(Mutex::new(Vec::new()));
+    let mut request = with_source(wire_request("mistral/model", &base, json!({})), &source);
+    request.hooks = Arc::new(RetainedFieldsHost {
+        original_document: original_document.clone(),
+        retained_fields: retained_fields.clone(),
+    });
+
+    perform_ocr(request).await.unwrap();
+    server.await.unwrap();
+    assert_eq!(
+        *retained_fields.lock().unwrap(),
+        vec!["document".to_string()]
+    );
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let body: Value = serde_json::from_str(requests[0].split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(body["document"], original_document);
 }
 
 #[tokio::test]
