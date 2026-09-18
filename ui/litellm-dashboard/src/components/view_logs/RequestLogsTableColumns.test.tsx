@@ -161,6 +161,26 @@ describe("Tokens column", () => {
   });
 });
 
+describe("Internal User column", () => {
+  it("shows the SSO email above the user id when both are available", () => {
+    renderRows([
+      logEntry({
+        user: "okta|abc123",
+        metadata: { user_api_key_user_email: "sso-user@example.com" },
+      }),
+    ]);
+
+    expect(screen.getByText("sso-user@example.com")).toBeInTheDocument();
+    expect(screen.getByText("okta|abc123")).toHaveClass("text-[10px]", "text-muted-foreground");
+  });
+
+  it("keeps showing the user id when no SSO email is available", () => {
+    renderRows([logEntry({ user: "okta|abc123" })]);
+
+    expect(screen.getByText("okta|abc123")).toBeInTheDocument();
+  });
+});
+
 describe("Type column", () => {
   it("shows the conversation badge and composition even when an MCP call represents the conversation", async () => {
     const user = userEvent.setup();

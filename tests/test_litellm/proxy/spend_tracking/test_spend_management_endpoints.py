@@ -3691,6 +3691,18 @@ async def _wait_for_mock_call(mock, timeout=10, interval=0.1):
     mock.assert_called_once()  # will raise with a clear message
 
 
+def _with_user_email_metadata(payload: SpendLogsPayload) -> SpendLogsPayload:
+    return {
+        **payload,
+        "metadata": json.dumps(
+            {
+                **json.loads(payload["metadata"]),
+                "user_api_key_user_email": None,
+            }
+        ),
+    }
+
+
 class TestSpendLogsPayload:
     def setup_method(self):
         self._original_callbacks = litellm.callbacks[:]
@@ -3726,7 +3738,8 @@ class TestSpendLogsPayload:
 
             kwargs = mock_client.call_args.kwargs
             payload: SpendLogsPayload = kwargs["payload"]
-            expected_payload = SpendLogsPayload(
+            expected_payload = _with_user_email_metadata(
+                SpendLogsPayload(
                 **{
                     "request_id": "chatcmpl-34df56d5-4807-45c1-bb99-61e52586b802",
                     "session_id": "1234567890",
@@ -3765,6 +3778,7 @@ class TestSpendLogsPayload:
                     "mcp_namespaced_tool_name": None,
                     "agent_id": None,
                 }
+                )
             )
 
             differences = _compare_nested_dicts(
@@ -3823,7 +3837,8 @@ class TestSpendLogsPayload:
 
             kwargs = mock_client.call_args.kwargs
             payload: SpendLogsPayload = kwargs["payload"]
-            expected_payload = SpendLogsPayload(
+            expected_payload = _with_user_email_metadata(
+                SpendLogsPayload(
                 **{
                     "request_id": "chatcmpl-34df56d5-4807-45c1-bb99-61e52586b802",
                     "call_type": "acompletion",
@@ -3861,6 +3876,7 @@ class TestSpendLogsPayload:
                     "mcp_namespaced_tool_name": None,
                     "agent_id": None,
                 }
+                )
             )
 
             differences = _compare_nested_dicts(
@@ -3917,7 +3933,8 @@ class TestSpendLogsPayload:
 
             kwargs = mock_client.call_args.kwargs
             payload: SpendLogsPayload = kwargs["payload"]
-            expected_payload = SpendLogsPayload(
+            expected_payload = _with_user_email_metadata(
+                SpendLogsPayload(
                 **{
                     "request_id": "chatcmpl-34df56d5-4807-45c1-bb99-61e52586b802",
                     "call_type": "acompletion",
@@ -3955,6 +3972,7 @@ class TestSpendLogsPayload:
                     "mcp_namespaced_tool_name": None,
                     "agent_id": None,
                 }
+                )
             )
 
             differences = _compare_nested_dicts(
