@@ -2967,7 +2967,11 @@ def test_gemini_embedding_2_ga_in_cost_map():
         assert info.get("mode") == "embedding"
         assert info.get("supports_multimodal") is True
         assert info.get("input_cost_per_token") == 2e-07
-        if key.endswith("gemini-embedding-2"):
+        if key in {
+            "gemini/gemini-embedding-2",
+            "vertex_ai/gemini-embedding-2",
+            "gemini-embedding-2",
+        }:
             assert info.get("input_cost_per_audio_token") == 6.5e-06
             assert info.get("input_cost_per_image_token") == 4.5e-07
             assert info.get("input_cost_per_token_batches") == 1e-07
