@@ -48,6 +48,8 @@ from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_gateway_initialize_instructions,
     _mcp_gateway_server_name,
     _mcp_proxy_mode,  # pyright: ignore[reportPrivateUsage]  # server-owned request mode
+    active_mcp_request_ctx_var,
+    get_active_mcp_request_ctx,
 )
 from litellm.proxy._experimental.mcp_server.mcp_debug import (
     MCP_AUTH_DIAGNOSTICS_SCOPE_KEY,
@@ -117,6 +119,22 @@ _MCP_ROUTING_PEEK_MAX_BYTES: Final = 4096
 # ASGI scope keys carrying OTel request state into a stateful MCP message handler.
 _MCP_TRANSPORT_SPAN_SCOPE_KEY: Final = "litellm_otel_transport_span"
 _MCP_DESTINATIONS_SCOPE_KEY: Final = "litellm_otel_request_destinations"
+_MCP_PROTOCOL_VERSION_HEADER: Final = b"mcp-protocol-version"
+
+def unsupported_protocol_version(scope: Scope) -> str | None:
+    """Return the unsupported ``MCP-Protocol-Version`` header value, if any.
+
+    SDK 2's ``StreamableHTTPSessionManager`` routes any version outside
+    ``HANDSHAKE_PROTOCOL_VERSIONS`` to the modern single-exchange path, which
+    bypasses litellm's session/auth model, so the ASGI entry rejects it.
+    """
+    headers: Final = scope.get("headers") or []
+    values: Final = [v for k, v in headers if k.lower() == _MCP_PROTOCOL_VERSION_HEADER]
+    for raw_value in values:
+        value: Final = raw_value.decode("latin-1").strip()
+        if value and value not in HANDSHAKE_PROTOCOL_VERSIONS:
+            return value
+    return None
 
 
 def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
@@ -145,14 +163,12 @@ try:
 
     from mcp import ReadResourceResult, Resource
     from mcp.server import Server
-    from mcp.server.lowlevel.helper_types import ReadResourceContents
     from mcp.server.session import ServerSession as _McpServerSession
     from mcp.types import (
         BlobResourceContents,
         GetPromptResult,
         ResourceTemplate,
         TextResourceContents,
-        Tool,
     )
 
     # Robust auth lookup keyed by session_object.
@@ -165,7 +181,6 @@ except ImportError as e:
     # so they will never be accessed at runtime
     BlobResourceContents = None
     GetPromptResult = None
-    ReadResourceContents = None
     ReadResourceResult = None
     Resource = None
     ResourceTemplate = None
@@ -266,8 +281,8 @@ def _mcp_meta_trace_carrier(req_ctx: object) -> dict[str, str] | None:
     span's identity attribution.
     """
     meta: Final = getattr(req_ctx, "meta", None)
-    extra: Final = getattr(meta, "model_extra", None)
-    if not isinstance(extra, dict):
+    extra: Final = meta if isinstance(meta, Mapping) else getattr(meta, "model_extra", None)
+    if not isinstance(extra, Mapping):
         return None
     carrier: Final = {key: extra[key] for key in ("traceparent", "tracestate") if isinstance(extra.get(key), str)}
     return carrier or None
@@ -445,6 +460,7 @@ if MCP_AVAILABLE:
         AuthContextMiddleware,
         auth_context_var,
     )
+    from mcp.server.context import ServerRequestContext
     from mcp.server.lowlevel.server import NotificationOptions
     from mcp.server.models import InitializationOptions
 
@@ -453,12 +469,21 @@ if MCP_AVAILABLE:
     except ImportError:
         StreamableHTTPSessionManager = None
     from mcp.types import (
+        INVALID_REQUEST,
+        CallToolRequestParams,
         CallToolResult,
+        GetPromptRequestParams,
+        ListPromptsResult,
+        ListResourcesResult,
+        ListResourceTemplatesResult,
         ListToolsResult,
+        PaginatedRequestParams,
         Prompt,
+        ReadResourceRequestParams,
         TextContent,
     )
     from mcp.types import Tool as MCPTool
+    from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
         MCPAuthenticatedUser,
@@ -510,43 +535,17 @@ if MCP_AVAILABLE:
         mcp_info: MCPInfo | None = None
         model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def _normalize_resource_contents(contents: list) -> list[ReadResourceContents]:
-        """Normalize ResourceContents to ReadResourceContents, preserving meta (MCP 1.26.0+)."""
-        normalized: Final[list[ReadResourceContents]] = []
-        for content in contents:
-            meta = getattr(content, "meta", None)
-            if meta is None and hasattr(content, "model_dump"):
-                d = content.model_dump()
-                meta = d.get("meta")
-                if meta is None:
-                    meta = d.get("_meta")
-            if isinstance(content, TextResourceContents):
-                normalized.append(
-                    ReadResourceContents(
-                        content=content.text,
-                        mime_type=content.mime_type,
-                        meta=meta,
-                    )
-                )
-            elif isinstance(content, BlobResourceContents):
-                normalized.append(
-                    ReadResourceContents(
-                        content=content.blob,
-                        mime_type=content.mime_type,
-                        meta=meta,
-                    )
-                )
-        return normalized
-
     def _gateway_create_initialization_options(
         self,
         notification_options: NotificationOptions | None = None,
         experimental_capabilities: dict[str, dict[str, object]] | None = None,
+        extensions: dict[str, dict[str, object]] | None = None,
     ) -> InitializationOptions:
         base_options: Final = Server.create_initialization_options(
             self,
             notification_options=notification_options,
             experimental_capabilities=experimental_capabilities or {},
+            extensions=extensions,
         )
         opts: Final = (
             base_options.model_copy(
@@ -800,8 +799,7 @@ if MCP_AVAILABLE:
     ############### MCP Server Routes #######################
     ########################################################
 
-    @server.list_tools()
-    async def handle_list_tools() -> "ListToolsResult | list[Tool]":
+    async def handle_list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListToolsResult:
         """
         List all available tools, with each server's listing outcome attached to the result's
         ``_meta`` (SERVER_OUTCOMES_META_KEY) so a broken upstream is distinguishable from a healthy
@@ -809,12 +807,9 @@ if MCP_AVAILABLE:
         pass the result through unwrapped, which is what lets the ``_meta`` survive to the client.
         Also captures the active session for propagation to callbacks.
         """
-        from mcp.server.lowlevel.server import request_ctx
-
-        req_ctx: Final = request_ctx.get(None)
-        _session_reset_token = None
-        if req_ctx:
-            _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        req_ctx: Final = ctx
+        _ctx_reset_token: Final = active_mcp_request_ctx_var.set(ctx)
+        _session_reset_token: Final = active_mcp_session_var.set(ctx.session)
         _trace_token = None
         _transport_token = None
         _destinations_token = None
@@ -847,13 +842,13 @@ if MCP_AVAILABLE:
             )
 
             if _mcp_proxy_mode.get():
-                return [Tool.model_validate(d) for d in get_mcp_proxy_tool_definitions()]  # mutable-ok: MCP SDK list
+                return ListToolsResult(tools=[Tool.model_validate(d) for d in get_mcp_proxy_tool_definitions()])
             if getattr(
                 getattr(user_api_key_auth, "object_permission", None),
                 "mcp_tool_search_enabled",
                 False,
             ):
-                return [Tool.model_validate(d) for d in get_virtual_tool_definitions()]
+                return ListToolsResult(tools=[Tool.model_validate(d) for d in get_virtual_tool_definitions()])
 
             # Get mcp_servers from context variable
             verbose_logger.debug("MCP list_tools - Calling _list_mcp_tools")
@@ -869,7 +864,7 @@ if MCP_AVAILABLE:
             )
             verbose_logger.info("MCP list_tools - Successfully returned %s tools", len(listing.tools))
             if not listing.outcomes:
-                return listing.tools
+                return ListToolsResult(tools=listing.tools)
             outcome_meta: Final = {
                 SERVER_OUTCOMES_META_KEY: {
                     key: outcome_wire_value(outcome) for key, outcome in listing.outcomes.items()
@@ -885,24 +880,20 @@ if MCP_AVAILABLE:
             verbose_logger.exception("Error in list_tools endpoint: %s", e)
             # Return empty list instead of failing completely
             # This prevents the HTTP stream from failing and allows the client to get a response
-            return []
+            return ListToolsResult(tools=[])
         finally:
             _otel_reset_mcp_request_destinations(_destinations_token)
             _otel_reset_mcp_transport_span(_transport_token)
             _otel_reset_mcp_trace_carrier(_trace_token)
-            if _session_reset_token is not None:
-                active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_request_ctx_var.reset(_ctx_reset_token)
 
-    def _capture_host_progress_callback(host_server) -> Callable | None:
+    def _capture_host_progress_callback(ctx: ServerRequestContext) -> Callable | None:
         """Return a progress-forwarding callback bound to the host MCP session.
 
         Returns ``None`` when the host did not supply a progress token.
         """
-        try:
-            host_ctx: Final = host_server.request_context
-        except Exception as e:
-            verbose_logger.warning("Could not capture host progress context: %s", e)
-            return None
+        host_ctx: Final = ctx
 
         if not (host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta):
             return None
@@ -1137,29 +1128,24 @@ if MCP_AVAILABLE:
             litellm_logging_obj=virtual_logging_obj,
         )
 
-    @server.call_tool()
-    async def mcp_server_tool_call(name: str, arguments: dict[str, object] | None) -> CallToolResult:
+    async def mcp_server_tool_call(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
         """
         Call a specific tool with the provided arguments
         Args:
-            name (str): Name of the tool to call
-            arguments (Dict[str, Any] | None): Arguments to pass to the tool
+            ctx: SDK request context carrying the client session and HTTP request
+            params (CallToolRequestParams): Tool name and arguments
         Returns:
-            List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]: Tool execution results
-        Raises:
-            HTTPException: If tool not found or arguments missing
+            CallToolResult: Tool execution results
         """
-        from mcp.server.lowlevel.server import request_ctx
         from mcp.types import CallToolResult
 
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
         from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
         from litellm.proxy.proxy_server import proxy_config
 
-        req_ctx: Final = request_ctx.get(None)
-        _session_reset_token = None
-        if req_ctx:
-            _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        req_ctx: Final = ctx
+        _ctx_reset_token: Final = active_mcp_request_ctx_var.set(ctx)
+        _session_reset_token: Final = active_mcp_session_var.set(ctx.session)
         _trace_token = None
         _transport_token = None
         _destinations_token = None
@@ -1190,8 +1176,8 @@ if MCP_AVAILABLE:
                 # Inside this try so virtual-tool errors convert to isError
                 # CallToolResult instead of raising out of the protocol handler.
                 virtual_tool_result: Final = await _dispatch_virtual_mcp_tool(
-                    name=name,
-                    arguments=arguments,
+                    name=params.name,
+                    arguments=params.arguments,
                     user_api_key_auth=user_api_key_auth,
                     client_ip=_client_ip,
                     mcp_servers=mcp_servers,
@@ -1203,9 +1189,9 @@ if MCP_AVAILABLE:
                 if virtual_tool_result is not None:
                     return virtual_tool_result
 
-                host_progress_callback: Final = _capture_host_progress_callback(server)
+                host_progress_callback: Final = _capture_host_progress_callback(ctx)
                 # Create a body date for logging
-                body_data: Final = {"name": name, "arguments": arguments}
+                body_data: Final = {"name": params.name, "arguments": params.arguments}
                 # Set trace/session id from raw_headers so spend logs and logging_obj stay consistent (same as A2A)
                 chain_id: Final = get_chain_id_from_headers(raw_headers)
                 if chain_id:
@@ -1230,7 +1216,7 @@ if MCP_AVAILABLE:
                         # Authorization is unaffected: it ran before this, and the union is resolved
                         # from the untouched auth object passed to call_mcp_tool below.
                         user_api_key_dict=await MCPRequestHandler.billing_auth_for_tool_call(
-                            user_api_key_auth, tool_name=name
+                            user_api_key_auth, tool_name=params.name
                         ),
                         proxy_config=proxy_config,
                     )
@@ -1309,22 +1295,17 @@ if MCP_AVAILABLE:
             _otel_reset_mcp_request_destinations(_destinations_token)
             _otel_reset_mcp_transport_span(_transport_token)
             _otel_reset_mcp_trace_carrier(_trace_token)
-            if _session_reset_token is not None:
-                active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_request_ctx_var.reset(_ctx_reset_token)
 
-    @server.list_prompts()
-    async def list_prompts() -> list[Prompt]:
+    async def list_prompts(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListPromptsResult:
         """
         List all available prompts
         """
         if _mcp_proxy_mode.get():
             _reject_mcp_proxy_operation()
-        from mcp.server.lowlevel.server import request_ctx
-
-        req_ctx: Final = request_ctx.get(None)
-        _session_reset_token = None
-        if req_ctx:
-            _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        _ctx_reset_token: Final = active_mcp_request_ctx_var.set(ctx)
+        _session_reset_token: Final = active_mcp_session_var.set(ctx.session)
 
         try:
             # Get user authentication from context variable
@@ -1354,36 +1335,24 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
             )
             verbose_logger.info("MCP list_prompts - Successfully returned %s prompts", len(prompts))
-            return prompts
+            return ListPromptsResult(prompts=prompts)
         except Exception as e:
             verbose_logger.exception("Error in list_prompts endpoint: %s", e)
             # Return empty list instead of failing completely
             # This prevents the HTTP stream from failing and allows the client to get a response
-            return []
+            return ListPromptsResult(prompts=[])
         finally:
-            if _session_reset_token is not None:
-                active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_request_ctx_var.reset(_ctx_reset_token)
 
-    @server.get_prompt()
-    async def get_prompt(name: str, arguments: dict[str, str] | None) -> GetPromptResult:
+    async def get_prompt(ctx: ServerRequestContext, params: GetPromptRequestParams) -> GetPromptResult:
         """
         Get a specific prompt with the provided arguments
-
-        Args:
-            name (str): Name of the prompt to get
-            arguments (Dict[str, Any] | None): Arguments to pass to the prompt
-
-        Returns:
-            GetPromptResult: Getting prompt execution results
         """
         if _mcp_proxy_mode.get():
             _reject_mcp_proxy_operation()
-        from mcp.server.lowlevel.server import request_ctx
-
-        req_ctx: Final = request_ctx.get(None)
-        _session_reset_token = None
-        if req_ctx:
-            _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        _ctx_reset_token: Final = active_mcp_request_ctx_var.set(ctx)
+        _session_reset_token: Final = active_mcp_session_var.set(ctx.session)
 
         try:
             (
@@ -1398,8 +1367,8 @@ if MCP_AVAILABLE:
 
             verbose_logger.debug("MCP mcp_server_tool_call - User API Key Auth from context: %s", user_api_key_auth)
             return await mcp_get_prompt(
-                name=name,
-                arguments=arguments,
+                name=params.name,
+                arguments=params.arguments,
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
@@ -1408,20 +1377,15 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
             )
         finally:
-            if _session_reset_token is not None:
-                active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_request_ctx_var.reset(_ctx_reset_token)
 
-    @server.list_resources()
-    async def list_resources() -> list[Resource]:
+    async def list_resources(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListResourcesResult:
         """List all available resources."""
         if _mcp_proxy_mode.get():
             _reject_mcp_proxy_operation()
-        from mcp.server.lowlevel.server import request_ctx
-
-        req_ctx: Final = request_ctx.get(None)
-        _session_reset_token = None
-        if req_ctx:
-            _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        _ctx_reset_token: Final = active_mcp_request_ctx_var.set(ctx)
+        _session_reset_token: Final = active_mcp_session_var.set(ctx.session)
 
         try:
             (
@@ -1449,25 +1413,22 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
             )
             verbose_logger.info("MCP list_resources - Successfully returned %s resources", len(resources))
-            return resources
+            return ListResourcesResult(resources=resources)
         except Exception as e:
             verbose_logger.exception("Error in list_resources endpoint: %s", e)
-            return []
+            return ListResourcesResult(resources=[])
         finally:
-            if _session_reset_token is not None:
-                active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_request_ctx_var.reset(_ctx_reset_token)
 
-    @server.list_resource_templates()
-    async def list_resource_templates() -> list[ResourceTemplate]:
+    async def list_resource_templates(
+        ctx: ServerRequestContext, params: PaginatedRequestParams
+    ) -> ListResourceTemplatesResult:
         """List all available resource templates."""
         if _mcp_proxy_mode.get():
             _reject_mcp_proxy_operation()
-        from mcp.server.lowlevel.server import request_ctx
-
-        req_ctx: Final = request_ctx.get(None)
-        _session_reset_token = None
-        if req_ctx:
-            _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        _ctx_reset_token: Final = active_mcp_request_ctx_var.set(ctx)
+        _session_reset_token: Final = active_mcp_session_var.set(ctx.session)
 
         try:
             (
@@ -1497,24 +1458,19 @@ if MCP_AVAILABLE:
             verbose_logger.info(
                 "MCP list_resource_templates - Successfully returned %s resource templates", len(resource_templates)
             )
-            return resource_templates
+            return ListResourceTemplatesResult(resource_templates=resource_templates)
         except Exception as e:
             verbose_logger.exception("Error in list_resource_templates endpoint: %s", e)
-            return []
+            return ListResourceTemplatesResult(resource_templates=[])
         finally:
-            if _session_reset_token is not None:
-                active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_request_ctx_var.reset(_ctx_reset_token)
 
-    @server.read_resource()
-    async def read_resource(url: AnyUrl) -> list[ReadResourceContents]:
+    async def read_resource(ctx: ServerRequestContext, params: ReadResourceRequestParams) -> ReadResourceResult:
         if _mcp_proxy_mode.get():
             _reject_mcp_proxy_operation()
-        from mcp.server.lowlevel.server import request_ctx
-
-        req_ctx: Final = request_ctx.get(None)
-        _session_reset_token = None
-        if req_ctx:
-            _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        _ctx_reset_token: Final = active_mcp_request_ctx_var.set(ctx)
+        _session_reset_token: Final = active_mcp_session_var.set(ctx.session)
 
         try:
             (
@@ -1528,7 +1484,7 @@ if MCP_AVAILABLE:
             ) = await get_or_extract_auth_context()
 
             read_resource_result: Final = await mcp_read_resource(
-                url=url,
+                url=params.uri,
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
@@ -1537,10 +1493,18 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
             )
 
-            return _normalize_resource_contents(read_resource_result.contents)
+            return read_resource_result
         finally:
-            if _session_reset_token is not None:
-                active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_request_ctx_var.reset(_ctx_reset_token)
+
+    server.add_request_handler("tools/list", PaginatedRequestParams, handle_list_tools)
+    server.add_request_handler("tools/call", CallToolRequestParams, mcp_server_tool_call)
+    server.add_request_handler("prompts/list", PaginatedRequestParams, list_prompts)
+    server.add_request_handler("prompts/get", GetPromptRequestParams, get_prompt)
+    server.add_request_handler("resources/list", PaginatedRequestParams, list_resources)
+    server.add_request_handler("resources/templates/list", PaginatedRequestParams, list_resource_templates)
+    server.add_request_handler("resources/read", ReadResourceRequestParams, read_resource)
 
     ########################################################
     ############ End of MCP Server Routes ##################
@@ -4394,6 +4358,21 @@ if MCP_AVAILABLE:
     async def handle_streamable_http_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through StreamableHTTP."""
         try:
+            bad_version: Final = unsupported_protocol_version(scope)
+            if bad_version is not None:
+                supported: Final = ", ".join(sorted(HANDSHAKE_PROTOCOL_VERSIONS))
+                await JSONResponse(
+                    status_code=400,
+                    content={
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {
+                            "code": INVALID_REQUEST,
+                            "message": f"Unsupported MCP-Protocol-Version {bad_version}; supported: {supported}",
+                        },
+                    },
+                )(scope, receive, send)
+                return
             path: Final[str] = scope.get("path", "")
             (
                 user_api_key_auth,
@@ -5014,12 +4993,8 @@ if MCP_AVAILABLE:
         return None, None, None, None, None, None, None
 
     def _get_current_session():
-        try:
-            from mcp.server.lowlevel.server import request_ctx
-
-            return request_ctx.get().session
-        except (LookupError, ImportError):
-            return None
+        ctx: Final = get_active_mcp_request_ctx()
+        return ctx.session if ctx is not None else None
 
     def _cache_auth_context_lazily():
         session: Final = _get_current_session()
