@@ -8,10 +8,13 @@ to login_utils.py for better reusability.
 import os
 from collections.abc import Mapping
 from contextlib import ExitStack
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+if TYPE_CHECKING:
+    from litellm.proxy.auth.login_throttle import LoginThrottle
 
 
 def _unlimited_throttle():
