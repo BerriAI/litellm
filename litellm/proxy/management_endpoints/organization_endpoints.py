@@ -80,7 +80,23 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_OrganizationTable as PrismaOrganizationTable
     from prisma.models import LiteLLM_UserTable as PrismaUserTable
 
-router: Final = APIRouter()
+
+async def _enterprise_license_required(
+    _user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> None:
+    from litellm.proxy.proxy_server import premium_user
+
+    if not premium_user:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Organizations are only available for LiteLLM Enterprise users. "
+                f"{CommonProxyErrors.not_premium_user.value}"
+            },
+        )
+
+
+router: Final = APIRouter(dependencies=[Depends(_enterprise_license_required)])
 
 
 class _ObjectPermissionRow(Protocol):
@@ -346,6 +362,7 @@ async def new_organization(
     - max_budget: *Optional[float]* - Max budget for org
     - tpm_limit: *Optional[int]* - Max tpm limit for org
     - rpm_limit: *Optional[int]* - Max rpm limit for org
+    - tpd_limit: *Optional[int]* - Max tokens per day stored on the org budget. Batch submissions enforce tpd_limit at the key, team and end user scopes only.
     - model_rpm_limit: *Optional[Dict[str, int]]* - The RPM (Requests Per Minute) limit per model for this organization.
     - model_tpm_limit: *Optional[Dict[str, int]]* - The TPM (Tokens Per Minute) limit per model for this organization.
     - max_parallel_requests: *Optional[int]* - [Not Implemented Yet] Max parallel requests for org

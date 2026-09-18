@@ -4,15 +4,18 @@ import contextlib
 import json
 import os
 import traceback
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
+import respx
 from fastapi import HTTPException, Request, Response
+from fastapi.routing import APIRoute
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
@@ -26,6 +29,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
     _join_url_paths,
+    anthropic_proxy_route,
     azure_proxy_route,
     bedrock_llm_proxy_route,
     bedrock_proxy_route,
@@ -38,13 +42,16 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
     mistral_proxy_route,
+    relay_nvidia_nim_request,
     openai_proxy_route,
+    typesafe_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
     vllm_proxy_route,
 )
 from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
@@ -581,6 +588,7 @@ class TestVertexAIPassThroughHandler:
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
             pass_through_router,
         )
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master-1234")
 
         endpoint = f"/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent"
 
@@ -1977,6 +1985,144 @@ class TestBedrockAgentRuntimePassthroughToggle:
         create_route.assert_called_once()
 
 
+class TestBedrockAgentRuntimePassthroughVirtualKeyLeak:
+
+    VKEY: Final = "sk-litellm-victim-key"
+    MASTER_KEY: Final = "sk-master-1234"
+    ENDPOINT: Final = "knowledgebases/KB1234567/retrieve"
+    AMBIENT_AWS_ENV: Final = (
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "AWS_SESSION_TOKEN",
+        "AWS_SESSION_NAME",
+        "AWS_PROFILE_NAME",
+        "AWS_ROLE_NAME",
+        "AWS_WEB_IDENTITY_TOKEN",
+        "AWS_STS_ENDPOINT",
+        "AWS_EXTERNAL_ID",
+    )
+
+    async def _upstream_headers(self, monkeypatch, headers: list[tuple[bytes, bytes]]) -> dict:
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", self.MASTER_KEY)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        for ambient in self.AMBIENT_AWS_ENV:
+            monkeypatch.delenv(ambient, raising=False)
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ak")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "sk")
+        monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+        caller: Final = UserAPIKeyAuth(api_key=self.VKEY)
+
+        async def receive():
+            return {"type": "http.request", "body": b'{"retrievalQuery": {"text": "hi"}}', "more_body": False}
+
+        request: Final = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": f"/bedrock/{self.ENDPOINT}",
+                "headers": headers,
+                "query_string": b"",
+            },
+            receive=receive,
+        )
+        captured: dict = {}
+
+        def fake_create_pass_through_route(**kwargs):
+            captured.update(kwargs)
+            return AsyncMock(return_value={"status": "success"})
+
+        module: Final = "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints"
+        with (
+            patch(f"{module}.create_request_copy", Mock()),
+            patch(f"{module}.create_pass_through_route", side_effect=fake_create_pass_through_route),
+        ):
+            await bedrock_proxy_route(
+                endpoint=self.ENDPOINT,
+                request=request,
+                fastapi_response=Response(),
+                user_api_key_dict=caller,
+            )
+        return HttpPassThroughEndpointHelpers.forward_headers_from_request(
+            request_headers=dict(request.headers),
+            headers=dict(captured["custom_headers"] or {}),
+            forward_headers=captured.get("_forward_headers", False),
+        )
+
+    @staticmethod
+    def _blob(upstream: dict) -> str:
+        return " ".join(f"{name}:{value}" for name, value in upstream.items())
+
+    @staticmethod
+    def _names_matching(upstream: dict, lowercase_name: str) -> list[str]:
+        return [name for name in upstream if name.lower() == lowercase_name]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "header_name", ["x-api-key", "x-litellm-api-key", "api-key", "x-goog-api-key", "ocp-apim-subscription-key"]
+    )
+    async def test_virtual_key_in_a_credential_header_never_reaches_aws(self, monkeypatch, header_name: str):
+        upstream: Final = await self._upstream_headers(
+            monkeypatch,
+            [
+                (header_name.encode(), self.VKEY.encode()),
+                (b"content-type", b"application/json"),
+                (b"x-request-id", b"trace-1"),
+            ],
+        )
+
+        assert self.VKEY not in self._blob(upstream)
+        assert self._names_matching(upstream, header_name) == []
+        assert upstream["x-request-id"] == "trace-1", "a benign caller header still reaches AWS"
+        assert upstream["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert self._names_matching(upstream, "content-type") == ["Content-Type"], "the signed header is the only one"
+
+    @pytest.mark.asyncio
+    async def test_credential_headers_are_dropped_by_name_even_when_they_carry_someone_elses_key(self, monkeypatch):
+        other_key: Final = "sk-other-tenant-key"
+        upstream: Final = await self._upstream_headers(
+            monkeypatch,
+            [
+                (b"x-api-key", other_key.encode()),
+                (b"x-litellm-api-key", other_key.encode()),
+                (b"x-request-id", b"trace-3"),
+            ],
+        )
+
+        assert other_key not in self._blob(upstream)
+        assert self._names_matching(upstream, "x-api-key") == []
+        assert self._names_matching(upstream, "x-litellm-api-key") == []
+        assert upstream["x-request-id"] == "trace-3"
+
+    @pytest.mark.asyncio
+    async def test_virtual_key_in_authorization_bearer_is_replaced_by_the_sigv4_signature(self, monkeypatch):
+        upstream: Final = await self._upstream_headers(
+            monkeypatch,
+            [(b"authorization", f"Bearer {self.VKEY}".encode()), (b"content-type", b"application/json")],
+        )
+
+        assert self.VKEY not in self._blob(upstream)
+        assert self._names_matching(upstream, "authorization") == ["Authorization"]
+        assert upstream["Authorization"].startswith("AWS4-HMAC-SHA256")
+
+    @pytest.mark.asyncio
+    async def test_authenticated_secrets_in_any_other_header_never_reach_aws(self, monkeypatch):
+        upstream: Final = await self._upstream_headers(
+            monkeypatch,
+            [
+                (b"x-api-key", self.VKEY.encode()),
+                (b"x-forwarded-key", self.VKEY.encode()),
+                (b"x-operator-token", self.MASTER_KEY.encode()),
+                (b"x-request-id", b"trace-2"),
+            ],
+        )
+
+        assert self.VKEY not in self._blob(upstream) and self.MASTER_KEY not in self._blob(upstream)
+        assert self._names_matching(upstream, "x-forwarded-key") == []
+        assert self._names_matching(upstream, "x-operator-token") == []
+        assert upstream["x-request-id"] == "trace-2"
+
+
 class TestLLMPassthroughFactoryProxyRoute:
     @pytest.mark.asyncio
     async def test_llm_passthrough_factory_proxy_route_success(self):
@@ -3339,7 +3485,10 @@ class TestOpenAIPassthroughRoute:
 def _resolve_route_name(method: str, path: str) -> str | None:
     from starlette.routing import Match
 
+    from litellm.proxy._lazy_features import LAZY_FEATURES, _force_load
     from litellm.proxy.proxy_server import app
+
+    asyncio.run(_force_load(app, next(f for f in LAZY_FEATURES if f.name == "llm_passthrough")))
 
     scope: Final = {
         "type": "http",
@@ -3350,8 +3499,8 @@ def _resolve_route_name(method: str, path: str) -> str | None:
         "root_path": "",
     }
     for route in app.router.routes:
-        if route.matches(scope)[0] == Match.FULL:
-            return getattr(route, "name", None)
+        if isinstance(route, APIRoute) and route.matches(scope)[0] == Match.FULL:
+            return route.name
     return None
 
 
@@ -3376,7 +3525,7 @@ def test_openai_passthrough_prefix_wins_over_native_provider_routes(method, path
     /{provider}/v1/files and /{provider}/v1/batches routes must never capture it
     with provider="openai_passthrough" (which 500s on the LlmProviders lookup).
     """
-    assert _resolve_route_name(method, path) == "openai_proxy_route"
+    assert _resolve_route_name(method, path) == "openai_passthrough_route"
 
 
 @pytest.mark.parametrize(
@@ -3391,6 +3540,41 @@ def test_openai_passthrough_prefix_wins_over_native_provider_routes(method, path
 )
 def test_native_provider_routes_are_unchanged(method, path, expected_name):
     assert _resolve_route_name(method, path) == expected_name
+
+
+@pytest.fixture
+def openai_passthrough_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    from litellm.proxy.proxy_server import app
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-upstream")
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+    yield TestClient(app)
+
+
+@pytest.mark.parametrize(
+    "method, path, body",
+    [
+        ("POST", "/v1/responses", {"model": "gpt-5.1", "input": "hi"}),
+        ("GET", "/v1/files", None),
+        ("POST", "/v1/batches", {"input_file_id": "file-abc123", "endpoint": "/v1/responses"}),
+    ],
+)
+def test_openai_passthrough_forwards_verbatim_to_openai(
+    openai_passthrough_client: TestClient, method: str, path: str, body: dict[str, str] | None
+) -> None:
+    """Every /openai_passthrough request, including the /v1/files and /v1/batches
+    paths that native provider routes also claim, must reach OpenAI unchanged."""
+    with respx.mock(assert_all_called=True) as upstream:
+        route = upstream.request(method, f"https://api.openai.com{path}").mock(
+            return_value=httpx.Response(200, json={"id": "upstream_123"})
+        )
+        response = openai_passthrough_client.request(method, f"/openai_passthrough{path}", json=body)
+
+        assert (response.status_code, response.json()) == (200, {"id": "upstream_123"})
+        assert route.calls.last.request.headers["authorization"] == "Bearer sk-upstream"
 
 
 class TestCursorProxyRoute:
@@ -4244,6 +4428,329 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert "sk-master-1234" not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
 
 
+class TestAnthropicPassthroughVirtualKeyLeak:
+    VKEY = "sk-litellm-victim-key"
+    PROXY_KEY = "sk-ant-api03-proxy-configured-key"
+    ENDPOINT = "v1/messages"
+
+    async def _run(
+        self,
+        monkeypatch,
+        headers: list[tuple[bytes, bytes]],
+        authenticated: UserAPIKeyAuth | None = None,
+        master_key: str | None = "sk-master-1234",
+        proxy_api_key: str | None = None,
+    ) -> tuple[HTTPException | None, dict | None]:
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
+        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+            PassthroughEndpointRouter,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", master_key)
+        monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+        if proxy_api_key is None:
+            monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        else:
+            monkeypatch.setenv("ANTHROPIC_API_KEY", proxy_api_key)
+        caller: Final = authenticated if authenticated is not None else UserAPIKeyAuth(api_key=self.VKEY)
+
+        async def receive():
+            return {"type": "http.request", "body": b"{}", "more_body": False}
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": f"/anthropic/{self.ENDPOINT}",
+                "headers": headers,
+                "query_string": b"",
+            },
+            receive=receive,
+        )
+
+        captured: dict = {}
+
+        def fake_create_pass_through_route(**kwargs):
+            captured.update(kwargs)
+            return AsyncMock(return_value={"status": "success"})
+
+        module = "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints"
+        monkeypatch.setattr(f"{module}.passthrough_endpoint_router", PassthroughEndpointRouter(lambda: None))
+        raised: HTTPException | None = None
+        with (
+            mock.patch(f"{module}.create_pass_through_route", side_effect=fake_create_pass_through_route),
+            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value=caller)),
+        ):
+            try:
+                await anthropic_proxy_route(
+                    endpoint=self.ENDPOINT,
+                    request=request,
+                    fastapi_response=Response(),
+                    user_api_key_dict=caller,
+                )
+            except HTTPException as exc:
+                raised = exc
+
+        if not captured:
+            return raised, None
+        upstream: Final = HttpPassThroughEndpointHelpers.forward_headers_from_request(
+            request_headers=dict(request.headers),
+            headers=dict(captured["custom_headers"] or {}),
+            forward_headers=captured.get("_forward_headers", False),
+        )
+        return raised, upstream
+
+    @staticmethod
+    def _blob(forwarded: dict) -> str:
+        return " ".join(f"{name}:{value}" for name, value in forwarded.items())
+
+    @pytest.mark.asyncio
+    async def test_authorization_bearer_virtual_key_is_rejected_not_forwarded(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"authorization", f"Bearer {self.VKEY}".encode()), (b"content-type", b"application/json")],
+        )
+        assert forwarded is None, "credential-less request must never reach the upstream forwarder"
+        assert raised is not None and raised.status_code == 401
+        assert "ANTHROPIC_API_KEY" in str(raised.detail) and "use_in_pass_through" in str(raised.detail)
+
+    @pytest.mark.asyncio
+    async def test_x_api_key_virtual_key_is_rejected_not_forwarded(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"x-api-key", self.VKEY.encode()), (b"content-type", b"application/json")],
+        )
+        assert forwarded is None, "a virtual key that authenticated via x-api-key must be stripped, not forwarded"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_x_litellm_api_key_virtual_key_is_rejected_not_forwarded(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"x-litellm-api-key", self.VKEY.encode()), (b"content-type", b"application/json")],
+        )
+        assert forwarded is None, "credential-less request must never reach the upstream forwarder"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_master_key_in_authorization_is_rejected_not_forwarded(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"authorization", b"Bearer sk-master-1234"), (b"content-type", b"application/json")],
+            authenticated=UserAPIKeyAuth(api_key="sk-master-1234", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert forwarded is None, "the master key must never reach Anthropic"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("header", "value"),
+        [
+            pytest.param(b"x-api-key", b"sk-ant-api03-callers-own-key", id="x-api-key"),
+            pytest.param(b"authorization", b"Bearer sk-ant-api03-callers-own-key", id="authorization"),
+        ],
+    )
+    async def test_without_a_master_key_the_callers_own_anthropic_key_still_forwards(
+        self, monkeypatch, header: bytes, value: bytes
+    ):
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_auth", None)
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(header, value), (b"anthropic-version", b"2023-06-01"), (b"content-type", b"application/json")],
+            authenticated=UserAPIKeyAuth(api_key="sk-ant-api03-callers-own-key", user_role=LitellmUserRoles.INTERNAL_USER),
+            master_key=None,
+        )
+        assert raised is None, "with no master key the proxy authenticated nothing, so nothing of the caller's is a LiteLLM secret"
+        assert forwarded is not None
+        assert forwarded.get(header.decode()) == value.decode()
+
+    @pytest.mark.asyncio
+    async def test_without_a_master_key_a_custom_auth_credential_is_still_stripped(self, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_auth", AsyncMock())
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"authorization", b"Bearer sk-custom-auth-token"), (b"anthropic-version", b"2023-06-01")],
+            authenticated=UserAPIKeyAuth(api_key="sk-custom-auth-token", user_role=LitellmUserRoles.INTERNAL_USER),
+            master_key=None,
+        )
+        assert raised is not None and raised.status_code == 401
+        assert forwarded is None
+
+    @pytest.mark.asyncio
+    async def test_without_a_master_key_an_oauth2_token_is_still_stripped(self, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"enable_oauth2_auth": True})
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_auth", None)
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"authorization", b"Bearer oauth2-access-token"), (b"anthropic-version", b"2023-06-01")],
+            authenticated=UserAPIKeyAuth(api_key="oauth2-access-token", user_role=LitellmUserRoles.INTERNAL_USER),
+            master_key=None,
+        )
+        assert raised is not None and raised.status_code == 401
+        assert forwarded is None
+
+    @pytest.mark.asyncio
+    async def test_byo_anthropic_oauth_token_still_forwards_without_virtual_key(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.VKEY.encode()),
+                (b"authorization", b"Bearer sk-ant-oat01-caller-oauth-token"),
+                (b"anthropic-version", b"2023-06-01"),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("authorization") == "Bearer sk-ant-oat01-caller-oauth-token"
+        assert forwarded.get("anthropic-version") == "2023-06-01"
+        assert "x-litellm-api-key" not in forwarded
+        assert self.VKEY not in self._blob(forwarded)
+
+    @pytest.mark.asyncio
+    async def test_byo_x_api_key_still_forwards_without_virtual_key(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"authorization", f"Bearer {self.VKEY}".encode()),
+                (b"x-api-key", b"sk-ant-api03-caller-own-key"),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-api-key") == "sk-ant-api03-caller-own-key"
+        assert "authorization" not in forwarded
+        assert self.VKEY not in self._blob(forwarded)
+
+    @pytest.mark.asyncio
+    async def test_custom_auth_caller_keeps_own_authorization_token(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"authorization", b"Bearer sk-ant-oat01-caller-oauth-token"), (b"content-type", b"application/json")],
+            authenticated=UserAPIKeyAuth(api_key=None),
+            master_key=None,
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("authorization") == "Bearer sk-ant-oat01-caller-oauth-token"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "credential_header",
+        sorted(SpecialHeaders.litellm_credential_header_names() - {"authorization", "x-api-key", "x-litellm-api-key"}),
+    )
+    async def test_every_non_anthropic_credential_header_is_dropped_by_name(self, monkeypatch, credential_header):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.VKEY.encode()),
+                (b"x-api-key", b"sk-ant-api03-caller-own-key"),
+                (credential_header.encode(), b"some-distinct-caller-secret-value"),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-api-key") == "sk-ant-api03-caller-own-key"
+        assert credential_header not in forwarded
+        assert "x-litellm-api-key" not in forwarded
+        assert self.VKEY not in self._blob(forwarded)
+        assert "some-distinct-caller-secret-value" not in self._blob(forwarded)
+
+    @pytest.mark.asyncio
+    async def test_virtual_key_in_operator_configured_header_is_stripped(self, monkeypatch):
+        with mock.patch.dict(  # test-quality-ok: general_settings is the real proxy config surface for litellm_key_header_name; no injection seam exists on this route
+            "litellm.proxy.proxy_server.general_settings",
+            {"litellm_key_header_name": "x-company-key"},
+        ):
+            raised, forwarded = await self._run(
+                monkeypatch,
+                [
+                    (b"x-company-key", f"Bearer {self.VKEY}".encode()),
+                    (b"x-api-key", b"sk-ant-api03-caller-own-key"),
+                    (b"content-type", b"application/json"),
+                ],
+            )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-api-key") == "sk-ant-api03-caller-own-key"
+        assert "x-company-key" not in forwarded
+        assert self.VKEY not in self._blob(forwarded)
+
+    @pytest.mark.asyncio
+    async def test_proxy_credential_replaces_virtual_key_sent_as_bearer(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"authorization", f"Bearer {self.VKEY}".encode()),
+                (b"anthropic-version", b"2023-06-01"),
+                (b"content-type", b"application/json"),
+            ],
+            proxy_api_key=self.PROXY_KEY,
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-api-key") == self.PROXY_KEY
+        assert "authorization" not in forwarded
+        assert forwarded.get("anthropic-version") == "2023-06-01"
+        assert self.VKEY not in self._blob(forwarded)
+
+    @pytest.mark.asyncio
+    async def test_proxy_credential_replaces_virtual_key_sent_as_x_api_key(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"x-api-key", self.VKEY.encode()), (b"content-type", b"application/json")],
+            proxy_api_key=self.PROXY_KEY,
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-api-key") == self.PROXY_KEY
+        assert self.VKEY not in self._blob(forwarded)
+
+    @pytest.mark.asyncio
+    async def test_proxy_credential_wins_over_callers_own_x_api_key(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.VKEY.encode()),
+                (b"x-api-key", b"sk-ant-api03-caller-own-key"),
+                (b"content-type", b"application/json"),
+            ],
+            proxy_api_key=self.PROXY_KEY,
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-api-key") == self.PROXY_KEY
+        assert "sk-ant-api03-caller-own-key" not in self._blob(forwarded)
+
+    @pytest.mark.asyncio
+    async def test_x_pass_and_hop_by_hop_handling_is_unchanged(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"authorization", f"Bearer {self.VKEY}".encode()),
+                (b"x-pass-anthropic-beta", b"interleaved-thinking-2025-05-14"),
+                (b"x-pass-authorization", b"Bearer smuggled"),
+                (b"content-length", b"2"),
+                (b"host", b"proxy.internal"),
+                (b"accept-encoding", b"br"),
+                (b"user-agent", b"curl/8.7.1"),
+            ],
+            proxy_api_key=self.PROXY_KEY,
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("anthropic-beta") == "interleaved-thinking-2025-05-14"
+        assert forwarded.get("user-agent") == "curl/8.7.1"
+        assert "authorization" not in forwarded
+        assert "content-length" not in forwarded
+        assert "host" not in forwarded
+        assert "accept-encoding" not in forwarded
+
+
 class TestVertexPassthroughDefaultLocationOnShortRoutes:
     PROJECT = "test-project"
     SHORT_ROUTE = "publishers/google/models/gemini-2.5-flash:generateContent"
@@ -5022,7 +5529,11 @@ class TestPassthroughRouterModelBudgetReservation:
 
         monkeypatch.setattr(proxy_server, "llm_router", RecordingRouter())
         monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
-        monkeypatch.setattr(ep, "is_passthrough_request_using_router_model", lambda *a, **k: True)
+        monkeypatch.setattr(
+            ep,
+            "is_passthrough_request_using_router_model",
+            lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
         return captured
 
     def _assert_metadata_carries_attribution(self, captured: list[dict], user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -5121,7 +5632,11 @@ class TestAzureRouterModelStreamingDispatch:
 
         monkeypatch.setattr(proxy_server, "llm_router", StreamingRouter())
         monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
-        monkeypatch.setattr(ep, "is_passthrough_request_using_router_model", lambda *a, **k: True)
+        monkeypatch.setattr(
+            ep,
+            "is_passthrough_request_using_router_model",
+            lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
 
         request = MagicMock(spec=Request)
         request.method = "POST"
@@ -5181,7 +5696,11 @@ class TestAzureRouterModelStreamingKeepalive:
 
         monkeypatch.setattr(proxy_server, "llm_router", StreamingRouter())
         monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
-        monkeypatch.setattr(ep, "is_passthrough_request_using_router_model", lambda *a, **k: True)
+        monkeypatch.setattr(
+            ep,
+            "is_passthrough_request_using_router_model",
+            lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
 
         request = MagicMock(spec=Request)
         request.method = "POST"
@@ -5231,6 +5750,277 @@ class TestAzureRouterModelStreamingKeepalive:
         assert chunks == [b"data: hello\n\n"]
 
 
+class TestRouterModelRelayUpstreamContract:
+    def _request(self, content_type: str) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.headers = {"content-type": content_type}
+        request.query_params = {}
+        return request
+
+    def _install_router(self, monkeypatch, router, body: dict) -> None:
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        async def fake_get_request_body(_request):
+            return body
+
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
+        monkeypatch.setattr(
+            ep,
+            "is_passthrough_request_using_router_model",
+            lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
+
+    def _recording_router(self, captured: list[dict]):
+        class RecordingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                captured.append(kwargs)
+                return httpx.Response(200, json={"ok": True})
+
+        return RecordingRouter()
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_keeps_the_json_body_when_the_content_type_carries_a_charset(self, monkeypatch):
+        body = {"model": "gpt-5", "messages": [{"role": "user", "content": "hi"}]}
+        captured: list[dict] = []
+        self._install_router(monkeypatch, self._recording_router(captured), body)
+
+        await azure_proxy_route(
+            endpoint="openai/deployments/gpt-5/chat/completions",
+            request=self._request("application/json; charset=utf-8"),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert captured[0]["json"] == body
+
+    @pytest.mark.asyncio
+    async def test_vllm_relay_keeps_the_json_body_when_the_content_type_carries_a_charset(self, monkeypatch):
+        body = {"model": "router-model", "messages": [{"role": "user", "content": "hi"}]}
+        captured: list[dict] = []
+        self._install_router(monkeypatch, self._recording_router(captured), body)
+
+        await vllm_proxy_route(
+            endpoint="/chat/completions",
+            request=self._request("application/json; charset=utf-8"),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert captured[0]["json"] == body
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_returns_the_upstream_status_and_body_when_the_deployment_rejects_the_call(
+        self, monkeypatch
+    ):
+        upstream_body = {"error": {"code": "DeploymentNotFound", "message": "The API deployment does not exist."}}
+
+        class RejectingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                upstream_request = httpx.Request(
+                    "POST", "https://my-azure.openai.azure.com/openai/deployments/gpt-5/chat/completions"
+                )
+                upstream = httpx.Response(
+                    404, json=upstream_body, headers={"x-ms-request-id": "req-1"}, request=upstream_request
+                )
+                raise httpx.HTTPStatusError("404", request=upstream_request, response=upstream)
+
+        self._install_router(monkeypatch, RejectingRouter(), {"model": "gpt-5", "stream": False})
+
+        result = await azure_proxy_route(
+            endpoint="openai/deployments/gpt-5/chat/completions",
+            request=self._request("application/json"),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert result.status_code == 404
+        assert json.loads(result.body) == upstream_body
+        assert result.headers["x-ms-request-id"] == "req-1"
+
+
+NIM_INFER_BODY = {
+    "input": [
+        {"type": "image_url", "url": "data:image/png;base64,AAAA"},
+        {"type": "image_url", "url": "data:image/png;base64,BBBB"},
+    ]
+}
+
+
+class TestNvidiaNimProxyRoute:
+    def _request(self) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.headers = {"content-type": "application/json"}
+        request.query_params = {}
+        return request
+
+    def _recording_router(self, captured: list[dict], deployments: dict[str, str]):
+        class RecordingRouter:
+            def get_model_list(self):
+                return [{"model_name": name, "litellm_params": {"model": model}} for name, model in deployments.items()]
+
+            async def allm_passthrough_route(self, **kwargs):
+                captured.append(kwargs)
+                return httpx.Response(
+                    200, json={"data": [{"index": 0, "bounding_boxes": {}}]}, headers={"x-nim-request": "r1"}
+                )
+
+        return RecordingRouter()
+
+    async def _relay(self, llm_router, endpoint: str, body: dict, user_api_key_dict=None) -> Response:
+        return await relay_nvidia_nim_request(
+            llm_router=llm_router,
+            endpoint=endpoint,
+            request=self._request(),
+            request_body=dict(body),
+            user_api_key_dict=user_api_key_dict or UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_model_group_in_the_path_selects_the_deployment_and_the_body_stays_model_free(self):
+        captured: list[dict] = []
+        router = self._recording_router(
+            captured,
+            {
+                "nim-page-elements": "nvidia_nim/nvidia/nemoretriever-page-elements-v2",
+                "nim-table": "nvidia_nim/nvidia/nemoretriever-table-structure-v1",
+            },
+        )
+
+        result = await self._relay(
+            router,
+            "nim-page-elements/v1/infer",
+            NIM_INFER_BODY,
+            UserAPIKeyAuth(api_key="hashed-token", team_id="team-1"),
+        )
+
+        (relay,) = captured
+        assert relay["model"] == "nim-page-elements"
+        assert relay["endpoint"] == "nim-page-elements/v1/infer"
+        assert relay["method"] == "POST"
+        assert relay["json"] == NIM_INFER_BODY
+        assert "model" not in relay["json"]
+        assert relay["litellm_metadata"]["user_api_key_team_id"] == "team-1"
+        assert result.status_code == 200
+        assert json.loads(result.body) == {"data": [{"index": 0, "bounding_boxes": {}}]}
+        assert result.headers["x-nim-request"] == "r1"
+
+    @pytest.mark.asyncio
+    async def test_model_group_with_a_slash_is_matched_as_the_longest_leading_path(self):
+        captured: list[dict] = []
+        router = self._recording_router(
+            captured, {"nvidia/nemoretriever-page-elements-v2": "nvidia_nim/nvidia/nemoretriever-page-elements-v2"}
+        )
+
+        await self._relay(router, "nvidia/nemoretriever-page-elements-v2/v1/infer", NIM_INFER_BODY)
+
+        assert captured[0]["model"] == "nvidia/nemoretriever-page-elements-v2"
+
+    @pytest.mark.asyncio
+    async def test_custom_llm_provider_marks_a_deployment_as_nim_without_the_model_prefix(self):
+        captured: list[dict] = []
+
+        class ProviderRouter:
+            def get_model_list(self):
+                return [
+                    {
+                        "model_name": "page-elements",
+                        "litellm_params": {
+                            "model": "nvidia/nemoretriever-page-elements-v2",
+                            "custom_llm_provider": "nvidia_nim",
+                        },
+                    }
+                ]
+
+            async def allm_passthrough_route(self, **kwargs):
+                captured.append(kwargs)
+                return httpx.Response(200, json={"data": []})
+
+        await self._relay(ProviderRouter(), "page-elements/v1/infer", NIM_INFER_BODY)
+
+        assert captured[0]["model"] == "page-elements"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["v1/infer", "unknown-group/v1/infer", "nim-page-elements-v2/v1/infer", "gpt-4o/v1/infer"],
+    )
+    async def test_path_without_a_nim_model_group_is_rejected_before_any_upstream_call(self, endpoint):
+        captured: list[dict] = []
+        router = self._recording_router(
+            captured,
+            {"nim-page-elements": "nvidia_nim/nvidia/nemoretriever-page-elements-v2", "gpt-4o": "openai/gpt-4o"},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._relay(router, endpoint, NIM_INFER_BODY)
+
+        assert exc_info.value.status_code == 400
+        assert captured == []
+
+    @pytest.mark.asyncio
+    async def test_a_group_mixing_nim_and_other_deployments_is_rejected_before_any_upstream_call(self):
+        captured: list[dict] = []
+
+        class MixedRouter:
+            def get_model_list(self):
+                return [
+                    {
+                        "model_name": "detect",
+                        "litellm_params": {"model": "nvidia_nim/nvidia/nemoretriever-page-elements-v2"},
+                    },
+                    {"model_name": "detect", "litellm_params": {"model": "openai/gpt-4o"}},
+                ]
+
+            async def allm_passthrough_route(self, **kwargs):
+                captured.append(kwargs)
+                return httpx.Response(200, json={"data": []})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._relay(MixedRouter(), "detect/v1/infer", NIM_INFER_BODY)
+
+        assert exc_info.value.status_code == 400
+        assert captured == []
+
+    @pytest.mark.asyncio
+    async def test_no_router_is_rejected_before_any_upstream_call(self):
+        with pytest.raises(HTTPException) as exc_info:
+            await self._relay(None, "nim-page-elements/v1/infer", NIM_INFER_BODY)
+
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_upstream_rejection_is_relayed_with_its_status_body_and_headers(self):
+        upstream_body = {"detail": "input[0].url must be a data URL"}
+
+        class RejectingRouter:
+            def get_model_list(self):
+                return [
+                    {
+                        "model_name": "nim-page-elements",
+                        "litellm_params": {"model": "nvidia_nim/nvidia/nemoretriever-page-elements-v2"},
+                    }
+                ]
+
+            async def allm_passthrough_route(self, **kwargs):
+                upstream_request = httpx.Request("POST", "http://nim.internal:8000/v1/infer")
+                upstream = httpx.Response(
+                    422, json=upstream_body, headers={"x-nim-request": "r2"}, request=upstream_request
+                )
+                raise httpx.HTTPStatusError("422", request=upstream_request, response=upstream)
+
+        result = await self._relay(
+            RejectingRouter(), "nim-page-elements/v1/infer", {"input": [{"type": "image_url", "url": "x"}]}
+        )
+
+        assert result.status_code == 422
+        assert json.loads(result.body) == upstream_body
+        assert result.headers["x-nim-request"] == "r2"
+
+
 @pytest.mark.asyncio
 async def test_bedrock_count_tokens_error_forwards_provider_headers():
     """The count tokens route converts BedrockError into an HTTPException, and dropping the
@@ -5263,3 +6053,172 @@ async def test_bedrock_count_tokens_error_forwards_provider_headers():
 
     assert exc_info.value.status_code == 500
     assert exc_info.value.headers["llm_provider-x-amzn-requestid"] == "req-count-tokens-500"
+
+
+class _AzureGroupRouter:
+    def __init__(self, captured: list[dict]) -> None:
+        self.captured = captured
+
+    def get_model_names(self, team_id=None):
+        return ["gpt", "other-group"]
+
+    def get_model_list(self, model_name=None, team_id=None):
+        rows = [
+            {"model_name": "gpt", "litellm_params": {"model": "azure_ai/gpt-5.4-mini", "api_key": "k"}},
+            {"model_name": "other-group", "litellm_params": {"model": "azure/gpt-5.4", "api_key": "k"}},
+        ]
+        return [row for row in rows if model_name is None or row["model_name"] == model_name]
+
+    async def allm_passthrough_route(self, **kwargs):
+        self.captured.append(kwargs)
+        return httpx.Response(200, json={"ok": True})
+
+
+class TestAzureRelayDeploymentSegment:
+    """A key allowed one model group must not reach another deployment by naming it in the
+    ``openai/deployments/<x>`` segment while the group segment picks the credential."""
+
+    def test_models_served_by_group_resolves_each_deployment_to_its_model_name(self):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import _models_served_by_group
+
+        assert _models_served_by_group(_AzureGroupRouter([]), "gpt") == frozenset({"gpt-5.4-mini"})
+        assert _models_served_by_group(_AzureGroupRouter([]), "missing-group") == frozenset()
+
+    def _install(self, monkeypatch, body: dict) -> list[dict]:
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        captured: list[dict] = []
+
+        async def fake_get_request_body(_request):
+            return body
+
+        monkeypatch.setattr(proxy_server, "llm_router", _AzureGroupRouter(captured))
+        monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
+        return captured
+
+    def _request(self) -> Request:
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.headers = {"content-type": "application/json"}
+        request.query_params = {}
+        return request
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_rejects_a_deployment_the_group_does_not_serve(self, monkeypatch):
+        from fastapi import HTTPException
+
+        captured = self._install(monkeypatch, {"model": "gpt", "messages": []})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await azure_proxy_route(
+                endpoint="gpt/openai/deployments/gpt-5.4/chat/completions",
+                request=self._request(),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token", models=["gpt"]),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "gpt-5.4" in exc_info.value.detail["error"]
+        assert captured == []
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_dispatches_the_group_and_its_own_deployment_name(self, monkeypatch):
+        captured = self._install(monkeypatch, {"model": "gpt", "messages": []})
+
+        for endpoint in (
+            "gpt/openai/deployments/gpt/chat/completions",
+            "gpt/openai/deployments/gpt-5.4-mini/chat/completions",
+        ):
+            await azure_proxy_route(
+                endpoint=endpoint,
+                request=self._request(),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token", models=["gpt"]),
+            )
+
+        assert [call["model"] for call in captured] == ["gpt", "gpt"]
+
+
+class TestTypeSafePassthroughRoute:
+    @staticmethod
+    def _request(body: object, query_params: Mapping[str, str] | None = None) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.query_params = query_params or {}
+        request.json = AsyncMock(return_value=body)
+        return request
+
+    @pytest.fixture
+    def client(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+        from litellm.proxy.proxy_server import app
+
+        monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
+        monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.example/base")
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+        yield TestClient(app)
+
+    @pytest.mark.parametrize(
+        "method, body",
+        [
+            ("GET", None),
+            ("POST", {"state": "x"}),
+            ("PUT", {"state": "x"}),
+            ("DELETE", None),
+            ("PATCH", {"state": "x"}),
+        ],
+    )
+    def test_forwards_every_method_and_body_upstream(
+        self, client: TestClient, method: str, body: dict[str, str] | None
+    ) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.request(method, "https://typesafe.example/base/v1/systemone").mock(
+                return_value=httpx.Response(200, json={"id": "upstream_123"})
+            )
+            response = client.request(method, "/typesafe/v1/systemone", json=body)
+
+            assert (response.status_code, response.json()) == (200, {"id": "upstream_123"})
+            sent: Final = route.calls.last.request
+            assert sent.headers["authorization"] == "Bearer typesafe-test-key"
+            assert json.loads(sent.content or b"{}") == (body or {})
+
+    @pytest.mark.asyncio
+    async def test_forwards_target_auth_headers_provider_and_query(self, monkeypatch):
+        monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
+        monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.example/base")
+
+        async def fake_upstream(request, *_args):
+            target: Final = create_route.call_args.kwargs["target"]
+            upstream_url: Final = httpx.URL(target).copy_merge_params(request.query_params)
+            return {"upstream_query": parse_qs(upstream_url.query.decode())}
+
+        endpoint_func = AsyncMock(side_effect=fake_upstream)
+        create_route = Mock(return_value=endpoint_func)
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            create_route,
+        )
+
+        request = self._request({"state": "x"}, {"trace": "yes"})
+        result = await typesafe_proxy_route(
+            endpoint="v1/systemone",
+            request=request,
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
+        )
+
+        assert result == {"upstream_query": {"trace": ["yes"]}}
+        endpoint_func.assert_awaited_once()
+        create_route.assert_called_once_with(
+            endpoint="v1/systemone",
+            target="https://typesafe.example/base/v1/systemone",
+            custom_headers={
+                "Authorization": "Bearer typesafe-test-key",
+                "Content-Type": "application/json",
+            },
+            custom_llm_provider="typesafe",
+            is_streaming_request=False,
+        )

@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import anyio
 import httpx
 import pytest
+import respx
 from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
 from mcp import McpError
 from mcp.client.streamable_http import streamable_http_client
@@ -1686,3 +1687,265 @@ async def test_empty_http_event_stream_uses_the_existing_request_deadline() -> N
                 timeout=3,
             )
     assert isinstance(as_mcp_read_timeout(caught.value), TimeoutError)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ("prompts/list", "resources/list", "resources/templates/list"))
+@pytest.mark.parametrize(
+    "outcome",
+    (
+        "absent",
+        "other_capability",
+        "supported",
+        "method_not_found",
+        "internal_error",
+        "unauthorized",
+        "timeout",
+        "initialize_not_found",
+    ),
+)
+@pytest.mark.parametrize("raise_on_error", (False, True))
+async def test_optional_discovery_capabilities_and_errors(
+    method: str, outcome: str, caplog: pytest.LogCaptureFixture, raise_on_error: bool
+) -> None:
+    import logging
+    from unittest.mock import Mock
+
+    from mcp.types import JSONRPCRequest
+
+    capability: Final = "prompts" if method == "prompts/list" else "resources"
+    field: Final = {
+        "prompts/list": "prompts",
+        "resources/list": "resources",
+        "resources/templates/list": "resourceTemplates",
+    }[method]
+    advertised: Final = "resources" if capability == "prompts" else "prompts"
+    entry: Final = {
+        "prompts/list": {"name": "example"},
+        "resources/list": {"name": "example", "uri": "test://example"},
+        "resources/templates/list": {"name": "example", "uriTemplate": "test://{name}"},
+    }[method]
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "DELETE":
+            return httpx.Response(200)
+        payload: Final = JSONRPCMessage.model_validate_json(request.content).root
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx.Response(202)
+        if outcome == "initialize_not_found":
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "error": {"code": -32601, "message": "Initialization rejected"},
+                },
+            )
+        if payload.method == "initialize":
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": LATEST_PROTOCOL_VERSION,
+                        "capabilities": {}
+                        if outcome == "absent"
+                        else {advertised if outcome == "other_capability" else capability: {}},
+                        "serverInfo": {"name": "discovery", "version": "1"},
+                    },
+                },
+            )
+        if outcome == "timeout":
+            raise httpx.ReadTimeout("Optional list timed out", request=request)
+        if outcome == "unauthorized":
+            return httpx.Response(401)
+        if outcome in ("method_not_found", "internal_error", "absent", "other_capability"):
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "error": {
+                        "code": -32603 if outcome == "internal_error" else -32601,
+                        "message": "Optional list rejected",
+                    },
+                },
+            )
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {field: [entry]}})
+
+    responder: Final = Mock(side_effect=respond)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+    with respx.mock(base_url="https://example.com") as router:
+        router.route().mock(side_effect=responder)
+        client: Final = MCPClient(server_url="https://example.com/mcp")
+        operation: Final = {
+            "prompts/list": client.list_prompts,
+            "resources/list": client.list_resources,
+            "resources/templates/list": client.list_resource_templates,
+        }[method]
+        if raise_on_error and outcome in ("internal_error", "unauthorized", "timeout", "initialize_not_found"):
+            with pytest.raises((McpError, httpx.HTTPError)):
+                await operation(raise_on_error=True)
+            return
+        result: Final = await operation(raise_on_error=raise_on_error)
+
+    requests: Final = tuple(
+        JSONRPCMessage.model_validate_json(call.args[0].content).root
+        for call in responder.call_args_list
+        if call.args[0].method == "POST"
+    )
+    assert sum(isinstance(request, JSONRPCRequest) and request.method == method for request in requests) == (
+        0 if outcome in ("absent", "other_capability", "initialize_not_found") else 1
+    )
+    assert [item.name for item in result] == (["example"] if outcome == "supported" else [])
+    failures: Final = tuple(
+        record for record in caplog.records if record.name == "LiteLLM" and record.levelno >= logging.WARNING
+    )
+    if outcome in ("internal_error", "unauthorized", "timeout", "initialize_not_found"):
+        assert any(record.levelno == logging.ERROR and "failed" in record.message for record in failures)
+    else:
+        assert failures == ()
+    if outcome == "method_not_found":
+        assert any(
+            record.levelno == logging.DEBUG and "Optional list rejected" in record.message for record in caplog.records
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("supports_first", (True, False))
+async def test_optional_discovery_uses_each_sessions_capabilities(supports_first: bool) -> None:
+    from unittest.mock import Mock
+    from mcp.types import JSONRPCRequest
+
+    capabilities: Final = iter(({"resources": {}}, {}) if supports_first else ({}, {"resources": {}}))
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "DELETE":
+            return httpx.Response(200)
+        payload: Final = JSONRPCMessage.model_validate_json(request.content).root
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx.Response(202)
+        result: Final = (
+            {
+                "protocolVersion": LATEST_PROTOCOL_VERSION,
+                "capabilities": next(capabilities),
+                "serverInfo": {"name": "changing", "version": "1"},
+            }
+            if payload.method == "initialize"
+            else {"resources": [{"name": "example", "uri": "test://example"}]}
+        )
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
+
+    responder: Final = Mock(side_effect=respond)
+    with respx.mock(base_url="https://example.com") as router:
+        router.route().mock(side_effect=responder)
+        client: Final = MCPClient(server_url="https://example.com/mcp")
+        first: Final = await client.list_resources()
+        second: Final = await client.list_resources()
+
+    assert [item.name for item in first] == (["example"] if supports_first else [])
+    assert [item.name for item in second] == ([] if supports_first else ["example"])
+    requests: Final = tuple(
+        JSONRPCMessage.model_validate_json(call.args[0].content).root
+        for call in responder.call_args_list
+        if call.args[0].method == "POST"
+    )
+    assert sum(isinstance(request, JSONRPCRequest) and request.method == "resources/list" for request in requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ("prompts/list", "resources/list", "resources/templates/list"))
+async def test_optional_discovery_preserves_cancellation(method: str) -> None:
+    from mcp.types import JSONRPCRequest
+
+    ready: Final = asyncio.Event()
+    pending: Final = asyncio.Event()
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "DELETE":
+            return httpx.Response(200)
+        payload: Final = JSONRPCMessage.model_validate_json(request.content).root
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx.Response(202)
+        if payload.method == "initialize":
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": LATEST_PROTOCOL_VERSION,
+                        "capabilities": {"resources": {}, "prompts": {}},
+                        "serverInfo": {"name": "pending", "version": "1"},
+                    },
+                },
+            )
+        ready.set()
+        await pending.wait()
+        return httpx.Response(202)
+
+    with respx.mock(base_url="https://example.com") as router:
+        router.route().mock(side_effect=respond)
+        client: Final = MCPClient(server_url="https://example.com/mcp")
+        operation: Final = {
+            "prompts/list": client.list_prompts,
+            "resources/list": client.list_resources,
+            "resources/templates/list": client.list_resource_templates,
+        }[method]
+        task: Final = asyncio.create_task(operation())
+        try:
+            await asyncio.wait_for(ready.wait(), timeout=3)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=3)
+
+
+
+def test_client_import_before_proxy_credentials_succeeds_in_fresh_process():
+    import subprocess
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import litellm.experimental_mcp_client.client; from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager; print(MCPServerManager.__name__)"],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "MCPServerManager"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resolved", (False, True))
+async def test_discovery_auth_fingerprint_tracks_effective_credentials(resolved: bool) -> None:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
+
+    def client(token: str) -> MCPClient:
+        return MCPClient(
+            server_url="https://example.com/mcp",
+            auth_type=MCPAuth.api_key,
+            auth_value=None if resolved else token,
+            resolved_auth=StaticHeaderAuth(token) if resolved else None,
+        )
+
+    original: Final = await client("private-original-credential").discovery_auth_fingerprint()
+    repeated: Final = await client("private-original-credential").discovery_auth_fingerprint()
+    replaced: Final = await client("private-replaced-credential").discovery_auth_fingerprint()
+    assert original == repeated
+    assert original != replaced
+    assert len(original) == 64
+    assert "private-original-credential" not in original
+
+
+@pytest.mark.asyncio
+async def test_request_auth_preview_uses_the_same_effective_headers_as_egress() -> None:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
+
+    client: Final = MCPClient(
+        server_url="https://upstream.example/mcp", auth_type=MCPAuth.bearer_token,
+        resolved_auth=StaticHeaderAuth("Bearer resolved"), extra_headers={"X-Trace": "trace"},
+    )
+    request: Final = await client.prepare_request_auth()
+    assert request.method == "POST"
+    assert str(request.url) == "https://upstream.example/mcp"
+    assert request.headers["Authorization"] == "Bearer resolved"
+    assert request.headers["X-Trace"] == "trace"

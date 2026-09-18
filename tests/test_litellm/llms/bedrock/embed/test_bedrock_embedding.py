@@ -1041,6 +1041,63 @@ def test_load_credentials_assumes_role_with_external_id(monkeypatch):
     assert "aws_external_id" not in optional_params
 
 
+def test_embedding_session_tags_sign_the_request_and_stay_out_of_the_body(monkeypatch):
+    """The tagged STS session signs the InvokeModel call and the tags never reach the body (#34069)."""
+    import datetime
+
+    import boto3
+    from botocore.exceptions import ClientError
+
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
+    tags = [{"Key": "team", "Value": "genai"}]
+
+    class FakeSTSClient:
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if list(params.get("Tags", ())) != tags:
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:TagSession"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIAEMBEDTAGGED",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+                }
+            }
+
+    client = HTTPHandler()
+    with patch.object(boto3, "client", return_value=FakeSTSClient()), patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(titan_embedding_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model="bedrock/amazon.titan-embed-text-v1",
+            input=test_input,
+            client=client,
+            aws_region_name="us-east-1",
+            aws_access_key_id="AKIAEMBEDCALLERKEY",
+            aws_secret_access_key="pod-caller-secret",
+            aws_role_name="arn:aws:iam::999999999999:role/litellm-embed-role",
+            aws_session_name="litellm-embed-session",
+            aws_session_tags=tags,
+        )
+
+    assert response.data[0]["embedding"] == titan_embedding_response["embedding"]
+    sent = mock_post.call_args.kwargs
+    assert "Credential=ASIAEMBEDTAGGED/" in sent["headers"]["Authorization"]
+    assert "aws_session_tags" not in sent["data"]
+
+
 def test_bedrock_embedding_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
     """The deployment's AWS profile does not exist, so resolving SigV4 credentials
     raises; a bearer-token deployment must still serve the request, since the

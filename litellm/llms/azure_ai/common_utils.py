@@ -9,6 +9,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
 AzureAIApiKeyHeader = Literal["Authorization", "api-key", "Api-Key", "Ocp-Apim-Subscription-Key"]
+AZURE_OPENAI_V1_HOST_SUFFIXES: Final = (".services.ai.azure.com", ".openai.azure.com")
 
 
 def is_foundry_model_inference_base(api_base: str) -> bool:
@@ -17,6 +18,15 @@ def is_foundry_model_inference_base(api_base: str) -> bool:
     if host is None or not host.endswith(".services.ai.azure.com"):
         return False
     return "/openai/deployments" not in parsed.path
+
+
+def is_azure_openai_v1_host(api_base: str | None) -> bool:
+    host: Final = urlparse(api_base).hostname if api_base else None
+    return host is not None and host.endswith(AZURE_OPENAI_V1_HOST_SUFFIXES)
+
+
+def api_key_header_for_base(api_base: str | None) -> AzureAIApiKeyHeader:
+    return "api-key" if is_azure_openai_v1_host(api_base) else "Authorization"
 
 
 def get_azure_ai_entra_token(litellm_params: Mapping[str, object] | None = None) -> str | None:
@@ -61,6 +71,17 @@ def get_azure_ai_auth_headers(
 
 
 AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: Final = "azure_model_router_selected_model"
+
+
+def azure_ai_supports_native_responses(model: str | None, api_base: str | None) -> bool:
+    resolved_base: Final = AzureFoundryModelInfo.get_api_base(api_base)
+    if resolved_base is not None and not is_azure_openai_v1_host(resolved_base):
+        return False
+    if model is None:
+        return True
+    if "claude" in model.lower():
+        return False
+    return AzureFoundryModelInfo.get_azure_ai_route(model) == "default"
 
 
 class AzureFoundryModelInfo(BaseLLMModelInfo):
@@ -137,10 +158,13 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
     def get_api_key(api_key: str | None = None) -> str | None:
         return api_key or litellm.api_key or get_secret_str("AZURE_AI_API_KEY")
 
+    @staticmethod
+    def get_api_version(api_version: str | None = None) -> str | None:
+        return api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
+
     @property
-    def api_version(self, api_version: str | None = None) -> str | None:
-        api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
-        return api_version
+    def api_version(self) -> str | None:
+        return AzureFoundryModelInfo.get_api_version()
 
     def get_token_counter(self) -> BaseTokenCounter | None:
         """

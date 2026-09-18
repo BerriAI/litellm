@@ -231,7 +231,7 @@ class CacheDetailBlock(TypedDict):
 class ConverseTokenUsageBlock(TypedDict, total=False):
     inputTokens: Required[ReadOnly[int]]
     outputTokens: Required[ReadOnly[int]]
-    totalTokens: Required[ReadOnly[int]]
+    totalTokens: ReadOnly[int]
     cacheReadInputTokenCount: ReadOnly[int]
     cacheReadInputTokens: ReadOnly[int]
     cacheWriteInputTokenCount: ReadOnly[int]
@@ -1105,6 +1105,11 @@ class BedrockOutputDataConfig(TypedDict):
 class BedrockTag(TypedDict):
     key: str
     value: str
+
+
+class AwsSessionTag(TypedDict):
+    Key: str  # writable-ok: boto3's STS stubs type assume_role Tags as writable TagTypeDef, which rejects ReadOnly
+    Value: str  # writable-ok: boto3's STS stubs type assume_role Tags as writable TagTypeDef, which rejects ReadOnly
 
 
 class BedrockCreateBatchRequest(TypedDict, total=False):

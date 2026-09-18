@@ -170,8 +170,8 @@ interface StartFormValidityInputs {
   models: string[];
   routerNames: string[];
   direction: ShadowEvalDirection;
-  baselineModel: string;
-  judgeModel: string;
+  baselineModel: string | null;
+  judgeModel: string | null;
   percentage: string;
   maxBudget: string;
 }
@@ -181,13 +181,13 @@ const startFormValidity = (inputs: StartFormValidityInputs) => {
   const percentageValid = parsedPct >= 0.1 && parsedPct <= 100;
   const parsedMaxBudget = Number.parseFloat(inputs.maxBudget);
   const maxBudgetValid = parsedMaxBudget >= 0.01 && parsedMaxBudget <= 10000;
-  const baselinePicked = inputs.direction === "forward" || inputs.baselineModel !== "";
+  const baselinePicked = inputs.direction === "forward" || Boolean(inputs.baselineModel);
   const targetsPicked = inputs.apiKeyIds.length + inputs.teamIds.length + inputs.userIds.length > 0;
   const routerCountValid = inputs.routerNames.length >= 1 && inputs.routerNames.length <= MAX_ROUTERS;
   const routersMatchDirection = inputs.direction === "forward" || inputs.routerNames.length === 1;
   const routersValid = routerCountValid && routersMatchDirection;
   const scopeValid = routersValid && (inputs.direction === "reverse" || inputs.models.length <= MAX_MODELS);
-  const modelsPicked = scopeValid && inputs.judgeModel !== "" && baselinePicked;
+  const modelsPicked = scopeValid && Boolean(inputs.judgeModel) && baselinePicked;
   const filled = targetsPicked && modelsPicked;
   const boundsValid = percentageValid && maxBudgetValid;
   const valid = Boolean(inputs.accessToken) && filled && boundsValid;
@@ -201,7 +201,7 @@ interface StartBodyInputs {
   models: string[];
   routerNames: string[];
   direction: ShadowEvalDirection;
-  baselineModel: string;
+  baselineModel: string | null;
   shadowPercentage: number;
   durationDays: number;
   maxBudget: number;
@@ -215,7 +215,7 @@ const buildStartBody = (inputs: StartBodyInputs) => ({
   models: inputs.direction === "forward" ? inputs.models : [],
   router_names: inputs.routerNames,
   direction: inputs.direction,
-  ...(inputs.direction === "reverse" ? { baseline_model: inputs.baselineModel } : {}),
+  ...(inputs.direction === "reverse" ? { baseline_model: inputs.baselineModel ?? undefined } : {}),
   shadow_percentage: inputs.shadowPercentage,
   duration_days: inputs.durationDays,
   max_budget: inputs.maxBudget,
@@ -230,10 +230,10 @@ export const StartForm: React.FC = () => {
   const [models, setModels] = useState<string[]>([]);
   const [routerNames, setRouterNames] = useState<string[]>([]);
   const [direction, setDirection] = useState<ShadowEvalDirection>("forward");
-  const [baselineModel, setBaselineModel] = useState("");
+  const [baselineModel, setBaselineModel] = useState<string | null>(null);
   const [percentage, setPercentage] = useState("10");
   const [durationDays, setDurationDays] = useState("7");
-  const [judgeModel, setJudgeModel] = useState("");
+  const [judgeModel, setJudgeModel] = useState<string | null>(null);
   const [maxBudget, setMaxBudget] = useState("10");
   const { data: autoRouters } = useAutoRouters();
   const configuredGroups = usePlainModelGroups();
@@ -286,6 +286,7 @@ export const StartForm: React.FC = () => {
   };
   const { parsedPct, parsedMaxBudget, percentageValid, maxBudgetValid, valid } = startFormValidity(validityInputs);
   const handleStart = () => {
+    if (!valid || !judgeModel) return;
     const bodyInputs: StartBodyInputs = {
       apiKeyIds,
       teamIds,

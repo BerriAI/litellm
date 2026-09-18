@@ -972,11 +972,6 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/projects/_components/ProjectKeysSection.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/projects/_components/ProjectModals/ProjectBaseForm.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 2
@@ -2321,11 +2316,6 @@
     }
   },
   "src/components/view_logs/GuardrailViewer/GuardrailViewer.tsx": {
-    "no-nested-ternary": {
-      "count": 4
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/LogDetailContent.tsx": {
     "no-nested-ternary": {
       "count": 3
     }
