@@ -11,7 +11,9 @@ from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+import httpx
 import pytest
+from prisma.errors import RawQueryError
 from redis.exceptions import DataError
 
 import litellm
@@ -2812,20 +2814,65 @@ async def test_failed_window_spend_commit_requeues_the_increments_and_continues_
 class _DailySpendFakeDB(_WindowSpendFakeDB):
     """Records the daily rollup upserts it is handed and fails the ones aimed at one table."""
 
-    def __init__(self, failing_table: str | None) -> None:
+    def __init__(self, failing_table: str | None, failure: Exception | None = None) -> None:
         super().__init__()
         self.failing_table = failing_table
+        self.failure = failure
         self.execute_raw_calls: list[Statement] = []
 
     async def execute_raw(self, query: str, *args: object) -> int:
         if self.failing_table is not None and self.failing_table in query:
-            raise Exception("connection reset")
+            raise self.failure if self.failure is not None else Exception("connection reset")
         self.execute_raw_calls.append((query, args))
         return len(args)
 
 
 def _daily_upserts(db: _DailySpendFakeDB, table: str) -> list[Statement]:
     return [statement for statement in db.execute_raw_calls if table in statement[0]]
+
+
+def _postgres_rejection(sqlstate: str) -> RawQueryError:
+    return RawQueryError(
+        data={"user_facing_error": {"error_code": "P2010", "meta": {"code": sqlstate, "message": "db error"}}}
+    )
+
+
+@pytest.mark.parametrize(
+    ("failure", "lands_on_the_next_tick"),
+    [
+        pytest.param(httpx.ReadTimeout("no reply"), False, id="reply lost after the statement was sent"),
+        pytest.param(httpx.ConnectError("refused"), True, id="statement never reached the database"),
+        pytest.param(_postgres_rejection("22021"), False, id="postgres refused the data itself"),
+        pytest.param(_postgres_rejection("23502"), False, id="postgres refused a constraint violation"),
+        pytest.param(_postgres_rejection("42P01"), True, id="table missing"),
+        pytest.param(_postgres_rejection("57014"), True, id="statement cancelled"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_failed_daily_spend_commit_is_requeued_only_when_the_rows_are_provably_uncommitted(
+    failure: Exception, lands_on_the_next_tick: bool
+):
+    """A lost reply means the statement may already have applied, and re-sending it stacks a
+    second increment into the same transaction (LIT-4823); a row Postgres refuses would fail
+    every tick forever. Both are dropped loudly. Every other failure left nothing committed,
+    so its rows go back on the queue and land on the next tick."""
+    db_writer = DBSpendUpdateWriter()
+    await db_writer.daily_spend_update_queue.add_update({"user-key": _daily_txn(user_id="user-1")})
+    db = _DailySpendFakeDB(failing_table="LiteLLM_DailyUserSpend", failure=failure)
+    db_writer._flush_tool_discovery_queue = AsyncMock()
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db), n_retry_times=0, proxy_logging_obj=proxy_logging_obj
+    )
+    db.failing_table = None
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db), n_retry_times=0, proxy_logging_obj=proxy_logging_obj
+    )
+
+    assert len(_daily_upserts(db, "LiteLLM_DailyUserSpend")) == (1 if lands_on_the_next_tick else 0)
+    assert db_writer.daily_spend_update_queue.update_queue.empty()
 
 
 @pytest.mark.asyncio
