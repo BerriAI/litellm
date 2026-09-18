@@ -17,7 +17,7 @@ from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.models.user import LiteLLM_UserTable
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ModelAccessDeniedProxyException, UserAPIKeyAuth
 from litellm.proxy.realtime_endpoints import live
 
 
@@ -1132,8 +1132,9 @@ async def test_authorize_enforces_authoritative_personal_user_models(monkeypatch
     auth = UserAPIKeyAuth(api_key="owner", models=[], user_id="user-only")
 
     await live._authorize("voice", auth)
-    with pytest.raises(Exception, match="user can only access"):
+    with pytest.raises(ModelAccessDeniedProxyException) as rejected:
         await live._authorize("backend", auth)
+    assert "user can only access" in rejected.value.internal_message
 
     assert user_loader.await_count == 2
 
@@ -1153,8 +1154,9 @@ async def test_authorize_enforces_authoritative_organization_models(monkeypatch,
     auth = UserAPIKeyAuth(api_key="owner", models=[], org_id="org-only")
 
     await live._authorize("voice", auth)
-    with pytest.raises(Exception, match="org can only access"):
+    with pytest.raises(ModelAccessDeniedProxyException) as rejected:
         await live._authorize("backend", auth)
+    assert "org can only access" in rejected.value.internal_message
 
     assert org_loader.await_count == 2
 

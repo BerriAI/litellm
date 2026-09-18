@@ -280,8 +280,9 @@ async def test_offer_auth_enforces_session_model_policy_before_upstream(
     with pytest.raises(ProxyException) as denied:
         await proxy_realtime_calls(request, Response())
     if policy == "personal_models":
-        assert "user not allowed to access model" in str(denied.value)
-        assert "forbidden-voice" in str(denied.value)
+        internal_message = getattr(denied.value, "internal_message", str(denied.value))
+        assert "user not allowed to access model" in internal_message
+        assert "forbidden-voice" in internal_message
     custom.assert_awaited_once()
     upstream.assert_not_awaited()
     if policy == "budget":
