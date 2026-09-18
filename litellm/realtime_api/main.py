@@ -38,6 +38,10 @@ from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_pr
 from ..llms.bedrock.realtime.handler import BedrockRealtime
 from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..llms.openai.realtime.handler import OpenAIRealtime
+from ..llms.vertex_ai.audio_transcription.realtime_transformation import (
+    VertexChirpRealtimeConfig,
+    is_vertex_speech_to_text_model,
+)
 from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
 from ..llms.vertex_ai.vertex_llm_base import VertexBase
 from ..llms.xai.realtime.handler import XAIRealtime
@@ -539,8 +543,6 @@ async def _arealtime(
             or get_secret_str("VERTEXAI_LOCATION")
         )
 
-        resolved_location: Final = vertex_llm_base.get_vertex_region(vertex_region=vertex_location, model=model)
-
         (
             access_token,
             resolved_project,
@@ -551,10 +553,11 @@ async def _arealtime(
             timeout_seconds=REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
         )
 
-        vertex_realtime_config: Final = VertexAIRealtimeConfig(
+        vertex_realtime_config: Final = _vertex_realtime_config(
+            model=model,
             access_token=access_token,
             project=resolved_project,
-            location=resolved_location,
+            location=vertex_location,
         )
 
         await base_llm_http_handler.async_realtime(
@@ -573,6 +576,18 @@ async def _arealtime(
         )
     else:
         raise ValueError(f"Unsupported model: {model}")
+
+
+def _vertex_realtime_config(
+    model: str, access_token: str, project: str, location: str | None
+) -> VertexAIRealtimeConfig | VertexChirpRealtimeConfig:
+    if is_vertex_speech_to_text_model(model):
+        return VertexChirpRealtimeConfig(access_token=access_token, project=project, location=location)
+    return VertexAIRealtimeConfig(
+        access_token=access_token,
+        project=project,
+        location=vertex_llm_base.get_vertex_region(vertex_region=location, model=model),
+    )
 
 
 def _is_transcription_only_realtime_model(model: str, custom_llm_provider: str) -> bool:
@@ -682,6 +697,11 @@ async def _realtime_health_check(
             api_base=resolved_api_base or "https://api.x.ai/v1", query_params={"model": model}
         )
     elif custom_llm_provider == "vertex_ai":
+        if is_vertex_speech_to_text_model(model):
+            raise ValueError(
+                f"Realtime health checks are not supported for Speech-to-Text streaming model {model};"
+                " health check it with mode audio_transcription"
+            )
         vertex_model_params: Final = dict(resolved_params)
         resolved_location: Final = vertex_llm_base.get_vertex_region(
             vertex_region=VertexBase.safe_get_vertex_ai_location(vertex_model_params),
