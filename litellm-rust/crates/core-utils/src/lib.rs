@@ -4,7 +4,6 @@ pub mod exception_mapping_utils;
 pub mod get_llm_provider_logic;
 pub mod params;
 pub mod prompt_templates;
-pub mod python_repr;
 pub mod secret_redaction;
 pub mod serde_compat;
 pub mod url_utils;
