@@ -12,6 +12,7 @@ from typing_extensions import TypedDict
 
 from litellm import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -25,6 +26,16 @@ class DeploymentHealthStateValue(TypedDict):
     is_healthy: bool
     timestamp: float
     reason: str
+
+
+def _read_shared_health_snapshot(cache: DualCache, key: str) -> object:
+    redis_cache: Final = cache.redis_cache
+    if redis_cache is None:
+        return None
+    try:
+        return redis_cache.get_cache(key)
+    except RedisCircuitBreakerOpenError:
+        return None
 
 
 class DeploymentHealthCache:
@@ -50,13 +61,12 @@ class DeploymentHealthCache:
         coexist on the one shared entry without erasing each other's results.
         The snapshot is read from Redis when available, since a pod-local read
         would only ever see this writer's own previous merge. When the Redis
-        read comes back empty (a miss, or a swallowed connection error), the
-        pod-local copy of the last merge is used so peers are not erased.
+        read comes back empty (a miss, a swallowed connection error, or a read
+        refused by the open circuit breaker), the pod-local copy of the last
+        merge is used so peers are not erased.
         """
         try:
-            redis_raw: Final = (
-                self.cache.redis_cache.get_cache(self.CACHE_KEY) if self.cache.redis_cache is not None else None
-            )
+            redis_raw: Final = _read_shared_health_snapshot(self.cache, self.CACHE_KEY)
             raw: Final = redis_raw if isinstance(redis_raw, dict) else self.cache.get_cache(key=self.CACHE_KEY)
             existing: Final = raw if isinstance(raw, dict) else {}
             expiry_seconds: Final = self.staleness_threshold * 1.5

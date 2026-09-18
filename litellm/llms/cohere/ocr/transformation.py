@@ -144,9 +144,6 @@ class CohereParseConfig(BaseOCRConfig):
     def get_api_key_env_var(self) -> str | None:
         return COHERE_API_KEY_ENV_VAR
 
-    def supports_rust_bridge(self) -> bool:
-        return False
-
     def get_health_check_document(self) -> DocumentType:
         return {  # mutable-ok: litellm.aocr rejects any document that is not a dict
             "type": "image_url",

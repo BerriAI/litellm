@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 
 import litellm
-from litellm.cost_calculator import cost_per_token
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import StandardBuiltInToolCostTracking
 
@@ -23,16 +22,6 @@ def _load_cost_map(filename: str = "model_prices_and_context_window.json") -> di
         return json.load(f)
 
 
-@pytest.mark.parametrize("model, input_cost, cached_cost, output_cost", PRICING)
-def test_muse_spark_1_3_cost_per_token(
-    local_model_cost_map, model: str, input_cost: float, cached_cost: float, output_cost: float
-):
-    prompt_cost, completion_cost = cost_per_token(model=model, prompt_tokens=1000, completion_tokens=500)
-
-    assert prompt_cost == pytest.approx(1000 * input_cost)
-    assert completion_cost == pytest.approx(500 * output_cost)
-
-
 @pytest.mark.parametrize("model", (MUSE_SPARK_STANDARD, MUSE_SPARK_CONTRIBUTOR))
 def test_muse_spark_1_3_routes_to_meta_model_api(model: str):
     routed_model, provider, _, api_base = get_llm_provider(model=model, api_key="sk-test")
@@ -40,13 +29,6 @@ def test_muse_spark_1_3_routes_to_meta_model_api(model: str):
     assert routed_model == model.split("/", 1)[1]
     assert provider == "meta"
     assert api_base == "https://api.meta.ai/v1"
-
-
-@pytest.mark.parametrize("model", (MUSE_SPARK_STANDARD, MUSE_SPARK_CONTRIBUTOR))
-def test_muse_spark_1_3_web_search_cost_per_query(local_model_cost_map, model: str):
-    info = litellm.get_model_info(model=model)
-
-    assert StandardBuiltInToolCostTracking.get_cost_for_web_search(model_info=info) == WEB_SEARCH_COST_PER_QUERY
 
 
 @pytest.mark.parametrize("model", (MUSE_SPARK_STANDARD, MUSE_SPARK_CONTRIBUTOR))

@@ -1,20 +1,23 @@
+use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
+use litellm_llms::{
+    base_llm::chat::transformation::{BaseConfig, ChatCompletionsAuth},
+    custom_httpx::http_handler::has_header,
+};
+use litellm_types::llms::openai::ChatMessage;
 use serde_json::Value;
 
-use crate::error::Error;
-use crate::http_utils::has_header;
-use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
-
-use super::common_utils::{chat_completions_provider_config, string_headers};
-use super::transformation::{ChatCompletionsAuth, ChatCompletionsProviderConfig};
-use super::types::{
-    ChatCompletionsRequest, ChatMessage, ProviderChatCompletionsRequest,
-    ResolvedChatCompletionsRequest,
+use super::{
+    Error,
+    common_utils::{chat_completions_provider_config, string_headers},
+};
+use crate::chat_completions::types::{
+    ChatCompletionsRequest, ProviderChatCompletionsRequest, ResolvedChatCompletionsRequest,
 };
 
 pub(super) fn resolve_provider_config<'a>(
     model: &'a str,
     custom_llm_provider: Option<&'a str>,
-) -> Result<(String, &'static dyn ChatCompletionsProviderConfig), Error> {
+) -> Result<(String, &'static dyn BaseConfig), Error> {
     let provider_info = get_custom_llm_provider(model, custom_llm_provider)
         .or_else(|| {
             custom_llm_provider.map(|provider| CustomLlmProvider {
@@ -62,11 +65,10 @@ pub(super) fn resolve_request(
     })
 }
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 fn validate_environment(
     request: &ResolvedChatCompletionsRequest<'_>,
     model: &str,
-    config: &dyn ChatCompletionsProviderConfig,
+    config: &dyn BaseConfig,
 ) -> Result<(Vec<(String, String)>, ChatCompletionsAuth), Error> {
     let env_lookup = |key: &str| std::env::var(key).ok();
     let mut headers = string_headers(request.extra_headers.clone())?;
@@ -123,7 +125,7 @@ pub(super) fn prepare_provider_request(
     let model = request.model;
     let config = request.config;
     let env_lookup = |key: &str| std::env::var(key).ok();
-    let url = config.complete_url(
+    let url = config.get_complete_url(
         request.api_base,
         &model,
         &request.optional_params,

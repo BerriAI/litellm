@@ -379,6 +379,27 @@
     "description": "OpenTelemetry Logging Integration"
   },
   {
+    "id": "pointfive",
+    "displayName": "PointFive",
+    "logo": "pointfive.png",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "POINTFIVE_API_KEY": {
+        "type": "password",
+        "ui_name": "API Key",
+        "description": "PointFive API key, used to request an upload url for each batch of logs",
+        "required": true
+      },
+      "POINTFIVE_API_URL": {
+        "type": "text",
+        "ui_name": "API URL",
+        "description": "PointFive API endpoint. Leave blank to use https://api.pointfive.co/api/v1/ingestion",
+        "required": false
+      }
+    },
+    "description": "PointFive Logging Integration"
+  },
+  {
     "id": "s3",
     "displayName": "S3",
     "logo": "aws.svg",
@@ -424,6 +445,12 @@
         "type": "text",
         "ui_name": "S3 Path Prefix",
         "description": "Path prefix within the bucket for organizing logs",
+        "required": false
+      },
+      "s3_log_prompts_only": {
+        "type": "boolean",
+        "ui_name": "Log Prompts Only",
+        "description": "Log request messages to S3 but drop the model response from each logged object",
         "required": false
       }
     },

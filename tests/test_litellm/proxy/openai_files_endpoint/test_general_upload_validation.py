@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 
 import pytest
 
@@ -6,11 +7,14 @@ from litellm.proxy._types import ProxyException
 from litellm.proxy.openai_files_endpoints.general_upload_validation import (
     MB,
     UploadedFileBlockedExtension,
+    UploadedFileExtensionNotAllowed,
     UploadedFileTooLarge,
     UploadedFileUnsafeFilename,
+    check_allowed_extension,
     check_blocked_extension,
     check_unsafe_filename,
     check_upload_file_size,
+    coerce_optional_str_list_setting,
     raise_upload_validation_failure,
 )
 
@@ -79,6 +83,44 @@ def test_no_filename_skips_extension_check():
     assert check_blocked_extension(None, (".exe",)) is None
 
 
+def test_allowed_extension_passes():
+    assert check_allowed_extension("batch.jsonl", (".jsonl", ".pdf")) is None
+
+
+@pytest.mark.parametrize("filename", ["payload.exe", "notes.txt", "archive.tar.gz"])
+def test_extension_outside_allowlist_rejected(filename):
+    assert check_allowed_extension(filename, (".jsonl", ".pdf")) == UploadedFileExtensionNotAllowed(
+        extension=Path(filename).suffix
+    )
+
+
+def test_allowed_extension_match_is_case_insensitive_for_upload():
+    assert check_allowed_extension("batch.JSONL", (".jsonl",)) is None
+
+
+def test_allowed_extension_match_is_case_insensitive_for_configured_value():
+    assert check_allowed_extension("batch.jsonl", (".JSONL",)) is None
+
+
+@pytest.mark.parametrize("filename", ["README", "", None, "../../"])
+def test_no_extension_rejected_when_allowlist_set(filename):
+    assert check_allowed_extension(filename, (".jsonl",)) == UploadedFileExtensionNotAllowed(extension="")
+
+
+def test_empty_allowlist_rejects_everything():
+    assert check_allowed_extension("batch.jsonl", ()) == UploadedFileExtensionNotAllowed(extension=".jsonl")
+
+
+def test_unset_allowlist_skips_check():
+    assert check_allowed_extension("payload.exe", None) is None
+
+
+def test_coerce_str_list_setting_keeps_unset_and_empty_distinct():
+    assert coerce_optional_str_list_setting(None) is None
+    assert coerce_optional_str_list_setting([]) == ()
+    assert coerce_optional_str_list_setting([".jsonl"]) == (".jsonl",)
+
+
 def test_path_traversal_filename_rejected():
     assert check_unsafe_filename("../../etc/passwd") == UploadedFileUnsafeFilename(filename="../../etc/passwd")
 
@@ -111,6 +153,16 @@ def test_ordinary_filenames_allowed(filename):
             UploadedFileTooLarge(size_bytes=15728640, limit_mb=10),
             "413",
             ("15.0 MB", "max_file_size_mb", "10 MB", "not forwarded"),
+        ),
+        (
+            UploadedFileExtensionNotAllowed(extension=".exe"),
+            "400",
+            (".exe", "allowed_file_extensions", "not forwarded"),
+        ),
+        (
+            UploadedFileExtensionNotAllowed(extension=""),
+            "400",
+            ("without an extension", "allowed_file_extensions", "not forwarded"),
         ),
         (
             UploadedFileBlockedExtension(extension=".exe"),
