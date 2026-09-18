@@ -36,6 +36,7 @@ StopReason: TypeAlias = Literal["exhausted", "budget_exhausted", "batch_cap_reac
 class TableCleanupResult:
     """Outcome of pruning one table, so the caller can report why a run ended."""
 
+    table_name: str
     rows_deleted: int
     stop_reason: StopReason
 
@@ -448,11 +449,11 @@ class SpendLogCleanup:
         from the last run that finished inside its budget.
         """
         if time.monotonic() >= deadline:
-            return TableCleanupResult(rows_deleted=rows_deleted, stop_reason=stop_reason)
+            return TableCleanupResult(table_name=table_name, rows_deleted=rows_deleted, stop_reason=stop_reason)
         remaining: Final = await self._count_remaining(prisma_client, cutoff_date, table_name, time_column, deadline)
         if remaining is not None:
             SpendLogCleanupMetrics.set_rows_remaining(table_name, remaining)
-        return TableCleanupResult(rows_deleted=rows_deleted, stop_reason=stop_reason)
+        return TableCleanupResult(table_name=table_name, rows_deleted=rows_deleted, stop_reason=stop_reason)
 
     async def _delete_old_logs(
         self, prisma_client: PrismaClient, cutoff_date: datetime, deadline: float
@@ -535,7 +536,9 @@ class SpendLogCleanup:
             )
             verbose_proxy_logger.info("Dropped %d expired spend-log partitions: %s", len(dropped), dropped)
 
-        logs_result: Final = await self._delete_old_logs(prisma_client, cutoff_date, deadline)
+        logs_result: Final = await self._delete_old_logs(
+            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=2)
+        )
         verbose_proxy_logger.info("Deleted %s logs", logs_result.rows_deleted)
 
         index_result: Final = await self._delete_old_tool_index_rows(prisma_client, cutoff_date, deadline)
@@ -583,6 +586,24 @@ class SpendLogCleanup:
             return "batch_cap_reached"
         return "completed"
 
+    @staticmethod
+    def _log_run_summary(outcome: RunOutcome, results: tuple[TableCleanupResult, ...], elapsed_seconds: float) -> None:
+        """
+        One line per run naming every table's rows deleted and stop reason.
+
+        A run that ends with backlog left is logged at WARNING so an operator
+        running the proxy at warning or error level still sees that retention
+        was not satisfied; a drained run stays at INFO.
+        """
+        per_table: Final = ", ".join(
+            f"{result.table_name}: deleted={result.rows_deleted} stop_reason={result.stop_reason}" for result in results
+        )
+        message: Final = "Spend log cleanup run finished: outcome=%s elapsed=%.1fs [%s]"
+        if outcome == "completed":
+            verbose_proxy_logger.info(message, outcome, elapsed_seconds, per_table)
+            return
+        verbose_proxy_logger.warning(message, outcome, elapsed_seconds, per_table)
+
     async def cleanup_old_spend_logs(self, prisma_client: PrismaClient) -> None:
         """
         Main cleanup function. Deletes old spend logs in batches.
@@ -629,7 +650,8 @@ class SpendLogCleanup:
                     SpendLogCleanupMetrics.record_run("skipped_locked")
                     return
 
-            deadline: Final = time.monotonic() + self.run_budget_seconds
+            started_at: Final = time.monotonic()
+            deadline: Final = started_at + self.run_budget_seconds
             configured_group_count: Final = (
                 int(delete_spend_logs and self.retention_seconds is not None)
                 + int(autorouter_retention_seconds is not None)
@@ -666,9 +688,10 @@ class SpendLogCleanup:
                 else ()
             )
 
-            SpendLogCleanupMetrics.record_run(
-                self._run_outcome(spend_log_results + session_results + health_check_results)
-            )
+            results: Final = spend_log_results + session_results + health_check_results
+            outcome: Final = self._run_outcome(results)
+            SpendLogCleanupMetrics.record_run(outcome)
+            self._log_run_summary(outcome, results, time.monotonic() - started_at)
 
         except Exception as e:
             # .exception() captures the traceback; str(e) alone on a Prisma/DB
