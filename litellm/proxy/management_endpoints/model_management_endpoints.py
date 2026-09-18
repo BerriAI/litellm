@@ -328,6 +328,84 @@ def _raise_on_strategy_router_write_violation(
     )
 
 
+def _raise_if_unroutable_model(litellm_params: GenericLiteLLMParams | None) -> None:
+    """Validate that the deployment specifies a routable model and provider before persisting to DB.
+
+    Rejects models that are pricing-only (such as 'typesafe/*') or whose provider cannot be resolved
+    by the router, preventing corrupted rows from being committed to LiteLLM_ProxyModelTable that
+    later fail router reload and trigger 500 degraded serving errors.
+    """
+    if litellm_params is None:
+        return
+
+    raw_model = (
+        getattr(litellm_params, "model", None) if not isinstance(litellm_params, dict) else litellm_params.get("model")
+    )
+    if not raw_model or not isinstance(raw_model, str):
+        return
+
+    custom_llm_provider = (
+        getattr(litellm_params, "custom_llm_provider", None)
+        if not isinstance(litellm_params, dict)
+        else litellm_params.get("custom_llm_provider")
+    )
+
+    # 1. TypeSafe models in LiteLLM are pricing-only for passthrough / auto-router classifier
+    if raw_model.startswith("typesafe/") or custom_llm_provider == "typesafe":
+        raise ProxyException(
+            message=(
+                f"Model '{raw_model}' uses provider 'typesafe'. TypeSafe models in LiteLLM are pricing-only "
+                "and cannot be added as a routable model deployment. Use the '/typesafe/{endpoint}' pass-through "
+                "route (https://docs.litellm.ai/docs/pass_through/typesafe) or configure 'classifier_type: jev' "
+                "in your auto-router settings."
+            ),
+            type=ProxyErrorTypes.validation_error.value,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="litellm_params.model",
+        )
+
+    # 2. Skip prompt-management callbacks, wildcards, and special router routes
+    if "/" in raw_model:
+        split_prefix = raw_model.split("/")[0]
+        if split_prefix in getattr(litellm, "_known_custom_logger_compatible_callbacks", ()):
+            return
+
+    if raw_model.startswith("*"):
+        return
+
+    # 3. Validate provider resolution through get_llm_provider
+    try:
+        api_base = (
+            getattr(litellm_params, "api_base", None)
+            if not isinstance(litellm_params, dict)
+            else litellm_params.get("api_base")
+        )
+        _, resolved_provider, _, _ = litellm.get_llm_provider(
+            model=raw_model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+        )
+        from litellm.router import JSONProviderRegistry, is_registered_custom_provider
+
+        if (
+            resolved_provider not in litellm.provider_list
+            and not JSONProviderRegistry.exists(resolved_provider)
+            and not is_registered_custom_provider(resolved_provider)
+        ):
+            raise ValueError(
+                f"Provider '{resolved_provider}' is not supported. Supported providers: {litellm.provider_list}"
+            )
+    except Exception as e:
+        if isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message=f"Invalid or unroutable model '{raw_model}': {e}",
+            type=ProxyErrorTypes.validation_error.value,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="litellm_params.model",
+        )
+
+
 AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY: Final = 5_872_301
 _CAPABILITY_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock($1)"
 _STORED_LITELLM_PARAMS_SQL: Final = (
@@ -1087,6 +1165,7 @@ async def patch_model(
             incoming_params=patch_data.litellm_params,
             existing_params=db_model.litellm_params,
         )
+        _raise_if_unroutable_model(patch_data.litellm_params)
 
         effective_params: Final = _effective_complexity_router_params(
             patch_data.litellm_params, db_model.litellm_params
@@ -2306,6 +2385,8 @@ async def add_new_model(
             enforced=bool(general_settings.get(ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING, False)),
         )
 
+        _raise_if_unroutable_model(model_params.litellm_params)
+
         clean_model_info: Final = ModelInfo(
             **without_server_derived_pricing(model_params.model_info.model_dump(exclude_none=True))
         )
@@ -2504,6 +2585,7 @@ async def update_model(
             incoming_params=model_params.litellm_params,
             existing_params=deployment.litellm_params,
         )
+        _raise_if_unroutable_model(model_params.litellm_params)
         effective_params: Final = _effective_complexity_router_params(
             model_params.litellm_params, deployment.litellm_params
         )
