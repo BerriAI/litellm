@@ -10716,6 +10716,13 @@ async def model_list(
             view_aliases,
         ),
     )
+    # Team map before key map, the order litellm_pre_call_utils rewrites in, so a
+    # chained alias resolves to the deployment a request would actually reach.
+    alias_maps: Final[Sequence[object]] = (
+        user_api_key_dict.team_model_aliases,
+        user_api_key_dict.aliases,
+        view_aliases,
+    )
 
     # Validate scope parameter if provided
     if scope is not None and scope != "expand":
@@ -10788,7 +10795,7 @@ async def model_list(
         admin_entries: Final = TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
         for response_id, lookup_id in admin_entries:
             model_info = create_model_info_response(
-                model_id=lookup_id,
+                model_id=TeamModelNameTranslator.resolve_alias_target(lookup_id, llm_router, alias_maps) or lookup_id,
                 provider="openai",
                 include_metadata=include_metadata or False,
                 fallback_type=fallback_type,
@@ -10841,7 +10848,7 @@ async def model_list(
     entries: Final = TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
     for response_id, lookup_id in entries:
         model_info = create_model_info_response(
-            model_id=lookup_id,
+            model_id=TeamModelNameTranslator.resolve_alias_target(lookup_id, llm_router, alias_maps) or lookup_id,
             provider="openai",
             include_metadata=include_metadata or False,
             fallback_type=fallback_type,
@@ -10948,7 +10955,17 @@ async def model_info(
     if llm_router is None:
         raise HTTPException(status_code=500, detail="Router not initialized")
 
-    deployment: Final = llm_router.get_deployment_by_model_group_name(resolved_model_id)
+    # An alias has no deployment row of its own, so resolve it to the deployment the
+    # request would actually reach; both the provider and the capability metadata
+    # belong to that model, while the response id stays the name the caller asked for.
+    alias_target: Final = TeamModelNameTranslator.resolve_alias_target(
+        resolved_model_id,
+        llm_router,
+        (user_api_key_dict.team_model_aliases, user_api_key_dict.aliases),
+    )
+    deployment_lookup_id: Final = alias_target or resolved_model_id
+
+    deployment: Final = llm_router.get_deployment_by_model_group_name(deployment_lookup_id)
     if deployment is None:
         raise HTTPException(
             status_code=404,
@@ -10959,7 +10976,7 @@ async def model_info(
     _, provider, _, _ = litellm.get_llm_provider(model=deployment.litellm_params.model)
 
     response: Final = create_model_info_response(
-        model_id=resolved_model_id,
+        model_id=deployment_lookup_id,
         provider=provider,
         include_metadata=False,
         fallback_type=None,
