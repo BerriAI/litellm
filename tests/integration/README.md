@@ -2,7 +2,7 @@
 
 These tests exercise a running gateway, PostgreSQL and Redis with an owned local upstream. CircleCI owns this suite. Tests are grouped by behavior, with no automatic test retries or fallback to paid provider calls
 
-Use `tests/integration/run.py management`, `accounting`, `database`, `providers` or `extensions` to run a selected group. Set `INTEGRATION_PROXY_URL`, `INTEGRATION_UPSTREAM_URL`, `INTEGRATION_MASTER_KEY` and `DATABASE_URL` to an isolated test deployment. The runner selects the new domain directories explicitly; the legacy OCI and sandbox selections remain separate
+Use `tests/integration/run.py management`, `accounting`, `database`, `providers`, `extensions` or `sdk` to run a selected group. Set `INTEGRATION_PROXY_URL`, `INTEGRATION_UPSTREAM_URL`, `INTEGRATION_MASTER_KEY` and `DATABASE_URL` to an isolated test deployment. The runner selects the new domain directories explicitly; the legacy OCI and sandbox selections remain separate
 
 Management also requires `INTEGRATION_PEER_URL`, `REDIS_HOST` and `REDIS_PORT`. CircleCI starts two directly addressed proxy processes sharing only that job's stores. The test-only CLI wrapper supplies enterprise route entitlement, following the existing behavior suite's convention. It does not qualify license validation; run it with one worker and no reload
 
@@ -25,6 +25,8 @@ Accounting cases compare persisted input and output cost components against lite
 Provider contracts exercise actual TCP requests with synthetic credentials and local protocol peers. The S3 verifier uses independently implemented equations, a published known-answer vector, a fixed signing clock and deliberately invalid signed requests. Bedrock cases clear ambient AWS credential sources and check the literal model path, loaded role references, STS requests and bearer-only behavior
 
 Streaming checks send real HTTP transfer chunks, including one-byte partitions, fragmented tools, incomplete transfers and a cancellation barrier. They assert meaningful text, tool arguments, final usage and persisted cost. The Redis recovery case owns a separate database and Redis process, uses the supported one-second circuit-breaker recovery setting, waits for the real subscriber and verifies response data in Redis after restart. CircleCI reuses its existing Redis image for that extra process; it never pulls an image during tests
+
+The sdk shard exercises the SDK's own HTTP clients against local protocol peers with no gateway in the path, so a case here fails only when the client library or its wire behavior changes. The HTTP/2 case runs a hypercorn TLS peer offering h2 and http/1.1 over ALPN, drives the sync and async httpx handlers at it with `LITELLM_HTTP2` off and on, and asserts the version both the client and the peer observed on the wire. Put a test here only when it needs no proxy, database or Redis; a case that reaches the gateway belongs in one of the other shards
 
 The extensions shard reuses the existing MCP arithmetic functions with a real SDK server, and uses the built-in generic callback and guardrail transports. It checks actual tool calls after saved edits, discovery preservation, malformed/error responses, callback correlation and credential exclusion, guardrail rewriting and denial, retained OpenAI consumers, persisted toolsets and A2A wire versions
 
