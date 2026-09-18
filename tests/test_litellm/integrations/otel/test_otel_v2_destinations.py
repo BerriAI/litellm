@@ -82,6 +82,15 @@ def isolate_published_provider(monkeypatch):
     monkeypatch.setattr(otel_logger, "_published_v2_provider", None)
 
 
+@pytest.fixture(autouse=True)
+def forget_otel_v2_flag_after_each_test():
+    """``is_otel_v2_enabled`` caches its first answer. Tests here flip ``LITELLM_OTEL_V2``
+    through monkeypatch, which restores the env but not the cache, so the next module
+    on the worker would keep seeing v2 on."""
+    yield
+    is_otel_v2_enabled.cache_clear()
+
+
 def in_fresh_context(fn, *args):
     """Run ``fn`` in its own context so one test's destinations never leak."""
     return contextvars.copy_context().run(fn, *args)
