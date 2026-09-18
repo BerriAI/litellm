@@ -3426,6 +3426,22 @@ async def test_live_attachment_does_not_dispatch_duplicate_usage():
 
 
 @pytest.mark.asyncio
+async def test_log_messages_flush_awaits_dispatch_instead_of_enqueueing():
+    worker = MagicMock()
+    logger = MagicMock()
+    logger.model_call_details = {}
+    logger.dispatch_success_handlers = AsyncMock()
+    stream = RealTimeStreaming(MagicMock(), MagicMock(), logger, logging_worker=worker)
+    stream.store_message({"type": "session.created"})
+
+    await stream.log_messages(wait_for_dispatch=True)
+
+    logger.dispatch_success_handlers.assert_awaited_once_with(stream.messages, prefer_async_handlers=True)
+    worker.ensure_initialized_and_enqueue.assert_not_called()
+    assert logger.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("account_usage", [False, True])
 async def test_attachment_cleanup_runs_in_owning_context_only(account_usage):
     from litellm.litellm_core_utils.realtime_streaming import realtime_attachment_cleanup

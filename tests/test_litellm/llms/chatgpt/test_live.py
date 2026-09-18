@@ -192,3 +192,31 @@ async def test_live_websocket_does_not_redirect_credentials():
         with pytest.raises(InvalidStatus) as failure:
             await transport.connect("live/sessions")
         assert failure.value.response.status_code == 307
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "ftp://gateway.example/v1",
+        "https://user:secret@gateway.example/v1",
+        "https://gateway.example/v1#fragment",
+        "not a url",
+    ],
+)
+async def test_live_rejects_invalid_api_base_before_network(api_base):
+    requests: list = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        transport = LiveTransport(
+            LiveDeployment("deployment-model", provider="openai", api_key="deployment-key", api_base=api_base),
+            {},
+            http_client=client,
+        )
+        with pytest.raises(ValueError, match="Invalid Live API base"):
+            await transport.request("POST", "live/sessions", {})
+    assert requests == []

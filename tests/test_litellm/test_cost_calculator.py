@@ -5387,3 +5387,27 @@ def test_live_missing_backend_price_preserves_duration_and_marks_accounting_inco
         litellm_logging_obj=logger,
     ) == pytest.approx(0.75)
     assert logger.model_call_details["realtime_backend_accounting_incomplete"] is True
+
+
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        {"type": "response.event"},
+        {"type": "response.event", "event": {"response": {"id": "resp"}}},
+        {"type": "response.event", "event": "not-an-object"},
+    ],
+)
+def test_live_backend_malformed_envelope_is_dropped_without_accounting_flag(envelope):
+    """
+    Malformed event envelopes (missing event, missing event.type, wrong shape)
+    are skipped silently: unlike a terminal response.completed that fails
+    response validation, they must not mark the call's accounting incomplete.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.cost_calculator import _live_backend_response
+
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+    assert _live_backend_response(envelope, logger) is None
+    assert "realtime_backend_accounting_incomplete" not in logger.model_call_details

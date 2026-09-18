@@ -364,7 +364,7 @@ async def test_custom_auth_does_not_enforce_key_model_access_by_default():
 async def test_post_custom_auth_expired_key_returns_unauthorized():
     expired_token = UserAPIKeyAuth(
         token="test_token",
-        expires=datetime.now() - timedelta(minutes=1),
+        expires=datetime.now(timezone.utc) - timedelta(minutes=1),
     )
 
     with pytest.raises(ProxyException) as exc_info:
@@ -7755,3 +7755,65 @@ async def test_claude_view_never_reinterprets_explicit_names(monkeypatch, layer)
     assert data["model"] == ("foo" if layer == "unclaimed" else encoded)
     await _normalize_claude_model(data, token, request, "/v1/messages")
     assert data["model"] == ("foo" if layer == "unclaimed" else encoded)
+
+
+def _malformed_authorization_websocket(send):
+    from unittest.mock import AsyncMock
+
+    from fastapi import WebSocket
+
+    return WebSocket(
+        {
+            "type": "websocket", "scheme": "ws", "server": ("localhost", 4000),
+            "path": "/v1/realtime", "query_string": b"",
+            "headers": [(b"authorization", b"Token malformed")],
+        },
+        AsyncMock(),
+        send,
+    )
+
+
+@pytest.mark.parametrize("authorization_value", ["Token malformed", "bearer lowercase"])
+def test_get_websocket_api_key_rejects_malformed_authorization(monkeypatch, authorization_value):
+    import importlib
+    from unittest.mock import AsyncMock
+
+    from fastapi import HTTPException, WebSocket
+
+    from litellm.proxy import proxy_server
+
+    auth_module = importlib.import_module("litellm.proxy.auth.user_api_key_auth")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    websocket = WebSocket(
+        {
+            "type": "websocket", "scheme": "ws", "server": ("localhost", 4000),
+            "path": "/v1/realtime", "query_string": b"",
+            "headers": [(b"authorization", authorization_value.encode())],
+        },
+        AsyncMock(),
+        AsyncMock(),
+    )
+    with pytest.raises(HTTPException) as error:
+        auth_module.get_websocket_api_key(websocket)
+    assert error.value.status_code == 403
+    assert error.value.detail == "Invalid Authorization header format"
+
+
+@pytest.mark.asyncio
+async def test_websocket_auth_closes_policy_violation_on_malformed_authorization(monkeypatch):
+    import importlib
+    from unittest.mock import AsyncMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+
+    auth_module = importlib.import_module("litellm.proxy.auth.user_api_key_auth")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    send = AsyncMock()
+    websocket = _malformed_authorization_websocket(send)
+    with pytest.raises(HTTPException) as error:
+        await auth_module.user_api_key_auth_websocket(websocket)
+    assert error.value.status_code == 403
+    assert error.value.detail == "Invalid Authorization header format"
+    send.assert_awaited_once_with({"type": "websocket.close", "code": 1008, "reason": ""})

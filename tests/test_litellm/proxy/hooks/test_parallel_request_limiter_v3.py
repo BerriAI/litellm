@@ -6105,3 +6105,49 @@ async def test_an_open_circuit_breaker_reads_the_sliding_window_locally_without_
     assert isinstance(values, list)
     assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
     assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_cluster_gauge_guards_fail_fast_when_scripts_are_unavailable(monkeypatch):
+    # _check_parallel_request_gauges only enters the cluster path with an acquire script in hand, so the
+    # guards below run only for direct cluster callers or script resets racing an in-flight batch.
+    handler, transport, gauges = _cluster_parallel_fixture(monkeypatch)
+    monkeypatch.setattr(handler, "parallel_count_script", None)
+    with pytest.raises(RuntimeError, match="Redis cluster parallel count script is unavailable"):
+        await handler._check_cluster_parallel_gauges(gauges, "reader", None, read_only=True)
+    monkeypatch.setattr(handler, "parallel_count_script", transport.script("count"))
+    monkeypatch.setattr(handler, "parallel_acquire_script", None)
+    with pytest.raises(RuntimeError, match="Redis cluster parallel acquire script is unavailable"):
+        await handler._check_cluster_parallel_gauges(gauges, "owner", None, read_only=False)
+    assert transport.calls == []
+
+
+@pytest.mark.asyncio
+async def test_cluster_release_guards_when_release_script_unavailable(monkeypatch):
+    handler, transport, gauges = _cluster_parallel_fixture(monkeypatch)
+    keys = tuple(gauge["counter_key"] for gauge in gauges)
+    monkeypatch.setattr(handler, "parallel_release_script", None)
+    with pytest.raises(RuntimeError, match="Redis cluster parallel release script is unavailable"):
+        await handler._release_cluster_parallel_slots(keys, "owner", None)
+    # Every shard group is still attempted; the first shard's error is the one re-raised.
+    assert [operation for operation, _ in transport.calls] == []
+
+
+@pytest.mark.asyncio
+async def test_cluster_rollback_swallows_release_failure_and_logs(monkeypatch, caplog):
+    handler, transport, gauges = _cluster_parallel_fixture(monkeypatch)
+    keys = tuple(gauge["counter_key"] for gauge in gauges)
+    assert (await handler._check_parallel_request_gauges(gauges, "owner"))["overall_code"] == "OK"
+    transport.fail = ("release", keys[0])
+    await handler._rollback_cluster_parallel_slots(keys, "owner", None)
+    # The admission error must not be replaced by an unreachable compensation shard: the rollback
+    # exception is retrieved, reported once, and swallowed so the caller keeps its original failure.
+    assert "Could not roll back all Redis cluster parallel request slots" in caplog.text
+    released = {key for operation, group in transport.calls if operation == "release" for key in group}
+    assert released == set(keys)
+    transport.fail = None
+    assert "owner" not in transport.members[keys[1]]
+
+
+# Note: _renew_realtime_call_slot's in-memory "return False" isinstance guard after the any() scan is
+# unreachable for any real cache state (the scan rejects non-dict values first), so no test drives it.

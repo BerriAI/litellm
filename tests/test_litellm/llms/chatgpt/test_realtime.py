@@ -475,3 +475,22 @@ async def test_supervisor_connection_preserves_call_routing(model, chatgpt_token
     assert url.params["gateway_token"] == "a+b&c"
     assert connect.call_args.kwargs["additional_headers"]["x-gateway-token"] == "configured"
     assert url.path.endswith("/rtc_owner") if model == "gpt-live-1-codex" else url.params["call_id"] == "rtc_owner"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-live-1-codex", "gpt-realtime-1.5"])
+async def test_close_call_prefers_session_close_only_for_live_models(model, chatgpt_tokens):
+    handler = ChatGPTRealtime(
+        GenericLiteLLMParams(chatgpt_realtime_call_id="rtc_close", chatgpt_token_dir=chatgpt_tokens),
+        {},
+        {},
+    )
+    connection = SimpleNamespace(send=AsyncMock())
+    handler.hangup_call = AsyncMock()
+    await handler.close_call(connection, model, "https://gateway.example/v1")
+    if model == "gpt-live-1-codex":
+        connection.send.assert_awaited_once_with('{"type":"session.close"}')
+        handler.hangup_call.assert_not_awaited()
+    else:
+        connection.send.assert_not_awaited()
+        handler.hangup_call.assert_awaited_once_with("https://gateway.example/v1")

@@ -178,3 +178,51 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
             litellm_parent_otel_span=None,
         )
         assert current["current_tpm"] == 50, f"expected 50 tokens counted for {scope_id}, got {current['current_tpm']}"
+
+
+@pytest.mark.asyncio
+async def test_realtime_attachment_release_without_receipt_never_touches_counters():
+    dual_cache = MagicMock()
+    handler = _PROXY_MaxParallelRequestsHandler(InternalUsageCache(dual_cache))
+    auth = UserAPIKeyAuth(api_key="no-receipt")
+    await handler.async_release_realtime_attachment({}, auth)
+    await handler.async_release_realtime_attachment(
+        {"_legacy_realtime_attachment_reservations": {"cache_keys": [], "global_acquired": True}}, auth
+    )
+    # A release without a matching begin (or with a foreign receipt shape) must not decrement anything.
+    assert dual_cache.mock_calls == []
+
+
+@pytest.mark.asyncio
+async def test_failure_event_skips_realtime_observer_without_decrementing_slots():
+    from datetime import datetime
+
+    from litellm.proxy._types import InternalRequestOrigin
+
+    def failure_kwargs() -> dict:
+        return {
+            "litellm_params": {"metadata": {"user_api_key": "observer-hash", "global_max_parallel_requests": 5}},
+            "exception": RuntimeError("backend disconnected"),
+        }
+
+    dual_cache = MagicMock()
+    dual_cache.async_get_cache = AsyncMock(return_value=None)
+    dual_cache.async_increment_cache = AsyncMock()
+    dual_cache.async_batch_set_cache = AsyncMock()
+    handler = _PROXY_MaxParallelRequestsHandler(InternalUsageCache(dual_cache))
+    start = datetime.now()
+    end = datetime.now()
+
+    kwargs = failure_kwargs()
+    kwargs["internal_request_origin"] = InternalRequestOrigin.REALTIME_OBSERVER
+    await handler.async_log_failure_event(kwargs, None, start, end)
+    # The observer-internal failure mirror must leave the client-facing slot untouched.
+    assert dual_cache.mock_calls == []
+
+    dual_cache.mock_calls.clear()
+    await handler.async_log_failure_event(failure_kwargs(), None, start, end)
+    assert dual_cache.async_increment_cache.await_count >= 1
+    assert any(
+        call.kwargs.get("key") == "global_max_parallel_requests" and call.kwargs.get("value") == -1
+        for call in dual_cache.async_increment_cache.await_args_list
+    )

@@ -751,3 +751,108 @@ async def test_live_missing_backend_accounting_invalidates_budget_after_dispatch
     assert logger.model_call_details["realtime_accounting_incomplete"] is True
     assert "realtime_usage_incomplete" not in logger.model_call_details
     invalidate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_repeated_start_is_rejected_while_observer_is_running():
+    socket, sink, close_call, supervisor = fixture()
+    await socket.messages.put({"type": "session.started"})
+    await supervisor.start()
+    with pytest.raises(RuntimeError, match="Call observer already started"):
+        await supervisor.start()
+    # The rejected second start leaves the running observer untouched.
+    await socket.messages.put({"type": "session.closed", "usage": {"total_tokens": 7}})
+    await supervisor.wait()
+    await supervisor.close()
+    close_call.assert_not_awaited()
+    assert sink.logs == 1
+    assert socket.closed
+
+
+@pytest.mark.asyncio
+async def test_start_rejects_quota_reservation_lost_during_startup():
+    from litellm.proxy.hooks.realtime_call_lease import RealtimeCallLease
+
+    socket = Socket()
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+    sink = Sink(logger)
+
+    async def hangup():
+        await socket.messages.put({"type": "session.closed", "usage": {"total_tokens": 42}})
+
+    close_call = AsyncMock(side_effect=hangup)
+    renew = AsyncMock(return_value=False)
+    release = AsyncMock()
+    lease = RealtimeCallLease(renew=renew, release=release, interval=3600)
+    lease.start()
+    supervisor = CallSupervisor(
+        socket,
+        sink,
+        logger,
+        UserAPIKeyAuth(),
+        close_call,
+        ready_timeout=10,
+        lifetime=10,
+        drain_timeout=0.05,
+        lease=lease,
+    )
+    await socket.messages.put({"type": "session.started"})
+    with pytest.raises(RuntimeError, match="lost its quota reservation during startup"):
+        await supervisor.start()
+    assert socket.closed
+    close_call.assert_awaited_once()
+    assert renew.await_count >= 1
+    release.assert_awaited_once()
+    assert sink.logs == 1
+
+
+@pytest.mark.asyncio
+async def test_registry_watch_logs_observer_accounting_failure_without_payload(caplog, monkeypatch):
+    import logging
+
+    from litellm.proxy.realtime_endpoints import call_supervision
+
+    caplog.set_level(logging.ERROR, logger="LiteLLM Proxy")
+
+    class FailingSink(Sink):
+        async def log_messages(self, *, wait_for_dispatch=False):
+            raise RuntimeError("observer accounting secret-token")
+
+    socket = Socket()
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+    sink = FailingSink(logger)
+
+    async def hangup():
+        await socket.messages.put({"type": "session.closed", "usage": {"total_tokens": 42}})
+
+    close_call = AsyncMock(side_effect=hangup)
+    invalidate = AsyncMock()
+    monkeypatch.setattr(call_supervision, "invalidate_budget_reservation_counters", invalidate)
+    supervisor = CallSupervisor(
+        socket,
+        sink,
+        logger,
+        UserAPIKeyAuth(),
+        close_call,
+        ready_timeout=5,
+        lifetime=5,
+        drain_timeout=0.05,
+    )
+    registry = CallSupervisors()
+    await socket.messages.put({"type": "session.created"})
+    await registry.start(supervisor)
+    await socket.messages.put({"type": "session.closed", "usage": {"total_tokens": 42}})
+    with pytest.raises(RuntimeError, match="observer accounting secret-token"):
+        await supervisor.wait()
+    await registry.shutdown()
+    assert registry._calls == ()
+    assert registry._tasks == ()
+    assert socket.closed
+    close_call.assert_not_awaited()
+    invalidate.assert_awaited_once_with(budget_reservation=None)
+    assert logger.model_call_details["realtime_accounting_incomplete"] is True
+    proxy_logs = [record.getMessage() for record in caplog.records if record.name == "LiteLLM Proxy"]
+    assert any("Realtime observer accounting failed" in message for message in proxy_logs)
+    assert not any("secret-token" in message for message in proxy_logs)
