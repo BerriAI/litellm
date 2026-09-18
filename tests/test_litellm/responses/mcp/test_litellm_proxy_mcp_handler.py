@@ -567,6 +567,43 @@ async def test_execute_tool_calls_returns_proxy_result_without_logging(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_execute_tool_calls_passes_logging_details_to_proxy_hook(monkeypatch):
+    result = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_mcp_call_hook = AsyncMock(side_effect=lambda response, **_: response)
+    monkeypatch.setitem(
+        sys.modules, "litellm.proxy.proxy_server", types.SimpleNamespace(proxy_logging_obj=proxy_logging_obj)
+    )
+
+    fake_manager = types.SimpleNamespace(
+        get_registry=MagicMock(return_value={}),
+        call_tool=AsyncMock(return_value=result),
+        _get_mcp_server_from_tool_name=MagicMock(return_value=None),
+        get_mcp_server_by_name=MagicMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        fake_manager,
+    )
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"request_id": "request-1"}
+    logging_obj.async_post_mcp_tool_call_hook = AsyncMock(return_value=result.content)
+    logging_obj.async_success_handler = AsyncMock()
+    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (logging_obj, None))
+
+    tool_name = "deepwiki-read_wiki_structure"
+    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
+        user_api_key_auth=None,
+    )
+
+    assert results == [{"tool_call_id": "call-1", "result": "ok", "name": tool_name}]
+    assert proxy_logging_obj.post_mcp_call_hook.await_args.kwargs["request_data"] == logging_obj.model_call_details
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure_stage", ["post_call_hook", "success_handler"])
 async def test_execute_tool_calls_continues_when_post_call_logging_fails(monkeypatch, failure_stage: str):
     proxy_module = types.SimpleNamespace(proxy_logging_obj=None)
