@@ -681,7 +681,7 @@ def test_is_deadlock_error_excludes_non_deadlocks(error):
         (httpx.ReadTimeout("no reply"), None),
     ],
 )
-def test_postgres_sqlstate_reads_the_code_prisma_attached_to_the_failed_statement(error, sqlstate):
+def test_postgres_sqlstate_reads_the_code_prisma_attached_to_the_failed_statement(error: Exception, sqlstate: str | None):
     """Only a prisma data error carrying Postgres's own error code yields a SQLSTATE; a
     codeless or malformed payload, an engine-level error, and a transport error yield None."""
     assert PrismaDBExceptionHandler.postgres_sqlstate(error) == sqlstate
