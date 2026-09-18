@@ -1974,6 +1974,7 @@ class TestClaudeOpus48AdaptiveThinking:
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
+
     @pytest.mark.parametrize(
         "model",
         [

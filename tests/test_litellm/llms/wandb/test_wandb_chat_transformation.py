@@ -75,6 +75,7 @@ def wandb_request_mock(respx_mock: respx.MockRouter) -> respx.Route:
 class TestWandbConfig:
     """Test class for WandB Inference functionality"""
 
+
     def test_default_api_base(self):
         """Test that default API base is used when none is provided"""
         config = WandbConfig()
@@ -107,7 +108,9 @@ class TestWandbConfig:
         This test mocks the actual HTTP request to test the integration properly.
         """
 
-        litellm.disable_aiohttp_transport = True  # since this uses respx, we need to set use_aiohttp_transport to False
+        litellm.disable_aiohttp_transport = (
+            True  # since this uses respx, we need to set use_aiohttp_transport to False
+        )
 
         # Set up environment variables for the test
         api_key = "fake-wandb-key"
@@ -144,7 +147,9 @@ class TestWandbConfig:
         # Make the actual API call through LiteLLM
         response = completion(
             model=model,
-            messages=[{"role": "user", "content": "write code for saying hey from LiteLLM"}],
+            messages=[
+                {"role": "user", "content": "write code for saying hey from LiteLLM"}
+            ],
             api_key=api_key,
             api_base=api_base,
         )
@@ -222,6 +227,7 @@ class TestWandbConfig:
         assert request_body["reasoning_effort"] == effort
         assert request_body["max_tokens"] == 64
         assert "max_completion_tokens" not in request_body
+
 
     @pytest.mark.respx()
     def test_wandb_completion_keeps_reasoning_effort_for_an_unregistered_model(

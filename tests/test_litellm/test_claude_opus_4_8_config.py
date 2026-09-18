@@ -21,3 +21,5 @@ REPO_ROOT = os.path.join(os.path.dirname(__file__), "../..")
 
 def test_opus_4_8_registered_for_bedrock_converse():
     assert "anthropic.claude-opus-4-8" in BEDROCK_CONVERSE_MODELS
+
+

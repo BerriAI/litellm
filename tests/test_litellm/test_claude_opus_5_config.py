@@ -56,3 +56,5 @@ def test_opus_5_bedrock_rejects_strict_tools(model_name, local_model_cost_map):
 
 def test_opus_5_registered_for_bedrock_converse():
     assert "anthropic.claude-opus-5" in BEDROCK_CONVERSE_MODELS
+
+

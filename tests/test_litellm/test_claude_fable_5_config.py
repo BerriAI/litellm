@@ -92,3 +92,5 @@ def test_adaptive_thinking_detected_for_fable_5_1(local_model_cost_map, model):
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
+
+

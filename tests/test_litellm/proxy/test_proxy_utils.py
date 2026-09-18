@@ -2226,9 +2226,7 @@ async def test_post_call_failure_hook_redacts_traceback_before_callbacks(monkeyp
     with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
         await proxy_logging_obj.post_call_failure_hook(
             request_data={"metadata": {}},
-            original_exception=HTTPException(
-                status_code=400, detail="Upstream passthrough request failed with status 400"
-            ),
+            original_exception=HTTPException(status_code=400, detail="Upstream passthrough request failed with status 400"),
             user_api_key_dict=UserAPIKeyAuth(),
             traceback_str=upstream_traceback,
         )
@@ -2292,13 +2290,9 @@ def test_mcp_conversion_preserves_request_policy_and_isolates_guardrail_data(buc
     parent = {
         "model": "parent-model",
         bucket: {
-            "guardrails": ["policy-rule"],
-            "guardrail_config": {"language": "en"},
-            "applied_policies": ["parent-policy"],
-            "policy_sources": {"parent-policy": "model"},
-            "_guardrail_pipelines": [],
-            "_pipeline_managed_guardrails": ["pipeline-rule"],
-            "tags": ["review"],
+            "guardrails": ["policy-rule"], "guardrail_config": {"language": "en"},
+            "applied_policies": ["parent-policy"], "policy_sources": {"parent-policy": "model"},
+            "_guardrail_pipelines": [], "_pipeline_managed_guardrails": ["pipeline-rule"], "tags": ["review"],
         },
         "guardrails": [{"request-rule": {"extra_body": {"threshold": 0.9}}}],
         "guardrail_config": {"entities": ["EMAIL_ADDRESS"]},
@@ -2328,26 +2322,13 @@ def test_mcp_conversion_honors_only_authenticated_global_guardrail_opt_outs(opt_
     from litellm.responses.mcp.request_context import MCPRequestContext
 
     auth = UserAPIKeyAuth(metadata={"opted_out_global_guardrails": ["global-rule"] if opt_out else []})
-    context = MCPRequestContext.resolve(
-        kwargs={
-            "metadata": {
-                "user_api_key_auth": auth,
-                "disable_global_guardrails": True,
-                "user_api_key_metadata": {"disable_global_guardrails": True},
-            }
-        },
-        tools=None,
-    )
+    context = MCPRequestContext.resolve(kwargs={"metadata": {
+        "user_api_key_auth": auth, "disable_global_guardrails": True,
+        "user_api_key_metadata": {"disable_global_guardrails": True},
+    }}, tools=None)
     proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
-    kwargs = {
-        "name": "execute",
-        "arguments": {},
-        "user_api_key_auth": auth,
-        "guardrail_context": context.guardrail_context,
-    }
-    synthetic = proxy_logging._convert_mcp_to_llm_format(
-        proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs
-    )
+    kwargs = {"name": "execute", "arguments": {}, "user_api_key_auth": auth, "guardrail_context": context.guardrail_context}
+    synthetic = proxy_logging._convert_mcp_to_llm_format(proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs)
     guardrail = CustomGuardrail(guardrail_name="global-rule", event_hook="pre_mcp_call", default_on=True)
     assert guardrail.should_run_guardrail(synthetic, GuardrailEventHooks.pre_mcp_call) is (not opt_out)
     synthetic["metadata"]["user_api_key_metadata"]["opted_out_global_guardrails"].append("unrelated")
@@ -2361,25 +2342,18 @@ def test_mcp_auth_policy_uses_original_request_model(monkeypatch, model, expecte
     from litellm.types.proxy.policy_engine import Policy, PolicyCondition, PolicyGuardrails
 
     registry = policy_registry.PolicyRegistry()
-    registry._policies = {
-        "model-policy": Policy(
-            condition=PolicyCondition(model="parent-model"), guardrails=PolicyGuardrails(add=["model-rule"])
-        )
-    }
+    registry._policies = {"model-policy": Policy(
+        condition=PolicyCondition(model="parent-model"), guardrails=PolicyGuardrails(add=["model-rule"])
+    )}
     registry._initialized = True
     monkeypatch.setattr(policy_registry, "_policy_registry", registry)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
     kwargs = {
-        "name": "execute",
-        "arguments": {},
+        "name": "execute", "arguments": {},
         "user_api_key_auth": UserAPIKeyAuth(metadata={"policies": ["model-policy"]}),
-        "guardrail_context": MCPRequestContext.resolve_guardrail_context(
-            {"model": model, "guardrails": ["request-rule"]}
-        ),
+        "guardrail_context": MCPRequestContext.resolve_guardrail_context({"model": model, "guardrails": ["request-rule"]}),
     }
-    synthetic = proxy_logging._convert_mcp_to_llm_format(
-        proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs
-    )
+    synthetic = proxy_logging._convert_mcp_to_llm_format(proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs)
     assert ("model-rule" in synthetic["metadata"]["guardrails"]) is expected
     assert "request-rule" in synthetic["metadata"]["guardrails"]
