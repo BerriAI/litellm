@@ -3754,6 +3754,17 @@ async def _run_post_custom_auth_checks(
             llm_router=llm_router,
         )
 
+    def _budget_models() -> list[str]:
+        return _get_model_names_for_budget_checks(
+            model=_get_model_from_request_context(
+                request_data=request_data,
+                route=route,
+                request=request,
+                llm_router=llm_router,
+                team_id=valid_token.team_id,
+            )
+        )
+
     current_model = _get_model_from_request_context(
         request_data=request_data,
         route=route,
@@ -3794,16 +3805,7 @@ async def _run_post_custom_auth_checks(
                 llm_router=llm_router,
             )
 
-        # Recompute after a potential budget-fallback rewrite so
-        # the end-user check below validates the final model
-        current_model = _get_model_from_request_context(
-            request_data=request_data,
-            route=route,
-            request=request,
-            llm_router=llm_router,
-            team_id=valid_token.team_id,
-        )
-        current_models = _get_model_names_for_budget_checks(model=current_model)
+        current_models = _budget_models()  # rebind-ok: refresh after a budget-fallback rewrite
 
     # 3b. Attach and check the internal user's model_max_budget.
     # Custom auth builds its own token, so unlike the main path nothing has
@@ -3834,6 +3836,7 @@ async def _run_post_custom_auth_checks(
             llm_model_list=llm_model_list,
             llm_router=llm_router,
         )
+        current_models = _budget_models()  # rebind-ok: refresh after a budget-fallback rewrite
 
     # 4. Check end-user model_max_budget
     end_user_mmb: Final = valid_token.end_user_model_max_budget

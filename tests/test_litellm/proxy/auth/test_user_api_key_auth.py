@@ -491,6 +491,77 @@ async def test_custom_auth_honors_key_level_model_access_restriction_denied_with
         assert exc.value.type == ProxyErrorTypes.key_model_access_denied
 
 
+@pytest.mark.asyncio
+async def test_custom_auth_end_user_check_uses_model_after_user_budget_fallback():
+    """A user-level budget fallback rewrites request_data["model"]; the
+    end-user model budget check must run against the rewritten model, not
+    the pre-rewrite one."""
+    valid_token = UserAPIKeyAuth(
+        token="test_token",
+        user_id="user-1",
+        end_user_id="eu-1",
+        end_user_model_max_budget={"model-a": {"max_budget": 1}},
+    )
+    request_data = {"model": "model-a"}
+    request = MagicMock()
+    request.scope = {}
+
+    end_user_calls: list[str] = []
+
+    async def is_user_within_model_budget(user_id=None, user_model_max_budget=None, model=""):
+        if model == "model-b":
+            return True
+        raise litellm.BudgetExceededError(current_cost=10, max_budget=1)
+
+    async def is_end_user_within_model_budget(end_user_id=None, end_user_model_max_budget=None, model=""):
+        end_user_calls.append(model)
+        if model == "model-b":
+            return True
+        raise litellm.BudgetExceededError(current_cost=10, max_budget=1)
+
+    limiter = MagicMock()
+    limiter.is_user_within_model_budget = is_user_within_model_budget
+    limiter.is_end_user_within_model_budget = is_end_user_within_model_budget
+    limiter.is_key_within_model_budget = AsyncMock(return_value=True)
+    limiter.is_team_within_model_budget = AsyncMock(return_value=True)
+
+    user_row = MagicMock()
+    user_row.model_max_budget = {"model-a": {"max_budget": 1}}
+    user_row.budget_fallbacks = {"model-a": ["model-b"]}
+
+    with (
+        patch(  # test-quality-ok: the fallback check reads the limiter seam from module scope; no injection point
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(  # test-quality-ok: the function reads the user row seam from module scope; no injection point
+            "litellm.proxy.auth.user_api_key_auth._read_user_budget_row",
+            new=AsyncMock(return_value=user_row),
+        ),
+        patch(  # test-quality-ok: the function reads the end-user lookup seam from module scope; no injection point
+            "litellm.proxy.auth.user_api_key_auth._lookup_end_user_and_apply_budget",
+            new=AsyncMock(side_effect=lambda **kwargs: (kwargs["valid_token"], None)),
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: function reads proxy_server globals internally; no injection point
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: function reads proxy_server globals internally; no injection point
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),  # test-quality-ok: function reads proxy_server globals internally; no injection point
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),  # test-quality-ok: function reads proxy_server globals internally; no injection point
+        patch("litellm.proxy.proxy_server.llm_model_list", []),  # test-quality-ok: function reads proxy_server globals internally; no injection point
+        patch("litellm.proxy.proxy_server.llm_router", None),  # test-quality-ok: function reads proxy_server globals internally; no injection point
+        patch("litellm.proxy.proxy_server.model_max_budget_limiter", limiter),  # test-quality-ok: function reads proxy_server globals internally; no injection point
+    ):
+        await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=request,
+            request_data=request_data,
+            route="/v1/chat/completions",
+            parent_otel_span=None,
+        )
+
+    assert request_data["model"] == "model-b"
+    assert end_user_calls and set(end_user_calls) == {"model-b"}
+
+
 def _proxy_server_attrs_for_custom_auth(*, user_custom_auth):
     """
     Build the minimal set of proxy_server module attributes that
