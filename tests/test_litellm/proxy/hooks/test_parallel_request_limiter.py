@@ -88,11 +88,6 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
 
 @pytest.mark.asyncio
 async def test_team_max_parallel_requests_is_enforced_across_keys_in_the_team():
-    """
-    The legacy limiter used to cap the team bucket at sys.maxsize, so a team's
-    max_parallel_requests was silently ignored. Two keys in one team must now
-    share the team's parallel slots, while a key outside the team is unaffected.
-    """
     from fastapi import HTTPException
 
     from litellm.proxy._types import UserAPIKeyAuth

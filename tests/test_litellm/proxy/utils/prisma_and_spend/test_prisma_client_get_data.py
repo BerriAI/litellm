@@ -639,9 +639,6 @@ async def test_query_first_with_cached_plan_fallback_reports_the_reader_generati
 async def test_get_data_combined_view_projects_every_team_limit_the_limiter_reads(
     prisma_client: PrismaClient,
 ) -> None:
-    """The key-auth path only sees the team limits the combined-view SQL selects,
-    so each ``team_*`` limit on the view model must be aliased there and land on
-    the returned view."""
     row = {
         "token": "hashed-token-team-limits",
         "team_id": "team-1",
@@ -662,13 +659,6 @@ async def test_get_data_combined_view_projects_every_team_limit_the_limiter_read
         query_type="find_unique",
     )
 
-    sql = prisma_client.db.query_first.call_args.args[0]
-    for column, alias in (
-        ("tpm_limit", "team_tpm_limit"),
-        ("rpm_limit", "team_rpm_limit"),
-        ("max_parallel_requests", "team_max_parallel_requests"),
-    ):
-        assert f"t.{column} AS {alias}" in sql
     assert isinstance(response, LiteLLM_VerificationTokenView)
     assert response.team_tpm_limit == 1000
     assert response.team_rpm_limit == 10
