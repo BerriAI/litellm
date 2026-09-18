@@ -9,6 +9,8 @@ import asyncio
 import datetime
 from unittest.mock import MagicMock
 
+import pytest
+
 import litellm.litellm_core_utils.llm_response_utils.response_metadata as response_metadata_mod
 import litellm.proxy.common_request_processing as common_request_processing_mod
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -231,11 +233,13 @@ class TestResponseTimingMetrics:
     START = datetime.datetime(2025, 1, 1, 0, 0, 0)
     END = datetime.datetime(2025, 1, 1, 0, 0, 1)
 
-    def _make_logging_obj(self, llm_api_duration_ms=None, caching_details=None):
+    def _make_logging_obj(self, llm_api_duration_ms=None, caching_details=None, received_at=None):
         logging_obj = MagicMock()
         logging_obj.model_call_details = {}
         if llm_api_duration_ms is not None:
             logging_obj.model_call_details["llm_api_duration_ms"] = llm_api_duration_ms
+        if received_at is not None:
+            logging_obj.model_call_details["litellm_params"] = {"metadata": {"litellm_received_at": received_at}}
         logging_obj.caching_details = caching_details
         return logging_obj
 
@@ -245,6 +249,35 @@ class TestResponseTimingMetrics:
             "_response_ms": 1000.0,
             "litellm_overhead_time_ms": 100.0,
         }
+
+    def test_window_starts_at_proxy_receive_when_stamped(self):
+        received_at = self.START.astimezone(datetime.timezone.utc) - datetime.timedelta(seconds=3)
+        logging_obj = self._make_logging_obj(llm_api_duration_ms=900.0, received_at=received_at)
+
+        result = response_timing_metrics(self.START, self.END, logging_obj)
+
+        assert result["_response_ms"] == pytest.approx(4000.0)
+        assert result["litellm_overhead_time_ms"] == pytest.approx(3100.0)
+
+    def test_cache_hit_window_starts_at_proxy_receive_when_stamped(self):
+        received_at = self.START.astimezone(datetime.timezone.utc) - datetime.timedelta(seconds=3)
+        logging_obj = self._make_logging_obj(
+            caching_details={"cache_hit": True, "cache_duration_ms": 250.0},
+            received_at=received_at,
+        )
+
+        result = response_timing_metrics(self.START, self.END, logging_obj)
+
+        assert result["_response_ms"] == pytest.approx(4000.0)
+        assert result["litellm_overhead_time_ms"] == pytest.approx(3750.0)
+
+    def test_non_datetime_proxy_receive_falls_back_to_start_time(self):
+        logging_obj = self._make_logging_obj(llm_api_duration_ms=900.0, received_at="bad")
+
+        result = response_timing_metrics(self.START, self.END, logging_obj)
+
+        assert result["_response_ms"] == pytest.approx(1000.0)
+        assert result["litellm_overhead_time_ms"] == pytest.approx(100.0)
 
     def test_overhead_omitted_when_no_provider_or_cache_duration_recorded(self):
         logging_obj = self._make_logging_obj()
