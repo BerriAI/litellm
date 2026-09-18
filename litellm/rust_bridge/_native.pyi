@@ -1,53 +1,23 @@
 from asyncio import Future
 from collections.abc import Coroutine, Mapping, Sequence
-from typing import Literal, Never, TypeAlias, final
+from typing import Never, final
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.rust_bridge.ocr import LiteLLMOcrRequest
-
-_InputSource: TypeAlias = Literal["request", "deployment", "environment"]
+from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
 
 class RustBridgeDeclined(Exception): ...
 class RustUpstreamError(Exception): ...
 
 def ocr(
-    model: str,
-    document: object,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    optional_params: Mapping[str, object] | None = None,
-    input_sources: Mapping[str, _InputSource] | None = None,
-    timeout_seconds: float | None = None,
-) -> dict[str, object]: ...
-def aocr(
-    model: str,
-    document: object,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    optional_params: Mapping[str, object] | None = None,
-    input_sources: Mapping[str, _InputSource] | None = None,
-    timeout_seconds: float | None = None,
-) -> Future[dict[str, object]]: ...
-
-_OCR_MAX_FILE_BYTES: int
-
-def _ocr_upload_document(
-    file_content: bytes,
-    file_name: str | None = None,
-    content_type: str | None = None,
-) -> dict[str, str]: ...
-def _ocr_file_document(document: Mapping[str, object]) -> dict[str, str]: ...
-def _ocr_mime_type(file_name: str) -> str: ...
-def _ocr_lifecycle(
     request: LiteLLMOcrRequest,
     args: tuple[object, ...],
     kwargs: dict[str, object],
-    asynchronous: bool,
-) -> OCRResponse | Coroutine[object, object, OCRResponse]: ...
+) -> OCRResponse: ...
+def aocr(
+    request: LiteLLMOcrRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+) -> Coroutine[object, object, OCRResponse]: ...
 def transcription(
     model: str,
     audio: object,
@@ -139,15 +109,10 @@ class TokenCounter:
 def gil_stats() -> dict[str, int]: ...
 
 __all__ = [
-    "_OCR_MAX_FILE_BYTES",
     "ResponsesWebSocketConnection",
     "RustBridgeDeclined",
     "RustUpstreamError",
     "TokenCounter",
-    "_ocr_file_document",
-    "_ocr_lifecycle",
-    "_ocr_mime_type",
-    "_ocr_upload_document",
     "achat_completions",
     "amessages",
     "aocr",

@@ -24,9 +24,11 @@ import CacheControlInjectionPoints, {
   CACHE_CONTROL_TOOLTIP,
   type CacheControlInjectionPoint,
 } from "./add_model/cache_control_settings";
+import type { Team } from "./key_team_helpers/key_list";
 import type { CredentialItem } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import type { Tag } from "./tag_management/types";
+import { ModelTeamSelect } from "./view_model/ModelTeamSelect";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { formatPtuUtcDisplay, utcIsoToPickerValue } from "../utils/ptuDatetime";
 import { isMaskedSecret } from "../utils/maskedSecretUtils";
@@ -103,6 +105,7 @@ export interface ModelEditFormValues {
   litellm_credential_name?: string;
   litellm_extra_params?: string;
   model_info?: string;
+  team_id?: string;
 }
 
 type ModelEditFieldName = keyof ModelEditFormValues;
@@ -139,6 +142,7 @@ const modelEditShape = {
   litellm_credential_name: textish,
   litellm_extra_params: textish,
   model_info: textish,
+  team_id: textish,
 };
 
 const isJson = (value: string): boolean => {
@@ -260,6 +264,7 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
     null,
     2,
   ),
+  team_id: localModelData.model_info?.team_id ?? undefined,
 });
 
 const displayCost = (localModelData: any, field: TouchedPricingField): string => {
@@ -270,7 +275,7 @@ const displayCost = (localModelData: any, field: TouchedPricingField): string =>
 
 interface ModelInfoEditFormProps {
   localModelData: any;
-  modelData: { model_info: { team_id?: string | null } & Record<string, unknown> };
+  modelData: { model_info: { team_id?: string | null } };
   teamAlias: string | null;
   accessToken: string | null;
   isEditing: boolean;
@@ -286,6 +291,7 @@ interface ModelInfoEditFormProps {
   tagsList: Record<string, Tag>;
   credentialsList: CredentialItem[];
   healthCheckModelOptions: { value: string; label: string }[];
+  teams: Team[] | null;
 }
 
 const Display: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -357,6 +363,7 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
   tagsList,
   credentialsList,
   healthCheckModelOptions,
+  teams,
 }) => {
   // Neither RHF's blur-based touchedFields nor its resettable dirtyFields matches antd's touched-on-change.
   const touchedRef = React.useRef<ReadonlySet<string>>(new Set<string>());
@@ -802,11 +809,19 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
 
             <div>
               <FieldLabel>Team</FieldLabel>
-              <Display>
-                {teamAlias
-                  ? `${teamAlias} (${modelData.model_info.team_id})`
-                  : modelData.model_info.team_id || "Not Set"}
-              </Display>
+              {isEditing ? (
+                <FormField control={form.control} name="team_id">
+                  {({ id, value, onChange, onBlur }) => (
+                    <ModelTeamSelect id={id} value={value} onChange={onChange} onBlur={onBlur} teams={teams} />
+                  )}
+                </FormField>
+              ) : (
+                <Display>
+                  {teamAlias
+                    ? `${teamAlias} (${localModelData.model_info?.team_id})`
+                    : localModelData.model_info?.team_id || "Not Set"}
+                </Display>
+              )}
             </div>
           </div>
 

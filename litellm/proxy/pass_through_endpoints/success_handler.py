@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from types import MappingProxyType
 from typing import Any, Final
 from urllib.parse import urlparse
 
@@ -27,6 +28,11 @@ from .llm_provider_handlers.cursor_passthrough_logging_handler import (
 from .llm_provider_handlers.gemini_passthrough_logging_handler import (
     GeminiPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.transcribe_passthrough_logging_handler import (
+    TRANSCRIBE_CUSTOM_LLM_PROVIDER,
+    PassThroughLogDispatch,
+    TranscribePassthroughLoggingHandler,
+)
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
@@ -48,7 +54,15 @@ def _safe_response_text(httpx_response: httpx.Response) -> str:
 
 
 class PassThroughEndpointLogging:
-    def __init__(self):
+    def __init__(
+        self,
+        transcribe_handler: TranscribePassthroughLoggingHandler | None = None,
+        log_dispatch: PassThroughLogDispatch | None = None,
+    ):
+        self.transcribe_passthrough_logging_handler: Final = (
+            transcribe_handler if transcribe_handler is not None else TranscribePassthroughLoggingHandler()
+        )
+        self._injected_log_dispatch: Final = log_dispatch
         self.TRACKED_VERTEX_METHOD_ROUTES = (
             "generateContent",
             "streamGenerateContent",
@@ -89,6 +103,10 @@ class PassThroughEndpointLogging:
 
         # Vertex AI Live API WebSocket
         self.TRACKED_VERTEX_AI_LIVE_ROUTES = ["/vertex_ai/live"]
+
+    @property
+    def _log_dispatch(self) -> PassThroughLogDispatch:
+        return self._injected_log_dispatch if self._injected_log_dispatch is not None else self._handle_logging
 
     async def _handle_logging(
         self,
@@ -256,6 +274,39 @@ class PassThroughEndpointLogging:
             )
             standard_logging_response_object = comprehend_medical_handler_result["result"]  # rebind-ok: elif-chain
             kwargs = comprehend_medical_handler_result["kwargs"]  # rebind-ok: elif-chain contract
+        elif self.is_transcribe_route(custom_llm_provider):
+            transcribe_handler_result: Final = TranscribePassthroughLoggingHandler.transcribe_passthrough_handler(
+                httpx_response=httpx_response,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                request_body=request_body,
+                **kwargs,
+            )
+            standard_logging_response_object = transcribe_handler_result["result"]  # rebind-ok: elif-chain
+            kwargs = transcribe_handler_result["kwargs"]  # rebind-ok: elif-chain contract
+        elif self.is_typesafe_route(custom_llm_provider):
+            from .llm_provider_handlers.typesafe_passthrough_logging_handler import (
+                TypeSafePassthroughLoggingHandler,
+            )
+
+            typesafe_handler_result: Final = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
+                httpx_response=httpx_response,
+                response_body=response_body if isinstance(response_body, dict) else MappingProxyType({}),
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                request_body=request_body,
+                **kwargs,
+            )
+            standard_logging_response_object = typesafe_handler_result["result"]
+            kwargs = typesafe_handler_result["kwargs"]
         elif self.is_vertex_ai_live_route(url_route):
             from .llm_provider_handlers.vertex_ai_live_passthrough_logging_handler import (
                 VertexAILivePassthroughLoggingHandler,
@@ -318,6 +369,24 @@ class PassThroughEndpointLogging:
         elif self.is_langfuse_route(url_route):
             # Don't log langfuse pass-through requests
             return
+        elif self.is_transcribe_route(custom_llm_provider) and TranscribePassthroughLoggingHandler.is_priced_job_start(
+            httpx_response
+        ):
+            self.transcribe_passthrough_logging_handler.schedule_priced_job_logging(
+                httpx_response=httpx_response,
+                response_body=response_body if isinstance(response_body, dict) else None,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                request_body=request_body,
+                log=self._log_dispatch,
+                standard_pass_through_logging_payload=passthrough_logging_payload,
+                **kwargs,
+            )
+            return
         else:
             normalized_llm_passthrough_logging_payload: Final = self.normalize_llm_passthrough_logging_payload(
                 httpx_response=httpx_response,
@@ -347,7 +416,7 @@ class PassThroughEndpointLogging:
             kwargs=kwargs,
         )
 
-        await self._handle_logging(
+        await self._log_dispatch(
             logging_obj=logging_obj,
             standard_logging_response_object=standard_logging_response_object,
             result=result,
@@ -388,6 +457,12 @@ class PassThroughEndpointLogging:
 
     def is_comprehend_medical_route(self, custom_llm_provider: str | None) -> bool:
         return custom_llm_provider == "comprehendmedical"
+
+    def is_transcribe_route(self, custom_llm_provider: str | None) -> bool:
+        return custom_llm_provider == TRANSCRIBE_CUSTOM_LLM_PROVIDER
+
+    def is_typesafe_route(self, custom_llm_provider: str | None) -> bool:
+        return custom_llm_provider == "typesafe"
 
     def is_langfuse_route(self, url_route: str):
         parsed_url: Final = urlparse(url_route)

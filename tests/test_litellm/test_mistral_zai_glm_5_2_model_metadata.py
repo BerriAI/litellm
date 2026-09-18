@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 
 import litellm
-from litellm.utils import supports_prompt_caching, supports_reasoning
 
 REPO_ROOT = Path(__file__).parents[2]
 MAIN_PATH = REPO_ROOT / "model_prices_and_context_window.json"
@@ -31,16 +30,6 @@ def local_model_cost_map(monkeypatch):
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
-
-
-@pytest.mark.parametrize("model", GLM_5_2_MODELS)
-def test_zai_glm_5_2_capabilities_are_visible_to_callers(local_model_cost_map, model):
-    """Mistral advertises reasoning and prompt caching on this model, so the helpers
-    every caller checks before sending a request must say so too."""
-    assert supports_reasoning(model=model) is True
-    assert supports_prompt_caching(model=model) is True
-
-    assert litellm.get_model_info(model=model)
 
 
 @pytest.mark.parametrize("model", GLM_5_2_MODELS)

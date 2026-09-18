@@ -10,6 +10,7 @@ from typing import List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from respx import MockRouter
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
@@ -2359,7 +2360,7 @@ class TestTemporaryMCPSessionEndpoints:
             "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
             MagicMock(),
         ):
-            with pytest.raises(Exception, match='User does not have permission to create temporary mcp') as exc_info:
+            with pytest.raises(Exception, match="User does not have permission to create temporary mcp") as exc_info:
                 await add_session_mcp_server(
                     payload=payload,
                     user_api_key_dict=non_admin,
@@ -4040,7 +4041,7 @@ class TestHealthCheckServers:
             ),
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
-                AsyncMock(return_value=[mock_user_auth]),
+                AsyncMock(return_value=[mock_user_auth, mock_user_auth]),
             ),
         ):
             result = await health_check_servers(
@@ -4054,6 +4055,90 @@ class TestHealthCheckServers:
             assert result[0]["status"] == "healthy"
             assert result[1]["server_id"] == "server-2"
             assert result[1]["status"] == "unhealthy"
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.parametrize(
+    ("mode", "restricted", "grants", "requested", "expected", "upstream_status"),
+    [
+        ("view_all", True, ("server-x",), None, ("server-x",), 200),
+        ("view_all", True, ("server-x",), ("server-y",), (), 200),
+        ("view_all", True, ("server-x",), ("server-x", "server-y"), ("server-x",), 200),
+        ("view_all", True, (), None, (), 200),
+        ("view_all", True, ("server-y",), None, ("server-y",), 200),
+        ("view_all", True, ("server-x",), (), ("server-x",), 200),
+        ("view_all", False, ("server-x",), None, ("server-x", "server-y"), 200),
+        ("restricted", False, ("server-x",), None, ("server-x",), 200),
+        ("restricted", True, ("server-x",), None, ("server-x",), 200),
+        ("view_all", True, ("server-x",), None, ("server-x",), 503),
+    ],
+)
+async def test_health_discovery_respects_route_restricted_key_grants(
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    restricted: bool,
+    grants: tuple[str, ...],
+    requested: tuple[str, ...] | None,
+    expected: tuple[str, ...],
+    upstream_status: int,
+) -> None:
+    from typing import Final
+
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    manager: Final = mcp_server_manager.MCPServerManager()
+    manager.registry = {
+        server_id: MCPServer(
+            server_id=server_id,
+            name=server_id,
+            transport=MCPTransport.http,
+            spec_path=f"https://93.184.216.34/{server_id}.json",
+            auth_type=MCPAuth.none,
+        )
+        for server_id in ("server-x", "server-y")
+    }
+    routes: Final = {
+        server_id: respx_mock.get(server.spec_path).respond(upstream_status, json={"paths": {}})
+        for server_id, server in manager.registry.items()
+    }
+    caller: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="test-health-key",
+        allowed_routes=["/v1/mcp/server", "/v1/mcp/server/health"] if restricted else [],
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="health-permissions",
+            mcp_servers=list(grants),
+        ),
+    )
+    with (
+        patch.object(  # test-quality-ok: TQ008 inject real registry into legacy route binding
+            mgmt_endpoints,
+            "global_mcp_server_manager",
+            manager,
+        ),
+        patch.object(  # test-quality-ok: TQ008 inject shared registry without mocking permission policy
+            mcp_server_manager,
+            "global_mcp_server_manager",
+            manager,
+        ),
+        patch(  # test-quality-ok: TQ008 configure mode without mocking authorization
+            "litellm.proxy.proxy_server.general_settings",
+            {"user_mcp_management_mode": mode},
+        ),
+    ):
+        result: Final = await mgmt_endpoints.health_check_servers(
+            server_ids=list(requested) if requested is not None else None,
+            user_api_key_dict=caller,
+        )
+
+    assert {row["server_id"] for row in result} == set(expected)
+    assert {server_id for server_id, route in routes.items() if route.called} == set(expected)
+    expected_status: Final = {200: "healthy", 503: "unhealthy"}[upstream_status]
+    assert all(row["status"] == expected_status for row in result)
 
 
 class TestMCPRegistryEndpoint:
@@ -7049,9 +7134,7 @@ class TestImportMCPServers:
             import_mcp_servers,
         )
 
-        payload = MCPConnectorImportRequest.model_validate(
-            {"mcpServers": {"srv": {"url": "https://x.example/mcp"}}}
-        )
+        payload = MCPConnectorImportRequest.model_validate({"mcpServers": {"srv": {"url": "https://x.example/mcp"}}})
         caller = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.INTERNAL_USER)
 
         with patch(  # test-quality-ok: endpoint takes collaborators from module scope, matching the suite's pattern
@@ -7187,3 +7270,54 @@ class TestImportMCPServers:
 
         assert [entry.name for entry in result.imported] == ["new-server"]
         mock_manager.reload_servers_from_database.assert_awaited_once()
+
+
+class TestGetMCPGatewaySessions:
+    @pytest.mark.asyncio
+    async def test_non_admin_forbidden(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            get_mcp_gateway_sessions,
+        )
+
+        non_admin = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.INTERNAL_USER)
+        with pytest.raises(HTTPException) as exc_info:
+            await get_mcp_gateway_sessions(user_api_key_dict=non_admin)
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+    async def test_admin_roles_receive_live_session_report(self, role):
+        from mcp.types import Implementation
+
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            get_mcp_gateway_sessions,
+        )
+        from litellm.types.mcp import MCPGatewaySessionsResponse
+
+        session_id = "gateway-sessions-endpoint-1"
+        auth_user = mcp_server.MCPAuthenticatedUser(
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-live-secret", user_id="alice"),
+        )
+        with (
+            patch.object(  # test-quality-ok: the transport registry is a module-level singleton; the suite's only seam
+                mcp_server.session_manager_stateful, "_server_instances", {session_id: MagicMock()}
+            ),
+            patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+                mcp_server._stateful_session_auth_contexts, {session_id: auth_user}, clear=True
+            ),
+            patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+                mcp_server._stateful_session_client_info,
+                {session_id: Implementation(name="cursor", version="0.50.0")},
+                clear=True,
+            ),
+        ):
+            result = await get_mcp_gateway_sessions(
+                user_api_key_dict=generate_mock_user_api_key_auth(user_role=role),
+            )
+
+        assert isinstance(result, MCPGatewaySessionsResponse)
+        assert result.total_sessions == 1
+        assert [(group.label, group.count) for group in result.by_client] == [("cursor", 1)]
+        assert [(group.label, group.count) for group in result.by_user] == [("alice", 1)]
+        assert "sk-live-secret" not in result.model_dump_json()
