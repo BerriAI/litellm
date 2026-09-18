@@ -58,6 +58,16 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "byesu": {
+    "base_url": "https://byesu.com/v1",
+    "api_key_env": "BYESU_API_KEY",
+    "api_base_env": "BYESU_API_BASE",
+    "base_class": "openai_gpt",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  },
   "chutes": {
     "base_url": "https://llm.chutes.ai/v1/",
     "api_key_env": "CHUTES_API_KEY",
