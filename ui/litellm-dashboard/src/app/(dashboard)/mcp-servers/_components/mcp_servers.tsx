@@ -487,7 +487,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
             </div>
             <p className="mt-1 text-sm text-muted-foreground">Configure and manage your MCP servers</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Link href={uiHref("connect")} className={cn(buttonVariants({ variant: "outline" }), "shrink-0")}>
               <Plug />
               My Connections
