@@ -344,9 +344,9 @@ def transcribe_max_job_cost(cost_per_second: float) -> float:
     return transcription_job_cost(TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS, cost_per_second)
 
 
-def started_transcription_job(response_body: str) -> TranscriptionJobRecord | None:
+def started_transcription_job(response_body: Mapping[str, object] | None) -> TranscriptionJobRecord | None:
     try:
-        return _TranscriptionJobResponse.model_validate_json(response_body).TranscriptionJob
+        return _TranscriptionJobResponse.model_validate(response_body).TranscriptionJob
     except ValidationError:
         return None
 
@@ -603,6 +603,7 @@ class TranscribePassthroughLoggingHandler:
     def schedule_priced_job_logging(
         self,
         httpx_response: httpx.Response,
+        response_body: Mapping[str, object] | None,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
         result: str,
@@ -616,6 +617,7 @@ class TranscribePassthroughLoggingHandler:
         task: Final = asyncio.create_task(
             self._price_then_log(
                 httpx_response=httpx_response,
+                started_job=started_transcription_job(response_body),
                 logging_obj=logging_obj,
                 url_route=url_route,
                 result=result,
@@ -634,6 +636,7 @@ class TranscribePassthroughLoggingHandler:
     async def _price_then_log(
         self,
         httpx_response: httpx.Response,
+        started_job: TranscriptionJobRecord | None,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
         result: str,
@@ -654,7 +657,7 @@ class TranscribePassthroughLoggingHandler:
             job_name if isinstance(job_name, str) else "",
             aws_region_name,
             cost_per_second,
-            started_transcription_job(httpx_response.text),
+            started_job,
         )
         payload: Final = self.transcribe_passthrough_handler(
             httpx_response=httpx_response,
