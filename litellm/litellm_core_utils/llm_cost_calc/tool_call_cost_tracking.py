@@ -3,7 +3,11 @@ Helper utilities for tracking the cost of built-in tools.
 """
 
 from collections.abc import Mapping
-from typing import Final, Literal, cast
+from typing import (
+    Final,
+    Literal,
+    cast,  # noqa: TID251  # narrows SDK-union output items and dict fallbacks into typed views
+)
 
 from pydantic import ValidationError
 
