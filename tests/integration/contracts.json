@@ -213,6 +213,15 @@
     ],
     "tests/integration/sdk/test_http2_wire.py::test_sync_handler_negotiates_http2_only_when_enabled": [
       "other.sdk_wire.http2.sync_handler_negotiates_h2_only_when_enabled"
+    ],
+    "tests/integration/mcp/test_mcp_lifecycle.py::test_health_intersects_route_restricted_key_grants_in_both_management_modes": [
+      "other.mcp.health.restricted_keys_intersect_grants_in_both_modes"
+    ],
+    "tests/integration/mcp/test_mcp_lifecycle.py::test_warm_credential_removal_rejects_without_upstream_traffic": [
+      "other.mcp.credentials.warm_removal_fails_closed_without_upstream_traffic"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls": [
+      "other.mcp.guardrails.request_selection_blocks_resolved_tool_without_execution"
     ]
   },
   "browser": {
