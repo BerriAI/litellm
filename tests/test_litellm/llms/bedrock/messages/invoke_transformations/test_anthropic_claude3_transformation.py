@@ -3244,3 +3244,65 @@ def test_bedrock_messages_strips_effort_but_keeps_format_for_sonnet_4_5(local_mo
     )
 
     assert result.get("output_config") == {"format": schema_format}
+
+
+FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14"
+
+
+def _invoke_request_with_tools(tools, headers=None):
+    from litellm.types.router import GenericLiteLLMParams
+
+    return AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "write a big file"}],
+        anthropic_messages_optional_request_params={"max_tokens": 4096, "tools": copy.deepcopy(tools), "stream": True},
+        litellm_params=GenericLiteLLMParams(),
+        headers=headers or {},
+    )
+
+
+def _eager_invoke_tool(name, eager_input_streaming):
+    return {
+        "name": name,
+        "description": f"{name} tool",
+        "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+        "eager_input_streaming": eager_input_streaming,
+    }
+
+
+def test_bedrock_invoke_eager_input_streaming_tool_adds_beta_and_strips_key():
+    result = _invoke_request_with_tools(
+        [
+            _eager_invoke_tool("write_file", True),
+            _eager_invoke_tool("read_file", False),
+            {"name": "list_files", "input_schema": {"type": "object", "properties": {}}},
+        ]
+    )
+
+    assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
+    assert [tool["name"] for tool in result["tools"]] == ["write_file", "read_file", "list_files"]
+    assert all("eager_input_streaming" not in tool for tool in result["tools"])
+    assert result["tools"][0]["description"] == "write_file tool"
+    assert result["tools"][0]["input_schema"] == {"type": "object", "properties": {"path": {"type": "string"}}}
+
+
+def test_bedrock_invoke_eager_input_streaming_false_strips_key_without_beta():
+    result = _invoke_request_with_tools([_eager_invoke_tool("write_file", False)])
+
+    assert "anthropic_beta" not in result
+    assert result["tools"] == [
+        {
+            "name": "write_file",
+            "description": "write_file tool",
+            "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+        }
+    ]
+
+
+def test_bedrock_invoke_eager_input_streaming_beta_not_duplicated_with_client_header():
+    result = _invoke_request_with_tools(
+        [_eager_invoke_tool("write_file", True)],
+        headers={"anthropic-beta": FINE_GRAINED_TOOL_STREAMING_BETA},
+    )
+
+    assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]

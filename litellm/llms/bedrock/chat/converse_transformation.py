@@ -48,6 +48,7 @@ from litellm.llms.bedrock.request_metadata import (
     merge_bedrock_invoke_headers,
     resolve_bedrock_request_metadata,
 )
+from litellm.types.llms.anthropic import ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -1518,10 +1519,7 @@ class AmazonConverseConfig(BaseConfig):
         bedrock_tools: list[ToolBlock] = []
 
         # Collect anthropic_beta values from user headers
-        anthropic_beta_list: Final = []
-        if headers:
-            user_betas: Final = get_anthropic_beta_from_headers(headers)
-            anthropic_beta_list.extend(user_betas)
+        anthropic_beta_list: Final = list(get_anthropic_beta_from_headers(headers or {}))
 
         # Separate pre-formatted Bedrock tools (e.g. systemTool from web_search_options)
         # from OpenAI-format tools that need transformation via _bedrock_tools_pt
@@ -1633,6 +1631,12 @@ class AmazonConverseConfig(BaseConfig):
 
                 if ANTHROPIC_EFFORT_BETA_HEADER not in anthropic_beta_list:
                     anthropic_beta_list.append(ANTHROPIC_EFFORT_BETA_HEADER)
+
+            if (
+                AnthropicModelInfo().is_eager_input_streaming_used(filtered_tools)
+                and ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER not in anthropic_beta_list
+            ):
+                anthropic_beta_list.append(ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER)
 
             # Bedrock Converse: compact_20260112 edits only (+ beta header).
             AmazonConverseConfig._filter_context_management_for_bedrock_converse(

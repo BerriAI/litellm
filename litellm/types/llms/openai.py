@@ -992,6 +992,7 @@ class ChatCompletionToolParamFunctionChunk(TypedDict, total=False):
     description: str
     parameters: dict
     strict: bool
+    eager_input_streaming: ReadOnly[bool]
 
 
 class OpenAIChatCompletionToolParam(TypedDict):
@@ -1002,6 +1003,7 @@ class OpenAIChatCompletionToolParam(TypedDict):
 class ChatCompletionToolParam(OpenAIChatCompletionToolParam, total=False):
     cache_control: ChatCompletionCachedContent
     allowed_callers: list[str]
+    eager_input_streaming: ReadOnly[bool]
 
 
 class Function(TypedDict, total=False):
