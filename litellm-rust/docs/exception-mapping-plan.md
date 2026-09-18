@@ -37,7 +37,7 @@ Two things the design text does not say but the code shows:
 
 ## 3. Target shapes
 
-### Core (`core/src/litellm_core_utils/exception_mapping_utils/`)
+### Core (`core-utils/src/exception_mapping_utils/`)
 
 - `original.rs`
   - `enum OriginalException { Http{status, body, headers}, Connection{message}, Timeout{message}, Response{message}, Local{class: LocalClass, message, status: Option<u16>} }`
@@ -163,7 +163,7 @@ The parity sweep must be green after every step except for recorded divergences.
   - One case per rule, named after the rule
   - One case per pair of rules that can both match, asserting the earlier one wins (for example a 400 whose body has both a context-window marker and a content-policy marker)
   - Separate test modules for `status.rs` (every mapped status plus one unmapped), `extra_information` (each optional context field present and absent), redaction (message redacted, markers still matched on the redacted string), and `print_banner` against `suppress_debug_info`
-  - Run `cargo mutants -p litellm-core --file 'src/litellm_core_utils/exception_mapping_utils/**'` and hold the 90% kill rate. Survivors become table rows
+  - Run `cargo mutants -p litellm-core-utils --file 'src/exception_mapping_utils/**'` and hold the 90% kill rate. Survivors become table rows
 
 ### 4.7 Router and proxy smoke sweep
 
