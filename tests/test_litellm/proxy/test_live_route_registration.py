@@ -50,6 +50,8 @@ def test_public_live_websockets_reach_live_auth_before_legacy_sideband(monkeypat
     authenticate = AsyncMock(side_effect=HTTPException(403, "Live authentication rejected"))
     monkeypatch.setattr(live, "_auth", authenticate)
     monkeypatch.setattr(proxy_server, "general_settings", {})
+    # A previous proxy test may leave the module scheduler bound to a closed loop.
+    monkeypatch.setattr(proxy_server, "scheduler", None)
     with TestClient(proxy_server.app) as client:
         with pytest.raises(WebSocketDisconnect):
             with client.websocket_connect(prefix + "/sessions" + suffix, headers={"authorization": "Bearer test"}):
