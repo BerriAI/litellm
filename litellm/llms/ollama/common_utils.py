@@ -1,9 +1,29 @@
+from functools import lru_cache
 from typing import Any, Final
 
 import httpx
 
+from litellm import model_cost as _model_cost
 from litellm import verbose_logger
+from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _cached_ollama_show(model: str, api_base: str, headers: tuple[tuple[str, str], ...] = ()) -> dict[str, Any] | None:
+    from litellm import module_level_client
+
+    try:
+        response: Final = module_level_client.post(
+            url=f"{api_base}/api/show",
+            json={"name": model},
+            headers=dict(headers),
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception:
+        verbose_logger.debug("OllamaError: Could not get model info.")
+        return None
 
 
 class OllamaError(BaseLLMException):
@@ -51,6 +71,8 @@ class OllamaModelInfo(BaseLLMModelInfo):
     Fetches /api/models and /api/tags, then for each tag also /api/models?tag=...
     Returns the union of all model names.
     """
+
+    _builtin_model_cost_keys: Final = frozenset(key.lower() for key in _model_cost)
 
     @staticmethod
     def get_api_key(api_key=None) -> str | None:
@@ -141,8 +163,8 @@ class OllamaModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def _is_static_ollama_model(model: str) -> bool:
-        from litellm import model_cost
-
+        # Snapshot at class definition time so Router-registered keys
+        # (added via register_model at startup) don't pollute the check
         stripped_model: Final = OllamaModelInfo._strip_ollama_model_prefix(model)
         potential_model_names: Final = {
             model,
@@ -150,13 +172,20 @@ class OllamaModelInfo(BaseLLMModelInfo):
             "ollama/" + stripped_model,
             "ollama_chat/" + stripped_model,
         }
-        model_cost_keys: Final = {key.lower() for key in model_cost}
-        return any(name.lower() in model_cost_keys for name in potential_model_names)
+        return any(name.lower() in OllamaModelInfo._builtin_model_cost_keys for name in potential_model_names)
 
     @staticmethod
     def _supports_function_calling(ollama_model_info: dict) -> bool:
+        capabilities: Final = ollama_model_info.get("capabilities", [])
+        if isinstance(capabilities, list) and "tools" in capabilities:
+            return True
         _template: Final[str] = str(ollama_model_info.get("template", "") or "")
         return "tools" in _template.lower()
+
+    @staticmethod
+    def _supports_vision(ollama_model_info: dict) -> bool:
+        capabilities: Final = ollama_model_info.get("capabilities", [])
+        return isinstance(capabilities, list) and "vision" in capabilities
 
     @staticmethod
     def _get_max_tokens(ollama_model_info: dict) -> int | None:
@@ -173,23 +202,15 @@ class OllamaModelInfo(BaseLLMModelInfo):
         api_base: str | None = None,
         api_key: str | None = None,
     ) -> dict[str, Any]:
-        from litellm import module_level_client
-
         model = self._strip_ollama_model_prefix(model)
         passed_api_base: Final = api_base
         api_base = self.get_server_api_base(api_base)
-        api_key = self.get_api_key(api_key) if passed_api_base is None or api_key else None
-        headers: Final = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        resolved_api_key: Final = self.get_api_key(api_key) if passed_api_base is None or api_key else None
+        headers: Final = {"Authorization": f"Bearer {resolved_api_key}"} if resolved_api_key else {}
 
-        try:
-            response: Final = module_level_client.post(
-                url=f"{api_base}/api/show",
-                json={"name": model},
-                headers=headers,
-            )
-            response.raise_for_status()
-        except Exception:
-            verbose_logger.debug("OllamaError: Could not get model info.")
+        ollama_model_info = _cached_ollama_show(model, api_base, tuple(sorted(headers.items())))
+
+        if ollama_model_info is None:
             return {
                 "key": model,
                 "litellm_provider": "ollama",
@@ -201,19 +222,19 @@ class OllamaModelInfo(BaseLLMModelInfo):
                 "max_output_tokens": None,
             }
 
-        model_info: Final = response.json()
-        max_tokens: Final = self._get_max_tokens(model_info)
+        max_tokens: Final = self._get_max_tokens(ollama_model_info)
 
         return {
             "key": model,
             "litellm_provider": "ollama",
             "mode": "chat",
-            "supports_function_calling": self._supports_function_calling(model_info),
+            "supports_function_calling": self._supports_function_calling(ollama_model_info),
+            "supports_vision": self._supports_vision(ollama_model_info),
             "input_cost_per_token": 0.0,
             "output_cost_per_token": 0.0,
             "max_tokens": max_tokens,
             "max_input_tokens": max_tokens,
-            "max_output_tokens": max_tokens,
+            "max_output_tokens": None,
         }
 
     def get_model_info(
