@@ -2016,6 +2016,7 @@ dependencies = [
  "litellm-auth-azure",
  "litellm-auth-gcp",
  "litellm-framing",
+ "litellm-providers",
  "mime_guess",
  "moka",
  "rand 0.8.7",
@@ -2050,6 +2051,18 @@ dependencies = [
  "sse-stream",
  "thiserror 2.0.19",
  "tokio",
+]
+
+[[package]]
+name = "litellm-providers"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth",
+ "litellm-auth-aws",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

@@ -143,8 +143,9 @@ bedrock-realtime = [
     # InvokeModelWithBidirectionalStream API, which boto3 cannot do. This
     # experimental AWS SDK (with its smithy-* deps, pulled transitively)
     # provides the bidirectional stream; imported lazily in the realtime
-    # handler so litellm core stays usable without it.
-    "aws-sdk-bedrock-runtime>=0.7.0,<0.8.0; python_version >= '3.12'",
+    # handler so litellm core stays usable without it. The awscrt extra is
+    # required: the SDK's default aiohttp transport has no duplex streaming.
+    "aws-sdk-bedrock-runtime[awscrt]>=0.10.0,<0.12.0; python_version >= '3.12'",
 ]
 proxy-runtime = [
     # Historically bundled in the proxy Docker images via requirements.txt.
@@ -173,7 +174,7 @@ proxy-runtime = [
 [project.scripts]
 litellm = "litellm:run_server"
 lite = "litellm.proxy.client.cli:cli"
-litellm-proxy = "litellm.proxy.client.cli:cli"
+litellm-proxy = "litellm.proxy.client.cli:litellm_proxy_cli"
 
 [dependency-groups]
 dev = [

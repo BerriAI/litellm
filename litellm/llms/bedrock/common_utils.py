@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 
 _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
+_OPENAI_FAMILY_MODEL_RE: Final = re.compile(r"(^|[./])openai\.")
 
 
 def error_response_text(response: httpx.Response) -> str:
@@ -878,9 +879,10 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     """
     Whether Converse ``cachePoint`` blocks may be sent to this model.
 
-    Bedrock rejects requests carrying cachePoint blocks for models without prompt
-    caching support ("You invoked an unsupported model or your request did not allow
-    prompt caching"), so a model whose cost-map entry does not declare
+    OpenAI-family models only support implicit caching and never accept explicit
+    ``cachePoint`` blocks. Bedrock rejects requests carrying cachePoint blocks for
+    models without prompt caching support ("You invoked an unsupported model or your
+    request did not allow prompt caching"), so a model whose cost-map entry does not declare
     ``supports_prompt_caching`` must not receive them. A model absent from the map
     (an application inference profile ARN, a model newer than the map) keeps emitting
     so existing caching setups never silently degrade. ``litellm.utils.supports_prompt_caching``
@@ -888,6 +890,8 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     """
     if model is None:
         return True
+    if _OPENAI_FAMILY_MODEL_RE.search(model):
+        return False
     entries: Final = tuple(
         entry
         for candidate in (model, get_bedrock_base_model(model))
