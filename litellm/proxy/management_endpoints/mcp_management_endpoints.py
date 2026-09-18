@@ -2317,7 +2317,7 @@ if MCP_AVAILABLE:
                 _invalidate_byok_cred_cache,
             )
 
-            _invalidate_byok_cred_cache(user_id, server_id)
+            await _invalidate_byok_cred_cache(user_id, server_id)
             return MCPUserCredentialResponse(server_id=server_id, has_credential=True)
         # save=False: credential not persisted
         return MCPUserCredentialResponse(server_id=server_id, has_credential=False)
@@ -2348,7 +2348,7 @@ if MCP_AVAILABLE:
             _invalidate_byok_cred_cache,
         )
 
-        _invalidate_byok_cred_cache(target_user_id, server_id)
+        await _invalidate_byok_cred_cache(target_user_id, server_id)
         return MCPUserCredentialResponse(server_id=server_id, has_credential=False)
 
     # ── OAuth2 user-credential endpoints ──────────────────────────────────────

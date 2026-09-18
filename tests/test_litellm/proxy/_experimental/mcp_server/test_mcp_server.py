@@ -2989,9 +2989,10 @@ async def test_admin_terminated_session_id_gets_404_instead_of_a_fresh_stateless
     """Once an admin closes a session, a client replaying its id must not be silently upgraded to a
     new stateless session by the stale-header path; it gets 404 and has to initialize again."""
     try:
+        from starlette.types import Scope
+
         from litellm.proxy._experimental.mcp_server import server as mcp_server
         from litellm.proxy._experimental.mcp_server.server import session_manager_stateful
-        from starlette.types import Scope
     except ImportError:
         pytest.skip("MCP server not available")
 
@@ -3044,6 +3045,73 @@ async def test_admin_terminated_session_id_gets_404_instead_of_a_fresh_stateless
                 is False
             )
             assert [k for k, _ in unknown_scope["headers"]] == [b"content-type"]
+    finally:
+        mcp_server._admin_terminated_session_ids.clear()
+
+
+@pytest.mark.asyncio
+async def test_admin_terminated_session_id_stays_refused_while_replayed_and_is_forgotten_like_an_idle_session():
+    """The refusal window slides on every replay, so a client that keeps retrying is never silently
+    upgraded to a stateless session no matter how many other sessions an admin closes later; an id
+    nobody has replayed for a full idle timeout is dropped from the table by the idle sweep."""
+    try:
+        from starlette.types import Scope
+
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import session_manager_stateful
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    idle_timeout = mcp_server._STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS
+    retrying_id, silent_id = "admin-closed-retrying", "admin-closed-silent"
+    contexts = {
+        session_id: mcp_server.MCPAuthenticatedUser(
+            user_api_key_auth=UserAPIKeyAuth(api_key="key-alice", user_id="alice"),
+        )
+        for session_id in (retrying_id, silent_id)
+    }
+    live_transports = {session_id: MagicMock(terminate=AsyncMock()) for session_id in contexts}
+
+    async def replay(session_id: str, now: float) -> tuple[bool, list[bytes]]:
+        scope: Scope = {
+            "type": "http",
+            "method": "POST",
+            "headers": [(b"content-type", b"application/json"), (b"mcp-session-id", session_id.encode())],
+        }
+        with patch.object(mcp_server.time, "monotonic", return_value=now):
+            handled = await mcp_server._handle_stale_mcp_session(
+                scope, AsyncMock(), AsyncMock(), session_manager_stateful
+            )
+        return handled, [k for k, _ in scope["headers"]]
+
+    try:
+        with (
+            patch.object(  # test-quality-ok: the transport registry is a module-level singleton; the suite's only seam
+                session_manager_stateful, "_server_instances", live_transports
+            ),
+            patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+                mcp_server._stateful_session_auth_contexts, contexts, clear=True
+            ),
+            patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+                mcp_server._stateful_session_client_info, {}, clear=True
+            ),
+            patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+                mcp_server._stateful_session_auth_context_last_seen, {}, clear=True
+            ),
+        ):
+            with patch.object(mcp_server.time, "monotonic", return_value=1000.0):
+                closed = await mcp_server.terminate_mcp_gateway_sessions(user_id="alice")
+            assert closed.terminated_sessions == 2
+
+            for elapsed in (idle_timeout - 1, 2 * idle_timeout - 2, 3 * idle_timeout - 3):
+                assert await replay(retrying_id, 1000.0 + elapsed) == (True, [b"content-type", b"mcp-session-id"])
+
+            await mcp_server._purge_expired_stateful_session_auth_contexts(now=1000.0 + idle_timeout)
+            assert set(mcp_server._admin_terminated_session_ids) == {retrying_id}
+
+            assert await replay(silent_id, 1000.0 + idle_timeout) == (False, [b"content-type"])
+            assert await replay(retrying_id, 1000.0 + 4 * idle_timeout) == (False, [b"content-type"])
+            assert mcp_server._admin_terminated_session_ids == {}
     finally:
         mcp_server._admin_terminated_session_ids.clear()
 

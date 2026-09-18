@@ -184,7 +184,8 @@ MCP_METADATA_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "1
 MCP_HEALTH_CHECK_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
 MCP_TOOL_LISTING_MAX_PAGES: Final = 1000
 MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH: Final = 8
-MCP_ADMIN_TERMINATED_SESSION_IDS_MAX: Final = 1024
+MCP_BYOK_CREDENTIAL_CACHE_TTL_SECONDS: Final = 60
+MCP_BYOK_CREDENTIAL_CACHE_MAX_SIZE: Final = 4096
 
 # Allowlist of commands permitted for MCP stdio transport.
 # Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.

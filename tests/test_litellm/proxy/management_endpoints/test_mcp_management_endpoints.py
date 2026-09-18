@@ -5152,7 +5152,7 @@ async def test_admin_revokes_another_users_byok_credential():
     )
 
     delete_mock = AsyncMock(return_value=None)
-    invalidate_mock = MagicMock()
+    invalidate_mock = AsyncMock()
     with (
         patch(  # test-quality-ok: endpoint test stubs the Prisma client lookup
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
@@ -5174,7 +5174,7 @@ async def test_admin_revokes_another_users_byok_credential():
 
     delete_mock.assert_awaited_once()
     assert delete_mock.await_args.args[1:] == ("mallory", "srv-byok-admin")
-    invalidate_mock.assert_called_once_with("mallory", "srv-byok-admin")
+    invalidate_mock.assert_awaited_once_with("mallory", "srv-byok-admin")
     assert result.has_credential is False
 
 
@@ -5231,7 +5231,7 @@ async def test_user_naming_themselves_still_deletes_own_byok_credential():
             new=delete_mock,
         ),
         patch.object(  # test-quality-ok: the cache invalidator is module scoped; the suite's only seam
-            mcp_server, "_invalidate_byok_cred_cache", new=MagicMock()
+            mcp_server, "_invalidate_byok_cred_cache", new=AsyncMock()
         ),
     ):
         await delete_mcp_user_credential(
