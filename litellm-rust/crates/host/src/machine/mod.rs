@@ -1,5 +1,11 @@
+mod auth;
+mod route_machine;
+
 use std::future::Future;
 use std::pin::Pin;
+
+pub use auth::{HostTokenProvider, TokenRoute};
+pub use route_machine::{ExecuteFuture, HostChannel, MachineFault, RouteMachine};
 
 use crate::host::{HostOp, HostResult};
 use crate::route::Route;

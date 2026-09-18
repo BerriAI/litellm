@@ -477,19 +477,21 @@ def _test_tracer():
     return provider.get_tracer("test")
 
 
+_CALLER_TRACEPARENT = "00-11111111111111111111111111111111-2222222222222222-01"
+
+
 def test_inject_trace_context_prefers_request_root_span():
     def run():
         tracer = _test_tracer()
-        with tracer.start_as_current_span("root") as root:
+        inbound = TraceContextTextMapPropagator().extract({"traceparent": _CALLER_TRACEPARENT})
+        with tracer.start_as_current_span("root", context=inbound) as root:
             ctx_mod.set_request_root_span(root)
-            result = ctx_mod.inject_trace_context(
-                {"traceparent": "00-11111111111111111111111111111111-2222222222222222-01"}
-            )
+            result = ctx_mod.inject_trace_context({"traceparent": _CALLER_TRACEPARENT})
             propagated = get_current_span(TraceContextTextMapPropagator().extract(result))
             return result, root, propagated
 
     result, root, propagated = ContextVarContext().run(run)
-    assert result["traceparent"] != "00-11111111111111111111111111111111-2222222222222222-01"
+    assert result["traceparent"] != _CALLER_TRACEPARENT
     assert propagated.get_span_context().trace_id == root.get_span_context().trace_id
     assert propagated.get_span_context().span_id == root.get_span_context().span_id
 
@@ -507,24 +509,57 @@ def test_inject_trace_context_uses_ambient_span_without_request_root():
     assert propagated.get_span_context().span_id == ambient.get_span_context().span_id
 
 
-def test_inject_trace_context_replaces_stale_trace_headers():
+def test_inject_trace_context_replaces_same_trace_headers_with_request_span():
     def run():
         tracer = _test_tracer()
-        with tracer.start_as_current_span("ambient") as ambient:
-            headers = {
-                "Traceparent": "00-" + "a" * 32 + "-" + "b" * 16 + "-01",
-                "Tracestate": "vendor=old",
-                "x-keep": "1",
-            }
+        headers = {"Traceparent": _CALLER_TRACEPARENT, "Tracestate": "vendor=caller", "x-keep": "1"}
+        inbound = TraceContextTextMapPropagator().extract({key.lower(): value for key, value in headers.items()})
+        with tracer.start_as_current_span("ambient", context=inbound) as ambient:
             result = ctx_mod.inject_trace_context(headers)
             propagated = get_current_span(TraceContextTextMapPropagator().extract(result))
             return result, ambient, propagated
 
     result, ambient, propagated = ContextVarContext().run(run)
     assert sum(key.lower() == "traceparent" for key in result) == 1
-    assert not any(key.lower() == "tracestate" for key in result)
+    assert sum(key.lower() == "tracestate" for key in result) == 1
     assert result["x-keep"] == "1"
-    assert propagated.get_span_context().trace_id == ambient.get_span_context().trace_id
+    assert result["tracestate"] == "vendor=caller"
+    assert propagated.get_span_context().span_id == ambient.get_span_context().span_id
+
+
+def test_inject_trace_context_keeps_caller_traceparent_from_another_trace():
+    def run():
+        tracer = _test_tracer()
+        parent = tracer.start_span("litellm_request")
+        with tracer.start_as_current_span("ambient") as ambient:
+            ctx_mod.set_request_root_span(ambient)
+            headers = {"Traceparent": _CALLER_TRACEPARENT, "Tracestate": "vendor=caller", "x-keep": "1"}
+            result = ctx_mod.inject_trace_context(headers, parent_span=parent)
+            propagated = get_current_span(TraceContextTextMapPropagator().extract(result))
+            return result, parent, propagated
+
+    result, parent, propagated = ContextVarContext().run(run)
+    assert result["traceparent"] == _CALLER_TRACEPARENT
+    assert result["tracestate"] == "vendor=caller"
+    assert result["x-keep"] == "1"
+    assert sum(key.lower() == "traceparent" for key in result) == 1
+    assert sum(key.lower() == "tracestate" for key in result) == 1
+    assert propagated.get_span_context().trace_id != parent.get_span_context().trace_id
+
+
+def test_inject_trace_context_replaces_malformed_caller_traceparent():
+    def run():
+        tracer = _test_tracer()
+        parent = tracer.start_span("litellm_request")
+        with tracer.start_as_current_span("ambient"):
+            headers = {"traceparent": "not-a-traceparent", "tracestate": "vendor=caller"}
+            result = ctx_mod.inject_trace_context(headers, parent_span=parent)
+            propagated = get_current_span(TraceContextTextMapPropagator().extract(result))
+            return result, parent, propagated
+
+    result, parent, propagated = ContextVarContext().run(run)
+    assert propagated.get_span_context().span_id == parent.get_span_context().span_id
+    assert "tracestate" not in result
 
 
 def test_inject_trace_context_prefers_explicit_parent_span_over_root_and_ambient():
