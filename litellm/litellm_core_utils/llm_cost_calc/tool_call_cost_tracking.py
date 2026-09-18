@@ -37,7 +37,7 @@ from litellm.types.utils import (
 
 def _output_item_field(output_item: object, field: str) -> object:
     if isinstance(output_item, dict):
-        fields: Final[Mapping[str, object]] = cast(Mapping[str, object], output_item)
+        fields: Final[Mapping[str, object]] = cast(Mapping[str, object], output_item)  # cast-ok: narrowed by isinstance
         return fields.get(field)
     return getattr(output_item, field, None)
 
@@ -266,7 +266,7 @@ class StandardBuiltInToolCostTracking:
     def _handle_image_generation_cost(response_object: object, custom_llm_provider: str | None) -> float:
         if not isinstance(response_object, ResponsesAPIResponse):
             return 0.0
-        output: Final[list[object]] = cast(list[object], response_object.output)
+        output: Final[list[object]] = cast(list[object], response_object.output)  # cast-ok: narrowed by isinstance
         return sum(
             StandardBuiltInToolCostTracking._image_generation_call_cost(output_item, custom_llm_provider)
             for output_item in output
