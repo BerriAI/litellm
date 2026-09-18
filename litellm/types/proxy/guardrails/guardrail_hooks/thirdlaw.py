@@ -88,8 +88,8 @@ class ThirdlawGuardrailConfigModelOptionalParams(BaseModel):
         description="Controls LiteLLM behavior when a streamed response cannot be assembled into a scannable shape (for example /v1/responses and text-completion streams). fail_closed refuses the stream. fail_open forwards it unscanned, which lets a caller pick such an endpoint to bypass response moderation.",
     )
     send_stream_chunks: bool | None = Field(
-        default=True,
-        description="If true (default), a finished streamed response is posted both as the assembled provider body in response_body and as the buffered stream beside it: response_chunks for /v1/responses and chat completions, response_sse for /v1/messages. Set to false to post the assembled body alone.",
+        default=False,
+        description="If true, a finished streamed response is posted both as the assembled provider body in response_body and as the buffered stream beside it: response_chunks for /v1/responses and chat completions, response_sse for /v1/messages. Set to false to post the assembled body alone.",
     )
     streaming_buffer_until_moderated: bool | None = Field(
         default=True,
@@ -103,6 +103,11 @@ class ThirdlawGuardrailConfigModelOptionalParams(BaseModel):
         default=5,
         description="When streaming_end_of_stream_only is false, check every Nth streamed chunk (in addition to the final end-of-stream check). Interim checks can only block, not modify. Ignored when streaming_end_of_stream_only is true.",
     )
+    api_key: str | None = Field(
+        default=None,
+        description="API key for ThirdLaw, sent as a bearer token. Env: THIRDLAW_API_KEY.",
+    )
+
 
 
 class ThirdlawGuardrailConfigModel(GuardrailConfigModel[ThirdlawGuardrailConfigModelOptionalParams]):
@@ -115,11 +120,6 @@ class ThirdlawGuardrailConfigModel(GuardrailConfigModel[ThirdlawGuardrailConfigM
             ]
         },
     )
-    api_key: str | None = Field(
-        default=None,
-        description="API key for ThirdLaw, sent as a bearer token. Env: THIRDLAW_API_KEY.",
-    )
-
     guardrail_timeout: int | None = Field(
         default=60,
         description="Timeout for the ThirdLaw API request. In seconds.",
