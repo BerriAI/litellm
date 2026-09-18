@@ -41,8 +41,6 @@ from .models import (
     SAPUserMessage,
 )
 
-_UNSET = object()  # sentinel for _cached_deployment_url initialization
-
 # Env var that an operator can set to pin a specific orchestration deployment URL.
 # An empty string is treated as unset and falls through to auto-discovery.
 _AICORE_ORCHESTRATION_DEPLOYMENT_URL_ENV_VAR = "AICORE_ORCHESTRATION_DEPLOYMENT_URL"
@@ -143,7 +141,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         self.token_creator = None
         self._base_url = None
         self._resource_group = None
-        self._cached_deployment_url: object = _UNSET  # manual cache; avoids get_config() picking up @cached_property
+        self._cached_deployment_url: str | None = None  # None = not yet resolved
 
     def run_env_setup(self, service_key: str | None = None) -> None:
         try:
@@ -188,50 +186,49 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         handled one level up in ``get_complete_url`` before this property
         is ever called.
         """
-        if self._cached_deployment_url is _UNSET:
+        cached = self._cached_deployment_url
+        if cached is None:
             env = os.environ.get(_AICORE_ORCHESTRATION_DEPLOYMENT_URL_ENV_VAR)
-            self._cached_deployment_url = env or self._resolve_deployment_url()
-        return self._cached_deployment_url  # pyright: ignore[reportReturnType]  # _UNSET is excluded by the guard above
+            cached = env or self._resolve_deployment_url()
+            self._cached_deployment_url = cached
+        return cached
+
+    def _as_orchestration_candidate(self, dep: dict[str, Any]) -> tuple[str, str, str] | None:
+        if dep.get("scenarioId") != "orchestration":
+            return None
+        cfg: Final = litellm.module_level_client.get(
+            f"{self.base_url}/lm/configurations/{dep['configurationId']}",
+            headers=self.headers,
+        ).json()
+        if cfg.get("executableId") != "orchestration":
+            return None
+        return (dep["deploymentUrl"], dep["createdAt"], cfg.get("name", ""))
 
     def _resolve_deployment_url(self) -> str:
-        """Discover the orchestration deployment URL from SAP AI Core.
-
-        Lists all deployments, filters to those with scenarioId and
-        executableId both equal to "orchestration", picks the one with
-        the most recent createdAt timestamp.  Warns when more than one
-        candidate is found.  Raises if none found.
-        """
-        client = litellm.module_level_client
-        deployments = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
-        valid: list[tuple[str, str, str]] = []  # (url, createdAt, name)
-        for dep in deployments.get("resources", []):
-            if dep.get("scenarioId") != "orchestration":
-                continue
-            cfg = client.get(
-                f"{self.base_url}/lm/configurations/{dep['configurationId']}",
-                headers=self.headers,
-            ).json()
-            if cfg.get("executableId") == "orchestration":
-                valid.append((dep["deploymentUrl"], dep["createdAt"], cfg.get("name", "")))
-
-        if not valid:
+        resources: Final = (
+            litellm.module_level_client.get(f"{self.base_url}/lm/deployments", headers=self.headers)
+            .json()
+            .get("resources", [])
+        )
+        candidates: Final[list[tuple[str, str, str]]] = sorted(
+            filter(None, (self._as_orchestration_candidate(dep) for dep in resources)),
+            key=lambda c: c[1],
+            reverse=True,
+        )
+        if not candidates:
             raise GenAIHubOrchestrationError(
                 status_code=404,
                 message="No orchestration deployment found in SAP AI Core.",
             )
-
-        sorted_valid = sorted(valid, key=lambda x: x[1], reverse=True)
-
-        if len(sorted_valid) > 1:
-            chosen = sorted_valid[0]
-            others = [v[2] or v[0] for v in sorted_valid[1:]]
+        if len(candidates) > 1:
             verbose_logger.warning(
-                f"SAP: {len(sorted_valid)} orchestration deployments found; "
-                f"using newest (name={chosen[2]!r}, url={chosen[0]!r}). "
-                f"Others ignored: {others}."
+                "SAP: %d orchestration deployments found; using newest (name=%r, url=%r). Others ignored: %s.",
+                len(candidates),
+                candidates[0][2],
+                candidates[0][0],
+                tuple(v[2] or v[0] for v in candidates[1:]),
             )
-
-        return sorted_valid[0][0]
+        return candidates[0][0]
 
     @classmethod
     def get_config(cls):
