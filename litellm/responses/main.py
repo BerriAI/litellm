@@ -2338,6 +2338,8 @@ async def _aresponses_websocket(
         "api_base",
         "api_key",
         "timeout",
+        "input",
+        "previous_response_id",
     }
     remaining_kwargs: Final = {k: v for k, v in kwargs.items() if k not in _explicit_keys}
 

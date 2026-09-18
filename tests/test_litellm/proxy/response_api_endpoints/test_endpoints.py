@@ -511,6 +511,66 @@ class TestResponsesWSFirstFrameModelAuth:
         mock_model_auth.assert_awaited_once()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [False, True])
+    @pytest.mark.parametrize("query_model", [None, "gpt-4o-mini"])
+    async def test_endpoint_routes_on_first_frame_input_and_previous_response_id(self, nested, query_model):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            responses_websocket_endpoint,
+        )
+
+        replayed_input = [{"type": "reasoning", "id": "encitem_abc", "encrypted_content": "litellm_enc:abc;blob"}]
+        payload = {"model": "gpt-4o-mini", "input": replayed_input, "previous_response_id": "resp_prev"}
+        first_frame = {"type": "response.create", "response": payload} if nested else {"type": "response.create", **payload}
+        raw_first_frame = json.dumps(first_frame)
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(return_value=raw_first_frame)
+        ws.close = AsyncMock()
+
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
+        )
+
+        async def fake_llm_call():
+            return None
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests below
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; the payload it hands to routing is what is under test
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam where the first frame's input and previous_response_id become observable
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                return_value=fake_llm_call(),
+            ) as mock_route_request,
+        ):
+            await responses_websocket_endpoint(
+                websocket=ws,
+                model=query_model,
+                user_api_key_dict=MagicMock(),
+            )
+
+        ws.receive_text.assert_awaited_once()
+        routed = mock_route_request.await_args.kwargs["data"]
+        assert routed["model"] == "gpt-4o-mini"
+        assert routed["input"] == replayed_input
+        assert routed["previous_response_id"] == "resp_prev"
+        assert processor.common_processing_pre_call_logic.await_args.kwargs["model"] == "gpt-4o-mini"
+        assert mock_route_request.await_args.kwargs["route_type"] == "_aresponses_websocket"
+        ws.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_reruns_model_auth_for_first_frame_model(self):
         from starlette.requests import Request
 
@@ -633,6 +693,41 @@ class TestReadWSModelFromFirstFrameErrors:
         result = await _read_ws_model_from_first_frame(ws)
 
         assert result == ("gpt-4o", raw)
+        ws.send_text.assert_not_awaited()
+        ws.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_query_model_wins_over_first_frame_model(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        raw = json.dumps({"type": "response.create", "model": "gpt-4o", "input": []})
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(return_value=raw)
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws, query_model="reasoning-group")
+
+        assert result == ("reasoning-group", raw)
+        ws.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_query_model_satisfies_a_first_frame_without_model(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        raw = json.dumps({"type": "response.create", "input": []})
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(return_value=raw)
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws, query_model="reasoning-group")
+
+        assert result == ("reasoning-group", raw)
         ws.send_text.assert_not_awaited()
         ws.close.assert_not_awaited()
 

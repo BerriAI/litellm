@@ -2628,3 +2628,269 @@ class TestNativeWebSocketUrlConstruction:
         mock_config.get_websocket_url.assert_called_once()
         _, call_kwargs = mock_config.get_websocket_url.call_args
         assert call_kwargs["litellm_params"]["api_version"] == "2025-04-01-preview"
+
+
+_AFFINITY_METADATA = {
+    "model_info": {"id": "dep-1"},
+    "encrypted_content_affinity_enabled": True,
+}
+
+
+def _wrapped_reasoning_item():
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    return {
+        "type": "reasoning",
+        "id": ResponsesAPIRequestUtils._build_encrypted_item_id("dep-1", "rs_orig"),
+        "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAA-blob", "dep-1"),
+        "summary": [],
+    }
+
+
+class TestNativeWebSocketEncryptedContentAffinity:
+    """The native relay must restore and wrap ids the same way the HTTP /v1/responses path does."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [False, True])
+    async def test_client_to_backend_restores_wrapped_ids(self, nested):
+        from unittest.mock import AsyncMock
+
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        wrapped_previous = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai", model_id="dep-1", response_id="resp_orig"
+        )
+        payload = {
+            "input": [_wrapped_reasoning_item(), {"type": "message", "role": "user", "content": "hi"}],
+            "previous_response_id": wrapped_previous,
+        }
+        frame = {"type": "response.create", "response": payload} if nested else {"type": "response.create", **payload}
+        backend_ws = MagicMock()
+        backend_ws.send = AsyncMock()
+        websocket = MagicMock()
+        websocket.receive_text = AsyncMock(side_effect=[json.dumps(frame), Exception("stop")])
+        handler = _make_streaming(websocket=websocket, backend_ws=backend_ws, request_data={})
+
+        await handler.client_to_backend()
+
+        sent = json.loads(backend_ws.send.await_args_list[0][0][0])
+        body = sent["response"] if nested else sent
+        assert body["input"][0]["id"] == "rs_orig"
+        assert body["input"][0]["encrypted_content"] == "gAAAA-blob"
+        assert body["input"][1] == {"type": "message", "role": "user", "content": "hi"}
+        assert body["previous_response_id"] == "resp_orig"
+
+    @pytest.mark.asyncio
+    async def test_client_to_backend_leaves_unwrapped_frames_untouched(self):
+        from unittest.mock import AsyncMock
+
+        frame = json.dumps({"type": "response.create", "input": "hello", "previous_response_id": "resp_raw"})
+        backend_ws = MagicMock()
+        backend_ws.send = AsyncMock()
+        websocket = MagicMock()
+        websocket.receive_text = AsyncMock(side_effect=[frame, Exception("stop")])
+        handler = _make_streaming(websocket=websocket, backend_ws=backend_ws, request_data={})
+
+        await handler.client_to_backend()
+
+        assert backend_ws.send.await_args_list[0][0][0] == frame
+
+    @pytest.mark.asyncio
+    async def test_backend_to_client_wraps_ids_when_affinity_is_enabled(self):
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        reasoning_item = {"type": "reasoning", "id": "rs_1", "encrypted_content": "gAAAA-blob", "summary": []}
+        websocket = MagicMock()
+        websocket.send_text = AsyncMock()
+        backend_ws = MagicMock()
+        backend_ws.recv = AsyncMock(
+            side_effect=[
+                json.dumps({"type": "response.output_item.done", "output_index": 0, "item": dict(reasoning_item)}),
+                json.dumps(
+                    {
+                        "type": "response.completed",
+                        "response": {"id": "resp_1", "output": [dict(reasoning_item)], "usage": {"total_tokens": 3}},
+                    }
+                ),
+                Exception("stop"),
+            ]
+        )
+        logging_obj = MagicMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        handler = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            logging_obj=logging_obj,
+            request_data={"litellm_metadata": dict(_AFFINITY_METADATA)},
+            custom_llm_provider="openai",
+        )
+
+        await handler.backend_to_client()
+
+        wrapped_content = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAA-blob", "dep-1")
+        item_done = json.loads(websocket.send_text.await_args_list[0][0][0])
+        assert item_done["item"]["encrypted_content"] == wrapped_content
+        completed = json.loads(websocket.send_text.await_args_list[1][0][0])
+        assert completed["response"]["id"] == ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai", model_id="dep-1", response_id="resp_1"
+        )
+        assert completed["response"]["output"][0]["id"] == ResponsesAPIRequestUtils._build_encrypted_item_id(
+            "dep-1", "rs_1"
+        )
+        assert completed["response"]["output"][0]["encrypted_content"] == wrapped_content
+        await asyncio.sleep(0)
+        logged = logging_obj.dispatch_success_handlers.await_args[0][0]
+        assert logged[0]["response"]["id"] == completed["response"]["id"]
+
+    @pytest.mark.asyncio
+    async def test_backend_to_client_wraps_only_response_id_without_affinity(self):
+        from unittest.mock import AsyncMock
+
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        reasoning_item = {"type": "reasoning", "id": "rs_1", "encrypted_content": "gAAAA-blob", "summary": []}
+        websocket = MagicMock()
+        websocket.send_text = AsyncMock()
+        backend_ws = MagicMock()
+        backend_ws.recv = AsyncMock(
+            side_effect=[
+                json.dumps({"type": "response.output_item.done", "output_index": 0, "item": dict(reasoning_item)}),
+                json.dumps({"type": "response.completed", "response": {"id": "resp_1", "output": [dict(reasoning_item)]}}),
+                Exception("stop"),
+            ]
+        )
+        logging_obj = MagicMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        handler = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            logging_obj=logging_obj,
+            request_data={"litellm_metadata": {"model_info": {"id": "dep-1"}}},
+            custom_llm_provider="openai",
+        )
+
+        await handler.backend_to_client()
+
+        item_done = json.loads(websocket.send_text.await_args_list[0][0][0])
+        assert item_done["item"] == reasoning_item
+        completed = json.loads(websocket.send_text.await_args_list[1][0][0])
+        assert completed["response"]["id"] == ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai", model_id="dep-1", response_id="resp_1"
+        )
+        assert completed["response"]["output"][0] == reasoning_item
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "failure_frame, expected_status",
+        [
+            (
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "code": "invalid_encrypted_content",
+                        "message": "The encrypted content for item rs_1 could not be verified.",
+                    },
+                },
+                400,
+            ),
+            (
+                {
+                    "type": "response.failed",
+                    "response": {
+                        "id": "resp_1",
+                        "status": "failed",
+                        "error": {"code": "server_error", "message": "upstream blew up"},
+                    },
+                },
+                500,
+            ),
+        ],
+    )
+    async def test_backend_to_client_books_failure_frames_as_failures(self, failure_frame, expected_status):
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        websocket = MagicMock()
+        websocket.send_text = AsyncMock()
+        backend_ws = MagicMock()
+        backend_ws.recv = AsyncMock(
+            side_effect=[
+                json.dumps({"type": "response.created", "response": {"id": "resp_1", "status": "in_progress"}}),
+                json.dumps(failure_frame),
+                Exception("stop"),
+            ]
+        )
+        logging_obj = MagicMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.dispatch_failure_handlers = AsyncMock()
+        logging_obj._response_cost_calculator = MagicMock(return_value=0.0)
+        handler = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            logging_obj=logging_obj,
+            request_data={},
+            authorized_model="gpt-5.6",
+            custom_llm_provider="openai",
+        )
+
+        await handler.backend_to_client()
+        await asyncio.sleep(0)
+
+        logging_obj.dispatch_success_handlers.assert_not_awaited()
+        logging_obj.dispatch_failure_handlers.assert_awaited_once()
+        exception = logging_obj.dispatch_failure_handlers.await_args[0][0]
+        assert exception.status_code == expected_status
+        assert failure_frame.get("error", failure_frame.get("response", {}).get("error"))["message"] in str(exception)
+
+    @pytest.mark.asyncio
+    async def test_backend_to_client_bills_completed_turns_before_a_failure(self):
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        websocket = MagicMock()
+        websocket.send_text = AsyncMock()
+        backend_ws = MagicMock()
+        backend_ws.recv = AsyncMock(
+            side_effect=[
+                json.dumps(
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_1",
+                            "status": "completed",
+                            "output": [],
+                            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                        },
+                    }
+                ),
+                json.dumps({"type": "error", "error": {"type": "invalid_request_error", "message": "bad turn"}}),
+                Exception("stop"),
+            ]
+        )
+        logging_obj = MagicMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.dispatch_failure_handlers = AsyncMock()
+        logging_obj._response_cost_calculator = MagicMock(return_value=0.01)
+        handler = _make_streaming(websocket=websocket, backend_ws=backend_ws, logging_obj=logging_obj, request_data={})
+
+        await handler.backend_to_client()
+        await asyncio.sleep(0)
+
+        logging_obj.record_partial_usage_for_failure.assert_called_once()
+        usage, response_cost = logging_obj.record_partial_usage_for_failure.call_args[0]
+        assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (10, 5, 15)
+        assert response_cost == 0.01
+        logging_obj.dispatch_success_handlers.assert_not_awaited()
+        logging_obj.dispatch_failure_handlers.assert_awaited_once()
