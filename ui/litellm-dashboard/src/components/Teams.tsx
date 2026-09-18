@@ -40,6 +40,7 @@ import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_avail
 import type { Team } from "./key_team_helpers/key_list";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
+import { MCPToolSearchSelect } from "./mcp_server_management/MCPToolSearchSelect";
 import { toast } from "@/lib/toast";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import BudgetDurationDropdown, {
@@ -103,6 +104,7 @@ const teamCreateFieldsSchema = z.object({
   allowed_agents_and_groups: z.object({ agents: z.array(z.string()), accessGroups: z.array(z.string()) }).optional(),
   object_permission_search_tools: z.array(z.string()).optional(),
   object_permission_skills: z.array(z.string()).optional(),
+  mcp_tool_search_enabled: z.boolean().nullish(),
 });
 
 type TeamCreateFormValues = z.infer<typeof teamCreateFieldsSchema>;
@@ -134,6 +136,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
   allowed_agents_and_groups: undefined,
   object_permission_search_tools: undefined,
   object_permission_skills: undefined,
+  mcp_tool_search_enabled: null,
 };
 
 const ADDITIONAL_SETTINGS_FIELDS = [
@@ -150,7 +153,11 @@ const ADDITIONAL_SETTINGS_FIELDS = [
   "allowed_vector_store_ids",
   "allowed_passthrough_routes",
 ] as const;
-const MCP_SETTINGS_FIELDS = ["allowed_mcp_servers_and_groups", "mcp_tool_permissions"] as const;
+const MCP_SETTINGS_FIELDS = [
+  "allowed_mcp_servers_and_groups",
+  "mcp_tool_permissions",
+  "mcp_tool_search_enabled",
+] as const;
 const AGENT_SETTINGS_FIELDS = ["allowed_agents_and_groups"] as const;
 const SEARCH_TOOL_SETTINGS_FIELDS = ["object_permission_search_tools"] as const;
 const SKILL_SETTINGS_FIELDS = ["object_permission_skills"] as const;
@@ -522,6 +529,14 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           formValues.object_permission.skills = formValues.object_permission_skills;
         }
         delete formValues.object_permission_skills;
+
+        if (formValues.mcp_tool_search_enabled !== undefined && formValues.mcp_tool_search_enabled !== null) {
+          if (!formValues.object_permission) {
+            formValues.object_permission = {};
+          }
+          formValues.object_permission.mcp_tool_search_enabled = formValues.mcp_tool_search_enabled;
+        }
+        delete formValues.mcp_tool_search_enabled;
 
         // Add model_aliases if any are defined
         if (Object.keys(modelAliases).length > 0) {
@@ -1127,6 +1142,18 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                             allowAllProxyMcpServers={isProxyAdminRole(userRole || "")}
                           />
                         )}
+                      </FormField>
+
+                      <FormField
+                        control={form.control}
+                        name="mcp_tool_search_enabled"
+                        className="mt-6"
+                        label={labelWithHint(
+                          "MCP Tool Search",
+                          "Allow the mcp_tool_search and mcp_tool_call virtual tools for keys on this team. 'Not set' inherits the key's own setting.",
+                        )}
+                      >
+                        {({ id, value, onChange }) => <MCPToolSearchSelect id={id} value={value} onChange={onChange} />}
                       </FormField>
 
                       <div className="mt-6">
