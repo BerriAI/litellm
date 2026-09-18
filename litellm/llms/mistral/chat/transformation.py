@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast, get_type_hints, ove
 
 import httpx
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -20,6 +21,10 @@ from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
+from litellm.router_utils.reasoning_effort_capability import (
+    declared_reasoning_efforts_for_model,
+    nearest_declared_reasoning_effort,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
 from litellm.types.llms.openai import AllMessageValues
@@ -28,6 +33,18 @@ from litellm.utils import convert_to_model_response_object, supports_reasoning
 
 if TYPE_CHECKING:
     import tiktoken
+
+
+def _accepted_reasoning_effort(model: str, requested: str) -> str:
+    declared: Final = declared_reasoning_efforts_for_model(model, "mistral")
+    if declared is None:
+        return requested
+    accepted: Final = nearest_declared_reasoning_effort(requested, declared)
+    if accepted != requested:
+        verbose_logger.debug(
+            "mistral: %s takes reasoning_effort %s, sending %s in place of %s", model, declared, accepted, requested
+        )
+    return accepted
 
 
 class MistralConfig(OpenAIGPTConfig):
@@ -170,7 +187,7 @@ class MistralConfig(OpenAIGPTConfig):
             if param == "response_format":
                 optional_params["response_format"] = value
             if param == "reasoning_effort" and "magistral" not in model.lower():
-                optional_params["reasoning_effort"] = value
+                optional_params["reasoning_effort"] = _accepted_reasoning_effort(model, value)
             if param in ("reasoning_effort", "thinking") and "magistral" in model.lower():
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True

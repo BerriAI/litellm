@@ -63,7 +63,7 @@ class TestMistralReasoningSupport:
         assert "reasoning_effort" not in supported_params_normal
         assert "thinking" not in supported_params_normal
 
-    def test_map_openai_params_reasoning_effort(self):
+    def test_map_openai_params_reasoning_effort(self, local_model_cost_map):
         """Test that reasoning_effort parameter is properly mapped for magistral models."""
         mistral_config = MistralConfig()
 
@@ -87,21 +87,51 @@ class TestMistralReasoningSupport:
         )
 
         assert "_add_reasoning_prompt" not in result_normal
-        assert result_normal["reasoning_effort"] == "low"
+        assert result_normal["reasoning_effort"] == "high"
 
     @pytest.mark.parametrize(
-        ("model", "reasoning_effort"),
-        [("mistral-medium-latest", "high"), ("zai-glm-5-2", "xhigh")],
+        ("model", "requested", "sent"),
+        [
+            ("mistral-medium-latest", "high", "high"),
+            ("mistral-medium-latest", "none", "none"),
+            ("mistral-medium-latest", "low", "high"),
+            ("mistral-medium-latest", "medium", "high"),
+            ("mistral-medium-latest", "xhigh", "high"),
+            ("mistral-small-latest", "medium", "high"),
+            ("mistral-vibe-cli-latest", "medium", "high"),
+            ("zai-glm-5", "none", "low"),
+            ("zai-glm-5", "medium", "high"),
+            ("zai-glm-5", "xhigh", "max"),
+            ("zai-glm-5-2", "medium", "medium"),
+            ("zai-glm-5-2", "xhigh", "xhigh"),
+        ],
     )
-    def test_reasoning_effort_forwarded_verbatim_for_reasoning_models(self, model, reasoning_effort):
+    def test_reasoning_effort_is_sent_as_a_level_the_model_accepts(self, local_model_cost_map, model, requested, sent):
         import litellm
 
         optional_params = litellm.get_optional_params(
             model=model,
             custom_llm_provider="mistral",
-            reasoning_effort=reasoning_effort,
+            reasoning_effort=requested,
         )
-        assert optional_params["reasoning_effort"] == reasoning_effort
+        assert optional_params["reasoning_effort"] == sent
+
+    def test_reasoning_effort_is_forwarded_verbatim_when_the_map_declares_no_levels(
+        self, local_model_cost_map, monkeypatch
+    ):
+        import litellm
+
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "mistral/undeclared-reasoner",
+            {"litellm_provider": "mistral", "mode": "chat", "supports_reasoning": True},
+        )
+        optional_params = litellm.get_optional_params(
+            model="undeclared-reasoner",
+            custom_llm_provider="mistral",
+            reasoning_effort="medium",
+        )
+        assert optional_params["reasoning_effort"] == "medium"
 
     def test_reasoning_effort_stays_unsupported_for_non_reasoning_models(self):
         import litellm
