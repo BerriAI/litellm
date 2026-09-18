@@ -1,13 +1,16 @@
+use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
+use litellm_llms::{
+    base_llm::audio_transcription::transformation::{
+        AudioTranscriptionAuth, BaseAudioTranscriptionConfig,
+    },
+    bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG,
+    custom_httpx::http_handler::{has_header, string_headers},
+};
+
 use super::Error;
-use super::types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
-use crate::http_utils::{has_header, string_headers};
-use crate::litellm_core_utils::get_llm_provider_logic::{
-    CustomLlmProvider, get_custom_llm_provider,
+use crate::audio_transcription::types::{
+    AudioTranscriptionRequest, ProviderAudioTranscriptionRequest,
 };
-use crate::llms::base_llm::audio_transcription::transformation::{
-    AudioTranscriptionAuth, BaseAudioTranscriptionConfig,
-};
-use crate::llms::bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG;
 
 fn provider_config(provider: &str) -> Option<&'static dyn BaseAudioTranscriptionConfig> {
     if provider == "bedrock" {

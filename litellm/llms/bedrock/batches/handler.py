@@ -6,7 +6,7 @@ from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Metadata as OpenAIBatchMetadata
 
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
-from litellm.types.llms.bedrock import AwsSessionTag
+from litellm.types.llms.bedrock import AwsAuthParams, AwsSessionTag
 from litellm.types.utils import LiteLLMBatch
 
 if TYPE_CHECKING:
@@ -130,11 +130,10 @@ class BedrockBatchesHandler:
 
         from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 
-        creds: Final = BedrockBatchesConfig().get_credentials(
+        auth_params: Final = AwsAuthParams(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
-            aws_region_name=region,
             aws_session_name=aws_session_name,
             aws_profile_name=aws_profile_name,
             aws_role_name=aws_role_name,
@@ -143,6 +142,7 @@ class BedrockBatchesHandler:
             aws_external_id=aws_external_id,
             aws_session_tags=aws_session_tags,
         )
+        creds: Final = BedrockBatchesConfig().resolve_credentials(auth_params, region)
 
         client: Final = boto3.client(
             "bedrock",
@@ -157,16 +157,7 @@ class BedrockBatchesHandler:
                 batch_id=batch_id,
                 aws_region_name=region,
                 logging_obj=logging_obj,
-                aws_access_key_id=aws_access_key_id,
-                aws_secret_access_key=aws_secret_access_key,
-                aws_session_token=aws_session_token,
-                aws_session_name=aws_session_name,
-                aws_profile_name=aws_profile_name,
-                aws_role_name=aws_role_name,
-                aws_web_identity_token=aws_web_identity_token,
-                aws_sts_endpoint=aws_sts_endpoint,
-                aws_external_id=aws_external_id,
-                aws_session_tags=aws_session_tags,
+                **auth_params.model_dump(),
             )
 
         try:
@@ -310,19 +301,7 @@ class BedrockBatchesHandler:
         # BaseAWSLLM) lazily to avoid a circular import at module load.
         from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 
-        creds: Final = BedrockBatchesConfig().get_credentials(
-            aws_access_key_id=kwargs.get("aws_access_key_id"),
-            aws_secret_access_key=kwargs.get("aws_secret_access_key"),
-            aws_session_token=kwargs.get("aws_session_token"),
-            aws_region_name=region,
-            aws_session_name=kwargs.get("aws_session_name"),
-            aws_profile_name=kwargs.get("aws_profile_name"),
-            aws_role_name=kwargs.get("aws_role_name"),
-            aws_web_identity_token=kwargs.get("aws_web_identity_token"),
-            aws_sts_endpoint=kwargs.get("aws_sts_endpoint"),
-            aws_external_id=kwargs.get("aws_external_id"),
-            aws_session_tags=kwargs.get("aws_session_tags"),
-        )
+        creds: Final = BedrockBatchesConfig().resolve_credentials(AwsAuthParams.model_validate(kwargs), region)
 
         client: Final = boto3.client(
             "bedrock",
