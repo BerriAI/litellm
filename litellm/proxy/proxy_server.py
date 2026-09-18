@@ -145,6 +145,7 @@ from litellm.router_utils.auto_router_tuning_baseline import (
     snapshot_tuning_baselines,
     tuning_limit_violation,
 )
+from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     ModelResponse,
@@ -781,6 +782,7 @@ from litellm.types.router import (
     ClassifierPlugin,
     DeploymentTypedDict,
     RouterGeneralSettings,
+    RoutingGroup,
     RoutingPlugin,
     SearchToolTypedDict,
     updateDeployment,
@@ -7098,7 +7100,21 @@ class ProxyConfig:
         self.router_settings.apply_db_row("router_settings", db_values)
         combined_router_settings: Final = self.router_settings.resolved()
         if combined_router_settings:
-            llm_router.update_settings(**combined_router_settings)
+            self._apply_router_settings(llm_router, combined_router_settings)
+
+    @staticmethod
+    def _apply_router_settings(llm_router: Router, router_settings: Mapping[str, object]) -> None:
+        llm_router.update_settings(**{k: v for k, v in router_settings.items() if k != "routing_groups"})
+        if "routing_groups" not in router_settings:
+            return
+        try:
+            llm_router.update_settings(routing_groups=router_settings["routing_groups"])
+        except (TypeError, ValueError) as invalid_groups:
+            verbose_proxy_logger.error(
+                "Ignoring invalid router_settings.routing_groups from config/DB, all other router settings still "
+                "apply. Fix the routing groups in the Admin UI to load them: %s",
+                invalid_groups,
+            )
 
     async def _reschedule_spend_log_cleanup_job(self):
         """
@@ -16941,6 +16957,12 @@ async def update_config(
                         )
                     },
                 )
+            try:
+                parse_routing_groups(
+                    TypeAdapter(list[RoutingGroup] | None).validate_python(raw_router_settings.get("routing_groups"))
+                )
+            except (ValidationError, ValueError) as invalid_groups:
+                raise HTTPException(status_code=400, detail={"error": str(invalid_groups)})
 
         if prisma_client is None:
             raise Exception("No DB Connected")
