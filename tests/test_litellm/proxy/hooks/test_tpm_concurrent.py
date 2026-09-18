@@ -21,11 +21,11 @@ from typing import Any, Dict
 import pytest
 
 from litellm.caching.caching import DualCache
+from litellm.constants import AUDIO_BYTES_PER_TOKEN
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_ITPM_DESCRIPTOR_KEY,
     PROJECT_OTPM_DESCRIPTOR_KEY,
-    _AUDIO_BYTES_PER_TOKEN,
     _PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
@@ -2272,7 +2272,7 @@ def test_audio_token_estimate_scales_with_payload_size():
     to exhaust ITPM quota while reserving almost nothing.
 
     The estimate must now grow proportionally with the base64 payload size
-    (len(b64) * 3 // 4 // _AUDIO_BYTES_PER_TOKEN), floored at
+    (len(b64) * 3 // 4 // AUDIO_BYTES_PER_TOKEN), floored at
     DEFAULT_AUDIO_TOKEN_ESTIMATE so reference-only blocks and genuinely
     short clips still get a non-trivial reservation.
 
@@ -2310,7 +2310,7 @@ def test_audio_token_estimate_scales_with_payload_size():
         f"Large payload ({large_estimate}) must reserve more than small payload "
         f"({small_estimate}); flat-rate bug is back"
     )
-    assert very_large_estimate == len(very_large_b64) * 3 // 4 // _AUDIO_BYTES_PER_TOKEN
+    assert very_large_estimate == len(very_large_b64) * 3 // 4 // AUDIO_BYTES_PER_TOKEN
     assert very_large_estimate > 6_000
     assert no_data_estimate >= 300, (
         f"Reference-only block (no data) must use the DEFAULT_AUDIO_TOKEN_ESTIMATE floor; got {no_data_estimate}"
