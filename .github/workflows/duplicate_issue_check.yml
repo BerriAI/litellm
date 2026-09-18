@@ -93,10 +93,11 @@ jobs:
           responses-api-endpoint: ${{ vars.LITELLM_API_BASE }}/v1/responses
           prompt-file: .github/prompts/duplicate-issue-check.md
           output-schema-file: .github/prompts/duplicate-issue-check.schema.json
-          sandbox: read-only
-          # read-only denies network, and the whole method is searching the tracker with gh
-          codex-args: '["-c", "sandbox_permissions=[\"network-full-access\"]"]'
+          sandbox: workspace-write
+          # The whole method is searching the tracker with gh, and network is only switchable in workspace-write
+          codex-args: '["-c", "sandbox_workspace_write.network_access=true"]'
           model: ${{ vars.DUPLICATE_CHECK_MODEL }}
+          codex-version: "0.154.0"
           # Issue authors have no write access and the action refuses them by default; the
           # prompt is fixed, the sandbox read-only, and the only token is read-only on a public repo
           allow-users: "*"
