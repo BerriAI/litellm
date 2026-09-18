@@ -1403,6 +1403,305 @@ class TestDestinationResolution:
         assert parse_headers(destination.header_string())["authorization"] == destination.headers["Authorization"]
 
 
+LLM_ONLY_DEST = OtelDestination(
+    endpoint="http://tenant.local/api/public/otel",
+    headers={"Authorization": "Basic dGVuYW50"},
+    callback_name="langfuse_otel",
+    span_scope="llm_only",
+)
+
+#: Every span kind the proxy emits for one chat request, plus the two spans that
+#: look like a model call to a naive classifier: the MCP tool call carries
+#: ``gen_ai.operation.name`` too, and baggage promotes ``gen_ai.request.model``
+#: onto children that are not the call.
+REQUEST_TREE = frozenset(
+    {
+        "POST /v1/chat/completions",
+        "auth /v1/chat/completions",
+        "postgres SELECT",
+        "redis GET",
+        "execute_guardrail pii",
+        "tools/call get_weather",
+        "chat gpt-4",
+        "chat claude-haiku",
+        "cost_tracking",
+    }
+)
+LLM_SPANS = frozenset({"chat gpt-4", "chat claude-haiku"})
+TRACE_CONTROLS = MappingProxyType(
+    {
+        "langfuse.observation.type": "generation",
+        "langfuse.trace.name": "checkout",
+        "user.id": "user-7",
+        "session.id": "sess-1",
+        "langfuse.trace.tags": ("beta", "eu"),
+    }
+)
+
+
+def request_tree(provider: TracerProvider) -> None:
+    tracer = get_tracer(provider, "litellm")
+    with tracer.start_as_current_span("POST /v1/chat/completions"):
+        with tracer.start_as_current_span("auth /v1/chat/completions"):
+            with tracer.start_as_current_span("postgres SELECT") as db:
+                db.set_attribute("db.system", "postgresql")
+            with tracer.start_as_current_span("redis GET") as cache:
+                cache.set_attribute("db.system", "redis")
+        with tracer.start_as_current_span("execute_guardrail pii") as guard:
+            guard.set_attributes({"litellm.guardrail.name": "pii", "litellm.guardrail.status": "success"})
+        with tracer.start_as_current_span("tools/call get_weather") as tool:
+            tool.set_attributes({"gen_ai.operation.name": "execute_tool", "mcp.method.name": "tools/call"})
+        with tracer.start_as_current_span("chat gpt-4") as llm:
+            llm.set_attributes({"gen_ai.operation.name": "chat", "gen_ai.request.model": "gpt-4", **TRACE_CONTROLS})
+            with tracer.start_as_current_span("cost_tracking") as child:
+                child.set_attribute("gen_ai.request.model", "gpt-4")
+        with tracer.start_as_current_span("chat claude-haiku") as retry:
+            retry.set_attributes({"gen_ai.operation.name": "chat", "gen_ai.request.model": "claude-haiku"})
+
+
+def names(exporter: InMemorySpanExporter) -> frozenset[str]:
+    return frozenset(s.name for s in exporter.get_finished_spans())
+
+
+class TestSpanScope:
+    """``llm_only`` keeps the model-call spans and drops the rest of the request tree.
+
+    The tenant's switch rides the destination; the operator's rides the config and
+    reaches only the exporter ``langfuse_otel`` owns. Neither reparents or promotes
+    a span, so what does get through still hangs off the same trace.
+    """
+
+    @staticmethod
+    def _additive(monkeypatch):
+        monkeypatch.setattr(litellm, "otel_tenant_destination_mode", "additive", raising=False)
+
+    @staticmethod
+    def _run(provider, destinations):
+        def run():
+            set_request_destinations(destinations)
+            request_tree(provider)
+
+        in_fresh_context(run)
+
+    @staticmethod
+    def _operator_provider(operator_exporter, dest_exporter, scope="full"):
+        provider = TracerProvider()
+        provider.add_span_processor(
+            _OverriddenBackendFilter(SimpleSpanProcessor(operator_exporter), "langfuse_otel", scope)
+        )
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter))
+        )
+        return provider
+
+    def test_off_and_off_is_the_full_tree_on_both_sides(self, monkeypatch):
+        self._additive(monkeypatch)
+        operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
+
+        self._run(self._operator_provider(operator, tenant), (LANGFUSE_DEST,))
+
+        assert names(operator) == REQUEST_TREE
+        assert names(tenant) == REQUEST_TREE
+
+    def test_a_tenant_asking_for_llm_only_gets_just_the_model_calls(self, monkeypatch):
+        self._additive(monkeypatch)
+        operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
+
+        self._run(self._operator_provider(operator, tenant), (LLM_ONLY_DEST,))
+
+        assert names(tenant) == LLM_SPANS
+        assert names(operator) == REQUEST_TREE, "the tenant's scope must not narrow the operator's exporter"
+
+    def test_an_operator_asking_for_llm_only_keeps_the_tenants_tree_whole(self, monkeypatch):
+        self._additive(monkeypatch)
+        operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
+
+        self._run(self._operator_provider(operator, tenant, scope="llm_only"), (LANGFUSE_DEST,))
+
+        assert names(operator) == LLM_SPANS
+        assert names(tenant) == REQUEST_TREE, "the operator's scope must not narrow a tenant destination"
+
+    def test_both_on_narrows_both(self, monkeypatch):
+        self._additive(monkeypatch)
+        operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
+
+        self._run(self._operator_provider(operator, tenant, scope="llm_only"), (LLM_ONLY_DEST,))
+
+        assert names(operator) == LLM_SPANS
+        assert names(tenant) == LLM_SPANS
+
+    def test_an_operator_scope_does_not_undo_the_override(self):
+        """Under the default override mode an overridden backend stays suppressed on
+        the operator's exporter no matter what scope it carries."""
+        operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
+
+        self._run(self._operator_provider(operator, tenant, scope="llm_only"), (LLM_ONLY_DEST,))
+
+        assert operator.get_finished_spans() == ()
+        assert names(tenant) == LLM_SPANS
+
+    def test_a_kept_generation_still_hangs_off_the_request_trace_with_its_trace_controls(self, monkeypatch):
+        self._additive(monkeypatch)
+        operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
+
+        self._run(self._operator_provider(operator, tenant), (LLM_ONLY_DEST,))
+
+        root = next(s for s in operator.get_finished_spans() if s.name == "POST /v1/chat/completions")
+        kept = {s.name: s for s in tenant.get_finished_spans()}["chat gpt-4"]
+        assert kept.context.trace_id == root.context.trace_id
+        assert kept.parent is not None and kept.parent.span_id == root.context.span_id, "no reparenting"
+        assert {k: kept.attributes[k] for k in TRACE_CONTROLS} == dict(TRACE_CONTROLS)
+
+    def test_a_non_langfuse_destination_of_the_same_request_keeps_the_full_tree(self, monkeypatch):
+        self._additive(monkeypatch)
+        by_backend = {"langfuse_otel": InMemorySpanExporter(), "arize": InMemorySpanExporter()}
+        provider = TracerProvider()
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda d: SimpleSpanProcessor(by_backend[d.callback_name]),
+            )
+        )
+        arize = OtelDestination(endpoint="https://otlp.arize.com", headers={"api_key": "k"}, callback_name="arize")
+
+        self._run(provider, (LLM_ONLY_DEST, arize))
+
+        assert names(by_backend["langfuse_otel"]) == LLM_SPANS
+        assert names(by_backend["arize"]) == REQUEST_TREE
+
+    def test_two_views_of_one_account_share_the_exporter_but_not_the_filter(self):
+        """A full and an ``llm_only`` destination for the same account are one exporter
+        (``cache_key`` leaves the scope out), and each request is still filtered by its own scope."""
+        built, tenant = [], InMemorySpanExporter()
+        provider = TracerProvider()
+
+        def factory(destination):
+            built.append(destination)
+            return SimpleSpanProcessor(tenant)
+
+        provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=factory))
+
+        self._run(provider, (LLM_ONLY_DEST,))
+        assert names(tenant) == LLM_SPANS
+        tenant.clear()
+
+        self._run(provider, (LANGFUSE_DEST,))
+        assert names(tenant) == REQUEST_TREE
+        assert len(built) == 1, "the same account must not get a second exporter for a second scope"
+
+    def test_the_config_scope_reaches_only_the_exporter_langfuse_owns(self, monkeypatch):
+        exporters = {}
+
+        def exporter_for(spec):
+            return exporters.setdefault(spec.owner, InMemorySpanExporter())
+
+        monkeypatch.setattr(otel_providers, "_exporter_from_spec", exporter_for)
+        config = OpenTelemetryV2Config(
+            langfuse_span_scope="llm_only",
+            exporters=[
+                ExporterSpec(kind="in_memory", owner=ExporterOwner.LANGFUSE_OTEL),
+                ExporterSpec(kind="in_memory", owner=ExporterOwner.ARIZE_AX),
+                ExporterSpec(kind="in_memory"),
+            ],
+        )
+
+        self._run(build_tracer_provider(config, use_simple_processor=True), ())
+
+        assert names(exporters[ExporterOwner.LANGFUSE_OTEL]) == LLM_SPANS
+        assert names(exporters[ExporterOwner.ARIZE_AX]) == REQUEST_TREE
+        assert names(exporters[None]) == REQUEST_TREE, "a bare collector must never be narrowed"
+
+    @pytest.mark.parametrize("tenant_overrides", [False, True])
+    def test_the_config_default_leaves_every_exporter_on_the_full_tree(self, monkeypatch, tenant_overrides):
+        exporters = {}
+        monkeypatch.setattr(
+            otel_providers,
+            "_exporter_from_spec",
+            lambda spec: exporters.setdefault(spec.owner, InMemorySpanExporter()),
+        )
+        config = OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory", owner=ExporterOwner.LANGFUSE_OTEL)])
+
+        self._run(build_tracer_provider(config, use_simple_processor=True, tenant_overrides=tenant_overrides), ())
+
+        assert names(exporters[ExporterOwner.LANGFUSE_OTEL]) == REQUEST_TREE
+
+    def test_the_env_var_sets_the_operator_scope(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_SPAN_SCOPE", "llm_only")
+
+        assert OpenTelemetryV2Config().langfuse_span_scope == "llm_only"
+
+    def test_the_env_var_narrows_the_exporter_the_langfuse_preset_builds(self, monkeypatch):
+        """The whole operator path: env var -> preset -> provider, with a bare collector alongside."""
+        monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_SPAN_SCOPE", "llm_only")
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+        exporters = {}
+        monkeypatch.setattr(
+            otel_providers,
+            "_exporter_from_spec",
+            lambda spec: exporters.setdefault(spec.owner, InMemorySpanExporter()),
+        )
+        config = langfuse_preset(config_overrides=OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")]))
+
+        self._run(build_tracer_provider(config, use_simple_processor=True), ())
+
+        assert names(exporters[ExporterOwner.LANGFUSE_OTEL]) == LLM_SPANS
+        assert names(exporters[None]) == REQUEST_TREE
+
+    def test_an_unknown_scope_is_rejected_by_the_config(self):
+        with pytest.raises(ValueError, match="langfuse_span_scope"):
+            OpenTelemetryV2Config(langfuse_span_scope="everything")
+
+    def test_a_team_callback_var_becomes_the_destinations_scope(self, monkeypatch, allow_test_hosts):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        auth = UserAPIKeyAuth(
+            team_metadata={
+                "logging": [
+                    {
+                        "callback_name": "langfuse_otel",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "langfuse_public_key": "pk-team",
+                            "langfuse_secret_key": "sk-team",
+                            "langfuse_host": "http://team.local",
+                            "langfuse_span_scope": "llm_only",
+                        },
+                    }
+                ]
+            }
+        )
+
+        assert [d.span_scope for d in resolve_tenant_otel_destinations(auth)] == ["llm_only"]
+
+    def test_a_team_that_named_no_scope_gets_the_full_tree(self, allow_test_hosts):
+        creds = {"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_host": "http://x"}
+
+        assert destination_for("langfuse_otel", creds).span_scope == "full"
+
+    def test_only_langfuse_honours_the_scope_var(self):
+        arize = destination_for("arize", {"arize_api_key": "k", "arize_space_id": "s", "langfuse_span_scope": "llm_only"})
+
+        assert arize is not None and arize.span_scope == "full"
+
+    @pytest.mark.parametrize("scope", ["everything", "LLM_ONLY", ""])
+    def test_an_unknown_scope_is_rejected_when_the_callback_is_saved(self, scope):
+        with pytest.raises(ValueError, match=r"Invalid langfuse_span_scope .*must be one of \['full', 'llm_only'\]"):
+            AddTeamCallback(
+                callback_name="langfuse_otel",
+                callback_type="success",
+                callback_vars={"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_span_scope": scope},
+            )
+
+    def test_a_known_scope_is_accepted_when_the_callback_is_saved(self):
+        saved = AddTeamCallback(
+            callback_name="langfuse_otel",
+            callback_type="success",
+            callback_vars={"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_span_scope": "llm_only"},
+        )
+
+        assert saved.callback_vars["langfuse_span_scope"] == "llm_only"
+
+
 #: Anything that makes ``OpenTelemetryV2Config`` synthesize a real operator destination.
 _OTEL_SHORTHAND_ENV = (
     "OTEL_ENDPOINT",

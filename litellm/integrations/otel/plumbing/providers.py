@@ -41,7 +41,7 @@ from opentelemetry.util.types import Attributes, AttributeValue
 
 from litellm._logging import verbose_logger
 from litellm._version import version as litellm_version
-from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+from litellm.integrations.otel.model.config import ExporterOwner, ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.model.semconv import (
     DB,
     MCP,
@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     from opentelemetry.sdk.metrics.export import MetricReader
 
     from litellm.integrations.otel.model.destination import OtelDestination
+    from litellm.types.utils import OtelSpanScope
 
 _SPAN_KIND_BY_ROLE_KIND: Final[dict[LiteLLMSpanKind, SpanKind]] = {
     LiteLLMSpanKind.SERVER: SpanKind.SERVER,
@@ -414,6 +415,22 @@ def _is_tenant_owned_span(attributes: Mapping[str, AttributeValue]) -> bool:
     return any(key in attributes for key in _TENANT_OWNED_KEYS)
 
 
+def is_llm_call_span(span: ReadableSpan) -> bool:
+    """Whether ``span`` is the model call itself.
+
+    The GenAI mapper stamps ``gen_ai.operation.name`` on the model call and on the
+    MCP tool call, so the MCP method name tells the two apart. Guardrail, request
+    root, auth and database spans never carry the operation name; ``gen_ai.request.model``
+    would not do, since baggage promotes it onto every child span.
+    """
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    return GenAI.OPERATION_NAME in attributes and MCP.METHOD_NAME not in attributes
+
+
+def _in_scope(span: ReadableSpan, scope: "OtelSpanScope") -> bool:
+    return scope == "full" or is_llm_call_span(span)
+
+
 def _guardrail_unreachable(attributes: Mapping[str, AttributeValue]) -> bool:
     return attributes.get(LiteLLM.GUARDRAIL_STATUS) in _GUARDRAIL_UNREACHABLE_STATUSES
 
@@ -527,7 +544,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
     def on_end(self, span: ReadableSpan) -> None:
         suppressed: Final = suppressed_backends()
         for destination in request_destinations():
-            if self._operator_already_writes(destination, suppressed):
+            if self._operator_already_writes(destination, suppressed) or not _in_scope(span, destination.span_scope):
                 continue
             processor = self._acquire(destination)  # rebind-ok: loop variable; pyright forbids Final in a loop
             if processor is None:
@@ -753,17 +770,21 @@ class _OverriddenBackendFilter(SpanProcessor):
 
     Under ``additive`` mode nothing is suppressed, so the wrapper passes every span
     straight through and the operator keeps its copy.
+
+    ``scope`` narrows what the exporter receives independently of that: under
+    ``llm_only`` the model-call spans go through and the rest of the tree is held back.
     """
 
-    def __init__(self, inner: SpanProcessor, owner: str) -> None:
+    def __init__(self, inner: SpanProcessor, owner: str | None, scope: "OtelSpanScope" = "full") -> None:
         self._inner: Final = inner
         self._owner: Final = owner
+        self._scope: Final = scope
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         self._inner.on_start(span, parent_context)
 
     def on_end(self, span: ReadableSpan) -> None:
-        if self._owner in suppressed_backends():
+        if self._owner in suppressed_backends() or not _in_scope(span, self._scope):
             return
         self._inner.on_end(span)
 
@@ -1040,6 +1061,9 @@ def build_tracer_provider(
     tenant is a separate job, done once by :func:`attach_tenant_fan_out`. The
     per-tenant providers this same function builds must leave it off, or they would
     filter out the very spans they exist to carry.
+
+    ``config.langfuse_span_scope`` narrows the exporter owned by ``langfuse_otel``
+    alone; a collector or any other backend in the same config keeps the full tree.
     """
     provider: Final = TracerProvider(resource=build_resource(config))
     if baggage_processor is None:
@@ -1060,9 +1084,10 @@ def build_tracer_provider(
             exp,
             (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
         )
-        owner = spec.owner.value if spec.owner is not None else None
+        owner = spec.owner.value if tenant_overrides and spec.owner is not None else None
+        scope = config.langfuse_span_scope if spec.owner is ExporterOwner.LANGFUSE_OTEL else "full"
         provider.add_span_processor(
-            _OverriddenBackendFilter(processor, owner) if tenant_overrides and owner is not None else processor
+            _OverriddenBackendFilter(processor, owner, scope) if owner is not None or scope != "full" else processor
         )
     return provider
 

@@ -23,6 +23,7 @@ from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_environment_value,
+    validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
 from litellm.types.integrations.compression_interception import (
@@ -2187,6 +2188,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
             validate_no_callback_env_reference(key, callback_vars[key], source="key/team callback metadata")
             if key == "langfuse_environment":
                 validate_langfuse_environment_value(callback_vars[key])
+            if key == "langfuse_span_scope":
+                validate_langfuse_span_scope_value(callback_vars[key])
         return values
 
 
