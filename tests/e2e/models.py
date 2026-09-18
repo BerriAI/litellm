@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from e2e_http import PartialBody
 from pydantic import (
@@ -203,7 +203,7 @@ class FileObject(BaseModel):
 class TextContentPart(BaseModel):
     type: str = "text"
     text: str
-    cache_control: "CacheControl | None" = None
+    cache_control: CacheControl | None = None
 
 
 class ImageContentPart(BaseModel):
@@ -303,7 +303,7 @@ class ChatToolResultTurn(BaseModel):
     content: str
 
 
-type ChatTurn = ChatMessage | ChatAssistantTurn | ChatToolResultTurn
+ChatTurn: TypeAlias = ChatMessage | ChatAssistantTurn | ChatToolResultTurn
 
 
 class HostedWebSearchTool(BaseModel):
@@ -531,7 +531,7 @@ class AnthropicCustomTool(BaseModel):
     input_schema: ToolInputSchema
 
 
-type AnthropicTool = AnthropicToolSearchTool | AnthropicWebSearchTool | AnthropicCustomTool
+AnthropicTool: TypeAlias = AnthropicToolSearchTool | AnthropicWebSearchTool | AnthropicCustomTool
 
 
 class AnthropicContentBlock(BaseModel):
@@ -569,7 +569,7 @@ class AnthropicToolResultTurn(BaseModel):
     content: list[AnthropicToolResultBlock]
 
 
-type AnthropicMessage = ChatMessage | AnthropicAssistantTurn | AnthropicToolResultTurn
+AnthropicMessage: TypeAlias = ChatMessage | AnthropicAssistantTurn | AnthropicToolResultTurn
 
 
 class AnthropicToolChoice(BaseModel):
