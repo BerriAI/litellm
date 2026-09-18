@@ -4944,6 +4944,69 @@ async def test_add_router_settings_from_db_config_merge_logic():
     assert combined_settings["retry_delay"] == 2
 
 
+def _routing_groups_router():
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {"model_name": "m1", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"}},
+            {"model_name": "m2", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}},
+        ],
+        routing_groups=[{"group_name": "g1", "models": ["m1"], "routing_strategy": "latency-based-routing"}],
+    )
+
+
+@pytest.mark.asyncio
+async def test_invalid_db_routing_groups_do_not_abort_other_router_settings():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    router = _routing_groups_router()
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = {
+        "num_retries": 7,
+        "routing_groups": [
+            {"group_name": "g1", "models": ["m1"], "routing_strategy": "latency-based-routing"},
+            {"group_name": "g2", "models": ["m1"], "routing_strategy": "least-busy"},
+        ],
+    }
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
+
+    await ProxyConfig()._add_router_settings_from_db_config(
+        config_data={}, llm_router=router, prisma_client=mock_prisma_client
+    )
+
+    assert router.num_retries == 7
+    assert router._model_to_group == {"m1": "g1"}
+    assert router._get_routing_context("m1", None)[0] == "latency-based-routing"
+
+
+@pytest.mark.asyncio
+async def test_valid_db_routing_groups_still_replace_router_groups():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    router = _routing_groups_router()
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = {
+        "num_retries": 7,
+        "routing_groups": [{"group_name": "g2", "models": ["m2"], "routing_strategy": "least-busy"}],
+    }
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
+
+    await ProxyConfig()._add_router_settings_from_db_config(
+        config_data={}, llm_router=router, prisma_client=mock_prisma_client
+    )
+
+    assert router.num_retries == 7
+    assert router._model_to_group == {"m2": "g2"}
+    assert router._get_routing_context("m2", None)[0] == "least-busy"
+
+
 @pytest.mark.asyncio
 async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_config_fallbacks():
     """
@@ -9271,6 +9334,50 @@ def test_update_config_writes_only_sent_section(_update_config_setup):
         assert written == {"general_settings"}
         assert prisma.db.litellm_config.rows["litellm_settings"] == {"drop_params": True}
         assert prisma.db.litellm_config.rows["environment_variables"] == {"FOO": "enc:bar"}
+    finally:
+        restore()
+
+
+def test_update_config_rejects_overlapping_routing_groups_before_writing(_update_config_setup):
+    existing_groups = [{"group_name": "g1", "models": ["m1"], "routing_strategy": "least-busy"}]
+    client, prisma, restore = _update_config_setup(
+        initial_rows={"router_settings": {"num_retries": 2, "routing_groups": existing_groups}}
+    )
+    try:
+        resp = client.post(
+            "/config/update",
+            json={
+                "router_settings": {
+                    "routing_groups": [
+                        *existing_groups,
+                        {"group_name": "g2", "models": ["m1"], "routing_strategy": "latency-based-routing"},
+                    ]
+                }
+            },
+        )
+        assert resp.status_code == 400
+        assert "'m1' appears in 'g1' and 'g2'" in resp.text
+        assert prisma.db.litellm_config.upsert_calls == []
+        assert prisma.db.litellm_config.rows["router_settings"]["routing_groups"] == existing_groups
+    finally:
+        restore()
+
+
+def test_update_config_accepts_disjoint_routing_groups(_update_config_setup):
+    client, prisma, restore = _update_config_setup(initial_rows={"router_settings": {"num_retries": 2}})
+    groups = [
+        {"group_name": "g1", "models": ["m1"], "routing_strategy": "least-busy"},
+        {"group_name": "g2", "models": ["m2"], "routing_strategy": "latency-based-routing"},
+    ]
+    try:
+        resp = client.post("/config/update", json={"router_settings": {"routing_groups": groups}})
+        assert resp.status_code == 200
+        stored = prisma.db.litellm_config.rows["router_settings"]
+        assert stored["num_retries"] == 2
+        assert [(g["group_name"], g["models"]) for g in stored["routing_groups"]] == [
+            ("g1", ["m1"]),
+            ("g2", ["m2"]),
+        ]
     finally:
         restore()
 
