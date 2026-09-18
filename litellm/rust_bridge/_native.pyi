@@ -1,9 +1,9 @@
 from asyncio import Future
-from collections.abc import Coroutine, Mapping, Sequence
+from collections.abc import Coroutine, Mapping
 from typing import Never, final
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
+from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest, OcrHostHelpers
 
 class RustBridgeDeclined(Exception):
     """Rejected before any provider I/O. Args are (message, rejection)."""
@@ -15,11 +15,13 @@ def ocr(
     request: LiteLLMOcrRequest,
     args: tuple[object, ...],
     kwargs: dict[str, object],
+    helpers: OcrHostHelpers,
 ) -> OCRResponse: ...
 def aocr(
     request: LiteLLMOcrRequest,
     args: tuple[object, ...],
     kwargs: dict[str, object],
+    helpers: OcrHostHelpers,
 ) -> Coroutine[object, object, OCRResponse]: ...
 def transcription(
     model: str,

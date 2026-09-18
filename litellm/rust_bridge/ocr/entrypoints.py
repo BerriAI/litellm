@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
@@ -23,12 +23,23 @@ class LiteLLMOcrRequest:
     input_sources: Mapping[str, str] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class OcrHostHelpers:
+    """The Python callables the native OCR route answers with: the public response and
+    exception constructors, and the timeout conversion for the caller's raw keyword."""
+
+    response: Callable[[Mapping[str, object]], OCRResponse]
+    map_failure: Callable[[Exception, LiteLLMOcrRequest, str], Exception]
+    timeout_to_seconds: Callable[[float | httpx.Timeout | None], float | None]
+
+
 class NativeOcr(Protocol):
     def __call__(
         self,
         request: LiteLLMOcrRequest,
         args: tuple[object, ...],
         kwargs: Mapping[str, object],
+        helpers: OcrHostHelpers,
     ) -> OCRResponse: ...
 
 
@@ -38,6 +49,7 @@ class NativeAocr(Protocol):
         request: LiteLLMOcrRequest,
         args: tuple[object, ...],
         kwargs: Mapping[str, object],
+        helpers: OcrHostHelpers,
     ) -> Awaitable[OCRResponse]: ...
 
 

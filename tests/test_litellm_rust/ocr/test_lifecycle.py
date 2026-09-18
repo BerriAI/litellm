@@ -16,6 +16,7 @@ from litellm._logging import trace_id_var
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.rust_bridge.ocr.route_host import HELPERS
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import OCR_RESPONSE, call_aocr, call_ocr
@@ -594,7 +595,7 @@ def test_unstarted_native_coroutine_releases_input_without_reading_file(ocr_serv
     def create():
         file: Final = File()
         kwargs: Final = {"model": "mistral/mistral-ocr-latest", "document": {"type": "file", "file": file}}
-        coroutine: Final = _native.aocr(_public_request("aocr", (), kwargs), (), kwargs)
+        coroutine: Final = _native.aocr(_public_request("aocr", (), kwargs), (), kwargs, HELPERS)
         file.owner = coroutine
         coroutine.close()
         return weakref.ref(file)

@@ -11,7 +11,8 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.llms.base_llm.ocr.transformation import PROVIDER_NATIVE_RESPONSE_KEY, OCRResponse
 from litellm.rust_bridge import failures
-from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
+from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest, OcrHostHelpers
+from litellm.rust_bridge.timeouts import timeout_to_seconds
 
 _RESPONSE_ADAPTER: Final = TypeAdapter(dict[str, object])
 
@@ -90,3 +91,6 @@ def map_failure(error: Exception, request: LiteLLMOcrRequest, request_provider: 
             public_error.response = original.response
             public_error.status_code = original.status_code
     return public_error
+
+
+HELPERS: Final = OcrHostHelpers(response=response, map_failure=map_failure, timeout_to_seconds=timeout_to_seconds)

@@ -16,16 +16,19 @@ enum OcrHostData {
 }
 
 /// The Python side of the OCR route: projects the prepared arguments, reads file-like
-/// documents, acquires Azure AD tokens, and builds the public response and exception.
+/// documents, acquires Azure AD tokens, and builds the public response and exception
+/// through the helpers the caller handed in.
 pub(super) struct OcrRouteHost {
     request: Py<PyAny>,
+    helpers: Py<PyAny>,
     data: OcrHostData,
 }
 
 impl OcrRouteHost {
-    pub(super) fn new(request: Py<PyAny>) -> Self {
+    pub(super) fn new(request: Py<PyAny>, helpers: Py<PyAny>) -> Self {
         Self {
             request,
+            helpers,
             data: OcrHostData::Unprojected,
         }
     }
@@ -68,7 +71,8 @@ impl RouteHost for OcrRouteHost {
                 let OcrHostData::Unprojected = self.data else {
                     return Err(missing_state());
                 };
-                let (request, handles) = project_request(self.request.bind(py), arguments)?;
+                let (request, handles) =
+                    project_request(self.request.bind(py), arguments, self.helpers.bind(py))?;
                 let caller_token = handles.azure_ad_token_provider.is_some();
                 self.data = OcrHostData::Projected(Box::new(handles));
                 Ok(OcrOpResult::Request {
@@ -84,7 +88,8 @@ impl RouteHost for OcrRouteHost {
     }
 
     fn complete(&mut self, py: Python<'_>, response: LiteLLMOcrResponse) -> PyResult<Py<PyAny>> {
-        py.import("litellm.rust_bridge.ocr.route_host")?
+        self.helpers
+            .bind(py)
             .getattr("response")?
             .call1((to_py(py, &response)?,))
             .map(Bound::unbind)
@@ -103,8 +108,9 @@ impl RouteHost for OcrRouteHost {
             OcrHostData::Projected(handles) => handles.provider,
             _ => "",
         };
-        let mapped: Py<PyBaseException> = py
-            .import("litellm.rust_bridge.ocr.route_host")?
+        let mapped: Py<PyBaseException> = self
+            .helpers
+            .bind(py)
             .getattr("map_failure")?
             .call1((error.value(py), self.request.bind(py), provider))?
             .extract()?;
@@ -117,6 +123,7 @@ impl RouteHost for OcrRouteHost {
 
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.request)?;
+        visit.call(&self.helpers)?;
         if let OcrHostData::Projected(handles) = &self.data {
             if let Some(reader) = &handles.reader {
                 reader.traverse(visit)?;

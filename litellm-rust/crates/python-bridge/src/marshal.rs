@@ -37,13 +37,6 @@ fn optional_object(
     required_object(name, from_py_argument(value)?).map(Some)
 }
 
-pub(crate) fn python_timeout_seconds(py: Python<'_>, timeout: Py<PyAny>) -> PyResult<Option<f64>> {
-    py.import("litellm.rust_bridge.timeouts")?
-        .getattr("timeout_to_seconds")?
-        .call1((timeout,))?
-        .extract()
-}
-
 pub(crate) fn project_optional_fields(
     kwargs: &Bound<'_, PyDict>,
     names: &[&str],

@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 use super::document::{FileDocumentInput, PythonFileReader};
 use crate::credentials::{self, CallerTokenProvider};
 use crate::errors::ocr_error_to_pyerr;
-use crate::marshal::{project_optional_fields, python_timeout_seconds, request_input_sources};
+use crate::marshal::{project_optional_fields, request_input_sources};
 
 /// What the host keeps after projection: the caller's callables that answer the document
 /// read and token operations, and the provider name the failure mapping reports.
@@ -24,6 +24,7 @@ pub(super) struct OcrHostHandles {
 struct OcrArguments<'a, 'py> {
     request: &'a Bound<'py, PyAny>,
     kwargs: &'a Bound<'py, PyDict>,
+    helpers: &'a Bound<'py, PyAny>,
 }
 
 impl<'py> OcrArguments<'_, 'py> {
@@ -63,7 +64,12 @@ impl<'py> OcrArguments<'_, 'py> {
         Ok(self
             .lookup("timeout")?
             .extract::<Option<Py<PyAny>>>()?
-            .map(|value| python_timeout_seconds(self.request.py(), value))
+            .map(|value| {
+                self.helpers
+                    .getattr("timeout_to_seconds")?
+                    .call1((value,))?
+                    .extract::<Option<f64>>()
+            })
             .transpose()?
             .flatten())
     }
@@ -111,8 +117,13 @@ impl ProjectedDocument {
 pub(super) fn project_request(
     request: &Bound<'_, PyAny>,
     kwargs: &Bound<'_, PyDict>,
+    helpers: &Bound<'_, PyAny>,
 ) -> PyResult<(LiteLLMOcrRequest<OcrDocumentInput>, OcrHostHandles)> {
-    let arguments = OcrArguments { request, kwargs };
+    let arguments = OcrArguments {
+        request,
+        kwargs,
+        helpers,
+    };
     let model = arguments.model()?;
     let custom_llm_provider = arguments.custom_llm_provider()?;
     let document = ProjectedDocument::project(&arguments.document()?)?;
@@ -168,8 +179,22 @@ mod tests {
     fn arguments<'a, 'py>(
         request: &'a Bound<'py, PyAny>,
         kwargs: &'a Bound<'py, PyDict>,
+        helpers: &'a Bound<'py, PyAny>,
     ) -> OcrArguments<'a, 'py> {
-        OcrArguments { request, kwargs }
+        OcrArguments {
+            request,
+            kwargs,
+            helpers,
+        }
+    }
+
+    fn helpers(py: Python<'_>) -> Bound<'_, PyAny> {
+        py.eval(
+            c"__import__('types').SimpleNamespace(timeout_to_seconds=lambda timeout: None if timeout is None else float(timeout))",
+            None,
+            None,
+        )
+        .unwrap()
     }
 
     fn project_document(
@@ -184,21 +209,6 @@ mod tests {
             extra_fields: Default::default(),
         }
         .into()
-    }
-
-    fn stub_timeout_conversion(py: Python<'_>) {
-        eval(
-            py,
-            c"
-import sys
-import types
-timeouts = types.ModuleType('litellm.rust_bridge.timeouts')
-timeouts.timeout_to_seconds = lambda timeout: None if timeout is None else float(timeout)
-sys.modules.setdefault('litellm', types.ModuleType('litellm'))
-sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bridge'))
-sys.modules['litellm.rust_bridge.timeouts'] = timeouts
-",
-        );
     }
 
     #[test]
@@ -228,7 +238,8 @@ kwargs = {'model': 'from-kwargs', 'custom_llm_provider': None}
                 .unwrap()
                 .cast_into::<PyDict>()
                 .unwrap();
-            let arguments = arguments(&request, &kwargs);
+            let helpers = helpers(py);
+            let arguments = arguments(&request, &kwargs, &helpers);
             assert_eq!(arguments.model().unwrap(), "from-kwargs");
             assert_eq!(arguments.custom_llm_provider().unwrap(), None);
             let accesses: Vec<String> = request.getattr("accesses").unwrap().extract().unwrap();
@@ -262,7 +273,7 @@ kwargs = {}
                 .cast_into::<PyDict>()
                 .unwrap();
             assert_eq!(
-                arguments(&request, &kwargs).model().unwrap(),
+                arguments(&request, &kwargs, &helpers(py)).model().unwrap(),
                 "mistral-ocr-latest"
             );
             assert_eq!(
@@ -295,7 +306,9 @@ kwargs = {}
                 .unwrap()
                 .cast_into::<PyDict>()
                 .unwrap();
-            let error = arguments(&request, &kwargs).model().unwrap_err();
+            let error = arguments(&request, &kwargs, &helpers(py))
+                .model()
+                .unwrap_err();
             assert!(
                 error
                     .value(py)
@@ -328,7 +341,8 @@ kwargs = {}
                 .unwrap()
                 .cast_into::<PyDict>()
                 .unwrap();
-            let arguments = arguments(&request, &kwargs);
+            let helpers = helpers(py);
+            let arguments = arguments(&request, &kwargs, &helpers);
             assert_eq!(arguments.model().unwrap(), "mistral-ocr-latest");
             assert_eq!(arguments.custom_llm_provider().unwrap(), None);
         });
@@ -338,7 +352,6 @@ kwargs = {}
     fn document_readers_are_not_consumed_during_projection() {
         Python::initialize();
         Python::attach(|py| {
-            stub_timeout_conversion(py);
             let locals = eval(
                 py,
                 c"
@@ -365,7 +378,8 @@ kwargs = {}
                 .unwrap()
                 .cast_into::<PyDict>()
                 .unwrap();
-            let arguments = arguments(&request, &kwargs);
+            let helpers = helpers(py);
+            let arguments = arguments(&request, &kwargs, &helpers);
             let document = arguments.document().unwrap();
             let (input, reader) = project_document(&document).unwrap();
             assert_eq!(input, OcrDocumentInput::HostReader { mime_type: None });
