@@ -8,9 +8,6 @@ export const perSecondCostTiers = (modelInfo: Record<string, unknown> | null | u
     return resolution !== undefined && typeof value === "number" ? [{ resolution, cost: value }] : [];
   });
 
-export const formatPerSecondCost = (cost: number): string =>
-  `$${cost.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })}/s`;
-
 interface RawLitellmParams {
   model?: string;
   custom_llm_provider?: string;
@@ -50,8 +47,8 @@ const resolveProvider = (
 
 const transformModel = (rawModel: RawModel, getProviderFromModel: (model: string) => string) => {
   const model: RawModel = JSON.parse(JSON.stringify(rawModel));
-  const litellmParams = model?.litellm_params;
-  const modelInfo = model?.model_info;
+  const litellmParams = model.litellm_params;
+  const modelInfo = model.model_info;
 
   return {
     ...model,
@@ -70,8 +67,11 @@ const transformModel = (rawModel: RawModel, getProviderFromModel: (model: string
   };
 };
 
-export const transformModelData = (rawModelData: any, getProviderFromModel: (model: string) => string) => {
+export const transformModelData = (
+  rawModelData: { data?: RawModel[] | null } | null | undefined,
+  getProviderFromModel: (model: string) => string,
+) => {
   if (!rawModelData?.data) return { data: [] };
 
-  return { data: rawModelData.data.map((rawModel: RawModel) => transformModel(rawModel, getProviderFromModel)) };
+  return { data: rawModelData.data.map((rawModel) => transformModel(rawModel, getProviderFromModel)) };
 };

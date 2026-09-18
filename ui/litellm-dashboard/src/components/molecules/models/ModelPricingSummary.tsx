@@ -1,5 +1,5 @@
-import { formatPerSecondCost } from "@/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer";
 import { ModelData } from "@/components/model_dashboard/types";
+import { formatPerSecondCost } from "@/utils/dataUtils";
 
 type PricingFields = Pick<
   ModelData,
@@ -9,8 +9,12 @@ type PricingFields = Pick<
 export function ModelPricingSummary({ model }: { model: PricingFields }) {
   const perSecond = model.output_cost_per_second;
   const hasPerSecond = perSecond != null;
-  const showInput = !hasPerSecond || Number(model.input_cost) > 0;
-  const showOutput = !hasPerSecond || Number(model.output_cost) > 0;
+  const showInput = model.input_cost != null && (!hasPerSecond || Number(model.input_cost) > 0);
+  const showOutput = model.output_cost != null && (!hasPerSecond || Number(model.output_cost) > 0);
+
+  if (!showInput && !showOutput && !hasPerSecond) {
+    return <p className="mt-2 text-sm text-muted-foreground">-</p>;
+  }
 
   return (
     <div className="mt-2">
