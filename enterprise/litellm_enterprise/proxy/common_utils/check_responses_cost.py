@@ -120,6 +120,7 @@ class CheckResponsesCost:
         - Cost is tracked by the get-responses call, billed because the poll is stamped
           with BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
         - Mark responses in a terminal state as complete in the database
+        - Mark responses the provider no longer has (404) as stale_expired
         """
         try:
             await self._cleanup_stale_managed_objects()
@@ -139,6 +140,7 @@ class CheckResponsesCost:
         
         verbose_proxy_logger.debug(f"Found {len(jobs)} response jobs to check")
         completed_jobs = []
+        expired_jobs = []
 
         for job in jobs:
             unified_object_id = job.unified_object_id
@@ -175,6 +177,12 @@ class CheckResponsesCost:
                     f"Response {unified_object_id} status: {response.status}, model: {model_name}"
                 )
                 
+            except litellm.NotFoundError as e:
+                verbose_proxy_logger.info(
+                    f"Response {unified_object_id} no longer available at provider (404), marking stale_expired: {e}"
+                )
+                expired_jobs.append(job)
+                continue
             except Exception as e:
                 verbose_proxy_logger.warning(
                     f"Skipping job {unified_object_id} due to error: {e}"
@@ -195,5 +203,15 @@ class CheckResponsesCost:
             )
             verbose_proxy_logger.info(
                 f"Marked {len(completed_jobs)} response jobs as completed"
+            )
+
+        # Mark expired jobs (provider returned 404) in the database
+        if len(expired_jobs) > 0:
+            await self.prisma_client.db.litellm_managedobjecttable.update_many(
+                where={"id": {"in": [job.id for job in expired_jobs]}},
+                data={"status": "stale_expired"},
+            )
+            verbose_proxy_logger.info(
+                f"Marked {len(expired_jobs)} response jobs as stale_expired"
             )
 

@@ -365,6 +365,67 @@ class TestCheckResponsesCost:
         check_responses_cost_instance._expire_stale_rows.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_check_responses_cost_marks_404_response_stale_expired(
+        self, check_responses_cost_instance, mock_prisma_client
+    ):
+        """A provider 404 (e.g. dropped store=false/ZDR response) marks the row stale_expired."""
+        import litellm
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = "resp_test_404"
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-404"
+        mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_404"}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=1
+        )
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
+            mock_aget.side_effect = litellm.NotFoundError(
+                message="Response not found", model="gpt-5", llm_provider="openai"
+            )
+
+            await check_responses_cost_instance.check_responses_cost()
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many.assert_awaited_once_with(
+            where={"id": {"in": ["job-404"]}},
+            data={"status": "stale_expired"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_check_responses_cost_non_404_error_keeps_row_for_retry(
+        self, check_responses_cost_instance, mock_prisma_client
+    ):
+        """Non-404 provider errors skip the job so it is retried next cycle."""
+        import litellm
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = "resp_test_500"
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-500"
+        mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_500"}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
+            mock_aget.side_effect = litellm.InternalServerError(
+                message="boom", model="gpt-5", llm_provider="openai"
+            )
+
+            await check_responses_cost_instance.check_responses_cost()
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_check_responses_cost_multiple_jobs(
         self, check_responses_cost_instance, mock_prisma_client
     ):
