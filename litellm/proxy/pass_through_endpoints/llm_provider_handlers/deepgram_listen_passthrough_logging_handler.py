@@ -57,7 +57,7 @@ class DeepgramListenPassthroughLoggingHandler:
     @staticmethod
     def is_deepgram_listen_route(url_route: str) -> bool:
         path: Final = urlparse(url_route).path
-        return path.startswith("/deepgram/") and path.endswith(DEEPGRAM_LISTEN_ROUTE_SUFFIX)
+        return "/deepgram/" in path and path.endswith(DEEPGRAM_LISTEN_ROUTE_SUFFIX)
 
     def deepgram_listen_passthrough_handler(
         self,

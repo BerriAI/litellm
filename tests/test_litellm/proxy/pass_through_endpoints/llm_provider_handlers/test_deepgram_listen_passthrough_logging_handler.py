@@ -42,6 +42,7 @@ def _metadata(duration: object, channels: int = 1) -> dict[str, object]:
         ("/deepgram/v1/listen", True),
         ("/deepgram/listen", True),
         ("/deepgram/v1/listen?model=nova-3", True),
+        ("/litellm/deepgram/v1/listen", True),
         ("/deepgram/v1/speak", False),
         ("/deepgram/v1/listen/extra", False),
         ("/openai/v1/realtime", False),
