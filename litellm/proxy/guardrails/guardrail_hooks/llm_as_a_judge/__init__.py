@@ -195,6 +195,8 @@ def _build_judge_prompt(
 class LLMAsAJudgeGuardrail(CustomGuardrail):
     """Guardrail that judges request (pre_call/during_call) or response (post_call) quality via an LLM."""
 
+    reads_conversation_as_context = True
+
     def __init__(
         self,
         guardrail_name: str,

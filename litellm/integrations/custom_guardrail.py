@@ -153,6 +153,8 @@ class CustomGuardrail(CustomLogger):
 
     records_own_guardrail_information: ClassVar[bool] = False
 
+    reads_conversation_as_context: ClassVar[bool] = False
+
     def __init_subclass__(cls, **kwargs: object) -> None:  # kwargs-ok: forwarded to cooperative __init_subclass__ hooks
         super().__init_subclass__(**kwargs)
         own_apply_guardrail: Final = cls.__dict__.get("apply_guardrail")

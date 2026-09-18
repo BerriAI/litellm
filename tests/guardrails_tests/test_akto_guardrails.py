@@ -259,6 +259,31 @@ def test_build_akto_payload_with_response_keeps_tool_calls_of_a_tool_only_reply(
     assert resp_body["choices"] == [{"message": {"content": None, "role": "assistant", "tool_calls": tool_calls}}]
 
 
+def test_build_akto_payload_with_response_mirrors_the_scoped_responses_api_request(akto_ingest, sample_request_data):
+    request_turns = [
+        {"role": "system", "content": "Be terse."},
+        {"role": "user", "content": "Weather in Paris?"},
+    ]
+    tools = [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}]
+    tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}]
+    response_inputs = GenericGuardrailAPIInputs(
+        texts=["Checking."],
+        model="gpt-5.5",
+        tools=tools,
+        tool_calls=tool_calls,
+        structured_messages=[*request_turns, {"role": "assistant", "content": "Checking.", "tool_calls": tool_calls}],
+    )
+    payload = akto_ingest.build_akto_payload(
+        response_inputs, {**sample_request_data, "input": "Weather in Paris?"}, include_response=True
+    )
+    req_body = json.loads(json.loads(payload["requestPayload"])["body"])
+    assert req_body["messages"] == request_turns
+    assert req_body["tools"] == tools
+    assert req_body["tool_calls"] == tool_calls
+    resp_body = json.loads(json.loads(payload["responsePayload"])["body"])
+    assert resp_body["choices"][0]["message"]["content"] == "Checking."
+
+
 def test_build_response_body_puts_tool_calls_on_the_first_choice_only():
     tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}]
     body = AktoGuardrail.build_response_body(

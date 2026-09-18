@@ -2758,11 +2758,16 @@ class TestLoggingOnlyApplyGuardrail:
         kwargs, response = _logged_call(
             [
                 {"role": "user", "content": "What is the capital of France?"},
-                {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "lookup", "input": {}}]},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "toolu_01", "name": "lookup", "input": {}}],
+                },
                 {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "Paris"}]},
             ]
         )
-        kwargs["optional_params"] = {"tools": [{"name": "lookup", "input_schema": {"type": "object", "properties": {}}}]}
+        kwargs["optional_params"] = {
+            "tools": [{"name": "lookup", "input_schema": {"type": "object", "properties": {}}}]
+        }
 
         await guardrail.async_logging_hook(kwargs, response, CallTypes.anthropic_messages.value)
 

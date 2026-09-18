@@ -186,6 +186,27 @@ if TYPE_CHECKING:
 ToolResultContent: TypeAlias = str | list[ToolMessageContentPart]
 
 
+def _openai_function_chunk(
+    tool: AllAnthropicToolsValues, name: str, mapped_tool_params: Sequence[str]
+) -> ChatCompletionToolParamFunctionChunk:
+    extra_params: Final = {k: v for k, v in tool.items() if k not in mapped_tool_params}
+    chunk: Final = ChatCompletionToolParamFunctionChunk(name=name)
+    if "input_schema" in tool:
+        input_schema: Final = tool["input_schema"]
+        chunk["parameters"] = (
+            {**input_schema, **extra_params}
+            if isinstance(input_schema, Mapping)
+            else cast(dict[str, object], input_schema)  # cast-ok: a malformed schema goes to the provider verbatim
+        )
+    elif extra_params:
+        chunk["parameters"] = extra_params
+    if "description" in tool:
+        chunk["description"] = tool["description"]
+    if "strict" in tool:
+        chunk["strict"] = bool(tool["strict"])
+    return chunk
+
+
 class AnthropicAdapter:
     def __init__(self) -> None:
         pass
@@ -766,20 +787,9 @@ class LiteLLMAnthropicMessagesAdapter:
             if truncated_name != original_name:
                 tool_name_mapping[truncated_name] = original_name
 
-            function_chunk = ChatCompletionToolParamFunctionChunk(
-                name=truncated_name,
+            tool_param = ChatCompletionToolParam(
+                type="function", function=_openai_function_chunk(tool, truncated_name, mapped_tool_params)
             )
-            if "input_schema" in tool and tool["input_schema"] is not None:
-                function_chunk["parameters"] = tool["input_schema"].copy()
-            if "description" in tool:
-                function_chunk["description"] = tool["description"]
-            if "strict" in tool:
-                function_chunk["strict"] = bool(tool["strict"])
-
-            for k, v in tool.items():
-                if k not in mapped_tool_params:  # pass additional computer kwargs
-                    function_chunk.setdefault("parameters", {}).update({k: v})
-            tool_param = ChatCompletionToolParam(type="function", function=function_chunk)
             self._add_cache_control_if_applicable(tool, tool_param, model)
             new_tools.append(tool_param)
 

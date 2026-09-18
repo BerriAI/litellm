@@ -231,11 +231,19 @@ class AktoGuardrail(CustomGuardrail):
 
     @staticmethod
     def _response_mirror_inputs(inputs: GenericGuardrailAPIInputs) -> GenericGuardrailAPIInputs:
-        """The request-side mirror of a response scan: the model, plus the tool calls the reply made."""
-        tool_calls: Final = inputs.get("tool_calls")
-        if tool_calls:
-            return GenericGuardrailAPIInputs(model=inputs.get("model"), tool_calls=tool_calls)
-        return GenericGuardrailAPIInputs(model=inputs.get("model"))
+        """The request-side mirror of a response scan: the scoped request turns and tools, plus the reply's tool calls."""
+        scan_messages: Final = inputs.get("structured_messages") or ()
+        request_turns: Final = (
+            scan_messages[:-1] if scan_messages and scan_messages[-1].get("role") == "assistant" else scan_messages
+        )
+        mirror: Final = GenericGuardrailAPIInputs(model=inputs.get("model"))
+        if request_turns:
+            mirror["structured_messages"] = list(request_turns)
+        if tools := inputs.get("tools"):
+            mirror["tools"] = tools
+        if tool_calls := inputs.get("tool_calls"):
+            mirror["tool_calls"] = tool_calls
+        return mirror
 
     @staticmethod
     def build_tag_metadata(request_data: dict) -> dict[str, str]:

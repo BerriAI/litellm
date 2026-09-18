@@ -2553,6 +2553,26 @@ def test_translate_anthropic_tools_to_openai_leaves_the_request_input_schema_unt
     assert input_schema == {"type": "object", "properties": {"location": {"type": "string"}}}
 
 
+@pytest.mark.parametrize("malformed_schema", [None, "not a schema", 42, ["type", "object"]])
+def test_translate_anthropic_tools_to_openai_forwards_a_malformed_input_schema_for_the_provider_to_reject(
+    malformed_schema: object,
+):
+    tools = [{"name": "get_weather", "input_schema": malformed_schema, "defer_loading": True}]
+
+    result, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai(tools=tools, model=None)
+
+    assert result[0]["function"]["parameters"] == malformed_schema
+
+
+def test_translate_anthropic_tools_to_openai_keeps_extra_kwargs_without_an_input_schema():
+    tools = [{"name": "computer", "display_width_px": 1024}, {"name": "noop"}]
+
+    result, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai(tools=tools, model=None)
+
+    assert result[0]["function"]["parameters"] == {"display_width_px": 1024}
+    assert "parameters" not in result[1]["function"]
+
+
 def test_translate_anthropic_tools_to_openai_fills_missing_tool_name():
     """Schema-only tools (no ``name``) must not crash the Converse adapter path."""
     tools = [

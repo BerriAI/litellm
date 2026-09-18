@@ -54,6 +54,12 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_responses_stream_usage,
+    effective_scan_only_tool_results_for_guardrail,
+    effective_skip_system_message_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
+    merge_guardrailed_scoped_messages,
+    role_out_of_guardrail_scope,
+    scoped_structured_message_indices,
     stream_item_field,
     stream_item_fingerprint,
     stream_item_items,
@@ -345,6 +351,36 @@ class _RequestFields(NamedTuple):
     instructions: str | None
 
 
+class _ScanScope(NamedTuple):
+    skip_system: bool
+    skip_tool: bool
+    scan_only_tool_results: bool
+
+    @staticmethod
+    def for_guardrail(guardrail_to_apply: "CustomGuardrail") -> "_ScanScope":
+        return _ScanScope(
+            skip_system=effective_skip_system_message_for_guardrail(guardrail_to_apply),
+            skip_tool=effective_skip_tool_message_for_guardrail(guardrail_to_apply),
+            scan_only_tool_results=effective_scan_only_tool_results_for_guardrail(guardrail_to_apply),
+        )
+
+    def includes_role(self, role: object) -> bool:
+        return not role_out_of_guardrail_scope(
+            role if isinstance(role, str) else "",
+            skip_system_message=self.skip_system,
+            skip_tool_message=self.skip_tool,
+            scan_only_tool_results=self.scan_only_tool_results,
+        )
+
+    def message_indices(self, structured_messages: Sequence[AllMessageValues] | None) -> tuple[int, ...]:
+        return scoped_structured_message_indices(
+            structured_messages or (),
+            scan_only_tool_results=self.scan_only_tool_results,
+            skip_system=self.skip_system,
+            skip_tool=self.skip_tool,
+        )
+
+
 class _ExtractedInputs(NamedTuple):
     inputs: GenericGuardrailAPIInputs
     task_mappings: tuple[tuple[int, int | None], ...]
@@ -456,22 +492,19 @@ class OpenAIResponsesHandler(BaseTranslation):
         self, data: Mapping[str, object], guardrail_to_apply: "CustomGuardrail"
     ) -> RequestScanContext:
         raw_tools: Final = data.get("tools")
-        structured_messages: Final = tuple(
+        return RequestScanContext.scoped(
             self.get_structured_messages(
                 dict(data)  # mutable-ok: get_structured_messages takes the request as a dict
             )
-            or ()
-        )
-        return RequestScanContext(
-            structured_messages=structured_messages,
-            tools=tuple(
+            or (),
+            tuple(
                 cast(ChatCompletionToolParam, tool)  # cast-ok: mcp tools ride along in the guardrail's tool list
                 for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(
                     tuple(raw_tools) if isinstance(raw_tools, list) else (), validate_name_collisions=False
                 )
                 for tool in form.chat_tools
             ),
-            conversation_supplied=bool(structured_messages),
+            guardrail_to_apply,
         )
 
     async def process_input_messages(
@@ -488,7 +521,9 @@ class OpenAIResponsesHandler(BaseTranslation):
         input_data: Final[str | ResponseInputParam | None] = data.get("input")
         if not isinstance(input_data, (str, list)):
             return data
+        scope: Final = _ScanScope.for_guardrail(guardrail_to_apply)
         structured_messages: Final = self.get_structured_messages(data)
+        scoped_indices: Final = scope.message_indices(structured_messages)
         raw_tools: Final = data.get("tools")
         original_tools: Final[tuple[Mapping[str, object], ...]] = (
             tuple(raw_tools) if isinstance(raw_tools, list) else ()
@@ -496,11 +531,14 @@ class OpenAIResponsesHandler(BaseTranslation):
         flattened_tool_groups: Final = tuple(
             form.chat_tools for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(original_tools)
         )
-        extracted: Final = self._extract_guardrail_inputs(data, input_data, flattened_tool_groups)
+        extracted: Final = self._extract_guardrail_inputs(data, input_data, flattened_tool_groups, scope)
         if not extracted.inputs.get("texts"):
             return data
-        if structured_messages:
-            extracted.inputs["structured_messages"] = structured_messages
+        scoped_structured_messages: Final = (
+            [structured_messages[index] for index in scoped_indices] if structured_messages else None
+        )
+        if scoped_structured_messages:
+            extracted.inputs["structured_messages"] = scoped_structured_messages
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=extracted.inputs,
             request_data=data,
@@ -510,7 +548,14 @@ class OpenAIResponsesHandler(BaseTranslation):
         self._apply_guardrailed_tools_to_data(
             data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools")
         )
-        written_back: Final = self._written_back_request_fields(data, structured_messages, guardrailed_inputs)
+        written_back: Final = self._written_back_request_fields(
+            data,
+            structured_messages or (),
+            scoped_indices,
+            scoped_structured_messages,
+            guardrailed_inputs,
+            guardrail_to_apply,
+        )
         if written_back is not None:
             data["input"] = list(written_back.input)  # mutable-ok: JSON body
             if written_back.instructions is None:
@@ -539,6 +584,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         data: Mapping[str, object],
         input_data: "str | ResponseInputParam",
         flattened_tool_groups: Sequence[Sequence[Mapping[str, object]]],
+        scope: _ScanScope,
     ) -> _ExtractedInputs:
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
@@ -553,9 +599,12 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
         )
         if isinstance(input_data, str):
-            texts_to_check.append(input_data)
+            if scope.includes_role("user"):
+                texts_to_check.append(input_data)
         else:
             for msg_idx, message in enumerate(input_data):
+                if not scope.includes_role(message.get("role")):
+                    continue
                 self._extract_input_text_and_images(
                     message=message,
                     msg_idx=msg_idx,
@@ -566,7 +615,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
         if images_to_check:
             inputs["images"] = images_to_check
-        if tools_to_check:
+        if tools_to_check and not scope.scan_only_tool_results:
             inputs["tools"] = tools_to_check
         model: Final = data.get("model")
         if isinstance(model, str):
@@ -576,17 +625,25 @@ class OpenAIResponsesHandler(BaseTranslation):
     @staticmethod
     def _written_back_request_fields(
         data: Mapping[str, object],
-        structured_messages: Sequence[AllMessageValues] | None,
+        structured_messages: Sequence[AllMessageValues],
+        scoped_indices: Sequence[int],
+        scoped_structured_messages: Sequence[AllMessageValues] | None,
         guardrailed_inputs: GenericGuardrailAPIInputs,
+        guardrail_to_apply: "CustomGuardrail",
     ) -> _RequestFields | None:
         guardrailed: Final = guardrailed_inputs.get("structured_messages")
-        if guardrailed is None or guardrailed is structured_messages:
+        if not isinstance(guardrailed, list) or guardrailed is scoped_structured_messages:
             return None
+        full_rewrite: Final = (
+            guardrailed
+            if guardrail_to_apply.structured_messages_cover_full_request()
+            else merge_guardrailed_scoped_messages(structured_messages, scoped_indices, guardrailed)
+        )
         return _patch_or_convert_request_fields(
             data.get("input"),
             data.get("instructions"),
-            structured_messages or (),
-            guardrailed,
+            structured_messages,
+            full_rewrite,
         )
 
     def extract_request_tool_names(self, data: dict) -> list[str]:

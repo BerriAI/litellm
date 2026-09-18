@@ -3477,3 +3477,140 @@ class TestResponsesResponseScanCarriesRequestConversation:
         [(_, inputs)] = guardrail.seen
         assert "structured_messages" not in inputs
         assert "tools" not in inputs
+
+
+class TestResponsesScopingFlags:
+    """skip_system_message_in_guardrail, skip_tool_message_in_guardrail and scan_only_tool_results
+    must scope Responses scans the way they scope chat scans, on the request and on the reply."""
+
+    @staticmethod
+    def _request() -> dict:
+        return {
+            "model": "gpt-5.4",
+            "instructions": "SYSTEM SECRET",
+            "input": [
+                {"role": "system", "content": "SYSTEM SECRET TWO"},
+                {"role": "user", "content": "What is the capital of France?"},
+                {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "TOOL SECRET"},
+            ],
+            "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object"}}],
+        }
+
+    @staticmethod
+    def _reply() -> ResponsesAPIResponse:
+        return ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="gpt-5.4",
+            object="response",
+            status="completed",
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Paris"}],
+                }
+            ],
+        )
+
+    @staticmethod
+    def _scoped_guardrail(
+        *,
+        skip_system_message_in_guardrail: bool | None = None,
+        skip_tool_message_in_guardrail: bool | None = None,
+        scan_only_tool_results: bool | None = None,
+    ) -> TypedInputsRecordingGuardrail:
+        guardrail = TypedInputsRecordingGuardrail()
+        guardrail.skip_system_message_in_guardrail = skip_system_message_in_guardrail
+        guardrail.skip_tool_message_in_guardrail = skip_tool_message_in_guardrail
+        guardrail.scan_only_tool_results = scan_only_tool_results
+        return guardrail
+
+    @pytest.mark.asyncio
+    async def test_skip_system_hides_instructions_and_system_items_on_both_scans(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = self._scoped_guardrail(skip_system_message_in_guardrail=True)
+        request = self._request()
+
+        await handler.process_input_messages(data=request, guardrail_to_apply=guardrail)
+        await handler.process_output_response(self._reply(), guardrail, request_data=request)
+
+        (_, request_inputs), (_, response_inputs) = guardrail.seen
+        assert request_inputs["texts"] == ["What is the capital of France?"]
+        assert [m["role"] for m in request_inputs["structured_messages"]] == ["user", "assistant", "tool"]
+        assert [m["role"] for m in response_inputs["structured_messages"]] == ["user", "assistant", "tool", "assistant"]
+        assert "SYSTEM SECRET" not in repr(guardrail.seen)
+        assert request_inputs["tools"][0]["function"]["name"] == "lookup"
+
+    @pytest.mark.asyncio
+    async def test_skip_tool_hides_tool_results_on_both_scans(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = self._scoped_guardrail(skip_tool_message_in_guardrail=True)
+        request = self._request()
+
+        await handler.process_input_messages(data=request, guardrail_to_apply=guardrail)
+        await handler.process_output_response(self._reply(), guardrail, request_data=request)
+
+        (_, request_inputs), (_, response_inputs) = guardrail.seen
+        assert [m["role"] for m in request_inputs["structured_messages"]] == ["system", "system", "user", "assistant"]
+        assert [m["role"] for m in response_inputs["structured_messages"]] == [
+            "system",
+            "system",
+            "user",
+            "assistant",
+            "assistant",
+        ]
+        assert "TOOL SECRET" not in repr(guardrail.seen)
+
+    @pytest.mark.asyncio
+    async def test_scan_only_tool_results_keeps_tool_rows_and_drops_tool_definitions(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = self._scoped_guardrail(scan_only_tool_results=True)
+        request = self._request()
+
+        await handler.process_input_messages(data=request, guardrail_to_apply=guardrail)
+        await handler.process_output_response(self._reply(), guardrail, request_data=request)
+
+        request_scans = [inputs for kind, inputs in guardrail.seen if kind == "request"]
+        assert all("capital of France" not in repr(inputs) for inputs in request_scans)
+        [response_inputs] = [inputs for kind, inputs in guardrail.seen if kind == "response"]
+        assert [m["role"] for m in response_inputs["structured_messages"]] == ["tool", "assistant"]
+        assert response_inputs["structured_messages"][0]["content"] == "TOOL SECRET"
+        assert "tools" not in response_inputs
+
+    @pytest.mark.asyncio
+    async def test_scoped_rewrite_lands_without_dropping_the_hidden_turns(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = StructuredRewriteGuardrail()
+        guardrail.skip_system_message_in_guardrail = True
+        guardrail.skip_tool_message_in_guardrail = True
+        request = self._request()
+
+        result = await handler.process_input_messages(data=request, guardrail_to_apply=guardrail)
+
+        assert result["instructions"] == "SYSTEM SECRET"
+        assert result["input"][0] == {"role": "system", "content": "SYSTEM SECRET TWO"}
+        assert result["input"][1]["content"] == COMPRESSED_MARKER
+        assert result["input"][2]["type"] == "function_call"
+        assert result["input"][3] == {"type": "function_call_output", "call_id": "call_1", "output": "TOOL SECRET"}
+
+    @pytest.mark.asyncio
+    async def test_unscoped_guardrail_still_sees_every_turn(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = self._scoped_guardrail()
+        request = self._request()
+
+        await handler.process_input_messages(data=request, guardrail_to_apply=guardrail)
+
+        [(_, request_inputs)] = guardrail.seen
+        assert request_inputs["texts"] == ["SYSTEM SECRET TWO", "What is the capital of France?"]
+        assert [m["role"] for m in request_inputs["structured_messages"]] == [
+            "system",
+            "system",
+            "user",
+            "assistant",
+            "tool",
+        ]

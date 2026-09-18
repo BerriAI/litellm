@@ -203,7 +203,13 @@ def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsag
     return blocked_responses_api_usage(completed)
 
 
+def _reads_conversation_as_context(guardrail_to_apply: object) -> bool:
+    return getattr(guardrail_to_apply, "reads_conversation_as_context", False) is True
+
+
 def effective_skip_system_message_for_guardrail(guardrail_to_apply: object) -> bool:
+    if _reads_conversation_as_context(guardrail_to_apply):
+        return False
     per: Final = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
     if per is not None:
         return bool(per)
@@ -213,6 +219,8 @@ def effective_skip_system_message_for_guardrail(guardrail_to_apply: object) -> b
 
 
 def effective_skip_tool_message_for_guardrail(guardrail_to_apply: object) -> bool:
+    if _reads_conversation_as_context(guardrail_to_apply):
+        return False
     per: Final = getattr(guardrail_to_apply, "skip_tool_message_in_guardrail", None)
     if per is not None:
         return bool(per)
