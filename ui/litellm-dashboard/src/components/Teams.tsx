@@ -535,9 +535,9 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           formValues.model_max_budget = modelMaxBudget;
         }
 
-        const validWindows = (formValues.budget_limits ?? []).filter(
-          (window) => window.budget_duration && window.max_budget !== null && window.max_budget !== undefined,
-        );
+        const validWindows = (
+          (formValues.budget_limits ?? []) as { budget_duration: string; max_budget: number | null }[]
+        ).filter((window) => window.budget_duration && window.max_budget !== null && window.max_budget !== undefined);
         if (validWindows.length > 0) {
           formValues.budget_limits = validWindows;
         } else {
