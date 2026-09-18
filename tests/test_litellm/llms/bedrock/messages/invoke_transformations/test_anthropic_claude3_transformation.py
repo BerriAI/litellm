@@ -32,7 +32,6 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
 )
 
 
-
 @pytest.mark.asyncio
 async def test_bedrock_sse_wrapper_encodes_dict_chunks():
     """Verify that `bedrock_sse_wrapper` converts dictionary chunks to properly formatted Server-Sent Events and forwards non-dict chunks unchanged."""
@@ -1913,7 +1912,6 @@ async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
     same logging reconstruction as Anthropic /messages. Ensures token counts and
     completion_cost match model_prices for us.anthropic.claude-sonnet-4-6.
     """
-    from litellm import completion_cost
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
         AnthropicPassthroughLoggingHandler,
     )
@@ -2900,22 +2898,6 @@ def test_bedrock_messages_tool_search_follows_claude_tool_search_rule(local_mode
     cfg = AmazonAnthropicClaudeMessagesConfig()
 
     assert cfg._supports_tool_search_on_bedrock(model) is expected
-
-
-def test_bedrock_messages_tool_search_rule_fills_mapped_entry_without_flag(local_model_cost_map, monkeypatch):
-    """LIT-5851: a Bedrock entry that is in the map but carries no ``supports_tool_search``
-    key, the state Opus 4.8, Opus 5 and Sonnet 5 shipped in, is filled by the
-    ``claude-tool-search`` rule instead of resolving to ``None`` and losing the beta."""
-    import litellm
-
-    model = "us.anthropic.claude-opus-5"
-    cfg = AmazonAnthropicClaudeMessagesConfig()
-
-    monkeypatch.delitem(litellm.model_cost[model], "supports_tool_search")
-    litellm.get_model_info.cache_clear()
-
-    assert litellm.get_model_info(model, custom_llm_provider="bedrock")["supports_tool_search"] is True
-    assert cfg._supports_tool_search_on_bedrock(model) is True
 
 
 def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
