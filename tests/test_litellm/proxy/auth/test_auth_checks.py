@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -913,6 +914,32 @@ async def test_get_user_object_wraps_db_outage_as_valueerror_preserving_context(
             )
 
     assert isinstance(exc_info.value.__context__, ConnectionError)
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_check_db_only_ignores_recent_miss(monkeypatch):
+    """A database-only read is never answered by the per-worker negative memo: a row created after a miss on
+    this worker is returned within db_cache_expiry seconds instead of raising UserNotFoundError, so the token
+    exchange mints for a user JWT auth just accepted."""
+    from litellm.proxy.auth import auth_checks
+
+    user_id = "memo-probe-user"
+    monkeypatch.setitem(auth_checks.last_db_access_time, f"user_id:{user_id}", (None, time.time()))
+    db_row = LiteLLM_UserTable(user_id=user_id, user_email=None, user_role="internal_user")
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=db_row)
+
+    result = await get_user_object(
+        user_id=user_id,
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=UserApiKeyCache(),
+        user_id_upsert=False,
+        check_db_only=True,
+    )
+
+    assert result is not None
+    assert result.user_id == user_id
+    mock_prisma_client.db.litellm_usertable.find_unique.assert_awaited_once()
 
 
 @pytest.mark.asyncio
