@@ -66,6 +66,7 @@ from litellm.types.llms.vertex_ai import (
     ToolConfig,
     Tools,
     UsageMetadata,
+    VertexAICachedContentCreation,
     VertexToolName,
 )
 from litellm.types.utils import (
@@ -131,6 +132,30 @@ def _served_model_name(model_version: object) -> str | None:
     if not isinstance(model_version, str) or not model_version:
         return None
     return model_version.split("@", 1)[0]
+
+
+def _add_cache_creation_usage(usage: Usage, creation: VertexAICachedContentCreation) -> Usage:
+    creation_tokens: Final = creation["total_token_count"]
+    if creation_tokens <= 0:
+        return usage
+
+    prompt_tokens_details: Final = (
+        PromptTokensDetailsWrapper(**usage.prompt_tokens_details.model_dump())
+        if usage.prompt_tokens_details is not None
+        else PromptTokensDetailsWrapper()
+    )
+    cache_read_tokens: Final = getattr(usage, "_cache_read_input_tokens", 0) or 0
+    return Usage(
+        prompt_tokens=usage.prompt_tokens + creation_tokens,
+        completion_tokens=usage.completion_tokens,
+        total_tokens=usage.total_tokens + creation_tokens,
+        prompt_tokens_details=prompt_tokens_details,
+        completion_tokens_details=usage.completion_tokens_details,
+        server_tool_use=getattr(usage, "server_tool_use", None),
+        cost=getattr(usage, "cost", None),
+        cache_creation_input_tokens=creation_tokens,
+        **({"cache_read_input_tokens": cache_read_tokens} if cache_read_tokens > 0 else {}),
+    )
 
 
 class VertexAIBaseConfig:
@@ -2459,7 +2484,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     _,  # cumulative_tool_call_index not needed in non-streaming
                 ) = VertexGeminiConfig._process_candidates(_candidates, model_response, logging_obj.optional_params)
 
-            usage: Final = VertexGeminiConfig._calculate_usage(completion_response=completion_response)
+            base_usage: Final = VertexGeminiConfig._calculate_usage(completion_response=completion_response)
+            from ..context_caching.vertex_ai_context_caching import VERTEX_AI_CACHED_CONTENT_KEY
+
+            cached_content_creation: Final = logging_obj.model_call_details.get(VERTEX_AI_CACHED_CONTENT_KEY)
+            usage: Final = (
+                _add_cache_creation_usage(base_usage, cast(VertexAICachedContentCreation, cached_content_creation))
+                if isinstance(cached_content_creation, dict) and "total_token_count" in cached_content_creation
+                else base_usage
+            )
 
             VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
 
@@ -3211,8 +3244,16 @@ class ModelResponseIterator:
         if "usageMetadata" not in processed_chunk:
             return None
 
-        usage: Final = VertexGeminiConfig._calculate_usage(
+        base_usage: Final = VertexGeminiConfig._calculate_usage(
             completion_response=processed_chunk,
+        )
+        from ..context_caching.vertex_ai_context_caching import VERTEX_AI_CACHED_CONTENT_KEY
+
+        cached_content_creation: Final = self.logging_obj.model_call_details.get(VERTEX_AI_CACHED_CONTENT_KEY)
+        usage: Final = (
+            _add_cache_creation_usage(base_usage, cast(VertexAICachedContentCreation, cached_content_creation))
+            if isinstance(cached_content_creation, dict) and "total_token_count" in cached_content_creation
+            else base_usage
         )
 
         VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
