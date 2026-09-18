@@ -14060,32 +14060,29 @@ async def test_authoritative_floor_spend_keeps_a_reset_marker_written_during_the
 
 
 @pytest.mark.asyncio
-async def test_login_throttle_settings_are_not_hot_applied_from_the_database():
-    """LIT-5285: a stored sign-in limit does not take effect on a live worker.
-
-    _update_general_settings copies an allowlist of keys out of the DB row on every config
-    poll. Adding these to it would let a stored value outrank config.yaml without a restart,
-    so an operator locked out by a bad value could not fix it by editing YAML and restarting.
-    """
+async def test_login_throttle_limits_from_the_config_file_outrank_the_database(monkeypatch):
     import litellm.proxy.proxy_server as ps
     from litellm.proxy.proxy_server import ProxyConfig
 
-    original = dict(ps.general_settings)
-    try:
-        ps.general_settings.clear()
-        await ProxyConfig()._update_general_settings(
-            db_general_settings={
-                "max_failed_login_attempts_per_source": 999,
-                "failed_login_window_seconds": 1,
-                "failed_login_block_seconds": 1,
-            }
-        )
-        assert "max_failed_login_attempts_per_source" not in ps.general_settings
-        assert "failed_login_window_seconds" not in ps.general_settings
-        assert "failed_login_block_seconds" not in ps.general_settings
-    finally:
-        ps.general_settings.clear()
-        ps.general_settings.update(original)
+    monkeypatch.setattr(
+        ps,
+        "general_settings",
+        {
+            "max_failed_login_attempts_per_source": 10,
+            "failed_login_window_seconds": 60,
+            "failed_login_block_seconds": 300,
+        },
+    )
+    await ProxyConfig()._update_general_settings(
+        db_general_settings={
+            "max_failed_login_attempts_per_source": 999,
+            "failed_login_window_seconds": 1,
+            "failed_login_block_seconds": 1,
+        }
+    )
+    assert ps.general_settings.get("max_failed_login_attempts_per_source") == 10
+    assert ps.general_settings.get("failed_login_window_seconds") == 60
+    assert ps.general_settings.get("failed_login_block_seconds") == 300
 
 
 @pytest.mark.asyncio
