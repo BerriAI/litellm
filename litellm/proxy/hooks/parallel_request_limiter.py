@@ -703,6 +703,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             _metadata: Final = kwargs["litellm_params"].get("metadata", {}) or {}
             global_max_parallel_requests: Final = _metadata.get("global_max_parallel_requests", None)
             user_api_key: Final = _metadata.get("user_api_key", None)
+            user_api_key_team_id: Final = _metadata.get("user_api_key_team_id", None)
             self.print_verbose(f"user_api_key: [set={user_api_key is not None}]")
             if user_api_key is None:
                 return
@@ -738,33 +739,33 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 current_minute: Final = datetime.now().strftime("%M")
                 precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
 
-                request_count_api_key: Final = f"{user_api_key}::{precise_minute}::request_count"
+                bucket_ids: Final = [user_api_key] + (
+                    [user_api_key_team_id] if user_api_key_team_id is not None else []
+                )
+                for bucket_id in bucket_ids:
+                    request_count_api_key = f"{bucket_id}::{precise_minute}::request_count"
+                    current = await self.internal_usage_cache.async_get_cache(
+                        key=request_count_api_key,
+                        litellm_parent_otel_span=litellm_parent_otel_span,
+                    ) or {
+                        "current_requests": 1,
+                        "current_tpm": 0,
+                        "current_rpm": 0,
+                    }
 
-                # ------------
-                # Update usage
-                # ------------
-                current: Final = await self.internal_usage_cache.async_get_cache(
-                    key=request_count_api_key,
-                    litellm_parent_otel_span=litellm_parent_otel_span,
-                ) or {
-                    "current_requests": 1,
-                    "current_tpm": 0,
-                    "current_rpm": 0,
-                }
+                    new_val = {
+                        "current_requests": max(current["current_requests"] - 1, 0),
+                        "current_tpm": current["current_tpm"],
+                        "current_rpm": current["current_rpm"],
+                    }
 
-                new_val: Final = {
-                    "current_requests": max(current["current_requests"] - 1, 0),
-                    "current_tpm": current["current_tpm"],
-                    "current_rpm": current["current_rpm"],
-                }
-
-                self.print_verbose(f"updated_value in failure call: {new_val}")
-                await self.internal_usage_cache.async_set_cache(
-                    request_count_api_key,
-                    new_val,
-                    ttl=60,
-                    litellm_parent_otel_span=litellm_parent_otel_span,
-                )  # save in cache for up to 1 min.
+                    self.print_verbose(f"updated_value in failure call: {new_val}")
+                    await self.internal_usage_cache.async_set_cache(
+                        request_count_api_key,
+                        new_val,
+                        ttl=60,
+                        litellm_parent_otel_span=litellm_parent_otel_span,
+                    )  # save in cache for up to 1 min.
         except Exception as e:
             verbose_proxy_logger.exception("Inside Parallel Request Limiter: An exception occurred - %s", e)
 

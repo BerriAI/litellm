@@ -12,6 +12,7 @@ from pydantic import (
     ConfigDict,
     Field,
     Json,
+    NonNegativeInt,
     PositiveInt,
     field_validator,
     model_validator,
@@ -2005,6 +2006,7 @@ from litellm.models.team import TeamBase as TeamBase  # noqa: E402
 
 
 class NewTeamRequest(TeamBase):
+    max_parallel_requests: NonNegativeInt | None = None
     model_aliases: dict | None = None
     tags: list | None = None
     guardrails: list[str] | None = None
@@ -2076,7 +2078,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     metadata: dict | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
-    max_parallel_requests: int | None = None
+    max_parallel_requests: NonNegativeInt | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
     models: list | None = None

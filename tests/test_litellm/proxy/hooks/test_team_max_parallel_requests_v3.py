@@ -1,9 +1,4 @@
-"""
-Team-level ``max_parallel_requests`` on the v3 limiter: one concurrency
-gauge per team, shared by every key in the team, enforced alongside the
-per-key gauge and released when the request settles.
-"""
-
+from collections.abc import Iterator
 from datetime import datetime
 
 import pytest
@@ -26,7 +21,7 @@ TEAM_COUNTER_KEY = f"{{team:{TEAM_ID}}}:max_parallel_requests"
 
 
 @pytest.fixture(autouse=True)
-def _isolated_request_stash():
+def _isolated_request_stash() -> Iterator[None]:
     token = _request_stash.set(None)
     yield
     _request_stash.reset(token)
@@ -37,19 +32,20 @@ def _handler() -> tuple[_PROXY_MaxParallelRequestsHandler_v3, DualCache]:
     return _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache)), cache
 
 
-def _team_key(raw_key: str, team_max_parallel_requests: int, **extra) -> UserAPIKeyAuth:
+def _team_key(
+    raw_key: str, team_max_parallel_requests: int, max_parallel_requests: int | None = None
+) -> UserAPIKeyAuth:
     return UserAPIKeyAuth(
         api_key=hash_token(raw_key),
         team_id=TEAM_ID,
         team_max_parallel_requests=team_max_parallel_requests,
-        **extra,
+        max_parallel_requests=max_parallel_requests,
     )
 
 
 async def _admit(
     handler: _PROXY_MaxParallelRequestsHandler_v3, cache: DualCache, key: UserAPIKeyAuth
 ) -> RequestRateLimiterStash:
-    """Run the pre-call hook in a fresh per-request stash, as the proxy does for every request."""
     _request_stash.set(None)
     await handler.async_pre_call_hook(
         user_api_key_dict=key,
