@@ -143,7 +143,7 @@ class _ResetBand:
 
 
 def _reset_band(max_budget: float | None, rollover_max_budget: float | None) -> _ResetBand | None:
-    if max_budget is None or not math.isfinite(max_budget):
+    if max_budget is None or not math.isfinite(max_budget) or max_budget < 0:
         return None
     keep_overage: Final = litellm.budget_rollover is True
     lo: Final = (
