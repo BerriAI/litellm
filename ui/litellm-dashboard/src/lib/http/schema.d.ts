@@ -26693,6 +26693,16 @@ export interface components {
              */
             enforce_fallback_model_access?: boolean | null;
             /**
+             * Failed Login Block Seconds
+             * @description How long a blocked source address, or source address and username, stays blocked. Every attempt from a blocked key, right or wrong, is refused with 429 before the password is checked; the block is not extended by refused attempts. Set under `general_settings` in config.yaml. Defaults to 300
+             */
+            failed_login_block_seconds?: number | null;
+            /**
+             * Failed Login Window Seconds
+             * @description Fixed window in seconds over which failed Admin UI sign-in attempts are counted. The window starts at the first failure and is not extended by later ones. Set under `general_settings` in config.yaml. Defaults to 60
+             */
+            failed_login_window_seconds?: number | null;
+            /**
              * Forward Client Headers To Llm Api
              * @description If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.
              */
@@ -26736,6 +26746,18 @@ export interface components {
              * @description max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider
              */
             max_batch_file_size_mb?: number | null;
+            /**
+             * Max Failed Login Attempts Per Source
+             * @description Failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`. One more blocks that address for `failed_login_block_seconds`. Half this value, rounded down but at least 1, is the allowance for one username from that address; one more blocks that address for that username only, and its further failures stop counting toward the address limit, so a script stuck on one account does not block everyone behind a shared address. The per-address limit is only enforced when `trusted_proxy_ranges` is set: to the proxies in front of LiteLLM, or to an empty list when clients connect directly. Left unset, the peer address may be a shared ingress and only the per-username half runs. IPv6 addresses are grouped by /64. Set under `general_settings` in config.yaml. Defaults to 10
+             */
+            max_failed_login_attempts_per_source?: number | null;
+            /**
+             * Max Failed Login Attempts Per Source Overrides
+             * @description Per-address overrides of `max_failed_login_attempts_per_source`, keyed by IP address or CIDR range, e.g. {'1.2.3.4': 200, '5.6.0.0/24': 500}. The most specific matching range wins (between equivalent keys such as '1.2.3.4' and '1.2.3.4/32', an exemption wins, then the higher limit), and the per-username allowance for that address follows as half the override. A value of 0 exempts the address from both limits. Set under `general_settings` in config.yaml
+             */
+            max_failed_login_attempts_per_source_overrides?: {
+                [key: string]: number;
+            } | null;
             /**
              * Max File Size Mb
              * @description max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider
@@ -26916,7 +26938,7 @@ export interface components {
             transcribe_media_buckets?: string[] | null;
             /**
              * Trusted Proxy Ranges
-             * @description CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler.
+             * @description CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler, and whose X-Forwarded-For is used to attribute Admin UI sign-in attempts to a source address. Set it to an empty list when clients connect directly, so the peer address is the source. Left unset, or containing an entry that is not an address or CIDR range, the per-source sign-in limit is off.
              */
             trusted_proxy_ranges?: string[] | null;
             /**
@@ -27694,6 +27716,11 @@ export interface components {
         /** DailySpendMetadata */
         DailySpendMetadata: {
             /**
+             * Api Key Limit
+             * @description When set, api_keys and every api_key_breakdown list at most this many keys, ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.
+             */
+            api_key_limit?: number | null;
+            /**
              * Has More
              * @default false
              */
@@ -27703,6 +27730,11 @@ export interface components {
              * @default 1
              */
             page: number;
+            /**
+             * Total Api Keys
+             * @description Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key lists are truncated to the highest-spend keys.
+             */
+            total_api_keys?: number | null;
             /**
              * Total Api Requests
              * @default 0
@@ -36801,7 +36833,9 @@ export interface components {
             /** Type */
             type?: string | null;
             /** Value */
-            value: string;
+            value?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         /** SCIMPatchOp */
         SCIMPatchOp: {
