@@ -4958,8 +4958,6 @@ def _routing_groups_router():
 
 @pytest.mark.asyncio
 async def test_invalid_db_routing_groups_do_not_abort_other_router_settings():
-    """Regression: an overlapping routing_groups value persisted in DB used to raise out of
-    _add_router_settings_from_db_config, which skipped SSO / guardrail loading downstream."""
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.proxy_server import ProxyConfig
@@ -9341,8 +9339,6 @@ def test_update_config_writes_only_sent_section(_update_config_setup):
 
 
 def test_update_config_rejects_overlapping_routing_groups_before_writing(_update_config_setup):
-    """Regression: overlapping groups were persisted and only failed at router reload, where the
-    failure took SSO and the other DB-backed settings down with it."""
     existing_groups = [{"group_name": "g1", "models": ["m1"], "routing_strategy": "least-busy"}]
     client, prisma, restore = _update_config_setup(
         initial_rows={"router_settings": {"num_retries": 2, "routing_groups": existing_groups}}
