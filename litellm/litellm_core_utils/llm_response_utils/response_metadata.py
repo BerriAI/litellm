@@ -5,7 +5,7 @@ from typing import Any, Final
 import httpx
 
 from litellm.constants import LITELLM_DETAILED_TIMING
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.logging_utils import LiteLLMLoggingObject
 from litellm.types.utils import (
@@ -16,19 +16,25 @@ from litellm.types.utils import (
 )
 
 
+def _timing_window_start(start_time: datetime.datetime, logging_obj: LiteLLMLoggingObject) -> datetime.datetime:
+    received_at: Final = get_litellm_metadata_from_kwargs(logging_obj.model_call_details).get("litellm_received_at")
+    return received_at if isinstance(received_at, datetime.datetime) else start_time
+
+
 def response_timing_metrics(
     start_time: datetime.datetime,
     end_time: datetime.datetime,
     logging_obj: LiteLLMLoggingObject,
     include_overhead: bool = True,
 ) -> Mapping[str, float]:
-    """``_response_ms`` for the whole call, plus ``litellm_overhead_time_ms`` when it can be derived.
+    """``_response_ms`` for the window starting at proxy receive time when stamped, else ``start_time``.
 
     On a cache hit the overhead is the total minus the cache read; otherwise it is the total minus
     the provider call (``llm_api_duration_ms``). It is omitted when neither duration was recorded,
     and when ``include_overhead`` is False because the two durations cover different windows.
     """
-    total_response_time_ms: Final = (end_time - start_time).total_seconds() * 1000
+    window_start: Final = _timing_window_start(start_time, logging_obj)
+    total_response_time_ms: Final = (end_time.timestamp() - window_start.timestamp()) * 1000
     if not include_overhead:
         return {"_response_ms": total_response_time_ms}  # mutable-ok: read-only timing result
     caching_details: Final = logging_obj.caching_details
