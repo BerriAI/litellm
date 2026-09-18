@@ -19,7 +19,7 @@ import pytest
 import uvicorn
 import yaml
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult
 from starlette.requests import Request
 
@@ -206,7 +206,7 @@ class TestProxyMcpSimpleConnections:
     @pytest.mark.asyncio
     async def test_proxy_mcp_stdio_roundtrip(self, proxy_server_url: str) -> None:
         async with asyncio.timeout(20):
-            async with streamablehttp_client(
+            async with streamable_http_client(
                 url=f"{proxy_server_url}/mcp",
                 headers={
                     "Authorization": PROXY_AUTHORIZATION_HEADER,
@@ -227,7 +227,7 @@ class TestProxyMcpSimpleConnections:
     @pytest.mark.asyncio
     async def test_proxy_mcp_streamable_http_roundtrip(self, proxy_server_url: str) -> None:
         async with asyncio.timeout(20):
-            async with streamablehttp_client(
+            async with streamable_http_client(
                 url=f"{proxy_server_url}/mcp",
                 headers={
                     "Authorization": PROXY_AUTHORIZATION_HEADER,
@@ -248,7 +248,7 @@ class TestProxyMcpSimpleConnections:
     @pytest.mark.asyncio
     async def test_proxy_mcp_lists_all_servers_without_header(self, proxy_server_url: str) -> None:
         async with asyncio.timeout(20):
-            async with streamablehttp_client(
+            async with streamable_http_client(
                 url=f"{proxy_server_url}/mcp",
                 headers={"Authorization": PROXY_AUTHORIZATION_HEADER},
             ) as (read, write, _get_session_id):
@@ -296,7 +296,7 @@ class TestProxyMcpStatelessBehavior:
         """Two independent clients connect and operate without sharing session state."""
         async with asyncio.timeout(30):
             # --- Client A: connect, initialize, call tool ---
-            async with streamablehttp_client(
+            async with streamable_http_client(
                 url=f"{proxy_server_url}/mcp",
                 headers={
                     "Authorization": PROXY_AUTHORIZATION_HEADER,
@@ -316,7 +316,7 @@ class TestProxyMcpStatelessBehavior:
             await asyncio.sleep(0.5)
 
             # --- Client B: completely independent connection ---
-            async with streamablehttp_client(
+            async with streamable_http_client(
                 url=f"{proxy_server_url}/mcp",
                 headers={
                     "Authorization": PROXY_AUTHORIZATION_HEADER,
@@ -342,7 +342,7 @@ def _payload(result: typing.Any) -> typing.Any:
 
 
 def _proxy_session(proxy_server_url: str, **extra_headers: str):
-    return streamablehttp_client(
+    return streamable_http_client(
         url=f"{proxy_server_url}/mcp/proxy",
         headers={"Authorization": PROXY_AUTHORIZATION_HEADER, **extra_headers},
     )

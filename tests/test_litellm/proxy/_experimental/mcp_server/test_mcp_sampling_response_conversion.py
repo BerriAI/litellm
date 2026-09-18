@@ -151,7 +151,7 @@ class TestConvertMcpToolChoiceToOpenAI:
 
 class TestConvertImageAndAudioContent:
     def test_should_convert_image_to_data_uri(self):
-        content = SimpleNamespace(type="image", data="aGVsbG8=", mimeType="image/jpeg")
+        content = SimpleNamespace(type="image", data="aGVsbG8=", mime_type="image/jpeg")
         result = _convert_single_content(content)
         assert result == {
             "type": "image_url",
@@ -159,20 +159,20 @@ class TestConvertImageAndAudioContent:
         }
 
     def test_should_map_audio_mime_to_format(self):
-        content = SimpleNamespace(type="audio", data="Zm9v", mimeType="audio/mp3")
+        content = SimpleNamespace(type="audio", data="Zm9v", mime_type="audio/mp3")
         result = _convert_single_content(content)
         assert result["type"] == "input_audio"
         assert result["input_audio"] == {"data": "Zm9v", "format": "mp3"}
 
     def test_should_default_unknown_audio_mime_to_wav(self):
-        content = SimpleNamespace(type="audio", data="Zm9v", mimeType="audio/weird")
+        content = SimpleNamespace(type="audio", data="Zm9v", mime_type="audio/weird")
         result = _convert_single_content(content)
         assert result["input_audio"]["format"] == "wav"
 
     def test_should_flatten_list_content(self):
         items = [
             SimpleNamespace(type="text", text="a"),
-            SimpleNamespace(type="image", data="x", mimeType="image/png"),
+            SimpleNamespace(type="image", data="x", mime_type="image/png"),
         ]
         result = _convert_mcp_content_to_openai(items)
         assert isinstance(result, list)

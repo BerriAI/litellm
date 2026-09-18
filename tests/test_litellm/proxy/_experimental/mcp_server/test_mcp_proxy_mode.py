@@ -44,16 +44,28 @@ async def test_proxy_rejects_non_tool_protocol_operations() -> None:
     assert options.capabilities.resources is None
     assert options.capabilities.tools is not None
 
+    from types import SimpleNamespace
+
+    from mcp.server.context import ServerRequestContext
+    from mcp.types import GetPromptRequestParams, PaginatedRequestParams, ReadResourceRequestParams
+
+    ctx = ServerRequestContext(
+        session=SimpleNamespace(),
+        lifespan_context={},
+        protocol_version="2025-06-18",
+        method="",
+    )
+
     with pytest.raises(MCPError):
-        await server.list_prompts()
+        await server.list_prompts(ctx, PaginatedRequestParams())
     with pytest.raises(MCPError):
-        await server.get_prompt("prompt", {})
+        await server.get_prompt(ctx, GetPromptRequestParams(name="prompt", arguments={}))
     with pytest.raises(MCPError):
-        await server.list_resources()
+        await server.list_resources(ctx, PaginatedRequestParams())
     with pytest.raises(MCPError):
-        await server.list_resource_templates()
+        await server.list_resource_templates(ctx, PaginatedRequestParams())
     with pytest.raises(MCPError):
-        await server.read_resource(AnyUrl("https://example.com/resource"))
+        await server.read_resource(ctx, ReadResourceRequestParams(uri="https://example.com/resource"))
 
 
 class FailureRecorder(CustomLogger):

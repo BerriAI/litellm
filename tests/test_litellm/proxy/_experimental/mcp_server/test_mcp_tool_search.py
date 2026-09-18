@@ -85,6 +85,30 @@ FAKE_VECTORS: dict[str, Vector] = {
 }
 
 
+def _mcp_request_ctx(**overrides):
+    from types import SimpleNamespace
+
+    from mcp.server.context import ServerRequestContext
+
+    kwargs = {
+        "session": SimpleNamespace(),
+        "lifespan_context": {},
+        "protocol_version": "2025-06-18",
+        "method": "",
+        "params": None,
+        "request_id": 1,
+        "meta": None,
+        "request": None,
+    }
+    kwargs.update(overrides)
+    return ServerRequestContext(**kwargs)
+
+
+def _paged_params():
+    from mcp.types import PaginatedRequestParams
+
+    return PaginatedRequestParams()
+
 class RecordingEmbedder:
     def __init__(self) -> None:
         self.calls: list[tuple[str, ...]] = []
@@ -1146,25 +1170,23 @@ class TestDispatchVirtualMcpTool:
 class TestCaptureHostProgressCallback:
     """Covers the host progress-forwarding helper extracted from the tool call path."""
 
-    def test_returns_none_when_request_context_unavailable(self) -> None:
+    def test_returns_none_when_no_meta(self) -> None:
+        from types import SimpleNamespace
+
         from litellm.proxy._experimental.mcp_server.server import (
             _capture_host_progress_callback,
         )
 
-        class _NoCtx:
-            @property
-            def request_context(self):  # type: ignore[no-untyped-def]
-                raise RuntimeError("no context")
-
-        assert _capture_host_progress_callback(_NoCtx()) is None
+        assert _capture_host_progress_callback(SimpleNamespace(meta=None, session=object())) is None
 
     def test_returns_none_when_no_progress_token(self) -> None:
         from litellm.proxy._experimental.mcp_server.server import (
             _capture_host_progress_callback,
         )
 
-        host = MagicMock()
-        host.request_context.meta.progress_token = None
+        from types import SimpleNamespace
+
+        host = SimpleNamespace(meta=SimpleNamespace(progress_token=None), session=MagicMock())
         assert _capture_host_progress_callback(host) is None
 
     def test_returns_callable_when_token_present(self) -> None:
@@ -1172,9 +1194,9 @@ class TestCaptureHostProgressCallback:
             _capture_host_progress_callback,
         )
 
-        host = MagicMock()
-        host.request_context.meta.progress_token = "tok12345"
-        host.request_context.session = MagicMock()
+        from types import SimpleNamespace
+
+        host = SimpleNamespace(meta=SimpleNamespace(progress_token="tok12345"), session=MagicMock())
         assert callable(_capture_host_progress_callback(host))
 
     def test_returns_callable_when_token_is_integer(self) -> None:
@@ -1182,9 +1204,9 @@ class TestCaptureHostProgressCallback:
             _capture_host_progress_callback,
         )
 
-        host = MagicMock()
-        host.request_context.meta.progress_token = 12345
-        host.request_context.session = MagicMock()
+        from types import SimpleNamespace
+
+        host = SimpleNamespace(meta=SimpleNamespace(progress_token=12345), session=MagicMock())
         assert callable(_capture_host_progress_callback(host))
 
     def test_returns_callable_when_token_is_zero(self) -> None:
@@ -1192,9 +1214,9 @@ class TestCaptureHostProgressCallback:
             _capture_host_progress_callback,
         )
 
-        host = MagicMock()
-        host.request_context.meta.progress_token = 0
-        host.request_context.session = MagicMock()
+        from types import SimpleNamespace
+
+        host = SimpleNamespace(meta=SimpleNamespace(progress_token=0), session=MagicMock())
         assert callable(_capture_host_progress_callback(host))
 
     @pytest.mark.asyncio
@@ -1203,10 +1225,10 @@ class TestCaptureHostProgressCallback:
             _capture_host_progress_callback,
         )
 
-        host = MagicMock()
-        host.request_context.meta.progress_token = 12345
+        from types import SimpleNamespace
+
         session = AsyncMock()
-        host.request_context.session = session
+        host = SimpleNamespace(meta=SimpleNamespace(progress_token=12345), session=session)
 
         callback = _capture_host_progress_callback(host)
         assert callback is not None
@@ -1232,9 +1254,9 @@ class TestHandleListToolsVirtual:
             new_callable=AsyncMock,
             return_value=(uak, None, None, None, None, None, None),
         ):
-            tools = await srv.handle_list_tools()
+            result = await srv.handle_list_tools(_mcp_request_ctx(), _paged_params())
 
-        assert {t.name for t in tools} == {
+        assert {t.name for t in result.tools} == {
             MCP_TOOL_SEARCH_TOOL_NAME,
             MCP_TOOL_CALL_TOOL_NAME,
             AGENT_SEARCH_TOOL_NAME,
@@ -1265,9 +1287,14 @@ class TestMcpServerToolCallErrorHandling:
                 side_effect=HTTPException(status_code=403, detail="User not allowed to call this tool"),
             ),
         ):
+            from mcp.types import CallToolRequestParams
+
             result = await srv.mcp_server_tool_call(
-                name=MCP_TOOL_CALL_TOOL_NAME,
-                arguments={"tool_name": "other-server-tool", "arguments": {}},
+                _mcp_request_ctx(),
+                CallToolRequestParams(
+                    name=MCP_TOOL_CALL_TOOL_NAME,
+                    arguments={"tool_name": "other-server-tool", "arguments": {}},
+                ),
             )
 
         assert result.is_error is True
