@@ -1122,7 +1122,7 @@ class _RefusingTranslation:
         deliver_ended_stream_rewrites=False,
     ):
         responses_so_far[0]["text"] = "half-written"
-        raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name)
+        raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name, "the translation refused it")
 
 
 def _chunk():
@@ -1143,10 +1143,22 @@ async def _run_streaming_step(translation, streaming_chunks=None):
     )
 
 
-def _assert_passed_with_discard_warning(result, caplog):
+NO_WRITE_BACK_REASON = "this endpoint's streaming pipeline does not write ended-stream rewrites back yet"
+
+
+def _assert_passed_with_discard_warning(result, caplog, reason):
     assert result.terminal_action == "allow"
     assert [step.outcome for step in result.step_results] == ["pass"]
-    assert any("'masker'" in record.getMessage() and "discarded" in record.getMessage() for record in caplog.records)
+    discard_warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+        and "'masker'" in record.getMessage()
+        and "discarded" in record.getMessage()
+    ]
+    assert len(discard_warnings) == 1
+    assert reason in discard_warnings[0]
+    assert "text rewrites included" in discard_warnings[0]
     assert "masker" not in ((result.modified_data or {}).get("metadata") or {}).get("applied_guardrails", [])
 
 
@@ -1159,7 +1171,7 @@ async def test_streaming_step_discards_text_rewrite_when_translation_lacks_write
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         result = await _run_streaming_step(translation, chunks)
 
-    _assert_passed_with_discard_warning(result, caplog)
+    _assert_passed_with_discard_warning(result, caplog, NO_WRITE_BACK_REASON)
     assert chunks == [_chunk()]
     assert translation.seen_guardrail_names == ["masker"]
 
@@ -1196,7 +1208,7 @@ async def test_streaming_step_in_place_rewrite_is_discarded_without_write_back(m
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         result = await _run_streaming_step(_TextTranslation(), chunks)
 
-    _assert_passed_with_discard_warning(result, caplog)
+    _assert_passed_with_discard_warning(result, caplog, NO_WRITE_BACK_REASON)
     assert chunks == [_chunk()]
 
 
@@ -1258,7 +1270,9 @@ async def test_streaming_step_discards_whole_rewrite_when_guardrail_drops_a_tool
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         result = await _run_streaming_step(_WritingTranslation(), chunks)
 
-    _assert_passed_with_discard_warning(result, caplog)
+    _assert_passed_with_discard_warning(
+        result, caplog, "the guardrail returned 0 tool calls for a stream that carried 1"
+    )
     assert chunks == [_chunk()]
 
 
@@ -1270,7 +1284,7 @@ async def test_streaming_step_discards_tool_call_rewrite_when_translation_lacks_
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         result = await _run_streaming_step(_TextTranslation(), chunks)
 
-    _assert_passed_with_discard_warning(result, caplog)
+    _assert_passed_with_discard_warning(result, caplog, NO_WRITE_BACK_REASON)
     assert chunks == [_chunk()]
 
 
@@ -1326,7 +1340,7 @@ async def test_streaming_step_restores_chunks_when_translation_refuses_the_rewri
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         result = await _run_streaming_step(_RefusingTranslation(), chunks)
 
-    _assert_passed_with_discard_warning(result, caplog)
+    _assert_passed_with_discard_warning(result, caplog, "the translation refused it")
     assert chunks == [_chunk()]
 
 
@@ -1561,7 +1575,7 @@ async def test_streaming_step_discards_legacy_rewrite_whose_texts_do_not_line_up
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks)
 
-    _assert_passed_with_discard_warning(result, caplog)
+    _assert_passed_with_discard_warning(result, caplog, "the legacy hook returned 2 texts for a stream that carried 1")
     assert chunks == [_chunk()]
 
 
@@ -1576,7 +1590,7 @@ async def test_streaming_step_discards_legacy_rewrite_that_changes_a_tool_call(m
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks)
 
-    _assert_passed_with_discard_warning(result, caplog)
+    _assert_passed_with_discard_warning(result, caplog, "the legacy hook changed a tool call's name or arguments")
     assert chunks == [_chunk()]
 
 
@@ -1588,7 +1602,9 @@ async def test_streaming_step_discards_legacy_rewrite_that_drops_the_tool_calls(
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks)
 
-    _assert_passed_with_discard_warning(result, caplog)
+    _assert_passed_with_discard_warning(
+        result, caplog, "the legacy hook returned 0 tool calls for a stream that carried 1"
+    )
     assert chunks == [_chunk()]
 
 
@@ -1620,7 +1636,7 @@ async def test_streaming_step_discards_a_legacy_tool_call_rewrite_on_a_tool_only
             monkeypatch, guardrail, chunks, translation=_ToolOnlyLegacyScanningTranslation()
         )
 
-    _assert_passed_with_discard_warning(result, caplog)
+    _assert_passed_with_discard_warning(result, caplog, "the legacy hook changed a tool call's name or arguments")
     assert chunks == [_tool_only_chunk()]
 
 
@@ -1658,7 +1674,7 @@ async def test_streaming_step_discards_a_legacy_rewrite_the_translation_cannot_r
 
     result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks, translation=_UnscannableRewriteTranslation())
 
-    _assert_passed_with_discard_warning(result, caplog)
+    _assert_passed_with_discard_warning(result, caplog, "the legacy hook's response could not be rescanned")
     assert chunks == [_chunk()]
 
 
