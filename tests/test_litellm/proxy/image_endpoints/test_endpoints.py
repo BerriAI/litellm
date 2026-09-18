@@ -4,7 +4,7 @@ import io
 import logging
 from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any, Dict, Protocol
 
 import orjson
 import pytest
@@ -454,6 +454,43 @@ def test_string_image_upload_rejected(monkeypatch):
         )
         assert response.status_code == 422, field
         assert "multipart file upload" in response.text
+
+
+class _JSONResponse(Protocol):
+    @property
+    def status_code(self) -> int: ...
+
+    def json(self) -> Mapping[str, object]: ...
+
+
+class _JSONClient(Protocol):
+    def post(self, url: str, *, json: Mapping[str, object]) -> _JSONResponse: ...
+
+
+def _post_image_edit_json(client: _JSONClient, payload: Mapping[str, object]) -> _JSONResponse:
+    return client.post("/v1/images/edits", json=payload)
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("image", ["not-a-file"]),
+        ("image[]", ["not-a-file"]),
+        ("mask", "not-a-file"),
+        ("mask[]", "not-a-file"),
+    ],
+)
+def test_json_string_file_fields_rejected(
+    monkeypatch: pytest.MonkeyPatch, field: str, value: str | list[str]
+) -> None:
+    captured: Dict[str, object] = {}
+    response = _post_image_edit_json(
+        _image_edit_client(monkeypatch, captured),
+        {"model": "openai/gpt-image-2", "prompt": "hi", field: value},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == f"'{field}' must be provided as a multipart file upload, not a string."
+    assert captured == {}
 
 
 def test_numeric_coercion_preserved_with_file_upload(monkeypatch):

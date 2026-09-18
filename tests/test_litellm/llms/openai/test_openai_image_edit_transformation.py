@@ -1,7 +1,8 @@
 from io import BufferedReader, BytesIO
-from typing import Dict
+from typing import Dict, Mapping, Protocol
 
 import pytest
+from httpx._types import RequestFiles
 
 from litellm import image_edit
 from litellm.images.utils import ImageEditRequestUtils
@@ -368,3 +369,42 @@ def test_transform_image_edit_request_falls_back_when_bytesio_name_missing(
         headers={},
     )
     assert files[0][1][0] == "image.png"
+
+
+class _ImageEditTransformer(Protocol):
+    def transform_image_edit_request(
+        self,
+        model: str,
+        prompt: str | None,
+        image: BytesIO | bytes,
+        image_edit_optional_request_params: dict[str, object],
+        litellm_params: GenericLiteLLMParams,
+        headers: dict[str, str],
+    ) -> tuple[Mapping[str, object], RequestFiles]: ...
+
+
+@pytest.mark.parametrize("name", ["", 7], ids=["empty-name", "integer-name"])
+@pytest.mark.parametrize("field", ["image", "mask"])
+def test_transform_image_edit_request_falls_back_when_bytesio_name_invalid(
+    image_edit_config: _ImageEditTransformer, name: str | int, field: str
+) -> None:
+    image_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+    buf = BytesIO(image_bytes)
+    buf.name = name
+    data, files = image_edit_config.transform_image_edit_request(
+        model="gpt-image-2",
+        prompt="hi",
+        image=buf if field == "image" else b"fake_image_data",
+        image_edit_optional_request_params={"mask": buf} if field == "mask" else {},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert "image" not in data
+    assert "mask" not in data
+    assert isinstance(files, list)
+    file_entry = next(f for f in files if f[0] == ("image[]" if field == "image" else "mask"))
+    assert isinstance(file_entry[1], tuple) and len(file_entry[1]) == 3
+    assert file_entry[1][0] == f"{field}.png"
+    assert file_entry[1][1] is buf
+    assert buf.read() == image_bytes
+    assert file_entry[1][2] == "image/png"
