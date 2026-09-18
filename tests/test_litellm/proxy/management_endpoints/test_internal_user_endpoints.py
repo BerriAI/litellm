@@ -2096,24 +2096,12 @@ def test_get_users_filters_by_partial_user_alias(mocker):
         "created_at": datetime.now(timezone.utc),
         "updated_at": datetime.now(timezone.utc),
     }
-    find_many_wheres = []
-    count_wheres = []
-
-    async def mock_find_many(*args, **kwargs):
-        find_many_wheres.append(kwargs["where"])
-        return [mock_user_row]
-
-    async def mock_count(*args, **kwargs):
-        count_wheres.append(kwargs["where"])
-        return 1
-
-    async def mock_key_count(*args, **kwargs):
-        return 0
-
     mock_prisma_client = mocker.MagicMock()
-    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
-    mock_prisma_client.db.litellm_usertable.count = mock_count
-    mock_prisma_client.db.litellm_verificationtoken.count = mock_key_count
+    find_many: Final = mocker.AsyncMock(return_value=[mock_user_row])
+    count: Final = mocker.AsyncMock(return_value=1)
+    mock_prisma_client.db.litellm_usertable.find_many = find_many
+    mock_prisma_client.db.litellm_usertable.count = count
+    mock_prisma_client.db.litellm_verificationtoken.count = mocker.AsyncMock(return_value=0)
     mocker.patch(  # test-quality-ok: /user/list reads prisma_client off proxy_server at call time
         "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
     )
@@ -2121,24 +2109,24 @@ def test_get_users_filters_by_partial_user_alias(mocker):
         user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
     )
     try:
-        alias_response = client.get("/user/list", params={"user_alias": "jane DOE"})
+        alias_response: Final = client.get("/user/list", params={"user_alias": "jane DOE"})
         assert alias_response.status_code == 200, alias_response.text
-        alias_where = {"user_alias": {"contains": "jane DOE", "mode": "insensitive"}}
-        assert find_many_wheres == [alias_where]
-        assert count_wheres == [alias_where]
-        assert [user["user_id"] for user in alias_response.json()["users"]] == [aliased_user_id]
+        alias_where: Final = {"user_alias": {"contains": "jane DOE", "mode": "insensitive"}}
+        assert find_many.call_args.kwargs["where"] == alias_where
+        assert count.call_args.kwargs["where"] == alias_where
+        assert tuple(user["user_id"] for user in alias_response.json()["users"]) == (aliased_user_id,)
         assert alias_response.json()["total"] == 1
 
-        combined_response = client.get("/user/list", params={"user_alias": "jane", "role": "internal_user"})
+        combined_response: Final = client.get("/user/list", params={"user_alias": "jane", "role": "internal_user"})
         assert combined_response.status_code == 200, combined_response.text
-        assert find_many_wheres[-1] == {
+        assert find_many.call_args.kwargs["where"] == {
             "user_role": "internal_user",
             "user_alias": {"contains": "jane", "mode": "insensitive"},
         }
 
-        empty_response = client.get("/user/list", params={"user_alias": ""})
+        empty_response: Final = client.get("/user/list", params={"user_alias": ""})
         assert empty_response.status_code == 200, empty_response.text
-        assert find_many_wheres[-1] == {}
+        assert find_many.call_args.kwargs["where"] == {}
     finally:
         app.dependency_overrides.pop(user_api_key_auth, None)
 
