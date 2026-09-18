@@ -844,7 +844,11 @@ def _select_model_name_for_cost_calc(
         provider_prefix: Final = (
             custom_llm_provider if priced_region is None else f"{custom_llm_provider}/{priced_region}"
         )
-        return_model = _strip_unregistered_leading_segments(f"{provider_prefix}/{return_model}", priced_region)
+        prefixed_model: Final = _strip_unregistered_leading_segments(f"{provider_prefix}/{return_model}", priced_region)
+        if not (
+            base_model is not None and prefixed_model not in litellm.model_cost and return_model in litellm.model_cost
+        ):  # base_model is an explicit cost key; keep it verbatim when the prefixed form is unregistered (#41780)
+            return_model = prefixed_model
 
     return return_model
 
@@ -1716,7 +1720,7 @@ def completion_cost(
                     model=model,
                     prompt_tokens=prompt_tokens or 0,
                     completion_tokens=completion_tokens or 0,
-                    custom_llm_provider=custom_llm_provider,
+                    custom_llm_provider=None if base_model is not None else custom_llm_provider,
                     response_time_ms=total_time,
                     region_name=None if explicit_pricing else region_name,
                     custom_cost_per_second=custom_cost_per_second,
