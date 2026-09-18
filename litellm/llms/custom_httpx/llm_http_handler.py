@@ -6742,6 +6742,7 @@ class BaseLLMHTTPHandler:
                     output_guardrail_callbacks=_ws_output_guardrail_callbacks,
                     quota_callbacks=_ws_quota_callbacks,
                     authorized_model=model,
+                    custom_llm_provider=custom_llm_provider,
                 )
                 await streaming.bidirectional_forward()
 

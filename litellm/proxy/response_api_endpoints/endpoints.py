@@ -11,10 +11,12 @@ import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from openai.types.responses.response_create_params import ResponseInputParam
+from pydantic import BaseModel, ConfigDict, ValidationError
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_responses_api_usage as _blocked_responses_api_usage,
@@ -1289,7 +1291,8 @@ async def cancel_response(
 
 async def _read_ws_model_from_first_frame(
     websocket: WebSocket,
-) -> tuple | None:
+    query_model: str | None = None,
+) -> tuple[str, str] | None:
     """Read the first WS frame and return (model, raw_message), or None on error.
 
     Sends an appropriate error frame and closes the socket before returning None.
@@ -1338,7 +1341,7 @@ async def _read_ws_model_from_first_frame(
         await websocket.close(code=1008, reason="Invalid first message")
         return None
 
-    model: Final = _extract_model_from_first_ws_event(first_event)
+    model: Final = query_model or _extract_model_from_first_ws_event(first_event)
     if not model:
         await websocket.send_text(
             json.dumps(
@@ -1367,6 +1370,29 @@ def _extract_model_from_first_ws_event(first_event: Any) -> str | None:
         return None
     nested: Final = first_event.get("response")
     return (nested.get("model") if isinstance(nested, dict) else None) or first_event.get("model")
+
+
+class _ResponseCreateRoutingHints(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    input: str | list[object] | None = None
+    previous_response_id: str | None = None
+    response: "_ResponseCreateRoutingHints | None" = None
+
+
+def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, object]:
+    try:
+        frame: Final = _ResponseCreateRoutingHints.model_validate_json(first_message)
+    except ValidationError:
+        return EMPTY_MAPPING
+    nested: Final = frame.response or frame
+    hints: Final = {
+        "input": frame.input if nested.input is None else nested.input,
+        "previous_response_id": (
+            frame.previous_response_id if nested.previous_response_id is None else nested.previous_response_id
+        ),
+    }
+    return MappingProxyType({key: value for key, value in hints.items() if value is not None})
 
 
 async def _enforce_responses_ws_first_frame_model_auth(
@@ -1455,19 +1481,16 @@ async def responses_websocket_endpoint(
         accept_kwargs["subprotocol"] = requested_protocols[0]
     await websocket.accept(**accept_kwargs)
 
-    first_message: str | None = None
-    if not model:
-        result: Final = await _read_ws_model_from_first_frame(websocket)
-        if result is None:
-            return
-        model, first_message = result
+    result: Final = await _read_ws_model_from_first_frame(websocket, query_model=model)
+    if result is None:
+        return
+    resolved_model, first_message = result
 
     data: dict[str, object] = {
-        "model": model,
+        "model": resolved_model,
         "websocket": websocket,
+        "first_message": first_message,
     }
-    if first_message is not None:
-        data["first_message"] = first_message
 
     # Construct a synthetic Request for pre-call processing
     headers_list: Final = list(websocket.scope.get("headers") or [])
@@ -1480,7 +1503,7 @@ async def responses_websocket_endpoint(
     request: Final = Request(scope=scope)
     request._url = websocket.url
 
-    _body_bytes: Final = json.dumps({"model": model}).encode()
+    _body_bytes: Final = json.dumps({"model": resolved_model}).encode()
 
     async def return_body():
         return _body_bytes
@@ -1490,10 +1513,10 @@ async def responses_websocket_endpoint(
     # Phase 1: pre-call processing (auth, guardrails, rate limits)
     base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        if first_message is not None:
+        if not model:
             await _enforce_responses_ws_first_frame_model_auth(
                 request=request,
-                model=model,
+                model=resolved_model,
                 user_api_key_dict=user_api_key_dict,
                 llm_router=llm_router,
             )
@@ -1512,7 +1535,7 @@ async def responses_websocket_endpoint(
             user_request_timeout=user_request_timeout,
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
-            model=model,
+            model=resolved_model,
             route_type="_aresponses_websocket",
         )
     except Exception as e:
@@ -1537,6 +1560,7 @@ async def responses_websocket_endpoint(
     # Phase 2: route to upstream provider
     try:
         data["user_api_key_dict"] = user_api_key_dict
+        data.update(_routing_hints_from_first_ws_frame(first_message))
         llm_call: Final = await route_request(
             data=data,
             route_type="_aresponses_websocket",

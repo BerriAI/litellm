@@ -225,6 +225,29 @@ def _status_code_for_error_fields(error_type: str | None, error_code: str | None
     )
 
 
+def _map_stream_error_to_exception(error_obj: object, model: str, custom_llm_provider: str) -> Exception:
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    error_message, error_type, error_code = _error_event_fields(error_obj)
+    status_code: Final = _status_code_for_error_fields(error_type, error_code)
+    error_body: Final = {"message": error_message, "type": error_type, "code": error_code}
+    provider_exception: Final = BaseLLMException(
+        status_code=status_code,
+        message=f"Error code: {status_code} - {{'error': {error_body}}}",
+        body=error_body,
+    )
+    try:
+        return litellm.exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=provider_exception,
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    except Exception as mapped_exception:
+        return mapped_exception
+
+
 def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
     if isinstance(mapped_exception, litellm.ContentPolicyViolationError):
         return True
@@ -588,26 +611,7 @@ class BaseResponsesAPIStreamingIterator:
         )
 
     def _map_error_event_exception(self, error_obj: object) -> Exception:
-        from litellm.llms.base_llm.chat.transformation import BaseLLMException
-
-        error_message, error_type, error_code = _error_event_fields(error_obj)
-        status_code: Final = _status_code_for_error_fields(error_type, error_code)
-        error_body: Final = {"message": error_message, "type": error_type, "code": error_code}
-        provider_exception: Final = BaseLLMException(
-            status_code=status_code,
-            message=f"Error code: {status_code} - {{'error': {error_body}}}",
-            body=error_body,
-        )
-        try:
-            return litellm.exception_type(
-                model=self.model or "",
-                custom_llm_provider=self.custom_llm_provider or "",
-                original_exception=provider_exception,
-                completion_kwargs={},
-                extra_kwargs={},
-            )
-        except Exception as mapped_exception:
-            return mapped_exception
+        return _map_stream_error_to_exception(error_obj, self.model or "", self.custom_llm_provider or "")
 
     def _maybe_raise_for_error_event(self, result: object) -> None:
         chunk_type: Final = getattr(result, "type", None)
@@ -1691,6 +1695,65 @@ RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
 
 RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES: Final = frozenset({"input_text", "output_text", "text"})
 
+_RESPONSES_WS_FAILURE_EVENT_TYPES: Final = frozenset({"error", "response.failed"})
+
+_RESPONSES_WS_OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
+
+
+def _ws_event_error(event: _MutableJsonObject) -> object:
+    if event.get("type") == "error":
+        return event.get("error")
+    response: Final = event.get("response")
+    return response.get("error") if _is_json_object(response) else None
+
+
+def _item_id_fields(item: object) -> tuple[object, object]:
+    return (item.get("id"), item.get("encrypted_content")) if _is_json_object(item) else (None, None)
+
+
+def _restore_input_item_ids(items: list[object]) -> bool:
+    before: Final = tuple(_item_id_fields(item) for item in items)
+    ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(items)  # pyright: ignore[reportPrivateUsage]  # same restore the HTTP responses path runs
+    return before != tuple(_item_id_fields(item) for item in items)
+
+
+def _restore_wrapped_ids_in_container(container: _MutableJsonObject) -> bool:
+    input_items: Final = container.get("input")
+    input_restored: Final = _is_json_array(input_items) and _restore_input_item_ids(input_items)
+    previous_response_id: Final = container.get("previous_response_id")
+    if not isinstance(previous_response_id, str):
+        return input_restored
+    original_previous_response_id: Final = (
+        ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(previous_response_id)
+    )
+    if original_previous_response_id == previous_response_id:
+        return input_restored
+    container["previous_response_id"] = original_previous_response_id
+    return True
+
+
+def _restore_wrapped_ids_in_response_create(msg_obj: _MutableJsonObject) -> bool:
+    nested: Final = msg_obj.get("response")
+    containers: Final = (msg_obj, nested) if _is_json_object(nested) else (msg_obj,)
+    restored: Final = tuple(_restore_wrapped_ids_in_container(container) for container in containers)
+    return any(restored)
+
+
+def _wrap_output_item_encrypted_content(event_obj: _MutableJsonObject, litellm_metadata: dict[str, object]) -> bool:
+    if not litellm_metadata.get("encrypted_content_affinity_enabled"):
+        return False
+    model_id: Final = _model_id_from_metadata(litellm_metadata)
+    item: Final = event_obj.get("item")
+    if model_id is None or not _is_json_object(item):
+        return False
+    encrypted_content: Final = item.get("encrypted_content")
+    if not isinstance(encrypted_content, str) or not encrypted_content:
+        return False
+    item["encrypted_content"] = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(  # pyright: ignore[reportPrivateUsage]  # same wrap the HTTP streaming path applies
+        encrypted_content=encrypted_content, model_id=model_id
+    )
+    return True
+
 
 class ResponsesWebSocketStreaming:
     """
@@ -1717,12 +1780,16 @@ class ResponsesWebSocketStreaming:
         output_guardrail_callbacks: list[PresidioGuardrailCallback] | None = None,
         quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
         authorized_model: str | None = None,
+        custom_llm_provider: str | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
         self.request_data: dict[str, object] = request_data or {}
+        litellm_metadata: Final = self.request_data.get("litellm_metadata")
+        self.litellm_metadata: dict[str, object] = litellm_metadata if _is_json_object(litellm_metadata) else {}
+        self.custom_llm_provider: str | None = custom_llm_provider
         self.messages: list[_MutableJsonObject] = []
         self.input_messages: list[dict[str, object]] = []
         self.first_message = first_message
@@ -1795,8 +1862,55 @@ class ResponsesWebSocketStreaming:
             return
         if self.input_messages:
             self.logging_obj.model_call_details["messages"] = self.input_messages
-        if self.messages:
+        if not self.messages:
+            return
+        failed_event: Final = next(
+            (event for event in self.messages if event.get("type") in _RESPONSES_WS_FAILURE_EVENT_TYPES), None
+        )
+        if failed_event is None:
             asyncio.create_task(self.logging_obj.dispatch_success_handlers(self.messages, prefer_async_handlers=True))
+            return
+        self._record_usage_for_failure()
+        exception: Final = _map_stream_error_to_exception(
+            _ws_event_error(failed_event), self.authorized_model or "", self.custom_llm_provider or ""
+        )
+        traceback_exception: Final = "".join(traceback.format_exception(exception))
+        asyncio.create_task(
+            self.logging_obj.dispatch_failure_handlers(exception, traceback_exception, prefer_async_handlers=True)
+        )
+
+    def _record_usage_for_failure(self) -> None:
+        from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor
+        from litellm.types.utils import LiteLLMRealtimeStreamLoggingObject
+
+        usage: Final = ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(
+            self.messages
+        )
+        tier_partition: Final = ResponsesWebSocketTokenUsageProcessor.partition_results_by_service_tier(self.messages)
+        service_tier: Final = next(iter(tier_partition)) if len(tier_partition) == 1 else None
+        logging_result: Final = LiteLLMRealtimeStreamLoggingObject(
+            usage=usage, results=self.messages, service_tier=service_tier
+        )
+        response_cost: Final = self.logging_obj._response_cost_calculator(result=logging_result) or 0.0  # pyright: ignore[reportPrivateUsage]  # as the HTTP streaming iterator does
+        self.logging_obj.record_partial_usage_for_failure(usage, response_cost)
+
+    def _wrap_response_event(self, response_str: str) -> str:
+        try:
+            event_obj: Final = _load_json_object(response_str)
+        except (json.JSONDecodeError, TypeError):
+            return response_str
+        response: Final = event_obj.get("response")
+        if _is_json_object(response):
+            event_obj["response"] = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(  # pyright: ignore[reportPrivateUsage]  # same wrap the HTTP streaming path applies
+                responses_api_response=response,
+                custom_llm_provider=self.custom_llm_provider,
+                litellm_metadata=self.litellm_metadata,
+            )
+            return json.dumps(event_obj)
+        if event_obj.get("type") not in _RESPONSES_WS_OUTPUT_ITEM_EVENT_TYPES:
+            return response_str
+        item_wrapped: Final = _wrap_output_item_encrypted_content(event_obj, self.litellm_metadata)
+        return json.dumps(event_obj) if item_wrapped else response_str
 
     async def backend_to_client(self) -> None:
         """Forward events from backend WebSocket to the client."""
@@ -1833,12 +1947,13 @@ class ResponsesWebSocketStreaming:
 
                 unmasked_str = self._unmask_response_event(response_str)
                 output_masked_str = await self._mask_response_completed(unmasked_str)
+                wrapped_str = self._wrap_response_event(output_masked_str)
 
                 # Log the output-masked form so PII redacted by apply_to_output
                 # guardrails does not appear in success logs.
-                self._store_event(output_masked_str)
+                self._store_event(wrapped_str)
 
-                await self.websocket.send_text(output_masked_str)
+                await self.websocket.send_text(wrapped_str)
 
         except websockets.exceptions.ConnectionClosed as e:
             verbose_logger.debug("Responses WS backend connection closed: %s", e)
@@ -1898,14 +2013,16 @@ class ResponsesWebSocketStreaming:
 
         # Always enforce the authorized model, even when PII masking is off.
         model_modified: Final = self._enforce_authorized_model(msg_obj)
+        ids_restored: Final = _restore_wrapped_ids_in_response_create(msg_obj)
+        frame_modified: Final = model_modified or ids_restored
 
         if not self.guardrail_callbacks:
-            return json.dumps(msg_obj) if model_modified else message
+            return json.dumps(msg_obj) if frame_modified else message
 
         if "metadata" not in self.request_data:
             self.request_data["metadata"] = {}
 
-        modified = model_modified
+        modified = frame_modified
         guardrail_cbs: Final[tuple[PresidioGuardrailCallback, ...]] = tuple(self.guardrail_callbacks)
         for cb in guardrail_cbs:
             presidio_config = cb.get_presidio_settings_from_request_data(self.request_data)
