@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
@@ -14,6 +14,7 @@ import RoutingGroupsTable from "./RoutingGroupsTable";
 import RoutingGroupModal from "./RoutingGroupModal";
 import { toast } from "@/lib/toast";
 import type { RoutingGroup } from "./types";
+import { useExpandedRoutingGroups, useRoutingGroupsSearchUrlState } from "./routingGroupsUrlState";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const RoutingGroups: React.FC = () => {
@@ -24,13 +25,21 @@ const RoutingGroups: React.FC = () => {
   const proxySettings = useProxySettings(accessToken);
   const saveMutation = useSaveRoutingGroups();
 
-  const [searchQuery, setSearchQuery] = useState("");
+  const [{ group_search: searchQuery }, setSearchState] = useRoutingGroupsSearchUrlState();
+  const [expandedGroups, setExpandedGroups] = useExpandedRoutingGroups();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<"create" | "edit">("create");
   const [editingGroup, setEditingGroup] = useState<RoutingGroup | null>(null);
   const [deletingGroup, setDeletingGroup] = useState<RoutingGroup | null>(null);
 
-  const groups = data?.routingGroups ?? [];
+  const loadedGroups = data?.routingGroups;
+  const groups = loadedGroups ?? [];
+
+  useEffect(() => {
+    if (!loadedGroups) return;
+    const existing = expandedGroups.filter((name) => loadedGroups.some((group) => group.group_name === name));
+    if (existing.length !== expandedGroups.length) void setExpandedGroups(existing);
+  }, [loadedGroups, expandedGroups, setExpandedGroups]);
 
   const filteredGroups = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -56,6 +65,8 @@ const RoutingGroups: React.FC = () => {
     const names = records.map((r) => r.model_group).filter((n): n is string => Boolean(n));
     return Array.from(new Set(names));
   }, [modelHub]);
+
+  const setSearchQuery = (value: string) => void setSearchState({ group_search: value || null, page: null });
 
   const openCreate = () => {
     setDrawerMode("create");

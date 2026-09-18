@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { Info, TriangleAlert } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { useBaseUrl } from "@/components/constants";
@@ -409,12 +410,16 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
       children: <PluginSettings />,
     },
   ];
+  const [activeTab, setActiveTab] = useUrlTab(
+    tabItems.map((item) => item.key),
+    tabItems[0].key,
+  );
 
   return (
     <div className="w-full m-2 mt-2 p-8">
       <h2 className="mb-2 text-base font-semibold text-foreground">Admin Access</h2>
       <p className="mb-4 text-sm text-foreground">Go to &apos;Internal Users&apos; page to add other admins.</p>
-      <Tabs defaultValue={tabItems[0].key}>
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList variant="line" className="mb-4 h-auto flex-wrap">
           {tabItems.map((item) => (
             <TabsTrigger key={item.key} value={item.key} className="flex-none">

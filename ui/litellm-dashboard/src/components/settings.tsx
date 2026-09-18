@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import EmailSettings from "./email_settings";
 import MSTeamsSettings from "./MSTeamsSettings";
 import { Logo } from "@/components/molecules/logo/Logo";
@@ -35,6 +36,7 @@ import {
 } from "./networking";
 import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
 import { AlertingObject } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
+import { useCallbackEditUrlState } from "./Settings/LoggingAndAlerts/LoggingCallbacks/useCallbackEditUrlState";
 import { parseErrorMessage } from "./shared/errorUtils";
 interface SettingsPageProps {
   accessToken: string | null;
@@ -46,6 +48,15 @@ interface SettingsPageProps {
 type CallbackFormValues = Record<string, string>;
 
 const assetsLogoFolder = "/ui/assets/logos/";
+
+const LOGGING_AND_ALERTS_TABS = [
+  "logging-callbacks",
+  "cloudzero-cost-tracking",
+  "alerting-types",
+  "alerting-settings",
+  "email-alerts",
+  "ms-teams-alerts",
+] as const;
 
 export const backendCallbackLogoSrc = (logo: string | null | undefined): string | undefined => {
   if (!logo) return undefined;
@@ -316,8 +327,12 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
 
   const [selectedCallbackParams, setSelectedCallbackParams] = useState<string[]>([]);
 
-  const [showEditCallback, setShowEditCallback] = useState(false);
-  const [selectedEditCallback, setSelectedEditCallback] = useState<any | null>(null);
+  const [activeTab, setActiveTab] = useUrlTab(LOGGING_AND_ALERTS_TABS, "logging-callbacks");
+  const {
+    editingCallback: selectedEditCallback,
+    openEdit: openEditCallback,
+    closeEdit: closeEditCallback,
+  } = useCallbackEditUrlState(callbacks, isLoadingCallbacks);
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [callbackToDelete, setCallbackToDelete] = useState<any | null>(null);
   const [isUpdatingCallback, setIsUpdatingCallback] = useState(false);
@@ -338,7 +353,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   }, [accessToken]);
 
   useEffect(() => {
-    if (showEditCallback && selectedEditCallback) {
+    if (selectedEditCallback) {
       const params = getDynamicParamsForCallback(
         selectedEditCallback.name,
         callbackConfigs,
@@ -354,7 +369,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         callback: selectedEditCallback.name,
       });
     }
-  }, [showEditCallback, selectedEditCallback, editForm, callbackConfigs]);
+  }, [selectedEditCallback, editForm, callbackConfigs]);
 
   const handleSwitchChange = (alertName: string) => {
     if (activeAlerts.includes(alertName)) {
@@ -432,9 +447,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       toast.success(isEdit ? "Callback updated successfully" : `Callback ${callbackName} added successfully`);
 
       if (isEdit) {
-        setShowEditCallback(false);
+        closeEditCallback();
         editForm.reset();
-        setSelectedEditCallback(null);
       } else {
         setShowAddCallbacksModal(false);
         addForm.reset();
@@ -491,8 +505,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   };
 
   const closeEditCallbackModal = () => {
-    setShowEditCallback(false);
-    setSelectedEditCallback(null);
+    closeEditCallback();
     editForm.reset();
   };
 
@@ -561,7 +574,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   return (
     <div className="mx-4">
       <div className="grid grid-cols-1 gap-2 p-8 w-full mt-2">
-        <Tabs defaultValue="logging-callbacks">
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList variant="line">
             <TabsTrigger value="logging-callbacks">Logging Callbacks</TabsTrigger>
             <TabsTrigger value="cloudzero-cost-tracking">CloudZero Cost Tracking</TabsTrigger>
@@ -576,10 +589,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               availableCallbacks={allCallbacks}
               isLoading={isLoadingCallbacks}
               onAdd={() => setShowAddCallbacksModal(true)}
-              onEdit={(cb) => {
-                setSelectedEditCallback(cb);
-                setShowEditCallback(true);
-              }}
+              onEdit={openEditCallback}
               onDelete={(cb) => handleDeleteCallback(cb)}
               onTest={async (cb) => {
                 try {
@@ -735,7 +745,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showEditCallback} onOpenChange={(open) => !open && closeEditCallbackModal()}>
+      <Dialog open={selectedEditCallback !== null} onOpenChange={(open) => !open && closeEditCallbackModal()}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
           <DialogHeader>
             <DialogTitle>Edit Callback Settings</DialogTitle>

@@ -2,6 +2,7 @@ import { useAccessGroupDetails } from "@/app/(dashboard)/hooks/accessGroups/useA
 import { AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
@@ -365,6 +366,45 @@ describe("AccessGroupDetail", () => {
       await user.click(screen.getByRole("tab", { name: /Agents/i }));
 
       expect(screen.getByText("No agents assigned to this group")).toBeInTheDocument();
+    });
+  });
+
+  describe("detail_tab URL state", () => {
+    it("opens the tab named in detail_tab", () => {
+      renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />, {
+        searchParams: "?detail_tab=agents",
+      });
+
+      expect(screen.getByRole("tab", { name: /Agents/i })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByText("Support Agent")).toBeInTheDocument();
+      expect(screen.queryByText("model-1")).not.toBeInTheDocument();
+    });
+
+    it("falls back to Models for an unknown detail_tab", () => {
+      renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />, {
+        searchParams: "?detail_tab=keys",
+      });
+
+      expect(screen.getByRole("tab", { name: /Models/i })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByText("model-1")).toBeInTheDocument();
+    });
+
+    it("writes the clicked tab to detail_tab and drops it for Models", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />, {
+        searchParams: "?group=ag-1",
+        onUrlUpdate,
+      });
+
+      await user.click(screen.getByRole("tab", { name: /MCP Servers/i }));
+      expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("detail_tab")).toBe("mcp");
+      expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("group")).toBe("ag-1");
+      expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("tab")).toBe(false);
+
+      await user.click(screen.getByRole("tab", { name: /Models/i }));
+      expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("detail_tab")).toBe(false);
+      expect(screen.getByText("model-1")).toBeInTheDocument();
     });
   });
 

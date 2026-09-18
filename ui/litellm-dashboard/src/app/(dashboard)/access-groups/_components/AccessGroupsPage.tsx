@@ -1,17 +1,24 @@
 import { AccessGroupResponse, useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { useDeleteAccessGroup } from "@/app/(dashboard)/hooks/accessGroups/useDeleteAccessGroup";
 import { Boxes, Plus, SearchIcon, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { parseAsString, useQueryStates } from "nuqs";
+import { useCallback, useMemo, useState } from "react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
+import { useUrlTableState } from "@/components/shared/DataTable";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
-import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
+import { ACCESS_GROUP_DETAIL_TAB_KEY, AccessGroupDetail } from "./AccessGroupsDetailsPage";
 import { AccessGroupCreateDialog } from "./access-group-create/AccessGroupCreateDialog";
-import { AccessGroupsTable } from "./AccessGroupsTable";
+import { ACCESS_GROUPS_TABLE_STATE, AccessGroupsTable } from "./AccessGroupsTable";
 import { AccessGroup } from "./types";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { isProxyAdminRole } from "@/utils/roles";
+
+const DETAIL_URL_STATE = {
+  group: parseAsString,
+  [ACCESS_GROUP_DETAIL_TAB_KEY]: parseAsString,
+};
 
 function mapResponseToAccessGroup(r: AccessGroupResponse): AccessGroup {
   return {
@@ -37,9 +44,9 @@ export function AccessGroupsPage() {
   const { data: groupsData, isLoading } = useAccessGroups();
   const groups = useMemo(() => (groupsData ?? []).map(mapResponseToAccessGroup), [groupsData]);
 
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [{ group: selectedGroupId }, setDetail] = useQueryStates(DETAIL_URL_STATE, { history: "push" });
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
-  const [searchText, setSearchText] = useState("");
+  const { search: searchText, setSearch: setSearchText } = useUrlTableState(ACCESS_GROUPS_TABLE_STATE);
   const [groupToDelete, setGroupToDelete] = useState<AccessGroup | null>(null);
   const deleteMutation = useDeleteAccessGroup();
 
@@ -54,8 +61,13 @@ export function AccessGroupsPage() {
     );
   }, [groups, searchText]);
 
+  const openGroup = useCallback(
+    (id: string) => void setDetail({ group: id, [ACCESS_GROUP_DETAIL_TAB_KEY]: null }),
+    [setDetail],
+  );
+
   if (selectedGroupId) {
-    return <AccessGroupDetail accessGroupId={selectedGroupId} onBack={() => setSelectedGroupId(null)} />;
+    return <AccessGroupDetail accessGroupId={selectedGroupId} onBack={() => void setDetail(null)} />;
   }
 
   return (
@@ -99,7 +111,7 @@ export function AccessGroupsPage() {
         isLoading={isLoading}
         isFiltered={searchText.trim().length > 0}
         canModify={canModify}
-        onGroupClick={setSelectedGroupId}
+        onGroupClick={openGroup}
         onDeleteClick={setGroupToDelete}
       />
 

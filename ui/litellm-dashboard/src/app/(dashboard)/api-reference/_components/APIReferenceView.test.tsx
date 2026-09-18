@@ -1,6 +1,7 @@
-import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { describe, expect, it, vi } from "vitest";
+import { renderWithProviders, screen } from "../../../../../tests/test-utils";
 import APIReferenceView from "./APIReferenceView";
 
 vi.mock("@/components/CodeBlock", () => ({
@@ -13,7 +14,7 @@ describe("APIReferenceView", () => {
 
   it("uses the API doc base url when provided", () => {
     const apiDocUrl = "https://docs.litellm.test";
-    render(<APIReferenceView proxySettings={{ LITELLM_UI_API_DOC_BASE_URL: apiDocUrl }} />);
+    renderWithProviders(<APIReferenceView proxySettings={{ LITELLM_UI_API_DOC_BASE_URL: apiDocUrl }} />);
 
     const codeBlocks = screen.getAllByTestId(codeBlockTestId);
     expect(codeBlocks[0]).toHaveTextContent(new RegExp(apiDocUrl));
@@ -21,7 +22,7 @@ describe("APIReferenceView", () => {
 
   it("falls back to the proxy base url when the docs url is missing", () => {
     const proxyUrl = "https://proxy.litellm.test";
-    render(<APIReferenceView proxySettings={{ PROXY_BASE_URL: proxyUrl }} />);
+    renderWithProviders(<APIReferenceView proxySettings={{ PROXY_BASE_URL: proxyUrl }} />);
 
     const codeBlocks = screen.getAllByTestId(codeBlockTestId);
     expect(codeBlocks[0]).toHaveTextContent(new RegExp(proxyUrl));
@@ -31,7 +32,7 @@ describe("APIReferenceView", () => {
     const apiDocUrl = "https://docs-preferred.litellm.test";
     const proxyUrl = "https://proxy-backup.litellm.test";
 
-    render(
+    renderWithProviders(
       <APIReferenceView
         proxySettings={{
           LITELLM_UI_API_DOC_BASE_URL: apiDocUrl,
@@ -47,7 +48,7 @@ describe("APIReferenceView", () => {
   });
 
   it("renders the page title, blurb and docs link", () => {
-    render(<APIReferenceView proxySettings={{ PROXY_BASE_URL: "https://proxy.litellm.test" }} />);
+    renderWithProviders(<APIReferenceView proxySettings={{ PROXY_BASE_URL: "https://proxy.litellm.test" }} />);
 
     expect(screen.getByText("OpenAI Compatible Proxy: API Reference")).toBeInTheDocument();
     expect(screen.getByText(/LiteLLM is OpenAI Compatible/)).toBeInTheDocument();
@@ -58,7 +59,7 @@ describe("APIReferenceView", () => {
   });
 
   it("exposes the three SDK tabs with the first selected by default", () => {
-    render(<APIReferenceView proxySettings={{ PROXY_BASE_URL: "https://proxy.litellm.test" }} />);
+    renderWithProviders(<APIReferenceView proxySettings={{ PROXY_BASE_URL: "https://proxy.litellm.test" }} />);
 
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       "OpenAI Python SDK",
@@ -79,7 +80,7 @@ describe("APIReferenceView", () => {
   ])("selecting %s shows its snippet wired to the base url", async (tabName, marker) => {
     const proxyUrl = "https://proxy.litellm.test";
     const user = userEvent.setup();
-    render(<APIReferenceView proxySettings={{ PROXY_BASE_URL: proxyUrl }} />);
+    renderWithProviders(<APIReferenceView proxySettings={{ PROXY_BASE_URL: proxyUrl }} />);
 
     await user.click(screen.getByRole("tab", { name: tabName }));
 
@@ -88,5 +89,38 @@ describe("APIReferenceView", () => {
     const selectedPanel = screen.getByRole("tabpanel");
     expect(selectedPanel).toHaveTextContent(new RegExp(marker));
     expect(selectedPanel).toHaveTextContent(new RegExp(proxyUrl));
+  });
+
+  it("opens the SDK named in the URL", () => {
+    renderWithProviders(<APIReferenceView proxySettings={{ PROXY_BASE_URL: "https://proxy.litellm.test" }} />, {
+      searchParams: "?sdk=langchain",
+    });
+
+    expect(screen.getByRole("tab", { name: "Langchain Py" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel")).toHaveTextContent(/from langchain.chat_models import ChatOpenAI/);
+  });
+
+  it("falls back to the OpenAI SDK for an unknown sdk in the URL", () => {
+    renderWithProviders(<APIReferenceView proxySettings={{ PROXY_BASE_URL: "https://proxy.litellm.test" }} />, {
+      searchParams: "?sdk=rust",
+    });
+
+    expect(screen.getByRole("tab", { name: "OpenAI Python SDK" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel")).toHaveTextContent(/import openai/);
+  });
+
+  it("writes the selected SDK to the URL and removes it for the default SDK", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<APIReferenceView proxySettings={{ PROXY_BASE_URL: "https://proxy.litellm.test" }} />, {
+      onUrlUpdate,
+    });
+
+    await user.click(screen.getByRole("tab", { name: "LlamaIndex" }));
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("sdk")).toBe("llamaindex");
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("tab")).toBe(false);
+
+    await user.click(screen.getByRole("tab", { name: "OpenAI Python SDK" }));
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("sdk")).toBe(false);
   });
 });
