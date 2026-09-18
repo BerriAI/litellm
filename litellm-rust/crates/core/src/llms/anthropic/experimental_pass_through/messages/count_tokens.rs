@@ -1,9 +1,13 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::constants::ANTHROPIC_OAUTH_TOKEN_PREFIX;
-use crate::messages::Error;
-use crate::messages::types::{AnthropicMessage, SystemPrompt};
+use crate::{
+    constants::ANTHROPIC_OAUTH_TOKEN_PREFIX,
+    messages::{
+        Error,
+        types::{AnthropicMessage, SystemPrompt},
+    },
+};
 
 const COUNT_TOKENS_ENDPOINT: &str = "https://api.anthropic.com/v1/messages/count_tokens";
 const TOKEN_COUNTING_BETA: &str = "token-counting-2024-11-01";

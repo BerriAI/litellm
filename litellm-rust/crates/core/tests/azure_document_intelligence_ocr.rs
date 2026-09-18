@@ -1,10 +1,12 @@
-use std::sync::{Arc, Mutex};
-
+use litellm_callbacks::event::CallEvent;
 use rstest::rstest;
 use serde_json::{Value, json};
 
-use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
-use super::wire::{OcrWireRequest, decode_request};
+use super::{
+    LocalOcrHost,
+    test_support::{MockResponse, mock_server, perform_ocr, perform_ocr_with, wire_request},
+    wire::{OcrWireRequest, decode_request},
+};
 
 fn query_value(url: &str, key: &str) -> Option<String> {
     url::Url::parse(url)
@@ -241,34 +243,8 @@ async fn accepted_response_polls_to_success_with_only_credentials() {
     }
 }
 
-struct SubmissionBoundary {
-    request_count: Arc<Mutex<Vec<String>>>,
-}
-
-impl super::hooks::OcrHooks for SubmissionBoundary {
-    fn post_call(
-        &self,
-        request: super::hooks::OcrPostCallRequest,
-    ) -> super::hooks::OcrHookFuture<'_, super::hooks::OcrPostCallRequest> {
-        Box::pin(async move {
-            match self.request_count.lock().unwrap().len() {
-                1 => assert_eq!(request.original_response, json!(r#"{"submitted":true}"#)),
-                2 => assert!(
-                    request
-                        .original_response
-                        .as_str()
-                        .unwrap()
-                        .contains("succeeded")
-                ),
-                count => panic!("unexpected callback after {count} requests"),
-            }
-            Ok(request)
-        })
-    }
-}
-
 #[tokio::test]
-async fn accepted_response_runs_post_call_before_polling() {
+async fn accepted_response_emits_response_received_before_polling() {
     let (base, seen, server) = mock_server(vec![
         MockResponse {
             status: 202,
@@ -278,14 +254,24 @@ async fn accepted_response_runs_post_call_before_polling() {
         MockResponse::json(json!({"status":"succeeded"})),
     ])
     .await;
-    let request = super::LiteLLMOcrRequest {
-        hooks: Arc::new(SubmissionBoundary {
-            request_count: seen.clone(),
-        }),
-        ..wire_request("azure_ai/doc-intelligence/prebuilt-read", &base, json!({}))
-    };
+    let request_count = seen.clone();
+    let host = LocalOcrHost::new(wire_request(
+        "azure_ai/doc-intelligence/prebuilt-read",
+        &base,
+        json!({}),
+    ))
+    .with_observer(move |event| {
+        let CallEvent::ResponseReceived { raw } = event else {
+            return;
+        };
+        match request_count.lock().unwrap().len() {
+            1 => assert_eq!(raw.body, r#"{"submitted":true}"#),
+            2 => assert!(raw.body.contains("succeeded")),
+            count => panic!("unexpected callback after {count} requests"),
+        }
+    });
 
-    perform_ocr(request).await.unwrap();
+    perform_ocr_with(host).await.unwrap();
     server.await.unwrap();
     assert_eq!(seen.lock().unwrap().len(), 2);
 }
@@ -473,45 +459,4 @@ async fn model_id_is_encoded_and_dot_segments_are_rejected() {
             .unwrap_err();
         assert!(error.to_string().contains("dot segment"));
     }
-}
-
-#[tokio::test]
-async fn pre_call_guardrail_receives_caller_pages_before_mapping() {
-    use std::sync::Arc;
-
-    use crate::ocr::hooks::{OcrHookFuture, OcrHooks, OcrPreCallRequest};
-
-    struct RewritePages;
-    impl OcrHooks for RewritePages {
-        fn intercepts_requests(&self) -> bool {
-            true
-        }
-
-        fn pre_call(&self, request: OcrPreCallRequest) -> OcrHookFuture<'_, OcrPreCallRequest> {
-            Box::pin(async move {
-                assert_eq!(request.optional_params["pages"], json!([0, 2]));
-                Ok(OcrPreCallRequest {
-                    optional_params: json!({"pages": [1]}),
-                    ..request
-                })
-            })
-        }
-    }
-    let (base, seen, server) =
-        mock_server(vec![MockResponse::json(json!({"status": "succeeded"}))]).await;
-    let request = wire_request(
-        "azure_ai/doc-intelligence/prebuilt-read",
-        &base,
-        json!({"pages": [0, 2]}),
-    )
-    .with_host_hooks(Arc::new(RewritePages), None);
-    perform_ocr(request).await.unwrap();
-    server.await.unwrap();
-    let requests = seen.lock().unwrap();
-    let target = requests[0].split_whitespace().nth(1).unwrap();
-    assert_eq!(
-        query_value(&format!("{base}{target}"), "pages").as_deref(),
-        Some("2")
-    );
-    assert_eq!(requests.len(), 1);
 }

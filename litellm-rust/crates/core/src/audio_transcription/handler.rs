@@ -1,8 +1,6 @@
 use serde_json::Value;
 
-use super::Error;
-use super::client::http_client;
-use super::types::ProviderAudioTranscriptionRequest;
+use super::{Error, client::http_client, types::ProviderAudioTranscriptionRequest};
 use crate::http_utils::{http_request, truncate_error_body};
 
 pub async fn execute_audio_transcription_provider_call(
@@ -44,8 +42,7 @@ async fn signed_headers(
     request: &ProviderAudioTranscriptionRequest,
     body: &[u8],
 ) -> Result<Vec<(String, String)>, Error> {
-    use std::collections::BTreeMap;
-    use std::time::SystemTime;
+    use std::{collections::BTreeMap, time::SystemTime};
 
     use litellm_auth_aws::{aws_auth_config, resolve_credentials, sign_bedrock_post};
     use litellm_providers::base_llm::audio_transcription::transformation::AudioTranscriptionAuth;

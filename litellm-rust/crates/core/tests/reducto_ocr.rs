@@ -1,10 +1,11 @@
-use std::sync::Arc;
-
+use litellm_callbacks::event::{CallEvent, WireRequest};
 use rstest::rstest;
 use serde_json::{Value, json};
 
-use super::hooks::{OcrDuringCallRequest, OcrHookFuture, OcrHooks, OcrPostCallRequest};
-use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
+use super::{
+    LocalOcrHost,
+    test_support::{MockResponse, mock_server, perform_ocr, perform_ocr_with, wire_request},
+};
 
 fn request_body(request: &str) -> Value {
     serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
@@ -129,38 +130,24 @@ async fn data_uri_upload_preserves_multipart_headers(
     }
 }
 
-struct ParseBoundary {
-    request_count: Arc<std::sync::Mutex<Vec<String>>>,
-}
-
-impl OcrHooks for ParseBoundary {
-    fn post_call(&self, request: OcrPostCallRequest) -> OcrHookFuture<'_, OcrPostCallRequest> {
-        Box::pin(async move {
-            assert_eq!(self.request_count.lock().unwrap().len(), 2);
-            assert_eq!(
-                request.original_response,
-                json!(r#"{"result":{"chunks":[]}}"#)
-            );
-            Ok(request)
-        })
-    }
-}
-
 #[tokio::test]
-async fn post_call_stays_after_reducto_upload_and_parse() {
+async fn response_received_stays_after_reducto_upload_and_parse() {
     let (base, seen, server) = mock_server(vec![
         MockResponse::json(json!({"file_id":"reducto://uploaded.pdf"})),
         MockResponse::json(json!({"result":{"chunks":[]}})),
     ])
     .await;
-    let request = super::LiteLLMOcrRequest {
-        hooks: Arc::new(ParseBoundary {
-            request_count: seen.clone(),
-        }),
-        ..wire_request("reducto/parse-v3", &base, json!({}))
-    };
+    let request_count = seen.clone();
+    let host = LocalOcrHost::new(wire_request("reducto/parse-v3", &base, json!({}))).with_observer(
+        move |event| {
+            if let CallEvent::ResponseReceived { raw } = event {
+                assert_eq!(request_count.lock().unwrap().len(), 2);
+                assert_eq!(raw.body, r#"{"result":{"chunks":[]}}"#);
+            }
+        },
+    );
 
-    perform_ocr(request).await.unwrap();
+    perform_ocr_with(host).await.unwrap();
     server.await.unwrap();
     assert_eq!(seen.lock().unwrap().len(), 2);
 }
@@ -300,38 +287,66 @@ async fn facade_omits_native_response_by_default_and_preserves_auth_priority() {
     );
 }
 
-struct RewriteDocument;
+#[tokio::test]
+async fn native_format_retains_the_provider_response() {
+    let raw = json!({
+        "result":{"chunks":[{"content":"native OCR response"}]},
+        "usage":{"num_pages":1}
+    });
+    let (base, _, server) = mock_server(vec![MockResponse::json(raw.clone())]).await;
+    let request = super::test_support::with_source(
+        wire_request("reducto/parse-v3", &base, json!({"req_format":"native"})),
+        "reducto://ready.pdf",
+    );
 
-impl OcrHooks for RewriteDocument {
-    fn intercepts_requests(&self) -> bool {
-        true
-    }
+    let response = perform_ocr(request).await.unwrap();
+    server.await.unwrap();
 
-    fn during_call(
-        &self,
-        request: OcrDuringCallRequest,
-    ) -> OcrHookFuture<'_, OcrDuringCallRequest> {
-        Box::pin(async move {
-            assert_eq!(
-                request.body["document_url"],
-                "data:application/pdf;base64,YWJj"
-            );
-            Ok(OcrDuringCallRequest {
-                body: json!({"type":"document_url","document_url":"reducto://guarded.pdf"}),
-                ..request
-            })
-        })
-    }
+    assert_eq!(response.pages[0].markdown, "native OCR response");
+    assert_eq!(response.provider_native_response.as_ref(), raw.as_object());
+}
+
+#[tokio::test]
+async fn unknown_model_reaches_parse_and_keeps_its_name() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({
+        "result":{"chunks":[{"content":"future model response"}]}
+    }))])
+    .await;
+    let request = super::test_support::with_source(
+        wire_request("reducto/future-parse-model", &base, json!({})),
+        "reducto://ready.pdf",
+    );
+
+    let response = perform_ocr(request).await.unwrap();
+    server.await.unwrap();
+
+    assert_eq!(response.model, "future-parse-model");
+    assert_eq!(response.pages[0].markdown, "future model response");
+    let requests = seen.lock().unwrap();
+    assert!(requests[0].starts_with("POST /parse "));
+    assert_eq!(
+        request_body(&requests[0]),
+        json!({"input":"reducto://ready.pdf"})
+    );
 }
 
 #[tokio::test]
 async fn guardrail_rewrites_document_before_upload() {
     let (base, seen, server) =
         mock_server(vec![MockResponse::json(json!({"result":{"chunks":[]}}))]).await;
-    let mut request = wire_request("reducto/parse-v3", &base, json!({}));
-    request.hooks = Arc::new(RewriteDocument);
+    let host = LocalOcrHost::new(wire_request("reducto/parse-v3", &base, json!({})))
+        .with_before_send(|wire, _| {
+            assert_eq!(
+                wire.body["document_url"],
+                "data:application/pdf;base64,YWJj"
+            );
+            Ok(WireRequest {
+                body: json!({"type":"document_url","document_url":"reducto://guarded.pdf"}),
+                ..wire
+            })
+        });
 
-    perform_ocr(request).await.unwrap();
+    perform_ocr_with(host).await.unwrap();
     server.await.unwrap();
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 1);
