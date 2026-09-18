@@ -1883,7 +1883,7 @@ class ResponsesWebSocketStreaming:
         nested: Final = msg_obj.get("response")
         if _is_json_object(nested):
             return {**msg_obj, "response": self.request_defaults.merged_into(nested)}
-        return self.request_defaults.merged_into(msg_obj)
+        return {**self.request_defaults.merged_into(msg_obj), "type": msg_obj["type"]}
 
     async def _mask_response_create(self, message: str) -> str:
         """
