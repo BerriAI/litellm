@@ -36801,7 +36801,9 @@ export interface components {
             /** Type */
             type?: string | null;
             /** Value */
-            value: string;
+            value?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         /** SCIMPatchOp */
         SCIMPatchOp: {
