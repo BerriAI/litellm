@@ -94,29 +94,35 @@ _UI_SETTINGS_FIELDS: Final[tuple[str, ...]] = (
 )
 
 
-DUAL_SOURCE_KEYS: Final[Mapping[tuple[Section, str], KeyRule]] = MappingProxyType(
-    {
-        **{
-            ("general_settings", key): KeyRule(db_row="general_settings", kind="db_wins")
-            for key in _DB_GENERAL_SETTINGS
-        },
-        **{
-            ("general_settings", key): KeyRule(db_row="general_settings", kind="config_wins")
-            for key in _CONFIG_GENERAL_SETTINGS
-        },
-        **{
-            ("general_settings", key): KeyRule(db_row="general_settings", kind="db_fallback_to_config")
-            for key in _CLEANUP_BOUNDS
-        },
-        ("general_settings", "alerting"): KeyRule(db_row="general_settings", kind="list_union"),
-        ("general_settings", "pass_through_endpoints"): KeyRule(db_row="general_settings", kind="merge_by_path"),
-        ("general_settings", "*"): KeyRule(db_row="general_settings", kind="db_overlay"),
-        ("router_settings", "*"): KeyRule(db_row="router_settings", kind="db_overlay"),
-        ("litellm_settings", "*"): KeyRule(db_row="litellm_settings", kind="db_overlay"),
-        ("environment_variables", "*"): KeyRule(db_row="environment_variables", kind="db_overlay"),
-        **{("general_settings", key): KeyRule(db_row="ui_settings", kind="db_wins") for key in _UI_SETTINGS_FIELDS},
-    }
-)
+def _rules_for(
+    section: Section, keys: tuple[str, ...], db_row: DbRow, kind: RuleKind
+) -> tuple[tuple[tuple[Section, str], KeyRule], ...]:
+    return tuple(((section, key), KeyRule(db_row=db_row, kind=kind)) for key in keys)
+
+
+def _build_dual_source_keys() -> Mapping[tuple[Section, str], KeyRule]:
+    return MappingProxyType(
+        dict(
+            (
+                *_rules_for("general_settings", _DB_GENERAL_SETTINGS, "general_settings", "db_wins"),
+                *_rules_for("general_settings", _CONFIG_GENERAL_SETTINGS, "general_settings", "config_wins"),
+                *_rules_for("general_settings", _CLEANUP_BOUNDS, "general_settings", "db_fallback_to_config"),
+                (("general_settings", "alerting"), KeyRule(db_row="general_settings", kind="list_union")),
+                (
+                    ("general_settings", "pass_through_endpoints"),
+                    KeyRule(db_row="general_settings", kind="merge_by_path"),
+                ),
+                (("general_settings", "*"), KeyRule(db_row="general_settings", kind="db_overlay")),
+                (("router_settings", "*"), KeyRule(db_row="router_settings", kind="db_overlay")),
+                (("litellm_settings", "*"), KeyRule(db_row="litellm_settings", kind="db_overlay")),
+                (("environment_variables", "*"), KeyRule(db_row="environment_variables", kind="db_overlay")),
+                *_rules_for("general_settings", _UI_SETTINGS_FIELDS, "ui_settings", "db_wins"),
+            )
+        )
+    )
+
+
+DUAL_SOURCE_KEYS: Final[Mapping[tuple[Section, str], KeyRule]] = _build_dual_source_keys()
 
 
 def rule_for(section: Section, key: str) -> KeyRule:
@@ -168,7 +174,11 @@ def _list_union(yaml_value: SettingValue, db_value: SettingValue) -> Resolved:
         return _db_wins(yaml_value, db_value)
     if not isinstance(yaml_value, list) or not isinstance(db_value, list):
         return _db_wins(yaml_value, db_value)
-    return Resolved(value=[*yaml_value, *(value for value in db_value if value not in yaml_value)], source="db")
+    merged: Final[list[JsonValue]] = [  # mutable-ok: resolved config values retain the legacy JSON-list contract
+        *yaml_value,
+        *(value for value in db_value if value not in yaml_value),
+    ]
+    return Resolved(value=merged, source="db")
 
 
 def _merge_by_path(yaml_value: SettingValue, db_value: SettingValue) -> Resolved:
@@ -177,14 +187,18 @@ def _merge_by_path(yaml_value: SettingValue, db_value: SettingValue) -> Resolved
     if not isinstance(yaml_value, list) or not isinstance(db_value, list):
         return _db_wins(yaml_value, db_value)
     db_paths: Final = frozenset(_endpoint_path(value) for value in db_value if _endpoint_path(value) is not None)
-    return Resolved(
-        value=[*db_value, *(value for value in yaml_value if _endpoint_path(value) not in db_paths)], source="db"
-    )
+    merged: Final[list[JsonValue]] = [  # mutable-ok: resolved config values retain the legacy JSON-list contract
+        *db_value,
+        *(value for value in yaml_value if _endpoint_path(value) not in db_paths),
+    ]
+    return Resolved(value=merged, source="db")
 
 
 def _db_overlay(yaml_value: SettingValue, db_value: SettingValue) -> Resolved:
     if not _db_is_present(db_value):
         return _db_wins(yaml_value, db_value)
+    if isinstance(db_value, list) and not db_value and yaml_value is not ABSENT:
+        return Resolved(value=yaml_value, source="config")
     if not isinstance(yaml_value, dict) or not isinstance(db_value, dict):
         return _db_wins(yaml_value, db_value)
     overlay: Final = _overlay_mapping(yaml_value, db_value)
@@ -193,13 +207,19 @@ def _db_overlay(yaml_value: SettingValue, db_value: SettingValue) -> Resolved:
 
 
 def _overlay_mapping(yaml_value: dict[str, JsonValue], db_value: dict[str, JsonValue]) -> dict[str, JsonValue]:
-    retained: Final = {
-        key: _overlay_value(value, db_value[key]) if key in db_value else value for key, value in yaml_value.items()
-    }
-    additions: Final = {
-        key: value for key, value in db_value.items() if key not in yaml_value and not _db_overlay_defers(value)
-    }
-    return {**retained, **additions}
+    return dict(  # mutable-ok: resolved config values retain the legacy JSON-object contract
+        (
+            *(
+                (key, _overlay_value(value, db_value[key]) if key in db_value else value)
+                for key, value in yaml_value.items()
+            ),
+            *(
+                (key, value)
+                for key, value in db_value.items()
+                if key not in yaml_value and not _db_overlay_defers(value)
+            ),
+        )
+    )
 
 
 def _overlay_value(yaml_value: JsonValue, db_value: JsonValue) -> JsonValue:

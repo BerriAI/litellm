@@ -34,11 +34,16 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         self._clear_runtime()
 
     def apply_db_row(self, row: DbRow, db_row: Mapping[str, JsonValue]) -> None:
+        previous_row: Final = self._database_rows.get(row, _EMPTY_VALUES)
         self._database_rows = MappingProxyType({**self._database_rows, row: MappingProxyType(dict(db_row))})
-        self._clear_runtime()
+        self._clear_runtime_keys(frozenset((*previous_row, *db_row)))
 
     def resolved(self) -> Mapping[str, JsonValue]:
         return MappingProxyType(dict(self))
+
+    def apply_runtime_values(self, values: Mapping[str, JsonValue]) -> None:
+        self._runtime_values = MappingProxyType(dict(values))
+        self._deleted_runtime_keys = frozenset()
 
     def source(self, key: str) -> FieldSource:
         return self._resolution_for(key).source
@@ -55,7 +60,7 @@ class SettingsStore(MutableMapping[str, JsonValue]):
 
     def __setitem__(self, key: str, value: JsonValue) -> None:
         self._runtime_values = MappingProxyType({**self._runtime_values, key: value})
-        self._deleted_runtime_keys = self._deleted_runtime_keys - {key}
+        self._deleted_runtime_keys = self._deleted_runtime_keys - frozenset((key,))
 
     def __delitem__(self, key: str) -> None:
         if key not in self:
@@ -63,10 +68,15 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         self._runtime_values = MappingProxyType(
             {key_: value for key_, value in self._runtime_values.items() if key_ != key}
         )
-        self._deleted_runtime_keys = self._deleted_runtime_keys | {key}
+        self._deleted_runtime_keys = self._deleted_runtime_keys | frozenset((key,))
 
     def __iter__(self) -> Iterator[str]:
-        return iter(key for key in self._keys() if key not in self._deleted_runtime_keys)
+        return iter(
+            key
+            for key in self._keys()
+            if key not in self._deleted_runtime_keys
+            and (key in self._runtime_values or not isinstance(self._resolution_for(key).value, Absent))
+        )
 
     def __len__(self) -> int:
         return sum(1 for _ in self)
@@ -74,6 +84,14 @@ class SettingsStore(MutableMapping[str, JsonValue]):
     def _clear_runtime(self) -> None:
         self._runtime_values = _EMPTY_VALUES
         self._deleted_runtime_keys = frozenset()
+
+    def _clear_runtime_keys(self, keys: frozenset[str]) -> None:
+        if not keys:
+            return
+        self._runtime_values = MappingProxyType(
+            {key: value for key, value in self._runtime_values.items() if key not in keys}
+        )
+        self._deleted_runtime_keys = self._deleted_runtime_keys - keys
 
     def _keys(self) -> tuple[str, ...]:
         return tuple(

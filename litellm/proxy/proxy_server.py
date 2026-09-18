@@ -431,20 +431,24 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     model_access_group_spend_counter_key,
     tag_cache_key,
 )
-from litellm.proxy.config_resolvers import resolve_fields
+from litellm.proxy.config_resolvers import SettingsStore, resolve_fields
 from litellm.proxy.config_resolvers.alerting import (
     EMAIL_DESCRIPTORS,
     MS_TEAMS_DESCRIPTORS,
     SLACK_DESCRIPTORS,
 )
 from litellm.proxy.config_resolvers.changed_section_keys import changed_section_keys
+from litellm.proxy.config_resolvers.settings_rules import (
+    JsonValue as SettingsJsonValue,
+)
+from litellm.proxy.config_resolvers.settings_rules import (
+    Section,
+    coerce_bool,
+)
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
-from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
-    SPEND_LOG_CLEANUP_BOUND_SETTINGS,
-    SpendLogCleanup,
-)
+from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
@@ -4322,7 +4326,7 @@ def _scrub_guardrail_inner(inner: dict[str, JsonValue]) -> None:
         inner["guardrail"] = None
 
 
-def _scrub_db_overlay_remote_module_loads(section: str, db_value: JsonValue) -> JsonValue:
+def _scrub_db_overlay_remote_module_loads(section: str, db_value: object) -> object:
     """Strip ``s3://`` / ``gcs://`` entries from the DB-overlay value for
     fields whose contents reach ``get_instance_fn``. The same scheme is
     allowed from a YAML config (the documented operator flow) but a
@@ -4802,6 +4806,21 @@ class _ConfigWithBaseline(dict[str, object]):
         self._baseline = MappingProxyType({key: copy.deepcopy(value) for key, value in config.items()})
 
 
+_EMPTY_SETTINGS_MAPPING: Final[Mapping[str, SettingsJsonValue]] = MappingProxyType({})
+_SETTINGS_MAPPING: Final = TypeAdapter(dict[str, SettingsJsonValue])
+
+
+def _as_settings_mapping(value: object) -> Mapping[str, SettingsJsonValue]:
+    if not isinstance(value, Mapping):
+        return _EMPTY_SETTINGS_MAPPING
+    return _SETTINGS_MAPPING.validate_python(value)
+
+
+def _bind_general_settings_store(settings: SettingsStore) -> None:
+    global general_settings
+    general_settings = settings  # pyright: ignore[reportAssignmentType]  # legacy global accepts mappings
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -4825,11 +4844,38 @@ class ProxyConfig:
         # whether an existing request predates the prices it just fetched, and re-serving one
         # costs a single fetch where skipping one leaves it priced wrong indefinitely
         self.model_cost_map_applied_revision: int = 0
-        # Keys explicitly set in the YAML config file. Used to give YAML
-        # precedence over stale DB-cached values for these specific keys
-        # during periodic config reloads (_update_general_settings).
-        self._yaml_general_settings_keys: set[str] = set()  # mutable-ok: populated once at startup, read-only thereafter  # fmt: skip
-        self._yaml_spend_log_cleanup_bounds: dict[str, object] = {}  # mutable-ok: snapshot of YAML bounds at load time  # fmt: skip
+        self.settings: Final[SettingsStore] = SettingsStore("general_settings")
+        self.router_settings: Final[SettingsStore] = SettingsStore("router_settings")
+        self.litellm_settings: Final[SettingsStore] = SettingsStore("litellm_settings")
+        self.environment_variables: Final[SettingsStore] = SettingsStore("environment_variables")
+        self._settings_stores: Final[Mapping[Section, SettingsStore]] = MappingProxyType(
+            {
+                "general_settings": self.settings,
+                "router_settings": self.router_settings,
+                "litellm_settings": self.litellm_settings,
+                "environment_variables": self.environment_variables,
+            }
+        )
+
+    def _load_yaml_settings_stores(self, config: Mapping[str, object]) -> None:
+        for section, store in self._settings_stores.items():
+            store.load_yaml(_as_settings_mapping(config.get(section)))
+            store.apply_db_row(section, _EMPTY_SETTINGS_MAPPING)
+
+    def _config_with_resolved_settings(self, config: Mapping[str, object]) -> dict[str, object]:
+        return {  # mutable-ok: get_config preserves the mutable mapping contract used by existing loaders
+            **config,
+            **{
+                section: dict(store.resolved())
+                for section, store in self._settings_stores.items()
+                if isinstance(config.get(section), Mapping) or len(store) > 0
+            },
+        }
+
+    def _apply_resolved_runtime_settings(self, config: Mapping[str, object]) -> None:
+        for section, store in self._settings_stores.items():
+            if isinstance(config.get(section), Mapping):
+                store.apply_runtime_values(_as_settings_mapping(config[section]))
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -5372,6 +5418,8 @@ class ProxyConfig:
 
             config = await self._get_config_from_file(config_file_path=config_file_path)
 
+        self._load_yaml_settings_stores(config)
+
         ## UPDATE CONFIG WITH DB
         if prisma_client is not None and store_model_in_db is True:
             config = await self._update_config_from_db(
@@ -5380,6 +5428,8 @@ class ProxyConfig:
                 store_model_in_db=store_model_in_db,
             )
 
+        config = self._config_with_resolved_settings(config)
+
         ## PRINT YAML FOR CONFIRMING IT WORKS
         printed_yaml: Final = copy.deepcopy(config)
         printed_yaml.pop("environment_variables", None)
@@ -5387,6 +5437,7 @@ class ProxyConfig:
         self._initialize_secret_manager_from_raw_config(config=config, config_file_path=config_file_path)
 
         config = self._check_for_os_environ_vars(config=config)
+        self._apply_resolved_runtime_settings(config)
 
         self.update_config_state(config=config)
 
@@ -5965,17 +6016,6 @@ class ProxyConfig:
         _hc_staleness = None
         _hc_ignore_transient = False
         if general_settings:
-            # Record which keys were explicitly set in the YAML config file.
-            # These keys take precedence over DB-cached values during periodic
-            # reloads (see _update_general_settings).
-            self._yaml_general_settings_keys = set(general_settings.keys())  # mutable-ok: snapshot of YAML keys at load time  # fmt: skip
-            # The VALUES matter for the cleanup bounds, not just which keys were
-            # set: clearing one from the dashboard has to fall back to what the
-            # YAML declared, and a set of names cannot answer that.
-            self._yaml_spend_log_cleanup_bounds = {  # mutable-ok: snapshot of YAML bounds at load time  # fmt: skip
-                key: general_settings[key] for key in SPEND_LOG_CLEANUP_BOUND_SETTINGS if key in general_settings
-            }
-
             ### LOAD KEY MANAGEMENT SETTINGS ###
             # The secret manager itself is brought up by get_config(), which runs before the
             # `os.environ/` references in this config were resolved. Re-reading the settings here
@@ -6355,7 +6395,8 @@ class ProxyConfig:
         ## NON-LLM CONFIGS eg. MCP tools, vector stores, etc.
         await self._init_non_llm_configs(config=config, config_file_path=config_file_path)
 
-        return router, router.get_model_list(), general_settings
+        _bind_general_settings_store(self.settings)
+        return router, router.get_model_list(), self.settings
 
     async def _init_non_llm_configs(self, config: dict, config_file_path: str | None = None):
         """
@@ -6803,13 +6844,6 @@ class ProxyConfig:
             config_data=config_data, llm_router=llm_router, prisma_client=prisma_client
         )
 
-        # general settings
-        self._add_general_settings_from_db_config(
-            config_data=config_data,
-            general_settings=general_settings,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
         return still_desired_ids
 
     def _add_callback_from_db_to_in_memory_litellm_callbacks(
@@ -7016,121 +7050,25 @@ class ProxyConfig:
 
     async def _add_router_settings_from_db_config(
         self,
-        config_data: dict,
+        config_data: Mapping[str, object],
         llm_router: Router | None,
         prisma_client: PrismaClient | None,
     ) -> None:
-        """
-        Adds router settings from DB config to litellm proxy
-
-        1. Get router settings from DB
-        2. Get router settings from config
-        3. Combine both
-        4. Update router settings
-        """
-        if llm_router is not None and prisma_client is not None:
-            db_router_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
-                where={"param_name": "router_settings"}
-            )
-
-            config_router_settings: Final = config_data.get("router_settings", {})
-
-            combined_router_settings = {}
-            if (
-                config_router_settings is not None
-                and isinstance(config_router_settings, dict)
-                and db_router_settings is not None
-                and isinstance(db_router_settings.param_value, dict)
-            ):
-                from litellm.utils import _update_dictionary
-
-                db_overlay_deferring_empty_lists_to_config: Final = {
-                    k: v
-                    for k, v in db_router_settings.param_value.items()
-                    if not (k in config_router_settings and isinstance(v, list) and len(v) == 0)
-                }
-                combined_router_settings = _update_dictionary(
-                    config_router_settings, db_overlay_deferring_empty_lists_to_config
-                )
-            elif config_router_settings is not None and isinstance(config_router_settings, dict):
-                combined_router_settings = config_router_settings
-            elif db_router_settings is not None and isinstance(db_router_settings.param_value, dict):
-                combined_router_settings = db_router_settings.param_value
-
-            if combined_router_settings:
-                llm_router.update_settings(**combined_router_settings)
-
-    def _add_general_settings_from_db_config(
-        self, config_data: dict, general_settings: dict, proxy_logging_obj: ProxyLogging
-    ) -> None:
-        """
-        Adds general settings from DB config to litellm proxy
-
-        Args:
-            config_data: dict
-            general_settings: dict - global general_settings currently in use
-            proxy_logging_obj: ProxyLogging
-        """
-        _general_settings: Final = config_data.get("general_settings", {})
-
-        if _general_settings is not None and "alerting" in _general_settings:
-            if (
-                general_settings is not None
-                and general_settings.get("alerting", None) is not None
-                and isinstance(general_settings["alerting"], list)
-                and _general_settings.get("alerting", None) is not None
-                and isinstance(_general_settings["alerting"], list)
-            ):
-                # Merge DB and YAML/config alerting values instead of overriding
-                _yaml_alerting: Final = set(general_settings["alerting"])
-                _db_alerting: Final = set(_general_settings["alerting"])
-                _merged_alerting = list(_yaml_alerting.union(_db_alerting))
-                # Preserve order: YAML values first, then DB values
-                _merged_alerting = list(general_settings["alerting"]) + [
-                    item for item in _general_settings["alerting"] if item not in general_settings["alerting"]
-                ]
-                verbose_proxy_logger.debug(
-                    "Merging alerting values: YAML=%s, DB=%s, Merged=%s",
-                    general_settings["alerting"],
-                    _general_settings["alerting"],
-                    _merged_alerting,
-                )
-                general_settings["alerting"] = _merged_alerting
-                # Use update_values to properly set alerting for both slack and email
-                proxy_logging_obj.update_values(
-                    alerting=general_settings["alerting"],
-                )
-            elif general_settings is None:
-                general_settings = {}
-                general_settings["alerting"] = _general_settings["alerting"]
-                # Use update_values to properly set alerting for both slack and email
-                proxy_logging_obj.update_values(
-                    alerting=general_settings["alerting"],
-                )
-            elif isinstance(general_settings, dict):
-                general_settings["alerting"] = _general_settings["alerting"]
-                # Use update_values to properly set alerting for both slack and email
-                proxy_logging_obj.update_values(
-                    alerting=general_settings["alerting"],
-                )
-
-        if _general_settings is not None and "alert_types" in _general_settings:
-            general_settings["alert_types"] = _general_settings["alert_types"]
-            proxy_logging_obj.alert_types = general_settings["alert_types"]
-            proxy_logging_obj.slack_alerting_instance.update_values(
-                alert_types=general_settings["alert_types"], llm_router=llm_router
-            )
-
-        if _general_settings is not None and "alert_to_webhook_url" in _general_settings:
-            general_settings["alert_to_webhook_url"] = _general_settings["alert_to_webhook_url"]
-            proxy_logging_obj.slack_alerting_instance.update_values(
-                alert_to_webhook_url=general_settings["alert_to_webhook_url"],
-                llm_router=llm_router,
-            )
-
-        if _general_settings is not None and "plugins" in _general_settings:
-            general_settings["plugins"] = _general_settings["plugins"]
-            register_plugins_from_config(general_settings)
+        if llm_router is None or prisma_client is None:
+            return
+        self.router_settings.load_yaml(_as_settings_mapping(config_data.get("router_settings")))
+        db_router_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
+            where={"param_name": "router_settings"}
+        )
+        db_values: Final = (
+            _as_settings_mapping(db_router_settings.param_value)
+            if db_router_settings is not None and db_router_settings.param_value is not None
+            else _EMPTY_SETTINGS_MAPPING
+        )
+        self.router_settings.apply_db_row("router_settings", db_values)
+        combined_router_settings: Final = self.router_settings.resolved()
+        if combined_router_settings:
+            llm_router.update_settings(**combined_router_settings)
 
     async def _reschedule_spend_log_cleanup_job(self):
         """
@@ -7206,260 +7144,142 @@ class ProxyConfig:
                 except ValueError:
                     verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
 
-    async def _update_general_settings(self, db_general_settings: Json | None):
-        """
-        Pull from DB, read general settings value
-        """
-        global general_settings, store_model_in_db
+    async def _update_general_settings(self, db_general_settings: Mapping[str, SettingsJsonValue] | None) -> None:
+        global general_settings
         if db_general_settings is None:
             return
-        _general_settings: Final = dict(db_general_settings)
-        ## MAX PARALLEL REQUESTS ##
-        if "max_parallel_requests" in _general_settings:
-            general_settings["max_parallel_requests"] = _general_settings["max_parallel_requests"]
+        if not isinstance(general_settings, SettingsStore):
+            self.settings.load_yaml(_as_settings_mapping(general_settings))
+        cache_size_was_db: Final = self.settings.source("user_api_key_cache_max_size") == "db"
+        previous_retention_values: Final = self._resolved_retention_values()
+        self.settings.apply_db_row("general_settings", db_general_settings)
+        _bind_general_settings_store(self.settings)
+        await self._apply_general_settings_side_effects(
+            db_general_settings,
+            cache_size_was_db,
+            previous_retention_values,
+        )
 
-        if "global_max_parallel_requests" in _general_settings:
-            general_settings["global_max_parallel_requests"] = _general_settings["global_max_parallel_requests"]
-
-        if "max_batch_file_size_mb" not in self._yaml_general_settings_keys:
-            general_settings["max_batch_file_size_mb"] = _general_settings.get("max_batch_file_size_mb")
-
-        if "max_file_size_mb" not in self._yaml_general_settings_keys:
-            general_settings["max_file_size_mb"] = _general_settings.get("max_file_size_mb")
-
-        if "allowed_file_extensions" not in self._yaml_general_settings_keys:
-            general_settings["allowed_file_extensions"] = _general_settings.get("allowed_file_extensions")
-
-        if "blocked_file_extensions" not in self._yaml_general_settings_keys:
-            general_settings["blocked_file_extensions"] = _general_settings.get("blocked_file_extensions")
-
-        ## ALERTING ARGS ##
-        if "alerting_args" in _general_settings:
-            general_settings["alerting_args"] = _general_settings["alerting_args"]
-            proxy_logging_obj.slack_alerting_instance.update_values(
-                alerting_args=general_settings["alerting_args"],
+    def _resolved_retention_values(self) -> tuple[SettingsJsonValue | None, ...]:
+        return tuple(
+            self.settings.get(key)
+            for key in (
+                "maximum_spend_logs_retention_period",
+                "maximum_autorouter_session_retention_period",
+                "maximum_health_check_retention_period",
             )
+        )
 
-        ## PASS-THROUGH ENDPOINTS ##
-        if "pass_through_endpoints" in _general_settings:
-            db_pass_through_endpoints: Final = _general_settings["pass_through_endpoints"]
-            db_pass_through_paths: Final = frozenset(
-                endpoint.get("path") for endpoint in db_pass_through_endpoints if isinstance(endpoint, dict)
-            )
-            general_settings["pass_through_endpoints"] = [
-                *db_pass_through_endpoints,
-                *(
-                    endpoint
-                    for endpoint in config_passthrough_endpoints or ()
-                    if endpoint.get("path") not in db_pass_through_paths
-                ),
-            ]
-            await initialize_pass_through_endpoints(pass_through_endpoints=db_pass_through_endpoints)
-
-        ## UI ACCESS MODE ##
-        if "ui_access_mode" in _general_settings:
-            general_settings["ui_access_mode"] = _general_settings["ui_access_mode"]
-
-        ## STORE PROMPTS IN SPEND LOGS ##
-        if "store_prompts_in_spend_logs" in _general_settings:
-            # If the YAML config explicitly set this key, prefer the YAML value
-            # over the DB-cached value. This ensures config changes deployed via
-            # CI/CD take effect without requiring a manual /config/update call.
-            # When YAML does not set this key, the DB value is used (preserving
-            # admin UI runtime changes).
-            if "store_prompts_in_spend_logs" in self._yaml_general_settings_keys:
-                value = general_settings.get("store_prompts_in_spend_logs")
-            else:
-                value = _general_settings["store_prompts_in_spend_logs"]
-            # Normalize case: handle True/true/TRUE, False/false/FALSE, None/null
-            if value is None:
-                general_settings["store_prompts_in_spend_logs"] = None
-            elif isinstance(value, bool):
-                general_settings["store_prompts_in_spend_logs"] = value
-            elif isinstance(value, str):
-                # Case-insensitive string comparison
-                general_settings["store_prompts_in_spend_logs"] = value.lower() == "true"
-            else:
-                # For other types, convert to bool
-                general_settings["store_prompts_in_spend_logs"] = bool(value)
-
-        if "disable_auto_add_proxy_admin_to_teams" in _general_settings:
-            value = _general_settings["disable_auto_add_proxy_admin_to_teams"]
-            if isinstance(value, str):
-                general_settings["disable_auto_add_proxy_admin_to_teams"] = value.lower() == "true"
-            else:
-                general_settings["disable_auto_add_proxy_admin_to_teams"] = value if value is None else bool(value)
-
-        if "apply_user_budget_to_team_keys" in _general_settings and (
-            "apply_user_budget_to_team_keys" not in self._yaml_general_settings_keys
-        ):
-            db_value: Final = _general_settings["apply_user_budget_to_team_keys"]
-            if isinstance(db_value, str):
-                general_settings["apply_user_budget_to_team_keys"] = db_value.lower() == "true"
-            else:
-                general_settings["apply_user_budget_to_team_keys"] = db_value if db_value is None else bool(db_value)
-
-        if "enable_openai_websocket_passthrough" not in self._yaml_general_settings_keys:
-            general_settings["enable_openai_websocket_passthrough"] = _general_settings.get(
-                "enable_openai_websocket_passthrough"
-            )
-
-        if "user_api_key_cache_max_size" not in self._yaml_general_settings_keys:
-            db_cache_max_size: Final = _general_settings.get("user_api_key_cache_max_size")
-            try:
-                cache_max_size: Final = ConfigGeneralSettings.model_validate(
-                    MappingProxyType({"user_api_key_cache_max_size": db_cache_max_size})
-                ).user_api_key_cache_max_size
-            except ValidationError:
-                verbose_proxy_logger.warning(
-                    "Ignoring invalid general_settings.user_api_key_cache_max_size=%r from the DB", db_cache_max_size
-                )
-            else:
-                if cache_max_size is None:
-                    general_settings.pop("user_api_key_cache_max_size", None)
-                else:
-                    general_settings["user_api_key_cache_max_size"] = cache_max_size
-                user_api_key_cache.update_in_memory_max_size(cache_max_size)
-
-        ## STORE MODEL IN DB ##
-        if "store_model_in_db" in _general_settings:
-            value = _general_settings["store_model_in_db"]
-            if value is None:
-                pass  # Don't change store_model_in_db to None; keep current value
-            elif isinstance(value, bool):
-                store_model_in_db = value
-            elif isinstance(value, str):
-                store_model_in_db = value.lower() == "true"
-            else:
-                store_model_in_db = bool(value)
-            general_settings["store_model_in_db"] = store_model_in_db
-
-        ## MAXIMUM SPEND LOGS RETENTION PERIOD ##
-        if "maximum_spend_logs_retention_period" in _general_settings:
-            old_value: Final = general_settings.get("maximum_spend_logs_retention_period")
-            new_value: Final = _general_settings["maximum_spend_logs_retention_period"]
-            general_settings["maximum_spend_logs_retention_period"] = new_value
-            # Reschedule cleanup job if value changed (including when set to None)
-            if old_value != new_value:
-                await self._reschedule_spend_log_cleanup_job()
-
-        if "maximum_autorouter_session_retention_period" in _general_settings:
-            old_session_value: Final = general_settings.get("maximum_autorouter_session_retention_period")
-            new_session_value: Final = _general_settings["maximum_autorouter_session_retention_period"]
-            general_settings["maximum_autorouter_session_retention_period"] = new_session_value
-            if old_session_value != new_session_value:
-                await self._reschedule_spend_log_cleanup_job()
-
-        if "maximum_health_check_retention_period" in _general_settings:
-            old_health_check_value: Final = general_settings.get("maximum_health_check_retention_period")
-            new_health_check_value: Final = _general_settings["maximum_health_check_retention_period"]
-            general_settings["maximum_health_check_retention_period"] = new_health_check_value
-            if old_health_check_value != new_health_check_value:
-                await self._reschedule_spend_log_cleanup_job()
-
-        ## SPEND LOG CLEANUP BOUNDS ##
-        # The dashboard writes these straight to the DB, so without copying them
-        # here the running cleanup job never sees them. A key the DB no longer
-        # carries was cleared from the dashboard, and falls back to whatever
-        # config.yaml declared, or to None (the shipped default) when it declared
-        # nothing. Leaving the deleted DB value in memory would keep enforcing the
-        # bound the operator just removed.
-        for cleanup_key in SPEND_LOG_CLEANUP_BOUND_SETTINGS:
-            general_settings[cleanup_key] = _general_settings.get(
-                cleanup_key, self._yaml_spend_log_cleanup_bounds.get(cleanup_key)
-            )
-
-        for key in (
-            "user_url_allowed_hosts",
-            "user_url_validation",
-            "provider_url_destination_allowed_hosts",
-        ):
-            if key in _general_settings:
-                general_settings[key] = _general_settings[key]
-        _apply_ssrf_general_settings(_general_settings)
-
-    def _update_config_fields(
+    async def _apply_general_settings_side_effects(
         self,
-        current_config: dict,
-        param_name: Literal[
-            "general_settings",
-            "router_settings",
-            "litellm_settings",
-            "environment_variables",
-        ],
-        db_param_value: Any,
-    ) -> dict:
-        """
-        Updates the config fields with the new values from the DB
+        db_values: Mapping[str, SettingsJsonValue],
+        cache_size_was_db: bool,
+        previous_retention_values: tuple[SettingsJsonValue | None, ...],
+    ) -> None:
+        effects: Final = (
+            self._apply_alerting_settings,
+            self._apply_pass_through_settings,
+            self._apply_boolean_settings,
+            partial(self._apply_cache_size_setting, cache_size_was_db=cache_size_was_db),
+            self._apply_store_model_in_db_setting,
+            partial(self._apply_retention_settings, previous_retention_values=previous_retention_values),
+            self._apply_ssrf_settings,
+        )
+        for effect in effects:
+            await effect(db_values)
 
-        Args:
-            current_config (dict): Current configuration dictionary to update
-            param_name (Literal): Name of the parameter to update
-            db_param_value (Any): New value from the database
+    async def _apply_alerting_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
+        alerting: Final = self.settings.get("alerting")
+        if "alerting" in db_values and isinstance(alerting, list):
+            proxy_logging_obj.update_values(alerting=alerting)
 
-        Returns:
-            dict: Updated configuration dictionary
-        """
+        alerting_args: Final = self.settings.get("alerting_args")
+        if "alerting_args" in db_values and self.settings.source("alerting_args") == "db":
+            proxy_logging_obj.slack_alerting_instance.update_values(alerting_args=alerting_args)
 
-        def _deep_merge_dicts(dst: dict, src: dict) -> None:
-            """
-            Deep-merge src into dst, skipping None values and empty lists from src.
-            On conflicts, src (DB) wins, but empty lists are treated as "no value" and don't overwrite.
-            """
-            stack: Final = [(dst, src)]
-            while stack:
-                d, s = stack.pop()
-                for k, v in s.items():
-                    if v is None:
-                        # Preserve existing config when DB value is None (matches prior behavior)
-                        continue
-                    # Skip empty lists - treat them as "no value" to preserve file config
-                    if isinstance(v, list) and len(v) == 0:
-                        continue
-                    if isinstance(v, dict) and isinstance(d.get(k), dict):
-                        stack.append((d[k], v))
-                    else:
-                        d[k] = v
+        alert_types: Final = self.settings.get("alert_types")
+        if "alert_types" in db_values and self.settings.source("alert_types") == "db":
+            proxy_logging_obj.alert_types = alert_types
+            proxy_logging_obj.slack_alerting_instance.update_values(alert_types=alert_types, llm_router=llm_router)
 
-        # Strip remote-URL module loads from the DB-overlay before merge —
-        # the YAML-load callsites have ``config_file_path`` set, so a
-        # DB-sourced ``s3://`` value would otherwise reach
-        # ``_load_instance_from_remote_storage`` without going through
-        # the runtime gate.
-        db_param_value = _scrub_db_overlay_remote_module_loads(section=param_name, db_value=db_param_value)
+        webhook_url: Final = self.settings.get("alert_to_webhook_url")
+        if "alert_to_webhook_url" in db_values and self.settings.source("alert_to_webhook_url") == "db":
+            proxy_logging_obj.slack_alerting_instance.update_values(
+                alert_to_webhook_url=webhook_url, llm_router=llm_router
+            )
 
-        if param_name == "environment_variables":
-            decrypted_env_vars = self._decrypt_and_set_db_env_variables(db_param_value, return_original_value=True)
-            # Normalize keys when loading from DB so services expecting uppercase
-            # (e.g. Datadog) can read them even if stored in lowercase.
-            merged_env_vars: Final[dict] = {}
-            for key, value in decrypted_env_vars.items():
-                merged_env_vars[key] = value
-                upper_key = key.upper()
-                merged_env_vars[upper_key] = value
-                os.environ[upper_key] = value
+        if "plugins" in db_values and self.settings.source("plugins") == "db":
+            register_plugins_from_config(self.settings)
 
-            current_config.setdefault("environment_variables", {}).update(merged_env_vars)
-            return current_config
-        elif param_name == "litellm_settings" and isinstance(db_param_value, dict):
-            for key, value in db_param_value.items():
-                if key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:  # params that are safe to override with db values
-                    setattr(litellm, key, value)
+    async def _apply_pass_through_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
+        resolved_endpoints: Final = self.settings.get("pass_through_endpoints")
+        if "pass_through_endpoints" in db_values and isinstance(resolved_endpoints, list):
+            await initialize_pass_through_endpoints(pass_through_endpoints=resolved_endpoints)
 
-        # If param doesn't exist in config, add it
-        if param_name not in current_config:
-            current_config[param_name] = db_param_value
+    async def _apply_boolean_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
+        for key in (
+            "store_prompts_in_spend_logs",
+            "disable_auto_add_proxy_admin_to_teams",
+            "apply_user_budget_to_team_keys",
+        ):
+            if key in db_values and (value := self.settings.get(key)) is not None:
+                self.settings[key] = coerce_bool(value)
 
-            return current_config
-
-        # For dictionary values, update only non-none values
-        if isinstance(current_config[param_name], dict) and isinstance(db_param_value, dict):
-            _deep_merge_dicts(current_config[param_name], db_param_value)
+    async def _apply_cache_size_setting(
+        self,
+        db_values: Mapping[str, SettingsJsonValue],
+        cache_size_was_db: bool,
+    ) -> None:
+        if "user_api_key_cache_max_size" not in db_values and not cache_size_was_db:
+            return
+        cache_value: Final = self.settings.get("user_api_key_cache_max_size")
+        try:
+            cache_max_size: Final = ConfigGeneralSettings.model_validate(
+                MappingProxyType({"user_api_key_cache_max_size": cache_value})
+            ).user_api_key_cache_max_size
+        except ValidationError:
+            self.settings.pop("user_api_key_cache_max_size", None)
+            verbose_proxy_logger.warning(
+                "Ignoring invalid general_settings.user_api_key_cache_max_size=%r from the DB", cache_value
+            )
+            return
+        if cache_max_size is None:
+            self.settings.pop("user_api_key_cache_max_size", None)
         else:
-            # Non-dict or mismatched types: DB value replaces config (unchanged behavior)
-            current_config[param_name] = db_param_value
+            self.settings["user_api_key_cache_max_size"] = cache_max_size
+        user_api_key_cache.update_in_memory_max_size(cache_max_size)
 
-        return current_config
+    async def _apply_store_model_in_db_setting(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
+        global store_model_in_db
+        if "store_model_in_db" not in db_values:
+            return
+        value: Final = self.settings.get("store_model_in_db")
+        if value is None:
+            return
+        normalized: Final = coerce_bool(value)
+        store_model_in_db = normalized if isinstance(normalized, bool) else bool(normalized)
+        self.settings["store_model_in_db"] = store_model_in_db
+
+    async def _apply_retention_settings(
+        self,
+        db_values: Mapping[str, SettingsJsonValue],
+        previous_retention_values: tuple[SettingsJsonValue | None, ...],
+    ) -> None:
+        if (
+            any(
+                key in db_values
+                for key in (
+                    "maximum_spend_logs_retention_period",
+                    "maximum_autorouter_session_retention_period",
+                    "maximum_health_check_retention_period",
+                )
+            )
+            and previous_retention_values != self._resolved_retention_values()
+        ):
+            await self._reschedule_spend_log_cleanup_job()
+
+    async def _apply_ssrf_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
+        _apply_ssrf_general_settings(db_values)
 
     async def _update_config_from_db(
         self,
@@ -7471,37 +7291,48 @@ class ProxyConfig:
             verbose_proxy_logger.info("'store_model_in_db' is not True, skipping db updates")
             return config
 
-        _tasks: Final = []
-        keys: Final = [
-            "general_settings",
-            "router_settings",
-            "litellm_settings",
-            "environment_variables",
-        ]
-        for k in keys:
-            _tasks.append(get_config_param(prisma_client, k))
-
-        responses: Final = await asyncio.gather(*_tasks)
-        for response in responses:
-            if response is None:
+        sections: Final = tuple(self._settings_stores)
+        responses: Final = await asyncio.gather(*(get_config_param(prisma_client, section) for section in sections))
+        for section, response in zip(sections, responses):
+            if response is None or (param_value := getattr(response, "param_value", None)) is None:
                 continue
 
-            param_name = getattr(response, "param_name", None)
-            param_value = getattr(response, "param_value", None)
             verbose_proxy_logger.debug(
                 "param_name=%s, param_value=%s",
-                param_name,
-                _redact_config_param_value_for_logging(param_name, param_value),
+                section,
+                _redact_config_param_value_for_logging(section, param_value),
             )
-
-            if param_name is not None and param_value is not None:
-                config = self._update_config_fields(
-                    current_config=config,
-                    param_name=param_name,
-                    db_param_value=param_value,
+            if section == "litellm_settings":
+                self._apply_litellm_settings_db_values(self._prepared_db_settings_values(section, param_value))
+            else:
+                self._settings_stores[section].apply_db_row(
+                    section,
+                    self._prepared_db_settings_values(section, param_value),
                 )
 
-        return config
+        return self._config_with_resolved_settings(config)
+
+    def _prepared_db_settings_values(self, section: Section, value: object) -> Mapping[str, SettingsJsonValue]:
+        if section == "environment_variables":
+            decrypted: Final = self._decrypt_and_set_db_env_variables(
+                dict(_as_settings_mapping(value)), return_original_value=True
+            )
+            normalized: Final = {
+                **decrypted,
+                **{key.upper(): decrypted_value for key, decrypted_value in decrypted.items()},
+            }
+            for key, decrypted_value in normalized.items():
+                os.environ[key] = decrypted_value
+            return _as_settings_mapping(normalized)
+
+        scrubbed: Final = _scrub_db_overlay_remote_module_loads(section=section, db_value=value)
+        return _as_settings_mapping(scrubbed)
+
+    def _apply_litellm_settings_db_values(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
+        self.litellm_settings.apply_db_row("litellm_settings", db_values)
+        for key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:
+            if key in db_values and (value := self.litellm_settings.get(key)) is not None:
+                setattr(litellm, key, value)
 
     def _should_load_db_object(self, object_type: str | SupportedDBObjectType) -> bool:
         return should_load_db_object(object_type=object_type)
@@ -7737,12 +7568,8 @@ class ProxyConfig:
         if config_record is None or config_record.param_value is None:
             return
         raw_settings: Final = config_record.param_value
-        litellm_settings: Final = json.loads(raw_settings) if isinstance(raw_settings, str) else raw_settings
-        if not isinstance(litellm_settings, dict):
-            return
-        for key, value in litellm_settings.items():
-            if key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:
-                setattr(litellm, key, value)
+        db_values: Final = self._prepared_db_settings_values("litellm_settings", raw_settings)
+        self._apply_litellm_settings_db_values(db_values)
 
     async def _init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient):
         """

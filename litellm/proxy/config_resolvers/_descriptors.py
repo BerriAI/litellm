@@ -69,5 +69,7 @@ def resolve_fields(
     """
     resolved: Final = tuple(_resolve_one(descriptor, db_values, env, empty_db_is_set) for descriptor in descriptors)
     values: Final = {field_name: value for field_name, value, _ in resolved}
-    provenance: Final[dict[str, FieldSource]] = dict((field_name, source) for field_name, _, source in resolved)
+    provenance: Final[dict[str, FieldSource]] = dict(  # mutable-ok: public resolver contract returns a plain dict
+        (field_name, source) for field_name, _, source in resolved
+    )
     return values, provenance
