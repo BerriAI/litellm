@@ -1575,6 +1575,15 @@ PASS_THROUGH_HEADER_PREFIX: Final = "x-pass-"
 
 BASE_MCP_ROUTE: Final = "/mcp"
 
+TRANSCRIBE_JOB_POLLING_INTERVAL_SECONDS: Final = 10.0
+TRANSCRIBE_JOB_MAX_POLLING_ATTEMPTS: Final = 720  # 2 hours
+TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS: Final = 28800  # Amazon Transcribe quota: maximum audio file length
+TRANSCRIBE_MAX_MEDIA_BYTES: Final = 2 * 1024**3  # Amazon Transcribe quota: maximum audio file size
+TRANSCRIBE_MEDIA_DOWNLOAD_CONCURRENCY: Final = 1
+TRANSCRIBE_MEDIA_FETCH_ATTEMPTS: Final = 3
+TRANSCRIBE_MEDIA_LAST_MODIFIED_TOLERANCE_SECONDS: Final = 1.0  # S3 Last-Modified carries whole seconds only
+TRANSCRIBE_MEASURABLE_MEDIA_FORMATS: Final = frozenset({"flac", "mp3", "ogg", "wav"})  # what libsndfile can read
+
 BATCH_STATUS_POLL_INTERVAL_SECONDS: Final = int(os.getenv("BATCH_STATUS_POLL_INTERVAL_SECONDS", 3600))  # 1 hour
 BATCH_STATUS_POLL_MAX_ATTEMPTS: Final = int(os.getenv("BATCH_STATUS_POLL_MAX_ATTEMPTS", 24))  # for 24 hours
 BATCH_TPD_WINDOW_SECONDS: Final = 86400
