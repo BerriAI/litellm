@@ -3746,6 +3746,27 @@ async def test_ProxyConfig__update_general_settings_yaml_allowed_file_extensions
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_applies_db_transcribe_media_buckets(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    pc = ProxyConfig()
+    await pc._update_general_settings({"transcribe_media_buckets": ["team-audio"]})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("transcribe_media_buckets") == ["team-audio"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_yaml_transcribe_media_buckets_wins_over_db(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"transcribe_media_buckets": ["yaml-audio"]})
+    pc = ProxyConfig()
+    pc._yaml_general_settings_keys = {"transcribe_media_buckets"}
+    await pc._update_general_settings({"transcribe_media_buckets": ["team-audio"]})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("transcribe_media_buckets") == ["yaml-audio"]
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig__update_general_settings_none_input_noop():
     pc = ProxyConfig()
     # None input returns early.

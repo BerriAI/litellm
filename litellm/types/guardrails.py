@@ -62,6 +62,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.typesafe import (
+    TypeSafeGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
     VigilGuardGuardrailConfigModel,
 )
@@ -138,6 +141,7 @@ class SupportedGuardrailIntegrations(Enum):
     SINGULR = "singulr"
     HEADROOM = "headroom"
     COMPRESR = "compresr"
+    TYPESAFE = "typesafe"
     STRAIKER = "straiker"
     ALICE = "alice"
     AGENT_365 = "agent_365"
@@ -1055,7 +1059,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default="fail_closed",
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
-            "Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. "
+            "Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. "
             "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
         ),
     )
@@ -1171,6 +1175,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     LakeraV2GuardrailConfigModel,
     HeadroomGuardrailConfigModel,
     CompresrGuardrailConfigModel,
+    TypeSafeGuardrailConfigModel,
     RepelloAIGuardrailConfigModel,
     LassoGuardrailConfigModel,
     DeepKeepGuardrailConfigModel,
