@@ -1,9 +1,11 @@
 use base64::Engine;
 use bytes::Buf;
 use futures_util::{Stream, StreamExt};
-use litellm_framing::Framer;
-use litellm_framing::aws_event_stream::{AwsEventStreamFrame, AwsEventStreamFramer};
-use litellm_framing::sse::{SseFrame, SseFramer};
+use litellm_framing::{
+    Framer,
+    aws_event_stream::{AwsEventStreamFrame, AwsEventStreamFramer},
+    sse::{SseFrame, SseFramer},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 

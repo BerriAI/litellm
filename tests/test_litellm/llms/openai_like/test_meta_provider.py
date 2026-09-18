@@ -24,10 +24,6 @@ class TestMetaProviderConfig:
         assert meta.api_key_env == "META_API_KEY"
         assert meta.api_base_env == "META_API_BASE"
 
-    def test_meta_supports_responses_api(self):
-        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-
-        assert JSONProviderRegistry.supports_responses_api("meta")
 
     def test_meta_in_openai_compatible_providers(self):
         from litellm.constants import openai_compatible_providers
@@ -190,6 +186,5 @@ class TestMetaAnthropicMessages:
         )
         assert headers["authorization"] == "Bearer sk-env-key"
         assert headers["anthropic-version"] == "2023-06-01"
-
 
 

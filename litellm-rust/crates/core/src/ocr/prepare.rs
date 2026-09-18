@@ -1,8 +1,9 @@
+use litellm_callbacks::event::{Passthrough, RequestContext, WireRequest};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::OcrClient;
-use super::hooks::OcrDuringCallRequest;
+use super::route::OcrHost;
 use super::types::{OcrConnection, OcrDocument, PreparedOcrRequest, ResolvedOcrRequest};
 
 pub(crate) async fn transform_request_body<B>(
@@ -22,56 +23,62 @@ where
         request.config.get_supported_ocr_params(&request.model),
     )?;
     validate(&composed)?;
-    let retained_fields = request
-        .optional_params
-        .keys()
-        .filter(|name| composed.get(*name).is_some())
-        .cloned()
-        .chain(
-            composed
-                .get("document")
-                .is_some()
-                .then(|| "document".to_string()),
+    let passthrough_fields = Passthrough::unchanged(&caller_inputs(request)?, &composed);
+    let changed = request
+        .host
+        .before_send(
+            wire_request(url, headers, composed),
+            request_context(request, passthrough_fields),
         )
-        .collect();
-    let original_document =
-        serde_json::to_value(&request.document).map_err(|_| super::Error::RequestField {
+        .await?;
+    if !changed.body.is_object() {
+        return Err(super::Error::RequestField {
+            path: "guardrail.body".into(),
+        });
+    }
+    validate(&changed.body)?;
+    build_http_request(client, request, url, &changed.headers, &changed.body)
+}
+
+fn wire_request(url: &str, headers: &[(String, String)], body: Value) -> WireRequest {
+    WireRequest {
+        url: url.into(),
+        headers: headers.to_vec(),
+        body,
+    }
+}
+
+fn caller_inputs(request: &PreparedOcrRequest) -> Result<Map<String, Value>, super::Error> {
+    let document = request
+        .caller_document
+        .then(|| serde_json::to_value(&request.document))
+        .transpose()
+        .map_err(|_| super::Error::RequestField {
             path: "document".into(),
         })?;
-    let prepared_document = composed
-        .get("document")
-        .filter(|prepared| **prepared != original_document)
-        .cloned();
-    let (body, headers) = if request.hooks.intercepts_requests() {
-        let changed = request
-            .hooks
-            .during_call(OcrDuringCallRequest {
-                model: request.model.clone(),
-                custom_llm_provider: request.provider_name().into(),
-                api_key: request.connection.api_key.clone(),
-                url: url.into(),
-                headers: headers.to_vec(),
-                body: composed,
-                retained_fields,
-            })
-            .await?;
-        let Value::Object(mut fields) = changed.body else {
-            return Err(super::Error::RequestField {
-                path: "guardrail.body".into(),
-            });
-        };
-        if let Some(prepared) =
-            prepared_document.filter(|_| fields.get("document") == Some(&original_document))
-        {
-            fields.insert("document".into(), prepared);
-        }
-        let body = Value::Object(fields);
-        validate(&body)?;
-        (body, changed.headers)
-    } else {
-        (composed, headers.to_vec())
-    };
-    build_http_request(client, request, url, &headers, &body)
+    let params: Map<String, Value> = request.optional_params.clone().into();
+    Ok(params
+        .into_iter()
+        .chain(document.map(|document| ("document".to_string(), document)))
+        .collect())
+}
+
+fn request_context(
+    request: &PreparedOcrRequest,
+    passthrough_fields: Passthrough,
+) -> RequestContext {
+    RequestContext {
+        model: request.model.clone(),
+        custom_llm_provider: request.provider_name().into(),
+        optional_params: Value::Object(request.optional_params.clone().into()),
+        passthrough_fields,
+        secret_fields: request
+            .optional_params
+            .keys()
+            .filter(|name| super::arguments::is_secret_param(name))
+            .cloned()
+            .collect(),
+    }
 }
 
 pub(crate) fn build_http_request<B: Serialize>(
@@ -97,24 +104,15 @@ pub(crate) async fn guardrail_document(
     url: &str,
     headers: &[(String, String)],
 ) -> Result<(OcrDocument, Vec<(String, String)>), super::Error> {
-    if !request.hooks.intercepts_requests() {
-        return Ok((request.document.clone(), headers.to_vec()));
-    }
+    let body = serde_json::to_value(&request.document).map_err(|_| super::Error::RequestField {
+        path: "document".into(),
+    })?;
     let changed = request
-        .hooks
-        .during_call(OcrDuringCallRequest {
-            model: request.model.clone(),
-            custom_llm_provider: request.provider_name().into(),
-            api_key: request.connection.api_key.clone(),
-            url: url.into(),
-            headers: headers.to_vec(),
-            body: serde_json::to_value(&request.document).map_err(|_| {
-                super::Error::RequestField {
-                    path: "document".into(),
-                }
-            })?,
-            retained_fields: Vec::new(),
-        })
+        .host
+        .before_send(
+            wire_request(url, headers, body),
+            request_context(request, Passthrough::default()),
+        )
         .await?;
     let document = super::json::decode_request_value(changed.body, "guardrail.document")?;
     Ok((document, changed.headers))
@@ -139,7 +137,11 @@ pub(crate) fn credential_env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-pub(crate) fn prepare_request(request: ResolvedOcrRequest) -> PreparedOcrRequest {
+pub(crate) fn prepare_request(
+    request: ResolvedOcrRequest,
+    host: OcrHost,
+    caller_document: bool,
+) -> PreparedOcrRequest {
     use litellm_auth::{InputSource, Sourced};
 
     let credentials = request.credentials.clone();
@@ -174,7 +176,17 @@ pub(crate) fn prepare_request(request: ResolvedOcrRequest) -> PreparedOcrRequest
             ..credentials
         });
     let transport = request.transport.clone();
-    PreparedOcrRequest::new(request, OcrConnection::new(resolved, transport))
+    PreparedOcrRequest::new(
+        request,
+        OcrConnection::new(resolved, transport),
+        host,
+        caller_document,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn prepare_request_for_test(request: ResolvedOcrRequest) -> PreparedOcrRequest {
+    prepare_request(request, OcrHost::detached(), true)
 }
 
 #[cfg(test)]
