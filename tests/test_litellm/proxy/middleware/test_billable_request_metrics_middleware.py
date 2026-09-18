@@ -121,6 +121,8 @@ def test_is_pure_asgi_not_base_http_middleware():
             (BillableCategory.LLM, "/azure_speech"),
         ),
         ("/azure_speech/speechtotext/v3.2/transcriptions", (BillableCategory.LLM, "/azure_speech")),
+        ("/transcribe", (BillableCategory.LLM, "/transcribe")),
+        ("/transcribe/StartTranscriptionJob", (BillableCategory.LLM, "/transcribe")),
         ("/mcp", (BillableCategory.MCP, "/mcp")),
         ("/mcp/", (BillableCategory.MCP, "/mcp")),
         ("/mcp/tools/list", (BillableCategory.MCP, "/mcp")),
