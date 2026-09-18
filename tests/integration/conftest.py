@@ -12,9 +12,9 @@ import pytest
 import httpx
 from redis import Redis
 
-from integration._support.client import Gateway, eventually, gateway_from_environment
-from integration._support.manifest import OWNED_DIRECTORIES, contracts
-from integration._support.generation import LIFECYCLE_SETTINGS
+from tests.integration._support.client import Gateway, eventually, gateway_from_environment
+from tests.integration._support.manifest import OWNED_DIRECTORIES, contracts
+from tests.integration._support.generation import LIFECYCLE_SETTINGS
 
 COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
 REPORTS: Final = pytest.StashKey[list[pytest.TestReport]]()

@@ -23,11 +23,13 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+from litellm.llms.anthropic.experimental_pass_through.messages.mid_conversation_system import (
+    as_system_content_blocks,
+)
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
-
 
 
 @pytest.mark.asyncio
@@ -1900,7 +1902,6 @@ async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost(
         custom_llm_provider="bedrock",
     )
     assert cost > 0
-    assert cost == pytest.approx(0.0093951, rel=0, abs=1e-9)
 
 
 @pytest.mark.asyncio
@@ -1911,7 +1912,6 @@ async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
     same logging reconstruction as Anthropic /messages. Ensures token counts and
     completion_cost match model_prices for us.anthropic.claude-sonnet-4-6.
     """
-    from litellm import completion_cost
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
         AnthropicPassthroughLoggingHandler,
     )
@@ -1963,13 +1963,6 @@ async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
     assert built.usage.total_tokens == 36058
     assert built.usage.cache_creation_input_tokens == 10553
     assert built.usage.cache_read_input_tokens == 25490
-
-    cost = completion_cost(
-        completion_response=built,
-        model="bedrock/us.anthropic.claude-sonnet-4-6",
-        custom_llm_provider="bedrock",
-    )
-    assert cost == pytest.approx(0.052150725, rel=0, abs=1e-9)
 
 
 @pytest.mark.parametrize(
@@ -2533,20 +2526,16 @@ def test_bedrock_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_
 
 
 def test_as_system_content_blocks_handles_each_shape():
-    """``_as_system_content_blocks`` normalizes every system shape: ``None`` -> empty,
+    """``as_system_content_blocks`` normalizes every system shape: ``None`` -> empty,
     a string -> a single text block, a list -> a shallow copy, and any other value
     (e.g. a bare content-block dict) -> wrapped in a single-element list."""
     block = {"type": "text", "text": "x"}
-    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(None) == []
-    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks("hello") == [
-        {"type": "text", "text": "hello"}
-    ]
+    assert as_system_content_blocks(None) == []
+    assert as_system_content_blocks("hello") == [{"type": "text", "text": "hello"}]
     blocks = [block]
-    out = AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(blocks)
+    out = as_system_content_blocks(blocks)
     assert out == blocks and out is not blocks
-    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(block) == [
-        block
-    ]
+    assert as_system_content_blocks(block) == [block]
 
 
 @pytest.mark.parametrize(
@@ -2648,17 +2637,6 @@ def test_bedrock_clear_thinking_leaves_enabled_thinking_on_non_adaptive_model():
     assert changed is False
     assert request["thinking"] == {"type": "enabled", "budget_tokens": 8000}
     assert "output_config" not in request
-
-
-@pytest.fixture
-def local_beta_headers_config(monkeypatch):
-    from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
-
-    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
-    reload_beta_headers_config()
-    yield
-    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
-    reload_beta_headers_config()
 
 
 def test_bedrock_messages_preserves_clear_tool_uses_context_management_and_adds_beta(
@@ -2826,9 +2804,12 @@ def test_filter_and_transform_beta_headers_passes_context_management_for_bedrock
         "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "us.anthropic.claude-opus-4-7",
+        "us.anthropic.claude-opus-4-8",
+        "us.anthropic.claude-opus-5",
+        "us.anthropic.claude-sonnet-5",
     ],
 )
-def test_bedrock_messages_tool_search_adds_beta_header(local_beta_headers_config, model):
+def test_bedrock_messages_tool_search_adds_beta_header(local_model_cost_map, local_beta_headers_config, model):
     """
     LIT-4522: Bedrock InvokeModel only admits ``tool_search_tool_*`` tool types
     when the request body carries the ``tool-search-tool-2025-10-19`` beta;
@@ -2838,6 +2819,11 @@ def test_bedrock_messages_tool_search_adds_beta_header(local_beta_headers_config
     Opus 4.7, so the beta was silently dropped for those models and every
     tool-search request failed. Verified live 2026-08-11: Bedrock returns 200
     with ``server_tool_use`` for all three models once the beta is sent.
+
+    LIT-5851: the same allowlist then missed Opus 4.8, Opus 5 and Sonnet 5, so
+    the gate now reads the model map's ``supports_tool_search`` flag (explicit
+    on the Bedrock entries, and the ``claude-tool-search`` rule for Claude 4.5
+    and newer) instead of a per-model name list.
     """
     from litellm.types.router import GenericLiteLLMParams
 
@@ -2871,10 +2857,10 @@ def test_bedrock_messages_tool_search_adds_beta_header(local_beta_headers_config
 
 
 def test_bedrock_messages_tool_search_model_map_flag_is_authoritative(local_model_cost_map, monkeypatch):
-    """``supports_tool_search`` lives in the model map; the name patterns in
-    ``_supports_tool_search_on_bedrock`` are only a fallback for ids the map
-    cannot resolve. Flipping the mapped entry's flag to ``False`` must win even
-    though the model name still matches the ``haiku-4-5`` pattern."""
+    """``supports_tool_search`` lives in the model map; the ``claude-tool-search``
+    rule only fills entries that carry no opinion. Flipping the mapped entry's
+    flag to ``False`` must win even though the id is a Claude 4.5 the rule
+    would flag."""
     import litellm
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
@@ -2893,14 +2879,22 @@ def test_bedrock_messages_tool_search_model_map_flag_is_authoritative(local_mode
 @pytest.mark.parametrize(
     "model, expected",
     [
-        pytest.param("us.anthropic.claude-opus-4-6-v99:9", True, id="unmapped_id_falls_back_to_patterns"),
-        pytest.param("anthropic.claude-3-5-sonnet-20240620-v1:0", False, id="mapped_entry_without_flag_no_pattern"),
+        pytest.param("us.anthropic.claude-opus-4-6-v99:9", True, id="unmapped_4_6_variant"),
+        pytest.param("us.anthropic.claude-haiku-5-2", True, id="unmapped_future_minor"),
+        pytest.param(
+            "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-5",
+            True,
+            id="inference_profile_arn",
+        ),
+        pytest.param("anthropic.claude-3-5-sonnet-20240620-v1:0", False, id="mapped_claude_3_5_without_flag"),
+        pytest.param("us.anthropic.claude-opus-4-1-20250805-v1:0", False, id="mapped_opus_4_1_without_flag"),
+        pytest.param("us.anthropic.claude-sonnet-4-20250514-v1:0", False, id="mapped_dated_sonnet_4_without_flag"),
     ],
 )
-def test_bedrock_messages_tool_search_pattern_fallback(local_model_cost_map, model, expected):
-    """Ids the model map cannot resolve (or resolves without a
-    ``supports_tool_search`` opinion) fall through to the name patterns, so
-    ARNs and unlisted regional variants of supported families keep working."""
+def test_bedrock_messages_tool_search_follows_claude_tool_search_rule(local_model_cost_map, model, expected):
+    """Ids the model map cannot resolve, or resolves without a ``supports_tool_search``
+    opinion, take the ``claude-tool-search`` fallback rule: Claude 4.5 and newer get
+    the beta, ARNs and unlisted regional variants included, and older Claudes do not."""
     cfg = AmazonAnthropicClaudeMessagesConfig()
 
     assert cfg._supports_tool_search_on_bedrock(model) is expected

@@ -1,6 +1,6 @@
 """Shared handling of Claude Code's ~/.claude/settings.json.
 
-`lite up` and `lite autoroute up` patch this file temporarily and restore it on
+`lite up` and `lite autoroute start` patch this file temporarily and restore it on
 exit; `lite configure claude` patches it persistently and records how to undo it.
 All of them need the same merge, and `up` already imports from `auth`, so the
 shared parts live here rather than in any one command module. The credential is
@@ -88,7 +88,7 @@ class SettingsFileOwner:
 
 SETTINGS_FILE_OWNERS: Final = (
     SettingsFileOwner(BACKUP_PATH, "lite up", "lite down"),
-    SettingsFileOwner(AUTOROUTE_BACKUP_PATH, "lite autoroute up", "lite autoroute down"),
+    SettingsFileOwner(AUTOROUTE_BACKUP_PATH, "lite autoroute start", "lite autoroute stop"),
 )
 
 _SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
@@ -111,7 +111,7 @@ def _is_default_settings_file(settings_path: Path) -> bool:
 
 
 def settings_file_owners(settings_path: Path) -> tuple[SettingsFileOwner, ...]:
-    """The commands whose backups guard settings_path: `lite up` and `lite autoroute up` only ever manage the default file."""
+    """The commands whose backups guard settings_path: `lite up` and `lite autoroute start` only ever manage the default file."""
     return SETTINGS_FILE_OWNERS if _is_default_settings_file(settings_path) else ()
 
 
@@ -240,7 +240,7 @@ def _env_object(settings: Mapping[str, JsonValue], path: Path) -> Mapping[str, J
 
 
 def refuse_while_owned(settings_path: Path, owners: Sequence[SettingsFileOwner]) -> None:
-    """Refuse while `lite up` or `lite autoroute up` holds a backup it will restore over any write; a
+    """Refuse while `lite up` or `lite autoroute start` holds a backup it will restore over any write; a
     purely local check, so commands run it before any login prompt or request."""
     for owner in owners:
         if owner.backup_path.exists():
@@ -262,7 +262,7 @@ def _write_target(settings_path: Path) -> Path:
 
 def write_claude_settings(settings_path: Path, settings: Mapping[str, JsonValue]) -> None:
     """The one way a settings document lands on disk: staged owner-only beside the target and renamed into
-    place, through a symlink rather than over it. Every writer (`configure`, `up`, `autoroute up` and the
+    place, through a symlink rather than over it. Every writer (`configure`, `up`, `autoroute start` and the
     restores) may be carrying the credential, so none creates the file under the umask or truncates it."""
     target: Final = _write_target(settings_path)
     try:
@@ -341,7 +341,7 @@ def merge_claude_settings(
     an apiKeyHelper) are removed, since Claude Code given two credentials may send the wrong one.
     ENABLE_TOOL_SEARCH and CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY get their defaults only when
     missing. `default_model` is the top-level `model` and env.ANTHROPIC_MODEL (see StartOn);
-    `tier_model` is `lite autoroute up`'s knob that points every ANTHROPIC_DEFAULT_*_MODEL at one
+    `tier_model` is `lite autoroute start`'s knob that points every ANTHROPIC_DEFAULT_*_MODEL at one
     group. Apart from those tier keys, exactly OWNED_PATHS are touched.
     """
     raw_env: Final = settings.get(ENV_KEY, {})
