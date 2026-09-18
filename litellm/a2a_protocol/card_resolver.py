@@ -6,7 +6,7 @@ Extends the A2A SDK's card resolver to support multiple well-known paths.
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.exceptions import A2AAgentCardDiscoveryError
@@ -24,7 +24,6 @@ AGENT_CARD_PATH_PARAM: Final = "agent_card_path"
 
 try:
     from a2a.client import A2ACardResolver as _A2ACardResolver
-    from a2a.client.errors import AgentCardResolutionError
     from a2a.utils.constants import (
         AGENT_CARD_WELL_KNOWN_PATH,
         PREV_AGENT_CARD_WELL_KNOWN_PATH,
@@ -33,11 +32,16 @@ except ImportError:
     pass
 
 
+@runtime_checkable
+class _HasStatusCode(Protocol):
+    status_code: int | None
+
+
 def _discovery_status_code(failures: tuple[tuple[str, Exception], ...]) -> int:
     statuses: Final = tuple(
         error.status_code
         for _, error in failures
-        if isinstance(error, AgentCardResolutionError) and error.status_code is not None and error.status_code != 404
+        if isinstance(error, _HasStatusCode) and error.status_code is not None and error.status_code != 404
     )
     return statuses[0] if statuses else 404
 
