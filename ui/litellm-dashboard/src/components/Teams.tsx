@@ -38,6 +38,7 @@ import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "./common_components/RouterSettingsAccordion";
 import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
 import type { Team } from "./key_team_helpers/key_list";
+import { BudgetWindowsEditor } from "./key_team_helpers/BudgetWindowsEditor";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
 import { toast } from "@/lib/toast";
@@ -103,6 +104,7 @@ const teamCreateFieldsSchema = z.object({
   allowed_agents_and_groups: z.object({ agents: z.array(z.string()), accessGroups: z.array(z.string()) }).optional(),
   object_permission_search_tools: z.array(z.string()).optional(),
   object_permission_skills: z.array(z.string()).optional(),
+  budget_limits: z.array(z.object({ budget_duration: z.string(), max_budget: z.number().nullable() })).optional(),
 });
 
 type TeamCreateFormValues = z.infer<typeof teamCreateFieldsSchema>;
@@ -134,6 +136,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
   allowed_agents_and_groups: undefined,
   object_permission_search_tools: undefined,
   object_permission_skills: undefined,
+  budget_limits: undefined,
 };
 
 const ADDITIONAL_SETTINGS_FIELDS = [
@@ -532,6 +535,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           formValues.model_max_budget = modelMaxBudget;
         }
 
+        const validWindows = (formValues.budget_limits ?? []).filter(
+          (window) => window.budget_duration && window.max_budget !== null && window.max_budget !== undefined,
+        );
+        if (validWindows.length > 0) {
+          formValues.budget_limits = validWindows;
+        } else {
+          delete formValues.budget_limits;
+        }
+
         // Add router_settings if any are defined
         if (routerSettings?.router_settings) {
           // Only include router_settings if it has at least one non-null value
@@ -819,6 +831,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                         onChange={(next) => onChange(next ?? undefined)}
                       />
                     )}
+                  </FormField>
+                  <FormField
+                    control={form.control}
+                    name="budget_limits"
+                    className="mt-6"
+                    label="Budget Windows"
+                    description="Concurrent spend caps per time window for this team. Each window resets on its own schedule."
+                  >
+                    {({ value, onChange }) => <BudgetWindowsEditor value={value ?? []} onChange={onChange} />}
                   </FormField>
                   <ModelMaxBudgetField
                     key={`model-max-budget-${routerSettingsKey}`}

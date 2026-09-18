@@ -789,4 +789,54 @@ describe("UserEditView", () => {
       expect(onSubmit.mock.calls[0][0].metadata).toBe("");
     });
   });
+
+  describe("budget windows", () => {
+    const userDataWithWindows = {
+      ...MOCK_USER_DATA,
+      user_info: {
+        ...MOCK_USER_DATA.user_info,
+        budget_limits: [{ budget_duration: "1d", max_budget: 10, reset_at: "2026-10-01T00:00:00Z" }],
+      },
+    };
+
+    it("should seed the editor from the stored windows and omit budget_limits from an untouched save", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithWindows} onSubmit={onSubmit} />);
+
+      expect(await screen.findByPlaceholderText("Max spend ($)")).toHaveValue(10);
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("budget_limits");
+    });
+
+    it("should send the edited window as budget_limits", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithWindows} onSubmit={onSubmit} />);
+
+      fireEvent.change(await screen.findByPlaceholderText("Max spend ($)"), { target: { value: "42" } });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0].budget_limits).toEqual([{ budget_duration: "1d", max_budget: 42 }]);
+    });
+
+    it("should send an empty budget_limits when the last window is removed, so stored windows are cleared", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithWindows} onSubmit={onSubmit} />);
+
+      await userEvent.click(await screen.findByRole("button", { name: "✕" }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0].budget_limits).toEqual([]);
+    });
+  });
 });

@@ -1702,6 +1702,72 @@ describe("TeamInfoView", () => {
     });
   });
 
+  describe("budget windows", () => {
+    const teamWithWindows = () =>
+      createMockTeamData({
+        budget_limits: [{ budget_duration: "1d", max_budget: 10, reset_at: "2026-10-01T00:00:00Z" }],
+      });
+
+    const openWindowsEditor = async (user: ReturnType<typeof userEvent.setup>) => {
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      await screen.findByLabelText("Team Name");
+    };
+
+    const savedPayload = async () => {
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+      return vi.mocked(networking.teamUpdateCall).mock.calls[0][1] as Record<string, unknown>;
+    };
+
+    it("seeds the editor from the stored windows and leaves budget_limits out of an untouched save", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(teamWithWindows());
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await openWindowsEditor(user);
+      expect(screen.getByPlaceholderText("Max spend ($)")).toHaveValue(10);
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect(await savedPayload()).not.toHaveProperty("budget_limits");
+    });
+
+    it("sends the edited window as budget_limits", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(teamWithWindows());
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await openWindowsEditor(user);
+      fireEvent.change(screen.getByPlaceholderText("Max spend ($)"), { target: { value: "42" } });
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect((await savedPayload()).budget_limits).toEqual([{ budget_duration: "1d", max_budget: 42 }]);
+    });
+
+    it("sends an empty budget_limits when the last window is removed, so stored windows are cleared", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(teamWithWindows());
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await openWindowsEditor(user);
+      await user.click(screen.getByRole("button", { name: "✕" }));
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect((await savedPayload()).budget_limits).toEqual([]);
+    });
+  });
+
   describe("team member settings", () => {
     it("should populate Default Key Duration from the team's stored metadata", async () => {
       const user = userEvent.setup({ delay: null });

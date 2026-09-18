@@ -59,6 +59,7 @@ import TeamAdminSettingsForm from "./TeamAdminSettingsForm";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown, { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
+import { BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import {
   ModelBudgetUsage,
   ModelMaxBudget,
@@ -283,6 +284,7 @@ export interface TeamData {
     max_budget: number | null;
     soft_budget?: number | null;
     budget_duration: string | null;
+    budget_limits?: Array<{ budget_duration: string; max_budget: number; reset_at?: string }> | null;
     model_max_budget?: StoredModelMaxBudget | null;
     model_max_budget_usage?: Record<string, ModelBudgetUsage> | null;
     models: string[];
@@ -346,6 +348,7 @@ const teamUpdateFieldsSchema = z.object({
   team_member_tpm_limit: numericInputSchema,
   team_member_rpm_limit: numericInputSchema,
   budget_duration: z.string().nullish(),
+  budget_limits: z.array(z.object({ budget_duration: z.string(), max_budget: z.number().nullable() })).optional(),
   tpm_limit: numericInputSchema,
   rpm_limit: numericInputSchema,
   tpd_limit: numericInputSchema,
@@ -428,6 +431,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   team_member_tpm_limit: undefined,
   team_member_rpm_limit: undefined,
   budget_duration: undefined,
+  budget_limits: undefined,
   tpm_limit: undefined,
   rpm_limit: undefined,
   tpd_limit: undefined,
@@ -478,6 +482,10 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
   team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
   budget_duration: info.budget_duration,
+  budget_limits: (info.budget_limits ?? []).map((window) => ({
+    budget_duration: window.budget_duration,
+    max_budget: window.max_budget,
+  })),
   tpm_limit: info.tpm_limit,
   rpm_limit: info.rpm_limit,
   tpd_limit: info.tpd_limit,
@@ -984,6 +992,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         ...(values.policies?.length > 0 ? { policies: values.policies } : {}),
         ...(values.organization_id !== info.organization_id ? { organization_id: values.organization_id ?? null } : {}),
       };
+
+      const windowSignature = (
+        windows: Array<{ budget_duration: string; max_budget: number | null }> | null | undefined,
+      ) =>
+        (windows ?? [])
+          .filter((w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined)
+          .map((w) => `${w.budget_duration}:${w.max_budget}`)
+          .sort()
+          .join("|");
+      const validWindows = (values.budget_limits ?? []).filter(
+        (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
+      );
+      if (windowSignature(info.budget_limits) !== windowSignature(validWindows)) {
+        updateData.budget_limits = validWindows;
+      }
 
       updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
       updateData.team_member_budget_duration = values.team_member_budget_duration;
@@ -1575,6 +1598,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         onChange={(next) => onChange(next ?? null)}
                       />
                     )}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="budget_limits"
+                    label="Budget Windows"
+                    description="Concurrent spend caps per time window for this team. Each window resets on its own schedule."
+                  >
+                    {({ value, onChange }) => <BudgetWindowsEditor value={value ?? []} onChange={onChange} />}
                   </FormField>
 
                   <ModelMaxBudgetField

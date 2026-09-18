@@ -31076,6 +31076,8 @@ export interface components {
             allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -31164,6 +31166,8 @@ export interface components {
             allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -40305,6 +40309,8 @@ export interface components {
             updated_by?: string | null;
             /** User */
             user?: unknown | null;
+            /** User Budget Limits */
+            user_budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** User Email */
             user_email?: string | null;
             /** User Id */

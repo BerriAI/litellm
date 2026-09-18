@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { z } from "zod/v4";
 import { all_admin_roles } from "@/utils/roles";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
+import { BudgetWindowsEditor } from "@/components/key_team_helpers/BudgetWindowsEditor";
 import { ModelMaxBudget, ModelMaxBudgetField } from "@/components/key_team_helpers/ModelMaxBudgetEditor";
 import { modelMaxBudgetUpdate } from "@/components/key_team_helpers/modelMaxBudgetPayload";
 import { useSeededState } from "@/components/key_team_helpers/useSeededState";
@@ -52,6 +53,7 @@ const userEditShape = {
   user_role: z.string().nullish(),
   models: z.array(z.string()),
   budget_duration: z.string().nullish(),
+  budget_limits: z.array(z.object({ budget_duration: z.string(), max_budget: z.number().nullable() })).optional(),
   metadata: z.string().nullish(),
   mcp_servers_and_groups: MCP_SELECTION_SHAPE.optional(),
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
@@ -98,12 +100,31 @@ const toFormValues = (
     models: userData.user_info?.models || [],
     max_budget: isUnlimited ? "" : maxBudget,
     budget_duration: userData.user_info?.budget_duration,
+    ...(!isBulkEdit
+      ? {
+          budget_limits: (userData.user_info?.budget_limits ?? []).map(
+            (window: { budget_duration: string; max_budget: number | null }) => ({
+              budget_duration: window.budget_duration,
+              max_budget: window.max_budget,
+            }),
+          ),
+        }
+      : {}),
     metadata: userData.user_info?.metadata ? JSON.stringify(userData.user_info.metadata, null, 2) : undefined,
     ...(canEditMcpPermissions ? buildMcpFieldValues(objectPermission) : {}),
   };
 };
 
 type ParsedMetadata = { ok: true; value: unknown } | { ok: false };
+
+const budgetWindowSignature = (
+  windows: Array<{ budget_duration: string; max_budget: number | null }> | null | undefined,
+) =>
+  (windows ?? [])
+    .filter((w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined)
+    .map((w) => `${w.budget_duration}:${w.max_budget}`)
+    .sort()
+    .join("|");
 
 const parseMetadata = (metadata: string | null | undefined): ParsedMetadata => {
   if (!metadata) {
@@ -172,8 +193,20 @@ export function UserEditView({
     }
 
     const modelBudgets = modelMaxBudgetUpdate(modelMaxBudget, userData.user_info?.model_max_budget);
+    const validWindows = (values.budget_limits ?? []).filter(
+      (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
+    );
+    const budgetLimitsChanged =
+      "budget_limits" in values &&
+      budgetWindowSignature(userData.user_info?.budget_limits) !== budgetWindowSignature(validWindows);
+    const submitted = { ...values } as Record<string, unknown>;
+    if (!budgetLimitsChanged) {
+      delete submitted.budget_limits;
+    } else {
+      submitted.budget_limits = validWindows;
+    }
     onSubmit({
-      ...values,
+      ...submitted,
       ...("metadata" in values ? { metadata: metadata.value } : {}),
       ...(modelBudgets !== undefined && { model_max_budget: modelBudgets }),
       max_budget:
@@ -295,6 +328,16 @@ export function UserEditView({
 
           {/* Bulk edit forwards a fixed field list and has no single stored budget to
               diff against, so the editor would silently discard whatever was typed. */}
+          {!isBulkEdit && (
+            <FormField
+              control={form.control}
+              name="budget_limits"
+              label="Budget Windows"
+              description="Concurrent spend caps per time window for this user. Each window resets on its own schedule."
+            >
+              {({ value, onChange }) => <BudgetWindowsEditor value={value ?? []} onChange={onChange} />}
+            </FormField>
+          )}
           {!isBulkEdit && (
             <ModelMaxBudgetField
               key={userData.user_id}

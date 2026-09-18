@@ -777,6 +777,25 @@ describe("Teams - Reset Budget in team create", () => {
       expect(screen.getByText("n/a")).toBeInTheDocument();
     });
   });
+
+  it("should send a filled budget window as budget_limits", async () => {
+    await openCreateModal();
+
+    await userEvent.click(screen.getByRole("button", { name: /add budget window/i }));
+    fireEvent.change(screen.getByPlaceholderText("Max spend ($)"), { target: { value: "25" } });
+
+    const payload = await submitCreateModal();
+
+    expect(payload.budget_limits).toEqual([{ budget_duration: "24h", max_budget: 25 }]);
+  });
+
+  it("should omit budget_limits when no window is filled in", async () => {
+    await openCreateModal();
+
+    const payload = await submitCreateModal();
+
+    expect(payload).not.toHaveProperty("budget_limits");
+  });
 });
 
 describe("Teams - metadata key-value pairs in team create", () => {
