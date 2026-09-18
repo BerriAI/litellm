@@ -1,14 +1,17 @@
 import uuid
 from contextlib import ExitStack
+from pathlib import Path
 from typing import Final
 
 import pytest
+import yaml
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
 
 from integration._support.client import Gateway
 from integration._support.database import read_rows
 from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
+from integration._support.process import owned_proxy
 from integration._support.mcp import call_tool, mcp_peer, register_mcp, tool_names
 
 
@@ -121,3 +124,100 @@ def test_generated_mcp_edits_preserve_actual_headers_and_tool_results(gateway: G
                     self.resources.close()
 
         run_state_machine_as_test(Servers, settings=LIFECYCLE_SETTINGS)
+
+
+@pytest.mark.covers("other.mcp.health.restricted_keys_intersect_grants_in_both_modes")
+def test_health_intersects_route_restricted_key_grants_in_both_management_modes(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    for mode in ("restricted", "view_all"):
+        config = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["general_settings"]["user_mcp_management_mode"] = mode
+        path = tmp_path / f"health-{mode}.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with (
+            owned_proxy(gateway, tmp_path, {}, config=path) as candidate,
+            mcp_peer() as peer,
+            candidate.scenario() as scenario,
+        ):
+            first = register_mcp(scenario, peer, "health" + uuid.uuid4().hex)
+            second = register_mcp(scenario, peer, "health" + uuid.uuid4().hex)
+            owned = {first, second}
+            control = scenario.key(object_permission={"mcp_servers": [first]})
+            names = tool_names(candidate, control, first)
+            healthy = call_tool(candidate, control, first, names["add"], {"a": 3, "b": 5})
+            assert healthy.status_code == 200 and healthy.json()["content"][0]["text"] == "8", healthy.text
+            for grants in ([first], [second], []):
+                key = scenario.key(
+                    allowed_routes=["/v1/mcp/server", "/v1/mcp/server/health"],
+                    object_permission={"mcp_servers": grants},
+                )
+                listed = candidate.request("GET", "/v1/mcp/server", key=key)
+                assert listed.status_code == 200, listed.text
+                assert {row["server_id"] for row in listed.json()}.intersection(owned) == set(grants)
+                for requested in (None, [second], [first, second]):
+                    response = candidate.client.get(
+                        "/v1/mcp/server/health",
+                        headers={"Authorization": f"Bearer {key}"},
+                        params=[] if requested is None else [("server_ids", identity) for identity in requested],
+                    )
+                    assert response.status_code == 200, response.text
+                    expected = set(grants) if requested is None else set(grants).intersection(requested)
+                    assert {row["server_id"] for row in response.json()}.intersection(owned) == expected, response.text
+                    assert all(row["status"] == "healthy" for row in response.json() if row["server_id"] in owned)
+
+
+@pytest.mark.covers("other.mcp.credentials.warm_removal_fails_closed_without_upstream_traffic")
+def test_warm_credential_removal_rejects_without_upstream_traffic(gateway: Gateway) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        identity = register_mcp(
+            scenario,
+            peer,
+            "credentials" + uuid.uuid4().hex,
+            auth_type="bearer_token",
+            static_headers={"Authorization": "Bearer synthetic-upstream-credential"},
+        )
+        key = scenario.key(object_permission={"mcp_servers": [identity]})
+        names = tool_names(gateway, key, identity)
+        warm = call_tool(gateway, key, identity, names["add"], {"a": 3, "b": 5})
+        assert warm.status_code == 200 and warm.json()["content"][0]["text"] == "8", warm.text
+        calls = tuple(item for item in peer.drain() if item["body"].get("method") == "tools/call")
+        assert len(calls) == 1
+        assert calls[0]["headers"][b"authorization"] == b"Bearer synthetic-upstream-credential"
+        removed = gateway.request("PUT", "/v1/mcp/server", {"server_id": identity, "static_headers": {}})
+        assert removed.status_code == 202, removed.text
+        stored = gateway.request("GET", f"/v1/mcp/server/{identity}")
+        assert stored.status_code == 200, stored.text
+        assert stored.json()["auth_type"] == "bearer_token"
+        assert not stored.json().get("static_headers"), stored.text
+        peer.drain()
+        for operation in ("list", "call"):
+            rejected = (
+                gateway.client.get(
+                    "/mcp-rest/tools/list", params={"server_id": identity}, headers={"x-litellm-api-key": key}
+                )
+                if operation == "list"
+                else call_tool(gateway, key, identity, names["add"], {"a": 3, "b": 5})
+            )
+            assert rejected.status_code == 500, rejected.text
+            assert peer.drain() == (), "missing static credential escaped to upstream"
+        changed = gateway.request(
+            "PUT",
+            "/v1/mcp/server",
+            {
+                "server_id": identity,
+                "auth_type": "oauth2_token_exchange",
+                "token_exchange_endpoint": peer.url + "/token",
+                "credentials": {"client_id": "synthetic-client"},
+            },
+        )
+        assert changed.status_code == 202, changed.text
+        peer.drain()
+        rejected_subject = call_tool(gateway, key, identity, names["add"], {"a": 3, "b": 5})
+        assert rejected_subject.status_code == 401, rejected_subject.text
+        assert peer.drain() == (), "virtual key cannot supply an OBO subject token"
+        control_id = register_mcp(scenario, peer, "control" + uuid.uuid4().hex, auth_type="none")
+        control_key = scenario.key(object_permission={"mcp_servers": [control_id]})
+        control_names = tool_names(gateway, control_key, control_id)
+        control = call_tool(gateway, control_key, control_id, control_names["multiply"], {"a": 3, "b": 5})
+        assert control.status_code == 200 and control.json()["content"][0]["text"] == "15", control.text

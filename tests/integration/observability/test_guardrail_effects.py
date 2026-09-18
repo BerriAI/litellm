@@ -8,6 +8,7 @@ import yaml
 
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
+from integration._support.mcp import mcp_peer, register_mcp, tool_names
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 
@@ -143,3 +144,72 @@ def test_guardrail_denial_prevents_provider_and_preserves_allowed_control(gatewa
                 )
                 assert len(observed.get("/__observations").json()["requests"]) == 1
             assert len(policy.drain()) == 2
+
+
+@pytest.mark.covers("other.mcp.guardrails.request_selection_blocks_resolved_tool_without_execution")
+def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway: Gateway, tmp_path: Path) -> None:
+    guardrail = "mcp-policy-" + uuid.uuid4().hex
+    config = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["guardrails"] = [
+        {
+            "guardrail_name": guardrail,
+            "litellm_params": {
+                "guardrail": "custom_code",
+                "mode": "pre_mcp_call",
+                "default_on": False,
+                "custom_code": (
+                    "def apply_guardrail(inputs, request_data, input_type):\n"
+                    '    if inputs.get("tools", [{}])[0].get("function", {}).get("name") == "add":\n'
+                    '        return block("integration resolved add denied")\n'
+                    "    return allow()\n"
+                ),
+            },
+        }
+    ]
+    path = tmp_path / "mcp-guardrail.yaml"
+    path.write_text(yaml.safe_dump(config))
+    with (
+        owned_proxy(gateway, tmp_path, {}, config=path) as candidate,
+        mcp_peer() as peer,
+        candidate.scenario() as scenario,
+    ):
+        identity = register_mcp(scenario, peer, "guardrail" + uuid.uuid4().hex)
+        permission = {"mcp_servers": [identity], "mcp_tool_search_enabled": True}
+        key = scenario.key(object_permission=permission)
+        key_selected = scenario.key(object_permission=permission, guardrails=[guardrail])
+        team = scenario.team(guardrails=[guardrail])
+        team_selected = scenario.key(team_id=team, object_permission=permission)
+        names = tool_names(candidate, key, identity)
+        assert set(names) == {"add", "multiply", "fail"}
+        for virtual in (False, True):
+            for caller, selected, tool, expected in (
+                (key, [], "add", 8),
+                (key, [guardrail], "add", None),
+                (key_selected, [], "add", None),
+                (team_selected, [], "add", None),
+                (key, [guardrail], "multiply", 15),
+            ):
+                arguments = {"a": 3, "b": 5}
+                peer.drain()
+                response = candidate.client.post(
+                    "/mcp-rest/tools/call",
+                    headers={"x-litellm-api-key": caller},
+                    json={
+                        "server_id": identity,
+                        "name": "mcp_tool_call" if virtual else names[tool],
+                        "arguments": {"tool_name": names[tool], "arguments": arguments} if virtual else arguments,
+                        "guardrails": selected,
+                    },
+                )
+                calls = tuple(item for item in peer.drain() if item["body"].get("method") == "tools/call")
+                if expected is None:
+                    assert response.status_code == 400, response.text
+                    assert "integration resolved add denied" in response.text, response.text
+                    assert calls == (), "pre-call denial must prevent upstream execution"
+                else:
+                    assert response.status_code == 200, response.text
+                    assert response.json()["isError"] is False
+                    assert response.json()["content"][0]["text"] == str(expected), response.text
+                    assert len(calls) == 1
+                    assert calls[0]["body"]["params"]["name"] == tool
+                    assert calls[0]["body"]["params"]["arguments"] == arguments
