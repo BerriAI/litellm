@@ -1254,7 +1254,7 @@ if MCP_AVAILABLE:
         """
         user_mcp_management_mode: Final = _get_user_mcp_management_mode()
 
-        if user_mcp_management_mode == "view_all":
+        if user_mcp_management_mode == "view_all" and not _is_restricted_virtual_key_request(user_api_key_dict):
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(server_ids=server_ids)
             return [{"server_id": server.server_id, "status": server.status} for server in servers]
 

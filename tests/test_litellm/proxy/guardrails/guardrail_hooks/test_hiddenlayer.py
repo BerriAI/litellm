@@ -277,6 +277,31 @@ class TestHiddenlayerGuardrail:
         mock_post.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_apply_guardrail_response_scans_output_text_not_conversation(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
+        guardrail = HiddenlayerGuardrail(guardrail_name="hiddenlayer", event_hook="post_call", default_on=True)
+        request_messages = [
+            {"role": "system", "content": "You are a helpful assistant"},
+            {"role": "user", "content": "What is the capital of France?"},
+        ]
+        inputs = GenericGuardrailAPIInputs(
+            texts=["Paris."],
+            structured_messages=[*request_messages, {"role": "assistant", "content": "Paris."}],
+        )
+        mock_api_response = MagicMock(spec=Response)
+        mock_api_response.json.return_value = {"evaluation": {"action": "ALLOW"}}
+        mock_api_response.raise_for_status = MagicMock()
+
+        with patch.object(guardrail._http_client, "post", return_value=mock_api_response) as mock_post:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={"model": "gpt-3.5-turbo", "messages": request_messages},
+                input_type="response",
+            )
+
+        assert mock_post.call_args.kwargs["json"]["output"] == {"messages": [{"role": "user", "content": "Paris."}]}
+
+    @pytest.mark.asyncio
     async def test_apply_guardrail_response_with_violations(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail for response with violations detected."""
 

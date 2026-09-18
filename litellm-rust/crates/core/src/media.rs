@@ -1,12 +1,16 @@
-use std::future::Future;
-use std::io;
-use std::net::{IpAddr, SocketAddr};
-use std::pin::Pin;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    future::Future,
+    io,
+    net::{IpAddr, SocketAddr},
+    pin::Pin,
+    sync::Arc,
+    time::Duration,
+};
 
-use reqwest::Url;
-use reqwest::dns::{Addrs, Name, Resolve, Resolving};
+use reqwest::{
+    Url,
+    dns::{Addrs, Name, Resolve, Resolving},
+};
 
 use crate::constants::MEDIA_CONNECT_TIMEOUT_SECS;
 
@@ -279,10 +283,14 @@ impl Resolve for PublicDnsResolver {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashSet;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    use super::*;
 
     async fn serve(response: &'static [u8]) -> (Url, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0")
