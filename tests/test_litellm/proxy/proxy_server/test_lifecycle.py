@@ -131,6 +131,28 @@ async def test_proxy_shutdown_event_disconnects_prisma_and_resets(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_proxy_shutdown_flushes_every_langfuse_export_channel(monkeypatch):
+    """A generation finished just before a graceful restart is still queued in its batch
+    processor, so shutdown must flush every acquired export channel."""
+    from litellm.integrations.langfuse import langfuse_sdk
+
+    flushed = MagicMock(return_value=True)
+    monkeypatch.setattr(langfuse_sdk, "flush_langfuse_tracing", flushed)
+    monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+    monkeypatch.setattr(ps, "jwt_handler", MagicMock(close=AsyncMock()), raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    await proxy_shutdown_event()
+
+    assert flushed.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monkeypatch):
     """
     The gateway request fold lives in memory, so shutdown drains it to the database.

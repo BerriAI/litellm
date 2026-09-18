@@ -35,6 +35,7 @@ from litellm.integrations.langfuse.langfuse_sdk import (
     build_langfuse_client,
     build_langfuse_tracing,
     configured_sample_rate,
+    flush_langfuse_tracing,
     observation_attributes,
     resolve_observation_id,
     resolve_trace_id,
@@ -502,6 +503,26 @@ def test_changed_credentials_or_settings_get_their_own_channel(override):
     assert _acquire() is not _acquire(**override)
 
 
+def test_flush_langfuse_tracing_exports_the_queued_spans_of_every_channel(monkeypatch: pytest.MonkeyPatch):
+    """The proxy shutdown hook flushes through this, so a span finished just before a
+    graceful restart must reach the exporter without waiting for the batch interval."""
+    exporters: Final[
+        list[InMemorySpanExporter]
+    ] = []  # mutable-ok: collects the exporters the patched builder hands out
+
+    def build_in_memory(*, public_key: str, secret_key: str, base_url: str) -> InMemorySpanExporter:
+        exporters.append(InMemorySpanExporter())
+        return exporters[-1]
+
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk._build_span_exporter", build_in_memory)
+    for public_key in ("pk-flush-test-a", "pk-flush-test-b"):
+        _acquire(public_key=public_key, mock_mode=False, flush_interval=600.0).tracer.start_span("generation").end()
+
+    assert [len(exporter.get_finished_spans()) for exporter in exporters] == [0, 0]
+    assert flush_langfuse_tracing() is True
+    assert [len(exporter.get_finished_spans()) for exporter in exporters] == [1, 1]
+
+
 def test_a_changed_sample_rate_rebuilds_the_channel(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("LANGFUSE_SAMPLE_RATE", "0.25")
     quarter = _acquire(public_key="pk-resample-test")
@@ -624,9 +645,29 @@ def test_ssl_exporter_carries_litellm_tls_material(monkeypatch, tmp_path):
         ("https://lf.internal.example", "/otel/traces", "https://lf.internal.example/otel/traces"),
         ("https://lf.internal.example/", "/otel/traces", "https://lf.internal.example/otel/traces"),
         ("https://lf.internal.example", "otel/traces", "https://lf.internal.example/otel/traces"),
+        (
+            "https://lf.internal.example",
+            "//elsewhere.example/otel",
+            "https://lf.internal.example/elsewhere.example/otel",
+        ),
+        (
+            "https://lf.internal.example",
+            "https://elsewhere.example/otel",
+            "https://lf.internal.example/https://elsewhere.example/otel",
+        ),
+    ],
+    ids=[
+        "default",
+        "leading-slash",
+        "both-slashes",
+        "no-slash",
+        "scheme-relative-stays-on-host",
+        "absolute-stays-on-host",
     ],
 )
-def test_export_endpoint_never_doubles_the_slash(monkeypatch, base_url, export_path, expected):
+def test_export_endpoint_never_doubles_the_slash_or_leaves_the_configured_host(
+    monkeypatch, base_url, export_path, expected
+):
     if export_path is None:
         monkeypatch.delenv("LANGFUSE_OTEL_TRACES_EXPORT_PATH", raising=False)
     else:

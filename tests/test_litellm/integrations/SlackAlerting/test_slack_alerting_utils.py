@@ -76,9 +76,10 @@ async def test_langfuse_trace_url_when_callback_registered_as_logger_instance(mo
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
     monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setenv("LANGFUSE_HOST", "http://env-host.invalid")
     logging_obj = MagicMock()
     logging_obj._get_trace_id.return_value = "trace-from-instance"
-    logging_obj.standard_callback_dynamic_params = {"langfuse_host": "http://127.0.0.1:1"}
+    logging_obj.standard_callback_dynamic_params = {}
 
     result = await _add_langfuse_trace_id_to_alert({"litellm_logging_obj": logging_obj})
 

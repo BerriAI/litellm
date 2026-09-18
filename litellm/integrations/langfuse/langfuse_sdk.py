@@ -604,6 +604,14 @@ def acquire_langfuse_tracing(
         return created
 
 
+def flush_langfuse_tracing(timeout_millis: int = 30_000) -> bool:
+    """Force-flush every export channel this process acquired; ``True`` when all of them succeeded."""
+    with _TRACING_LOCK:
+        channels: Final = tuple(_TRACING.values())
+    results: Final = tuple(channel.flush(timeout_millis) for channel in channels)
+    return all(results)
+
+
 def build_langfuse_tracing(
     *,
     exporter: SpanExporter,

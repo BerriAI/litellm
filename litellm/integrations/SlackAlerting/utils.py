@@ -3,9 +3,11 @@ Utils used for slack alerting
 """
 
 import asyncio
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import AlertType
 from litellm.secret_managers.main import get_secret
 
@@ -68,7 +70,9 @@ async def _add_langfuse_trace_id_to_alert(
     """
     from litellm.integrations.langfuse.langfuse import LangFuseLogger, resolve_langfuse_host
 
-    callbacks: Final = litellm.logging_callback_manager._get_all_callbacks()
+    callbacks: Final[list[CustomLogger | Callable[..., object] | str]] = (
+        litellm.logging_callback_manager._get_all_callbacks()
+    )
     if not any(callback == "langfuse" or isinstance(callback, LangFuseLogger) for callback in callbacks):
         return None
 
@@ -76,7 +80,12 @@ async def _add_langfuse_trace_id_to_alert(
         return None
 
     litellm_logging_obj: Final[Logging] = request_data["litellm_logging_obj"]
-    host: Final = resolve_langfuse_host(litellm_logging_obj.standard_callback_dynamic_params.get("langfuse_host"))
+    instance_host: Final = next(
+        (callback.langfuse_host for callback in callbacks if isinstance(callback, LangFuseLogger)), None
+    )
+    host: Final = resolve_langfuse_host(
+        litellm_logging_obj.standard_callback_dynamic_params.get("langfuse_host") or instance_host
+    )
     for _ in range(3):
         if (trace_id := litellm_logging_obj._get_trace_id(service_name="langfuse")) is not None:
             return f"{host}/trace/{trace_id}"

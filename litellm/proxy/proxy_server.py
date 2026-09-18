@@ -1027,14 +1027,11 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
     if shutdown_billing_metrics_recorder is not None:
         shutdown_billing_metrics_recorder()
 
-    # flush remaining langfuse logs
-    if "langfuse" in litellm.success_callback:
+    if "litellm.integrations.langfuse.langfuse_sdk" in sys.modules:
         try:
-            # flush langfuse logs on shutdow
-            from litellm.utils import langFuseLogger
+            from litellm.integrations.langfuse.langfuse_sdk import flush_langfuse_tracing
 
-            if langFuseLogger is not None:
-                langFuseLogger.flush()
+            flush_langfuse_tracing()
         except Exception:
             # [DO NOT BLOCK shutdown events for this]
             pass
