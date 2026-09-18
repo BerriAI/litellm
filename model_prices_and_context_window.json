@@ -36785,6 +36785,7 @@
         "supports_tool_choice": true
     },
     "mistral/codestral-mamba-latest": {
+        "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 256000,
@@ -36842,6 +36843,7 @@
         "supports_tool_choice": true
     },
     "mistral/devstral-small-latest": {
+        "cache_read_input_token_cost": 1e-08,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 256000,
@@ -36871,6 +36873,7 @@
         "supports_tool_choice": true
     },
     "mistral/devstral-latest": {
+        "cache_read_input_token_cost": 4e-08,
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 256000,
@@ -36885,6 +36888,7 @@
         "supports_tool_choice": true
     },
     "mistral/devstral-medium-latest": {
+        "cache_read_input_token_cost": 4e-08,
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 256000,
@@ -36986,6 +36990,7 @@
         "source": "https://docs.mistral.ai/models/mistral-embed-23-12"
     },
     "mistral/mistral-medium-3": {
+        "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "mistral",
         "max_input_tokens": 262144,
@@ -37034,6 +37039,7 @@
         "supports_audio_output": true
     },
     "mistral/voxtral-small-2507": {
+        "cache_read_input_token_cost": 1e-08,
         "input_cost_per_second": 6.666666666666667e-05,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "mistral",
@@ -37049,6 +37055,7 @@
         "supports_tool_choice": true
     },
     "mistral/voxtral-small-latest": {
+        "cache_read_input_token_cost": 1e-08,
         "input_cost_per_second": 6.666666666666667e-05,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "mistral",
@@ -37554,6 +37561,7 @@
         "supports_vision": true
     },
     "mistral/mistral-small": {
+        "cache_read_input_token_cost": 1e-08,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 32000,
@@ -37680,6 +37688,7 @@
         "supports_vision": true
     },
     "mistral/mistral-tiny": {
+        "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 32000,
@@ -37718,6 +37727,7 @@
         "supports_tool_choice": true
     },
     "mistral/open-mistral-nemo": {
+        "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 128000,
@@ -37803,6 +37813,7 @@
         "supports_vision": true
     },
     "mistral/pixtral-large-latest": {
+        "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "mistral",
         "max_input_tokens": 128000,
@@ -62790,6 +62801,7 @@
         "supports_tool_choice": true
     },
     "mistral/mistral-code-agent-latest": {
+        "cache_read_input_token_cost": 4e-08,
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 256000,
