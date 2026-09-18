@@ -5444,6 +5444,11 @@ async def test_model_info_v1_oci_secrets_not_leaked():
     mock_user_api_key_dict.api_key = "test-key"
     mock_user_api_key_dict.team_models = []
     mock_user_api_key_dict.models = ["oci-grok-test"]
+    # model_info_v1 resolves DB access-group grants via
+    # get_available_models_for_user, which reads team_id / access_group_ids
+    # on the auth object (both absent from the mock spec).
+    mock_user_api_key_dict.team_id = None
+    mock_user_api_key_dict.access_group_ids = None
 
     # Mock model data with OCI sensitive information
     mock_model_data = {
