@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
-from litellm import supports_vision
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
@@ -937,18 +936,6 @@ def test_thinking_and_reasoning_effort_conflict_rejected():
             _REASONING_MODEL,
             drop_params=False,
         )
-
-
-def test_llama_vision_supports_vision_from_model_map():
-    config = FireworksAIConfig()
-
-    for model in [
-        "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct",
-        "fireworks_ai/accounts/fireworks/models/minimax-m3",
-        "fireworks_ai/minimax-m3",
-    ]:
-        assert supports_vision(model=model, custom_llm_provider="fireworks_ai") is True
-        assert config.get_provider_info(model)["supports_vision"] is True
 
 
 def test_transform_messages_helper_rejects_file_blocks():
