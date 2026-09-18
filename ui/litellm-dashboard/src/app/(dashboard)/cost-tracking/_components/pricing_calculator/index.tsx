@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from "react";
 import { Plus, Trash2 } from "lucide-react";
+import { parseAsStringLiteral, useQueryState } from "nuqs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -9,7 +10,9 @@ import { PricingCalculatorProps, ModelEntry } from "./types";
 import MultiCostResults from "./multi_cost_results";
 import { useMultiCostEstimate } from "./use_multi_cost_estimate";
 
-type TimePeriod = "day" | "month";
+const TIME_PERIODS = ["day", "month"] as const;
+type TimePeriod = (typeof TIME_PERIODS)[number];
+const timePeriodParser = parseAsStringLiteral(TIME_PERIODS).withDefault("month");
 
 const generateId = () => `entry-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -24,7 +27,7 @@ const createDefaultEntry = (): ModelEntry => ({
 
 const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, models }) => {
   const [entries, setEntries] = useState<ModelEntry[]>([createDefaultEntry()]);
-  const [timePeriod, setTimePeriod] = useState<TimePeriod>("month");
+  const [timePeriod, setTimePeriod] = useQueryState("period", timePeriodParser);
   const { debouncedFetchForEntry, removeEntry, getMultiModelResult } = useMultiCostEstimate(accessToken);
 
   const handleEntryChange = useCallback(
@@ -41,17 +44,20 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, mode
     [debouncedFetchForEntry],
   );
 
-  const handleTimePeriodChange = useCallback((period: TimePeriod) => {
-    setTimePeriod(period);
-    // Clear the opposite field for all entries when switching
-    setEntries((prev) =>
-      prev.map((entry) => ({
-        ...entry,
-        num_requests_per_day: period === "day" ? entry.num_requests_per_day : undefined,
-        num_requests_per_month: period === "month" ? entry.num_requests_per_month : undefined,
-      })),
-    );
-  }, []);
+  const handleTimePeriodChange = useCallback(
+    (period: TimePeriod) => {
+      void setTimePeriod(period);
+      // Clear the opposite field for all entries when switching
+      setEntries((prev) =>
+        prev.map((entry) => ({
+          ...entry,
+          num_requests_per_day: period === "day" ? entry.num_requests_per_day : undefined,
+          num_requests_per_month: period === "month" ? entry.num_requests_per_month : undefined,
+        })),
+      );
+    },
+    [setTimePeriod],
+  );
 
   const handleAddEntry = useCallback(() => {
     setEntries((prev) => [...prev, createDefaultEntry()]);
@@ -75,7 +81,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, mode
       <div className="flex items-center justify-end mb-2">
         <RadioGroup
           value={timePeriod}
-          onValueChange={(value) => handleTimePeriodChange(value as TimePeriod)}
+          onValueChange={(value) => handleTimePeriodChange(value === "day" ? "day" : "month")}
           className="flex w-auto items-center gap-4"
         >
           <label className="flex cursor-pointer items-center gap-2 text-sm">

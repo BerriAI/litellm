@@ -1,7 +1,8 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import CostTrackingSettings from "./cost_tracking_settings";
 
@@ -253,6 +254,113 @@ describe("CostTrackingSettings", () => {
       }
 
       expect(await screen.findByText(/no provider margins configured/i)).toBeInTheDocument();
+    });
+  });
+
+  describe("URL state", () => {
+    const lastSearchParams = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+      onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+
+    const openSectionsIn = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+      lastSearchParams(onUrlUpdate)?.get("open")?.split(",").filter(Boolean).sort();
+
+    it("should open only the pricing calculator when ?open= is absent", async () => {
+      renderWithProviders(<CostTrackingSettings {...ADMIN_PROPS} />);
+
+      expect(await screen.findByTestId("pricing-calculator")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /add provider discount/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /add provider margin/i })).not.toBeInTheDocument();
+    });
+
+    it("should open exactly the sections listed in ?open=", async () => {
+      renderWithProviders(<CostTrackingSettings {...ADMIN_PROPS} />, { searchParams: "?open=discounts,margin" });
+
+      expect(await screen.findByRole("button", { name: /add provider discount/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /add provider margin/i })).toBeInTheDocument();
+      expect(screen.queryByTestId("pricing-calculator")).not.toBeInTheDocument();
+    });
+
+    it("should ignore unknown section ids in ?open=", async () => {
+      renderWithProviders(<CostTrackingSettings {...ADMIN_PROPS} />, { searchParams: "?open=bogus,margin" });
+
+      expect(await screen.findByRole("button", { name: /add provider margin/i })).toBeInTheDocument();
+      expect(screen.queryByTestId("pricing-calculator")).not.toBeInTheDocument();
+    });
+
+    it("should add a section to ?open= when its header is expanded and drop it when collapsed", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<CostTrackingSettings {...ADMIN_PROPS} />, { onUrlUpdate });
+
+      await user.click(screen.getByRole("button", { name: /^provider discounts/i }));
+      await waitFor(() => expect(openSectionsIn(onUrlUpdate)).toEqual(["calculator", "discounts"]));
+      expect(await screen.findByRole("button", { name: /add provider discount/i })).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: /^provider discounts/i }));
+      await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.has("open")).toBe(false));
+      expect(screen.getByTestId("pricing-calculator")).toBeInTheDocument();
+    });
+
+    it("should keep a collapsed pricing calculator in the URL as an empty ?open=", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<CostTrackingSettings {...ADMIN_PROPS} />, { onUrlUpdate });
+
+      await user.click(screen.getByRole("button", { name: /^pricing calculator/i }));
+
+      await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.get("open")).toBe(""));
+      await waitFor(() => expect(screen.queryByTestId("pricing-calculator")).not.toBeInTheDocument());
+    });
+
+    it("should keep the calculator collapsed when ?open= is empty", () => {
+      renderWithProviders(<CostTrackingSettings {...ADMIN_PROPS} />, { searchParams: "?open=" });
+
+      expect(screen.queryByTestId("pricing-calculator")).not.toBeInTheDocument();
+    });
+
+    it("should select the discount tab named in ?discount_tab=", async () => {
+      renderWithProviders(<CostTrackingSettings {...ADMIN_PROPS} />, {
+        searchParams: "?open=discounts&discount_tab=test",
+      });
+
+      expect(await screen.findByRole("tab", { name: "Test It" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("tab", { name: "Discounts" })).toHaveAttribute("aria-selected", "false");
+    });
+
+    it("should write ?discount_tab= when a discount tab is chosen and drop it for the default tab", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<CostTrackingSettings {...ADMIN_PROPS} />, { searchParams: "?open=discounts", onUrlUpdate });
+
+      await user.click(await screen.findByRole("tab", { name: "Test It" }));
+      await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.get("discount_tab")).toBe("test"));
+      expect(screen.getByRole("tab", { name: "Test It" })).toHaveAttribute("aria-selected", "true");
+
+      await user.click(screen.getByRole("tab", { name: "Discounts" }));
+      await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.has("discount_tab")).toBe(false));
+      expect(lastSearchParams(onUrlUpdate)?.get("open")).toBe("discounts");
+    });
+
+    it.each([
+      ["an unknown tab for an admin", "proxy_admin", "?discount_tab=bogus"],
+      ["the test tab for a non-admin", "internal_user", "?discount_tab=test"],
+    ])("should drop %s from the URL", async (_label, userRole, searchParams) => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      render(<CostTrackingSettings {...ADMIN_PROPS} userRole={userRole} />, {
+        wrapper: ({ children }) => (
+          <NuqsTestingAdapter
+            searchParams={searchParams}
+            onUrlUpdate={onUrlUpdate}
+            hasMemory
+            resetUrlUpdateQueueOnMount={false}
+          >
+            {children}
+          </NuqsTestingAdapter>
+        ),
+      });
+
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      expect(lastSearchParams(onUrlUpdate)?.has("discount_tab")).toBe(false);
     });
   });
 });

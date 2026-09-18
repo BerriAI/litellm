@@ -1,7 +1,8 @@
 import React from "react";
-import { fireEvent, render, waitFor, screen } from "@testing-library/react";
+import { fireEvent, waitFor, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { renderWithProviders } from "../../../../../tests/test-utils";
 
 const mockUserDailyActivityCall = vi.fn();
 const mockUserDailyActivityAggregatedCall = vi.fn();
@@ -56,7 +57,7 @@ describe("CostOptimizationView daily activity", () => {
     useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "proxy_admin" });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    render(
+    renderWithProviders(
       <QueryClientProvider client={queryClient}>
         <CostOptimizationView accessToken="test-token" userId="u1" userRole="proxy_admin" />
       </QueryClientProvider>,
@@ -84,7 +85,7 @@ describe("CostOptimizationView daily activity", () => {
     useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "proxy_admin" });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    render(
+    renderWithProviders(
       <QueryClientProvider client={queryClient}>
         <CostOptimizationView accessToken="test-token" userId="u1" userRole="proxy_admin" />
       </QueryClientProvider>,
@@ -92,5 +93,29 @@ describe("CostOptimizationView daily activity", () => {
 
     expect(await screen.findByText(/Currently fetching spend data: fetched 1 \/ 3 pages/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+  });
+
+  it("fetches the date range named in ?start_date= and ?end_date=", async () => {
+    mockUserDailyActivityAggregatedCall.mockReset();
+    mockUserDailyActivityAggregatedCall.mockResolvedValue(singlePage);
+    useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "proxy_admin" });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    renderWithProviders(
+      <QueryClientProvider client={queryClient}>
+        <CostOptimizationView accessToken="test-token" userId="u1" userRole="proxy_admin" />
+      </QueryClientProvider>,
+      { searchParams: "?start_date=2026-01-05&end_date=2026-01-07" },
+    );
+
+    await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1));
+    expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+      "test-token",
+      new Date(2026, 0, 5),
+      new Date(2026, 0, 7, 23, 59, 59, 999),
+      null,
+      true,
+      null,
+    );
   });
 });

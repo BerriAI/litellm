@@ -1,5 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { describe, expect, it, vi } from "vitest";
+import { renderWithProviders } from "../../../../../tests/test-utils";
 
 import type { DailyData, KeyMetricWithMetadata, SpendMetrics } from "@/components/UsagePage/types";
 import type { DailyActivityRange } from "./useDailyActivityRange";
@@ -60,8 +62,13 @@ const dayWithModels = (date: string, models: Record<string, Partial<SpendMetrics
   },
 });
 
-const renderWith = (results: DailyData[], overrides: Partial<DailyActivityRange> = {}) =>
-  render(
+interface UrlOptions {
+  searchParams?: string;
+  onUrlUpdate?: OnUrlUpdateFunction;
+}
+
+const renderWith = (results: DailyData[], overrides: Partial<DailyActivityRange> = {}, url: UrlOptions = {}) =>
+  renderWithProviders(
     <CacheLeakageCard
       activity={{
         dateValue: {},
@@ -76,6 +83,7 @@ const renderWith = (results: DailyData[], overrides: Partial<DailyActivityRange>
         ...overrides,
       }}
     />,
+    url,
   );
 
 describe("CacheLeakageCard", () => {
@@ -97,22 +105,26 @@ describe("CacheLeakageCard", () => {
     ].forEach((info) => expect(screen.getByLabelText(info)).toBeInTheDocument());
   });
 
-  it("sorts by the clicked column, worst cache hit rate first", () => {
-    renderWith([
-      dayWithKeys("2026-07-12", {
-        "hash-a": key("alpha", {
-          prompt_tokens: 10000,
-          cache_read_input_tokens: 9000,
-          prompt_caching_savings_spend: 9.0,
-        }),
-        "hash-b": key("bravo", {
-          prompt_tokens: 500,
-          cache_read_input_tokens: 50,
-          prompt_caching_savings_spend: 0.05,
-        }),
+  const twoKeys = () => [
+    dayWithKeys("2026-07-12", {
+      "hash-a": key("alpha", {
+        prompt_tokens: 10000,
+        cache_read_input_tokens: 9000,
+        prompt_caching_savings_spend: 9.0,
       }),
-    ]);
-    const firstDataRow = () => screen.getAllByRole("row")[1];
+      "hash-b": key("bravo", {
+        prompt_tokens: 500,
+        cache_read_input_tokens: 50,
+        prompt_caching_savings_spend: 0.05,
+      }),
+    }),
+  ];
+  const firstDataRow = () => screen.getAllByRole("row")[1];
+  const lastSearchParams = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+    onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+
+  it("sorts by the clicked column, worst cache hit rate first", () => {
+    renderWith(twoKeys());
 
     expect(firstDataRow()).toHaveTextContent("alpha");
 
@@ -136,6 +148,67 @@ describe("CacheLeakageCard", () => {
     expect(screen.getByText("Cache leakage by model")).toBeInTheDocument();
     expect(screen.getByText("claude-sonnet-5")).toBeInTheDocument();
     expect(screen.getByText("vertex_ai/gemini-2.5-pro")).toBeInTheDocument();
+  });
+
+  it("applies the sort named in ?leak_sort= and ?leak_dir=", () => {
+    renderWith(twoKeys(), {}, { searchParams: "?leak_sort=cacheHitRatio&leak_dir=asc" });
+
+    expect(firstDataRow()).toHaveTextContent("bravo");
+  });
+
+  it("keeps the default sort for unknown ?leak_sort= and ?leak_dir= values", () => {
+    renderWith(twoKeys(), {}, { searchParams: "?leak_sort=spend&leak_dir=sideways" });
+
+    expect(firstDataRow()).toHaveTextContent("alpha");
+  });
+
+  it("writes the sort to the URL and drops the direction once it is back to the default", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWith(twoKeys(), {}, { onUrlUpdate });
+
+    fireEvent.click(screen.getByText("Cache hit rate"));
+    await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.get("leak_sort")).toBe("cacheHitRatio"));
+    expect(lastSearchParams(onUrlUpdate)?.get("leak_dir")).toBe("asc");
+
+    fireEvent.click(screen.getByText("Cache hit rate"));
+    await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.has("leak_dir")).toBe(false));
+    expect(lastSearchParams(onUrlUpdate)?.get("leak_sort")).toBe("cacheHitRatio");
+    expect(firstDataRow()).toHaveTextContent("alpha");
+  });
+
+  it("opens the model view from ?leak_by=model", () => {
+    renderWith(
+      [
+        dayWithModels("2026-07-12", {
+          "claude-sonnet-5": { prompt_tokens: 5000, cache_read_input_tokens: 0 },
+        }),
+      ],
+      {},
+      { searchParams: "?leak_by=model" },
+    );
+
+    expect(screen.getByRole("tab", { name: "By model" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Cache leakage by model")).toBeInTheDocument();
+    expect(screen.getByText("claude-sonnet-5")).toBeInTheDocument();
+  });
+
+  it("keeps the key view for an unknown ?leak_by= value", () => {
+    renderWith(twoKeys(), {}, { searchParams: "?leak_by=team" });
+
+    expect(screen.getByRole("tab", { name: "By virtual key" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+  });
+
+  it("writes ?leak_by=model for the model view and drops it for the key view", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWith(twoKeys(), {}, { onUrlUpdate });
+
+    fireEvent.click(screen.getByRole("tab", { name: "By model" }));
+    await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.get("leak_by")).toBe("model"));
+
+    fireEvent.click(screen.getByRole("tab", { name: "By virtual key" }));
+    await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.has("leak_by")).toBe(false));
+    expect(screen.getByText("alpha")).toBeInTheDocument();
   });
 
   it("shows an empty state when no key used tokens in the range", () => {
