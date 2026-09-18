@@ -1784,7 +1784,10 @@ async def new_team(
         )
 
         if is_audit_logging_enabled():
-            _updated_values = complete_team_data.json(exclude_none=True)
+            created_team_snapshot: Final = complete_team_data.model_copy(
+                update={"members_with_roles": list(team_row.members_with_roles)}
+            )
+            _updated_values = created_team_snapshot.json(exclude_none=True)
 
             _updated_values = json.dumps(_updated_values, default=str)
 
@@ -3160,6 +3163,27 @@ def _members_audit_value(members: Sequence[Member]) -> str:
     )
 
 
+async def _create_team_membership_audit_log(
+    team_id: str,
+    before_members: Sequence[Member],
+    after_members: Sequence[Member],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: str,
+) -> None:
+    from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
+
+    await create_object_audit_log(
+        object_id=team_id,
+        action="updated",
+        litellm_changed_by=None,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
+        table_name=LitellmTableNames.TEAM_TABLE_NAME,
+        before_value=_members_audit_value(before_members),
+        after_value=_members_audit_value(after_members),
+    )
+
+
 async def _create_team_member_add_audit_logs(
     team_id: str,
     updated_users: Sequence[LiteLLM_UserTable],
@@ -3191,15 +3215,12 @@ async def _create_team_member_add_audit_logs(
         if user.user_id is not None and user.user_id not in existing_user_ids
     )
 
-    membership_entry: Final = create_object_audit_log(
-        object_id=team_id,
-        action="updated",
-        litellm_changed_by=None,
+    membership_entry: Final = _create_team_membership_audit_log(
+        team_id=team_id,
+        before_members=before_members,
+        after_members=after_members,
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name=litellm_proxy_admin_name,
-        table_name=LitellmTableNames.TEAM_TABLE_NAME,
-        before_value=_members_audit_value(before_members),
-        after_value=_members_audit_value(after_members),
     )
 
     await asyncio.gather(*created_user_entries, membership_entry)
@@ -3508,7 +3529,33 @@ async def team_member_delete(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    existing_team_row, before_members, after_members = await _team_member_delete(
+        data=data, user_api_key_dict=user_api_key_dict
+    )
+
+    if before_members != after_members:
+        await _create_team_membership_audit_log(
+            team_id=existing_team_row.team_id,
+            before_members=before_members,
+            after_members=after_members,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
+
+    return existing_team_row
+
+
+async def _team_member_delete(
+    data: TeamMemberDeleteRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> tuple[LiteLLM_TeamTable, tuple[Member, ...], tuple[Member, ...]]:
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -3672,7 +3719,7 @@ async def team_member_delete(
 
     _emit_team_members_metric(existing_team_row)
 
-    return existing_team_row
+    return existing_team_row, tuple(fresh_members), tuple(new_team_members)
 
 
 @router.post(
@@ -3692,7 +3739,12 @@ async def team_member_update(
 
     Update team member budgets and team member role
     """
-    from litellm.proxy.proxy_server import premium_user, prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
+        premium_user,
+        prisma_client,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -3800,8 +3852,12 @@ async def team_member_update(
 
     ### update team member role
     if data.role is not None:
+        members_before_role_update: Final = tuple(
+            Member(user_id=member.user_id, user_email=member.user_email, role=member.role)
+            for member in team_table.members_with_roles
+        )
         team_members: Final[list[Member]] = []
-        for member in team_table.members_with_roles:
+        for member in members_before_role_update:
             if member.user_id == received_user_id:
                 team_members.append(
                     Member(
@@ -3820,6 +3876,14 @@ async def team_member_update(
             where={"team_id": data.team_id},
             data={"members_with_roles": json.dumps(_db_team_members)},
         )
+        if members_before_role_update != tuple(team_members):
+            await _create_team_membership_audit_log(
+                team_id=data.team_id,
+                before_members=members_before_role_update,
+                after_members=team_members,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+            )
 
     return TeamMemberUpdateResponse(
         team_id=data.team_id,
@@ -4298,7 +4362,7 @@ async def delete_team(
         tasks = []
         for team_member in team_members:
             tasks.append(
-                team_member_delete(
+                _team_member_delete(
                     data=TeamMemberDeleteRequest(
                         team_id=team_row.team_id,
                         user_id=team_member.user_id,
