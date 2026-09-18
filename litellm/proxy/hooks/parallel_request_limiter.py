@@ -1,5 +1,6 @@
 import asyncio
 import sys
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 
@@ -92,6 +93,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     triggered_type = RateLimitType.TOKENS
                 else:
                     triggered_type = RateLimitType.REQUESTS
+                await self._rollback_acquired_slots(values_to_update_in_cache, user_api_key_dict.parent_otel_span)
                 self.raise_rate_limit_error(
                     additional_details=f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. Hit limit for {rate_limit_type}. Current limits: max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}",
                     rate_limit_type=triggered_type,
@@ -128,6 +130,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 triggered_type = RateLimitType.REQUESTS
             requested_model: Final = data.get("model") if data else None
             resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(requested_model)
+            await self._rollback_acquired_slots(values_to_update_in_cache, user_api_key_dict.parent_otel_span)
             raise ProxyRateLimitError(
                 detail=f"LiteLLM Rate Limit Handler for rate limit type = {rate_limit_type}. {CommonProxyErrors.max_parallel_request_limit_reached.value}. current rpm: {current['current_rpm']}, rpm limit: {rpm_limit}, current tpm: {current['current_tpm']}, tpm limit: {tpm_limit}, current max_parallel_requests: {current['current_requests']}, max_parallel_requests: {max_parallel_requests}",
                 headers={"retry-after": str(self.time_to_next_minute())},
@@ -143,6 +146,31 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             local_only=True,
         )
         return new_val
+
+    async def _rollback_acquired_slots(
+        self,
+        values_to_update_in_cache: Sequence[tuple[str, CurrentItemRateLimit]],
+        parent_otel_span: Span | None,
+    ) -> None:
+        if not values_to_update_in_cache:
+            return
+        rolled_back: Final[list[tuple[str, object]]] = [
+            (
+                key,
+                CurrentItemRateLimit(
+                    current_requests=max(val["current_requests"] - 1, 0),
+                    current_tpm=val["current_tpm"],
+                    current_rpm=max(val["current_rpm"] - 1, 0),
+                ),
+            )
+            for key, val in values_to_update_in_cache
+        ]
+        await self.internal_usage_cache.async_batch_set_cache(
+            cache_list=rolled_back,
+            ttl=60,
+            litellm_parent_otel_span=parent_otel_span,
+            local_only=True,
+        )
 
     def time_to_next_minute(self) -> float:
         # Get the current time

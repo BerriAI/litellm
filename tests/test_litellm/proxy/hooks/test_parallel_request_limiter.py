@@ -11,7 +11,12 @@ from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
-from litellm.types.utils import EmbeddingResponse, TextCompletionResponse, Usage
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ModelResponse,
+    TextCompletionResponse,
+    Usage,
+)
 
 
 @pytest.mark.parametrize(
@@ -175,3 +180,56 @@ async def test_failed_request_releases_team_parallel_slot():
     await handler.async_pre_call_hook(
         user_api_key_dict=key, cache=cache, data=data, call_type=""
     )
+
+
+@pytest.mark.asyncio
+async def test_team_rejection_rolls_back_key_slot_acquired_in_same_call():
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache)
+    )
+    key = UserAPIKeyAuth(
+        api_key=hash_token("sk-a"),
+        max_parallel_requests=2,
+        team_id="legacy-team",
+        team_max_parallel_requests=1,
+    )
+    data = {"model": "gpt-4o-mini"}
+
+    async def admit() -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=key, cache=cache, data=data, call_type=""
+        )
+
+    async def finish() -> None:
+        await handler.async_log_success_event(
+            kwargs={
+                "litellm_params": {
+                    "metadata": {
+                        "user_api_key": key.api_key,
+                        "user_api_key_team_id": "legacy-team",
+                        "user_api_key_model_max_budget": {},
+                    }
+                }
+            },
+            response_obj=ModelResponse(
+                usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+            ),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    await admit()
+    with pytest.raises(HTTPException) as team_reject:
+        await admit()
+    assert "rate limit type = team" in team_reject.value.detail
+
+    await finish()
+    await admit()
+    with pytest.raises(HTTPException) as second_reject:
+        await admit()
+    assert "rate limit type = team" in second_reject.value.detail
