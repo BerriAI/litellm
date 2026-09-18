@@ -449,7 +449,6 @@ async def _acompletion(
     tools: list[_ToolDef] | None = None,
     stream: bool = False,
 ) -> ModelResponse | CustomStreamWrapper:
-    """Route through the proxy router when it knows the model, else call litellm directly."""
     from litellm.proxy.proxy_server import llm_router
     from litellm.types.llms.openai import AllMessageValues
 
