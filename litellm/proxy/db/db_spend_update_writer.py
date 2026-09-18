@@ -257,8 +257,8 @@ class DBSpendUpdateWriter:
         # Completion object fields
         kwargs: dict | None,
         completion_response: object,
-        start_time: datetime | None,
-        end_time: datetime | None,
+        start_time: datetime,
+        end_time: datetime,
         response_cost: float | None,
     ) -> bool:
         """Record the request's spend, answering whether its cost still needs charging.
@@ -299,6 +299,7 @@ class DBSpendUpdateWriter:
                 response_obj=completion_response,
                 start_time=start_time,
                 end_time=end_time,
+                llm_router=get_llm_router(),
             )
             payload["spend"] = response_cost or 0.0
             if isinstance(payload["startTime"], datetime):
