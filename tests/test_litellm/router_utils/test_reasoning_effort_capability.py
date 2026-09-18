@@ -325,7 +325,28 @@ KIMI_K3_PERPLEXITY_KEY = "perplexity/perplexity/kimi-k3"
 
 
 class TestKimiK3AdvertisesItsDocumentedLevels:
+    @pytest.mark.parametrize("model_key", KIMI_K3_PASSTHROUGH_KEYS)
+    def test_a_passthrough_entry_advertises_the_models_own_levels(self, local_model_cost_map, model_key):
+        """platform.kimi.ai documents exactly low, high and max, and these providers forward the
+        level unchanged. Undeclared, each entry resolves to unknown and the dashboard falls back to
+        a capability-blind list that omits max."""
+        entry = dict(litellm.model_cost[model_key], key=model_key)
 
+        assert resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) == ("low", "high", "max")
+
+    def test_the_perplexity_entry_advertises_the_wider_set_it_maps_down(self, local_model_cost_map):
+        """Perplexity's Agent API takes a six-value enum and maps it down internally, so this
+        deployment is legitimately wider than a passthrough. One blanket list could not say both."""
+        entry = dict(litellm.model_cost[KIMI_K3_PERPLEXITY_KEY], key=KIMI_K3_PERPLEXITY_KEY)
+
+        assert resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) == (
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        )
 
     @pytest.mark.parametrize("model, provider", [("kimi-k3", "moonshot"), ("kimi-k3", "fireworks_ai")])
     def test_the_declaration_survives_model_info_hydration(self, local_model_cost_map, model, provider):
@@ -337,6 +358,19 @@ class TestKimiK3AdvertisesItsDocumentedLevels:
 
         assert model_info["reasoning_effort_levels"] == ["low", "high", "max"]
         assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == ("low", "high", "max")
+
+    def test_a_kimi_k3_deployment_now_narrows_a_mixed_group(self, local_model_cost_map):
+        """kimi used to contribute unknown, which never narrows, so the group advertised whatever
+        its other deployments agreed on."""
+        kimi = resolve_supported_reasoning_efforts(
+            dict(litellm.model_cost["fireworks_ai/kimi-k3"], key="fireworks_ai/kimi-k3"),
+            deployment_is_mapped=True,
+        )
+
+        assert intersect_supported_reasoning_efforts(("none", "minimal", "low", "medium", "high", "xhigh"), kimi) == (
+            "low",
+            "high",
+        )
 
 
 class TestGpt6AstraAdvertisesItsDocumentedLevels:

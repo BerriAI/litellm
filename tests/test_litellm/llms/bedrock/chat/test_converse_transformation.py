@@ -194,6 +194,32 @@ def test_transform_usage_reads_invoke_model_count_suffixed_cache_keys(
     assert openai_usage.total_tokens == 12270
 
 
+def test_bedrock_invoke_nova_cache_read_billed_at_discounted_rate(monkeypatch):
+    """Nova cache reads are billed at the entry's discounted cache read rate; without a
+    ``cache_read_input_token_cost`` entry the cached tokens were billed at nothing."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    usage = ConverseTokenUsageBlock(
+        **{
+            "inputTokens": 5,
+            "outputTokens": 3,
+            "totalTokens": 12270,
+            "cacheReadInputTokenCount": 12262,
+            "cacheWriteInputTokenCount": 0,
+        }
+    )
+    openai_usage = AmazonConverseConfig().transform_usage(usage)
+    model = "bedrock/invoke/us.amazon.nova-pro-v1:0"
+    prompt_cost, completion_cost = litellm.cost_calculator.cost_per_token(model=model, usage_object=openai_usage)
+    model_info = litellm.get_model_info(model=model)
+    assert 0 < model_info["cache_read_input_token_cost"] < model_info["input_cost_per_token"]
+    assert prompt_cost == pytest.approx(
+        5 * model_info["input_cost_per_token"] + 12262 * model_info["cache_read_input_token_cost"]
+    )
+    assert prompt_cost > 5 * model_info["input_cost_per_token"]
+    assert completion_cost == pytest.approx(3 * model_info["output_cost_per_token"])
+
+
 def test_transform_usage_with_reasoning_content():
     """Test that completion_tokens_details correctly tracks reasoning vs text tokens."""
     usage = ConverseTokenUsageBlock(
@@ -5442,6 +5468,87 @@ def test_cache_control_injection_tool_config_drops_ttl_for_unsupported_model():
     )
     tools = result["toolConfig"]["tools"]
     assert tools[-1] == {"cachePoint": {"type": "default"}}
+
+
+@pytest.mark.parametrize(
+    ("model", "expects_cache_points"),
+    [
+        pytest.param("nvidia.nemotron-super-3-120b", False, id="mapped-model-without-prompt-caching"),
+        pytest.param("us.nvidia.nemotron-super-3-120b", False, id="regional-prefix-resolves-through-base-model"),
+        pytest.param(
+            "us.anthropic.claude-3-5-sonnet-20240620-v1:0", False, id="claude-named-but-not-caching-on-bedrock"
+        ),
+        pytest.param("us.anthropic.claude-sonnet-4-5-20250929-v1:0", True, id="mapped-model-with-prompt-caching"),
+        pytest.param(
+            "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+            True,
+            id="unmapped-arn-keeps-emitting",
+        ),
+        pytest.param("global.openai.gpt-6-astra", False, id="openai-family-implicit-caching-only"),
+        pytest.param("openai.gpt-oss-120b-1:0", False, id="openai-gpt-oss"),
+        pytest.param("us.openai.gpt-99-unmapped", False, id="unmapped-openai-family-still-suppressed"),
+    ],
+)
+def test_cache_points_emitted_only_for_models_that_support_prompt_caching(model, expects_cache_points, monkeypatch):
+    """Bedrock rejects cachePoint blocks for models without prompt caching support
+    ("You invoked an unsupported model or your request did not allow prompt caching"),
+    and clients like Claude Code attach cache_control to every request, so a map-known
+    model without the capability must not receive them. Unmapped ids (application
+    inference profile ARNs, models newer than the map) keep emitting so existing
+    caching setups never silently degrade."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    body = AmazonConverseConfig().transform_request(
+        model=model,
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]},
+            {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert ("cachePoint" in json.dumps(body)) is expects_cache_points
+    assert body["system"][0]["text"] == "sys"
+    assert body["messages"][0]["content"][0]["text"] == "hi"
+
+
+def test_tool_config_cachepoint_not_placed_or_credited_for_model_without_prompt_caching(monkeypatch):
+    """The tool_config injection point must stand down with the rest of the cachePoint
+    emission when the model cannot cache, and spend attribution must not credit the
+    gateway for a breakpoint that was never placed."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    bucket: dict = {"user_api_key": "sk-test"}
+    data = AmazonConverseConfig()._transform_request_helper(
+        model="nvidia.nemotron-super-3-120b",
+        system_content_blocks=[],
+        optional_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+            "cache_control_injection_points": [{"location": "tool_config"}],
+        },
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_params={"metadata": bucket, "litellm_metadata": None, "model_info": {"id": "dep-bedrock"}},
+    )
+
+    assert "cachePoint" not in json.dumps(data.get("toolConfig", {}))
+    assert "litellm_gateway_injected_cache" not in bucket
 
 
 def test_translate_response_format_json_schema_still_injects_tool():

@@ -41,6 +41,36 @@ class TestAzureOpenAIO3Mini(BaseOSeriesModelsTest, BaseLLMChatTest):
         """Temporary override. o1 prompt caching is not working."""
         pass
 
+    def test_override_fake_stream(self):
+        """Test that native streaming is not supported for o1."""
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "azure/o1-preview",
+                    "litellm_params": {
+                        "model": "azure/o1-preview",
+                        "api_key": "my-fake-o1-key",
+                        "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
+                    },
+                    "model_info": {
+                        "supports_native_streaming": True,
+                    },
+                }
+            ]
+        )
+
+        ## check model info
+
+        model_info = litellm.get_model_info(
+            model="azure/o1-preview", custom_llm_provider="azure"
+        )
+        assert model_info["supports_native_streaming"] is True
+
+        fake_stream = litellm.AzureOpenAIO1Config().should_fake_stream(
+            model="azure/o1-preview", stream=True
+        )
+        assert fake_stream is False
+
 
 class TestAzureOpenAIO3(BaseOSeriesModelsTest):
     def get_base_completion_call_args(self):

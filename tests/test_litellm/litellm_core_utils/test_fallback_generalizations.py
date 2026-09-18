@@ -802,6 +802,10 @@ def test_shipped_rules_flag_unmapped_wandb_ids_as_reasoning(shipped_cost_map):
     assert litellm.supports_reasoning(model="zai-org/GLM-6-Turbo", custom_llm_provider="wandb") is True
 
 
+def test_shipped_wandb_rule_does_not_fill_missing_mapped_entries(shipped_cost_map):
+    assert match_fill_missing_generalizations("wandb/meta-llama/Llama-3.1-8B-Instruct", "wandb") is None
+
+
 def test_shipped_wandb_rule_is_anchored_to_the_wandb_namespace(shipped_cost_map):
     """``^wandb/`` is anchored, so it cannot leak onto another provider's ids."""
     assert match_capability_generalizations("wandb/some-new-model") == {"supports_reasoning": True}
@@ -900,6 +904,25 @@ def test_shipped_openai_reasoning_rule_matches_only_openai(shipped_cost_map):
     assert match_fill_missing_generalizations("gpt-5.4", "openrouter") is None
 
 
+def test_shipped_claude_thinking_rules_backfill_only_anthropic(shipped_cost_map):
+    model = "perplexity/anthropic/claude-sonnet-4-6"
+    assert model in litellm.model_cost
+    raw_entry = litellm.model_cost[model]
+    assert "supports_adaptive_thinking" not in raw_entry
+    assert "max_input_tokens" not in raw_entry
+
+    info = litellm.get_model_info(model="anthropic/claude-sonnet-4-6", custom_llm_provider="perplexity")
+    assert info.get("supports_adaptive_thinking") is None
+    assert info.get("supports_legacy_thinking") is None
+    assert info.get("max_input_tokens") is None
+    assert match_fill_missing_generalizations("claude-sonnet-4-6", "anthropic") == {
+        "supports_adaptive_thinking": True,
+        "supports_legacy_thinking": True,
+        "supports_tool_search": True,
+    }
+    assert match_fill_missing_generalizations("claude-sonnet-4-6", "perplexity") is None
+
+
 @pytest.mark.parametrize(
     "model,provider,tool_search",
     [
@@ -924,3 +947,25 @@ def test_shipped_tool_search_rule_version_boundaries(shipped_cost_map, model, pr
     assert info.get("supports_tool_search") is tool_search, model
 
 
+def test_shipped_tool_search_rule_fills_mapped_claude_entries_without_flag(shipped_cost_map):
+    """A mapped Claude 4.5+ entry with no supports_tool_search key gets it from the rule
+    on Anthropic direct, Vertex and Bedrock, a mapped pre-4.5 entry stays without one,
+    and Azure Foundry and reseller copies of the same model are not touched."""
+    for key, model, provider in (
+        ("claude-opus-4-7", "claude-opus-4-7", "anthropic"),
+        ("vertex_ai/claude-opus-5", "claude-opus-5", "vertex_ai"),
+    ):
+        assert "supports_tool_search" not in litellm.model_cost[key]
+        assert litellm.get_model_info(model, custom_llm_provider=provider)["supports_tool_search"] is True
+
+    assert "supports_tool_search" not in litellm.model_cost["claude-opus-4-1"]
+    opus_4_1_info = litellm.get_model_info("claude-opus-4-1", custom_llm_provider="anthropic")
+    assert opus_4_1_info.get("supports_tool_search") is None
+
+    assert "supports_tool_search" not in litellm.model_cost["azure_ai/claude-opus-5"]
+    azure_opus_5_info = litellm.get_model_info("claude-opus-5", custom_llm_provider="azure_ai")
+    assert azure_opus_5_info.get("supports_tool_search") is None
+
+    assert match_fill_missing_generalizations("claude-opus-5", "bedrock")["supports_tool_search"] is True
+    assert "supports_tool_search" not in match_fill_missing_generalizations("claude-opus-5", "azure_ai")
+    assert match_fill_missing_generalizations("claude-opus-5", "perplexity") is None

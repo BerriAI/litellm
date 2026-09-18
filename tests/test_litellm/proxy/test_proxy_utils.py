@@ -2151,6 +2151,32 @@ async def test_proxy_only_error_5xx_keeps_traceback_and_runs_sync_callbacks(monk
     assert "test_proxy_utils" in captured["async_traceback"]
 
 
+def test_create_model_info_response_resolves_mode_through_deployment_model():
+    """`mode` is derived from the same lookup, so an aliased embedding deployment
+    currently reports no mode at all; it must report `embedding`."""
+    from litellm import Router
+
+    saved_model_cost = dict(litellm.model_cost)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "my-embeddings",
+                    "litellm_params": {"model": "openai/text-embedding-3-small"},
+                }
+            ]
+        )
+
+        response = create_model_info_response(
+            model_id="my-embeddings", provider="openai", llm_router=router
+        )
+    finally:
+        litellm.model_cost.clear()
+        litellm.model_cost.update(saved_model_cost)
+
+    assert response["mode"] == "embedding"
+
+
 @pytest.mark.parametrize(
     "key_metadata, team_metadata, expected_to_run",
     [
