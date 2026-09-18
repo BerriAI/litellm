@@ -458,6 +458,28 @@ def test_reasoning_with_forced_tool_choice_switches_to_auto():
 
 
 @pytest.mark.parametrize(
+    "model, param, value, expected_max_tokens",
+    [
+        ("us.openai.gpt-6-astra", "max_tokens", 1, 16),
+        ("us.openai.gpt-6-astra", "max_completion_tokens", 1, 16),
+        ("us.openai.gpt-6-astra", "max_tokens", 64, 64),
+        ("anthropic.claude-sonnet-4-5-20250929-v1:0", "max_tokens", 1, 1),
+    ],
+)
+def test_map_openai_params_enforces_minimum_max_tokens_for_openai_gpt_reasoning_models(
+    model: str, param: str, value: int, expected_max_tokens: int
+):
+    optional_params = AmazonConverseConfig().map_openai_params(
+        non_default_params={param: value},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["maxTokens"] == expected_max_tokens
+
+
+@pytest.mark.parametrize(
     "model",
     [
         "us.openai.gpt-5.6-sol",
