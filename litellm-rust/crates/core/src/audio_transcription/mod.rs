@@ -3,9 +3,8 @@ pub use error::Error;
 mod client;
 mod handler;
 mod prepare;
-pub mod types;
-
 pub use handler::execute_audio_transcription_provider_call;
+pub use litellm_providers::audio_transcription::types;
 pub use prepare::prepare_audio_transcription_provider_call;
 use serde_json::Value;
 pub use types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest};

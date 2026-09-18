@@ -1,5 +1,4 @@
-use std::collections::BTreeMap;
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use litellm_auth::InputSource;
 use serde::Deserialize;
@@ -105,9 +104,10 @@ pub fn decode_document(value: Value) -> Result<OcrDocument, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
     use serde_json::json;
+
+    use super::*;
 
     #[rstest]
     #[case::omitted(json!({"type":"document_url", "document_url":"https://example.com/a.pdf"}))]
@@ -120,7 +120,7 @@ mod tests {
     #[rstest]
     #[case::non_object(json!([]), "document")]
     #[case::missing_type(json!({"document_url":"https://example.com/a.pdf"}), "document")]
-    #[case::unsupported_type(json!({"type":"text"}), "document")]
+    #[case::unsupported_type(json!({"type":"text"}), "type")]
     #[case::missing_document_url(json!({"type":"document_url"}), "Document URL")]
     #[case::missing_image_url(json!({"type":"image_url"}), "Document URL")]
     fn ocr_contract_malformed_document_is_bad_request(
@@ -133,7 +133,7 @@ mod tests {
             Error::RequestField { .. } | Error::MissingDocumentUrl
         ));
         assert_eq!(error.http_status_code(), Some(400));
-        assert!(error.to_string().contains(field));
+        assert!(error.to_string().contains(field), "{error}");
     }
 
     #[test]

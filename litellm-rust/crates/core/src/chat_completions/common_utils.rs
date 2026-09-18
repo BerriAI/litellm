@@ -1,9 +1,11 @@
+use litellm_providers::{
+    anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
+    base_llm::chat::transformation::BaseConfig,
+};
 use serde_json::{Map, Value};
 
 use super::Error;
 use crate::http_utils::string_headers as shared_string_headers;
-use crate::llms::anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG;
-use crate::llms::base_llm::chat::transformation::BaseConfig;
 
 const HEADER_CONTEXT: &str = "chat completions";
 
@@ -11,7 +13,7 @@ pub(super) fn chat_completions_provider_config(provider: &str) -> Option<&'stati
     match provider {
         "anthropic" => Some(&ANTHROPIC_CHAT_COMPLETIONS_CONFIG),
         "bedrock" => Some(
-            &crate::llms::bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
+            &litellm_providers::bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
         ),
         _ => None,
     }

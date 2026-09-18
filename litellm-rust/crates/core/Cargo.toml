@@ -7,6 +7,7 @@ repository.workspace = true
 autotests = false
 
 [dependencies]
+litellm-callbacks.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 base64.workspace = true
@@ -15,6 +16,7 @@ litellm-auth.workspace = true
 litellm-auth-aws.workspace = true
 litellm-auth-azure.workspace = true
 litellm-auth-gcp.workspace = true
+litellm-providers.workspace = true
 litellm-framing.workspace = true
 moka.workspace = true
 mime_guess = "2.0.5"
@@ -40,3 +42,4 @@ veil.workspace = true
 aws-smithy-eventstream = "=0.61.1"
 aws-smithy-types = "1.6.1"
 rstest.workspace = true
+rstest_reuse.workspace = true

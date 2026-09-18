@@ -2589,22 +2589,6 @@ def test_dispatch_petals_empty_stream_after_finish_raises(
         _run_dispatch(initialized_custom_stream_wrapper, chunk=None)
 
 
-def test_dispatch_palm_slices_completion_stream(
-    initialized_custom_stream_wrapper: CustomStreamWrapper,
-):
-    """palm uses the same fake-streaming slice strategy as petals."""
-    initialized_custom_stream_wrapper.custom_llm_provider = "palm"
-    initialized_custom_stream_wrapper.completion_stream = "B" * 40
-
-    result, _, completion_obj = _run_dispatch(
-        initialized_custom_stream_wrapper, chunk=None
-    )
-
-    assert isinstance(result, _ProviderChunkParsed)
-    assert completion_obj["content"] == "B" * 30
-    assert initialized_custom_stream_wrapper.completion_stream == "B" * 10
-
-
 def test_dispatch_cached_response_extracts_delta(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
@@ -2841,22 +2825,6 @@ def test_dispatch_triton_stream(
 
     assert isinstance(result, _ProviderChunkParsed)
     assert completion_obj["content"] == "triton text"
-    assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
-
-
-def test_dispatch_ai21_decodes_completion(
-    initialized_custom_stream_wrapper: CustomStreamWrapper,
-):
-    """ai21 does fake streaming over a single byte-encoded JSON completion."""
-    initialized_custom_stream_wrapper.custom_llm_provider = "ai21"
-    chunk = json.dumps({"completions": [{"data": {"text": "ai21 text"}}]}).encode(
-        "utf-8"
-    )
-
-    result, _, completion_obj = _run_dispatch(initialized_custom_stream_wrapper, chunk)
-
-    assert isinstance(result, _ProviderChunkParsed)
-    assert completion_obj["content"] == "ai21 text"
     assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
 
 

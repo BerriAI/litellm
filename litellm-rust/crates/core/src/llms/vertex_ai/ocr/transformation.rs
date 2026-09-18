@@ -2,17 +2,21 @@ use litellm_auth_gcp::{self as vertex, VertexConfig};
 use serde_json::Value;
 
 use super::common_utils::validate_destination;
-use crate::call_arguments::CallArguments;
-use crate::llms::base_llm::ocr::transformation::{
-    BaseOcrConfig, OcrEnvironment, OcrRequestContext,
+use crate::{
+    call_arguments::CallArguments,
+    llms::{
+        base_llm::ocr::transformation::{BaseOcrConfig, OcrEnvironment, OcrRequestContext},
+        mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
+    },
+    ocr::{
+        OcrClient,
+        document::{inline_remote_document, validate_inline_document},
+        prepare::credential_env,
+        types::{LiteLLMOcrResponse, OcrConnection, OcrDocument, PreparedOcrRequest},
+    },
+    params::OpaqueParams,
+    url_utils::ApiUrl,
 };
-use crate::llms::mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest};
-use crate::ocr::OcrClient;
-use crate::ocr::document::{inline_remote_document, validate_inline_document};
-use crate::ocr::prepare::credential_env;
-use crate::ocr::types::{LiteLLMOcrResponse, OcrConnection, OcrDocument, PreparedOcrRequest};
-use crate::params::OpaqueParams;
-use crate::url_utils::ApiUrl;
 
 const DEFAULT_LOCATION: &str = "us-central1";
 
@@ -198,8 +202,9 @@ fn validate_location(location: &str) -> Result<(), crate::ocr::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::VertexAiOcrConfig;
     use rstest::rstest;
+
+    use super::VertexAiOcrConfig;
 
     #[test]
     fn endpoint_uses_location_project_and_model() {
@@ -329,10 +334,14 @@ mod tests {
     ) {
         use std::time::Duration;
 
-        use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
-        use crate::llms::mistral::ocr::transformation::MistralOcrConfig;
-        use crate::llms::vertex_ai::ocr::transformation::VertexAiOcrConfig;
-        use crate::ocr::test_support::ocr_client;
+        use crate::{
+            llms::{
+                base_llm::ocr::transformation::BaseOcrConfig,
+                mistral::ocr::transformation::MistralOcrConfig,
+                vertex_ai::ocr::transformation::VertexAiOcrConfig,
+            },
+            ocr::test_support::ocr_client,
+        };
 
         let client = ocr_client();
         let options = json!({
@@ -348,10 +357,10 @@ mod tests {
             options.clone(),
         );
         let vertex = wire_request("vertex_ai/mistral-ocr-maas", "https://vertex.test", options);
-        let direct = crate::ocr::prepare::prepare_request(
+        let direct = crate::ocr::prepare::prepare_request_for_test(
             crate::ocr::test_support::resolved_request(direct),
         );
-        let vertex = crate::ocr::prepare::prepare_request(
+        let vertex = crate::ocr::prepare::prepare_request_for_test(
             crate::ocr::test_support::resolved_request(vertex),
         );
         let direct_http = MistralOcrConfig

@@ -2,15 +2,17 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::chat_completions::Error;
-use crate::chat_completions::streaming::StreamTransformer;
-use crate::chat_completions::types::{
-    ChatCompletionChunk, ChatCompletionThinkingBlock, ChatCompletionToolCallChunk,
-    ChatCompletionsUsage,
-};
-use crate::llms::anthropic::experimental_pass_through::messages::streaming::{
+use super::super::experimental_pass_through::messages::streaming::{
     AnthropicContentBlock, AnthropicContentBlockDelta, AnthropicMessagesStreamEvent,
     AnthropicStreamUsage,
+};
+use crate::chat_completions::{
+    Error,
+    streaming::StreamTransformer,
+    types::{
+        ChatCompletionChunk, ChatCompletionThinkingBlock, ChatCompletionToolCallChunk,
+        ChatCompletionsUsage,
+    },
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

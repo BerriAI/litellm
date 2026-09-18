@@ -13,9 +13,8 @@ mod client;
 mod common_utils;
 mod handler;
 mod prepare;
-pub mod types;
-
 use handler::{execute_messages_provider_call, execute_messages_provider_stream};
+pub use litellm_providers::messages::types;
 use types::{AnthropicMessagesResponse, MessagesRequest};
 
 pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesResponse, Error> {

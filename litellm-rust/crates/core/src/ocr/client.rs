@@ -1,14 +1,14 @@
-use std::sync::OnceLock;
-use std::time::Duration;
+use std::{sync::OnceLock, time::Duration};
 
 use bytes::{Bytes, BytesMut};
 use litellm_auth_gcp::VertexAuth;
 use serde::de::DeserializeOwned;
 
-use super::json::{DecodedOcrResponse, decode_response};
-use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
-use crate::constants::OCR_CONNECT_TIMEOUT_SECS;
-use crate::media::MediaFetcher;
+use super::{
+    json::{DecodedOcrResponse, decode_response},
+    types::{LiteLLMOcrRequest, LiteLLMOcrResponse},
+};
+use crate::{constants::OCR_CONNECT_TIMEOUT_SECS, media::MediaFetcher};
 
 #[derive(Clone)]
 pub struct OcrClient {
@@ -37,36 +37,11 @@ impl OcrClient {
         &self,
         request: LiteLLMOcrRequest,
     ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-        use super::{
-            NativeOutcome, OcrAdmission, OcrCall, OcrCallStep, OcrHookHost, OcrHost,
-            OcrHostOperation, OcrHostResult,
-        };
-
-        let host = OcrHookHost::new(request.hooks.clone());
-        let mut request = Some(request);
-        let NativeOutcome::Completed(mut call) = OcrCall::admit(self.clone(), OcrAdmission::all())
-        else {
-            return Err(crate::ocr::Error::InvalidRequest(
-                "native OCR host admission declined".into(),
-            ));
-        };
-        let mut result = None;
-        loop {
-            match call.resume(result.take()).await? {
-                OcrCallStep::Host(OcrHostOperation::ProjectRequest) => {
-                    result = Some(OcrHostResult::Request(Ok((
-                        Box::new(request.take().ok_or_else(|| {
-                            crate::ocr::Error::InvalidRequest(
-                                "OCR request was already projected".into(),
-                            )
-                        })?),
-                        false,
-                    ))))
-                }
-                OcrCallStep::Host(operation) => result = Some(host.invoke(operation).await),
-                OcrCallStep::Complete(response) => return Ok(response),
-            }
-        }
+        litellm_callbacks::run::run(
+            super::ocr_machine(self.clone()),
+            &super::LocalOcrHost::new(request),
+        )
+        .await
     }
 
     pub(crate) fn provider_http(&self) -> &reqwest::Client {
