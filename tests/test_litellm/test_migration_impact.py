@@ -146,7 +146,7 @@ def test_split_statements_descends_into_dollar_quoted_blocks() -> None:
 
 def test_split_statements_drops_comments() -> None:
     statements = impact.split_statements('-- add a column\nALTER TABLE "T" ADD COLUMN "c" TEXT; /* trailing */')
-    assert statements == ['ALTER TABLE "T" ADD COLUMN "c" TEXT']
+    assert statements == ('ALTER TABLE "T" ADD COLUMN "c" TEXT',)
 
 
 def test_star_read_discovery_records_table_alias_and_joins() -> None:
@@ -165,7 +165,7 @@ def test_star_read_discovery_ignores_aliases_that_only_appear_in_a_comment() -> 
 
 def test_star_read_discovery_ignores_view_definitions() -> None:
     # A view expands `*` when it is created, so it holds no per-connection prepared plan.
-    assert impact.star_reads_in_source(VIEW_SOURCE, "litellm/proxy/db/create_views.py") == []
+    assert impact.star_reads_in_source(VIEW_SOURCE, "litellm/proxy/db/create_views.py") == ()
 
 
 def test_add_column_on_a_whole_row_read_table_is_a_prepared_plan_change() -> None:
@@ -269,7 +269,7 @@ def test_markdown_caps_the_table_and_says_where_the_rest_is() -> None:
     finding = _classify('ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN "key_type" TEXT', reads=(_auth_read(),))
     rendered = impact.render_markdown(_report(findings=tuple([finding] * (impact.MAX_ROWS + 3))))
     assert rendered.count("| **PREPARED-PLAN** |") == impact.MAX_ROWS
-    assert "…and 3 more" in rendered
+    assert "...and 3 more" in rendered
 
 
 def test_worst_severity_ranks_breaking_above_the_rest() -> None:

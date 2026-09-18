@@ -40,9 +40,10 @@ import json
 import re
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 MIGRATIONS_DIR: Final = "litellm-proxy-extras/litellm_proxy_extras/migrations"
@@ -209,7 +210,7 @@ class Column:
     prisma_type: str
 
 
-Schema = dict[str, dict[str, Column]]
+Schema = Mapping[str, Mapping[str, Column]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,7 +224,7 @@ class UpgradeContext:
     # (table, column) added by this upgrade with a DEFAULT: the old pods write that default on every insert.
     defaulted_columns: frozenset[tuple[str, str]] = frozenset()
     # Unique indexes that exist at the base, by name: what a dropped-and-recreated key used to cover.
-    base_unique_indexes: dict[str, tuple[str, tuple[str, ...]]] = field(default_factory=dict)
+    base_unique_indexes: Mapping[str, tuple[str, tuple[str, ...]]] = field(default_factory=lambda: MappingProxyType({}))
 
     def column(self, table: str, column: str) -> Column | None:
         return None if self.schema is None else self.schema.get(table, {}).get(column)
@@ -306,20 +307,14 @@ def normalize(statement: str) -> str:
     return " ".join(statement.split()).strip()
 
 
-def split_statements(sql: str) -> list[str]:
+def split_statements(sql: str) -> tuple[str, ...]:
     """Split a migration into single-line statements, descending into `DO $$ ... $$` bodies."""
     cleaned: Final = _BLOCK_COMMENT.sub(" ", _LINE_COMMENT.sub(" ", sql))
-    bodies: Final[list[str]] = []
-
-    def stash(match: re.Match[str]) -> str:
-        bodies.append(match.group("body"))
-        return " "
-
-    outer: Final = _DOLLAR_QUOTED.sub(stash, cleaned)
-    statements: Final = [normalize(part) for part in outer.split(";")]
-    for body in bodies:
-        statements.extend(split_statements(body))
-    return [statement for statement in statements if statement]
+    bodies: Final = tuple(match.group("body") for match in _DOLLAR_QUOTED.finditer(cleaned))
+    outer: Final = _DOLLAR_QUOTED.sub(" ", cleaned)
+    top_level: Final = tuple(normalize(part) for part in outer.split(";"))
+    nested: Final = tuple(statement for body in bodies for statement in split_statements(body))
+    return tuple(statement for statement in top_level + nested if statement)
 
 
 def statement_table(statement: str) -> str:
@@ -333,13 +328,9 @@ def statement_table(statement: str) -> str:
 def migration_names(repo: Path, ref: str) -> tuple[str, ...]:
     """The migration directories at `ref`, skipping `migration_lock.toml` and any stray file."""
     listing: Final = _git(repo, "ls-tree", ref, f"{MIGRATIONS_DIR}/")
-    names: Final[list[str]] = []
-    for line in listing.splitlines():
-        # <mode> <type> <object>\t<path>
-        meta, _, path = line.partition("\t")
-        if meta.split()[1:2] == ["tree"]:
-            names.append(Path(path).name)
-    return tuple(sorted(names))
+    # <mode> <type> <object>\t<path>
+    entries: Final = tuple(line.partition("\t") for line in listing.splitlines())
+    return tuple(sorted(Path(path).name for meta, _, path in entries if meta.split()[1:2] == ["tree"]))
 
 
 def read_migration(repo: Path, ref: str, name: str) -> str | None:
@@ -357,82 +348,87 @@ def tables_created_before(repo: Path, ref: str) -> frozenset[str]:
     return frozenset(match.group("table") for match in _CREATE_TABLE.finditer(listing or ""))
 
 
+def _model_columns(body: str, enums: frozenset[str]) -> Mapping[str, Column]:
+    declared: Final = tuple(_PRISMA_FIELD.finditer(body))
+    return MappingProxyType(
+        {
+            (_FIELD_MAP.search(one.group("rest")) or one).group("name"): Column(
+                required=one.group("optional") is None, prisma_type=one.group("type")
+            )
+            for one in declared
+            if one.group("type") in PRISMA_SCALARS or one.group("type") in enums
+        }
+    )
+
+
 def parse_prisma_schema(text: str) -> Schema:
     """The tables and columns a Prisma client generated from this schema selects and writes.
 
     Relation fields are not columns and are skipped; `@map` / `@@map` give the real names.
     """
     enums: Final = frozenset(_ENUM_NAME.findall(text))
-    schema: Final[Schema] = {}
-    for block in _MODEL_BLOCK.finditer(text):
-        body: Final = block.group("body")
-        table_map: Final = _TABLE_MAP.search(body)
-        table: Final = table_map.group("name") if table_map is not None else block.group("model")
-        columns: Final[dict[str, Column]] = {}
-        for declared in _PRISMA_FIELD.finditer(body):
-            prisma_type: Final = declared.group("type")
-            if prisma_type not in PRISMA_SCALARS and prisma_type not in enums:
-                continue
-            field_map: Final = _FIELD_MAP.search(declared.group("rest"))
-            name: Final = field_map.group("name") if field_map is not None else declared.group("name")
-            columns[name] = Column(required=declared.group("optional") is None, prisma_type=prisma_type)
-        schema[table] = columns
-    return schema
+    return MappingProxyType(
+        {
+            (_TABLE_MAP.search(block.group("body")) or block).group(
+                "name" if _TABLE_MAP.search(block.group("body")) else "model"
+            ): _model_columns(block.group("body"), enums)
+            for block in _MODEL_BLOCK.finditer(text)
+        }
+    )
 
 
 def load_base_schema(repo: Path, ref: str) -> Schema | None:
-    for path in SCHEMA_PATHS:
-        text: Final = _git_or_none(repo, "show", f"{ref}:{path}")
-        if text is not None:
-            parsed: Final = parse_prisma_schema(text)
-            if parsed:
-                return parsed
-    return None
+    texts: Final = (_git_or_none(repo, "show", f"{ref}:{path}") for path in SCHEMA_PATHS)
+    return next((parsed for text in texts if text is not None and (parsed := parse_prisma_schema(text))), None)
 
 
 def _identifiers(fragment: str) -> tuple[str, ...]:
     """Every name in the fragment, quoted or bare. Bare words include keywords and literals, so callers keep
     only the ones that are columns of the table at hand."""
-    quoted: Final = [match.group("name") for match in _QUOTED_IDENTIFIER.finditer(fragment)]
+    quoted: Final = tuple(match.group("name") for match in _QUOTED_IDENTIFIER.finditer(fragment))
     unquoted: Final = _QUOTED_IDENTIFIER.sub(" ", re.sub(r"'[^']*'", " ", fragment))
-    bare: Final = [match.group("name") for match in _BARE_WORD.finditer(unquoted)]
+    bare: Final = tuple(match.group("name") for match in _BARE_WORD.finditer(unquoted))
     return tuple(dict.fromkeys(quoted + bare))
 
 
-def _defaulted_columns(statements: Sequence[str]) -> frozenset[tuple[str, str]]:
+def _defaulted_columns(statements: Iterable[str]) -> frozenset[tuple[str, str]]:
     """(table, column) pairs these statements add with a DEFAULT."""
-    found: Final[set[tuple[str, str]]] = set()
-    for statement in statements:
-        table: Final = statement_table(statement)
-        for clause in _CLAUSE_SPLIT.split(statement):
-            added: Final = _ADDED_COLUMN_NAME.search(clause)
-            if added is not None and _DEFAULT.search(clause) is not None:
-                found.add((table, added.group("column")))
-    return frozenset(found)
-
-
-def unique_indexes_at(repo: Path, ref: str) -> dict[str, tuple[str, tuple[str, ...]]]:
-    """Every unique index some migration at `ref` creates, by name: its table and columns."""
-    listing: Final = _git_or_none(
-        repo, "grep", "-h", "-i", "--fixed-strings", "CREATE UNIQUE INDEX", ref, "--", f"{MIGRATIONS_DIR}/"
+    return frozenset(
+        (statement_table(statement), added.group("column"))
+        for statement in statements
+        for clause in _CLAUSE_SPLIT.split(statement)
+        if (added := _ADDED_COLUMN_NAME.search(clause)) is not None and _DEFAULT.search(clause) is not None
     )
-    indexes: Final[dict[str, tuple[str, tuple[str, ...]]]] = {}
-    for line in (listing or "").splitlines():
-        named: Final = _INDEX_NAME.search(line)
-        if named is not None:
-            indexes[named.group("index")] = (statement_table(line), _index_columns(line))
-    return indexes
+
+
+def unique_indexes_at(repo: Path, ref: str) -> Mapping[str, tuple[str, tuple[str, ...]]]:
+    """Every unique index some migration at `ref` creates, by name: its table and columns.
+
+    Read statement by statement, not line by line, because Prisma wraps long index definitions.
+    """
+    listing: Final = _git_or_none(
+        repo, "grep", "-l", "-i", "--fixed-strings", "CREATE UNIQUE INDEX", ref, "--", f"{MIGRATIONS_DIR}/"
+    )
+    paths: Final = tuple(line.split(":", 1)[1] if ":" in line else line for line in (listing or "").splitlines())
+    sources: Final = tuple(text for path in paths if (text := _git_or_none(repo, "show", f"{ref}:{path}")) is not None)
+    return MappingProxyType(
+        {
+            named.group("index"): (statement_table(statement), _index_columns(statement))
+            for source in sources
+            for statement in split_statements(source)
+            if _UNIQUE_INDEX.search(statement) is not None and (named := _INDEX_NAME.search(statement)) is not None
+        }
+    )
 
 
 def _constraint_columns(statement: str) -> tuple[str, ...]:
     """Names a new constraint mentions: the listed columns, and every name inside a CHECK expression."""
-    listed: Final = [
+    listed: Final = tuple(
         name for match in _CONSTRAINT_COLUMNS.finditer(statement) for name in _identifiers(match.group("columns"))
-    ]
+    )
     check: Final = _CHECK_BODY.search(statement)
-    if check is not None:
-        listed.extend(_identifiers(check.group("body")))
-    return tuple(dict.fromkeys(listed))
+    inside: Final = _identifiers(check.group("body")) if check is not None else ()
+    return tuple(dict.fromkeys(listed + inside))
 
 
 def _index_columns(statement: str) -> tuple[str, ...]:
@@ -440,63 +436,57 @@ def _index_columns(statement: str) -> tuple[str, ...]:
     return _identifiers(match.group("columns")) if match is not None else ()
 
 
-def _alias_map(body: str) -> tuple[dict[str, str], tuple[str, ...]]:
-    aliases: Final[dict[str, str]] = {}
-    tables: Final[list[str]] = []
-    for match in _FROM_JOIN.finditer(body):
-        table: Final = match.group("table")
-        if table not in tables:
-            tables.append(table)
-        alias: Final = match.group("alias")
-        if alias is not None and alias.lower() not in ALIAS_STOPWORDS:
-            aliases[alias] = table
-    return aliases, tuple(tables)
+def _alias_map(body: str) -> tuple[Mapping[str, str], tuple[str, ...]]:
+    matches: Final = tuple(_FROM_JOIN.finditer(body))
+    tables: Final = tuple(dict.fromkeys(match.group("table") for match in matches))
+    aliases: Final = MappingProxyType(
+        {
+            match.group("alias"): match.group("table")
+            for match in matches
+            if match.group("alias") is not None and match.group("alias").lower() not in ALIAS_STOPWORDS
+        }
+    )
+    return aliases, tables
 
 
-def star_reads_in_source(text: str, path: str) -> list[StarRead]:
+def _star_reads_in_literal(body: str, location: str) -> tuple[StarRead, ...]:
+    aliases, tables = _alias_map(body)
+    starred: Final = tuple(
+        (aliases[match.group("alias")], match.group("alias"))
+        for match in _STAR_ALIAS.finditer(body)
+        if match.group("alias") in aliases
+    )
+    bare: Final = ((tables[0], "*"),) if not starred and _BARE_STAR.search(body) and len(tables) == 1 else ()
+    return tuple(
+        StarRead(table=table, alias=alias, joined=tuple(other for other in tables if other != table), location=location)
+        for table, alias in dict.fromkeys(starred + bare)
+    )
+
+
+def star_reads_in_source(text: str, path: str) -> tuple[StarRead, ...]:
     """Find whole-row reads (`SELECT v.*`, `SELECT *`) in the SQL literals of one source file."""
-    found: Final[list[StarRead]] = []
-    for literal in _SQL_LITERAL.finditer(text):
-        raw: Final = literal.group("body")
-        if TABLE_MARKER not in raw or "SELECT" not in raw.upper():
-            continue
-        if VIEW_MARKER.search(raw) is not None:
-            continue
+    return tuple(
+        read
+        for literal in _SQL_LITERAL.finditer(text)
+        if TABLE_MARKER in literal.group("body")
+        and "SELECT" in literal.group("body").upper()
+        and VIEW_MARKER.search(literal.group("body")) is None
         # `-- Added comma to separate b.* columns` is a comment, not a read.
-        body: Final = _LINE_COMMENT.sub(" ", raw)
-        aliases, tables = _alias_map(body)
-        line: Final = text.count("\n", 0, literal.start()) + 1
-        location: Final = f"{path}:{line}"
-        starred: Final[list[tuple[str, str]]] = [
-            (aliases[match.group("alias")], match.group("alias"))
-            for match in _STAR_ALIAS.finditer(body)
-            if match.group("alias") in aliases
-        ]
-        if not starred and _BARE_STAR.search(body) is not None and len(tables) == 1:
-            starred.append((tables[0], "*"))
-        for table, alias in dict.fromkeys(starred):
-            found.append(
-                StarRead(
-                    table=table,
-                    alias=alias,
-                    joined=tuple(other for other in tables if other != table),
-                    location=location,
-                )
-            )
-    return found
+        for read in _star_reads_in_literal(
+            _LINE_COMMENT.sub(" ", literal.group("body")), f"{path}:{text.count(chr(10), 0, literal.start()) + 1}"
+        )
+    )
 
 
 def discover_star_reads(repo: Path, ref: str) -> tuple[StarRead, ...]:
     listing: Final = _git_or_none(repo, "grep", "-l", "--fixed-strings", TABLE_MARKER, ref, "--", *SOURCE_GLOBS)
-    if listing is None:
-        return ()
-    found: Final[list[StarRead]] = []
-    for line in listing.splitlines():
-        path: Final = line.split(":", 1)[1] if ":" in line else line
-        text: Final = _git_or_none(repo, "show", f"{ref}:{path}")
-        if text is not None:
-            found.extend(star_reads_in_source(text, path))
-    return tuple(found)
+    paths: Final = tuple(line.split(":", 1)[1] if ":" in line else line for line in (listing or "").splitlines())
+    return tuple(
+        read
+        for path in paths
+        if (text := _git_or_none(repo, "show", f"{ref}:{path}")) is not None
+        for read in star_reads_in_source(text, path)
+    )
 
 
 def _shape(read: StarRead) -> str:
@@ -730,35 +720,46 @@ def _adds_not_null_without_default(statement: str) -> bool:
     )
 
 
+def _context_for(
+    statements: Sequence[str],
+    fresh_tables: frozenset[str],
+    star_reads: tuple[StarRead, ...],
+    schema: Schema | None,
+    defaulted: frozenset[tuple[str, str]],
+    base_unique: Mapping[str, tuple[str, tuple[str, ...]]],
+) -> UpgradeContext:
+    dropped: Final = frozenset(
+        match.group("index") for statement in statements if (match := _DROP_INDEX_NAME.search(statement))
+    )
+    return UpgradeContext(fresh_tables, star_reads, schema, dropped, defaulted, base_unique)
+
+
 def build_report(repo: Path, base: str, head: str) -> Report:
-    base_names: Final = set(migration_names(repo, base))
-    head_names: Final = migration_names(repo, head)
-    new_names: Final = tuple(name for name in head_names if name not in base_names)
+    base_names: Final = frozenset(migration_names(repo, base))
+    new_names: Final = tuple(name for name in migration_names(repo, head) if name not in base_names)
     # The plans that break are the ones the old pods hold, so the queries that matter are the base version's.
     star_reads: Final = discover_star_reads(repo, base)
 
-    sql_by_migration: Final = {name: sql for name in new_names if (sql := read_migration(repo, head, name)) is not None}
+    statements_by_migration: Final = MappingProxyType(
+        {name: split_statements(sql) for name in new_names if (sql := read_migration(repo, head, name)) is not None}
+    )
     created_here: Final = frozenset(
         match.group("table")
-        for sql in sql_by_migration.values()
-        for statement in split_statements(sql)
+        for statements in statements_by_migration.values()
+        for statement in statements
         if (match := _CREATE_TABLE.search(statement)) is not None
     )
     # A re-declared `CREATE TABLE IF NOT EXISTS` of a table the old pods already use is not a new table.
     fresh_tables: Final = created_here - tables_created_before(repo, base)
     schema: Final = load_base_schema(repo, base)
-    statements_by_migration: Final = {name: split_statements(sql) for name, sql in sql_by_migration.items()}
-    defaulted: Final = _defaulted_columns([s for statements in statements_by_migration.values() for s in statements])
+    defaulted: Final = _defaulted_columns(s for statements in statements_by_migration.values() for s in statements)
     base_unique: Final = unique_indexes_at(repo, base)
 
-    findings: Final[list[Finding]] = []
-    for name, statements in statements_by_migration.items():
-        dropped: Final = frozenset(
-            match.group("index") for statement in statements if (match := _DROP_INDEX_NAME.search(statement))
-        )
-        context: Final = UpgradeContext(fresh_tables, star_reads, schema, dropped, defaulted, base_unique)
-        findings.extend(classify(name, statement, context) for statement in statements)
-
+    findings: Final = tuple(
+        classify(name, statement, _context_for(statements, fresh_tables, star_reads, schema, defaulted, base_unique))
+        for name, statements in statements_by_migration.items()
+        for statement in statements
+    )
     ranked: Final = sorted(findings, key=lambda finding: (SEVERITY_ORDER.index(finding.severity), finding.migration))
     return Report(
         base=base,
@@ -770,24 +771,26 @@ def build_report(repo: Path, base: str, head: str) -> Report:
     )
 
 
-PROCEDURE: Final = {
-    BREAKING: (
-        "**Do not run the old and new versions side by side.** Take the previous version out of service before the "
-        "new version applies these migrations, or split the change across two releases."
-    ),
-    WRITE_REJECT: (
-        "Writes from the previous version that break the new rule are rejected until those pods are gone. Confirm "
-        "the previous version already satisfies it on your data; if you cannot, do not overlap the two versions."
-    ),
-    PREPARED_PLAN: (
-        "Expect the queries cited above to fail on pods still running the previous version until their pooled "
-        "connections are recreated. LiteLLM recreates them on the first such failure as of `1.98.0`; on older "
-        "versions, or to avoid the failures entirely, set `general_settings.database_disable_prepared_statements: "
-        "true` before upgrading, or drain the old pods before the new ones migrate."
-    ),
-    LOCK: "Apply these migrations in a maintenance window, or during a traffic trough, and watch for lock waits.",
-    INFO: "Safe to apply during a rolling upgrade.",
-}
+PROCEDURE: Final = MappingProxyType(
+    {
+        BREAKING: (
+            "**Do not run the old and new versions side by side.** Take the previous version out of service before "
+            "the new version applies these migrations, or split the change across two releases."
+        ),
+        WRITE_REJECT: (
+            "Writes from the previous version that break the new rule are rejected until those pods are gone. Confirm "
+            "the previous version already satisfies it on your data; if you cannot, do not overlap the two versions."
+        ),
+        PREPARED_PLAN: (
+            "Expect the queries cited above to fail on pods still running the previous version until their pooled "
+            "connections are recreated. LiteLLM recreates them on the first such failure as of `1.98.0`; on older "
+            "versions, or to avoid the failures entirely, set `general_settings.database_disable_prepared_statements: "
+            "true` before upgrading, or drain the old pods before the new ones migrate."
+        ),
+        LOCK: "Apply these migrations in a maintenance window, or during a traffic trough, and watch for lock waits.",
+        INFO: "Safe to apply during a rolling upgrade.",
+    }
+)
 
 
 def _cited_reads(report: Report) -> tuple[StarRead, ...]:
@@ -797,55 +800,61 @@ def _cited_reads(report: Report) -> tuple[StarRead, ...]:
     return tuple(read for read in representatives if read is not None)
 
 
+def _evidence_line(report: Report) -> str:
+    schema_note: Final = (
+        f"no `schema.prisma` at `{report.base}`, so drops, renames and constraints are rated as if the previous "
+        "version used every column"
+        if report.schema_tables is None
+        else f"columns the previous version uses: `schema.prisma` at `{report.base}` ({report.schema_tables} tables)"
+    )
+    cited: Final = _cited_reads(report)
+    shapes: Final = ", ".join(sorted({f"`{_shape(read)}` on `{read.table}` (`{read.location}`)" for read in cited}))
+    reads_note: Final = (f"whole-row reads: {shapes}",) if cited else ()
+    return f"<sub>Evidence: {'; '.join((schema_note, *reads_note))}.</sub>"
+
+
 def render_markdown(report: Report) -> str:
-    lines: Final[list[str]] = ["## Database Schema Changes", ""]
     if not report.migrations:
-        lines.append(f"No database schema changes since `{report.base}`.")
-        return "\n".join(lines) + "\n"
+        return f"## Database Schema Changes\n\nNo database schema changes since `{report.base}`.\n"
 
     count: Final = len(report.migrations)
-    plural: Final = "" if count == 1 else "s"
-    lines.extend(
-        [
-            f"This release adds **{count} migration{plural}** to `litellm-proxy-extras`, applied by the first pod "
-            f"that boots (`prisma migrate deploy`). Rated against a pod still running `{report.base}`:",
-            "",
-            "| | Migration | Statement | Effect on pods still on the previous version |",
-            "|:--:|:--|:--|:--|",
-        ]
+    notable: Final = tuple(finding for finding in report.findings if finding.severity != INFO)
+    rows: Final = tuple(
+        f"| **{SEVERITY_LABEL[finding.severity]}** | `{finding.migration}` | `{_clip(finding.statement)}` | "
+        f"{finding.effect} |"
+        for finding in notable[:MAX_ROWS]
     )
-    notable: Final = [finding for finding in report.findings if finding.severity != INFO]
-    for finding in notable[:MAX_ROWS]:
-        lines.append(
-            f"| **{SEVERITY_LABEL[finding.severity]}** | `{finding.migration}` | `{_clip(finding.statement)}` | "
-            f"{finding.effect} |"
+    overflow: Final = (
+        (
+            f"| | | | ...and {len(notable) - MAX_ROWS} more, worst first. Run "
+            f"`python3 ci_cd/migration_impact.py --base {report.base} --head {report.head}` for the full list. |",
         )
-    if len(notable) > MAX_ROWS:
-        lines.append(
-            f"| | | | …and {len(notable) - MAX_ROWS} more, worst first. Run "
-            f"`python3 ci_cd/migration_impact.py --base {report.base} --head {report.head}` for the full list. |"
-        )
-
+        if len(notable) > MAX_ROWS
+        else ()
+    )
     worst: Final = report.worst
-    if worst is None or worst == INFO:
-        lines.append("| **INFO** | - | - | Nothing in this release affects a pod running the previous version. |")
-    lines.extend(["", PROCEDURE[worst or INFO], ""])
-    evidence: Final[list[str]] = []
-    if report.schema_tables is None:
-        evidence.append(
-            f"no `schema.prisma` at `{report.base}`, so drops, renames and constraints are rated as if the previous "
-            "version used every column"
-        )
-    else:
-        evidence.append(
-            f"columns the previous version uses: `schema.prisma` at `{report.base}` ({report.schema_tables} tables)"
-        )
-    cited: Final = _cited_reads(report)
-    if cited:
-        shapes: Final = ", ".join(sorted({f"`{_shape(read)}` on `{read.table}` (`{read.location}`)" for read in cited}))
-        evidence.append(f"whole-row reads: {shapes}")
-    lines.append(f"<sub>Evidence: {'; '.join(evidence)}.</sub>")
-    lines.append("")
+    quiet: Final = (
+        ("| **INFO** | - | - | Nothing in this release affects a pod running the previous version. |",)
+        if worst is None or worst == INFO
+        else ()
+    )
+    lines: Final = (
+        "## Database Schema Changes",
+        "",
+        f"This release adds **{count} migration{'' if count == 1 else 's'}** to `litellm-proxy-extras`, applied by "
+        f"the first pod that boots (`prisma migrate deploy`). Rated against a pod still running `{report.base}`:",
+        "",
+        "| | Migration | Statement | Effect on pods still on the previous version |",
+        "|:--:|:--|:--|:--|",
+        *rows,
+        *overflow,
+        *quiet,
+        "",
+        PROCEDURE[worst or INFO],
+        "",
+        _evidence_line(report),
+        "",
+    )
     return "\n".join(lines)
 
 
