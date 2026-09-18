@@ -53,6 +53,14 @@ const mockUseOrganizations = vi.fn();
 // The teams grid is unit-tested in TeamsPage/TeamsTable.test.tsx. Here we stub it and drive its callbacks
 // directly so we can test the Teams shell wiring (delete modal, detail view) without the real DataTable.
 let mockTeamsTableProps: any = null;
+vi.mock("./key_team_helpers/BudgetFallbacksEditor", () => ({
+  BudgetFallbacksEditor: ({ onChange }: { onChange: (v: Record<string, string[]>) => void }) => (
+    <button type="button" onClick={() => onChange({ "gpt-4": ["gpt-3.5-turbo"] })}>
+      Set Budget Fallback
+    </button>
+  ),
+}));
+
 vi.mock("./TeamsPage/TeamsTable", () => ({
   TeamsTable: (props: any) => {
     mockTeamsTableProps = props;
@@ -747,6 +755,24 @@ describe("Teams - Reset Budget in team create", () => {
 
     expect(payload.budget_duration).toBeUndefined();
     expect(JSON.stringify(payload)).not.toContain("budget_duration");
+  });
+
+  it("should send a configured budget fallback as budget_fallbacks", async () => {
+    await openCreateModal();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Set Budget Fallback" }));
+
+    const payload = await submitCreateModal();
+
+    expect(payload.budget_fallbacks).toEqual({ "gpt-4": ["gpt-3.5-turbo"] });
+  });
+
+  it("should omit budget_fallbacks when no fallback is configured", async () => {
+    await openCreateModal();
+
+    const payload = await submitCreateModal();
+
+    expect("budget_fallbacks" in payload).toBe(false);
   });
 
   it("should send the picked duration when one is selected", async () => {

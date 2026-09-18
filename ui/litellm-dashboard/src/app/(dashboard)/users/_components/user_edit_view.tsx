@@ -3,6 +3,7 @@ import { z } from "zod/v4";
 import { all_admin_roles } from "@/utils/roles";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
 import { ModelMaxBudget, ModelMaxBudgetField } from "@/components/key_team_helpers/ModelMaxBudgetEditor";
+import { BudgetFallbacksEditor } from "@/components/key_team_helpers/BudgetFallbacksEditor";
 import { modelMaxBudgetUpdate } from "@/components/key_team_helpers/modelMaxBudgetPayload";
 import { useSeededState } from "@/components/key_team_helpers/useSeededState";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
@@ -10,7 +11,7 @@ import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelec
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 import type { ObjectPermission } from "@/components/object_permission_types";
 import { MultiSelect } from "@/components/shared/MultiSelect";
-import { FieldGroup } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -147,6 +148,10 @@ export function UserEditView({
     userData.user_id,
     () => userData.user_info?.model_max_budget ?? {},
   );
+  const [budgetFallbacks, setBudgetFallbacks] = useSeededState<Record<string, string[]>>(
+    userData.user_id,
+    () => userData.user_info?.budget_fallbacks ?? {},
+  );
   const schema = useMemo(() => budgetSchema(unlimitedBudget), [unlimitedBudget]);
   const form = useZodForm(schema, {
     defaultValues: toFormValues(userData, objectPermission, isBulkEdit, canEditMcpPermissions),
@@ -172,10 +177,14 @@ export function UserEditView({
     }
 
     const modelBudgets = modelMaxBudgetUpdate(modelMaxBudget, userData.user_info?.model_max_budget);
+    const storedFallbacks = userData.user_info?.budget_fallbacks ?? {};
     onSubmit({
       ...values,
       ...("metadata" in values ? { metadata: metadata.value } : {}),
       ...(modelBudgets !== undefined && { model_max_budget: modelBudgets }),
+      ...(JSON.stringify(budgetFallbacks) !== JSON.stringify(storedFallbacks)
+        ? { budget_fallbacks: budgetFallbacks }
+        : {}),
       max_budget:
         unlimitedBudget || values.max_budget === "" || values.max_budget === undefined ? null : values.max_budget,
     });
@@ -305,6 +314,22 @@ export function UserEditView({
               usage={userData.user_info?.model_max_budget_usage}
               hint="Cap this user's spend on individual models, each with its own reset window. Applies across every key the user holds."
             />
+          )}
+
+          {!isBulkEdit && (
+            <Field>
+              <FieldLabel>
+                {labelWithHint(
+                  "Budget Fallbacks",
+                  "When a model exceeds its per-model budget, requests automatically reroute to fallback models instead of failing",
+                )}
+              </FieldLabel>
+              <BudgetFallbacksEditor
+                value={budgetFallbacks}
+                onChange={setBudgetFallbacks}
+                availableModels={userModels}
+              />
+            </Field>
           )}
 
           <FormField control={form.control} name="metadata" label="Metadata">

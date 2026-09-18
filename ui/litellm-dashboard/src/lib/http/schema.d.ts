@@ -29560,6 +29560,10 @@ export interface components {
             blocked: boolean;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
@@ -30941,6 +30945,10 @@ export interface components {
             blocked: boolean;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
@@ -31076,6 +31084,10 @@ export interface components {
             allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -31164,6 +31176,10 @@ export interface components {
             allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -33509,6 +33525,10 @@ export interface components {
             blocked: boolean;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Default Estimated Output Tokens */
@@ -34284,6 +34304,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Default Estimated Output Tokens */
@@ -37746,6 +37770,10 @@ export interface components {
             blocked: boolean;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
@@ -37878,6 +37906,10 @@ export interface components {
             blocked: boolean;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
@@ -39508,6 +39540,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Default Estimated Output Tokens */
@@ -40243,6 +40279,10 @@ export interface components {
              * @default false
              */
             team_blocked: boolean;
+            /** Team Budget Fallbacks */
+            team_budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Max Budget */
@@ -40305,6 +40345,10 @@ export interface components {
             updated_by?: string | null;
             /** User */
             user?: unknown | null;
+            /** User Budget Fallbacks */
+            user_budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** User Email */
             user_email?: string | null;
             /** User Id */

@@ -66,6 +66,7 @@ import {
   modelMaxBudgetToEntries,
 } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { modelMaxBudgetUpdate, StoredModelMaxBudget } from "../key_team_helpers/modelMaxBudgetPayload";
+import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import {
   computeTeamModelBadges,
   normalizeTeamModelSelection,
@@ -285,6 +286,7 @@ export interface TeamData {
     budget_duration: string | null;
     model_max_budget?: StoredModelMaxBudget | null;
     model_max_budget_usage?: Record<string, ModelBudgetUsage> | null;
+    budget_fallbacks?: Record<string, string[]> | null;
     models: string[];
     blocked: boolean;
     spend: number;
@@ -580,6 +582,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isTeamSaving, setIsTeamSaving] = useState(false);
   const [teamModelAliases, setTeamModelAliases] = useState<Record<string, string>>({});
   const [teamModelMaxBudget, setTeamModelMaxBudget] = useState<ModelMaxBudget>({});
+  const [teamBudgetFallbacks, setTeamBudgetFallbacks] = useState<Record<string, string[]>>({});
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole } = useAuthorized();
@@ -631,6 +634,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const startEditing = () => {
     form.reset(teamFormValues());
     setTeamModelMaxBudget((teamData?.team_info?.model_max_budget ?? {}) as ModelMaxBudget);
+    setTeamBudgetFallbacks(teamData?.team_info?.budget_fallbacks ?? {});
     setTeamMemberSettingsOpen(false);
     setSearchToolSettingsOpen(false);
     setIsEditing(true);
@@ -1116,6 +1120,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.model_max_budget = modelBudgets;
       }
 
+      const storedFallbacks = info.budget_fallbacks ?? {};
+      if (JSON.stringify(teamBudgetFallbacks) !== JSON.stringify(storedFallbacks)) {
+        updateData.budget_fallbacks = teamBudgetFallbacks;
+      }
+
       // Handle router_settings - read fresh values from DOM at save time.
       const currentRouterSettings = routerSettingsRef.current?.getValue();
       if (currentRouterSettings?.router_settings) {
@@ -1585,6 +1594,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     usage={info.model_max_budget_usage}
                     hint="Cap this team's spend on individual models, each with its own reset window. Every key on the team shares the cap unless the key sets its own budget for that model."
                   />
+
+                  <Field>
+                    <FieldLabel>
+                      {labelWithHint(
+                        "Budget Fallbacks",
+                        "When a model exceeds its per-model budget, requests automatically reroute to fallback models instead of failing",
+                      )}
+                    </FieldLabel>
+                    <BudgetFallbacksEditor
+                      value={teamBudgetFallbacks}
+                      onChange={setTeamBudgetFallbacks}
+                      availableModels={availableRateLimitModels}
+                    />
+                  </Field>
 
                   <FormField control={form.control} name="tpm_limit" label="Tokens per minute Limit (TPM)">
                     {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}

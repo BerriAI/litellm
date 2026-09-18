@@ -32,6 +32,19 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
+vi.mock("@/components/key_team_helpers/BudgetFallbacksEditor", () => ({
+  BudgetFallbacksEditor: ({ onChange }: { onChange: (v: Record<string, string[]>) => void }) => (
+    <>
+      <button type="button" onClick={() => onChange({ "gpt-4": ["claude-haiku"] })}>
+        Set Budget Fallback
+      </button>
+      <button type="button" onClick={() => onChange({})}>
+        Clear Budget Fallback
+      </button>
+    </>
+  ),
+}));
+
 vi.mock("@/components/networking", () => ({
   serverRootPath: "",
   teamInfoCall: vi.fn(),
@@ -2956,5 +2969,96 @@ describe("TeamInfo MCP permission retention", () => {
     );
     expect(networking.teamUpdateCall).not.toHaveBeenCalled();
     errorToast.mockRestore();
+  });
+});
+
+describe("budget fallbacks", () => {
+  const defaultProps = {
+    teamId: "123",
+    onUpdate: vi.fn(),
+    onClose: vi.fn(),
+    accessToken: "test-token",
+    is_team_admin: true,
+    is_proxy_admin: true,
+    userModels: ["gpt-4", "gpt-3.5-turbo"],
+    editTeam: false,
+    premiumUser: false,
+  };
+
+  beforeEach(seedDefaultMocks);
+
+  const openSettingsEditor = async (user: ReturnType<typeof userEvent.setup>) => {
+    await waitFor(() => {
+      expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+    });
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
+    });
+  };
+
+  const updatePayloads = () =>
+    vi.mocked(networking.teamUpdateCall).mock.calls.map((call) => call[1] as Record<string, unknown>);
+
+  it("should leave budget_fallbacks out of a save that did not touch it", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({ models: ["gpt-4"], budget_fallbacks: { "gpt-4": ["claude-haiku"] } }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+    await openSettingsEditor(user);
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(networking.teamUpdateCall).toHaveBeenCalled();
+    });
+    expect(updatePayloads().every((payload) => !("budget_fallbacks" in payload))).toBe(true);
+  });
+
+  it("should send the configured budget_fallbacks map on save", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"] }));
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+    await openSettingsEditor(user);
+    await user.click(screen.getByRole("button", { name: "Set Budget Fallback" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(networking.teamUpdateCall).toHaveBeenCalled();
+    });
+    expect(networking.teamUpdateCall).toHaveBeenCalledWith(
+      "test-token",
+      expect.objectContaining({ budget_fallbacks: { "gpt-4": ["claude-haiku"] } }),
+    );
+  });
+
+  it("should send an empty budget_fallbacks map to clear stored fallbacks", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({ models: ["gpt-4"], budget_fallbacks: { "gpt-4": ["claude-haiku"] } }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+    await openSettingsEditor(user);
+    await user.click(screen.getByRole("button", { name: "Clear Budget Fallback" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(networking.teamUpdateCall).toHaveBeenCalled();
+    });
+    expect(
+      updatePayloads().some(
+        (payload) => "budget_fallbacks" in payload && Object.keys(payload.budget_fallbacks as object).length === 0,
+      ),
+    ).toBe(true);
   });
 });
