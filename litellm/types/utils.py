@@ -3994,6 +3994,7 @@ class LlmProviders(str, Enum):
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
     ELEVENLABS = "elevenlabs"
+    GANDR = "gandr"
     NOVITA = "novita"
     AIOHTTP_OPENAI = "aiohttp_openai"
     LANGFUSE = "langfuse"
