@@ -239,7 +239,7 @@ def _parse_mode(update: TranscriptionSessionUpdate) -> MuseMode:
 
 
 def parse_session_update(payload: str, expected_model: str) -> MuseSessionConfig:
-    update: Final = parse_transcription_session_update(payload)
+    update: Final = parse_transcription_session_update(payload, MuseProtocolError)
     if update.session_type not in (None, "transcription", "realtime"):
         raise MuseProtocolError("Muse Voice supports transcription sessions only")
     if update.unsupported_transcription_keys:
@@ -486,7 +486,7 @@ class MetaRealtimeConfig(BaseRealtimeConfig):
         model: str,
         session_configuration_request: str | None = None,
     ) -> tuple[str | bytes, ...]:
-        request: Final = json_object(message)
+        request: Final = json_object(message, MuseProtocolError)
         event_type: Final = request.get("type")
         if event_type in ("session.update", "transcription_session.update"):
             return self._configure(message, model)
@@ -538,7 +538,7 @@ class MetaRealtimeConfig(BaseRealtimeConfig):
         return result
 
     def _backend_events(self, payload: str) -> tuple[OpenAIRealtimeEvents, ...]:
-        frame: Final = json_object(payload)
+        frame: Final = json_object(payload, MuseProtocolError)
         session_id: Final = frame.get("sessionId")
         if session_id is None:
             return self._transformer.transform(frame)
@@ -560,7 +560,7 @@ class MetaRealtimeConfig(BaseRealtimeConfig):
 
     def _append_audio(self, request: Mapping[str, JsonValue]) -> tuple[bytes, ...]:
         config: Final = self._require_config()
-        audio: Final = decode_pcm16_append(request.get("audio"), config.max_encoded_append_bytes)
+        audio: Final = decode_pcm16_append(request.get("audio"), config.max_encoded_append_bytes, MuseProtocolError)
         buffered: Final = self._pending_audio + audio
         packet_end: Final = len(buffered) - len(buffered) % config.packet_bytes
         self._pending_audio = buffered[packet_end:]

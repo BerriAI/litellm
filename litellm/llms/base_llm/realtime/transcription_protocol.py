@@ -59,37 +59,46 @@ class TranscriptionSessionUpdate:
         return None if self.turn_detection is None else self.turn_detection.get("type")
 
 
-def json_object(payload: str) -> Mapping[str, JsonValue]:
+ProtocolErrorType = type[RealtimeTranscriptionProtocolError]
+
+
+def json_object(payload: str, error: ProtocolErrorType = RealtimeTranscriptionProtocolError) -> Mapping[str, JsonValue]:
     try:
         value: Final = _JSON_ADAPTER.validate_json(payload)
     except ValidationError:
-        raise RealtimeTranscriptionProtocolError("invalid JSON object") from None
+        raise error("invalid JSON object") from None
     if not isinstance(value, dict):
-        raise RealtimeTranscriptionProtocolError("message must be a JSON object")
+        raise error("message must be a JSON object")
     return value
 
 
-def json_mapping(value: JsonValue | None, name: str) -> Mapping[str, JsonValue]:
+def json_mapping(
+    value: JsonValue | None, name: str, error: ProtocolErrorType = RealtimeTranscriptionProtocolError
+) -> Mapping[str, JsonValue]:
     if value is None:
         return EMPTY_JSON_OBJECT
     if not isinstance(value, dict):
-        raise RealtimeTranscriptionProtocolError(f"{name} must be an object")
+        raise error(f"{name} must be an object")
     return value
 
 
-def json_string(value: JsonValue | None, name: str) -> str | None:
+def json_string(
+    value: JsonValue | None, name: str, error: ProtocolErrorType = RealtimeTranscriptionProtocolError
+) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise RealtimeTranscriptionProtocolError(f"{name} must be a string")
+        raise error(f"{name} must be a string")
     return value
 
 
-def json_integer(value: JsonValue | None, name: str) -> int | None:
+def json_integer(
+    value: JsonValue | None, name: str, error: ProtocolErrorType = RealtimeTranscriptionProtocolError
+) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
-        raise RealtimeTranscriptionProtocolError(f"{name} must be an integer")
+        raise error(f"{name} must be an integer")
     return value
 
 
@@ -97,49 +106,52 @@ def new_event_id() -> str:
     return f"event_{uuid.uuid4().hex}"
 
 
-def parse_transcription_session_update(payload: str) -> TranscriptionSessionUpdate:
-    message: Final = json_object(payload)
+def parse_transcription_session_update(
+    payload: str, error: ProtocolErrorType = RealtimeTranscriptionProtocolError
+) -> TranscriptionSessionUpdate:
+    message: Final = json_object(payload, error)
     if message.get("type") not in SESSION_UPDATE_EVENT_TYPES:
-        raise RealtimeTranscriptionProtocolError("expected session.update")
-    session: Final = json_mapping(message.get("session"), "session")
+        raise error("expected session.update")
+    session: Final = json_mapping(message.get("session"), "session", error)
     if not session:
-        raise RealtimeTranscriptionProtocolError("session.update requires a session object")
-    audio: Final = json_mapping(session.get("audio"), "session.audio")
-    audio_input: Final = json_mapping(audio.get("input"), "session.audio.input")
+        raise error("session.update requires a session object")
+    audio: Final = json_mapping(session.get("audio"), "session.audio", error)
+    audio_input: Final = json_mapping(audio.get("input"), "session.audio.input", error)
     beta_transcription: Final = session.get("input_audio_transcription")
     ga_transcription: Final = audio_input.get("transcription")
     if beta_transcription is not None and ga_transcription is not None:
-        raise RealtimeTranscriptionProtocolError("input transcription must use either beta or GA layout")
+        raise error("input transcription must use either beta or GA layout")
     transcription: Final = json_mapping(
         beta_transcription if beta_transcription is not None else ga_transcription,
         "input audio transcription",
+        error,
     )
     turn_detection_present: Final = "turn_detection" in session or "turn_detection" in audio_input
     turn_detection: Final = session.get("turn_detection", audio_input.get("turn_detection"))
     return TranscriptionSessionUpdate(
-        session_type=json_string(session.get("type"), "session.type"),
-        audio_format=_parse_audio_format(session, audio_input),
-        model=json_string(transcription.get("model"), "transcription model"),
-        language=json_string(transcription.get("language"), "language"),
+        session_type=json_string(session.get("type"), "session.type", error),
+        audio_format=_parse_audio_format(session, audio_input, error),
+        model=json_string(transcription.get("model"), "transcription model", error),
+        language=json_string(transcription.get("language"), "language", error),
         unsupported_transcription_keys=tuple(
             sorted(key for key in transcription if key not in _SUPPORTED_TRANSCRIPTION_KEYS)
         ),
-        turn_detection=None if turn_detection is None else json_mapping(turn_detection, "turn_detection"),
+        turn_detection=None if turn_detection is None else json_mapping(turn_detection, "turn_detection", error),
         turn_detection_disabled=turn_detection_present and turn_detection is None,
     )
 
 
 def _parse_audio_format(
-    session: Mapping[str, JsonValue], audio_input: Mapping[str, JsonValue]
+    session: Mapping[str, JsonValue], audio_input: Mapping[str, JsonValue], error: ProtocolErrorType
 ) -> TranscriptionAudioFormat | None:
     beta_format: Final = session.get("input_audio_format")
     ga_format: Final = audio_input.get("format")
     if beta_format is not None and ga_format is not None:
-        raise RealtimeTranscriptionProtocolError("input audio format must use either beta or GA layout")
+        raise error("input audio format must use either beta or GA layout")
     if beta_format is not None:
         return TranscriptionAudioFormat(
             layout="beta",
-            encoding=json_string(beta_format, "session.input_audio_format"),
+            encoding=json_string(beta_format, "session.input_audio_format", error),
             rate=None,
             channels=None,
         )
@@ -147,26 +159,30 @@ def _parse_audio_format(
         return None
     if isinstance(ga_format, str):
         return TranscriptionAudioFormat(layout="ga", encoding=ga_format, rate=None, channels=None)
-    format_mapping: Final = json_mapping(ga_format, "session.audio.input.format")
+    format_mapping: Final = json_mapping(ga_format, "session.audio.input.format", error)
     return TranscriptionAudioFormat(
         layout="ga",
-        encoding=json_string(format_mapping.get("type"), "session.audio.input.format.type"),
-        rate=json_integer(format_mapping.get("rate"), "session.audio.input.format.rate"),
-        channels=json_integer(format_mapping.get("channels"), "session.audio.input.format.channels"),
+        encoding=json_string(format_mapping.get("type"), "session.audio.input.format.type", error),
+        rate=json_integer(format_mapping.get("rate"), "session.audio.input.format.rate", error),
+        channels=json_integer(format_mapping.get("channels"), "session.audio.input.format.channels", error),
     )
 
 
-def decode_pcm16_append(audio: JsonValue | None, max_encoded_bytes: int | None = None) -> bytes:
+def decode_pcm16_append(
+    audio: JsonValue | None,
+    max_encoded_bytes: int | None = None,
+    error: ProtocolErrorType = RealtimeTranscriptionProtocolError,
+) -> bytes:
     if not isinstance(audio, str):
-        raise RealtimeTranscriptionProtocolError("Audio must be a base64 string")
+        raise error("Audio must be a base64 string")
     if max_encoded_bytes is not None and len(audio) > max_encoded_bytes:
-        raise RealtimeTranscriptionProtocolError("Audio append exceeds the four-second backlog limit")
+        raise error("Audio append exceeds the four-second backlog limit")
     try:
         decoded: Final = base64.b64decode(audio, validate=True)
     except (binascii.Error, ValueError):
-        raise RealtimeTranscriptionProtocolError("Audio must be valid base64") from None
+        raise error("Audio must be valid base64") from None
     if len(decoded) % 2:
-        raise RealtimeTranscriptionProtocolError("PCM16 audio must contain complete samples")
+        raise error("PCM16 audio must contain complete samples")
     return decoded
 
 

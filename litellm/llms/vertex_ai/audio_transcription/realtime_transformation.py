@@ -3,7 +3,9 @@ from dataclasses import dataclass, replace
 from typing import Final
 
 from pydantic import JsonValue, TypeAdapter
+from typing_extensions import assert_never
 
+import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.audio_utils.utils import normalize_transcription_language_to_bcp47
@@ -56,7 +58,7 @@ DEFAULT_SAMPLE_RATE_HERTZ: Final = 24_000
 MIN_SAMPLE_RATE_HERTZ: Final = 8_000
 MAX_SAMPLE_RATE_HERTZ: Final = 48_000
 MAX_AUDIO_MESSAGE_BYTES: Final = 25_000
-SPEECH_TO_TEXT_MODEL_PREFIX: Final = "chirp"
+_SPEECH_TO_TEXT_ENDPOINTS: Final = frozenset({"/v1/audio/transcriptions", "/v1/realtime"})
 _VERTEX_MODEL_PREFIX: Final = "vertex_ai/"
 _STREAMING_EVENT_ADAPTER: Final = TypeAdapter[VertexSpeechStreamingEventUnion](VertexSpeechStreamingEvent)
 _FINISH_TURN_COMMAND: Final = VertexSpeechStreamingFinishTurn().model_dump_json()
@@ -99,7 +101,15 @@ class ChirpSessionConfig:
 
 
 def is_vertex_speech_to_text_model(model: str) -> bool:
-    return normalize_speech_to_text_model(model).startswith(SPEECH_TO_TEXT_MODEL_PREFIX)
+    try:
+        info: Final = litellm.get_model_info(
+            model=normalize_speech_to_text_model(model), custom_llm_provider="vertex_ai"
+        )
+    except Exception:  # noqa: BLE001  # get_model_info raises for unmapped models, which are not Speech-to-Text models
+        return False
+    if info.get("mode") != "audio_transcription":
+        return False
+    return _SPEECH_TO_TEXT_ENDPOINTS <= frozenset(info.get("supported_endpoints") or ())
 
 
 def normalize_speech_to_text_model(model: str) -> str:
@@ -116,7 +126,7 @@ def default_session_config(model: str) -> ChirpSessionConfig:
 
 
 def parse_chirp_session_update(payload: str, expected_model: str) -> ChirpSessionConfig:
-    update: Final = parse_transcription_session_update(payload)
+    update: Final = parse_transcription_session_update(payload, ChirpProtocolError)
     if update.session_type not in (None, "transcription", "realtime"):
         raise ChirpProtocolError("Speech-to-Text streaming supports transcription sessions only")
     if update.unsupported_transcription_keys:
@@ -228,6 +238,8 @@ class ChirpEventTransformer:
             case VertexSpeechStreamingTurnDiscarded():
                 self._turn = None
                 return ()
+            case _:
+                assert_never(frame)
 
     def _response(self, frame: VertexSpeechStreamingResponse) -> tuple[OpenAIRealtimeEvents, ...]:
         self._billed_seconds = max(self._billed_seconds, frame.billed_seconds)
@@ -367,7 +379,7 @@ class VertexChirpRealtimeConfig(BaseRealtimeConfig):
         model: str,
         session_configuration_request: str | None = None,
     ) -> tuple[str | bytes, ...]:
-        request: Final = json_object(message)
+        request: Final = json_object(message, ChirpProtocolError)
         event_type: Final = request.get("type")
         if event_type in ("session.update", "transcription_session.update"):
             return self._configure(message, model)
@@ -417,7 +429,7 @@ class VertexChirpRealtimeConfig(BaseRealtimeConfig):
 
     def _append_audio(self, request: Mapping[str, JsonValue]) -> tuple[bytes, ...]:
         self._require_config()
-        audio: Final = decode_pcm16_append(request.get("audio"))
+        audio: Final = decode_pcm16_append(request.get("audio"), error=ChirpProtocolError)
         return tuple(
             audio[start : start + MAX_AUDIO_MESSAGE_BYTES] for start in range(0, len(audio), MAX_AUDIO_MESSAGE_BYTES)
         )

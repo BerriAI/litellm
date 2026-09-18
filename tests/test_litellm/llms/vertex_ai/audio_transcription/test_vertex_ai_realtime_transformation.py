@@ -100,7 +100,10 @@ def _types(events: list[dict[str, object]]) -> list[object]:
 
 
 def _commands(config: VertexChirpRealtimeConfig, payload: str) -> list[object]:
-    return [json.loads(command) if isinstance(command, str) else command for command in config.transform_realtime_request(payload, MODEL)]
+    return [
+        json.loads(command) if isinstance(command, str) else command
+        for command in config.transform_realtime_request(payload, MODEL)
+    ]
 
 
 @pytest.mark.parametrize(
@@ -108,9 +111,11 @@ def _commands(config: VertexChirpRealtimeConfig, payload: str) -> list[object]:
     [
         ("vertex_ai/chirp_3", True),
         ("chirp_3", True),
-        ("chirp_2", True),
+        ("chirp_2", False),
         ("gemini-live-2.5-flash", False),
         ("vertex_ai/gemini-2.0-flash-live-preview-04-09", False),
+        ("vertex_ai/gemini-3.5-transcribe-live-preview", False),
+        ("gemini-3.5-transcribe-preview", False),
     ],
 )
 def test_is_vertex_speech_to_text_model(model: str, expected: bool):
@@ -132,7 +137,11 @@ def test_beta_session_update_defaults_the_rate_and_auto_detects_the_language():
     config = parse_chirp_session_update(
         _event(
             "transcription_session.update",
-            session={"input_audio_format": "pcm16", "input_audio_transcription": {"model": MODEL}, "turn_detection": None},
+            session={
+                "input_audio_format": "pcm16",
+                "input_audio_transcription": {"model": MODEL},
+                "turn_detection": None,
+            },
         ),
         MODEL,
     )
@@ -146,7 +155,10 @@ def test_beta_session_update_defaults_the_rate_and_auto_detects_the_language():
         (_event("session.update", session={"type": "realtime_voice"}), "transcription sessions only"),
         (_ga_session_update(model="gemini-live-2.5-flash"), "cannot be changed"),
         (_event("session.update", session={"audio": {"input": {"format": {"type": "audio/pcmu"}}}}), "pcm16"),
-        (_event("session.update", session={"audio": {"input": {"format": {"type": "audio/pcm", "channels": 2}}}}), "mono"),
+        (
+            _event("session.update", session={"audio": {"input": {"format": {"type": "audio/pcm", "channels": 2}}}}),
+            "mono",
+        ),
         (_ga_session_update(rate=4_000), "sample rates"),
         (_ga_session_update(rate=96_000), "sample rates"),
         (_ga_session_update(turn_detection="semantic_vad"), "server_vad"),
@@ -169,7 +181,9 @@ def test_session_update_configures_once_and_later_updates_are_ignored():
 def test_audio_and_commits_before_session_update_are_rejected():
     config = _config()
     with pytest.raises(ChirpProtocolError, match=r"session\.update must configure"):
-        config.transform_realtime_request(_event("input_audio_buffer.append", audio=base64.b64encode(b"\x00\x00").decode()), MODEL)
+        config.transform_realtime_request(
+            _event("input_audio_buffer.append", audio=base64.b64encode(b"\x00\x00").decode()), MODEL
+        )
     with pytest.raises(ChirpProtocolError, match=r"session\.update must configure"):
         config.transform_realtime_request(_event("input_audio_buffer.commit"), MODEL)
 
@@ -177,8 +191,14 @@ def test_audio_and_commits_before_session_update_are_rejected():
 def test_append_is_split_into_google_sized_chunks():
     config = _configured()
     audio = bytes(range(256)) * 250
-    chunks = config.transform_realtime_request(_event("input_audio_buffer.append", audio=base64.b64encode(audio).decode()), MODEL)
-    assert [len(chunk) for chunk in chunks] == [MAX_AUDIO_MESSAGE_BYTES, MAX_AUDIO_MESSAGE_BYTES, 64_000 - 2 * MAX_AUDIO_MESSAGE_BYTES]
+    chunks = config.transform_realtime_request(
+        _event("input_audio_buffer.append", audio=base64.b64encode(audio).decode()), MODEL
+    )
+    assert [len(chunk) for chunk in chunks] == [
+        MAX_AUDIO_MESSAGE_BYTES,
+        MAX_AUDIO_MESSAGE_BYTES,
+        64_000 - 2 * MAX_AUDIO_MESSAGE_BYTES,
+    ]
     assert b"".join(chunk for chunk in chunks if isinstance(chunk, bytes)) == audio
 
 

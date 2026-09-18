@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence
 from datetime import timedelta
@@ -13,7 +14,7 @@ from google.cloud.speech_v2.types import (
 )
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
-from litellm.llms.vertex_ai.audio_transcription.realtime_backend import SpeechStreamingBackend
+from litellm.llms.vertex_ai.audio_transcription.realtime_backend import REQUEST_QUEUE_SIZE, SpeechStreamingBackend
 from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import SpeechStreamingTarget
 
 TARGET: Final = SpeechStreamingTarget(
@@ -26,7 +27,7 @@ CONFIGURE: Final = json.dumps(
 )
 FINISH_TURN: Final = json.dumps({"kind": "finish_turn"})
 DISCARD_TURN: Final = json.dumps({"kind": "discard_turn"})
-ScriptItem = StreamingRecognizeResponse | Exception
+ScriptItem = StreamingRecognizeResponse | Exception | asyncio.Event
 
 
 def _response(
@@ -84,13 +85,16 @@ class _FakeSpeechClient:
         async for request in requests:
             received.append(request)
             if request.audio and script:
-                yield self._next(script)
+                yield await self._next(script)
         while script:
-            yield self._next(script)
+            yield await self._next(script)
 
     @staticmethod
-    def _next(script: list[ScriptItem]) -> StreamingRecognizeResponse:
+    async def _next(script: list[ScriptItem]) -> StreamingRecognizeResponse:
         item: Final = script.pop(0)
+        if isinstance(item, asyncio.Event):
+            await item.wait()
+            return await _FakeSpeechClient._next(script)
         if isinstance(item, Exception):
             raise item
         return item
@@ -101,9 +105,16 @@ def _backend(client: _FakeSpeechClient, **kwargs: object) -> SpeechStreamingBack
 
 
 async def _recv(backend: SpeechStreamingBackend) -> dict[str, object]:
-    message: Final = await backend.recv()
+    message: Final = await asyncio.wait_for(backend.recv(), timeout=2)
     assert isinstance(message, str)
     return json.loads(message)
+
+
+async def _transcript(backend: SpeechStreamingBackend) -> str:
+    event: Final = await _recv(backend)
+    assert event["kind"] == "response", event
+    (result,) = event["results"]
+    return result["transcript"]
 
 
 async def _configure(backend: SpeechStreamingBackend) -> None:
@@ -149,7 +160,9 @@ async def test_audio_streams_through_one_recognize_call_with_the_config_first():
 
 @pytest.mark.asyncio
 async def test_voice_activity_events_are_relayed():
-    client = _FakeSpeechClient([_response(None, event="SPEECH_ACTIVITY_BEGIN"), _response(None, event="SPEECH_ACTIVITY_END")])
+    client = _FakeSpeechClient(
+        [_response(None, event="SPEECH_ACTIVITY_BEGIN"), _response(None, event="SPEECH_ACTIVITY_END")]
+    )
     async with _backend(client) as backend:
         await _configure(backend)
         await backend.send(b"\x00\x00")
@@ -181,16 +194,17 @@ async def test_stream_failure_closes_the_session_with_1011_and_the_reason():
 
 
 @pytest.mark.asyncio
-async def test_close_discards_the_open_turn_then_reports_a_normal_closure():
+async def test_close_reports_a_normal_closure_to_both_directions():
     client = _FakeSpeechClient([_response("hi")])
     backend = _backend(client)
     await _configure(backend)
     await backend.send(b"\x00\x00")
-    assert (await _recv(backend))["results"][0]["transcript"] == "hi"
+    assert await _transcript(backend) == "hi"
     await backend.close()
-    assert await _recv(backend) == {"kind": "turn_discarded"}
     with pytest.raises(ConnectionClosedOK):
         await backend.recv()
+    with pytest.raises(ConnectionClosedOK):
+        await backend.send(b"\x00\x00")
     assert client.transport.closed
 
 
@@ -210,17 +224,19 @@ async def test_discard_turn_cancels_the_open_stream_and_the_next_turn_starts_fre
     async with _backend(client) as backend:
         await _configure(backend)
         await backend.send(b"\x01\x01")
-        assert (await _recv(backend))["results"][0]["transcript"] == "draft"
+        assert await _transcript(backend) == "draft"
         await backend.send(DISCARD_TURN)
         assert await _recv(backend) == {"kind": "turn_discarded"}
         await backend.send(b"\x02\x02")
-        assert (await _recv(backend))["results"][0]["transcript"] == "again"
+        assert await _transcript(backend) == "again"
     assert [_audio(stream) for stream in client.streams] == [[b"\x01\x01"], [b"\x02\x02"]]
 
 
 @pytest.mark.asyncio
 async def test_billed_seconds_accumulate_across_turns():
-    client = _FakeSpeechClient([_response("one", is_final=True, billed=2.0)], [_response("two", is_final=True, billed=3.0)])
+    client = _FakeSpeechClient(
+        [_response("one", is_final=True, billed=2.0)], [_response("two", is_final=True, billed=3.0)]
+    )
     async with _backend(client) as backend:
         await _configure(backend)
         await backend.send(b"\x00\x00")
@@ -236,26 +252,132 @@ async def test_billed_seconds_accumulate_across_turns():
 
 
 @pytest.mark.asyncio
-async def test_streams_rotate_before_the_five_minute_limit_without_losing_audio():
+async def test_streams_rotate_before_the_five_minute_limit_without_ending_the_turn():
     now = [0.0]
     client = _FakeSpeechClient(
         [_response("first"), _response("first half", is_final=True, billed=239.0)],
-        [_response("second")],
+        [_response("second", billed=1.0)],
     )
     async with _backend(client, clock=lambda: now[0], rotation_seconds=240.0) as backend:
         await _configure(backend)
         await backend.send(b"\x01\x01")
-        assert (await _recv(backend))["results"][0]["transcript"] == "first"
+        assert await _transcript(backend) == "first"
         now[0] = 239.0
         await backend.send(b"\x02\x02")
-        assert (await _recv(backend))["results"][0]["transcript"] == "first half"
+        assert await _transcript(backend) == "first half"
         now[0] = 240.0
         await backend.send(b"\x03\x03")
-        assert await _recv(backend) == {"kind": "turn_finished"}
         second = await _recv(backend)
-        assert second["results"][0]["transcript"] == "second"
-        assert second["billed_seconds"] == 239.0
+        assert second["results"] == [{"transcript": "second", "is_final": False}]
+        assert second["billed_seconds"] == 240.0
         await backend.send(FINISH_TURN)
         assert await _recv(backend) == {"kind": "turn_finished"}
     assert [_audio(stream) for stream in client.streams] == [[b"\x01\x01", b"\x02\x02"], [b"\x03\x03"]]
     assert client.streams[1][0].streaming_config.config.model == "chirp_3"
+
+
+@pytest.mark.asyncio
+async def test_turn_finished_follows_results_that_arrive_after_a_rotation():
+    now = [0.0]
+    client = _FakeSpeechClient(
+        [_response("one"), _response("one two", is_final=True)],
+        [_response("three")],
+    )
+    async with _backend(client, clock=lambda: now[0], rotation_seconds=240.0) as backend:
+        await _configure(backend)
+        await backend.send(b"\x01\x01")
+        assert await _transcript(backend) == "one"
+        now[0] = 240.0
+        await backend.send(b"\x02\x02")
+        await backend.send(FINISH_TURN)
+        assert await _transcript(backend) == "one two"
+        assert await _transcript(backend) == "three"
+        assert await _recv(backend) == {"kind": "turn_finished"}
+
+
+@pytest.mark.asyncio
+async def test_rotation_waits_for_a_pause_in_speech():
+    now = [0.0]
+    client = _FakeSpeechClient(
+        [
+            _response(None, event="SPEECH_ACTIVITY_BEGIN"),
+            _response("still talking"),
+            _response("still talking", is_final=True, event="SPEECH_ACTIVITY_END"),
+        ],
+        [_response("next")],
+    )
+    async with _backend(
+        client, clock=lambda: now[0], rotation_seconds=240.0, rotation_deadline_seconds=280.0
+    ) as backend:
+        await _configure(backend)
+        await backend.send(b"\x01\x01")
+        assert (await _recv(backend))["speech_event"] == "begin"
+        now[0] = 250.0
+        await backend.send(b"\x02\x02")
+        assert await _transcript(backend) == "still talking"
+        now[0] = 260.0
+        await backend.send(b"\x03\x03")
+        assert (await _recv(backend))["speech_event"] == "end"
+        now[0] = 261.0
+        await backend.send(b"\x04\x04")
+        assert await _transcript(backend) == "next"
+    assert [_audio(stream) for stream in client.streams] == [[b"\x01\x01", b"\x02\x02", b"\x03\x03"], [b"\x04\x04"]]
+
+
+@pytest.mark.asyncio
+async def test_rotation_is_forced_at_the_deadline_during_continuous_speech():
+    now = [0.0]
+    client = _FakeSpeechClient(
+        [_response(None, event="SPEECH_ACTIVITY_BEGIN"), _response("still talking")],
+        [_response("cut off")],
+    )
+    async with _backend(
+        client, clock=lambda: now[0], rotation_seconds=240.0, rotation_deadline_seconds=280.0
+    ) as backend:
+        await _configure(backend)
+        await backend.send(b"\x01\x01")
+        assert (await _recv(backend))["speech_event"] == "begin"
+        now[0] = 279.0
+        await backend.send(b"\x02\x02")
+        assert await _transcript(backend) == "still talking"
+        now[0] = 280.0
+        await backend.send(b"\x03\x03")
+        assert await _transcript(backend) == "cut off"
+    assert [_audio(stream) for stream in client.streams] == [[b"\x01\x01", b"\x02\x02"], [b"\x03\x03"]]
+
+
+@pytest.mark.asyncio
+async def test_discard_turn_cancels_every_stream_of_the_turn():
+    now = [0.0]
+    hold = asyncio.Event()
+    client = _FakeSpeechClient(
+        [_response("draft"), hold, _response("never delivered")],
+        [_response("fresh", is_final=True)],
+    )
+    async with _backend(client, clock=lambda: now[0], rotation_seconds=240.0) as backend:
+        await _configure(backend)
+        await backend.send(b"\x01\x01")
+        assert await _transcript(backend) == "draft"
+        now[0] = 240.0
+        await backend.send(b"\x02\x02")
+        await backend.send(DISCARD_TURN)
+        assert await _recv(backend) == {"kind": "turn_discarded"}
+        await backend.send(b"\x03\x03")
+        assert await _transcript(backend) == "fresh"
+    assert [_audio(stream) for stream in client.streams] == [[b"\x01\x01"], [b"\x03\x03"]]
+
+
+@pytest.mark.asyncio
+async def test_audio_sends_block_once_the_request_queue_is_full():
+    hold = asyncio.Event()
+    client = _FakeSpeechClient([hold, _response("late", is_final=True)])
+    async with _backend(client) as backend:
+        await _configure(backend)
+        for _ in range(REQUEST_QUEUE_SIZE + 1):
+            await backend.send(b"\x00\x00")
+        blocked = asyncio.create_task(backend.send(b"\x00\x00"))
+        await asyncio.sleep(0)
+        assert not blocked.done()
+        hold.set()
+        await asyncio.wait_for(blocked, timeout=2)
+        assert await _transcript(backend) == "late"
