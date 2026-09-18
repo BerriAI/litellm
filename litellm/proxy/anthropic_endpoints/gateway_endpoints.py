@@ -80,6 +80,12 @@ class _AccessTokenBody(BaseModel):
     token_type: str = "Bearer"
 
 
+class _ManagedSettingsBody(BaseModel):
+    uuid: str
+    checksum: str
+    settings: dict[str, object]
+
+
 def _general_settings() -> Mapping[str, object]:
     from litellm.proxy.proxy_server import general_settings
 
@@ -333,12 +339,14 @@ async def managed_settings(request: Request) -> Response:
     if settings is None:
         return Response(status_code=404)
 
-    body: Final = json.dumps(settings, sort_keys=True, separators=(",", ":"))
-    etag: Final = '"' + hashlib.sha256(body.encode("utf-8")).hexdigest() + '"'
+    canonical: Final = json.dumps(settings, sort_keys=True, separators=(",", ":"))
+    checksum: Final = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    etag: Final = f'"{checksum}"'
     headers: Final = MappingProxyType({"ETag": etag})
     if request.headers.get("If-None-Match") == etag:
         return Response(status_code=304, headers=headers)
-    return Response(content=body, media_type="application/json", headers=headers)
+    body: Final = _ManagedSettingsBody(uuid=checksum, checksum=checksum, settings=settings)
+    return Response(content=body.model_dump_json(), media_type="application/json", headers=headers)
 
 
 def _accept_otlp() -> Response:
