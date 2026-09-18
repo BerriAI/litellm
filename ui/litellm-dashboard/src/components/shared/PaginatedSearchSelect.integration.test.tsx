@@ -421,27 +421,18 @@ describe("PaginatedSearchSelect", () => {
           }),
         enabled: query.length > 0,
       });
-      return (
-        <>
-          <button type="button" onClick={() => setQuery("A")}>
-            Search A
-          </button>
-          <button type="button" onClick={() => setQuery("B")}>
-            Search B
-          </button>
-          <PaginatedSearchSelect options={result.data ?? []} onValueChange={vi.fn()} onSearchChange={setQuery} />
-        </>
-      );
+      return <PaginatedSearchSelect options={result.data ?? []} onValueChange={vi.fn()} onSearchChange={setQuery} />;
     }
 
     const user = userEvent.setup();
     render(<QueryBackedSelect />);
-    await user.click(screen.getByRole("button", { name: "Search A" }));
-    await user.click(screen.getByRole("button", { name: "Search B" }));
-    await waitFor(() => {
-      expect(pending.has("A")).toBe(true);
-      expect(pending.has("B")).toBe(true);
-    });
+    const input = screen.getByRole("combobox");
+    await user.click(input);
+    await user.type(input, "A");
+    await waitFor(() => expect(pending.has("A")).toBe(true));
+    await user.clear(input);
+    await user.type(input, "B");
+    await waitFor(() => expect(pending.has("B")).toBe(true));
 
     pending.get("B")?.([{ label: "B result", value: "b" }]);
     await user.click(screen.getByRole("combobox"));

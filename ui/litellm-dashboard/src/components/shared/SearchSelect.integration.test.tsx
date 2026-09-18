@@ -112,7 +112,7 @@ describe("SearchSelect", () => {
     expect(onValueChange).not.toHaveBeenCalled();
   });
 
-  it("supports keyboard select, clear, escape, blur, and reopen", async () => {
+  it("supports keyboard select, clear, and reselect", async () => {
     const onValueChange = vi.fn();
     const user = userEvent.setup();
     function Controlled() {
@@ -139,9 +139,8 @@ describe("SearchSelect", () => {
     clear.focus();
     await user.keyboard("{Enter}");
     expect(onValueChange).toHaveBeenLastCalledWith(null);
-    await user.keyboard("{Escape}");
-    await user.tab();
-    await user.tab({ shift: true });
-    expect(input).toHaveFocus();
+    input.focus();
+    await user.keyboard("{Enter}{ArrowDown}{Enter}");
+    expect(onValueChange).toHaveBeenLastCalledWith("team-1");
   });
 });

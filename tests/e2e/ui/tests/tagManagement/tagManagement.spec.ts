@@ -64,13 +64,14 @@ test.describe("Tag management", () => {
         })
         .toBe(updatedDescription);
     } finally {
-      await page.request.post("/tag/delete", {
+      const deleteResponse = await page.request.post("/tag/delete", {
         headers: {
           Authorization: `Bearer ${masterKey()}`,
           "Content-Type": "application/json",
         },
         data: { name: tagName },
       });
+      expect(deleteResponse.ok()).toBe(true);
     }
   });
 });
