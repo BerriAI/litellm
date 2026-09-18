@@ -1420,6 +1420,7 @@ async def _refresh_session_token_grants(
                         **team_grants(team_object, team_membership, user_object.user_id),
                         "user_role": _get_user_role(user_object),
                         "models": () if team_object is not None else user_models(user_object),
+                        "user_budget_limits": user_object.budget_limits,
                     }
                 )
             )
@@ -1756,6 +1757,9 @@ async def _user_api_key_auth_builder(
                             # the budget check below has nothing to enforce.
                             auto_registered.user_model_max_budget = (
                                 user_object.model_max_budget if user_object is not None else None
+                            )
+                            auto_registered.user_budget_limits = (
+                                user_object.budget_limits if user_object is not None else None
                             )
                             valid_token = auto_registered
                             api_key = valid_token.token or ""
@@ -2192,6 +2196,7 @@ async def _user_api_key_auth_builder(
                     # user's own per-model budget reaches enforcement and the post-call
                     # increment through the row fetched here.
                     valid_token.user_model_max_budget = user_obj.model_max_budget
+                    valid_token.user_budget_limits = user_obj.budget_limits
 
                 if (
                     user_obj is not None
@@ -3294,6 +3299,7 @@ async def _return_user_api_key_auth_obj(
             user_spend=getattr(user_obj, "spend", None),
             user_max_budget=getattr(user_obj, "max_budget", None),
             user_model_max_budget=getattr(user_obj, "model_max_budget", None),
+            user_budget_limits=getattr(user_obj, "budget_limits", None),
         )
     if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
         user_api_key_kwargs.update(

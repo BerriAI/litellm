@@ -8,7 +8,10 @@ import pytest
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import _virtual_key_multi_budget_check
+from litellm.proxy.auth.auth_checks import (
+    _user_multi_budget_check,
+    _virtual_key_multi_budget_check,
+)
 
 
 def _make_valid_token(**kwargs) -> UserAPIKeyAuth:
@@ -68,9 +71,7 @@ async def test_over_first_window_raises():
         call_count += 1
         return val
 
-    with patch(
-        "litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend
-    ):
+    with patch("litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend):
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
             await _virtual_key_multi_budget_check(valid_token=token)
 
@@ -100,9 +101,7 @@ async def test_over_second_window_raises():
         call_count += 1
         return val
 
-    with patch(
-        "litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend
-    ):
+    with patch("litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend):
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
             await _virtual_key_multi_budget_check(valid_token=token)
 
@@ -135,3 +134,122 @@ async def test_budget_limit_entry_objects_coerced():
     ):
         # Should not raise TypeError / KeyError — model_dump() coerces the object
         await _virtual_key_multi_budget_check(valid_token=token)
+
+
+def _make_user_token(**kwargs) -> UserAPIKeyAuth:
+    defaults = dict(
+        user_id="user-1",
+        spend=0.0,
+        user_budget_limits=None,
+    )
+    defaults.update(kwargs)
+    return UserAPIKeyAuth(**defaults)
+
+
+@pytest.mark.asyncio
+async def test_user_with_no_windows_passes():
+    await _user_multi_budget_check(valid_token=_make_user_token(), team_object=None, general_settings={})
+
+
+@pytest.mark.asyncio
+async def test_user_under_all_windows_passes():
+    token = _make_user_token(
+        user_budget_limits=[
+            {"budget_duration": "24h", "max_budget": 10.0, "reset_at": None},
+            {"budget_duration": "30d", "max_budget": 100.0, "reset_at": None},
+        ]
+    )
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new_callable=AsyncMock,
+        return_value=1.0,
+    ) as spend_mock:
+        await _user_multi_budget_check(valid_token=token, team_object=None, general_settings={})
+
+    counter_keys = [call.kwargs["counter_key"] for call in spend_mock.await_args_list]
+    assert counter_keys == [
+        "spend:user:user-1:window:24h",
+        "spend:user:user-1:window:30d",
+    ]
+    assert all(call.kwargs["window_entity_type"] == "User" for call in spend_mock.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_user_over_any_window_raises():
+    token = _make_user_token(
+        user_budget_limits=[
+            {"budget_duration": "24h", "max_budget": 50.0, "reset_at": None},
+            {"budget_duration": "30d", "max_budget": 5.0, "reset_at": None},
+        ]
+    )
+
+    spend_by_window = [1.0, 10.0]
+    call_count = 0
+
+    async def fake_get_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        nonlocal call_count
+        val = spend_by_window[call_count]
+        call_count += 1
+        return val
+
+    with patch("litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _user_multi_budget_check(valid_token=token, team_object=None, general_settings={})
+
+    err = exc_info.value
+    assert err.status_code == 429
+    assert "30d" in str(err)
+    assert "User=user-1" in str(err)
+
+
+@pytest.mark.asyncio
+async def test_jwt_built_token_carries_user_budget_limits_and_is_blocked():
+    """JWT auth has no key; user windows must still be enforced through the
+    UserAPIKeyAuth.user_budget_limits field populated from the user row."""
+    token = _make_user_token(
+        api_key=None,
+        user_budget_limits=[
+            {"budget_duration": "1d", "max_budget": 2.0, "reset_at": None},
+        ],
+    )
+    assert token.user_budget_limits[0].max_budget == 2.0
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new_callable=AsyncMock,
+        return_value=5.0,
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _user_multi_budget_check(valid_token=token, team_object=None, general_settings={})
+
+    assert "user-1" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_user_windows_skipped_for_team_key_unless_flag_set():
+    """Matches _user_max_budget_check: keys owned by a team don't inherit the
+    user's windows unless apply_user_budget_to_team_keys is enabled."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+
+    token = _make_user_token(user_budget_limits=[{"budget_duration": "1d", "max_budget": 2.0, "reset_at": None}])
+    team = LiteLLM_TeamTable(team_id="team-1")
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new_callable=AsyncMock,
+        return_value=100.0,
+    ) as spend_mock:
+        await _user_multi_budget_check(valid_token=token, team_object=team, general_settings={})
+    spend_mock.assert_not_awaited()
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new_callable=AsyncMock,
+        return_value=100.0,
+    ):
+        with pytest.raises(litellm.BudgetExceededError):
+            await _user_multi_budget_check(
+                valid_token=token,
+                team_object=team,
+                general_settings={"apply_user_budget_to_team_keys": True},
+            )

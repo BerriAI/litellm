@@ -87,6 +87,19 @@ _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL: Final = (
     "WHERE team_id = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')"
 )
 
+_SEED_FROM_SPEND_LOGS_USER_SQL: Final = (
+    "SELECT COALESCE(SUM(spend), 0.0) AS total, "
+    "COALESCE(SUM(spend) FILTER (WHERE \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')), 0.0) AS before_batch "
+    'FROM "LiteLLM_SpendLogs" '
+    'WHERE "user" = $1 AND "startTime" >= ($2::timestamptz AT TIME ZONE \'UTC\')'
+)
+
+_SEED_FROM_SPEND_LOGS_USER_UNBOUNDED_SQL: Final = (
+    "SELECT COALESCE(SUM(spend), 0.0) AS total, COALESCE(SUM(spend), 0.0) AS before_batch "
+    'FROM "LiteLLM_SpendLogs" '
+    'WHERE "user" = $1 AND "startTime" >= ($2::timestamptz AT TIME ZONE \'UTC\')'
+)
+
 _UPSERT_TRANSACTION_TIMEOUT: Final = timedelta(seconds=60)
 
 
@@ -144,6 +157,8 @@ async def spend_logs_seed_totals(
         bounded_sql, unbounded_sql = _SEED_FROM_SPEND_LOGS_KEY_SQL, _SEED_FROM_SPEND_LOGS_KEY_UNBOUNDED_SQL
     elif entity_type == Litellm_EntityType.TEAM.value:
         bounded_sql, unbounded_sql = _SEED_FROM_SPEND_LOGS_TEAM_SQL, _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL
+    elif entity_type == Litellm_EntityType.USER.value:
+        bounded_sql, unbounded_sql = _SEED_FROM_SPEND_LOGS_USER_SQL, _SEED_FROM_SPEND_LOGS_USER_UNBOUNDED_SQL
     else:
         return None
     rows: Final = (

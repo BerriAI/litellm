@@ -49,6 +49,7 @@ _WINDOW_SPEND_ENTITY_TYPES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "Key": Litellm_EntityType.KEY.value,
         "Team": Litellm_EntityType.TEAM.value,
+        "User": Litellm_EntityType.USER.value,
     }
 )
 
@@ -58,6 +59,7 @@ _WINDOW_SPEND_LOG_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "Key": "api_key",
         "Team": "team_id",
+        "User": "user",
     }
 )
 
@@ -129,7 +131,7 @@ class SpendCounterReseed:
         # Per-window key/team counters share prefixes with primary counters
         # but don't correspond to a DB row. Do not reject arbitrary entity IDs
         # or tag names that merely contain ":window:".
-        if SpendCounterReseed._is_key_or_team_window_counter(counter_key):
+        if SpendCounterReseed._is_entity_window_counter(counter_key):
             return None
         try:
             async with db_lookup_gate.current():
@@ -181,8 +183,8 @@ class SpendCounterReseed:
         return float(row.spend or 0.0)
 
     @staticmethod
-    def _is_key_or_team_window_counter(counter_key: str) -> bool:
-        for prefix in ("spend:key:", "spend:team:"):
+    def _is_entity_window_counter(counter_key: str) -> bool:
+        for prefix in ("spend:key:", "spend:team:", "spend:user:"):
             if not counter_key.startswith(prefix):
                 continue
             _, separator, duration = counter_key.rpartition(":window:")

@@ -4519,3 +4519,167 @@ async def test_user_update_hashes_and_persists_strong_password(_admin_prisma, mo
     written_data = mock_prisma_client.update_data.call_args.kwargs["data"]
     assert written_data.get("password") is not None
     assert written_data["password"] != strong_password
+
+
+@pytest.mark.asyncio
+async def test_new_user_forwards_budget_limits_into_user_persistence(mocker):
+    """/user/new must pass the requested windows down to generate_key_helper_fn
+    so they land on the user row (the helper used to drop them)."""
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.count = mocker.AsyncMock(return_value=5)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        new=mocker.AsyncMock(),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        new=mocker.AsyncMock(),
+    )
+    mock_license = mocker.MagicMock()
+    mock_license.is_over_limit.return_value = False
+    mocker.patch("litellm.proxy.proxy_server._license_check", mock_license)
+
+    helper = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        new=mocker.AsyncMock(return_value={"user_id": "u-1", "key": "sk-1", "expires": None}),
+    )
+
+    admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    windows = [{"budget_duration": "1d", "max_budget": 10.0}]
+    await new_user(
+        data=NewUserRequest(user_email="w@example.com", budget_limits=windows),
+        user_api_key_dict=admin,
+    )
+
+    helper.assert_awaited_once()
+    forwarded = helper.await_args.kwargs["budget_limits"]
+    assert [(w["budget_duration"], w["max_budget"]) for w in forwarded] == [("1d", 10.0)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "windows",
+    [
+        [{"budget_duration": "1d", "max_budget": 10.0}, {"budget_duration": "1d", "max_budget": 5.0}],
+        [{"budget_duration": "1d", "max_budget": -3.0}],
+        [{"budget_duration": "not-a-duration", "max_budget": 10.0}],
+    ],
+    ids=["duplicate_window", "non_positive_cap", "invalid_duration"],
+)
+async def test_new_user_rejects_malformed_budget_limits(mocker, windows):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    mock_prisma_client = mocker.MagicMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    duplicate_check = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        new=mocker.AsyncMock(),
+    )
+    admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await new_user(
+            data=NewUserRequest(user_email="w@example.com", budget_limits=windows),
+            user_api_key_dict=admin,
+        )
+
+    assert str(exc_info.value.code) == "400"
+    duplicate_check.assert_not_awaited()
+
+
+def test_update_internal_user_params_writes_budget_limits_with_initialized_reset_at():
+    from litellm.proxy._types import UpdateUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_user_params,
+    )
+
+    data = UpdateUserRequest(
+        user_id="u-1",
+        budget_limits=[
+            {"budget_duration": "1d", "max_budget": 10.0},
+            {"budget_duration": "30d", "max_budget": 100.0},
+        ],
+    )
+
+    non_default_values = _update_internal_user_params(data_json=data.model_dump(exclude_unset=True), data=data)
+
+    written = json.loads(non_default_values["budget_limits"])
+    assert len(written) == 2
+    for window in written:
+        assert window["reset_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_update_user_replaces_budget_limits(_admin_prisma, mocker):
+    """/user/update persists the replacement list into the user row as JSON."""
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    existing_user = mocker.MagicMock()
+    existing_user.model_dump.return_value = {"user_id": "target-user"}
+    existing_user.user_id = "target-user"
+    _admin_prisma.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=existing_user)
+    _admin_prisma.update_data = mocker.AsyncMock(return_value={"user_id": "target-user"})
+    _admin_prisma.jsonify_object = mocker.MagicMock(side_effect=lambda x: x)
+
+    admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(
+            user_id="target-user",
+            budget_limits=[{"budget_duration": "7d", "max_budget": 50.0}],
+        ),
+        user_api_key_dict=admin_caller,
+    )
+
+    written = json.loads(_admin_prisma.update_data.call_args.kwargs["data"]["budget_limits"])
+    assert [(w["budget_duration"], w["max_budget"]) for w in written] == [("7d", 50.0)]
+    assert written[0]["reset_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_update_user_clears_budget_limits_with_empty_list(_admin_prisma, mocker):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    existing_user = mocker.MagicMock()
+    existing_user.model_dump.return_value = {"user_id": "target-user"}
+    existing_user.user_id = "target-user"
+    _admin_prisma.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=existing_user)
+    _admin_prisma.update_data = mocker.AsyncMock(return_value={"user_id": "target-user"})
+    _admin_prisma.jsonify_object = mocker.MagicMock(side_effect=lambda x: x)
+
+    admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(user_id="target-user", budget_limits=[]),
+        user_api_key_dict=admin_caller,
+    )
+
+    assert json.loads(_admin_prisma.update_data.call_args.kwargs["data"]["budget_limits"]) is None
+
+
+@pytest.mark.asyncio
+async def test_update_user_rejects_duplicate_budget_window(_admin_prisma, mocker):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _update_single_user_helper(
+            user_request=UpdateUserRequest(
+                user_id="target-user",
+                budget_limits=[
+                    {"budget_duration": "1d", "max_budget": 10.0},
+                    {"budget_duration": "1d", "max_budget": 5.0},
+                ],
+            ),
+            user_api_key_dict=admin_caller,
+        )
+
+    assert exc_info.value.status_code == 400

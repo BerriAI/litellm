@@ -1,5 +1,5 @@
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
@@ -39,6 +39,41 @@ def validate_budget_duration(budget_duration: str | None, status_code: int = 400
     error: Final = budget_duration_error(budget_duration)
     if error is not None:
         raise HTTPException(status_code=status_code, detail={"error": error})
+
+
+def validate_budget_limits(budget_limits: Sequence[object] | None, status_code: int = 400) -> None:
+    """Reject malformed budget windows before they are persisted: each entry
+    needs a valid duration, a positive finite cap, and a unique budget_duration.
+    Duplicate durations collide on the (entity, window) spend row, and a
+    non-positive cap can never be meaningful spend headroom.
+    """
+    from litellm.models.team import BudgetLimitEntry
+    from litellm.proxy.common_utils.timezone_utils import budget_duration_error
+
+    if not budget_limits:
+        return
+    windows: Final[tuple[BudgetLimitEntry, ...]] = tuple(
+        entry if isinstance(entry, BudgetLimitEntry) else BudgetLimitEntry.model_validate(entry)
+        for entry in budget_limits
+    )
+    for window in windows:
+        error: Final = budget_duration_error(window.budget_duration)
+        if error is not None:
+            raise HTTPException(status_code=status_code, detail={"error": error})
+        if not math.isfinite(window.max_budget) or window.max_budget <= 0:
+            raise HTTPException(
+                status_code=status_code,
+                detail={
+                    "error": f"budget_limits entry max_budget ({window.max_budget}) must be a positive finite number."
+                },
+            )
+    durations: Final[tuple[str, ...]] = tuple(window.budget_duration for window in windows)
+    duplicate: Final = next((d for d in durations if durations.count(d) > 1), None)
+    if duplicate is not None:
+        raise HTTPException(
+            status_code=status_code,
+            detail={"error": f"budget_limits has a duplicate budget_duration '{duplicate}'."},
+        )
 
 
 from litellm._logging import verbose_proxy_logger

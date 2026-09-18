@@ -3024,15 +3024,64 @@ async def _increment_spend_counters_batched(
 
     async def _user_scope(scope_user_id: str) -> tuple[PendingSpendIncrement | BaseException, ...]:
         user_counter_key: Final = f"spend:user:{scope_user_id}"
-        if user_counter_key in reserved_counter_keys:
-            return ()
-        return (
-            await _prepare_spend_counter_increment(
-                counter_key=user_counter_key,
-                source_cache_key=scope_user_id,
-                increment=cost,
-            ),
+        user_pending: Final[tuple[PendingSpendIncrement, ...]] = (
+            ()
+            if user_counter_key in reserved_counter_keys
+            else (
+                await _prepare_spend_counter_increment(
+                    counter_key=user_counter_key,
+                    source_cache_key=scope_user_id,
+                    increment=cost,
+                ),
+            )
         )
+
+        async def _user_window_increment(window: object) -> PendingSpendIncrement | None:
+            duration = (
+                window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
+            )
+            user_window_reset_at = (
+                window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
+            )
+            user_window_counter: Final = f"spend:user:{scope_user_id}:window:{duration}"
+            user_window_start = get_budget_window_start(window)
+            pending_window: Final = (
+                await _prepare_window_spend_counter_increment(
+                    counter_key=user_window_counter,
+                    entity_type="User",
+                    entity_id=scope_user_id,
+                    window_duration=duration,
+                    window_start=user_window_start,
+                    increment=cost,
+                )
+                if user_window_counter not in reserved_counter_keys
+                else None
+            )
+            await _enqueue_window_spend_row_update(
+                entity_type=Litellm_EntityType.USER,
+                entity_id=scope_user_id,
+                reset_at=user_window_reset_at,
+                window_duration=duration,
+                window_start=user_window_start,
+                increment=cost,
+                request_started_at=request_started_at,
+            )
+            return pending_window
+
+        user_obj: Final[object] = await user_api_key_cache.async_get_cache(key=scope_user_id)
+        if user_obj is None:
+            return user_pending
+        user_budget_limits = getattr(user_obj, "budget_limits", None) or (
+            user_obj.get("budget_limits") if isinstance(user_obj, dict) else None
+        )
+        if isinstance(user_budget_limits, str):
+            user_budget_limits = json.loads(user_budget_limits)
+        if not isinstance(user_budget_limits, list):
+            return user_pending
+        window_pending: Final = await asyncio.gather(
+            *(_user_window_increment(window) for window in user_budget_limits), return_exceptions=True
+        )
+        return user_pending + tuple(item for item in window_pending if item is not None)
 
     scope_coros: Final = tuple(
         coro

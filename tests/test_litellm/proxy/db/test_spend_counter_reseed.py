@@ -157,6 +157,41 @@ async def test_window_from_table_maps_team_entity_type():
 
 
 @pytest.mark.asyncio
+async def test_window_from_table_maps_user_entity_type():
+    prisma = _FakePrismaClient(row=_row(WINDOW_START, 7.5))
+
+    result = await SpendCounterReseed.window_from_table(
+        prisma_client=prisma,
+        entity_type="User",
+        entity_id="user-1",
+        window_duration="1d",
+        expected_window_start=WINDOW_START,
+    )
+
+    assert result == 7.5
+    inner = prisma.db.litellm_budgetwindowspend.where_clauses[0]["entity_type_entity_id_window_duration"]
+    assert inner["entity_type"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_user_window_falls_back_to_spend_logs_aggregate_on_user_column():
+    """With no maintained row, a user window must aggregate LiteLLM_SpendLogs
+    grouped by the ``user`` column, like key/team windows do on theirs."""
+    prisma = _FakePrismaClient(row=None, spend_logs_total=6.25)
+
+    result = await SpendCounterReseed.window_from_db(
+        prisma_client=prisma,
+        entity_type="User",
+        entity_id="user-1",
+        window_duration="1d",
+        window_start=WINDOW_START,
+    )
+
+    assert result == 6.25
+    assert prisma.db.litellm_spendlogs.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_window_from_table_trusts_row_newer_than_expected_window():
     """Regression: a pod holding a stale ``reset_at`` computes an expected start
     behind a window another pod already rolled. Trusting only an exact match
@@ -211,7 +246,7 @@ async def test_window_from_table_treats_naive_row_timestamp_as_utc():
     "prisma, entity_type",
     [
         (_FakePrismaClient(row=None), "Key"),
-        (_FakePrismaClient(row=_row(WINDOW_START, 1.0)), "User"),
+        (_FakePrismaClient(row=_row(WINDOW_START, 1.0)), "Organization"),
         (_FakePrismaClient(error=RuntimeError("connection reset")), "Key"),
         (None, "Key"),
     ],

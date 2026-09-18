@@ -12593,6 +12593,25 @@ async def test_team_window_spend_row_is_enqueued():
 
 
 @pytest.mark.asyncio
+async def test_user_window_spend_row_is_enqueued():
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    reset_at = datetime.now(timezone.utc) + timedelta(days=3)
+    user_obj = MagicMock()
+    user_obj.budget_limits = [{"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}]
+
+    with _window_spend_enqueue_env({"user-1": user_obj}) as queue:
+        await increment_spend_counters(token=None, team_id=None, user_id="user-1", response_cost=1.5)
+        enqueued = await _drain(queue)
+
+    assert len(enqueued) == 1
+    assert enqueued[0]["entity_type"] == "user"
+    assert enqueued[0]["entity_id"] == "user-1"
+    assert enqueued[0]["window_duration"] == "7d"
+    assert enqueued[0]["spend"] == pytest.approx(1.5)
+
+
+@pytest.mark.asyncio
 async def test_window_spend_row_is_enqueued_even_when_the_counter_was_reserved():
     """A reservation only pre-charged the cache counter with an estimate; the
     row still owes the actual cost, so the enqueue must not be skipped."""

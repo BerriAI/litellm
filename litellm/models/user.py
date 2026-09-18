@@ -5,6 +5,7 @@ Canonical definition for ``litellm_usertable``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
+import json
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -13,6 +14,7 @@ from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization_membership import (
     LiteLLM_OrganizationMembershipTable,
 )
+from litellm.models.team import BudgetLimitEntry
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
@@ -40,6 +42,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     policies: list[str] = []
     model_spend: dict | None = {}
     model_max_budget: dict | None = {}
+    budget_limits: list[BudgetLimitEntry] | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     organization_memberships: list[LiteLLM_OrganizationMembershipTable] | None = None
@@ -56,6 +59,9 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
             values.update({"models": []})
         if values.get("teams") is None:
             values.update({"teams": []})
+        raw_budget_limits = values.get("budget_limits")
+        if isinstance(raw_budget_limits, str):
+            values["budget_limits"] = json.loads(raw_budget_limits)
         return values
 
     def is_over_budget(self) -> bool:

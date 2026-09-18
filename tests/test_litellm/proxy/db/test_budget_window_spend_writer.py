@@ -344,8 +344,8 @@ async def test_all_upserts_are_committed_in_one_transaction():
 
 @pytest.mark.asyncio
 async def test_unknown_entity_type_contributes_no_seed():
-    """Only key and team windows have a LiteLLM_SpendLogs column to aggregate;
-    anything else starts from its increment alone."""
+    """Only key, team, and user windows have a LiteLLM_SpendLogs column to
+    aggregate; anything else starts from its increment alone."""
     db = _FakeDB(existing_rows=[])
 
     async def no_such_column(prisma_client, entity_type, entity_id, window_start, batch_started_at):
@@ -353,7 +353,7 @@ async def test_unknown_entity_type_contributes_no_seed():
 
     await commit_window_spend_updates(
         prisma_client=_FakePrismaClient(db),
-        transactions=(build_window_spend_transaction("user", "u1", "30d", WINDOW_A, 1.0),),
+        transactions=(build_window_spend_transaction("organization", "o1", "30d", WINDOW_A, 1.0),),
         spend_logs_aggregate=no_such_column,
     )
 
@@ -515,7 +515,7 @@ async def test_new_row_is_correct_when_the_batch_logs_have_not_flushed_yet():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "entity_type, expected_column",
-    [("key", "api_key = $1"), ("team", "team_id = $1")],
+    [("key", "api_key = $1"), ("team", "team_id = $1"), ("user", '"user" = $1')],
 )
 async def test_seed_aggregate_sql_splits_the_window_at_the_batch_start(entity_type, expected_column):
     db = _FakeDB(existing_rows=[{"total": 1.25, "before_batch": 0.75}])
@@ -569,7 +569,7 @@ async def test_seed_aggregate_returns_none_for_an_entity_type_with_no_spend_logs
 
     totals = await spend_logs_seed_totals(
         prisma_client=_FakePrismaClient(db),
-        entity_type="user",
+        entity_type="organization",
         entity_id="u1",
         window_start=WINDOW_A,
         batch_started_at=None,

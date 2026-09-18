@@ -48,6 +48,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_view,
     require_caller_user_id_for_non_admin,
     validate_budget_duration,
+    validate_budget_limits,
     validate_finite_spend,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -524,6 +525,7 @@ async def new_user(
                 detail=CommonProxyErrors.db_not_connected_error.value,
             )
         validate_budget_duration(data.budget_duration)
+        validate_budget_limits(data.budget_limits)
 
         # Check for duplicate user_id or email
         await _check_duplicate_user_id(data.user_id, prisma_client)
@@ -1248,6 +1250,19 @@ def _process_keys_for_user_info(
     return returned_keys
 
 
+def _prepare_user_budget_limits(value: object) -> str:
+    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+    if not value:
+        return json.dumps(None)
+    initialized_windows: Final = []
+    for window in cast(Sequence[object], value):
+        w = window if isinstance(window, dict) else window.model_dump()  # pyright: ignore[reportAttributeAccessIssue]  # BudgetLimitEntry or its JSON dict
+        w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
+        initialized_windows.append(w)
+    return json.dumps(initialized_windows)
+
+
 def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
     non_default_values: Final = {}
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
@@ -1256,6 +1271,10 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
         if k in ("max_budget", "budget_duration"):
             if k in fields_set:
                 non_default_values[k] = v
+        elif k == "budget_limits":
+            if k in fields_set:
+                validate_budget_limits(v)
+                non_default_values[k] = _prepare_user_budget_limits(v)
         elif k == "model_max_budget":
             if k in fields_set:
                 try:
@@ -1477,7 +1496,14 @@ async def _update_single_user_helper(
         # because `_update_internal_user_params` drops empty values, and `object_permission: {}` is
         # precisely the clear-my-own-ceiling case this must refuse.
         _sent_fields: Final = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
-        _protected_fields: Final = ("max_budget", "model_max_budget", "soft_budget", "spend", "object_permission")
+        _protected_fields: Final = (
+            "max_budget",
+            "model_max_budget",
+            "budget_limits",
+            "soft_budget",
+            "spend",
+            "object_permission",
+        )
         for _field in _protected_fields:
             if _field in non_default_values or _field in _sent_fields:
                 raise HTTPException(
@@ -1561,7 +1587,7 @@ async def _update_single_user_helper(
 
         await _invalidate_user_spend_counter_if_changed(non_default_values)
 
-        if "model_max_budget" in non_default_values:
+        if "model_max_budget" in non_default_values or "budget_limits" in non_default_values:
             await evict_and_broadcast(
                 cache_keys=(non_default_values["user_id"],),
                 user_api_key_cache=user_api_key_cache,

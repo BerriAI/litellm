@@ -3133,6 +3133,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # and validating it here would make one malformed row fail auth outright.
     # resolve_model_budget validates the single entry a request actually needs.
     user_model_max_budget: Mapping[str, object] | None = None
+    user_budget_limits: list[BudgetLimitEntry] | None = None
     request_route: str | None = None
     is_session_token: bool = False
     # Server-only marker set exclusively by the MCP gateway admission path

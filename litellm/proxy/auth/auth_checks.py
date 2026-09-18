@@ -1109,6 +1109,11 @@ async def common_checks(
                     valid_token=valid_token,
                 ),
                 _team_multi_budget_check(team_object=team_object),
+                _user_multi_budget_check(
+                    valid_token=valid_token,
+                    team_object=team_object,
+                    general_settings=general_settings,
+                ),
                 _virtual_key_multi_budget_check(valid_token=valid_token) if valid_token is not None else None,
                 _team_soft_budget_check(
                     team_object=team_object,
@@ -5517,6 +5522,52 @@ async def _team_multi_budget_check(
                 ),
                 entity_type=Litellm_EntityType.TEAM.value,
                 entity_id=team_object.team_id,
+            )
+
+
+async def _user_multi_budget_check(
+    valid_token: UserAPIKeyAuth | None,
+    team_object: LiteLLM_TeamTable | None,
+    general_settings: dict,
+):
+    """
+    Raises BudgetExceededError if any budget window in valid_token.user_budget_limits is exceeded.
+
+    Each window has its own Redis counter keyed by spend:user:{user_id}:window:{budget_duration}.
+    Using budget_duration (not list index) keeps counters stable when windows are reordered
+    or removed during a user update. Skipped for keys owned by a team unless
+    apply_user_budget_to_team_keys is enabled, matching the flat user budget check.
+    """
+    if valid_token is None or not valid_token.user_budget_limits or valid_token.user_id is None:
+        return
+    is_team_key: Final = team_object is not None and team_object.team_id is not None
+    if is_team_key and general_settings.get("apply_user_budget_to_team_keys") is not True:
+        return
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    for window in valid_token.user_budget_limits:
+        w: dict = window if isinstance(window, dict) else window.model_dump()
+        counter_key = f"spend:user:{valid_token.user_id}:window:{w['budget_duration']}"
+        window_spend = await get_current_spend(
+            counter_key=counter_key,
+            fallback_spend=0.0,
+            max_budget=w["max_budget"],
+            window_entity_type="User",
+            window_entity_id=valid_token.user_id,
+            window_duration=str(w["budget_duration"]),
+            window_start=get_budget_window_start(w),
+        )
+        if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
+            raise litellm.BudgetExceededError(
+                current_cost=window_spend,
+                max_budget=w["max_budget"],
+                message=(
+                    f"ExceededBudget: User={valid_token.user_id} over {w['budget_duration']} budget. "
+                    f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
+                ),
+                entity_type=Litellm_EntityType.USER.value,
+                entity_id=valid_token.user_id,
             )
 
 

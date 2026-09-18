@@ -13,6 +13,7 @@ import litellm
 
 from litellm.proxy._types import (
     DEFAULT_JWKS_STALE_TTL,
+    JWTAuthBuilderResult,
     JWTLiteLLMRoleMap,
     LiteLLM_JWTAuth,
     LiteLLM_ModelTable,
@@ -7144,3 +7145,64 @@ async def test_admin_jwt_team_header_only_provisions_during_admission(monkeypatc
     else:
         create_team.assert_not_awaited()
         assert result["team_id"] is None
+
+
+def test_jwt_built_user_api_key_auth_carries_user_budget_limits():
+    """JWT-authenticated requests have no key row, so the user's budget windows
+    must ride UserAPIKeyAuth.user_budget_limits from the loaded user object."""
+    user = LiteLLM_UserTable(
+        user_id="jwt-user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        budget_limits=[
+            {"budget_duration": "1d", "max_budget": 10.0},
+            {"budget_duration": "30d", "max_budget": 100.0},
+        ],
+    )
+    result = JWTAuthBuilderResult(
+        is_proxy_admin=False,
+        team_object=None,
+        user_object=user,
+        end_user_object=None,
+        org_object=None,
+        token="jwt",
+        team_id=None,
+        user_id="jwt-user",
+        user_email="jwt@example.com",
+        end_user_id=None,
+        org_id=None,
+        team_membership=None,
+        jwt_claims={},
+        agent_id=None,
+    )
+
+    auth = JWTAuthManager.user_api_key_auth_from_result(result=result)
+
+    windows = [w.model_dump() if not isinstance(w, dict) else w for w in auth.user_budget_limits or []]
+    assert [(w["budget_duration"], w["max_budget"]) for w in windows] == [("1d", 10.0), ("30d", 100.0)]
+
+
+def test_jwt_admin_does_not_inherit_user_budget_limits():
+    user = LiteLLM_UserTable(
+        user_id="admin-user",
+        budget_limits=[{"budget_duration": "1d", "max_budget": 10.0}],
+    )
+    result = JWTAuthBuilderResult(
+        is_proxy_admin=True,
+        team_object=None,
+        user_object=user,
+        end_user_object=None,
+        org_object=None,
+        token="jwt",
+        team_id=None,
+        user_id="admin-user",
+        user_email=None,
+        end_user_id=None,
+        org_id=None,
+        team_membership=None,
+        jwt_claims={},
+        agent_id=None,
+    )
+
+    auth = JWTAuthManager.user_api_key_auth_from_result(result=result)
+
+    assert auth.user_budget_limits is None
