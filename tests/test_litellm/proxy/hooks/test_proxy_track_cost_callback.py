@@ -586,6 +586,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         tags=["tag-a"],
         request_started_at=start_time,
         model_access_groups=("premium",),
+        user_budget_limits=None,
     )
 
 
