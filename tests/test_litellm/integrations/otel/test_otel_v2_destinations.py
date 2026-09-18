@@ -42,7 +42,7 @@ from litellm.integrations.otel.plumbing.providers import (
     _sink_key,
     build_tracer_provider,
     deliverable_destinations,
-    operator_sink_keys,
+    operator_sink_scopes,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache, get_tracer
 from litellm.integrations.otel.presets.arize import arize_preset
@@ -237,7 +237,7 @@ class TestRoutingMode:
         provider.add_span_processor(
             TenantFanOutSpanProcessor(
                 processor_factory=lambda _d: SimpleSpanProcessor(shared),
-                operator_sinks=frozenset({self.OPERATOR_SINK}),
+                operator_sinks=MappingProxyType({self.OPERATOR_SINK: "full"}),
             )
         )
 
@@ -260,7 +260,7 @@ class TestRoutingMode:
         provider.add_span_processor(
             TenantFanOutSpanProcessor(
                 processor_factory=lambda _d: SimpleSpanProcessor(shared),
-                operator_sinks=frozenset({self.OPERATOR_SINK}),
+                operator_sinks=MappingProxyType({self.OPERATOR_SINK: "full"}),
             )
         )
 
@@ -277,7 +277,7 @@ class TestRoutingMode:
         provider.add_span_processor(
             TenantFanOutSpanProcessor(
                 processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter),
-                operator_sinks=frozenset({self.OPERATOR_SINK}),
+                operator_sinks=MappingProxyType({self.OPERATOR_SINK: "full"}),
             )
         )
 
@@ -330,7 +330,7 @@ class TestRoutingMode:
 
         assert global_exporter.get_finished_spans() == ()
 
-    def test_operator_sink_keys_skips_an_exporter_with_no_endpoint_of_its_own(self):
+    def test_operator_sink_scopes_skips_an_exporter_with_no_endpoint_of_its_own(self):
         """Such an exporter resolves its endpoint from the environment at export
         time, so it has no identity to compare a destination against."""
         config = OpenTelemetryV2Config(
@@ -340,9 +340,9 @@ class TestRoutingMode:
             )
         )
 
-        assert operator_sink_keys(config) == frozenset({self.OPERATOR_SINK})
+        assert dict(operator_sink_scopes(config)) == {self.OPERATOR_SINK: "full"}
 
-    def test_operator_sink_keys_skips_exporters_that_never_reach_the_wire(self):
+    def test_operator_sink_scopes_skips_exporters_that_never_reach_the_wire(self):
         """A console kind ignores the endpoint and a header-gated spec with no
         credentials is dropped when the provider is built, so treating either as an
         account the operator writes to would silently withhold a team's own spans
@@ -355,9 +355,9 @@ class TestRoutingMode:
             )
         )
 
-        assert operator_sink_keys(config) == frozenset({self.OPERATOR_SINK})
+        assert dict(operator_sink_scopes(config)) == {self.OPERATOR_SINK: "full"}
 
-    def test_operator_sink_keys_spans_every_config_it_is_handed(self):
+    def test_operator_sink_scopes_spans_every_config_it_is_handed(self):
         first = OpenTelemetryV2Config(
             exporters=(
                 ExporterSpec(
@@ -377,9 +377,9 @@ class TestRoutingMode:
             )
         )
 
-        assert operator_sink_keys(first, second) == {
-            self.OPERATOR_SINK,
-            _sink_key("https://otlp.arize.com/v1/traces", {"space_id": "s", "api_key": "k"}),
+        assert dict(operator_sink_scopes(first, second)) == {
+            self.OPERATOR_SINK: "full",
+            _sink_key("https://otlp.arize.com/v1/traces", {"space_id": "s", "api_key": "k"}): "full",
         }
 
     def test_a_team_pointing_at_a_credential_less_operator_exporter_still_gets_its_spans(self, monkeypatch):
@@ -397,7 +397,7 @@ class TestRoutingMode:
         provider.add_span_processor(
             TenantFanOutSpanProcessor(
                 processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter),
-                operator_sinks=operator_sink_keys(config),
+                operator_sinks=operator_sink_scopes(config),
             )
         )
 
@@ -416,7 +416,7 @@ class TestRoutingMode:
         monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-op")
         monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-op")
         monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["lf.internal"], raising=False)
-        operator = operator_sink_keys(langfuse_preset())
+        operator = operator_sink_scopes(langfuse_preset())
 
         def sink(public_key, secret_key):
             destination = destination_for(
@@ -450,7 +450,7 @@ class TestRoutingMode:
         monkeypatch.setenv("ARIZE_SPACE_ID", "space-op")
         monkeypatch.setenv("ARIZE_API_KEY", "key-op")
         monkeypatch.delenv("ARIZE_SPACE_KEY", raising=False)
-        operator = operator_sink_keys(arize_preset())
+        operator = operator_sink_scopes(arize_preset())
 
         def sink(space, api_key):
             destination = destination_for(
@@ -1039,7 +1039,9 @@ class TestProviderWiring:
             set_request_destinations(destinations)
             emit(published.tracer_provider)
 
-        in_fresh_context(run, (destination(canonical, dict(pair.split("=") for pair in accounts[canonical][1].split(","))),))
+        in_fresh_context(
+            run, (destination(canonical, dict(pair.split("=") for pair in accounts[canonical][1].split(","))),)
+        )
         in_fresh_context(run, (destination(other, dict(pair.split("=") for pair in accounts[other][1].split(","))),))
         assert shared.get_finished_spans() == (), "an account the operator already writes to was written twice"
 
@@ -1540,6 +1542,56 @@ class TestSpanScope:
         assert operator.get_finished_spans() == ()
         assert names(tenant) == LLM_SPANS
 
+    @staticmethod
+    def _same_account_provider(shared, operator_scope):
+        """The operator's own exporter and a tenant destination naming the same account,
+        both writing one sink, with the operator's exporter narrowed to ``operator_scope``."""
+        provider = TracerProvider()
+        provider.add_span_processor(
+            _OverriddenBackendFilter(SimpleSpanProcessor(shared), "langfuse_otel", operator_scope)
+        )
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda _d: SimpleSpanProcessor(shared),
+                operator_sinks=MappingProxyType({TestRoutingMode.OPERATOR_SINK: operator_scope}),
+            )
+        )
+        return provider
+
+    @staticmethod
+    def _same_account_destination(span_scope):
+        return OtelDestination(
+            endpoint=TestRoutingMode.SAME_ACCOUNT_ENDPOINT,
+            headers=MappingProxyType({"Authorization": "Basic op"}),
+            callback_name="langfuse_otel",
+            span_scope=span_scope,
+        )
+
+    @pytest.mark.parametrize(
+        ("operator_scope", "tenant_scope", "expected"),
+        [
+            ("llm_only", "full", REQUEST_TREE),
+            ("full", "llm_only", REQUEST_TREE),
+            ("llm_only", "llm_only", LLM_SPANS),
+            ("full", "full", REQUEST_TREE),
+        ],
+    )
+    def test_a_team_naming_the_operators_project_gets_the_wider_of_the_two_scopes_once(
+        self, monkeypatch, operator_scope, tenant_scope, expected
+    ):
+        """Under additive the fan-out stands down for a span the operator's exporter is
+        already sending to that account. When the operator's exporter is narrowed, the
+        spans it drops are not being sent by anyone, so the fan-out still owes them to
+        the team; and no span may land twice."""
+        self._additive(monkeypatch)
+        shared = InMemorySpanExporter()
+
+        self._run(self._same_account_provider(shared, operator_scope), (self._same_account_destination(tenant_scope),))
+
+        finished = [s.name for s in shared.get_finished_spans()]
+        assert frozenset(finished) == expected
+        assert len(finished) == len(expected), "the same account received a span twice"
+
     def test_a_kept_generation_still_hangs_off_the_request_trace_with_its_trace_controls(self, monkeypatch):
         self._additive(monkeypatch)
         operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
@@ -1679,7 +1731,9 @@ class TestSpanScope:
         assert destination_for("langfuse_otel", creds).span_scope == "full"
 
     def test_only_langfuse_honours_the_scope_var(self):
-        arize = destination_for("arize", {"arize_api_key": "k", "arize_space_id": "s", "langfuse_span_scope": "llm_only"})
+        arize = destination_for(
+            "arize", {"arize_api_key": "k", "arize_space_id": "s", "langfuse_span_scope": "llm_only"}
+        )
 
         assert arize is not None and arize.span_scope == "full"
 
@@ -2365,7 +2419,9 @@ class TestEvictionSafety:
 
             assert len(built) == _MAX_CACHED_DESTINATION_PROCESSORS + 3, "a processor per request during the outage"
             assert sum(1 for accepted in anchored if accepted) == len(built), "anchored what it could not build"
-            assert fan_out.deliverable((self._dest(999),)) == (), "the span would vanish instead of staying with the operator"
+            assert fan_out.deliverable((self._dest(999),)) == (), (
+                "the span would vanish instead of staying with the operator"
+            )
         finally:
             release.set()
         for _ in range(500):

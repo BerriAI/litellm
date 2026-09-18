@@ -524,7 +524,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self,
         processor_factory: 'Callable[["OtelDestination"], SpanProcessor | None] | None' = None,
         shutdown_drain_seconds: float = _SHUTDOWN_DRAIN_SECONDS,
-        operator_sinks: frozenset[_SinkKey] = frozenset(),
+        operator_sinks: 'Mapping[_SinkKey, "OtelSpanScope"]' = MappingProxyType({}),
         pending_drains: int = _MAX_PENDING_DRAINS,
         drain_pool: _DrainPool | None = None,
     ) -> None:
@@ -544,7 +544,9 @@ class TenantFanOutSpanProcessor(SpanProcessor):
     def on_end(self, span: ReadableSpan) -> None:
         suppressed: Final = suppressed_backends()
         for destination in request_destinations():
-            if self._operator_already_writes(destination, suppressed) or not _in_scope(span, destination.span_scope):
+            if self._operator_already_writes(span, destination, suppressed) or not _in_scope(
+                span, destination.span_scope
+            ):
                 continue
             processor = self._acquire(destination)  # rebind-ok: loop variable; pyright forbids Final in a loop
             if processor is None:
@@ -556,17 +558,22 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             finally:
                 self._release(processor)
 
-    def _operator_already_writes(self, destination: "OtelDestination", suppressed: frozenset[str]) -> bool:
+    def _operator_already_writes(
+        self, span: ReadableSpan, destination: "OtelDestination", suppressed: frozenset[str]
+    ) -> bool:
         """Whether the operator's own exporter is sending this span to the same account.
 
         Only reachable under ``additive``, where nothing is suppressed: a team that
         names the operator's own project would otherwise have every span written
-        there twice, once by the operator's exporter and once by the fan-out.
+        there twice, once by the operator's exporter and once by the fan-out. The
+        operator's exporter may itself be narrowed to the model calls, in which case
+        the rest of the tree is still the fan-out's to deliver.
         """
-        return (
-            destination.callback_name not in suppressed
-            and _sink_key(destination.endpoint, destination.headers) in self._operator_sinks
-        )
+        sink: Final = _sink_key(destination.endpoint, destination.headers)
+        if destination.callback_name in suppressed or sink is None:
+            return False
+        operator_scope: Final = self._operator_sinks.get(sink)
+        return operator_scope is not None and _in_scope(span, operator_scope)
 
     def shutdown(self) -> None:
         """Close every destination processor, once the spans in flight have landed.
@@ -1085,7 +1092,7 @@ def build_tracer_provider(
             (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
         )
         owner = spec.owner.value if tenant_overrides and spec.owner is not None else None
-        scope = config.langfuse_span_scope if spec.owner is ExporterOwner.LANGFUSE_OTEL else "full"
+        scope = _operator_scope(config, spec)
         provider.add_span_processor(
             _OverriddenBackendFilter(processor, owner, scope) if owner is not None or scope != "full" else processor
         )
@@ -1109,7 +1116,7 @@ def attach_tenant_fan_out(provider: TracerProvider, *configs: OpenTelemetryV2Con
     with _FAN_OUT_ATTACH_LOCK:
         if any(isinstance(processor, TenantFanOutSpanProcessor) for processor in _attached_processors(provider)):
             return
-        provider.add_span_processor(TenantFanOutSpanProcessor(operator_sinks=operator_sink_keys(*configs)))
+        provider.add_span_processor(TenantFanOutSpanProcessor(operator_sinks=operator_sink_scopes(*configs)))
 
 
 def deliverable_destinations(
@@ -1134,8 +1141,9 @@ def deliverable_destinations(
     return fan_out.deliverable(destinations) if fan_out is not None else ()
 
 
-def operator_sink_keys(*configs: OpenTelemetryV2Config) -> frozenset[_SinkKey]:
-    """The accounts the operator's own exporters write to, in destination terms.
+def operator_sink_scopes(*configs: OpenTelemetryV2Config) -> 'Mapping[_SinkKey, "OtelSpanScope"]':
+    """The accounts the operator's own exporters write to, in destination terms, and
+    how much of the tree each one receives.
 
     Every v2 logger's config counts, since each logger exports through its own
     provider. An exporter with no endpoint of its own resolves one from the
@@ -1143,12 +1151,18 @@ def operator_sink_keys(*configs: OpenTelemetryV2Config) -> frozenset[_SinkKey]:
     and so is one that never reaches the wire: a console kind ignores the endpoint,
     and a header-gated spec with no credentials is skipped when the provider is built.
     """
-    return frozenset(
-        key
-        for config in configs
-        for spec in config.exporters
-        if _exports_to_the_wire(spec) and (key := _sink_key(spec.endpoint, parse_headers(spec.headers))) is not None
+    return MappingProxyType(
+        {
+            key: _operator_scope(config, spec)
+            for config in configs
+            for spec in config.exporters
+            if _exports_to_the_wire(spec) and (key := _sink_key(spec.endpoint, parse_headers(spec.headers))) is not None
+        }
     )
+
+
+def _operator_scope(config: OpenTelemetryV2Config, spec: ExporterSpec) -> "OtelSpanScope":
+    return config.langfuse_span_scope if spec.owner is ExporterOwner.LANGFUSE_OTEL else "full"
 
 
 def _exports_to_the_wire(spec: ExporterSpec) -> bool:
