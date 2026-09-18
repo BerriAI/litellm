@@ -156,6 +156,11 @@ def test_variants_of_one_failure_share_a_normalized_error(messages: tuple[Except
     assert normalized == {expected}
 
 
+def test_parameter_length_error_is_not_a_context_window_error() -> None:
+    exc = litellm.BadRequestError("string too long: 'user' max 64 chars", llm_provider="openai", model="gpt")
+    assert StandardLoggingPayloadSetup.get_error_information(exc)["normalized_error"] == "400_INVALID_REQUEST"
+
+
 def test_no_exception_has_no_normalized_error() -> None:
     assert StandardLoggingPayloadSetup.get_error_information(None)["normalized_error"] is None
 
