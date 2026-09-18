@@ -216,14 +216,25 @@ def _error_event_fields(error_obj: object) -> tuple[str, str | None, str | None]
     return message, error_type, code
 
 
+_UNKNOWN_CONDITION_HTTP_STATUS: Final = 500
+
+
 def _status_code_for_error_fields(error_type: str | None, error_code: str | None) -> int:
+    """`code` names the condition and `type` names its family, so the code decides whenever the table
+    knows it and the type classifies only what no code contradicts. A code the table does not know is an
+    unknown condition, and an unknown condition is a server fault, which keeps it retriable and lets the
+    Router's mid-stream fallback fire. Falling through to the type used to defeat that: a gateway
+    reporting a stream cut in transit as code "request_timeout" under type "invalid_request_error" came
+    back as a 400, so a request the upstream had accepted and begun answering reached the caller as its
+    own malformed request, unretriable, with the partial output dropped
+    """
     fields: Final = tuple(field for field in (error_code, error_type) if field is not None)
     if any(field.startswith("rate_limit") or field == "insufficient_quota" for field in fields):
         return 429
-    return next(
-        (_ERROR_CODE_HTTP_STATUS[field] for field in fields if field in _ERROR_CODE_HTTP_STATUS),
-        500,
-    )
+    specific: Final = error_code if error_code is not None else error_type
+    if specific is None:
+        return _UNKNOWN_CONDITION_HTTP_STATUS
+    return _ERROR_CODE_HTTP_STATUS.get(specific, _UNKNOWN_CONDITION_HTTP_STATUS)
 
 
 def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
@@ -594,9 +605,13 @@ class BaseResponsesAPIStreamingIterator:
         error_message, error_type, error_code = _error_event_fields(error_obj)
         status_code: Final = _status_code_for_error_fields(error_type, error_code)
         error_body: Final = {"message": error_message, "type": error_type, "code": error_code}
+        overruled_type: Final = error_code is not None and error_code not in _ERROR_CODE_HTTP_STATUS
+        decided_body: Final = (
+            f"{{'message': {error_message!r}, 'code': {error_code!r}}}" if overruled_type else f"{error_body}"
+        )
         provider_exception: Final = BaseLLMException(
             status_code=status_code,
-            message=f"Error code: {status_code} - {{'error': {error_body}}}",
+            message=f"Error code: {status_code} - {{'error': {decided_body}}}",
             body=error_body,
         )
         try:

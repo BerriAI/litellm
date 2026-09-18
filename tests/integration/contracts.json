@@ -131,6 +131,9 @@
     "tests/integration/streaming/test_stream_contracts.py::test_truncated_http_stream_is_an_error_and_next_stream_succeeds": [
       "other.streaming.failure.truncated_transport_raises_and_control_recovers"
     ],
+    "tests/integration/streaming/test_stream_contracts.py::test_responses_in_stream_error_classifies_by_code_not_generic_type": [
+      "other.streaming.failure.in_stream_error_code_outranks_generic_type"
+    ],
     "tests/integration/streaming/test_stream_contracts.py::test_client_cancellation_releases_the_actual_provider_connection": [
       "other.streaming.cancellation.closes_actual_provider_connection"
     ],
