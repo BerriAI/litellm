@@ -233,7 +233,12 @@ class TestResponseTimingMetrics:
     START = datetime.datetime(2025, 1, 1, 0, 0, 0)
     END = datetime.datetime(2025, 1, 1, 0, 0, 1)
 
-    def _make_logging_obj(self, llm_api_duration_ms=None, caching_details=None, received_at=None):
+    def _make_logging_obj(
+        self,
+        llm_api_duration_ms: float | None = None,
+        caching_details: dict[str, object] | None = None,
+        received_at: datetime.datetime | str | None = None,
+    ) -> MagicMock:
         logging_obj = MagicMock()
         logging_obj.model_call_details = {}
         if llm_api_duration_ms is not None:
