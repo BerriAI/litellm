@@ -647,7 +647,7 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=oauth_server,
         ),
-        patch(
+        patch(  # test-quality-ok: transport handler collaborators are module-level globals, no injectable seam
             "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
             new_callable=AsyncMock,
             return_value=[oauth_server],
@@ -740,7 +740,7 @@ async def test_admitted_subject_missing_stored_token_challenged_with_resource_me
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=oauth_server,
         ),
-        patch(
+        patch(  # test-quality-ok: transport handler collaborators are module-level globals, no injectable seam
             "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
             new_callable=AsyncMock,
             return_value=[oauth_server],
@@ -1040,7 +1040,7 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=oauth_server,
         ),
-        patch(
+        patch(  # test-quality-ok: transport handler collaborators are module-level globals, no injectable seam
             "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
             new_callable=AsyncMock,
             return_value=[oauth_server],
@@ -1148,7 +1148,7 @@ async def test_handle_streamable_http_mcp_delegated_server_without_token_returns
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=delegated_server,
         ),
-        patch(
+        patch(  # test-quality-ok: transport handler collaborators are module-level globals, no injectable seam
             "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
             new_callable=AsyncMock,
             return_value=[delegated_server],
@@ -1241,7 +1241,7 @@ async def test_handle_streamable_http_mcp_token_exchange_without_subject_returns
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=obo_server,
         ),
-        patch(
+        patch(  # test-quality-ok: transport handler collaborators are module-level globals, no injectable seam
             "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
             new_callable=AsyncMock,
             return_value=[obo_server],
@@ -1345,7 +1345,7 @@ async def test_handle_streamable_http_mcp_oauth_delegate_without_token_returns_g
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=od_server,
         ),
-        patch(
+        patch(  # test-quality-ok: transport handler collaborators are module-level globals, no injectable seam
             "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
             new_callable=AsyncMock,
             return_value=[od_server],
@@ -1607,7 +1607,7 @@ async def test_handle_streamable_http_mcp_true_passthrough_without_token_surface
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=tp_server,
         ),
-        patch(
+        patch(  # test-quality-ok: transport handler collaborators are module-level globals, no injectable seam
             "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
             new_callable=AsyncMock,
             return_value=[tp_server],
@@ -1680,7 +1680,7 @@ async def test_handle_streamable_http_mcp_true_passthrough_dcr_bridge_challenges
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=bridge_server,
         ),
-        patch(
+        patch(  # test-quality-ok: transport handler collaborators are module-level globals, no injectable seam
             "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
             new_callable=AsyncMock,
             return_value=[bridge_server],
