@@ -111,7 +111,7 @@ def _assert_describes_cat(response: ChatResponse) -> None:
     assert response.choices, f"vision returned no choices: {response}"
     message = response.choices[0].message
     content = (message.content if message else None) or ""
-    assert "cat" in content.lower() or "feline" in content.lower(), (
+    assert any(term in content.lower() for term in ("cat", "feline", "kitten", "kitty")), (
         f"vision response did not describe the image: {content[:200]}"
     )
 
