@@ -3539,7 +3539,7 @@ class TestResponsesScopingFlags:
         await handler.process_output_response(self._reply(), guardrail, request_data=request)
 
         (_, request_inputs), (_, response_inputs) = guardrail.seen
-        assert request_inputs["texts"] == ["What is the capital of France?"]
+        assert request_inputs["texts"] == ["What is the capital of France?", "TOOL SECRET"]
         assert [m["role"] for m in request_inputs["structured_messages"]] == ["user", "assistant", "tool"]
         assert [m["role"] for m in response_inputs["structured_messages"]] == ["user", "assistant", "tool", "assistant"]
         assert "SYSTEM SECRET" not in repr(guardrail.seen)
@@ -3574,12 +3574,26 @@ class TestResponsesScopingFlags:
         await handler.process_input_messages(data=request, guardrail_to_apply=guardrail)
         await handler.process_output_response(self._reply(), guardrail, request_data=request)
 
-        request_scans = [inputs for kind, inputs in guardrail.seen if kind == "request"]
-        assert all("capital of France" not in repr(inputs) for inputs in request_scans)
-        [response_inputs] = [inputs for kind, inputs in guardrail.seen if kind == "response"]
+        (_, request_inputs), (_, response_inputs) = guardrail.seen
+        assert request_inputs["texts"] == ["TOOL SECRET"]
+        assert [m["role"] for m in request_inputs["structured_messages"]] == ["tool"]
+        assert "tools" not in request_inputs
+        assert "capital of France" not in repr(request_inputs)
         assert [m["role"] for m in response_inputs["structured_messages"]] == ["tool", "assistant"]
         assert response_inputs["structured_messages"][0]["content"] == "TOOL SECRET"
         assert "tools" not in response_inputs
+
+    @pytest.mark.asyncio
+    async def test_text_rewrite_lands_on_the_tool_output_item(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = MockGuardrail()
+        guardrail.scan_only_tool_results = True
+        request = self._request()
+
+        result = await handler.process_input_messages(data=request, guardrail_to_apply=guardrail)
+
+        assert result["input"][1] == {"role": "user", "content": "What is the capital of France?"}
+        assert result["input"][3] == {"type": "function_call_output", "call_id": "call_1", "output": "TOOL SECRET [GUARDRAILED]"}
 
     @pytest.mark.asyncio
     async def test_scoped_rewrite_lands_without_dropping_the_hidden_turns(self):
@@ -3606,7 +3620,7 @@ class TestResponsesScopingFlags:
         await handler.process_input_messages(data=request, guardrail_to_apply=guardrail)
 
         [(_, request_inputs)] = guardrail.seen
-        assert request_inputs["texts"] == ["SYSTEM SECRET TWO", "What is the capital of France?"]
+        assert request_inputs["texts"] == ["SYSTEM SECRET TWO", "What is the capital of France?", "TOOL SECRET"]
         assert [m["role"] for m in request_inputs["structured_messages"]] == [
             "system",
             "system",

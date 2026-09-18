@@ -218,6 +218,7 @@ _OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "resp
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call_output": "output", "message": "content"}
 )
+_ITEM_TYPE_ROLES: Final[Mapping[str, str]] = MappingProxyType({"function_call_output": "tool", "function_call": "assistant"})
 
 _EMPTY_RESPONSES_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {}
 
@@ -229,6 +230,14 @@ def _item_rewrite_field(item: Mapping[str, object]) -> str | None:
     if not isinstance(item_type, str):
         return None
     return _PATCHABLE_ITEM_FIELDS.get(item_type)
+
+
+def _input_item_role(item: Mapping[str, object]) -> str:
+    role: Final = item.get("role")
+    if isinstance(role, str):
+        return role
+    item_type: Final = item.get("type")
+    return _ITEM_TYPE_ROLES.get(item_type, "") if isinstance(item_type, str) else ""
 
 
 def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapping[str, object] | None:
@@ -603,7 +612,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 texts_to_check.append(input_data)
         else:
             for msg_idx, message in enumerate(input_data):
-                if not scope.includes_role(message.get("role")):
+                if not scope.includes_role(_input_item_role(message)):
                     continue
                 self._extract_input_text_and_images(
                     message=message,
@@ -685,7 +694,8 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Override this method to customize text/image extraction logic.
         """
-        content: Final = message.get("content", None)
+        field: Final = _item_rewrite_field(message)
+        content: Final = message.get(field) if field is not None else None
         if content is None:
             return
 
@@ -730,18 +740,18 @@ class OpenAIResponsesHandler(BaseTranslation):
             msg_idx = cast(int, mapping[0])
             content_idx_optional = cast(int | None, mapping[1])
 
-            content = messages[msg_idx].get("content", None)
-            if content is None:
+            field = _item_rewrite_field(messages[msg_idx])
+            content = messages[msg_idx].get(field) if field is not None else None
+            if field is None or content is None:
                 continue
 
             if isinstance(content, str) and content_idx_optional is None:
-                # Replace string content with guardrail response
-                messages[msg_idx]["content"] = guardrail_response
+                messages[msg_idx][field] = guardrail_response
 
             elif isinstance(content, list) and content_idx_optional is not None:
                 # Replace specific text item in list content
-                if isinstance(messages[msg_idx]["content"][content_idx_optional], dict):
-                    messages[msg_idx]["content"][content_idx_optional]["text"] = guardrail_response
+                if isinstance(content[content_idx_optional], dict):
+                    content[content_idx_optional]["text"] = guardrail_response
 
     async def process_output_response(
         self,
