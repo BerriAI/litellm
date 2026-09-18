@@ -46,7 +46,9 @@ export async function runWithCleanup(
   try {
     if (outcome.status === "failure") throw outcome.error;
   } finally {
-    const cleanupSucceeded = await cleanup().catch(() => false);
+    const cleanupSucceeded = await Promise.resolve()
+      .then(cleanup)
+      .catch(() => false);
     if (outcome.status === "success" && !cleanupSucceeded) {
       throw new Error("Failed to clean up UI E2E resource");
     }
