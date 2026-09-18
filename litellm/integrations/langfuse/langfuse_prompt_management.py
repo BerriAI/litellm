@@ -152,9 +152,11 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         flush_interval=1,
     ):
 
+        self.langfuse_sdk_version = installed_langfuse_version()
+        raise_if_unsupported_langfuse_version(self.langfuse_sdk_version)
+
         from .langfuse_sdk import acquire_langfuse_tracing
 
-        self.langfuse_sdk_version = installed_langfuse_version()
         self.Langfuse = langfuse_client_init(
             langfuse_public_key=langfuse_public_key,
             langfuse_secret=langfuse_secret,

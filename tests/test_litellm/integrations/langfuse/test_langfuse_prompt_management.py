@@ -1,3 +1,4 @@
+import sys
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -243,3 +244,19 @@ async def test_async_log_failure_event_records_trace_id_for_alerting(monkeypatch
     assert in_memory_trace_id_cache.get_cache(litellm_call_id=call_id, service_name="langfuse") == resolve_trace_id(
         "alert-trace-1"
     )
+
+
+def test_old_sdk_fails_with_the_upgrade_message_before_the_otel_module_is_imported(monkeypatch):
+    """On a v2 install `langfuse_sdk` itself fails to import, so the version gate must run first."""
+    import litellm.integrations.langfuse.langfuse_prompt_management as pm_module
+
+    monkeypatch.setattr(pm_module, "installed_langfuse_version", lambda: "2.59.7")
+    monkeypatch.setitem(sys.modules, "litellm.integrations.langfuse.langfuse_sdk", None)
+
+    with pytest.raises(ImportError) as raised:
+        LangfusePromptManagement(
+            langfuse_public_key="pk-old", langfuse_secret="sk-old", langfuse_host="http://127.0.0.1:1"
+        )
+
+    assert "2.59.7" in str(raised.value)
+    assert "langfuse_otel" in str(raised.value)
