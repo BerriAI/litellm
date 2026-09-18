@@ -56,55 +56,49 @@ async def test_embedding_metadata_population():
     Test that the embedding endpoint correctly populates metadata
     from UserAPIKeyAuth.
     """
+    captured_data = {}
+
+    async def mock_base_process(self, *args, **kwargs):
+        captured_data.update(self.data)
+        return {"data": []}
+
     # Setup
     with patch(
-        "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing.base_process_llm_request"
+        "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+        new=mock_base_process,
     ):
+        # Create a mock UserAPIKeyAuth object
+        mock_user_auth = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_auth.user_id = "test_user_id_emb"
+        mock_user_auth.team_id = "test_team_id_emb"
+        mock_user_auth.org_id = "test_org_id_emb"
+
+        # Create a mock Request object
+        mock_request = MagicMock(spec=Request)
+        mock_request.json = AsyncMock(
+            return_value={"model": "gpt-3.5-turbo", "input": "hello"}
+        )
+        # Mock _read_request_body to return our data
         with patch(
-            "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing.__init__",
-            return_value=None,
-        ) as mock_base_process_init:
-            # Create a mock UserAPIKeyAuth object
-            mock_user_auth = MagicMock(spec=UserAPIKeyAuth)
-            mock_user_auth.user_id = "test_user_id_emb"
-            mock_user_auth.team_id = "test_team_id_emb"
-            mock_user_auth.org_id = "test_org_id_emb"
-
-            # Create a mock Request object
-            mock_request = MagicMock(spec=Request)
-            mock_request.json = AsyncMock(
-                return_value={"model": "gpt-3.5-turbo", "input": "hello"}
+            "litellm.proxy.proxy_server._read_request_body",
+            new=AsyncMock(return_value={"model": "gpt-3.5-turbo", "input": "hello"}),
+        ):
+            # Call the endpoint function directly
+            await embeddings(
+                request=mock_request,
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=mock_user_auth,
             )
-            # Mock _read_request_body to return our data
-            with patch(
-                "litellm.proxy.proxy_server._read_request_body",
-                new=AsyncMock(
-                    return_value={"model": "gpt-3.5-turbo", "input": "hello"}
-                ),
-            ):
-                # Call the endpoint function directly
-                await embeddings(
-                    request=mock_request,
-                    fastapi_response=MagicMock(spec=Response),
-                    user_api_key_dict=mock_user_auth,
-                )
 
-                # Check if ProxyBaseLLMRequestProcessing was initialized with the correct metadata
-                mock_base_process_init.assert_called_once()
-                call_args = mock_base_process_init.call_args
-                # handle both positional and keyword args for data
-                if "data" in call_args.kwargs:
-                    data_arg = call_args.kwargs["data"]
-                else:
-                    data_arg = call_args.args[0]
-
-                assert (
-                    data_arg["metadata"]["user_api_key_user_id"] == "test_user_id_emb"
-                )
-                assert (
-                    data_arg["metadata"]["user_api_key_team_id"] == "test_team_id_emb"
-                )
-                assert data_arg["metadata"]["user_api_key_org_id"] == "test_org_id_emb"
+            assert (
+                captured_data["metadata"]["user_api_key_user_id"]
+                == "test_user_id_emb"
+            )
+            assert (
+                captured_data["metadata"]["user_api_key_team_id"]
+                == "test_team_id_emb"
+            )
+            assert captured_data["metadata"]["user_api_key_org_id"] == "test_org_id_emb"
 
 
 @pytest.mark.asyncio
