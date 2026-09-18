@@ -4,6 +4,7 @@ Utilities for mapping exceptions to Anthropic error format.
 Similar to litellm/litellm_core_utils/exception_mapping_utils.py but for Anthropic response format.
 """
 
+import json
 from typing import Final
 
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -166,3 +167,16 @@ class AnthropicExceptionMapping:
             message=message,
             request_id=request_id,
         )
+
+
+def anthropic_error_sse_frame(status_code: int, raw_message: str) -> str:
+    """One `event: error` frame, for a stream that fails once the response headers are out.
+
+    Anthropic clients pick stream events by the `event:` name, so a frame carrying only a `data:`
+    line is skipped and the failure never reaches the caller
+    """
+    error_response: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
+        status_code=status_code,
+        raw_message=raw_message,
+    )
+    return f"event: error\ndata: {json.dumps(error_response)}\n\n"

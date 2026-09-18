@@ -9364,9 +9364,10 @@ class TestAnthropicMessagesStreamErrorFrame:
         "status_code, expected_error_type",
         [
             (429, "rate_limit_error"),
-            (503, "overloaded_error"),
+            (529, "overloaded_error"),
+            (413, "request_too_large"),
             (500, "api_error"),
-            (529, "api_error"),
+            (502, "api_error"),
             (400, "invalid_request_error"),
         ],
     )

@@ -31,6 +31,7 @@ from starlette.types import Receive, Scope, Send
 import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.anthropic_interface.exceptions import anthropic_error_sse_frame
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -71,7 +72,6 @@ from litellm.proxy.auth.auth_checks import (
     tag_max_budget_check_for_tags,
 )
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe, get_request_route
-from litellm.proxy.common_utils.anthropic_error_payload import anthropic_error_sse_frame
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
@@ -3911,8 +3911,8 @@ class ProxyBaseLLMRequestProcessing:
             proxy_logging_obj=proxy_logging_obj,
             serialize_chunk=ProxyBaseLLMRequestProcessing._sse_chunk_serializer(restamper),
             serialize_error=lambda proxy_exc: anthropic_error_sse_frame(
-                message=proxy_exc.message,
                 status_code=error_status_code(proxy_exc, status.HTTP_500_INTERNAL_SERVER_ERROR),
+                raw_message=proxy_exc.message,
             ),
             request=request,
             flush_tail=None if restamper is None else restamper.flush,
