@@ -1447,27 +1447,6 @@ class TestConfigRepository:
         client = MockPrismaClient()
         return ConfigRepository(client)
 
-    def test_deep_merge_dicts_db_wins(self, repo):
-        dst = {"a": 1, "b": {"c": 2}}
-        src = {"a": 10, "b": {"d": 3}}
-        repo._deep_merge_dicts(dst, src)
-        assert dst["a"] == 10
-        assert dst["b"]["c"] == 2
-        assert dst["b"]["d"] == 3
-
-    def test_deep_merge_dicts_skips_none(self, repo):
-        dst = {"a": 1}
-        src = {"a": None, "b": 2}
-        repo._deep_merge_dicts(dst, src)
-        assert dst["a"] == 1
-        assert dst["b"] == 2
-
-    def test_deep_merge_dicts_skips_empty_list(self, repo):
-        dst = {"models": ["gpt-4"]}
-        src = {"models": []}
-        repo._deep_merge_dicts(dst, src)
-        assert dst["models"] == ["gpt-4"]
-
     @pytest.mark.asyncio
     async def test_get_param(self, repo):
         repo._prisma_client.db.litellm_config._records["general_settings"] = {
@@ -1511,99 +1490,6 @@ class TestConfigRepository:
         }
         params = await repo.get_all_params()
         assert len(params) == 2
-
-    @pytest.mark.asyncio
-    async def test_reconcile_config_skips_when_store_model_false(self, repo):
-        yaml_config = {"general_settings": {"key": "value"}}
-        result = await repo.reconcile_config(yaml_config, store_model_in_db=False)
-        assert result == yaml_config
-
-    @pytest.mark.asyncio
-    async def test_prefetch_params(self, repo):
-        repo._prisma_client.db.litellm_config._records["general_settings"] = {
-            "param_name": "general_settings",
-            "param_value": "{}",
-        }
-        await repo.prefetch_params(["general_settings"])
-
-    @pytest.mark.asyncio
-    async def test_reconcile_config_with_db_values(self, repo):
-        repo._prisma_client.db.litellm_config._records["general_settings"] = {
-            "param_name": "general_settings",
-            "param_value": '{"master_key": "db-key", "db_only": "from_db"}',
-        }
-        repo._prisma_client.db.litellm_config._records["router_settings"] = {
-            "param_name": "router_settings",
-            "param_value": '{"timeout": 60}',
-        }
-        yaml_config = {
-            "general_settings": {"master_key": "yaml-key", "yaml_only": "from_yaml"},
-        }
-        result = await repo.reconcile_config(yaml_config, store_model_in_db=True)
-        assert result["general_settings"]["master_key"] == "db-key"
-        assert result["general_settings"]["yaml_only"] == "from_yaml"
-        assert result["general_settings"]["db_only"] == "from_db"
-        assert result["router_settings"]["timeout"] == 60
-
-    @pytest.mark.asyncio
-    @patch("litellm.repositories.config_repository.decrypt_value_helper")
-    async def test_reconcile_config_with_environment_variables(
-        self, mock_decrypt, repo
-    ):
-        mock_decrypt.side_effect = lambda value, **kw: f"decrypted_{value}"
-        repo._prisma_client.db.litellm_config._records["environment_variables"] = {
-            "param_name": "environment_variables",
-            "param_value": '{"api_key": "encrypted_key", "secret": "encrypted_secret"}',
-        }
-        yaml_config = {}
-        result = await repo.reconcile_config(yaml_config, store_model_in_db=True)
-        assert "environment_variables" in result
-        assert "api_key" in result["environment_variables"]
-        assert "API_KEY" in result["environment_variables"]
-
-    @pytest.mark.asyncio
-    async def test_reconcile_config_none_values_preserved(self, repo):
-        repo._prisma_client.db.litellm_config._records["general_settings"] = {
-            "param_name": "general_settings",
-            "param_value": '{"new_key": "value", "null_key": null}',
-        }
-        yaml_config = {"general_settings": {"existing": "keep"}}
-        result = await repo.reconcile_config(yaml_config, store_model_in_db=True)
-        assert result["general_settings"]["existing"] == "keep"
-        assert result["general_settings"]["new_key"] == "value"
-
-    def test_update_config_fields_non_dict(self, repo):
-        config = {"litellm_settings": "old_value"}
-        result = repo._update_config_fields(
-            current_config=config,
-            param_name="litellm_settings",
-            db_param_value="new_value",
-        )
-        assert result["litellm_settings"] == "new_value"
-
-    def test_update_config_fields_new_param(self, repo):
-        config = {}
-        result = repo._update_config_fields(
-            current_config=config,
-            param_name="router_settings",
-            db_param_value={"timeout": 30},
-        )
-        assert result["router_settings"] == {"timeout": 30}
-
-    @patch("litellm.repositories.config_repository.decrypt_value_helper")
-    def test_decrypt_env_variables_non_string(self, mock_decrypt, repo):
-        mock_decrypt.side_effect = lambda value, **kw: value
-        env_vars = {"string_val": "encrypted", "int_val": 123, "bool_val": True}
-        result = repo._decrypt_env_variables(env_vars)
-        assert result["int_val"] == "123"
-        assert result["bool_val"] == "True"
-
-    @patch("litellm.repositories.config_repository.decrypt_value_helper")
-    def test_decrypt_env_variables_none_value(self, mock_decrypt, repo):
-        mock_decrypt.return_value = None
-        env_vars = {"key": "value"}
-        result = repo._decrypt_env_variables(env_vars)
-        assert "key" not in result
 
 
 class TestVerificationTokenRepositoryExtended:
@@ -2211,48 +2097,6 @@ class TestTeamRepositoryArchiveData:
         assert "model_spend" in archive_data
         assert "model_max_budget" in archive_data
         assert "router_settings" in archive_data
-
-
-class TestConfigRepositoryDeepCopy:
-    @pytest.fixture
-    def repo(self):
-        client = MockPrismaClient()
-        return ConfigRepository(client)
-
-    @pytest.mark.asyncio
-    async def test_reconcile_config_does_not_mutate_original(self, repo):
-        import copy
-
-        repo._prisma_client.db.litellm_config._records["general_settings"] = {
-            "param_name": "general_settings",
-            "param_value": '{"db_key": "db_value", "nested": {"db_nested": "from_db"}}',
-        }
-        original_config = {
-            "general_settings": {
-                "yaml_key": "yaml_value",
-                "nested": {"yaml_nested": "from_yaml"},
-            }
-        }
-        original_copy = copy.deepcopy(original_config)
-        result = await repo.reconcile_config(original_config, store_model_in_db=True)
-        assert original_config == original_copy
-        assert result["general_settings"]["db_key"] == "db_value"
-        assert result["general_settings"]["yaml_key"] == "yaml_value"
-        assert result["general_settings"]["nested"]["db_nested"] == "from_db"
-        assert result["general_settings"]["nested"]["yaml_nested"] == "from_yaml"
-
-    @pytest.mark.asyncio
-    async def test_reconcile_config_repeated_calls_independent(self, repo):
-        repo._prisma_client.db.litellm_config._records["general_settings"] = {
-            "param_name": "general_settings",
-            "param_value": '{"db_key": "db_value"}',
-        }
-        yaml_config = {"general_settings": {"yaml_key": "yaml_value"}}
-        result1 = await repo.reconcile_config(yaml_config, store_model_in_db=True)
-        result1["general_settings"]["modified"] = "in_result1"
-        result2 = await repo.reconcile_config(yaml_config, store_model_in_db=True)
-        assert "modified" not in yaml_config.get("general_settings", {})
-        assert "modified" not in result2.get("general_settings", {})
 
 
 class TestPrismaTableRepository:

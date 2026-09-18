@@ -22,6 +22,8 @@ model LiteLLM_BudgetTable {
   budget_duration String?
   budget_reset_at DateTime?
   allowed_models String[] @default([]) // per-member model scope; empty = inherit team models
+  temp_budget_increase Float?
+  temp_budget_expiry DateTime?
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")

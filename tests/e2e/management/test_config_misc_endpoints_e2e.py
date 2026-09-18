@@ -24,10 +24,10 @@ from collections.abc import Callable
 from typing import Final
 
 import pytest
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, RootModel
 
 from e2e_config import unique_marker
-from e2e_http import NoBody, Success, UnknownApiError, unwrap, unwrap_status
+from e2e_http import NoBody, Success, unwrap, unwrap_status
 from lifecycle import ResourceManager
 from management_client import ManagementClient
 from models import KeyGenerateBody, LiteLLMParamsBody, TeamNewBody
@@ -210,6 +210,24 @@ class ConfigFieldInfoParams(BaseModel):
 class ConfigFieldInfoResponse(BaseModel):
     field_name: str
     field_value: JsonValue
+    source: str
+    editable: bool
+
+
+class ConfigListParams(BaseModel):
+    config_type: str
+
+
+class ConfigListEntry(BaseModel):
+    field_name: str
+    field_value: JsonValue
+    stored_in_db: bool | None
+    source: str
+    editable: bool
+
+
+class ConfigListResponse(RootModel[list[ConfigListEntry]]):
+    pass
 
 
 class RouterCurrentValues(BaseModel):
@@ -556,17 +574,30 @@ class TestConfigPersistence:
         )
         assert added.message == f"IP {allowed_ip} address added successfully"
 
-        field_info: Final = client.proxy.transport.get(
-            "/config/field/info",
-            headers=client.proxy.transport.master,
-            params=ConfigFieldInfoParams(field_name="max_parallel_requests"),
-            response_type=ConfigFieldInfoResponse,
+        listed: Final = unwrap(
+            client.proxy.transport.get(
+                "/config/list",
+                headers=client.proxy.transport.master,
+                params=ConfigListParams(config_type="general_settings"),
+                response_type=ConfigListResponse,
+            )
         )
-        match field_info:
-            case UnknownApiError(status_code=400, body=body):
-                assert "not in DB" in body
-            case _:
-                pytest.fail(f"expected max_parallel_requests to remain absent from the DB row, got {field_info}")
+        unrelated: Final = next(entry for entry in listed.root if entry.field_name == "max_parallel_requests")
+        assert unrelated.stored_in_db is not True
+        assert unrelated.source == "config"
+        assert unrelated.editable is False
+
+        field_info: Final = unwrap(
+            client.proxy.transport.get(
+                "/config/field/info",
+                headers=client.proxy.transport.master,
+                params=ConfigFieldInfoParams(field_name="max_parallel_requests"),
+                response_type=ConfigFieldInfoResponse,
+            )
+        )
+        assert field_info.source == "config"
+        assert field_info.editable is False
+        assert field_info.field_value == unrelated.field_value
 
 
 class TestMcpServerSubmission:

@@ -22,6 +22,7 @@ import {
   isComplexityRouter as isComplexityRouterParams,
 } from "./add_model/auto_router_strategies";
 import { canEditAutoRouter, canModifyModel } from "@/utils/modelPermissions";
+import { teamsUserCanAssign } from "@/utils/roles";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
@@ -40,6 +41,7 @@ import {
   testConnectionRequest,
 } from "./networking";
 import { Logo } from "@/components/molecules/logo/Logo";
+import { ModelPricingSummary } from "@/components/molecules/models/ModelPricingSummary";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import ModelInfoEditForm, { type ModelEditFormValues, type TouchedPricingField } from "./ModelInfoEditForm";
 import { Tag } from "./tag_management/types";
@@ -114,7 +116,9 @@ export default function ModelInfoView({
   // Keep modelData variable name for backwards compatibility
   const modelData = transformedModelData;
 
-  const teamAlias = teams?.find((team) => team.team_id === modelData?.model_info?.team_id)?.team_alias || null;
+  const aliasForTeam = (teamId: string | null | undefined): string | null =>
+    teams?.find((team) => team.team_id === teamId)?.team_alias || null;
+  const teamAlias = aliasForTeam(modelData?.model_info?.team_id);
   const rawModelInfoEntries = Object.entries(modelData?.model_info ?? {}).flatMap((entry) =>
     entry[0] === "team_id" && teamAlias ? [entry, ["team_alias", teamAlias]] : [entry],
   );
@@ -130,6 +134,7 @@ export default function ModelInfoView({
   };
   const canEditModel = canModifyModel(actor, teams ?? null, origin);
   const canEditRouter = canEditAutoRouter(actor, teams ?? null, origin);
+  const assignableTeams = useMemo(() => teamsUserCanAssign(teams ?? null, userRole, userID), [teams, userRole, userID]);
   // Editor-aware on purpose: an adaptive or quality router must not offer Edit Auto Router.
   const isAutoRouterModel = hasAutoRouterEditor(modelData?.litellm_params);
   // Broader than the editor check: adaptive and quality routers equally have no upstream
@@ -364,7 +369,7 @@ export default function ModelInfoView({
       // Parse the model_info from the form values
       let updatedModelInfo;
       try {
-        updatedModelInfo = values.model_info ? JSON.parse(values.model_info) : modelData.model_info;
+        updatedModelInfo = values.model_info ? JSON.parse(values.model_info) : modelData?.model_info;
         // Update access_groups from the form
         if (values.model_access_group) {
           updatedModelInfo = {
@@ -379,6 +384,7 @@ export default function ModelInfoView({
             health_check_model: values.health_check_model,
           };
         }
+        if (values.team_id) updatedModelInfo = { ...updatedModelInfo, team_id: values.team_id };
         updatedModelInfo = applyPtuModelInfo(updatedModelInfo, values, ptuCostAttributionEnabled);
       } catch (e) {
         toast.fromError("Invalid JSON in Model Info");
@@ -657,10 +663,7 @@ export default function ModelInfoView({
               </Card>
               <Card className="block p-6">
                 <p className="text-sm">Pricing</p>
-                <div className="mt-2">
-                  <p className="text-sm">Input: ${modelData.input_cost}/1M tokens</p>
-                  <p className="text-sm">Output: ${modelData.output_cost}/1M tokens</p>
-                </div>
+                <ModelPricingSummary model={modelData} />
               </Card>
             </div>
 
@@ -724,7 +727,7 @@ export default function ModelInfoView({
                 <ModelInfoEditForm
                   localModelData={localModelData}
                   modelData={modelData}
-                  teamAlias={teamAlias}
+                  teamAlias={aliasForTeam(localModelData.model_info?.team_id)}
                   accessToken={accessToken}
                   isEditing={isEditing}
                   isSaving={isSaving}
@@ -739,6 +742,7 @@ export default function ModelInfoView({
                   tagsList={tagsList}
                   credentialsList={credentialsList}
                   healthCheckModelOptions={healthCheckModelOptions}
+                  teams={assignableTeams}
                 />
               ) : (
                 <p className="text-sm">Loading...</p>

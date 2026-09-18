@@ -208,6 +208,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/nvidia_nim/",
             "/openai/",
             "/openai_passthrough/",
+            "/transcribe",
             "/typesafe/",
             "/vertex-ai/",
             "/vertex_ai/",

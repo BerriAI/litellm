@@ -3384,12 +3384,14 @@ def test_get_file_content_provider_only_resolves_named_vertex_credentials(
 
     async def _mock_afile_content(**kwargs):
         captured_kwargs.update(kwargs)
-        return HttpxBinaryResponseContent(
-            response=httpx.Response(
-                status_code=200,
-                content=b"vertex-bytes",
-                headers={"content-type": "application/octet-stream"},
-            )
+
+        async def _stream():
+            yield b"vertex-"
+            yield b"bytes"
+
+        return FileContentStreamingResult(
+            stream_iterator=_stream(),
+            headers={"content-type": "application/octet-stream"},
         )
 
     monkeypatch.setattr(litellm, "afile_content", _mock_afile_content)
@@ -3414,6 +3416,7 @@ def test_get_file_content_provider_only_resolves_named_vertex_credentials(
     assert response.status_code == 200, response.text
     assert response.content == b"vertex-bytes"
     assert captured_kwargs.get("file_id") == "file-abc123"
+    assert captured_kwargs.get("stream") is True
     _assert_vertex_named_credentials_attached(captured_kwargs)
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
 
