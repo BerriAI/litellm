@@ -57,9 +57,6 @@ class TestExtractImageGenerationOutputItems:
 
     def test_extracts_images_correctly(self):
         """Should extract OutputImageGenerationCall objects from images"""
-        mock_response = Mock(spec=ModelResponse)
-        mock_response.id = "test_123"
-
         mock_message = Mock(spec=Message)
         mock_message.images = [
             {
@@ -80,7 +77,6 @@ class TestExtractImageGenerationOutputItems:
 
         result = (
             LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-                chat_completion_response=mock_response,
                 choice=mock_choice,
             )
         )
@@ -89,13 +85,13 @@ class TestExtractImageGenerationOutputItems:
         assert result[0].type == "image_generation_call"
         assert result[0].result == "IMG1"
         assert result[1].result == "IMG2"
-        assert result[0].id == "test_123_img_0"
-        assert result[1].id == "test_123_img_1"
+        assert result[0].id.startswith("ig_")
+        assert result[1].id.startswith("ig_")
+        assert result[0].id != result[1].id
         assert result[0].status == "completed"
 
     def test_returns_empty_for_no_images(self):
         """Should return empty list if no images"""
-        mock_response = Mock(spec=ModelResponse)
         mock_message = Mock(spec=Message)
         mock_message.images = []
 
@@ -105,7 +101,6 @@ class TestExtractImageGenerationOutputItems:
 
         result = (
             LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-                chat_completion_response=mock_response,
                 choice=mock_choice,
             )
         )
@@ -114,9 +109,6 @@ class TestExtractImageGenerationOutputItems:
 
     def test_maps_finish_reason_to_status(self):
         """Should correctly map finish_reason to status"""
-        mock_response = Mock(spec=ModelResponse)
-        mock_response.id = "test_finish"
-
         mock_message = Mock(spec=Message)
         mock_message.images = [
             {
@@ -132,7 +124,6 @@ class TestExtractImageGenerationOutputItems:
 
         result = (
             LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-                chat_completion_response=mock_response,
                 choice=mock_choice,
             )
         )
@@ -198,3 +189,40 @@ class TestExtractMessageOutputItemsIntegration:
         assert len(result) == 1
         assert isinstance(result[0], GenericResponseOutputItem)
         assert result[0].type == "message"
+
+
+class TestImageGenerationOutputItemIds:
+    """Image generation call IDs must use the ig_ prefix (issue #27333).
+
+    Native OpenAI Responses validates the prefix before it looks the item up, so a
+    replayed chatcmpl-*_img_N ID is rejected outright.
+    """
+
+    def _choice_with_images(self, count):
+        mock_message = Mock(spec=Message)
+        mock_message.images = [
+            {"image_url": {"url": f"data:image/png;base64,IMG{idx}"}}
+            for idx in range(count)
+        ]
+        mock_choice = Mock(spec=Choices)
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+        return mock_choice
+
+    def test_image_generation_item_id_uses_ig_prefix(self):
+        result = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
+            choice=self._choice_with_images(2),
+        )
+
+        assert len(result) == 2
+        for item in result:
+            assert item.id.startswith("ig_")
+            assert "chatcmpl-" not in item.id
+            assert "_img_" not in item.id
+
+    def test_image_generation_item_ids_are_unique(self):
+        result = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
+            choice=self._choice_with_images(3),
+        )
+
+        assert len({item.id for item in result}) == 3

@@ -3,7 +3,8 @@ Helper util for handling openai-specific cost calculation
 - e.g.: prompt caching
 """
 
-from typing import Any, Literal, Mapping, Optional, Tuple
+from collections.abc import Mapping
+from typing import Any, Final, Literal
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
@@ -21,9 +22,9 @@ def cost_router(call_type: CallTypes) -> Literal["cost_per_token", "cost_per_sec
 def cost_per_token(
     model: str,
     usage: Usage,
-    service_tier: Optional[str] = None,
-    data_residency: Optional[str] = None,
-) -> Tuple[float, float]:
+    service_tier: str | None = None,
+    data_residency: str | None = None,
+) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -37,7 +38,6 @@ def cost_per_token(
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    ## CALCULATE INPUT COST
     return generic_cost_per_token(
         model=model,
         usage=usage,
@@ -45,52 +45,9 @@ def cost_per_token(
         service_tier=service_tier,
         data_residency=data_residency,
     )
-    # ### Non-cached text tokens
-    # non_cached_text_tokens = usage.prompt_tokens
-    # cached_tokens: Optional[int] = None
-    # if usage.prompt_tokens_details and usage.prompt_tokens_details.cached_tokens:
-    #     cached_tokens = usage.prompt_tokens_details.cached_tokens
-    #     non_cached_text_tokens = non_cached_text_tokens - cached_tokens
-    # prompt_cost: float = non_cached_text_tokens * model_info["input_cost_per_token"]
-    # ## Prompt Caching cost calculation
-    # if model_info.get("cache_read_input_token_cost") is not None and cached_tokens:
-    #     # Note: We read ._cache_read_input_tokens from the Usage - since cost_calculator.py standardizes the cache read tokens on usage._cache_read_input_tokens
-    #     prompt_cost += cached_tokens * (
-    #         model_info.get("cache_read_input_token_cost", 0) or 0
-    #     )
-
-    # _audio_tokens: Optional[int] = (
-    #     usage.prompt_tokens_details.audio_tokens
-    #     if usage.prompt_tokens_details is not None
-    #     else None
-    # )
-    # _audio_cost_per_token: Optional[float] = model_info.get(
-    #     "input_cost_per_audio_token"
-    # )
-    # if _audio_tokens is not None and _audio_cost_per_token is not None:
-    #     audio_cost: float = _audio_tokens * _audio_cost_per_token
-    #     prompt_cost += audio_cost
-
-    # ## CALCULATE OUTPUT COST
-    # completion_cost: float = (
-    #     usage["completion_tokens"] * model_info["output_cost_per_token"]
-    # )
-    # _output_cost_per_audio_token: Optional[float] = model_info.get(
-    #     "output_cost_per_audio_token"
-    # )
-    # _output_audio_tokens: Optional[int] = (
-    #     usage.completion_tokens_details.audio_tokens
-    #     if usage.completion_tokens_details is not None
-    #     else None
-    # )
-    # if _output_cost_per_audio_token is not None and _output_audio_tokens is not None:
-    #     audio_cost = _output_audio_tokens * _output_cost_per_audio_token
-    #     completion_cost += audio_cost
-
-    # return prompt_cost, completion_cost
 
 
-def cost_per_second(model: str, custom_llm_provider: Optional[str], duration: float = 0.0) -> Tuple[float, float]:
+def cost_per_second(model: str, custom_llm_provider: str | None, duration: float = 0.0) -> tuple[float, float]:
     """
     Calculates the cost per second for a given model, prompt tokens, and completion tokens.
 
@@ -104,19 +61,26 @@ def cost_per_second(model: str, custom_llm_provider: Optional[str], duration: fl
     """
 
     ## GET MODEL INFO
-    model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider or "openai")
+    model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider or "openai")
     prompt_cost = 0.0
     completion_cost = 0.0
     ## Speech / Audio cost calculation
-    if "output_cost_per_second" in model_info and model_info["output_cost_per_second"] is not None:
+    output_cost_per_second: Final = model_info.get("output_cost_per_second")
+    if output_cost_per_second is not None and output_cost_per_second > 0:
         verbose_logger.debug(
-            f"For model={model} - output_cost_per_second: {model_info.get('output_cost_per_second')}; duration: {duration}"
+            "For model=%s - output_cost_per_second: %s; duration: %s",
+            model,
+            output_cost_per_second,
+            duration,
         )
         ## COST PER SECOND ##
-        completion_cost = model_info["output_cost_per_second"] * duration
+        completion_cost = output_cost_per_second * duration
     elif "input_cost_per_second" in model_info and model_info["input_cost_per_second"] is not None:
         verbose_logger.debug(
-            f"For model={model} - input_cost_per_second: {model_info.get('input_cost_per_second')}; duration: {duration}"
+            "For model=%s - input_cost_per_second: %s; duration: %s",
+            model,
+            model_info.get("input_cost_per_second"),
+            duration,
         )
         ## COST PER SECOND ##
         prompt_cost = model_info["input_cost_per_second"] * duration
@@ -125,19 +89,12 @@ def cost_per_second(model: str, custom_llm_provider: Optional[str], duration: fl
     return prompt_cost, completion_cost
 
 
-def _video_resolution_to_cost_field_suffix(resolution: str) -> Optional[str]:
-    """
-    Map usage resolution to a safe suffix for ``output_cost_per_second_<suffix>`` keys.
-
-    Note: Currently only ``output_cost_per_second_1080p`` is explicitly declared in
-    ModelInfo (types/utils.py). Other resolution tiers (e.g., 720p, 4k) can be added
-    to model_prices_and_context_window.json but are not exposed via get_model_info()
-    until added to the ModelInfo TypedDict.
-    """
-    r = resolution.strip().lower()
+def _video_resolution_to_cost_field_suffix(resolution: str) -> str | None:
+    """Map usage resolution to a safe suffix for ``output_cost_per_second_<suffix>`` keys."""
+    r: Final = resolution.strip().lower()
     if not r:
         return None
-    safe = "".join(c for c in r if c.isalnum() or c == "_")
+    safe: Final = "".join(c for c in r if c.isalnum() or c == "_")
     if not safe or len(safe) > 24:
         return None
     return safe
@@ -145,8 +102,8 @@ def _video_resolution_to_cost_field_suffix(resolution: str) -> Optional[str]:
 
 def _video_output_cost_per_second(
     model_info: Mapping[str, Any],
-    video_resolution: Optional[str],
-) -> Optional[float]:
+    video_resolution: str | None,
+) -> float | None:
     """
     Per-second video output rate from model_info.
 
@@ -154,15 +111,15 @@ def _video_output_cost_per_second(
     ``output_cost_per_second_<resolution>`` first (e.g. ``output_cost_per_second_1080p``),
     then falls back to ``output_cost_per_second``.
     """
-    r = (video_resolution or "").strip().lower()
+    r: Final = (video_resolution or "").strip().lower()
     if r:
-        suffix = _video_resolution_to_cost_field_suffix(r)
+        suffix: Final = _video_resolution_to_cost_field_suffix(r)
         if suffix is not None:
-            tier_key = f"output_cost_per_second_{suffix}"
-            tier_rate = model_info.get(tier_key)
+            tier_key: Final = f"output_cost_per_second_{suffix}"
+            tier_rate: Final = model_info.get(tier_key)
             if tier_rate is not None:
                 return float(tier_rate)
-    out = model_info.get("output_cost_per_second")
+    out: Final = model_info.get("output_cost_per_second")
     if out is not None:
         return float(out)
     return None
@@ -171,9 +128,9 @@ def _video_output_cost_per_second(
 def video_generation_cost(
     model: str,
     duration_seconds: float,
-    custom_llm_provider: Optional[str] = None,
-    model_info: Optional[ModelInfo] = None,
-    video_resolution: Optional[str] = None,
+    custom_llm_provider: str | None = None,
+    model_info: ModelInfo | None = None,
+    video_resolution: str | None = None,
 ) -> float:
     """
     Calculates the cost for video generation based on duration in seconds.
@@ -195,22 +152,26 @@ def video_generation_cost(
         model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider or "openai")
 
     # Check for video-specific cost per second
-    video_cost_per_second = model_info.get("output_cost_per_video_per_second")
+    video_cost_per_second: Final = model_info.get("output_cost_per_video_per_second")
     if video_cost_per_second is not None:
         verbose_logger.debug(
-            f"For model={model} - output_cost_per_video_per_second: {video_cost_per_second}; duration: {duration_seconds}"
+            "For model=%s - output_cost_per_video_per_second: %s; duration: %s",
+            model,
+            video_cost_per_second,
+            duration_seconds,
         )
         return video_cost_per_second * duration_seconds
 
-    output_cost_per_second = _video_output_cost_per_second(model_info, video_resolution)
+    output_cost_per_second: Final = _video_output_cost_per_second(model_info, video_resolution)
     if output_cost_per_second is not None:
         verbose_logger.debug(
-            f"For model={model} - output_cost_per_second: {output_cost_per_second}; duration: {duration_seconds}"
+            "For model=%s - output_cost_per_second: %s; duration: %s", model, output_cost_per_second, duration_seconds
         )
         return output_cost_per_second * duration_seconds
 
     # If no cost information found, return 0
     verbose_logger.warning(
-        f"No cost information found for video model {model}. Please add pricing to model_prices_and_context_window.json"
+        "No cost information found for video model %s. Please add pricing to model_prices_and_context_window.json",
+        model,
     )
     return 0.0

@@ -9,6 +9,7 @@ rows instead of the internal routing key `model_name_{team_id}_{uuid}`.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,11 +20,15 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslator
+from litellm.proxy.common_utils.model_listing_utils import (
+    TeamModelNameTranslator,
+    configured_display_names,
+)
 from litellm.proxy.proxy_server import (
     _get_proxy_model_info,
     _translate_model_name_for_response,
 )
+from litellm.types.router import DeploymentModelListingInfo
 
 
 def _team_row() -> dict:
@@ -155,6 +160,59 @@ async def test_model_info_v2_translates_team_model_name(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_model_info_v2_exact_model_filter_matches_team_public_name(monkeypatch):
+    """`/v2/model/info?model=<public name>` must keep the team-scoped row whose
+    `model_name` is the internal routing key: the dashboard links team model
+    chips with the public name, and the exact filter ran before translation."""
+    global_row = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {"id": "normal-id-1", "db_model": False},
+    }
+    router = MagicMock()
+    router.model_list = [_team_row(), global_row]
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(ps.proxy_config, "get_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        ps,
+        "_apply_search_filter_to_models",
+        AsyncMock(side_effect=lambda all_models, **kw: (all_models, len(all_models))),
+    )
+    monkeypatch.setattr(
+        ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
+    )
+    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
+
+    monkeypatch.setattr(
+        mlh,
+        "append_agents_to_model_info",
+        AsyncMock(side_effect=lambda models, **kw: models),
+    )
+
+    admin = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+    resp = await ps.model_info_v2(
+        user_api_key_dict=admin,
+        model="team-claude-sonnet",
+        user_models_only=False,
+        include_team_models=False,
+        debug=False,
+        page=1,
+        size=50,
+        search=None,
+        modelId=None,
+        teamId=None,
+        sortBy=None,
+        sortOrder="asc",
+    )
+
+    assert [m["model_name"] for m in resp["data"]] == ["team-claude-sonnet"]
+    assert resp["total_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_model_info_v1_list_path_translates_team_model_name(monkeypatch):
     """/v1/model/info list path (no litellm_model_id) must include team-scoped
     deployments from the router model list and surface the public name (#28382)."""
@@ -181,7 +239,7 @@ async def test_model_info_v1_list_path_translates_team_model_name(monkeypatch):
     )
     resp = await ps.model_info_v1(user_api_key_dict=admin, litellm_model_id=None)
 
-    names = [m["model_name"] for m in resp["data"]]
+    names = [m["model_name"] for m in json.loads(resp.body)["data"]]
     assert "team-claude-sonnet" in names
     assert "model_name_team-abc-123_4a6b8" not in names
 
@@ -214,7 +272,7 @@ async def test_model_info_v1_unrestricted_key_returns_all_deployments(monkeypatc
     )
     resp = await ps.model_info_v1(user_api_key_dict=caller, litellm_model_id=None)
 
-    assert [m["model_name"] for m in resp["data"]] == ["gpt-4"]
+    assert [m["model_name"] for m in json.loads(resp.body)["data"]] == ["gpt-4"]
 
 
 @pytest.mark.asyncio
@@ -246,7 +304,7 @@ async def test_model_info_v1_restricted_key_filters_deployments(monkeypatch):
     )
     resp = await ps.model_info_v1(user_api_key_dict=caller, litellm_model_id=None)
 
-    assert [m["model_name"] for m in resp["data"]] == ["gpt-4"]
+    assert [m["model_name"] for m in json.loads(resp.body)["data"]] == ["gpt-4"]
 
 
 def _other_team_row() -> dict:
@@ -310,10 +368,11 @@ async def test_model_info_v1_unrestricted_key_hides_other_team_byok(monkeypatch)
     )
     resp = await ps.model_info_v1(user_api_key_dict=caller, litellm_model_id=None)
 
-    returned_ids = {m["model_info"]["id"] for m in resp["data"]}
+    data = json.loads(resp.body)["data"]
+    returned_ids = {m["model_info"]["id"] for m in data}
     assert returned_ids == {"global-id-1", "byok-id-1"}
     assert "byok-id-other" not in returned_ids
-    names = [m["model_name"] for m in resp["data"]]
+    names = [m["model_name"] for m in data]
     assert "team-claude-sonnet" in names
     assert "gpt-4" in names
 
@@ -355,7 +414,7 @@ async def test_model_info_v1_service_key_hides_all_team_byok(monkeypatch):
     )
     resp = await ps.model_info_v1(user_api_key_dict=caller, litellm_model_id=None)
 
-    assert [m["model_info"]["id"] for m in resp["data"]] == ["global-id-1"]
+    assert [m["model_info"]["id"] for m in json.loads(resp.body)["data"]] == ["global-id-1"]
 
 
 @pytest.mark.asyncio
@@ -409,7 +468,7 @@ async def test_model_info_v1_team_key_sees_own_byok_regardless_of_user_lookup(
     )
     resp = await ps.model_info_v1(user_api_key_dict=caller, litellm_model_id=None)
 
-    assert [m["model_info"]["id"] for m in resp["data"]] == ["byok-id-1", "global-id-1"]
+    assert [m["model_info"]["id"] for m in json.loads(resp.body)["data"]] == ["byok-id-1", "global-id-1"]
 
 
 @pytest.mark.asyncio
@@ -452,7 +511,7 @@ async def test_model_info_v1_user_team_membership_grants_byok(monkeypatch):
     )
     resp = await ps.model_info_v1(user_api_key_dict=caller, litellm_model_id=None)
 
-    assert [m["model_info"]["id"] for m in resp["data"]] == [
+    assert [m["model_info"]["id"] for m in json.loads(resp.body)["data"]] == [
         "byok-id-other",
         "global-id-1",
     ]
@@ -500,7 +559,7 @@ async def test_model_info_v1_populates_access_via_team_ids(monkeypatch):
     )
     resp = await ps.model_info_v1(user_api_key_dict=admin, litellm_model_id=None)
 
-    by_id = {m["model_info"]["id"]: m for m in resp["data"]}
+    by_id = {m["model_info"]["id"]: m for m in json.loads(resp.body)["data"]}
     assert by_id["byok-id-1"]["model_info"]["access_via_team_ids"] == [team_id]
     assert by_id["byok-id-1"]["model_info"]["direct_access"] is False
     assert by_id["global-id-1"]["model_info"]["direct_access"] is True
@@ -536,6 +595,105 @@ async def test_populate_team_access_sets_direct_access_false_by_default(monkeypa
     by_id = {m["model_info"]["id"]: m for m in result}
     assert by_id["byok-id-1"]["model_info"]["direct_access"] is False
     assert by_id["global-id-1"]["model_info"]["direct_access"] is True
+
+
+@pytest.mark.asyncio
+async def test_populate_team_access_gives_view_only_admin_full_admin_scope(monkeypatch):
+    """proxy_admin_viewer reads with admin scope - every team ("*") plus direct access
+    to all non-team models - instead of being narrowed to its own user row."""
+    team_row = _team_row()
+    global_row = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {"id": "global-id-1", "db_model": False},
+    }
+    router = MagicMock()
+    router.get_model_ids.return_value = ["global-id-1"]
+
+    get_all_team_models = AsyncMock(return_value={"byok-id-1": ["team-abc-123"]})
+    monkeypatch.setattr(ps, "get_all_team_models", get_all_team_models)
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="viewer", teams=[], models=[])
+    )
+
+    viewer = UserAPIKeyAuth(
+        user_id="viewer",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        team_models=[],
+    )
+    result = await ps._populate_team_access_on_models(
+        user_api_key_dict=viewer,
+        prisma_client=prisma_client,
+        llm_router=router,
+        all_models=[team_row, global_row],
+    )
+
+    assert get_all_team_models.await_args.kwargs["user_teams"] == "*"
+    router.get_model_ids.assert_called_once_with(exclude_team_models=True)
+    prisma_client.db.litellm_usertable.find_unique.assert_not_awaited()
+
+    by_id = {m["model_info"]["id"]: m for m in result}
+    assert by_id["byok-id-1"]["model_info"]["access_via_team_ids"] == ["team-abc-123"]
+    assert by_id["global-id-1"]["model_info"]["direct_access"] is True
+
+
+@pytest.mark.asyncio
+async def test_populate_team_access_grants_config_access_group_model():
+    """LIT-4433: a team whose only model grant is a CONFIG-defined access group
+    (model_info.access_groups) must have that group's member deployments listed in
+    access_via_team_ids. Before the fix _add_team_models_to_all_models passed the
+    access-group name straight to get_model_list, which never matched, leaving the
+    team's /v2/model/info?include_team_models=true result empty."""
+    team_id = "team-access-group-only"
+    access_group_model = {
+        "model_name": "team-allowed-model-a",
+        "litellm_params": {"model": "gpt-4"},
+        "model_info": {
+            "id": "model-a-id",
+            "access_groups": ["test-access-group"],
+            "db_model": False,
+        },
+    }
+
+    router = MagicMock()
+    router.get_model_names.return_value = ["team-allowed-model-a"]
+    router.get_model_access_groups.return_value = {"test-access-group": ["team-allowed-model-a"]}
+    router.get_model_ids.return_value = []
+
+    def get_model_list(model_name=None, team_id=None):
+        if model_name == "team-allowed-model-a":
+            return [access_group_model]
+        return None
+
+    router.get_model_list.side_effect = get_model_list
+
+    team_db_object = MagicMock()
+    team_db_object.model_dump.return_value = {
+        "team_id": team_id,
+        "models": ["test-access-group"],
+        "access_group_ids": [],
+    }
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_db_object])
+
+    admin = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[])
+    result = await ps._populate_team_access_on_models(
+        user_api_key_dict=admin,
+        prisma_client=prisma_client,
+        llm_router=router,
+        all_models=[
+            {
+                "model_name": "team-allowed-model-a",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"id": "model-a-id", "access_groups": ["test-access-group"], "db_model": False},
+            }
+        ],
+    )
+
+    by_id = {m["model_info"]["id"]: m for m in result}
+    assert by_id["model-a-id"]["model_info"]["access_via_team_ids"] == [team_id]
 
 
 @pytest.mark.asyncio
@@ -660,7 +818,7 @@ async def test_model_info_v1_litellm_model_id_include_team_models_filters_inacce
         include_team_models=True,
     )
 
-    assert resp["data"] == []
+    assert json.loads(resp.body)["data"] == []
 
 
 @pytest.mark.asyncio
@@ -696,7 +854,7 @@ async def test_model_info_v1_litellm_model_id_team_id_applies_team_filter(monkey
         teamId="other-team",
     )
 
-    assert resp["data"] == []
+    assert json.loads(resp.body)["data"] == []
     team_filter.assert_awaited_once()
     assert team_filter.await_args.kwargs["team_id"] == "other-team"
     assert team_filter.await_args.kwargs["all_models"] == [team_row]
@@ -725,6 +883,7 @@ async def test_v1_models_translates_team_model_for_access_group_key(monkeypatch)
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
+    router.get_model_listing_info.return_value = None
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
 
@@ -766,6 +925,7 @@ async def test_v1_models_keeps_internal_names_when_public_name_flag_disabled(
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
+    router.get_model_listing_info.return_value = None
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
 
@@ -800,6 +960,7 @@ async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
+    router.get_model_listing_info.return_value = None
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
     router.get_model_group_info.return_value = None
@@ -845,6 +1006,7 @@ async def test_v1_models_metadata_fallbacks_use_internal_routing_key(monkeypatch
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
+    router.get_model_listing_info.return_value = None
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
     # Fallbacks are keyed on the internal routing name, as the router stores them.
@@ -901,6 +1063,7 @@ async def test_v1_models_metadata_does_not_leak_other_team_fallbacks(monkeypatch
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
+    router.get_model_listing_info.return_value = None
     router.model_list = [team_x, team_y]
     router.get_model_list.return_value = [team_x, team_y]
     router.fallbacks = [
@@ -925,6 +1088,101 @@ async def test_v1_models_metadata_does_not_leak_other_team_fallbacks(monkeypatch
             "created": 1677610602,
             "owned_by": "openai",
             "metadata": {"fallbacks": ["teamX-backup"]},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_v1_models_team_alias_inherits_token_limits_and_chat_mode(monkeypatch):
+    team_dep = {
+        "model_name": "model_name_teamX_terra_uuid",
+        "litellm_params": {"model": "azure/gpt-4.1"},
+        "model_info": {
+            "id": "id-terra",
+            "team_id": "teamX",
+            "team_public_model_name": "GPT Terra",
+            "access_groups": ["grp-a"],
+            "mode": "chat",
+            "max_input_tokens": 876000,
+            "max_output_tokens": 128000,
+        },
+    }
+    router = MagicMock()
+    router.get_model_names.return_value = ["model_name_teamX_terra_uuid"]
+    router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_terra_uuid"]}
+    router.get_fully_blocked_model_names.return_value = set()
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("azure/gpt-4.1",),
+        max_input_tokens=876000,
+        max_output_tokens=128000,
+    )
+    router.get_configured_mode.return_value = "chat"
+    router.model_list = [team_dep]
+    router.get_model_list.return_value = [team_dep]
+    router.get_model_group_info.return_value = None
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": True})
+
+    key = UserAPIKeyAuth(user_id="user", api_key="***", models=["grp-a"], team_models=[])
+    response = await ps.model_list(user_api_key_dict=key, include_metadata=True)
+
+    assert response["data"] == [
+        {
+            "id": "GPT Terra",
+            "object": "model",
+            "created": 1677610602,
+            "owned_by": "openai",
+            "mode": "chat",
+            "max_input_tokens": 876000,
+            "max_output_tokens": 128000,
+            "metadata": {"fallbacks": []},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_v1_models_team_image_alias_inherits_image_generation_mode(monkeypatch):
+    team_dep = {
+        "model_name": "model_name_teamX_image_uuid",
+        "litellm_params": {"model": "openai/gpt-image-1"},
+        "model_info": {
+            "id": "id-image",
+            "team_id": "teamX",
+            "team_public_model_name": "image",
+            "access_groups": ["grp-a"],
+            "mode": "image_generation",
+        },
+    }
+    router = MagicMock()
+    router.get_model_names.return_value = ["model_name_teamX_image_uuid"]
+    router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_image_uuid"]}
+    router.get_fully_blocked_model_names.return_value = set()
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("openai/gpt-image-1",),
+        max_input_tokens=None,
+        max_output_tokens=None,
+    )
+    router.get_configured_mode.return_value = "image_generation"
+    router.model_list = [team_dep]
+    router.get_model_list.return_value = [team_dep]
+    router.get_model_group_info.return_value = None
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": True})
+
+    key = UserAPIKeyAuth(user_id="user", api_key="***", models=["grp-a"], team_models=[])
+    response = await ps.model_list(user_api_key_dict=key)
+
+    assert response["data"] == [
+        {
+            "id": "image",
+            "object": "model",
+            "created": 1677610602,
+            "owned_by": "openai",
+            "mode": "image_generation",
         }
     ]
 
@@ -1155,6 +1413,7 @@ def test_translate_team_model_names_for_listing_respects_legacy_flag():
 def _public_named_router(*team_rows: dict) -> MagicMock:
     router = MagicMock()
     router.get_model_list.return_value = list(team_rows)
+    router.get_model_listing_info.return_value = None
     return router
 
 
@@ -1233,6 +1492,27 @@ def test_resolve_public_name_respects_legacy_flag():
     )
 
 
+def test_configured_display_names_keyed_by_response_id():
+    """The map is keyed by the public response id while the router lookup uses
+    the internal routing key, and entries without a configured name are omitted."""
+    router = MagicMock()
+    router.get_configured_display_name = MagicMock(
+        side_effect=lambda model_name: "Team Sonnet" if model_name == "model_name_team-abc-123_4a6b8" else None
+    )
+
+    assert configured_display_names(
+        entries=[
+            ("team-claude-sonnet", "model_name_team-abc-123_4a6b8"),
+            ("gpt-4o", "gpt-4o"),
+        ],
+        llm_router=router,
+    ) == {"team-claude-sonnet": "Team Sonnet"}
+
+
+def test_configured_display_names_empty_without_router():
+    assert configured_display_names(entries=[("gpt-4o", "gpt-4o")], llm_router=None) == {}
+
+
 @pytest.mark.asyncio
 async def test_retrieve_model_by_public_name_returns_200(monkeypatch):
     """Regression: `GET /v1/models/{public_name}` must NOT 404. The listing
@@ -1245,8 +1525,13 @@ async def test_retrieve_model_by_public_name_returns_200(monkeypatch):
     team_row = _team_row()
     router = _public_named_router(team_row)
     deployment = MagicMock()
-    deployment.litellm_params.model = "azure/gpt-5.2-low-rpm-testing"
+    deployment.litellm_params.model = "azure/gpt-4.1"
     router.get_deployment_by_model_group_name.return_value = deployment
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("azure/gpt-4.1",),
+        max_input_tokens=16384,
+        max_output_tokens=4096,
+    )
 
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "general_settings", {})
@@ -1263,6 +1548,9 @@ async def test_retrieve_model_by_public_name_returns_200(monkeypatch):
     resp = await ps.model_info(model_id="team-claude-sonnet", user_api_key_dict=key)
 
     assert resp["id"] == "team-claude-sonnet"
+    assert resp.get("mode") == "chat"
+    assert resp.get("max_input_tokens") == 16384
+    assert resp.get("max_output_tokens") == 4096
     # lookup happened by the internal routing key, not the public name
     router.get_deployment_by_model_group_name.assert_called_once_with(
         "model_name_team-abc-123_4a6b8"
@@ -1382,7 +1670,7 @@ def test_get_direct_access_models_expands_all_proxy_models_sentinel():
 
     result = ps.get_direct_access_models(user_db_object=user, llm_router=router)
 
-    assert result == ["global-id-1", "global-id-2"]
+    assert result == ("global-id-1", "global-id-2")
     router.get_model_ids.assert_called_once_with(exclude_team_models=True)
     router.get_model_list.assert_not_called()
 
@@ -1397,9 +1685,170 @@ def test_get_direct_access_models_resolves_explicit_model_names():
 
     result = ps.get_direct_access_models(user_db_object=user, llm_router=router)
 
-    assert result == ["gpt4o-id"]
+    assert result == ("gpt4o-id",)
     router.get_model_ids.assert_not_called()
     router.get_model_list.assert_called_once_with(model_name="gpt-4o")
+
+
+def test_get_direct_access_models_empty_models_grants_all_non_team_models():
+    """An empty user.models list means unrestricted access at call time
+    (can_user_call_model), so the listing must resolve it like 'all-proxy-models'
+    instead of returning nothing. Regression for a user with models=[] and no
+    teams seeing an empty Models+Endpoints page."""
+    router = MagicMock()
+    router.get_model_ids.return_value = ["global-id-1", "global-id-2"]
+
+    user = LiteLLM_UserTable(user_id="u", models=[], teams=[])
+
+    result = ps.get_direct_access_models(user_db_object=user, llm_router=router)
+
+    assert result == ("global-id-1", "global-id-2")
+    router.get_model_ids.assert_called_once_with(exclude_team_models=True)
+    router.get_model_list.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_populate_team_access_grants_empty_models_user_direct_access(monkeypatch):
+    """An internal user with models=[] and no teams can call every non-team model,
+    so the Models+Endpoints page must list them instead of rendering empty."""
+    global_row = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {"id": "global-id-1", "db_model": False},
+    }
+
+    router = MagicMock()
+    router.get_model_ids.return_value = ["global-id-1"]
+
+    user_row = LiteLLM_UserTable(
+        user_id="u",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        models=[],
+        teams=[],
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+
+    monkeypatch.setattr(ps, "get_all_team_models", AsyncMock(return_value={}))
+
+    caller = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.INTERNAL_USER, team_models=[])
+
+    populated = await ps._populate_team_access_on_models(
+        user_api_key_dict=caller,
+        prisma_client=prisma_client,
+        llm_router=router,
+        all_models=[global_row],
+    )
+    visible = ps._filter_models_to_user_accessible(populated)
+
+    assert [m["model_info"]["id"] for m in visible] == ["global-id-1"]
+    assert visible[0]["model_info"]["direct_access"] is True
+
+
+def test_get_direct_access_models_restricted_key_narrows_unrestricted_user():
+    """A key scoped to one model cannot call the rest, so the listing must not show
+    every non-team model just because the user record is unrestricted."""
+    router = MagicMock()
+    router.get_model_ids.return_value = ["gpt4o-id", "sonnet-id"]
+    router.get_model_access_groups.return_value = {}
+    router.get_model_list.side_effect = lambda model_name: (
+        [{"model_info": {"id": "gpt4o-id"}}] if model_name == "gpt-4o" else []
+    )
+
+    user = LiteLLM_UserTable(user_id="u", models=[], teams=[])
+
+    result = ps.get_direct_access_models(user_db_object=user, llm_router=router, key_models=("gpt-4o",))
+
+    assert result == ("gpt4o-id",)
+
+
+def test_get_direct_access_models_all_proxy_models_key_keeps_team_scoped_user_grant():
+    """'all-proxy-models' on the key means unrestricted, so it must leave the user's
+    grant alone rather than clipping it to the non-team deployment set."""
+    router = MagicMock()
+    router.get_model_ids.return_value = ["global-id"]
+    router.get_model_access_groups.return_value = {}
+    router.get_model_list.side_effect = lambda model_name: (
+        [{"model_info": {"id": "byok-id"}}] if model_name == "byok-model" else []
+    )
+
+    user = LiteLLM_UserTable(user_id="u", models=["byok-model"], teams=[])
+
+    result = ps.get_direct_access_models(
+        user_db_object=user,
+        llm_router=router,
+        key_models=(ps.SpecialModelNames.all_proxy_models.value,),
+    )
+
+    assert result == ("byok-id",)
+
+
+def test_get_direct_access_models_expands_access_group_grant():
+    """A grant naming an access group can call the group's members at call time, so the
+    listing must resolve the members instead of looking up the group name as a model."""
+    router = MagicMock()
+    router.get_model_access_groups.return_value = {"beta-models": ["gpt-4o", "sonnet"]}
+    router.get_model_list.side_effect = lambda model_name: {
+        "gpt-4o": [{"model_info": {"id": "gpt4o-id"}}],
+        "sonnet": [{"model_info": {"id": "sonnet-id"}}],
+    }.get(model_name, [])
+
+    user = LiteLLM_UserTable(user_id="u", models=["beta-models"], teams=[])
+
+    result = ps.get_direct_access_models(user_db_object=user, llm_router=router)
+
+    assert result == ("gpt4o-id", "sonnet-id")
+
+
+@pytest.mark.asyncio
+async def test_populate_team_access_hides_models_the_calling_key_cannot_call(monkeypatch):
+    """An unrestricted user calling with a key scoped to one model must only see that
+    model as direct access; the others 403 at the key check, so listing them over-promises."""
+    allowed_row = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {"id": "gpt4o-id", "db_model": False},
+    }
+    blocked_row = {
+        "model_name": "sonnet",
+        "litellm_params": {"model": "sonnet"},
+        "model_info": {"id": "sonnet-id", "db_model": False},
+    }
+
+    router = MagicMock()
+    router.get_model_ids.return_value = ["gpt4o-id", "sonnet-id"]
+    router.get_model_access_groups.return_value = {}
+    router.get_model_list.side_effect = lambda model_name: (
+        [{"model_info": {"id": "gpt4o-id"}}] if model_name == "gpt-4o" else []
+    )
+
+    user_row = LiteLLM_UserTable(
+        user_id="u",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        models=[],
+        teams=[],
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+
+    monkeypatch.setattr(ps, "get_all_team_models", AsyncMock(return_value={}))
+
+    caller = UserAPIKeyAuth(
+        user_id="u",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=["gpt-4o"],
+        team_models=[],
+    )
+
+    populated = await ps._populate_team_access_on_models(
+        user_api_key_dict=caller,
+        prisma_client=prisma_client,
+        llm_router=router,
+        all_models=[allowed_row, blocked_row],
+    )
+    visible = ps._filter_models_to_user_accessible(populated)
+
+    assert [m["model_info"]["id"] for m in visible] == ["gpt4o-id"]
 
 
 @pytest.mark.asyncio

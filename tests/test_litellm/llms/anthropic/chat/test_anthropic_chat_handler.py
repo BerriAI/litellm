@@ -1,13 +1,17 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from unittest.mock import AsyncMock, MagicMock
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
+from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -44,6 +48,91 @@ async def test_make_call_passes_logging_obj_to_client_post():
     mock_client.post.assert_called_once()
     call_kwargs = mock_client.post.call_args[1]
     assert call_kwargs.get("logging_obj") is logging_obj
+
+
+def test_anthropic_completion_does_not_send_deployment_default_limits():
+    captured_requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_default_limits",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-3-5-haiku-20241022",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-3-5-haiku-20241022",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=client,
+            default_api_key_rpm_limit=60,
+            default_api_key_tpm_limit=5000000,
+        )
+    finally:
+        client.close()
+
+    request_body = json.loads(captured_requests[0].content)
+    assert "default_api_key_rpm_limit" not in request_body
+    assert "default_api_key_tpm_limit" not in request_body
+
+
+async def test_anthropic_async_completion_inlines_http_images_off_the_event_loop(async_only_image_fetch):
+    http_image_url = f"http://img.example/{uuid.uuid4()}.png"
+    https_image_url = f"https://img.example/{uuid.uuid4()}.png"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "Green"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.acompletion(
+        model="anthropic/claude-sonnet-4-6",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What colour is this?"},
+                    {"type": "image_url", "image_url": {"url": http_image_url}},
+                    {"type": "image_url", "image_url": {"url": https_image_url}},
+                ],
+            }
+        ],
+        api_key="test-key",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "Green"
+    assert async_only_image_fetch.fetched == [http_image_url]
+    sources = [part["source"] for part in captured["body"]["messages"][0]["content"] if part["type"] == "image"]
+    assert sources == [
+        {"type": "base64", "media_type": "image/png", "data": async_only_image_fetch.base64_png},
+        {"type": "url", "url": https_image_url},
+    ]
 
 
 def test_redacted_thinking_content_block_delta():
@@ -489,6 +578,20 @@ def test_text_only_streaming_has_index_zero():
             assert (
                 parsed.choices[0].index == 0
             ), f"Expected index=0, got {parsed.choices[0].index}"
+
+
+def test_message_delta_without_usage_returns_chunk_with_no_usage():
+    iterator: Final = ModelResponseIterator(None, sync_stream=True)
+
+    model_response: Final = iterator.chunk_parser(
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+        }
+    )
+
+    assert model_response.choices[0].finish_reason == "stop"
+    assert model_response.usage is None
 
 
 def test_streaming_thinking_deltas_count_reasoning_tokens_in_usage():
@@ -1008,6 +1111,143 @@ def test_multiple_partial_chunks_accumulation():
     assert result3.choices[0].delta.content == "Hello"
 
 
+def test_accumulated_json_partial_fragment_returns_none_without_parsing():
+    """
+    Regression test: before the shared JSONFragmentAccumulator, every partial
+    fragment triggered a `json.loads` attempt over the whole growing buffer,
+    unlike Vertex which already deferred parsing until the buffer could close.
+    A fragment that can't close a JSON value must not trigger a decode attempt.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    iterator.chunk_type = "accumulated_json"
+
+    with patch.object(
+        json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode
+    ) as spy:
+        result = iterator._handle_accumulated_json_chunk(
+            '{"type":"content_block_delta","index":0,"delta":'
+        )
+        assert result is None
+        assert spy.call_count == 0, "incomplete buffer should not be parsed"
+
+
+def test_accumulated_json_does_not_reparse_every_fragment():
+    """
+    Regression test for the O(n^2) json.loads-per-fragment anti-pattern: a
+    payload split across many fragments must be parsed ~once, not once per
+    fragment.
+    """
+    text = "x" * 200_000
+    blob = json.dumps(
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}
+    )
+    fragments = [blob[i : i + 4096] for i in range(0, len(blob), 4096)]
+    assert len(fragments) > 10, "need a multi-fragment payload to exercise the bug"
+
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    iterator.chunk_type = "accumulated_json"
+
+    parsed = None
+    with patch.object(
+        json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode
+    ) as spy:
+        for fragment in fragments:
+            out = iterator._handle_accumulated_json_chunk(fragment)
+            if out is not None:
+                parsed = out
+        parse_calls = spy.call_count
+
+    assert parsed is not None, "the reassembled chunk must still parse"
+    assert parsed.choices[0].delta.content == text
+    assert parse_calls <= 2, (
+        f"raw_decode was called {parse_calls} times for {len(fragments)} fragments; "
+        "the O(n^2) per-fragment re-parse has regressed"
+    )
+
+
+def test_accumulated_json_concatenated_envelopes_do_not_wedge():
+    """
+    Regression test: Anthropic's single `json.loads(self.accumulated_json)`
+    call raised "Extra data" on two concatenated envelopes and, since the
+    buffer was never reset on that failure, returned None forever while
+    growing without bound. The shared accumulator peels one value at a time
+    and keeps the remainder, so both values surface across two calls.
+    """
+    obj = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}'
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    iterator.chunk_type = "accumulated_json"
+
+    first = iterator._handle_accumulated_json_chunk(obj + obj)
+    assert first is not None
+    assert first.choices[0].delta.content == "a"
+
+    second = iterator._handle_accumulated_json_chunk("")
+    assert second is not None
+    assert second.choices[0].delta.content == "a"
+
+    assert iterator.accumulated_json == ""
+
+
+def test_accumulated_json_heuristic_passes_but_value_still_incomplete():
+    """
+    A buffer whose newest fragment ends in '}' can still be genuinely
+    incomplete (an inner object closed, the outer one didn't). The
+    heuristic must let the parse attempt through, and pop_next_value
+    finding nothing must propagate as None rather than raising.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    iterator.chunk_type = "accumulated_json"
+
+    result = iterator._handle_accumulated_json_chunk('{"type": {"nested": 1}')
+    assert result is None
+
+
+def test_accumulated_json_setter_and_sync_end_of_stream_drain():
+    """
+    The accumulated_json setter and __next__'s StopIteration drain branch:
+    a buffered partial JSON must still parse and return when the
+    underlying stream ends, instead of being silently dropped.
+    """
+    obj = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}'
+    iterator = ModelResponseIterator(
+        streaming_response=iter([]), sync_stream=True, json_mode=False
+    )
+    iterator.chunk_type = "accumulated_json"
+    iterator.accumulated_json = obj  # exercises the setter
+
+    result = iterator.__next__()
+    assert result is not None
+    assert result.choices[0].delta.content == "a"
+
+
+def test_accumulated_json_async_end_of_stream_drain():
+    """Async twin of the sync end-of-stream drain test: __anext__'s
+    StopAsyncIteration branch must also parse a buffered value."""
+    import asyncio
+
+    obj = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}'
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=False, json_mode=False
+    )
+    iterator.chunk_type = "accumulated_json"
+    iterator.accumulated_json = obj
+    mock_async_iterator = MagicMock()
+    mock_async_iterator.__anext__ = AsyncMock(side_effect=StopAsyncIteration)
+    iterator.async_response_iterator = mock_async_iterator
+
+    result = asyncio.run(iterator.__anext__())
+    assert result is not None
+    assert result.choices[0].delta.content == "a"
+
+
 def test_web_search_tool_result_no_extra_tool_calls():
     """
     Test that web_search_tool_result blocks don't emit tool call chunks.
@@ -1155,6 +1395,52 @@ def test_current_content_block_type_tracking():
     chunk4 = {"type": "content_block_stop", "index": 1}
     iterator.chunk_parser(chunk4)
     assert iterator.current_content_block_type is None
+
+
+def test_web_search_calls_are_cumulative_through_incomplete_search():
+    iterator = ModelResponseIterator(None, sync_stream=True)
+    first_start = iterator.chunk_parser(
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_A",
+                "name": "web_search",
+                "input": {"query": "a"},
+            },
+        }
+    )
+    first_result = iterator.chunk_parser(
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_A",
+                "content": [],
+            },
+        }
+    )
+    second_start = iterator.chunk_parser(
+        {
+            "type": "content_block_start",
+            "index": 2,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_B",
+                "name": "web_search",
+                "input": {"query": "b"},
+            },
+        }
+    )
+
+    assert list(first_start.choices[0].delta.provider_specific_fields["web_search_calls"]) == ["srvtoolu_A"]
+    assert first_result.choices[0].delta.provider_specific_fields["web_search_calls"]["srvtoolu_A"].status == "completed"
+    calls = second_start.choices[0].delta.provider_specific_fields["web_search_calls"]
+    assert list(calls) == ["srvtoolu_A", "srvtoolu_B"]
+    assert calls["srvtoolu_A"].status == "completed"
+    assert calls["srvtoolu_B"].status == "in_progress"
 
 
 def test_web_search_tool_result_captured_in_provider_specific_fields():
@@ -2045,3 +2331,124 @@ def test_non_bash_tool_result_skipped():
     assert (
         len(code_results) == 0
     ), f"Expected 0 code_interpreter_results for text_editor result, got {len(code_results)}"
+
+
+class TestAnthropicChatCompletionPreCallLogging:
+    @staticmethod
+    def _completion_kwargs(**overrides):
+        from litellm.types.utils import ModelResponse
+
+        kwargs = {
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "api_base": "https://api.anthropic.com/v1/messages",
+            "custom_llm_provider": "anthropic",
+            "custom_prompt_dict": {},
+            "model_response": ModelResponse(),
+            "print_verbose": lambda *_args, **_kwargs: None,
+            "encoding": None,
+            "api_key": "sk-ant-test",
+            "logging_obj": MagicMock(),
+            "optional_params": {"max_tokens": 16},
+            "timeout": 30.0,
+            "litellm_params": {},
+            "acompletion": False,
+            "headers": {},
+            "client": None,
+        }
+        kwargs.update(overrides)
+        return kwargs
+
+    def test_pre_call_logging_fires_once_on_the_python_path(self):
+        from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        calls = {"pre_call": []}
+        logging_obj = MagicMock()
+        logging_obj.pre_call.side_effect = lambda **kwargs: calls["pre_call"].append(kwargs)
+        with patch.object(
+            AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}
+        ):
+            try:
+                AnthropicChatCompletion().completion(**self._completion_kwargs(logging_obj=logging_obj))
+            except Exception:
+                # The Python path goes on to make an HTTP call; reaching it is
+                # the assertion, so the network failure below is expected.
+                pass
+
+        assert len(calls["pre_call"]) == 1
+        assert calls["pre_call"][0]["additional_args"]["complete_input_dict"] == {
+            "model": "m",
+            "messages": [],
+        }
+
+
+def _served_model_stream_chunks(model: str | None) -> list[dict[str, object]]:
+    return [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_served",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+                **({"model": model} if model is not None else {}),
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello"},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 2},
+        },
+        {"type": "message_stop"},
+    ]
+
+
+def test_message_start_model_is_carried_on_stream_chunks():
+    iterator: Final = ModelResponseIterator(None, sync_stream=True)
+
+    parsed: Final = [iterator.chunk_parser(chunk) for chunk in _served_model_stream_chunks("claude-served-1")]
+
+    assert all(chunk.model == "claude-served-1" for chunk in parsed)
+
+
+def test_message_start_without_model_leaves_chunk_model_unset():
+    iterator: Final = ModelResponseIterator(None, sync_stream=True)
+
+    parsed: Final = [iterator.chunk_parser(chunk) for chunk in _served_model_stream_chunks(None)]
+
+    assert all(chunk.model is None for chunk in parsed)
+
+
+def test_served_model_reaches_assembled_stream_through_custom_stream_wrapper():
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    served_model: Final = "claude-served-1"
+    sse_lines: Final = [f"data: {json.dumps(chunk)}\n".encode() for chunk in _served_model_stream_chunks(served_model)]
+    iterator: Final = ModelResponseIterator(iter(sse_lines), sync_stream=True)
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(iterator),
+        model="anthropic/claude-requested",
+        custom_llm_provider="anthropic",
+        logging_obj=MagicMock(),
+    )
+
+    chunks: Final = list(wrapper)
+
+    assert len(chunks) > 1
+    for chunk in chunks[1:]:
+        assert chunk._hidden_params["provider_response_model"] == served_model
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(chunks), messages=[{"role": "user", "content": "hi"}])
+    assert assembled._hidden_params["provider_response_model"] == served_model

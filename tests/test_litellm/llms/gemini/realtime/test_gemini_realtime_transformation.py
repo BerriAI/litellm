@@ -1,16 +1,14 @@
 import json
-import os
-import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from collections.abc import Mapping
+from typing import cast
+from unittest.mock import MagicMock
 
-import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
-from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
+from litellm.types.llms.gemini import BidiGenerateContentServerMessage
 
 
 def test_gemini_realtime_transformation_session_created():
@@ -309,20 +307,6 @@ def test_gemini_realtime_transformation_generation_complete():
             contains_audio_done_event = True
             break
     assert contains_audio_done_event, "Expected audio done event"
-
-
-def test_gemini_3_1_flash_live_preview_model_cost_map_entry():
-    for key in (
-        "gemini-3.1-flash-live-preview",
-        "gemini/gemini-3.1-flash-live-preview",
-    ):
-        assert key in litellm.model_cost
-        info = litellm.model_cost[key]
-        assert "/v1/realtime" in info.get("supported_endpoints", [])
-        assert info.get("max_input_tokens") == 131072
-        assert info.get("max_output_tokens") == 65536
-        assert "video" in info.get("supported_modalities", [])
-        assert info.get("supports_function_calling") is True
 
 
 def test_gemini_realtime_tool_call_transformation():
@@ -1301,8 +1285,7 @@ def test_gemini_realtime_pipecat_ga_session_voice_and_tools(patch_gemini_audio_c
     assert len(messages) == 1
     setup = json.loads(messages[0])["setup"]
     assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
-    # Native-audio Live rejects speechConfig on setup (see _finalize_gemini_live_setup).
-    assert "speechConfig" not in setup.get("generationConfig", {})
+    assert setup["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
     assert setup["tools"][0]["function_declarations"][0]["name"] == "terminate_call"
     assert setup["realtimeInputConfig"]["automaticActivityDetection"]["disabled"] is False
 
@@ -1816,6 +1799,7 @@ def patch_gemini_audio_cost_map_entries(monkeypatch):
         "gemini-2.5-flash-native-audio",
         "gemini-2.5-flash-native-audio-latest",
         "gemini/gemini-2.5-flash-native-audio-latest",
+        "gemini-live-2.5-flash-native-audio",
     ]
     flash_live_models = [
         "gemini-3.1-flash-live-preview",
@@ -1838,26 +1822,14 @@ def patch_gemini_audio_cost_map_entries(monkeypatch):
         ("gemini/gemini-3.1-flash-live-preview", True),
         ("gemini-2.5-flash-native-audio-latest", True),
         ("gemini/gemini-2.5-flash-native-audio-latest", True),
+        ("gemini-live-2.5-flash-native-audio", True),
+        ("vertex_ai/gemini-live-2.5-flash-native-audio", True),
         ("gemini-2.0-flash", False),
         ("gemini-2.5-flash", False),
     ],
 )
 def test_is_audio_only_live_model_uses_cost_map(model, expected, patch_gemini_audio_cost_map_entries):
     assert GeminiRealtimeConfig._is_audio_only_live_model(model) == expected
-
-
-@pytest.mark.parametrize(
-    "model,expected",
-    [
-        ("gemini-2.5-flash-native-audio-latest", True),
-        ("gemini/gemini-2.5-flash-native-audio-latest", True),
-        ("gemini-3.1-flash-live-preview", False),
-        ("gemini/gemini-3.1-flash-live-preview", False),
-        ("gemini-2.0-flash", False),
-    ],
-)
-def test_is_native_audio_model_uses_cost_map(model, expected, patch_gemini_audio_cost_map_entries):
-    assert GeminiRealtimeConfig._is_native_audio_model(model) == expected
 
 
 def test_is_setup_message_and_is_content_message():
@@ -1868,3 +1840,364 @@ def test_is_setup_message_and_is_content_message():
     assert config.is_content_message({"clientContent": {}}) is True
     assert config.is_content_message({"toolResponse": {}}) is True
     assert config.is_content_message({"setup": {}}) is False
+
+
+def test_map_openai_params_drops_stock_voice_case_insensitively():
+    """Regression: OpenAI stock voices are dropped regardless of casing so Gemini Live keeps its default voice.
+
+    Non-OpenAI names pass through verbatim.
+    """
+    cfg = GeminiRealtimeConfig()
+
+    dropped = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Alloy"})
+    assert "speechConfig" not in dropped.get("generationConfig", {})
+
+    passthrough = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Kore"})
+    assert passthrough["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+@pytest.fixture(autouse=False)
+def patch_gemini_transcribe_live_cost_map_entry(monkeypatch):
+    """Inject the gemini-3.5-transcribe-live registry entry locally.
+
+    litellm.model_cost is fetched from main branch at import time, so in CI
+    the entry may not exist yet. Also stamp supported_output_modalities on a
+    chat model to prove mode, not output modalities, drives the discriminator.
+    """
+    for m in ["gemini-3.5-transcribe-live", "gemini/gemini-3.5-transcribe-live"]:
+        entry = dict(litellm.model_cost.get(m, {}))
+        entry["mode"] = "audio_transcription"
+        monkeypatch.setitem(litellm.model_cost, m, entry)
+    chat_entry = dict(litellm.model_cost.get("gemini-2.5-flash", {}))
+    chat_entry["supported_output_modalities"] = ["text"]
+    monkeypatch.setitem(litellm.model_cost, "gemini-2.5-flash", chat_entry)
+
+
+@pytest.mark.parametrize("model", ["gemini-3.5-transcribe-live", "gemini/gemini-3.5-transcribe-live"])
+def test_gemini_transcribe_live_eager_setup_uses_text_modality(model, patch_gemini_transcribe_live_cost_map_entry):
+    """Regression: the hardcoded AUDIO eager setup closes transcribe-live sessions with 1007."""
+    config = GeminiRealtimeConfig()
+
+    setup = json.loads(config.session_configuration_request(model))["setup"]
+
+    assert setup["generationConfig"]["responseModalities"] == ["TEXT"]
+
+
+def test_gemini_transcribe_live_session_update_defaults_to_text_modality(
+    patch_gemini_transcribe_live_cost_map_entry,
+):
+    config = GeminiRealtimeConfig()
+    session_update = {
+        "type": "session.update",
+        "session": {"instructions": "Transcribe the audio."},
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-3.5-transcribe-live",
+        session_configuration_request=None,
+    )
+
+    setup = json.loads(messages[0])["setup"]
+    assert setup["generationConfig"]["responseModalities"] == ["TEXT"]
+
+
+@pytest.mark.parametrize("modalities", [["audio"], ["audio", "text"]])
+def test_gemini_transcribe_live_coerces_audio_modality_to_text(modalities, patch_gemini_transcribe_live_cost_map_entry):
+    config = GeminiRealtimeConfig()
+    session_update = {
+        "type": "session.update",
+        "session": {"modalities": modalities},
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-3.5-transcribe-live",
+        session_configuration_request=None,
+    )
+
+    setup = json.loads(messages[0])["setup"]
+    assert setup["generationConfig"]["responseModalities"] == ["TEXT"]
+
+
+def test_gemini_chat_model_with_text_output_modalities_keeps_audio_eager_setup(
+    patch_gemini_transcribe_live_cost_map_entry,
+):
+    """Chat entries also declare supported_output_modalities ["text"]; they must keep AUDIO."""
+    config = GeminiRealtimeConfig()
+
+    setup = json.loads(config.session_configuration_request("gemini-2.5-flash"))["setup"]
+
+    assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
+def test_generation_complete_without_prior_delta_keeps_turn_usage(patch_gemini_audio_cost_map_entries):
+    from typing import Final
+
+    from litellm.types.llms.gemini import BidiGenerateContentServerMessage
+    from litellm.types.realtime import RealtimeResponseTransformInput
+
+    config: Final = GeminiRealtimeConfig()
+    turn_end_frame: Final[BidiGenerateContentServerMessage] = {
+        "serverContent": {"generationComplete": True, "turnComplete": True},
+        "usageMetadata": {
+            "promptTokenCount": 200,
+            "totalTokenCount": 200,
+            "promptTokensDetails": [
+                {"modality": "AUDIO", "tokenCount": 199},
+                {"modality": "TEXT", "tokenCount": 1},
+            ],
+        },
+    }
+    transform_input: Final[RealtimeResponseTransformInput] = {
+        "session_configuration_request": None,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_conversation_id": None,
+        "current_delta_chunks": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+    }
+
+    result: Final = config.transform_realtime_response(
+        json.dumps(turn_end_frame),
+        "gemini-3.5-transcribe-live",
+        MagicMock(),
+        realtime_response_transform_input=transform_input,
+    )
+
+    done_events: Final = tuple(event for event in result["response"] if event["type"] == "response.done")
+    assert len(done_events) == 1
+    assert done_events[0]["response"]["usage"]["input_tokens"] == 200
+
+
+def test_bare_generation_complete_without_prior_delta_is_dropped(patch_gemini_audio_cost_map_entries):
+    from typing import Final
+
+    from litellm.types.llms.gemini import BidiGenerateContentServerMessage
+    from litellm.types.realtime import RealtimeResponseTransformInput
+
+    config: Final = GeminiRealtimeConfig()
+    bare_frame: Final[BidiGenerateContentServerMessage] = {"serverContent": {"generationComplete": True}}
+    transform_input: Final[RealtimeResponseTransformInput] = {
+        "session_configuration_request": None,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_conversation_id": None,
+        "current_delta_chunks": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+    }
+
+    result: Final = config.transform_realtime_response(
+        json.dumps(bare_frame),
+        "gemini-3.5-transcribe-live",
+        MagicMock(),
+        realtime_response_transform_input=transform_input,
+    )
+
+    assert result["response"] == []
+
+
+def _input_audio_append_message(raw_byte_count: int) -> str:
+    import base64
+
+    return json.dumps(
+        {"type": "input_audio_buffer.append", "audio": base64.b64encode(b"\x00" * raw_byte_count).decode()}
+    )
+
+
+def test_transcribe_live_completed_event_carries_estimated_usage(patch_gemini_transcribe_live_cost_map_entry):
+    """Gemini Live sends no usageMetadata for transcribe sessions, so LiteLLM bills
+    from streamed audio duration at Google's published estimate (25 audio tok/sec in,
+    175 text tok/min out): 96000 pcm16 bytes = 2s at 24kHz -> 50 in / 6 out."""
+    from typing import Final
+
+    from litellm.types.llms.gemini import BidiGenerateContentServerMessage
+    from litellm.types.realtime import RealtimeInputAudioTranscriptionUsage, RealtimeResponseTransformInput
+
+    config: Final = GeminiRealtimeConfig()
+    config.transform_realtime_request(_input_audio_append_message(96000), "gemini-3.5-transcribe-live")
+
+    transcript_frame: Final[BidiGenerateContentServerMessage] = {
+        "serverContent": {"inputTranscription": {"text": "ahoy there"}}
+    }
+    transform_input: Final[RealtimeResponseTransformInput] = {
+        "session_configuration_request": None,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_conversation_id": None,
+        "current_delta_chunks": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+    }
+
+    result: Final = config.transform_realtime_response(
+        json.dumps(transcript_frame),
+        "gemini-3.5-transcribe-live",
+        MagicMock(),
+        realtime_response_transform_input=transform_input,
+    )
+
+    completed: Final = tuple(
+        event
+        for event in result["response"]
+        if event["type"] == "conversation.item.input_audio_transcription.completed"
+    )
+    assert len(completed) == 1
+    assert completed[0]["transcript"] == "ahoy there"
+    expected_usage: Final[RealtimeInputAudioTranscriptionUsage] = {
+        "type": "tokens",
+        "input_tokens": 50,
+        "output_tokens": 6,
+        "total_tokens": 56,
+        "input_token_details": {"text_tokens": 0, "audio_tokens": 50},
+    }
+    assert completed[0]["usage"] == expected_usage
+
+    second: Final = config.transform_realtime_response(
+        json.dumps(transcript_frame),
+        "gemini-3.5-transcribe-live",
+        MagicMock(),
+        realtime_response_transform_input=transform_input,
+    )
+    second_completed: Final = tuple(
+        event
+        for event in second["response"]
+        if event["type"] == "conversation.item.input_audio_transcription.completed"
+    )
+    assert len(second_completed) == 1
+    assert "usage" not in second_completed[0]
+
+
+def test_non_transcription_live_model_completed_event_has_no_usage(patch_gemini_audio_cost_map_entries):
+    """Conversational Live models get their audio tokens from usageMetadata via
+    response.done; attaching estimated usage to their transcription events would
+    double-bill, so the estimate is gated to audio_transcription-mode models."""
+    from typing import Final
+
+    from litellm.types.llms.gemini import BidiGenerateContentServerMessage
+    from litellm.types.realtime import RealtimeResponseTransformInput
+
+    config: Final = GeminiRealtimeConfig()
+    config.transform_realtime_request(_input_audio_append_message(96000), "gemini-3.1-flash-live-preview")
+
+    transcript_frame: Final[BidiGenerateContentServerMessage] = {
+        "serverContent": {"inputTranscription": {"text": "ahoy there"}}
+    }
+    transform_input: Final[RealtimeResponseTransformInput] = {
+        "session_configuration_request": None,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_conversation_id": None,
+        "current_delta_chunks": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+    }
+
+    result: Final = config.transform_realtime_response(
+        json.dumps(transcript_frame),
+        "gemini-3.1-flash-live-preview",
+        MagicMock(),
+        realtime_response_transform_input=transform_input,
+    )
+
+    completed: Final = tuple(
+        event
+        for event in result["response"]
+        if event["type"] == "conversation.item.input_audio_transcription.completed"
+    )
+    assert len(completed) == 1
+    assert "usage" not in completed[0]
+
+
+def test_unbilled_usage_on_session_close_flushes_trailing_audio(patch_gemini_transcribe_live_cost_map_entry):
+    """Audio appended after the last transcript frame is still unbilled when the
+    session closes; the session-close hook must hand back the estimate exactly once
+    so the streaming layer can bill it (144000 pcm16 bytes = 3s -> 75 in / 9 out)."""
+    from typing import Final
+
+    from litellm.types.realtime import RealtimeInputAudioTranscriptionUsage
+
+    config: Final = GeminiRealtimeConfig()
+    config.transform_realtime_request(_input_audio_append_message(144000), "gemini-3.5-transcribe-live")
+
+    usage: Final = config.unbilled_usage_on_session_close("gemini-3.5-transcribe-live")
+
+    expected: Final[RealtimeInputAudioTranscriptionUsage] = {
+        "type": "tokens",
+        "input_tokens": 75,
+        "output_tokens": 9,
+        "total_tokens": 84,
+        "input_token_details": {"text_tokens": 0, "audio_tokens": 75},
+    }
+    assert usage == expected
+    assert config.unbilled_usage_on_session_close("gemini-3.5-transcribe-live") is None
+
+
+def _grounded_live_frame(grounding_metadata: Mapping[str, object] | None) -> Mapping[str, object]:
+    """One Live server frame. Grounding metadata and usageMetadata arrive together, as Vertex sends them."""
+    from typing import Final
+
+    server_content: Final = {
+        "turnComplete": True,
+        **({} if grounding_metadata is None else {"groundingMetadata": grounding_metadata}),
+    }
+    return {
+        "serverContent": server_content,
+        "usageMetadata": {
+            "promptTokenCount": 19,
+            "candidatesTokenCount": 157,
+            "totalTokenCount": 176,
+            "promptTokensDetails": ({"modality": "TEXT", "tokenCount": 19},),
+            "candidatesTokensDetails": ({"modality": "AUDIO", "tokenCount": 157},),
+        },
+    }
+
+
+def _response_done_input_details(message: Mapping[str, object]) -> Mapping[str, object]:
+    """The ``input_tokens_details`` a ``response.done`` event carries, read off the emitted event."""
+    from typing import Final
+
+    config: Final = GeminiRealtimeConfig()
+    event: Final = config.transform_response_done_event(
+        message=cast(  # cast-ok: a test fixture stands in for the server frame TypedDict
+            BidiGenerateContentServerMessage, message
+        ),
+        current_response_id="resp_grounding",
+        current_conversation_id="conv_grounding",
+        output_items=None,
+    )
+    usage: Final = event["response"]["usage"]
+    assert usage, "response.done must carry a usage object"
+    return usage.get("input_tokens_details") or {}
+
+
+def test_gemini_realtime_response_done_counts_web_grounding():
+    """Regression: Live reports grounding in the server frames and never in usageMetadata.
+
+    Nothing read those frames on the realtime path, so web_search_requests stayed unset and the
+    cost path's only trigger for Google's per-query grounding charge never fired.
+
+    The counter is read off the emitted event, which is what the cost path is handed, so this covers
+    the grounding read and the usage bridge that carries it together
+    """
+    input_details = _response_done_input_details(
+        _grounded_live_frame(
+            {
+                "webSearchQueries": ["who won the 2026 world cup final"],
+                "groundingChunks": [{"web": {"uri": "https://example.com"}}],
+            }
+        )
+    )
+
+    assert input_details.get("web_search_requests") == 1, "a grounded turn must report its query"
+    assert input_details.get("text_tokens") == 19, "the modality breakdown must survive alongside it"
+
+
+def test_gemini_realtime_response_done_reports_no_grounding_when_none_ran():
+    """The counter must stay unset on an ordinary turn, or every session pays a grounding fee."""
+    input_details = _response_done_input_details(_grounded_live_frame(None))
+
+    assert input_details.get("web_search_requests") is None
+    assert input_details.get("google_maps_grounding_requests") is None

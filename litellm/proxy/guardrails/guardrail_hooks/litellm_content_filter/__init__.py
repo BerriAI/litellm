@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Final, Optional
 
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
@@ -26,19 +26,19 @@ def initialize_guardrail(
     Returns:
         Initialized ContentFilterGuardrail instance
     """
-    guardrail_name = guardrail.get("guardrail_name")
+    guardrail_name: Final = guardrail.get("guardrail_name")
 
     if not guardrail_name:
         raise ValueError("Content Filter: guardrail_name is required")
 
-    content_filter_guardrail = ContentFilterGuardrail(
+    content_filter_guardrail: Final = ContentFilterGuardrail(
         guardrail_name=guardrail_name,
         guardrail_id=guardrail.get("guardrail_id"),
         policy_template=guardrail.get("policy_template"),
         patterns=litellm_params.patterns,
         blocked_words=litellm_params.blocked_words,
         blocked_words_file=litellm_params.blocked_words_file,
-        event_hook=litellm_params.mode,  # type: ignore
+        event_hook=litellm_params.mode,
         default_on=litellm_params.default_on or False,
         categories=getattr(litellm_params, "categories", None),
         severity_threshold=getattr(litellm_params, "severity_threshold", "medium"),
@@ -55,11 +55,11 @@ def initialize_guardrail(
     return content_filter_guardrail
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.LITELLM_CONTENT_FILTER.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.LITELLM_CONTENT_FILTER.value: ContentFilterGuardrail,
 }

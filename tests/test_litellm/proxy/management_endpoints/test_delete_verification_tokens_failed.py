@@ -8,12 +8,9 @@ its result dict in all scenarios, populated with any token hashes that could
 not be deleted.
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from unittest.mock import AsyncMock, MagicMock
 

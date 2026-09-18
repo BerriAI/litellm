@@ -1,22 +1,20 @@
-"""Management suite fixtures: the client plus a logged-in dashboard page.
+"""Management suite's `client` fixture.
 
-Lifecycle/skip/marker live in the parent conftest. The browser fixtures drive
-the dashboard the proxy serves at /ui, so browser tests exercise exactly what an
-end user sees. playwright is an optional dependency loaded behind importorskip
-inside the fixture, so the API tests in this suite collect and run without it:
-
-    uv pip install playwright && uv run playwright install chromium
+Lifecycle/liveness gate/marker live in the parent conftest. ManagementClient
+holds the shared ProxyClient so `resources` / `scoped_key` clean up keys, teams,
+users, and orgs this suite creates.
 """
 
-from typing import TYPE_CHECKING, Iterator
+from collections.abc import Generator
+from typing import Final
 
 import pytest
-
-from e2e_config import PROXY_BASE_URL, UI_PASSWORD, UI_USERNAME
+from e2e_http import without_retries
+from idp import Keycloak
+from lifecycle import ResourceManager
+from management.jwt_actors import ActorFactory
 from management_client import ManagementClient, build_client
-
-if TYPE_CHECKING:
-    from playwright.sync_api import Browser, Page
+from proxy_client import ProxyClient
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -27,31 +25,16 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 @pytest.fixture(scope="session")
-def client() -> ManagementClient:
-    return build_client()
-
-
-@pytest.fixture(scope="session")
-def browser() -> "Iterator[Browser]":
-    pytest.importorskip("playwright.sync_api", reason="playwright not installed")
-    from playwright.sync_api import sync_playwright
-
-    with sync_playwright() as playwright:
-        launched = playwright.chromium.launch()
-        yield launched
-        launched.close()
+def client(proxy: ProxyClient) -> ManagementClient:
+    return build_client(proxy)
 
 
 @pytest.fixture
-def ui_page(browser: "Browser") -> "Iterator[Page]":
-    context = browser.new_context()
-    try:
-        page = context.new_page()
-        page.goto(f"{PROXY_BASE_URL}/ui/")
-        page.fill("#username", UI_USERNAME)
-        page.fill("#password", UI_PASSWORD)
-        page.click('input[type="submit"]')
-        page.wait_for_url("**/ui/**")
-        yield page
-    finally:
-        context.close()
+def actor_factory(proxy: ProxyClient, idp: Keycloak) -> Generator[ActorFactory]:
+    bootstrap: Final = build_client(proxy)
+    resources: Final = ResourceManager(client=proxy, strict_cleanup=True)
+    with without_retries():
+        try:
+            yield ActorFactory(bootstrap=bootstrap, idp=idp, resources=resources)
+        finally:
+            resources.teardown()

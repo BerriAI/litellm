@@ -24,8 +24,6 @@ real ``OpenTelemetry`` integration. No monkey patching of the integration
 under test — only the OTEL exporter is in-memory.
 """
 
-import os
-import sys
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -35,7 +33,6 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.integrations.opentelemetry import (
     LITELLM_REQUEST_SPAN_NAME,
@@ -277,6 +274,48 @@ class TestGuardrailSpanOnViolation(unittest.TestCase):
         self.assertEqual(
             guardrail_spans[0].parent.span_id,
             parent_span.context.span_id,
+        )
+
+    def test_post_call_failure_hook_emits_span_when_caller_sends_metadata(self):
+        """On routes that seed ``litellm_metadata`` the guardrail entry lives there,
+        not in the caller's own ``metadata`` field. Reading a hard-coded ``metadata``
+        key drops the span for exactly the requests that carry both."""
+        otel, provider, exporter = _make_otel()
+        parent_span = provider.get_tracer(__name__).start_span(PROXY_SPAN_NAME)
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-test",
+            parent_otel_span=parent_span,
+            request_route="/v1/messages",
+        )
+
+        request_data = {
+            "model": "claude-haiku",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "metadata": {"user_id": "device-account-session"},
+            "litellm_metadata": {
+                "standard_logging_guardrail_information": [
+                    _slg_entry("guardrail_intervened", _bedrock_block_response())
+                ],
+            },
+        }
+
+        _run(
+            otel.async_post_call_failure_hook(
+                request_data=request_data,
+                original_exception=Exception("guardrail blocked"),
+                user_api_key_dict=user_api_key_dict,
+            )
+        )
+
+        guardrail_spans = [
+            s for s in exporter.get_finished_spans() if s.name == GUARDRAIL_SPAN_NAME
+        ]
+        self.assertEqual(
+            len(guardrail_spans),
+            1,
+            "the guardrail span must be emitted from the resolved metadata bucket, "
+            "not from a hard-coded 'metadata' key",
         )
 
     def test_handle_failure_and_post_call_failure_hook_dedupe(self):

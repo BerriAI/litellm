@@ -56,7 +56,7 @@ class TestEnforceUserParamPostGetFiltering:
             new_callable=AsyncMock,
             return_value=True,
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match="user' param not passed in\\. 'enforce_user_param'=True") as exc_info:
                 await common_checks(
                     request_body=request_body,
                     team_object=None,
@@ -175,7 +175,7 @@ class TestEnforceUserParamPostGetFiltering:
             new_callable=AsyncMock,
             return_value=True,
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match="user' param not passed in\\. 'enforce_user_param'=True") as exc_info:
                 await common_checks(
                     request_body=request_body,
                     team_object=None,
@@ -405,7 +405,7 @@ class TestEnforceUserParamEdgeCases:
             new_callable=AsyncMock,
             return_value=True,
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match="user' param not passed in\\. 'enforce_user_param'=True") as exc_info:
                 await common_checks(
                     request_body=request_body,
                     team_object=None,

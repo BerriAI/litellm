@@ -108,6 +108,19 @@ class TestGetSchemas:
         assert "displayName" in attr_names
         assert "members" in attr_names
 
+    def test_group_schema_advertises_member_type(self):
+        """IdPs read the schema to learn we understand ``members.type``, which is how
+        a nested group announces itself."""
+        schemas = _get_schemas()
+        group_schema = next(
+            s for s in schemas if s.id == "urn:ietf:params:scim:schemas:core:2.0:Group"
+        )
+        members = next(a for a in group_schema.attributes if a.name == "members")
+        member_type = next(a for a in members.subAttributes or [] if a.name == "type")
+        assert member_type.type == "string"
+        assert member_type.multiValued is False
+        assert "Group" in (member_type.description or "")
+
     def test_schema_meta_fields(self):
         schemas = _get_schemas()
         user_schema = next(

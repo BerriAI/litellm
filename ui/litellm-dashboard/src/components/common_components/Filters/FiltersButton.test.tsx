@@ -21,12 +21,18 @@ describe("FiltersButton", () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
-  it("should show badge when hasActiveFilters is true", () => {
+  it("should show the active-filter indicator when hasActiveFilters is true", () => {
     const onClick = vi.fn();
     const { container } = render(<FiltersButton onClick={onClick} active={false} hasActiveFilters={true} />);
-    const button = screen.getByRole("button", { name: /filters/i });
-    const badgeWrapper = button.closest(".ant-badge");
-    expect(badgeWrapper).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /filters/i })).toBeInTheDocument();
+    expect(container.querySelector("sup")).toBeInTheDocument();
+  });
+
+  it("should not show the active-filter indicator when hasActiveFilters is false", () => {
+    const onClick = vi.fn();
+    const { container } = render(<FiltersButton onClick={onClick} active={false} hasActiveFilters={false} />);
+    expect(screen.getByRole("button", { name: /filters/i })).toBeInTheDocument();
+    expect(container.querySelector("sup")).not.toBeInTheDocument();
   });
 
   it("should render custom label when provided", () => {
