@@ -20,6 +20,11 @@ name: Agent Shin — reconsider
 # commenter being either the PR/issue author or an internal collaborator
 # (OWNER/MEMBER/COLLABORATOR) so random commenters cannot DOS the LLM
 # judge or force a reopen.
+#
+# Bot comments never trigger a run: Agent Shin's own close and warning
+# comments quote `@agent-shin reconsider` in their "how to bring this PR
+# back" instructions, so without this gate every sweep comment triggers a
+# self-reconsider that can only ever be unauthorized.
 
 on:
   issue_comment:
@@ -35,6 +40,9 @@ jobs:
     if: |
       github.repository == 'BerriAI/litellm'
       && contains(github.event.comment.body, '@agent-shin reconsider')
+      && github.event.comment.user.type != 'Bot'
+      && !endsWith(github.event.comment.user.login, '[bot]')
+      && github.event.comment.user.login != 'oss-agent-shin'
     runs-on: ubuntu-latest
     steps:
       - name: Authorize commenter
