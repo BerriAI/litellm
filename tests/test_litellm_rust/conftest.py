@@ -1,10 +1,9 @@
 import asyncio
 import os
-from collections.abc import AsyncIterator, Generator, Iterator
+from collections.abc import AsyncIterator, Generator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack, contextmanager
-from types import ModuleType
-from typing import Final, cast
+from contextlib import ExitStack
+from typing import Final
 
 import pytest
 import pytest_asyncio
@@ -18,62 +17,20 @@ from litellm.rust_bridge.configuration import (  # pyright: ignore[reportPrivate
     _parse_env_bool,
 )
 from tests.test_litellm_rust.support.callback_recorder import drain_logging
+from tests.test_litellm_rust.support.isolation import isolated_callback_registries, rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, recording_service
-
-CALLBACK_ATTRIBUTES: Final = (
-    "callbacks",
-    "input_callback",
-    "success_callback",
-    "failure_callback",
-    "_async_input_callback",
-    "_async_success_callback",
-    "_async_failure_callback",
-)
-
-
-def _list_attribute(container: ModuleType, attribute: str) -> list[object]:
-    value: Final = getattr(container, attribute)
-    if not isinstance(value, list):
-        raise AssertionError(f"{container.__name__}.{attribute} is not a list")
-    return cast(list[object], value)
-
-
-@contextmanager
-def _isolated_list(container: ModuleType, attribute: str) -> Iterator[None]:
-    source: Final = _list_attribute(container, attribute)
-    original: Final = list(source)
-    source.clear()  # mutable-ok: test isolation mutates global registries by design
-    try:
-        yield
-    finally:
-        source.clear()
-        source.extend(original)
-        setattr(container, attribute, source)
-
-
-@contextmanager
-def _rebound(container: object, attribute: str, value: object) -> Iterator[None]:
-    original: Final[object] = getattr(container, attribute)
-    setattr(container, attribute, value)
-    try:
-        yield
-    finally:
-        setattr(container, attribute, original)
 
 
 @pytest_asyncio.fixture(autouse=True, loop_scope="function")
 async def isolate_ocr_test_state() -> AsyncIterator[None]:
     with ExitStack() as stack:
-        for attribute in CALLBACK_ATTRIBUTES:
-            stack.enter_context(_isolated_list(litellm, attribute))
-        stack.enter_context(_isolated_list(litellm_logging, "_in_memory_loggers"))  # pyright: ignore[reportPrivateUsage]  # no public callback-cache accessor
-        stack.enter_context(_rebound(utils, "callback_list", []))  # rebind-ok: isolate legacy callback registry
-        stack.enter_context(_rebound(litellm, "cache", None))  # test-quality-ok: isolate process-global cache
-        stack.enter_context(_rebound(_CONFIGURATION, "override", None))
+        stack.enter_context(isolated_callback_registries())
+        stack.enter_context(rebound(litellm, "cache", None))  # test-quality-ok: isolate process-global cache
+        stack.enter_context(rebound(_CONFIGURATION, "override", None))
         executor: Final = ThreadPoolExecutor(thread_name_prefix="rust-ocr-test-logging")
-        stack.enter_context(_rebound(litellm_logging, "executor", executor))
-        stack.enter_context(_rebound(utils, "executor", executor))
-        stack.enter_context(_rebound(thread_pool_executor, "executor", executor))
+        stack.enter_context(rebound(litellm_logging, "executor", executor))
+        stack.enter_context(rebound(utils, "executor", executor))
+        stack.enter_context(rebound(thread_pool_executor, "executor", executor))
         try:
             yield
         finally:

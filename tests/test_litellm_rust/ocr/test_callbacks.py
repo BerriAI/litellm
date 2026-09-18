@@ -3,6 +3,8 @@ import copy
 import gc
 import queue
 import threading
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -13,6 +15,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
+from tests.test_litellm_rust.support.isolation import isolated_callback_registries
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import (
     OCR_DOCUMENT,
@@ -307,18 +310,13 @@ JSON_VALUES: Final = st.recursive(
 )
 
 
-LATEST_EDITS: Final[list[dict[str, object]]] = []
-
-
-class ApplyLatestEdits(CustomLogger):
-    """Registrations can outlive one hypothesis example, so every instance applies the current example's edits."""
-
-    def __init__(self, latest: list[dict[str, object]]) -> None:
+class ApplyEdits(CustomLogger):
+    def __init__(self, edits: Mapping[str, object]) -> None:
         super().__init__()
-        self.latest = latest
+        self.edits: Final = edits
 
     def log_pre_api_call(self, model, messages, kwargs):
-        request_body(kwargs).update(copy.deepcopy(self.latest[-1]))
+        request_body(kwargs).update(copy.deepcopy(dict(self.edits)))
 
 
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
@@ -327,9 +325,9 @@ def test_native_ocr_provider_receives_the_body_exactly_as_pre_call_callbacks_lef
     ocr_server: RecordingServer, edits: dict[str, object]
 ) -> None:
     ocr_server.expected_requests = None
-    LATEST_EDITS.append(edits)
 
-    call_native_ocr_with_callbacks(ocr_server, [ApplyLatestEdits(LATEST_EDITS)])
+    with isolated_callback_registries():
+        call_native_ocr_with_callbacks(ocr_server, [ApplyEdits(MappingProxyType(edits))])
 
     assert ocr_server.requests[-1].body == {"model": "mistral-ocr-latest", "document": OCR_DOCUMENT, **edits}
 
