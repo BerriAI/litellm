@@ -300,6 +300,9 @@ class _RawTeamRow(_TeamIdRow, _ModelDumpRow, _ObjectPermissionRow, _TeamBudgetRo
     @property
     def model_id(self) -> int | None: ...
 
+    @property
+    def budget_fallbacks(self) -> Mapping[str, Sequence[str]] | None: ...
+
 
 def _raw_team_db(repo: TeamRepository) -> "TableActions[_RawTeamRow]":
     return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
@@ -1347,6 +1350,23 @@ def _check_team_model_budget_update_authority(
                     )
                 },
             )
+
+
+def _check_team_budget_fallbacks_update_authority(
+    data: UpdateTeamRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    existing_budget_fallbacks: Mapping[str, Sequence[str]] | None,
+) -> None:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    if "budget_fallbacks" not in data.model_fields_set:
+        return
+    if (data.budget_fallbacks or {}) == (existing_budget_fallbacks or {}):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": "Only a proxy admin can change a team's budget_fallbacks."},
+    )
 
 
 def _should_auto_add_team_creator(
@@ -2412,6 +2432,11 @@ async def update_team(
             data=data,
             user_api_key_dict=user_api_key_dict,
             existing_model_max_budget=existing_team_row.model_max_budget,
+        )
+        _check_team_budget_fallbacks_update_authority(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            existing_budget_fallbacks=existing_team_row.budget_fallbacks,
         )
 
         updated_kv = data.json(exclude_unset=True)

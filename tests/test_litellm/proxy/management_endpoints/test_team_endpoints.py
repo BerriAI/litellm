@@ -14973,6 +14973,51 @@ def test_team_model_cap_authority_skips_omitted_field_malformed_rows_and_proxy_a
     assert outcomes == (None, None, None)
 
 
+def test_team_admin_cannot_change_team_budget_fallbacks() -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import _check_team_budget_fallbacks_update_authority
+
+    with pytest.raises(HTTPException) as exc:
+        _check_team_budget_fallbacks_update_authority(
+            data=UpdateTeamRequest(team_id="t1", budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]}),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"),
+            existing_budget_fallbacks={},
+        )
+    assert exc.value.status_code == 403
+    assert "proxy admin" in exc.value.detail["error"]
+
+
+def test_proxy_admin_can_change_team_budget_fallbacks() -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import _check_team_budget_fallbacks_update_authority
+
+    assert (
+        _check_team_budget_fallbacks_update_authority(
+            data=UpdateTeamRequest(team_id="t1", budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]}),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            existing_budget_fallbacks={},
+        )
+        is None
+    )
+
+
+def test_team_budget_fallbacks_authority_skips_unchanged_and_omitted() -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import _check_team_budget_fallbacks_update_authority
+
+    team_admin = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin")
+    outcomes = (
+        _check_team_budget_fallbacks_update_authority(
+            data=UpdateTeamRequest(team_id="t1", budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]}),
+            user_api_key_dict=team_admin,
+            existing_budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+        ),
+        _check_team_budget_fallbacks_update_authority(
+            data=UpdateTeamRequest(team_id="t1", max_budget=1.0),
+            user_api_key_dict=team_admin,
+            existing_budget_fallbacks={},
+        ),
+    )
+    assert outcomes == (None, None)
+
+
 @pytest.mark.asyncio
 async def test_new_team_persists_model_max_budget(mock_db_client, mock_admin_auth):
     mock_db_client.jsonify_team_object = lambda db_data: db_data
