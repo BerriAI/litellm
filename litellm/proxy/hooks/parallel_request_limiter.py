@@ -743,31 +743,38 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     [user_api_key_team_id] if user_api_key_team_id is not None else []
                 )
                 for bucket_id in bucket_ids:
-                    request_count_api_key = f"{bucket_id}::{precise_minute}::request_count"
-                    current = await self.internal_usage_cache.async_get_cache(
-                        key=request_count_api_key,
+                    await self._release_parallel_slot_on_failure(
+                        request_count_api_key=f"{bucket_id}::{precise_minute}::request_count",
                         litellm_parent_otel_span=litellm_parent_otel_span,
-                    ) or {
-                        "current_requests": 1,
-                        "current_tpm": 0,
-                        "current_rpm": 0,
-                    }
-
-                    new_val = {
-                        "current_requests": max(current["current_requests"] - 1, 0),
-                        "current_tpm": current["current_tpm"],
-                        "current_rpm": current["current_rpm"],
-                    }
-
-                    self.print_verbose(f"updated_value in failure call: {new_val}")
-                    await self.internal_usage_cache.async_set_cache(
-                        request_count_api_key,
-                        new_val,
-                        ttl=60,
-                        litellm_parent_otel_span=litellm_parent_otel_span,
-                    )  # save in cache for up to 1 min.
+                    )
         except Exception as e:
             verbose_proxy_logger.exception("Inside Parallel Request Limiter: An exception occurred - %s", e)
+
+    async def _release_parallel_slot_on_failure(
+        self,
+        request_count_api_key: str,
+        litellm_parent_otel_span: Span | None,
+    ) -> None:
+        current: Final = await self.internal_usage_cache.async_get_cache(
+            key=request_count_api_key,
+            litellm_parent_otel_span=litellm_parent_otel_span,
+        ) or {
+            "current_requests": 1,
+            "current_tpm": 0,
+            "current_rpm": 0,
+        }
+        new_val: Final = {
+            "current_requests": max(current["current_requests"] - 1, 0),
+            "current_tpm": current["current_tpm"],
+            "current_rpm": current["current_rpm"],
+        }
+        self.print_verbose(f"updated_value in failure call: {new_val}")
+        await self.internal_usage_cache.async_set_cache(
+            request_count_api_key,
+            new_val,
+            ttl=60,
+            litellm_parent_otel_span=litellm_parent_otel_span,
+        )
 
     async def get_internal_user_object(
         self,
