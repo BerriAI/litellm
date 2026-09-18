@@ -257,10 +257,10 @@ class TypeSafeGuardrail(CustomGuardrail):
             "model": self.jev_model,
             "state": state,
             "questions": {  # mutable-ok: serialized to JSON
-                question_id: {
+                question_id: {  # mutable-ok: serialized to JSON
                     "type": "noul",
                     "instructions": _question_instructions(question_id),
-                }  # mutable-ok: serialized to JSON
+                }
                 for question_id in question_ids
             },
         }
@@ -292,10 +292,10 @@ class TypeSafeGuardrail(CustomGuardrail):
         if not 200 <= raw_response.status_code < 300:
             self._handle_failure(
                 "TypeSafe evaluation service returned an error",
-                {
+                {  # mutable-ok: log detail record
                     "status_code": raw_response.status_code,
                     "body": _safe_response_text(raw_response),
-                },  # mutable-ok: log detail record
+                },
             )
             return None
         try:
@@ -378,9 +378,9 @@ class TypeSafeGuardrail(CustomGuardrail):
             return inputs
 
         compacted_messages: Final = [  # mutable-ok: structured_messages contract is a list of dicts
-            {**message, "content": DROPPED_RESULT_TEXT}
+            {**message, "content": DROPPED_RESULT_TEXT}  # mutable-ok: JSON message row
             if index in dropped_tool_indices
-            else message  # mutable-ok: JSON message row
+            else message
             for index, message in enumerate(messages)
         ]
         chars_removed: Final = sum(
