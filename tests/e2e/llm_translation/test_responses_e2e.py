@@ -8,7 +8,7 @@ litellm-regression-tests/tests/test_inference_endpoints.py.
 from __future__ import annotations
 
 import json
-from typing import cast
+from typing import Final, cast
 
 import pytest
 from e2e_config import unique_marker
@@ -39,6 +39,8 @@ class _OptionalResponsesBody(BaseModel):
 
 
 BEDROCK_CONVERSE_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+VERTEX_BACKEND: Final = "vertex_ai/gemini-2.5-flash"
+AZURE_OPENAI_BACKEND: Final = "azure/gpt-5.6-sol"
 
 WEATHER_TOOL = ResponsesFunctionTool(
     name="get_weather",
@@ -294,6 +296,128 @@ class TestResponses:
         raw_arguments = cast(object, json.loads(function_call.arguments))
         arguments = WeatherArguments.model_validate(raw_arguments)
         assert arguments.location, f"function call arguments missing location: {function_call.arguments}"
+
+    def _register(
+        self,
+        endpoints_client: EndpointsClient,
+        resources: ResourceManager,
+        prefix: str,
+        params: LiteLLMParamsBody,
+    ) -> tuple[str, str]:
+        model = f"{prefix}-{unique_marker()}"
+        model_id = endpoints_client.create_model(model, params)
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        return model, resources.key()
+
+    @pytest.mark.covers("llm.responses.vertex.basic.nonstream.works")
+    def test_responses_vertex_returns_completion(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model, key = self._register(
+            endpoints_client,
+            resources,
+            "e2e-responses-vertex",
+            LiteLLMParamsBody(
+                model=VERTEX_BACKEND,
+                vertex_project="os.environ/VERTEXAI_PROJECT",
+                vertex_location="us-central1",
+            ),
+        )
+
+        result = endpoints_client.responses(key, model, "reply with one word")
+        require_successful_call(result)
+        parsed = ResponsesResult.model_validate_json(result.body)
+        assert parsed.text.strip(), f"/responses over vertex returned no output text: {result.body[:300]}"
+
+    @pytest.mark.covers("llm.responses.vertex.tool_use.nonstream.works")
+    def test_responses_vertex_returns_function_call(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model, key = self._register(
+            endpoints_client,
+            resources,
+            "e2e-responses-vertex-tool",
+            LiteLLMParamsBody(
+                model=VERTEX_BACKEND,
+                vertex_project="os.environ/VERTEXAI_PROJECT",
+                vertex_location="us-central1",
+            ),
+        )
+
+        result = endpoints_client.responses_with_tools(
+            key,
+            model,
+            "What is the weather in San Francisco? Use the get_weather tool.",
+            [WEATHER_TOOL],
+            tool_choice="required",
+        )
+        require_successful_call(result)
+        parsed = ResponsesResult.model_validate_json(result.body)
+        function_call = next(
+            (call for call in parsed.function_calls if call.name == "get_weather"),
+            None,
+        )
+        assert function_call is not None, f"no vertex get_weather function call: {result.body[:500]}"
+        assert function_call.arguments is not None
+        raw_arguments = cast(object, json.loads(function_call.arguments))
+        arguments = WeatherArguments.model_validate(raw_arguments)
+        assert arguments.location, f"vertex function call arguments missing location: {function_call.arguments}"
+
+    @pytest.mark.covers("llm.responses.azure_openai.basic.nonstream.works")
+    def test_responses_azure_openai_returns_completion(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model, key = self._register(
+            endpoints_client,
+            resources,
+            "e2e-responses-azure-openai",
+            LiteLLMParamsBody(
+                model=AZURE_OPENAI_BACKEND,
+                api_base="os.environ/AZURE_API_BASE",
+                api_key="os.environ/AZURE_API_KEY",
+            ),
+        )
+
+        result = endpoints_client.responses(key, model, "reply with one word")
+        require_successful_call(result)
+        parsed = ResponsesResult.model_validate_json(result.body)
+        assert parsed.text.strip(), (
+            f"/responses over azure openai returned no output text: {result.body[:300]}"
+        )
+
+    @pytest.mark.covers("llm.responses.azure_openai.tool_use.nonstream.works")
+    def test_responses_azure_openai_returns_function_call(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model, key = self._register(
+            endpoints_client,
+            resources,
+            "e2e-responses-azure-openai-tool",
+            LiteLLMParamsBody(
+                model=AZURE_OPENAI_BACKEND,
+                api_base="os.environ/AZURE_API_BASE",
+                api_key="os.environ/AZURE_API_KEY",
+            ),
+        )
+
+        result = endpoints_client.responses_with_tools(
+            key,
+            model,
+            "What is the weather in San Francisco? Use the get_weather tool.",
+            [WEATHER_TOOL],
+            tool_choice="required",
+        )
+        require_successful_call(result)
+        parsed = ResponsesResult.model_validate_json(result.body)
+        function_call = next(
+            (call for call in parsed.function_calls if call.name == "get_weather"),
+            None,
+        )
+        assert function_call is not None, f"no azure openai get_weather function call: {result.body[:500]}"
+        assert function_call.arguments is not None
+        raw_arguments = cast(object, json.loads(function_call.arguments))
+        arguments = WeatherArguments.model_validate(raw_arguments)
+        assert arguments.location, f"azure openai function call arguments missing location: {function_call.arguments}"
 
     @pytest.mark.skip(reason="stage red: product gap, /v1/responses 500s (aresponses TypeError) on missing input instead of 400")
     @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
