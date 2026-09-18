@@ -1,9 +1,8 @@
 import json
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
-import httpx
 import pytest
 
 
@@ -15,7 +14,6 @@ from litellm.types.llms.openai import (
     ImageGenerationPartialImageEvent,
     OutputTextDeltaEvent,
     ResponseCompletedEvent,
-    ResponsesAPIRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )

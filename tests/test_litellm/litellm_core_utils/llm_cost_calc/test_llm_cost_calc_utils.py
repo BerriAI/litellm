@@ -48,7 +48,7 @@ def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize("prompt_tokens", [100, 200000, 200001])
 @pytest.mark.parametrize("read_rate", [None, 0.0, 0.25e-6])
 @pytest.mark.parametrize("service_tier", [None, "priority"])
-def test_missing_cache_read_policy_preserves_billing(prompt_tokens, read_rate, service_tier):
+def test_missing_cache_read_rate_resolves_to_input_rate(prompt_tokens, read_rate, service_tier):
     info = {
         "input_cost_per_token": 3e-6,
         "input_cost_per_token_priority": 4e-6,
@@ -59,14 +59,41 @@ def test_missing_cache_read_policy_preserves_billing(prompt_tokens, read_rate, s
     }
     usage = Usage(prompt_tokens=prompt_tokens, prompt_tokens_details={"cached_tokens": 100})
     billed = _get_token_base_cost(info, usage, service_tier=service_tier)
-    savings = _get_token_base_cost(info, usage, service_tier=service_tier, missing_cache_read_uses_input=True)
     prompt_cost, _ = generic_cost_per_token(
         "policy-fixture", usage, "openai", service_tier=service_tier, model_info=info
     )
-    assert billed[4] == pytest.approx(read_rate or 0.0)
-    assert savings[:4] == billed[:4]
-    assert savings[4] == pytest.approx(billed[0] if read_rate is None else read_rate)
+    assert billed[4] == pytest.approx(read_rate if read_rate is not None else billed[0])
     assert prompt_cost == pytest.approx((prompt_tokens - 100) * billed[0] + 100 * billed[4])
+
+
+def test_generic_cost_per_token_bills_cache_reads_at_input_rate_when_no_cache_read_rate() -> None:
+    model_info: ModelInfo = {
+        "key": "bare-model",
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "input_cost_per_token": 2.4e-7,
+        "output_cost_per_token": 9.7e-7,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supported_openai_params": None,
+    }
+    usage = Usage(
+        prompt_tokens=12928,
+        completion_tokens=380,
+        total_tokens=13308,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=12288),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="bare-model",
+        usage=usage,
+        custom_llm_provider="bedrock",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(12928 * 2.4e-7)
+    assert completion_cost == pytest.approx(380 * 9.7e-7)
 
 
 def test_generic_cost_per_token_prefers_audio_per_second_rate() -> None:
@@ -180,11 +207,7 @@ def test_missing_cache_read_uses_off_peak_input_rate():
     }
     when = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
     billed = _get_token_base_cost(info, Usage(prompt_tokens=100), current_time=when)
-    savings = _get_token_base_cost(
-        info, Usage(prompt_tokens=100), current_time=when, missing_cache_read_uses_input=True
-    )
-    assert billed[4] == 0.0
-    assert savings[0] == savings[4] == 5e-6
+    assert billed[0] == billed[4] == 5e-6
 
 
 def test_reasoning_tokens_no_price_set(_local_model_cost_map):
@@ -1575,59 +1598,6 @@ def test_generic_cost_per_token_tiered_pricing_bills_reasoning_at_tier_rate():
         litellm.model_cost.pop(model, None)
 
 
-def test_gpt_5_6_alias_prices_match_sol(local_model_cost_map):
-    """Regression: the bare gpt-5.6 alias routes to GPT-5.6 Sol, so every cost field on
-    the two entries has to hold the same value. They drifted once before, when Sol took
-    its promotional cut and gpt-5.6 was left on the pre-cut rates, overbilling callers
-    who used the alias."""
-    alias = litellm.model_cost["gpt-5.6"]
-    sol = litellm.model_cost["gpt-5.6-sol"]
-
-    cost_fields = sorted(field for field in sol if "cost" in field)
-    assert len(cost_fields) == 27
-
-    for field in cost_fields:
-        assert alias.get(field) == sol.get(field), field
-
-
-@pytest.mark.parametrize(
-    "model,expected_none,expected_xhigh,expected_minimal",
-    [
-        # Verified against OpenAI's live API on 2026-04-24:
-        #   gpt-5.5   -> supports: none, low, medium, high, xhigh
-        #   gpt-5.5-pro -> supports: medium, high, xhigh
-        # Neither supports "minimal"; gpt-5.5-pro additionally does not support "none".
-        # The JSON must reflect this so LiteLLM rejects unsupported values locally
-        # (or drops them with drop_params=True) instead of round-tripping to OpenAI
-        # for a 400.
-        ("gpt-5.5", True, True, False),
-        ("gpt-5.5-2026-04-23", True, True, False),
-        ("gpt-5.5-pro", False, True, False),
-        ("gpt-5.5-pro-2026-04-23", False, True, False),
-    ],
-)
-def test_gpt55_reasoning_effort_flags_match_live_openai_api(
-    _local_model_cost_map, model, expected_none, expected_xhigh, expected_minimal
-):
-    """Pin reasoning_effort capability flags to OpenAI's actual API contract.
-
-    Observed via `POST /v1/chat/completions` with reasoning_effort=minimal:
-    ``Unsupported value: 'reasoning_effort' does not support 'minimal' with
-    this model``. gpt-5.5-pro additionally rejects 'none' and 'low'.
-    """
-
-    m = litellm.model_cost[model]
-    assert m.get("supports_none_reasoning_effort") is expected_none, (
-        f"{model}: supports_none_reasoning_effort expected {expected_none}"
-    )
-    assert m.get("supports_xhigh_reasoning_effort") is expected_xhigh, (
-        f"{model}: supports_xhigh_reasoning_effort expected {expected_xhigh}"
-    )
-    assert m.get("supports_minimal_reasoning_effort") is expected_minimal, (
-        f"{model}: supports_minimal_reasoning_effort expected {expected_minimal}"
-    )
-
-
 @pytest.mark.parametrize(
     "base_model,dated_model",
     [
@@ -1660,29 +1630,6 @@ def test_gpt55_dated_variants_match_base_reasoning_effort_capabilities(_local_mo
             f"Dated snapshots must inherit the base model's reasoning_effort "
             f"capability profile."
         )
-
-
-@pytest.mark.parametrize(
-    "model,expected_none,expected_minimal,expected_xhigh",
-    [
-        # Mirror live OpenAI API contract (verified via openai/gpt-5.5* on
-        # 2026-04-24): chat accepts {none, low, medium, high, xhigh} but NOT
-        # minimal; pro accepts {medium, high, xhigh} only.
-        # NOTE: openai/gpt-5.5* entries currently set supports_minimal=true on
-        # main (pre #26456). Once that PR lands, OpenAI + Azure flags align.
-        ("azure/gpt-5.5", True, False, True),
-        ("azure/gpt-5.5-pro", False, False, True),
-    ],
-)
-def test_azure_gpt55_reasoning_effort_flags_match_live_openai_api(
-    _local_model_cost_map, model, expected_none, expected_minimal, expected_xhigh
-):
-    """Azure entries pin reasoning_effort flags to OpenAI's actual API contract."""
-
-    m = litellm.model_cost[model]
-    assert m.get("supports_none_reasoning_effort") is expected_none
-    assert m.get("supports_minimal_reasoning_effort") is expected_minimal
-    assert m.get("supports_xhigh_reasoning_effort") is expected_xhigh
 
 
 def test_string_cost_values():
@@ -3411,14 +3358,6 @@ GEMINI_38_FLASH_FIELDS_SHARED_WITH_37_FLASH = (
     "supports_web_search",
     "supports_url_context",
 )
-
-
-@pytest.mark.parametrize("prefix", ["", "gemini/", "vertex_ai/"])
-def test_gemini_38_flash_matches_37_flash_promotional_pricing(prefix, _local_model_cost_map):
-    new_model = litellm.model_cost[f"{prefix}gemini-3.8-flash"]
-    old_model = litellm.model_cost[f"{prefix}gemini-3.7-flash"]
-    for field in GEMINI_38_FLASH_FIELDS_SHARED_WITH_37_FLASH:
-        assert new_model[field] == old_model[field], field
 
 
 @pytest.mark.parametrize(

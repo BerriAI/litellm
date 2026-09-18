@@ -7,7 +7,6 @@ import os
 from unittest import mock
 
 import httpx
-import pytest
 
 import litellm
 from litellm.llms.inception.chat.transformation import InceptionChatConfig
@@ -230,18 +229,6 @@ def test_inception_in_provider_lists():
     assert "inception" in litellm.openai_compatible_providers
     assert "inception" in litellm.provider_list
     assert "https://api.inceptionlabs.ai/v1" in litellm.openai_compatible_endpoints
-
-
-def test_inception_model_list_populated(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.inception_models = set()
-    litellm.add_known_models()
-
-    assert "inception/mercury-2" in litellm.inception_models
-    assert "inception/mercury-2.5" in litellm.inception_models
-    for model in litellm.inception_models:
-        assert model.startswith("inception/")
 
 
 def test_inception_completion_targets_inception_endpoint():

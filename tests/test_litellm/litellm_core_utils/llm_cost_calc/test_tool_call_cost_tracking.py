@@ -1,4 +1,3 @@
-from collections.abc import Mapping, Sequence
 
 import pytest
 
@@ -527,7 +526,6 @@ def _openai_responses_with_web_search_calls(model, num_calls):
         ResponseFunctionWebSearch,
     )
 
-    from litellm.types.llms.openai import ResponsesAPIResponse
 
     output = [
         ResponseFunctionWebSearch(
@@ -585,7 +583,6 @@ def test_web_search_call_count_reads_dict_output_items(local_model_cost_map):
     counter must read their "type" key like the detection gate does, instead of flooring
     a multi-search response to a single billable search.
     """
-    from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.utils import Usage
 
     model = "gpt-4o-search-preview"
@@ -631,7 +628,6 @@ def test_response_includes_output_type_reads_dict_output_items():
     items without an "action" field) stay plain dicts in the output union. The gate must
     read their "type" key instead of returning False and skipping the web search fee.
     """
-    from litellm.types.llms.openai import ResponsesAPIResponse
 
     response = ResponsesAPIResponse.model_validate(
         {
@@ -697,36 +693,5 @@ _BEDROCK_MANTLE_WEB_SEARCH_MODELS = (
 )
 
 _BEDROCK_MANTLE_WEB_SEARCH_RATE = 0.012
-
-
-def _responses_with_web_search(
-    model: str, actions: Sequence[Mapping[str, str]], tool_usage: Mapping[str, object] | None = None
-) -> ResponsesAPIResponse:
-    payload = {
-        "id": "resp_1",
-        "created_at": 1756900000,
-        "model": model.split("/", 1)[-1],
-        "object": "response",
-        "status": "completed",
-        "output": [
-            {"type": "web_search_call", "id": f"ws_{i}", "status": "completed", "action": action}
-            for i, action in enumerate(actions)
-        ],
-    }
-    return ResponsesAPIResponse.model_validate(
-        payload if tool_usage is None else {**payload, "tool_usage": tool_usage}
-    )
-
-
-def _web_search_cost(model: str, response: ResponsesAPIResponse, custom_llm_provider: str) -> float:
-    from litellm.types.utils import Usage
-
-    return StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
-        model=model,
-        response_object=response,
-        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
-        custom_llm_provider=custom_llm_provider,
-        standard_built_in_tools_params=None,
-    )
 
 

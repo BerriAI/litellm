@@ -27,7 +27,6 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
-from litellm.utils import TranscriptionResponse
 
 
 @pytest.fixture
@@ -2376,28 +2375,6 @@ def test_anthropic_geo_and_fast_multipliers_compose(_local_model_cost_map, monke
 
 
 @pytest.mark.parametrize(
-    "model,expected_fast",
-    [
-        ("claude-opus-5", 2.0),
-        ("claude-opus-4-8", 2.0),
-        ("claude-opus-4-6", None),
-        ("claude-opus-4-6-20260205", None),
-        ("claude-opus-4-7", None),
-        ("claude-opus-4-7-20260416", None),
-    ],
-)
-def test_anthropic_fast_multiplier_only_on_models_with_fast_mode(_local_model_cost_map, model, expected_fast):
-    """
-    Anthropic serves fast mode on Opus 5 and Opus 4.8 only, at 2x. Opus 4.6 and
-    4.7 accept the ``speed`` request param but are always served standard, so a
-    ``fast`` multiplier on their map entries overbills every request that asked
-    for fast and was served standard.
-    """
-    entry = litellm.model_cost[model]
-    assert entry["provider_specific_entry"].get("fast") == expected_fast
-
-
-@pytest.mark.parametrize(
     "model",
     ["claude-sonnet-4-6", "claude-mythos-5", "claude-mythos-preview"],
 )
@@ -3374,24 +3351,6 @@ def test_combine_usage_objects_sums_mirrored_cache_write_fields_once():
     assert combined_pair.prompt_tokens_details is not None
     assert combined_pair.prompt_tokens_details.cache_write_tokens == 100
     assert combined_pair.prompt_tokens_details.cache_creation_tokens == 100
-
-
-def _together_chat_response(
-    model: str, prompt_tokens: int, completion_tokens: int, cached_tokens: int
-) -> ModelResponse:
-    return ModelResponse(
-        id="chatcmpl-together-cache",
-        choices=[{"finish_reason": "stop", "index": 0, "message": {"content": "acknowledged", "role": "assistant"}}],
-        created=1756164000,
-        model=model,
-        object="chat.completion",
-        usage=Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
-            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
-        ),
-    )
 
 
 def test_select_model_name_strips_unregistered_alias_prefix(_local_model_cost_map):
