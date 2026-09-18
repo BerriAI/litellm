@@ -1,6 +1,7 @@
 from typing import Final, Literal
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -14,6 +15,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.openai.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import (
+    VERTEX_AI_CACHED_CONTENT_KEY,
     CachedContentListAllResponseBody,
     VertexAICachedContentCreation,
     VertexAICachedContentResponseObject,
@@ -31,7 +33,6 @@ from .transformation import (
 local_cache_obj: Final = Cache(type=LiteLLMCacheType.LOCAL)  # only used for calling 'get_cache_key' function
 
 MAX_PAGINATION_PAGES: Final = 100  # Reasonable upper bound for pagination
-VERTEX_AI_CACHED_CONTENT_KEY: Final = "vertex_ai_cached_content"
 
 
 class ContextCachingEndpoints(VertexBase):
@@ -426,7 +427,9 @@ class ContextCachingEndpoints(VertexBase):
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
         raw_response_cached: Final = response.json()
-        cached_content_response_obj: Final = VertexAICachedContentResponseObject(**raw_response_cached)
+        cached_content_response_obj: Final = TypeAdapter(VertexAICachedContentResponseObject).validate_python(
+            raw_response_cached
+        )
         usage_metadata: Final = cached_content_response_obj.get("usageMetadata", {})
         cached_content_creation: Final = VertexAICachedContentCreation(
             name=cached_content_response_obj["name"],
@@ -588,7 +591,9 @@ class ContextCachingEndpoints(VertexBase):
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
         raw_response_cached: Final = response.json()
-        cached_content_response_obj: Final = VertexAICachedContentResponseObject(**raw_response_cached)
+        cached_content_response_obj: Final = TypeAdapter(VertexAICachedContentResponseObject).validate_python(
+            raw_response_cached
+        )
         usage_metadata: Final = cached_content_response_obj.get("usageMetadata", {})
         cached_content_creation: Final = VertexAICachedContentCreation(
             name=cached_content_response_obj["name"],
