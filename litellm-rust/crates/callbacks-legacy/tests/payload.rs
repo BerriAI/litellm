@@ -2,10 +2,11 @@ use std::ffi::CStr;
 
 use litellm_auth::SecretValue;
 use litellm_callbacks::event::{CallEvent, RawResponse, RequestContext, WireRequest};
-use litellm_host_python::{LifecycleStep, PythonLifecycle};
+use litellm_host_python::{LifecycleStep, PythonLifecycle, to_py};
+use proptest::prelude::*;
 use pyo3::prelude::*;
 use rstest::rstest;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::LegacyLogging;
 use crate::PythonLogger;
@@ -58,9 +59,23 @@ fn before_send_with_secrets(
     body: Value,
     secret_fields: &[&str],
 ) -> WireRequest {
+    before_send_bound(&[], script, optional_params, body, secret_fields)
+}
+
+/// [`before_send_with_secrets`] with `bindings` placed in the namespace before `script` runs.
+fn before_send_bound(
+    bindings: &[(&str, &Value)],
+    script: &CStr,
+    optional_params: Value,
+    body: Value,
+    secret_fields: &[&str],
+) -> WireRequest {
     Python::initialize();
     Python::attach(|py| {
         let locals = namespace(py, PAYLOAD_LOGGER);
+        for &(name, value) in bindings {
+            locals.set_item(name, to_py(py, value).unwrap()).unwrap();
+        }
         run(py, &locals, script);
         let mut logging = LegacyLogging {
             logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
@@ -345,4 +360,160 @@ def check():
         wire.body,
         json!({"document": document(DOCUMENT), "include_image_base64": true})
     );
+}
+
+/// What one pre-call callback does to the payload it is handed.
+#[derive(Clone, Debug)]
+enum Edit {
+    Nothing,
+    Set(String, Value),
+    Remove(String),
+    Rebind(Value),
+    RebindThenSetRetained(String, Value),
+}
+
+impl Edit {
+    fn script(&self) -> Value {
+        match self {
+            Self::Nothing => json!({"kind": "nothing"}),
+            Self::Set(key, value) => json!({"kind": "set", "key": key, "value": value}),
+            Self::Remove(key) => json!({"kind": "remove", "key": key}),
+            Self::Rebind(value) => json!({"kind": "rebind", "value": value}),
+            Self::RebindThenSetRetained(key, value) => {
+                json!({"kind": "rebind_then_set_retained", "key": key, "value": value})
+            }
+        }
+    }
+
+    /// The legacy contract: the provider is sent the body object `pre_call` received, as
+    /// the callback left it. Rebinding the envelope's key points the envelope elsewhere and
+    /// leaves that object alone.
+    fn sent(&self, body: &Map<String, Value>) -> Value {
+        let mut sent = body.clone();
+        match self {
+            Self::Nothing | Self::Rebind(_) => {}
+            Self::Set(key, value) | Self::RebindThenSetRetained(key, value) => {
+                sent.insert(key.clone(), value.clone());
+            }
+            Self::Remove(key) => {
+                sent.remove(key);
+            }
+        }
+        Value::Object(sent)
+    }
+}
+
+/// How the caller's keyword for a body key relates to what the route sends under it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Caller {
+    PassedUnchanged,
+    RewrittenByTheRoute,
+    NotPassed,
+}
+
+const MODEL: &CStr = c"
+aliased = {}
+def on_pre_call(args):
+    body = args['complete_input_dict']
+    aliased.update({name: body[name] is kwargs[name] for name in unchanged})
+    kind = edit['kind']
+    if kind == 'set':
+        body[edit['key']] = edit['value']
+    elif kind == 'remove':
+        body.pop(edit['key'], None)
+    elif kind == 'rebind':
+        args['complete_input_dict'] = edit['value']
+    elif kind == 'rebind_then_set_retained':
+        args['complete_input_dict'] = {}
+        body[edit['key']] = edit['value']
+def check():
+    assert aliased == {name: True for name in unchanged}, aliased
+    assert logger.names() == ['pre_call', 'post_call'], logger.calls
+";
+
+fn json_value() -> impl Strategy<Value = Value> {
+    let leaf = prop_oneof![
+        Just(Value::Null),
+        any::<bool>().prop_map(Value::from),
+        any::<i64>().prop_map(Value::from),
+        any::<f64>()
+            .prop_filter("JSON has no NaN or infinity", |number| number.is_finite())
+            .prop_map(Value::from),
+        ".{0,8}".prop_map(Value::from),
+    ];
+    leaf.prop_recursive(3, 24, 4, |inner| {
+        prop_oneof![
+            prop::collection::vec(inner.clone(), 0..4).prop_map(Value::from),
+            prop::collection::btree_map(key(), inner, 0..4)
+                .prop_map(|fields| Value::Object(fields.into_iter().collect())),
+        ]
+    })
+}
+
+fn key() -> impl Strategy<Value = String> {
+    "[a-z]{1,6}"
+}
+
+fn caller() -> impl Strategy<Value = Caller> {
+    prop_oneof![
+        Just(Caller::PassedUnchanged),
+        Just(Caller::RewrittenByTheRoute),
+        Just(Caller::NotPassed),
+    ]
+}
+
+fn edit() -> impl Strategy<Value = Edit> {
+    prop_oneof![
+        Just(Edit::Nothing),
+        (key(), json_value()).prop_map(|(key, value)| Edit::Set(key, value)),
+        key().prop_map(Edit::Remove),
+        json_value().prop_map(Edit::Rebind),
+        (key(), json_value()).prop_map(|(key, value)| Edit::RebindThenSetRetained(key, value)),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    /// For any body, any caller keywords and any callback edit: every keyword the route
+    /// sends unchanged reaches `pre_call` as the caller's own object, and the provider is
+    /// sent exactly what the model says, so a callback that edits nothing changes nothing.
+    #[test]
+    fn the_wire_is_the_body_pre_call_received_as_the_callback_left_it(
+        fields in prop::collection::btree_map(key(), (json_value(), caller()), 0..5),
+        edit in edit(),
+    ) {
+        let body: Map<String, Value> = fields
+            .iter()
+            .map(|(name, (value, _))| (name.clone(), value.clone()))
+            .collect();
+        let kwargs: Map<String, Value> = fields
+            .iter()
+            .filter_map(|(name, (value, caller))| match caller {
+                Caller::PassedUnchanged => Some((name.clone(), value.clone())),
+                Caller::RewrittenByTheRoute => Some((name.clone(), json!([value]))),
+                Caller::NotPassed => None,
+            })
+            .collect();
+        let unchanged: Value = fields
+            .iter()
+            .filter(|(_, (_, caller))| *caller == Caller::PassedUnchanged)
+            .map(|(name, _)| Value::from(name.clone()))
+            .collect();
+
+        let wire = before_send_bound(
+            &[
+                ("kwargs", &Value::Object(kwargs)),
+                ("unchanged", &unchanged),
+                ("edit", &edit.script()),
+            ],
+            MODEL,
+            json!({}),
+            Value::Object(body.clone()),
+            &[],
+        );
+
+        prop_assert_eq!(wire.body, edit.sent(&body));
+        prop_assert_eq!(wire.headers, [("x-route".to_string(), "route".to_string())]);
+    }
 }

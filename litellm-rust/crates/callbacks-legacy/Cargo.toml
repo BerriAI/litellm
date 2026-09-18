@@ -16,5 +16,6 @@ serde_json.workspace = true
 
 [dev-dependencies]
 litellm-auth.workspace = true
+proptest.workspace = true
 rstest.workspace = true
 serde_json.workspace = true
