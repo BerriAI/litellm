@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta
 from typing import NoReturn
 from unittest.mock import MagicMock, patch
 
@@ -26,6 +27,7 @@ class StreamingWrapper:
 
 class FakeRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def log_retry(self, kwargs, e):
         return kwargs
@@ -36,6 +38,7 @@ class FakeRouter:
 
 class AlwaysFailRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def log_retry(self, kwargs, e):
         return kwargs
@@ -100,6 +103,7 @@ async def test_run_async_fallback_raises_when_all_fallbacks_fail():
 
 class RecordingRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def __init__(self):
         self.received_kwargs = None
@@ -161,6 +165,7 @@ async def test_run_async_fallback_skips_original_model_group():
 
 class AttemptRecordingRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def __init__(self):
         self.attempted_model_groups = []
@@ -470,6 +475,8 @@ class AccessCheckedRouter(AttemptRecordingRouter):
         self.allowed_models = allowed_models
         self.access_checks = []
 
+    fallback_budget_check = None
+
     async def fallback_access_check(self, *, model, request_kwargs, llm_router):
         self.access_checks.append((model, request_kwargs["metadata"]["user_api_key"], llm_router is self))
         return model in self.allowed_models
@@ -541,6 +548,7 @@ async def test_run_async_fallback_does_not_consult_access_check_for_same_model_g
 
 class RecordingFailRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def __init__(self):
         self.attempted_models = []
@@ -612,6 +620,27 @@ async def test_run_async_fallback_forwards_attempted_model_groups_to_nested_call
     assert router.received_kwargs["attempted_targets"].keys == frozenset(
         {"earlier-model", "primary-model", "fallback-model"}
     )
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_can_target_the_requested_group_when_a_pre_router_replaced_it():
+    """The requested group was never called when a pre-router selected a tier, so a
+    tier fallback may legitimately target that originally requested group."""
+    router = RecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["requested-model"],
+        original_model_group="requested-model",
+        original_exception=RuntimeError("selected tier failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="requested-model",
+        metadata={"pre_routing_selected_model": "selected-tier"},
+    )
+
+    assert router.received_kwargs["model"] == "requested-model"
+    assert router.received_kwargs["attempted_targets"].keys == frozenset({"selected-tier", "requested-model"})
 
 
 @pytest.mark.asyncio
@@ -934,7 +963,11 @@ class TestTriggerCooldownForFailedDeployment:
         """The proxy's x-litellm-timeout header lets a caller set an arbitrarily short
         timeout, which litellm.Timeout reports as status 408 regardless of the
         deployment's actual health. Without this guard, a caller could force a 408 on
-        every deployment in the fallback chain from a single request."""
+        every deployment in the fallback chain from a single request.
+
+        The failure logger never stamps end_time for a fallback hop (has_logged_async_failure
+        is already set), so model_call_details still carries the previous hop's end_time, which
+        predates this hop's api_call_start_time. The guard must not trust it."""
         mock_router = MagicMock()
         mock_router.cooldown_time = 60.0
         mock_router.get_model_info.return_value = None
@@ -952,10 +985,60 @@ class TestTriggerCooldownForFailedDeployment:
                 litellm_router=mock_router,
                 kwargs={"client_side_timeout": True},
                 exception=exc,
+                model_call_details={
+                    "litellm_params": {"client_side_timeout": True, "timeout": 0.5},
+                    "api_call_start_time": datetime.now() - timedelta(seconds=1),
+                    "end_time": datetime.now() - timedelta(seconds=5),
+                },
             )
 
             mock_set_cooldown.assert_not_called()
             mock_increment.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_still_cools_down_provider_408_before_caller_deadline(self):
+        """client_side_timeout only records that the caller configured a timeout. A 408
+        that comes back before that deadline was raised by the provider itself, so it is
+        a real health signal and must still cool the deployment down."""
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+            get_deployment_failures_for_current_minute,
+        )
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "fallback-model",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                    "model_info": {"id": "fallback-deployment"},
+                }
+            ],
+            allowed_fails=0,
+            cooldown_time=60,
+            num_retries=0,
+        )
+        exc = litellm.Timeout(message="timeout", model="gpt-5.6", llm_provider="openai")
+        exc.failed_deployment_id = "fallback-deployment"
+        started = datetime.now()
+
+        _trigger_cooldown_for_failed_deployment(
+            litellm_router=router,
+            kwargs={"client_side_timeout": True},
+            exception=exc,
+            model_call_details={
+                "litellm_params": {"client_side_timeout": True, "timeout": 30},
+                "api_call_start_time": started,
+                "end_time": started + timedelta(seconds=1),
+            },
+        )
+
+        assert (
+            get_deployment_failures_for_current_minute(
+                litellm_router_instance=router, deployment_id="fallback-deployment"
+            )
+            == 1
+        )
+        active = router.cooldown_cache.get_active_cooldowns(model_ids=["fallback-deployment"], parent_otel_span=None)
+        assert [entry[0] for entry in active] == ["fallback-deployment"]
 
     def test_still_cools_down_408_without_client_side_timeout_flag(self):
         """The client-side-timeout guard is scoped to caller-supplied timeouts only: a
@@ -977,6 +1060,7 @@ class TestTriggerCooldownForFailedDeployment:
 class TestRunAsyncFallbackTriggersCooldown:
     class RouterWithLoggingKwarg:
         fallback_access_check = None
+        fallback_budget_check = None
 
         def __init__(self):
             self.cooldown_time = 60.0
@@ -1198,6 +1282,28 @@ class TestOrderedFallbackLookupGroups:
         assert fallback_lookup_groups(kwargs, "tier1") == ("tier1",)
         assert fallback_lookup_groups({}, "smart-router") == ("smart-router",)
         assert fallback_lookup_groups({}, None) == ()
+
+    def test_session_remap_keeps_the_bound_router_between_tier_and_requested_group(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            PRE_ROUTING_SELECTED_MODEL_KEY,
+            fallback_lookup_groups,
+        )
+
+        kwargs = {
+            "litellm_metadata": {
+                PRE_ROUTING_SELECTED_MODEL_KEY: "tier1",
+                "model_group": "smart-router",
+            }
+        }
+
+        assert fallback_lookup_groups(kwargs, "requested-model") == (
+            "tier1",
+            "smart-router",
+            "requested-model",
+        )
+        assert fallback_lookup_groups({"metadata": {"model_group": []}}, "requested-model") == (
+            "requested-model",
+        )
 
     def test_first_resolving_group_wins_and_generic_idx_survives_a_miss(self):
         from litellm.router_utils.fallback_event_handlers import (

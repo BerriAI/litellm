@@ -7,7 +7,8 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from httpx import ASGITransport, AsyncClient
 from pytest_mock import MockerFixture
 
 from litellm.proxy._types import (
@@ -19,16 +20,19 @@ from litellm.proxy._types import (
     NewUserResponse,
     ProxyErrorTypes,
     ProxyException,
+    UserAPIKeyAuth,
 )
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
     SCIMRosterSyncError,
     UserProvisionerHelpers,
     _apply_group_patch_updates,
+    _create_user_if_not_exists,
     _extract_group_member_ids,
     _extract_ids_from_path_filter,
     _handle_group_membership_changes,
     _handle_team_membership_changes,
     _parse_member_entries,
+    _premium_user_check,
     _process_group_patch_operations,
     _recompute_scim_member_roles,
     _resolve_group_member_ids,
@@ -37,14 +41,16 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     delete_group,
     delete_user,
     get_groups,
-    get_users,
     get_service_provider_config,
+    get_users,
     merge_placeholder,
     patch_group,
     patch_team_membership,
     patch_user,
+    scim_router,
     update_group,
     update_user,
+    user_api_key_auth,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTERPRISE_USER_SCHEMA,
@@ -304,6 +310,85 @@ async def test_create_user_uses_default_internal_user_params_role(mocker, monkey
     assert called_args.user_role == LitellmUserRoles.PROXY_ADMIN
 
 
+def _mock_scim_create_user_deps(mocker: MockerFixture, scim_user: SCIMUser) -> AsyncMock:
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable into create_user
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable into create_user
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=scim_user),
+    )
+    return mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable into create_user
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_user",
+        AsyncMock(return_value=NewUserRequest(user_id=scim_user.userName)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_user_without_groups_defers_to_default_team(mocker: MockerFixture, monkeypatch):
+    """IdPs omit groups on POST /Users; teams must stay unset so new_user applies default_internal_user_params.teams"""
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="new-user",
+        emails=[SCIMUserEmail(value="new@example.com")],
+    )
+    monkeypatch.setattr(
+        "litellm.default_internal_user_params",
+        {"teams": [{"team_id": "default-team", "max_budget_in_team": 25}]},
+        raising=False,
+    )
+    new_user_mock = _mock_scim_create_user_deps(mocker, scim_user)
+
+    await create_user(user=scim_user)
+
+    assert new_user_mock.call_args.kwargs["data"].teams is None
+    assert new_user_mock.call_args.kwargs["user_api_key_dict"] == UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+
+@pytest.mark.asyncio
+async def test_create_user_with_groups_keeps_idp_teams(mocker: MockerFixture, monkeypatch):
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="new-user",
+        emails=[SCIMUserEmail(value="new@example.com")],
+        groups=[SCIMUserGroup(value="idp-team")],
+    )
+    monkeypatch.setattr(
+        "litellm.default_internal_user_params",
+        {"teams": [{"team_id": "default-team", "max_budget_in_team": 25}]},
+        raising=False,
+    )
+    new_user_mock = _mock_scim_create_user_deps(mocker, scim_user)
+
+    await create_user(user=scim_user)
+
+    assert new_user_mock.call_args.kwargs["data"].teams == ["idp-team"]
+
+
+@pytest.mark.asyncio
+async def test_create_user_if_not_exists_defers_to_default_team(mocker: MockerFixture, monkeypatch):
+    monkeypatch.setattr(
+        "litellm.default_internal_user_params",
+        {"teams": [{"team_id": "default-team", "max_budget_in_team": 25}]},
+        raising=False,
+    )
+    new_user_mock = mocker.patch(  # test-quality-ok: new_user is imported inside the helper, not injectable
+        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user",
+        AsyncMock(return_value=NewUserResponse(user_id="group-user", key="k")),
+    )
+
+    created = await _create_user_if_not_exists(user_id="group-user")
+
+    assert created is not None
+    assert new_user_mock.call_args.kwargs["data"].teams is None
+    assert new_user_mock.call_args.kwargs["user_api_key_dict"] == UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+
 @pytest.mark.asyncio
 async def test_scim_create_user_respects_default_role_set_via_ui(mocker, monkeypatch):
     """
@@ -401,6 +486,48 @@ async def test_scim_create_user_respects_default_role_set_via_ui(mocker, monkeyp
         f"{LitellmUserRoles.INTERNAL_USER}. The default_internal_user_params "
         f"in-memory variable was not updated by _update_litellm_setting."
     )
+
+
+@pytest.fixture
+def scim_test_client():
+    """An in-process SCIM application with authorization dependencies bypassed."""
+    app = FastAPI()
+    app.dependency_overrides[_premium_user_check] = lambda: None
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    app.include_router(scim_router)
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["Users", "Groups"])
+@pytest.mark.parametrize(("requested_count", "effective_count"), [(0, 0), (200, 100), (1000, 100)])
+async def test_scim_collection_endpoints_clamp_requested_page_size(
+    scim_test_client, endpoint, requested_count, effective_count, mocker
+):
+    """SCIM list endpoints accept zero and cap larger client page requests."""
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = MagicMock()
+    table = MagicMock()
+    table.find_many = AsyncMock(return_value=[])
+    table.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_usertable = table
+    mock_prisma_client.db.litellm_teamtable = table
+    mocker.patch(  # test-quality-ok: HTTP validation requires an in-memory database boundary.
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+
+    async with scim_test_client as client:
+        response = await client.get(f"/scim/v2/{endpoint}?startIndex=1&count={requested_count}")
+
+    assert response.status_code == 200
+    table.find_many.assert_awaited_once_with(
+        where={},
+        skip=0,
+        take=effective_count,
+        order={"created_at": "desc"},
+    )
+    assert response.json()["itemsPerPage"] == 0
 
 
 @pytest.mark.asyncio
@@ -1174,6 +1301,67 @@ async def test_update_user_success(mocker):
     assert call_args[1]["where"] == {"user_id": "test-user"}
     assert call_args[1]["data"]["user_email"] == "updated@example.com"
     assert call_args[1]["data"]["teams"] == ["new-team"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("groups", [None, []], ids=["groups-omitted", "groups-empty"])
+async def test_update_user_without_groups_preserves_memberships_and_role(mocker, monkeypatch, groups):
+    """Okta profile PUTs carry no `groups` or `groups: []`; neither may drop teams (and their keys) or recompute role"""
+    from litellm.proxy.proxy_server import proxy_config
+
+    async def mock_get_config():
+        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    existing_user = mocker.MagicMock()
+    existing_user.teams = ["litellm-admins", "engineering"]
+    existing_user.metadata = {}
+
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="okta-user",
+        name=SCIMUserName(familyName="Renamed", givenName="Okta"),
+        emails=[SCIMUserEmail(value="okta@example.com")],
+        **({} if groups is None else {"groups": groups}),
+    )
+    response_scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        id="okta-user",
+        userName="okta-user",
+        emails=[SCIMUserEmail(value="okta@example.com")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value={"user_id": "okta-user"})
+
+    mocker.patch(  # test-quality-ok: update_user's collaborators are module-level, not injectable
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(  # test-quality-ok: update_user's collaborators are module-level, not injectable
+        "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
+        AsyncMock(return_value=existing_user),
+    )
+    mocker.patch(  # test-quality-ok: update_user's collaborators are module-level, not injectable
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=response_scim_user),
+    )
+    patch_membership = mocker.patch(  # test-quality-ok: roster writes are module-level, not injectable
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        AsyncMock(),
+    )
+
+    result = await update_user(user_id="okta-user", user=scim_user)
+
+    assert result == response_scim_user
+    patch_membership.assert_not_awaited()
+    update_data = mock_prisma_client.db.litellm_usertable.update.call_args.kwargs["data"]
+    assert update_data["teams"] == ["litellm-admins", "engineering"]
+    assert "user_role" not in update_data
 
 
 @pytest.mark.asyncio

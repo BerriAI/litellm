@@ -1,16 +1,19 @@
 pub mod audio_transcription;
-pub mod caching;
-pub mod call_lifecycle;
+pub mod call_arguments;
 pub mod chat_completions;
 pub mod constants;
 pub mod error;
 pub mod http_utils;
+pub mod litellm_core_utils;
+pub mod llms;
+pub mod machine;
+mod media;
 pub mod messages;
 pub mod ocr;
-pub mod providers;
-pub mod realtime;
+pub mod params;
 pub mod responses;
-pub mod router;
-pub mod routing_utils;
+mod serde_compat;
+pub mod transport;
+mod url_utils;
 
-pub use error::{CoreError, CoreResult};
+pub use error::Error;

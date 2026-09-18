@@ -28,6 +28,8 @@ from litellm.integrations.otel import (
 )
 from litellm.integrations.otel.mappers.genai import GenAIMapper
 from litellm.integrations.otel.model import spans as spans_mod
+from litellm.integrations.otel.model.metadata import LLMCallEvent
+from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
     RequestIdentity,
@@ -720,6 +722,117 @@ def test_request_identity_falls_back_to_legacy_team_keys():
     ident = RequestIdentity.from_payload(payload)
     assert ident.team_id == "legacy-team"
     assert ident.team_alias == "legacy"
+
+
+@pytest.mark.parametrize(
+    ("request_data", "expected"),
+    [
+        ({"proxy_server_request": {"headers": {"langfuse_trace_name": "from-header"}}}, "from-header"),
+        ({"metadata": {"trace_name": "from-body"}}, "from-body"),
+        ({"litellm_metadata": {"trace_name": "from-anthropic-body"}}, "from-anthropic-body"),
+        (
+            {
+                "proxy_server_request": {"headers": {"langfuse_trace_name": "from-header"}},
+                "metadata": {"trace_name": "from-body"},
+            },
+            "from-header",
+        ),
+        ({"proxy_server_request": {"headers": {"langfuse_trace_name": ""}}, "metadata": {"trace_name": "body"}}, "body"),
+        ({"proxy_server_request": {"headers": {}}, "metadata": {"user_api_key_team_id": "t1"}}, None),
+        ({}, None),
+    ],
+    ids=["header", "body", "anthropic-body", "header-beats-body", "blank-header-falls-through", "neither", "empty"],
+)
+def test_caller_trace_name_prefers_the_langfuse_header_over_body_metadata(request_data, expected):
+    assert caller_trace_controls({"litellm_params": request_data}).name == expected
+    assert LLMCallEvent.from_dict({"litellm_params": request_data}).trace.name == expected
+
+
+@pytest.mark.parametrize(
+    ("request_data", "expected"),
+    [
+        (
+            {"metadata": {"trace_user_id": "u-body", "session_id": "s-body", "tags": ["a", "b", "c"]}},
+            TraceControls(user_id="u-body", session_id="s-body", tags=("a", "b", "c")),
+        ),
+        (
+            {
+                "proxy_server_request": {
+                    "headers": {"langfuse_trace_user_id": "u-header", "langfuse_session_id": "s-header"}
+                },
+                "metadata": {"trace_user_id": "u-body", "session_id": "s-body"},
+            },
+            TraceControls(user_id="u-header", session_id="s-header"),
+        ),
+        (
+            {"litellm_metadata": {"trace_user_id": "u-anthropic", "session_id": "s-anthropic", "tags": ["x"]}},
+            TraceControls(user_id="u-anthropic", session_id="s-anthropic", tags=("x",)),
+        ),
+        (
+            {"metadata": {"tags": ["kept", 7, "", None, "also-kept"]}},
+            TraceControls(tags=("kept", "also-kept")),
+        ),
+        ({"metadata": {"tags": "not-a-list", "trace_user_id": "", "session_id": 12}}, TraceControls(session_id="12")),
+        (
+            {
+                "metadata": {
+                    "trace_id": "forced",
+                    "existing_trace_id": "forced",
+                    "update_trace_keys": ["name"],
+                    "trace_metadata": {"team_id": "spoofed"},
+                    "user_api_key_team_id": "t1",
+                }
+            },
+            TraceControls(),
+        ),
+        ({}, TraceControls()),
+    ],
+    ids=["body", "headers-beat-body", "anthropic-body", "non-string-tags-dropped", "scalar-coercion", "mutation-controls-ignored", "empty"],
+)
+def test_caller_trace_controls_carry_user_session_and_tags(request_data, expected):
+    assert caller_trace_controls({"litellm_params": request_data}) == expected
+    assert LLMCallEvent.from_dict({"litellm_params": request_data}).trace == expected
+
+
+def test_llm_span_data_carries_the_caller_trace_controls():
+    controls: Final = TraceControls(name="nightly-eval", user_id="u1", session_id="s1", tags=("a", "b"))
+    data: Final = LLMCallSpanData.from_standard_logging_payload(_sample_payload(), trace=controls)
+
+    assert data.trace == controls
+    assert LLMCallSpanData.from_standard_logging_payload(_sample_payload()).trace == TraceControls()
+
+
+def test_llm_span_carries_proxy_request_route():
+    """The LLM span records the proxy route the request arrived on, so it can be
+    filtered by endpoint (``/v1/responses`` vs ``/v1/chat/completions``) without
+    joining back to the root SERVER span's ``http.route``. The value is that
+    span's ``http.route`` verbatim, so a parameterized route reports the template
+    the SERVER span reports and not the path the caller happened to send."""
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(metadata={"user_api_key_request_route": "/v1/responses/resp_abc123"}),
+        request_route="/v1/responses/{response_id}",
+    )
+    attrs: Final = GenAIMapper().map(data)
+
+    assert attrs[LiteLLM.REQUEST_ROUTE] == "/v1/responses/{response_id}"
+
+
+def test_llm_span_falls_back_to_the_logged_route_without_a_server_span():
+    """The route the proxy recorded at auth is the backstop for a deployment whose
+    FastAPI instrumentation never mounted: there is no server span to disagree with
+    there, and an endpoint name is worth more than an absent attribute."""
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(metadata={"user_api_key_request_route": "/v1/responses"})
+    )
+
+    assert GenAIMapper().map(data)[LiteLLM.REQUEST_ROUTE] == "/v1/responses"
+
+
+def test_llm_span_omits_request_route_off_the_proxy():
+    """An SDK call has no inbound route, so the key is absent rather than empty."""
+    attrs: Final = GenAIMapper().map(LLMCallSpanData.from_standard_logging_payload(_sample_payload(metadata={})))
+
+    assert LiteLLM.REQUEST_ROUTE not in attrs
 
 
 def test_guardrail_span_data_block_carries_verdict_and_error():

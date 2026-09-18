@@ -14,19 +14,24 @@ from typing import (
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
-from pydantic import ConfigDict, JsonValue, ValidationError, create_model
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, create_model
 from pydantic.fields import FieldInfo
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
+from litellm.proxy._experimental.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.config_resolvers.sso import (
     SSO_FIELD_ENV_VARS,
     SSO_SECRET_FIELDS,
     resolve_sso_config,
+)
+from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+    SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
+    TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import invalidate_config_param
@@ -38,6 +43,7 @@ from litellm.repositories.table_repositories import (
     UISettingsRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
+from litellm.types.mcp import MCPToolSearchSettings
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     SSOConfig,
@@ -210,6 +216,9 @@ class UIThemeSettingsResponse(SettingsResponse):
     """Response model for UI theme settings"""
 
 
+_TEAM_ADMIN_FIELD_ENUM: Final = tuple(sorted(SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS))
+
+
 class UISettings(BaseModel):
     """Configuration for UI-specific flags"""
 
@@ -302,6 +311,18 @@ class UISettings(BaseModel):
         description="If true, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth.",
     )
 
+    team_admin_editable_team_fields: Sequence[str] = Field(
+        default=(),
+        description=(
+            "Team settings fields a team admin may change on the teams they administer. "
+            "Empty means team admins cannot edit team settings at all. "
+            "Proxy admins and org admins are not affected."
+        ),
+        json_schema_extra={  # mutable-ok: pydantic only merges json_schema_extra when it is a plain dict
+            "items": {"type": "string", "enum": [*_TEAM_ADMIN_FIELD_ENUM]},  # mutable-ok: nested in the dict above
+        },
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -324,6 +345,7 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
     "enable_chat_ui",
+    TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 }
 
 ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: Final = "enable_ptu_cost_attribution"
@@ -358,6 +380,7 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
     "disable_key_generate_for_org_admin",
+    TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 ]
 
 # Extension point: packages outside OSS (e.g. litellm_enterprise) can
@@ -446,6 +469,10 @@ class MCPSemanticFilterSettings(BaseModel):
 
 class MCPSemanticFilterSettingsResponse(SettingsResponse):
     """Response model for MCP semantic filter settings"""
+
+
+class MCPToolSearchSettingsResponse(SettingsResponse):
+    """Response model for native MCP tool search settings"""
 
 
 @router.get(
@@ -835,7 +862,7 @@ async def update_default_team_member_budget(teams: list[NewUserRequestTeam], use
 
 
 async def _update_litellm_setting(
-    settings: DefaultInternalUserParams | DefaultTeamSSOParams | MCPSemanticFilterSettings,
+    settings: DefaultInternalUserParams | DefaultTeamSSOParams | MCPSemanticFilterSettings | MCPToolSearchSettings,
     settings_key: str,
     success_message: str,
     user_api_key_dict: UserAPIKeyAuth,
@@ -861,7 +888,7 @@ async def _update_litellm_setting(
             detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
-    in_memory_var: Final = settings.model_dump(exclude_none=True)
+    in_memory_var: Final = settings.model_dump(mode="json", exclude_none=True)
 
     # Load existing config first, then set in-memory value after,
     # because get_config() may overwrite litellm.<key> with stale DB values
@@ -1359,6 +1386,59 @@ async def update_mcp_semantic_filter_settings(
     return result
 
 
+@router.get(
+    "/get/mcp_tool_search_settings",
+    tags=["Settings"],  # mutable-ok: FastAPI's route decorator only accepts a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI's route decorator only accepts a list
+    response_model=MCPToolSearchSettingsResponse,
+)
+async def get_mcp_tool_search_settings(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> Mapping[str, object]:
+    """
+    Get the `litellm_settings.mcp_tool_search` configuration used by the native `mcp_tool_search` virtual tool.
+    """
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected. Please connect a database.")
+
+    config: Final = await proxy_config.get_config()
+
+    return await _get_settings_with_schema(
+        settings_key=MCP_TOOL_SEARCH_SETTINGS_KEY,
+        settings_class=MCPToolSearchSettings,
+        config=config,
+    )
+
+
+@router.patch(
+    "/update/mcp_tool_search_settings",
+    tags=["Settings"],  # mutable-ok: FastAPI's route decorator only accepts a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI's route decorator only accepts a list
+)
+async def update_mcp_tool_search_settings(
+    settings: MCPToolSearchSettings,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> Mapping[str, object]:
+    """
+    Update `litellm_settings.mcp_tool_search` in the database.
+    Settings will be picked up by all pods within approximately 10 seconds via background polling.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can update MCP tool search settings.",
+        )
+
+    return await _update_litellm_setting(
+        settings=settings,
+        settings_key=MCP_TOOL_SEARCH_SETTINGS_KEY,
+        success_message="MCP tool search settings updated successfully. Changes will be applied across all pods within 10 seconds.",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
 UI_SETTINGS_CACHE_KEY: Final = "ui_settings:settings_dict"
 UI_SETTINGS_CACHE_TTL: Final = 600  # 10 minutes
 
@@ -1398,6 +1478,42 @@ async def get_ui_settings_cached() -> dict[str, JsonValue]:
     return ui_settings
 
 
+_UI_SETTINGS_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def apply_runtime_general_settings_flags(ui_settings: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    """Copy the UI settings that gate runtime behavior into ``general_settings``. Returns what was applied."""
+    from litellm.proxy.proxy_server import general_settings
+
+    flags: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
+    if flags:
+        general_settings.update(flags)
+    return MappingProxyType(flags)
+
+
+async def sync_ui_settings_to_general_settings(prisma_client: object) -> Mapping[str, JsonValue]:
+    """Re-read the persisted UI settings and apply the runtime flags to ``general_settings``.
+
+    Runs on startup and on every periodic config reload: the PATCH handler only updates the pod
+    that served it, so every other pod needs its own read to pick up a change without a restart.
+    Never raises. A read that fails leaves this pod on the flags it already had.
+    """
+    try:
+        db_record: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(
+            where={"id": "ui_settings"}
+        )
+        stored: Final = (db_record.ui_settings if db_record else None) or "{}"
+        parsed: Final = (
+            _UI_SETTINGS_OBJECT.validate_json(stored)
+            if isinstance(stored, str)
+            else _UI_SETTINGS_OBJECT.validate_python(stored)
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning("Could not refresh UI settings from the database: %s", e)
+        return MappingProxyType({})
+    return apply_runtime_general_settings_flags(parsed)
+
+
 @router.get(
     "/get/ui_settings",
     tags=["UI Settings"],
@@ -1426,13 +1542,7 @@ async def get_ui_settings():
     # Sanitize any unexpected keys from persisted config before returning
     ui_settings: Final = {k: v for k, v in parsed.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
-    # Sync runtime flags into general_settings so the proxy picks them up
-    # at runtime (covers server restart scenarios).
-    _flags_to_sync: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
-    if _flags_to_sync:
-        from litellm.proxy.proxy_server import general_settings
-
-        general_settings.update(_flags_to_sync)
+    apply_runtime_general_settings_flags(ui_settings)
 
     # Refresh DualCache so other code paths (e.g. /user/filter/ui) see fresh values
     from litellm.proxy.proxy_server import user_api_key_cache
@@ -1512,6 +1622,20 @@ async def update_ui_settings(
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=e.errors())
 
+    unsupported_team_fields: Final = sorted(
+        frozenset(settings.team_admin_editable_team_fields) - SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+    )
+    if unsupported_team_fields:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: HTTPException detail must be a plain dict for FastAPI JSON serialization
+                "error": (
+                    f"{TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING} does not support {unsupported_team_fields}. "
+                    f"Supported fields: {sorted(SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS)}."
+                )
+            },
+        )
+
     # Only include fields the caller actually sent (not Pydantic defaults).
     settings_dict: Final[Mapping[str, JsonValue]] = settings.model_dump(exclude_unset=True)
 
@@ -1557,13 +1681,7 @@ async def update_ui_settings(
         },
     )
 
-    # Sync runtime flags to general_settings so the proxy picks them up
-    # at runtime (general_settings is checked in pre-call utils).
-    _flags_to_sync: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
-    if _flags_to_sync:
-        from litellm.proxy.proxy_server import general_settings
-
-        general_settings.update(_flags_to_sync)
+    apply_runtime_general_settings_flags(ui_settings)
 
     # Invalidate + set DualCache so subsequent reads see the new values immediately
     from litellm.proxy.proxy_server import user_api_key_cache
@@ -1594,13 +1712,22 @@ async def update_ui_settings(
     tags=["UI Theme Settings"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def upload_logo(file: UploadFile = File(...)):
+async def upload_logo(
+    file: UploadFile = File(...),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Upload a custom logo for the admin UI.
     Accepts image files (PNG, JPG, JPEG, SVG) and stores them for use in the UI.
     """
     import os
     from pathlib import Path
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can upload a UI logo.",
+        )
 
     # Validate file type
     allowed_extensions: Final = {".png", ".jpg", ".jpeg", ".svg"}
@@ -1612,9 +1739,11 @@ async def upload_logo(file: UploadFile = File(...)):
             detail=f"Invalid file type. Allowed types: {', '.join(allowed_extensions)}",
         )
 
-    # Validate file size (max 5MB)
-    file_content: Final = await file.read()
-    if len(file_content) > 5 * 1024 * 1024:  # 5MB
+    # Read bounded to one byte past the limit, so an oversized upload is never
+    # fully buffered in memory before being rejected.
+    max_logo_size_bytes: Final = 5 * 1024 * 1024
+    file_content: Final = await file.read(max_logo_size_bytes + 1)
+    if len(file_content) > max_logo_size_bytes:
         raise HTTPException(status_code=400, detail="File size too large. Maximum size is 5MB.")
 
     # Create uploads directory if it doesn't exist

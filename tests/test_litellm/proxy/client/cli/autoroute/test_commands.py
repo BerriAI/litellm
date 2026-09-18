@@ -3,12 +3,14 @@ import socket
 import stat
 from typing import Optional
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
+from litellm.proxy.client.cli.commands.claude_settings import ClaudeSettingsError
 from litellm.proxy.client.cli.commands.autoroute import commands as commands_module
 from litellm.proxy.client.cli.commands.autoroute import process as process_module
-from litellm.proxy.client.cli.commands.autoroute.commands import down, up
+from litellm.proxy.client.cli.commands.autoroute.commands import autoroute_group, start, stop
 from litellm.proxy.client.cli.commands.autoroute.process import PidRecord, ProcessLaunchError, write_pid_record
 from litellm.proxy.client.cli.commands.up import BackupRecord as ClaudeBackupRecord
 from litellm.proxy.client.cli.commands.up import write_backup
@@ -45,14 +47,14 @@ def _silence_signal_handling(monkeypatch):
     monkeypatch.setattr(commands_module, "stream_log", lambda *a, **k: None)
 
 
-class TestUpCommand:
+class TestStartCommand:
     def setup_method(self):
         self.runner = CliRunner()
 
     def test_refuses_when_never_configured(self, monkeypatch, tmp_path):
         _patch_paths(monkeypatch, tmp_path)
 
-        result = self.runner.invoke(up)
+        result = self.runner.invoke(start)
 
         assert result.exit_code != 0
         assert "lite autoroute configure" in result.output
@@ -65,14 +67,14 @@ class TestUpCommand:
         config_path.write_text("")
         monkeypatch.setattr(commands_module, "is_port_available", lambda port: True)
 
-        result = self.runner.invoke(up)
+        result = self.runner.invoke(start)
 
         assert result.exit_code != 0
         assert result.exception is None or isinstance(result.exception, SystemExit)
         assert "lite autoroute configure" in result.output
 
     def test_refuses_with_actionable_error_when_proxy_runtime_missing(self, monkeypatch, tmp_path):
-        """`up` launches a real litellm proxy, which the thin `litellm[cli]` install cannot run.
+        """`start` launches a real litellm proxy, which the thin `litellm[cli]` install cannot run.
         It must fail fast with an actionable message pointing at the proxy install, before it ever
         tries to launch the doomed subprocess (which would otherwise die with a bare ImportError)."""
         config_path, _log_path, _settings_path, _backup_path, _pid_record_path = _patch_paths(monkeypatch, tmp_path)
@@ -84,7 +86,7 @@ class TestUpCommand:
 
         monkeypatch.setattr(commands_module, "launch_proxy", _fail_if_launched)
 
-        result = self.runner.invoke(up)
+        result = self.runner.invoke(start)
 
         assert result.exit_code != 0
         assert "fastapi, websockets" in result.output
@@ -98,18 +100,18 @@ class TestUpCommand:
         )
         monkeypatch.setattr(commands_module, "is_running", lambda pid: True)
 
-        result = self.runner.invoke(up)
+        result = self.runner.invoke(start)
 
         assert result.exit_code != 0
         assert "already running" in result.output
-        assert "lite autoroute down" in result.output
+        assert "lite autoroute stop" in result.output
         assert config_path.read_text() == yaml.safe_dump({"model_list": []})
 
     def test_refuses_when_backup_exists_after_an_unclean_crash(self, monkeypatch, tmp_path):
-        """A prior `up` that was SIGKILL'd leaves no live pid but does leave a stale backup file.
+        """A prior `start` that was SIGKILL'd leaves no live pid but does leave a stale backup file.
 
-        Without this guard, a fresh `up` would overwrite that backup with the currently-patched
-        (not original) Claude settings, so `down`/Ctrl-C would restore the wrong content forever.
+        Without this guard, a fresh `start` would overwrite that backup with the currently-patched
+        (not original) Claude settings, so `stop`/Ctrl-C would restore the wrong content forever.
         """
         config_path, _log_path, claude_settings_path, backup_path, _pid_record_path = _patch_paths(
             monkeypatch, tmp_path
@@ -118,11 +120,11 @@ class TestUpCommand:
         claude_settings_path.write_text(json.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": "stale-patched-token"}}))
         write_backup(ClaudeBackupRecord(existed=True, content={"theme": "dark"}), backup_path)
 
-        result = self.runner.invoke(up)
+        result = self.runner.invoke(start)
 
         assert result.exit_code != 0
         assert "already exists" in result.output
-        assert "lite autoroute down" in result.output
+        assert "lite autoroute stop" in result.output
         assert json.loads(backup_path.read_text())["content"] == {"theme": "dark"}
 
     def test_happy_path_patches_settings_then_restores_everything_on_stop(self, monkeypatch, tmp_path):
@@ -150,7 +152,7 @@ class TestUpCommand:
 
         monkeypatch.setattr("threading.Event.wait", fake_wait)
 
-        result = self.runner.invoke(up)
+        result = self.runner.invoke(start)
 
         assert result.exit_code == 0, result.output
         assert captured["backup_existed"] is True
@@ -159,6 +161,11 @@ class TestUpCommand:
         assert captured["settings"]["env"]["ANTHROPIC_AUTH_TOKEN"] == "fixed-master-key"
         assert captured["settings"]["env"]["ENABLE_TOOL_SEARCH"] == "true"
         assert "apiKeyHelper" not in captured["settings"]
+        # The ephemeral proxy serves only the autorouter, so a starting model left by
+        # `lite configure claude --model` or a user pin would 400 on the first message.
+        assert captured["settings"]["model"] == "autorouter"
+        assert captured["settings"]["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "autorouter"
+        assert captured["settings"]["statusLine"]["command"].endswith("statusline.py")
         assert captured["settings_mode"] == 0o600
 
         assert terminate_calls == [99999]
@@ -192,7 +199,7 @@ class TestUpCommand:
 
         monkeypatch.setattr("threading.Event.wait", fake_wait)
 
-        result = self.runner.invoke(up)
+        result = self.runner.invoke(start)
 
         assert result.exit_code == 0, result.output
         assert "invalid or unexpected JSON" in result.output
@@ -216,7 +223,7 @@ class TestUpCommand:
         monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: terminate_calls.append(pid))
         monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
 
-        result = self.runner.invoke(up)
+        result = self.runner.invoke(start)
 
         assert result.exit_code != 0
         assert "boom" in result.output
@@ -228,7 +235,7 @@ class TestUpCommand:
     def test_terminates_ephemeral_proxy_when_claude_settings_is_corrupt(self, monkeypatch, tmp_path):
         """The health check can pass and the proxy can come up fine, but if
         ~/.claude/settings.json turns out to be corrupt, the just-started proxy must not be left
-        running with no pid record -- exactly the leak `lite autoroute down` exists to clean up."""
+        running with no pid record -- exactly the leak `lite autoroute stop` exists to clean up."""
         config_path, _log_path, claude_settings_path, backup_path, pid_record_path = _patch_paths(monkeypatch, tmp_path)
         config_path.write_text(yaml.safe_dump({"model_list": []}))
         claude_settings_path.write_text("not json at all {{{")
@@ -241,7 +248,7 @@ class TestUpCommand:
         monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: terminate_calls.append(pid))
         monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
 
-        result = self.runner.invoke(up)
+        result = self.runner.invoke(start)
 
         assert result.exit_code != 0
         assert "invalid JSON" in result.output
@@ -249,7 +256,34 @@ class TestUpCommand:
         assert not pid_record_path.exists()
         assert not backup_path.exists()
 
-    def test_up_uses_the_same_port_and_master_key_across_runs(self, monkeypatch, tmp_path):
+    def test_a_status_line_install_failure_leaves_no_backup_behind(self, monkeypatch, tmp_path):
+        # The install runs before the backup is written, so a failure cannot strand a backup that
+        # would make every later `lite configure` / `lite autoroute start` think a session still owns settings.json
+        config_path, _log_path, claude_settings_path, backup_path, pid_record_path = _patch_paths(monkeypatch, tmp_path)
+        config_path.write_text(yaml.safe_dump({"model_list": []}))
+        claude_settings_path.write_text(json.dumps({"theme": "dark"}))
+
+        def boom():
+            raise ClaudeSettingsError("disk full")
+
+        fake_process = FakeProcess(pid=778)
+        terminate_calls = []
+        monkeypatch.setattr(commands_module, "launch_proxy", lambda *a, **k: fake_process)
+        monkeypatch.setattr(commands_module, "poll_liveliness", lambda *a, **k: None)
+        monkeypatch.setattr(commands_module, "is_port_available", lambda port: True)
+        monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: terminate_calls.append(pid))
+        monkeypatch.setattr(commands_module, "install_statusline_script", boom)
+        monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
+
+        result = self.runner.invoke(start)
+
+        assert result.exit_code != 0 and "disk full" in result.output
+        assert terminate_calls == [778]
+        assert not pid_record_path.exists()
+        assert not backup_path.exists()
+        assert json.loads(claude_settings_path.read_text()) == {"theme": "dark"}
+
+    def test_start_uses_the_same_port_and_master_key_across_runs(self, monkeypatch, tmp_path):
         """The LIT-4607/LIT-4608 regression: a client configured against one session must keep
         working in the next, so consecutive runs must patch settings with an identical base URL
         and auth token, and the key must be minted exactly once."""
@@ -282,9 +316,9 @@ class TestUpCommand:
 
         monkeypatch.setattr("threading.Event.wait", fake_wait)
 
-        first = self.runner.invoke(up)
+        first = self.runner.invoke(start)
         run_index["current"] = 1
-        second = self.runner.invoke(up)
+        second = self.runner.invoke(start)
 
         assert first.exit_code == 0, first.output
         assert second.exit_code == 0, second.output
@@ -293,7 +327,7 @@ class TestUpCommand:
         assert captured[0]["ANTHROPIC_AUTH_TOKEN"] == captured[1]["ANTHROPIC_AUTH_TOKEN"]
         assert mint_calls == [32]
 
-    def test_up_reuses_a_master_key_already_persisted_in_the_config(self, monkeypatch, tmp_path):
+    def test_start_reuses_a_master_key_already_persisted_in_the_config(self, monkeypatch, tmp_path):
         config_path, _log_path, claude_settings_path, _backup_path, _pid_record_path = _patch_paths(
             monkeypatch, tmp_path
         )
@@ -321,13 +355,13 @@ class TestUpCommand:
 
         monkeypatch.setattr("threading.Event.wait", fake_wait)
 
-        result = self.runner.invoke(up)
+        result = self.runner.invoke(start)
 
         assert result.exit_code == 0, result.output
         assert captured["env"]["ANTHROPIC_AUTH_TOKEN"] == "persisted-key"
         assert captured["config_text"] == original_config
 
-    def test_up_mints_a_fresh_key_when_the_persisted_master_key_is_blank(self, monkeypatch, tmp_path):
+    def test_start_mints_a_fresh_key_when_the_persisted_master_key_is_blank(self, monkeypatch, tmp_path):
         config_path, _log_path, claude_settings_path, _backup_path, _pid_record_path = _patch_paths(
             monkeypatch, tmp_path
         )
@@ -349,16 +383,22 @@ class TestUpCommand:
 
         monkeypatch.setattr("threading.Event.wait", fake_wait)
 
-        result = self.runner.invoke(up)
+        result = self.runner.invoke(start)
 
         assert result.exit_code == 0, result.output
         assert captured["env"]["ANTHROPIC_AUTH_TOKEN"] == "fresh-minted-key"
         written_config = yaml.safe_load(config_path.read_text())
         assert written_config["general_settings"]["master_key"] == "fresh-minted-key"
 
-    def test_port_override_reaches_settings_launch_and_pid_record(self, monkeypatch, tmp_path):
-        """A --port override must flow to every consumer of the port; a hardcoded default in any
-        one of them would leave the patched settings pointing somewhere the proxy is not."""
+    @pytest.mark.parametrize(
+        ("command", "leading_args"),
+        [(start, []), (autoroute_group, ["start"]), (autoroute_group, ["up"])],
+        ids=["start", "group start", "deprecated up alias"],
+    )
+    def test_port_override_reaches_settings_launch_and_pid_record(self, monkeypatch, tmp_path, command, leading_args):
+        """A --port override must flow to every consumer of the port, through the deprecated `up`
+        alias too; a hardcoded default in any one of them would leave the patched settings pointing
+        somewhere the proxy is not."""
         config_path, _log_path, claude_settings_path, _backup_path, pid_record_path = _patch_paths(
             monkeypatch, tmp_path
         )
@@ -387,16 +427,16 @@ class TestUpCommand:
 
         monkeypatch.setattr("threading.Event.wait", fake_wait)
 
-        result = self.runner.invoke(up, ["--port", "6111"])
+        result = self.runner.invoke(command, [*leading_args, "--port", "6111"])
 
         assert result.exit_code == 0, result.output
         assert captured["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:6111"
         assert launched_ports == [6111]
         assert captured["pid_record"]["port"] == 6111
 
-    def test_up_rejects_port_4000_which_the_child_proxy_rebinds_unpredictably(self, monkeypatch, tmp_path):
+    def test_start_rejects_port_4000_which_the_child_proxy_rebinds_unpredictably(self, monkeypatch, tmp_path):
         """proxy_cli special-cases a busy port 4000 by silently rebinding to a random port,
-        which would desync base_url from the child; up must refuse 4000 outright."""
+        which would desync base_url from the child; start must refuse 4000 outright."""
         config_path, _log_path, _settings_path, backup_path, _pid_record_path = _patch_paths(monkeypatch, tmp_path)
         config_path.write_text(yaml.safe_dump({"model_list": []}))
 
@@ -405,13 +445,13 @@ class TestUpCommand:
 
         monkeypatch.setattr(commands_module, "launch_proxy", _fail_launch)
 
-        result = self.runner.invoke(up, ["--port", "4000"])
+        result = self.runner.invoke(start, ["--port", "4000"])
 
         assert result.exit_code != 0
         assert "4000" in result.output
         assert not backup_path.exists()
 
-    def test_up_refuses_when_the_port_is_busy_without_touching_any_state(self, monkeypatch, tmp_path):
+    def test_start_refuses_when_the_port_is_busy_without_touching_any_state(self, monkeypatch, tmp_path):
         """A busy port must fail loudly before anything is minted, launched, or patched --
         never silently move to another port (the pre-fix behavior this ticket removes)."""
         config_path, _log_path, claude_settings_path, backup_path, _pid_record_path = _patch_paths(
@@ -430,18 +470,18 @@ class TestUpCommand:
             sock.bind(("127.0.0.1", 0))
             sock.listen(1)
             busy_port = sock.getsockname()[1]
-            result = self.runner.invoke(up, ["--port", str(busy_port)])
+            result = self.runner.invoke(start, ["--port", str(busy_port)])
 
         assert result.exit_code != 0
         assert str(busy_port) in result.output
-        assert "lite autoroute down" in result.output
+        assert "lite autoroute stop" in result.output
         assert "--port" in result.output
         assert config_path.read_text() == original_config
         assert not backup_path.exists()
         assert json.loads(claude_settings_path.read_text()) == {"theme": "dark"}
 
 
-class TestDownCommand:
+class TestStopCommand:
     def setup_method(self):
         self.runner = CliRunner()
 
@@ -458,7 +498,7 @@ class TestDownCommand:
         monkeypatch.setattr(commands_module, "is_running", lambda pid: True)
         monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: terminate_calls.append(pid))
 
-        result = self.runner.invoke(down)
+        result = self.runner.invoke(stop)
 
         assert result.exit_code == 0, result.output
         assert "Stopped leftover ephemeral proxy" in result.output
@@ -468,19 +508,33 @@ class TestDownCommand:
         assert not backup_path.exists()
         assert json.loads(claude_settings_path.read_text()) == original_settings
 
+    def test_removes_settings_that_did_not_exist_before_start(self, monkeypatch, tmp_path):
+        _config_path, _log_path, claude_settings_path, backup_path, _pid_record_path = _patch_paths(
+            monkeypatch, tmp_path
+        )
+        write_backup(ClaudeBackupRecord(existed=False, content=None), backup_path)
+        claude_settings_path.write_text(json.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": "fixed-master-key"}}))
+
+        result = self.runner.invoke(stop)
+
+        assert result.exit_code == 0, result.output
+        assert f"Removed {claude_settings_path} (it did not exist before `lite autoroute start`)." in result.output
+        assert not claude_settings_path.exists()
+        assert not backup_path.exists()
+
     def test_is_a_clean_no_op_when_nothing_is_running_and_no_backup_exists(self, monkeypatch, tmp_path):
         _config_path, _log_path, claude_settings_path, _backup_path, _pid_record_path = _patch_paths(
             monkeypatch, tmp_path
         )
 
-        result = self.runner.invoke(down)
+        result = self.runner.invoke(stop)
 
         assert result.exit_code == 0, result.output
         assert "Nothing to restore." in result.output
         assert not claude_settings_path.exists()
 
     def test_clears_a_corrupt_pid_record_and_still_restores_settings(self, monkeypatch, tmp_path):
-        """down is specifically the crash-recovery path -- a pid file truncated by a mid-write
+        """stop is specifically the crash-recovery path -- a pid file truncated by a mid-write
         crash must not block it from clearing the record and restoring Claude settings anyway."""
         _config_path, _log_path, claude_settings_path, backup_path, pid_record_path = _patch_paths(
             monkeypatch, tmp_path
@@ -491,7 +545,7 @@ class TestDownCommand:
         write_backup(ClaudeBackupRecord(existed=True, content=original_settings), backup_path)
         claude_settings_path.write_text(json.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": "fixed-master-key"}}))
 
-        result = self.runner.invoke(down)
+        result = self.runner.invoke(stop)
 
         assert result.exit_code == 0, result.output
         assert "invalid or unexpected JSON" in result.output
@@ -507,7 +561,48 @@ class TestDownCommand:
         backup_path.parent.mkdir(parents=True, exist_ok=True)
         backup_path.write_text("not json at all {{{")
 
-        result = self.runner.invoke(down)
+        result = self.runner.invoke(stop)
 
         assert result.exit_code != 0
         assert "invalid or unexpected JSON" in result.output
+
+
+class TestSubcommandNames:
+    def test_start_and_stop_are_the_listed_commands(self):
+        """`lite up` already routes an existing proxy into Claude Code, so the ephemeral proxy's
+        launcher and its recovery path are listed as `start` and `stop`; the old names stay callable
+        but are hidden from the listing."""
+        runner = CliRunner()
+
+        listing = runner.invoke(autoroute_group, ["--help"])
+        assert listing.exit_code == 0, listing.output
+        listed = {line.split()[0] for line in listing.output.splitlines() if line.startswith("  ")}
+        assert {"configure", "start", "stop"} <= listed
+        assert listed.isdisjoint({"up", "down"})
+
+        for name in ("start", "stop", "up", "down"):
+            result = runner.invoke(autoroute_group, [name, "--help"])
+            assert result.exit_code == 0, result.output
+            assert "Show this message and exit" in result.output
+
+    def test_up_warns_then_behaves_like_start(self, monkeypatch, tmp_path):
+        _patch_paths(monkeypatch, tmp_path)
+        runner = CliRunner()
+
+        result = runner.invoke(autoroute_group, ["up", "--port", "5555"])
+
+        assert result.exit_code == 1, result.output
+        assert "`lite autoroute up` is deprecated" in result.stderr
+        assert "run `lite autoroute start` instead" in result.stderr
+        assert "No config found. Run `lite autoroute configure` first." in result.output
+
+    def test_down_warns_then_behaves_like_stop(self, monkeypatch, tmp_path):
+        _patch_paths(monkeypatch, tmp_path)
+        runner = CliRunner()
+
+        result = runner.invoke(autoroute_group, ["down"])
+
+        assert result.exit_code == 0, result.output
+        assert "`lite autoroute down` is deprecated" in result.stderr
+        assert "run `lite autoroute stop` instead" in result.stderr
+        assert "Nothing to restore." in result.output

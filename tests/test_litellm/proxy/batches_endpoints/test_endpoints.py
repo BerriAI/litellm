@@ -29,14 +29,16 @@ added to this layer raises instead of silently passing - the inventory of seams
 cannot drift without a test failure.
 """
 
+import base64
 import json
+import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
+from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
 import litellm
 import litellm.proxy.batches_endpoints.endpoints as endpoints
@@ -989,6 +991,67 @@ async def test_create__uses_acreate_batch_route_type(harness, openai_env_creds):
     assert harness.pre_call.call_args.kwargs["route_type"] == "acreate_batch"
 
 
+def install_managed_files_hook(harness: Harness) -> AsyncMock:
+    prisma_client = AsyncMock()
+    managed_files = _PROXY_LiteLLMManagedFiles(MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client)
+    harness.logging.post_call_success_hook = AsyncMock(side_effect=managed_files.async_post_call_success_hook)
+    harness.router.model_list = []
+    return prisma_client
+
+
+TEAM_A_KEY = UserAPIKeyAuth(api_key="sk-team-a", user_id="user_a", team_id="team_a")
+
+
+def assert_ownership_registered_for_team_a(prisma_client: AsyncMock, batch_id: str) -> None:
+    upsert = prisma_client.db.litellm_managedobjecttable.upsert
+    upsert.assert_awaited_once()
+    assert upsert.await_args.kwargs["where"] == {"unified_object_id": batch_id}
+    created = upsert.await_args.kwargs["data"]["create"]
+    assert created["created_by"] == "user_a"
+    assert created["team_id"] == "team_a"
+    prisma_client.db.litellm_managedobjecttable.update_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"input_file_id": AZURE_FILE_ID},
+        {"input_file_id": "file-plain", "model": "vertex-model"},
+        {"input_file_id": "file-plain"},
+    ],
+    ids=["model_encoded_file_id", "model_param", "provider_fallback"],
+)
+async def test_create__registers_ownership_for_creator(harness, openai_env_creds, body):
+    set_body(harness, {**body, "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+    prisma_client = install_managed_files_hook(harness)
+
+    resp = await call_create(harness, user=TEAM_A_KEY)
+
+    assert_ownership_registered_for_team_a(prisma_client, resp.id)
+
+
+@pytest.mark.asyncio
+async def test_create__unified_file_id_registers_ownership_for_creator(harness):
+    unified_input_file_id = base64.urlsafe_b64encode(
+        b"litellm_proxy:application/octet-stream;unified_id,input-uuid;target_model_names,gpt-4o-mini"
+    ).decode()
+    set_body(
+        harness,
+        {
+            "input_file_id": unified_input_file_id,
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    prisma_client = install_managed_files_hook(harness)
+
+    resp = await call_create(harness, user=TEAM_A_KEY)
+
+    assert harness.router_acreate.call_count == 1
+    assert_ownership_registered_for_team_a(prisma_client, resp.id)
+
+
 @pytest.mark.asyncio
 async def test_create__metadata_sanitized_before_forwarding(harness, openai_env_creds):
     set_body(
@@ -1024,6 +1087,28 @@ async def test_create__exception_calls_failure_hook(harness, openai_env_creds):
 
     harness.logging.post_call_failure_hook.assert_called_once()
     assert harness.logging.post_call_failure_hook.call_args.kwargs["original_exception"].args[0] == "provider boom"
+
+
+async def test_create__exception_carries_the_litellm_call_id(harness, openai_env_creds, caplog):
+    call_id = "lit7836-batch-call-id"
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "litellm_call_id": call_id,
+        },
+    )
+    harness.litellm_acreate.side_effect = ValueError("provider boom")
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"), pytest.raises(ProxyException) as raised:
+        await call_create(harness)
+
+    assert raised.value.headers["x-litellm-call-id"] == call_id
+    record = next(r for r in caplog.records if "Exception occured" in r.getMessage())
+    assert record.litellm_call_id == call_id
+    assert call_id in record.getMessage()
 
 
 # =========================================================================== #
@@ -1889,6 +1974,24 @@ async def test_list__exception_calls_failure_hook(list_harness):
 
     list_harness.logging.post_call_failure_hook.assert_called_once()
     assert list_harness.logging.post_call_failure_hook.call_args.kwargs["original_exception"].args[0] == "provider boom"
+
+
+@pytest.mark.asyncio
+async def test_list__failure_hook_and_response_share_the_request_litellm_call_id(list_harness):
+    call_id = "lit7836-list-batches-call-id"
+    list_harness.pre_call.side_effect = lambda **kw: (
+        {**list_harness.body["body"], "litellm_call_id": call_id},
+        MagicMock(),
+    )
+    list_harness.litellm_alist.side_effect = ValueError("provider boom")
+
+    with pytest.raises(ProxyException) as raised:
+        await call_list(list_harness, after="batch-0", limit=5)
+
+    failure_request_data = list_harness.logging.post_call_failure_hook.call_args.kwargs["request_data"]
+    assert failure_request_data["litellm_call_id"] == call_id
+    assert (failure_request_data["after"], failure_request_data["limit"]) == ("batch-0", 5)
+    assert raised.value.headers["x-litellm-call-id"] == call_id
 
 
 # =========================================================================== #

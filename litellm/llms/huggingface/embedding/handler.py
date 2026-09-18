@@ -1,7 +1,7 @@
 import json
 import os
-from collections.abc import Callable
-from typing import Any, Final, Literal, get_args
+from collections.abc import Sequence
+from typing import Final, Literal, Protocol, get_args
 
 import httpx
 
@@ -27,6 +27,12 @@ hf_tasks_embeddings: Final = (
         "sentence-similarity", "feature-extraction", "rerank", "embed", "similarity"
     ]
 )
+
+
+class _SupportsTokenEncode(Protocol):
+    """Token encoder handle. Only ``encode`` is ever called on it here."""
+
+    def encode(self, text: str, *, disallowed_special: tuple[str, ...]) -> Sequence[int]: ...
 
 
 def get_hf_task_embedding_for_model(model: str, task_type: str | None, api_base: str) -> str | None:
@@ -173,7 +179,7 @@ class HuggingFaceEmbedding(BaseLLM):
         model_response: EmbeddingResponse,
         model: str,
         input: list,
-        encoding: Any,
+        encoding: _SupportsTokenEncode,
     ) -> EmbeddingResponse:
         output_data: Final = []
         if "similarities" in embeddings:
@@ -234,7 +240,7 @@ class HuggingFaceEmbedding(BaseLLM):
         api_base: str,
         api_key: str | None,
         headers: dict,
-        encoding: Callable,
+        encoding: _SupportsTokenEncode,
         client: AsyncHTTPHandler | None = None,
     ):
         ## TRANSFORMATION ##
@@ -294,7 +300,7 @@ class HuggingFaceEmbedding(BaseLLM):
         optional_params: dict,
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
-        encoding: Callable,
+        encoding: _SupportsTokenEncode,
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | httpx.Timeout = httpx.Timeout(None),
