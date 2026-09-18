@@ -3069,6 +3069,9 @@ async def test_update_config_success_callback_normalization():
         async def add_deployment(self, prisma_client=None, proxy_logging_obj=None):  # noqa: F811  # pytest fixture, not a redefinition
             return None
 
+        def reject_config_owned_writes(self, *, section_name, changed_keys):
+            return None
+
     setattr(proxy_server, "proxy_config", MockProxyConfig())
 
     config_update = ConfigYAML(litellm_settings={"success_callback": ["SQS", "sQs"]})

@@ -16977,7 +16977,7 @@ async def update_config(
         proxy_config.reject_config_owned_writes(
             section_name="general_settings", changed_keys=requested_general_settings
         )
-        proxy_config.reject_config_owned_writes(section_name="litellm_settings", changed_keys=updated_litellm_settings)
+        proxy_config.reject_config_owned_writes(section_name="litellm_settings", changed_keys=raw_litellm_settings)
         proxy_config.reject_config_owned_writes(section_name="router_settings", changed_keys=router_settings_updates)
 
         async def _read_section(param_name: str) -> dict:
@@ -17006,8 +17006,7 @@ async def update_config(
         if config_info.general_settings is not None:
             existing = await _read_section("general_settings")
             before_general_settings: Final = copy.deepcopy(existing)
-            updates: Mapping[str, JsonValue] = config_info.general_settings.dict(exclude_none=True)
-            for k, v in updates.items():
+            for k, v in requested_general_settings.items():
                 if k == "alert_to_webhook_url":
                     if "alerting" not in existing:
                         existing["alerting"] = ["slack"]
