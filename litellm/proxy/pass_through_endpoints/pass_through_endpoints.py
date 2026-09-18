@@ -778,12 +778,11 @@ def _build_passthrough_failure_request_payload(
         request_payload.update(kwargs)
     if logging_obj is not None:
         request_payload["litellm_logging_obj"] = logging_obj
-        logging_litellm_params: Final = logging_obj.model_call_details.get("litellm_params", {})
-        existing_litellm_params: Final = request_payload.get("litellm_params", {})
-        if isinstance(logging_litellm_params, dict) and isinstance(existing_litellm_params, dict):
-            api_base: Final = logging_litellm_params.get("api_base")
-            if isinstance(api_base, str) and api_base and "api_base" not in existing_litellm_params:
-                request_payload["litellm_params"] = {**existing_litellm_params, "api_base": api_base}
+        logging_litellm_params: Final = logging_obj.model_call_details.get("litellm_params")
+        existing_litellm_params: Final[dict] = request_payload.get("litellm_params") or {}
+        api_base: Final = logging_litellm_params.get("api_base") if isinstance(logging_litellm_params, dict) else None
+        if isinstance(api_base, str) and api_base and "api_base" not in existing_litellm_params:
+            request_payload["litellm_params"] = {**existing_litellm_params, "api_base": api_base}
     if "model" not in request_payload and parsed_body and isinstance(parsed_body, dict):
         request_payload["model"] = parsed_body.get("model", "")
     if "custom_llm_provider" not in request_payload and custom_llm_provider:
