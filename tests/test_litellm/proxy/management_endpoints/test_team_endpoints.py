@@ -12,8 +12,6 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from litellm._uuid import uuid
-
-from litellm.proxy._types import UserAPIKeyAuth  # Import UserAPIKeyAuth
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_BudgetTableFull,
@@ -33,14 +31,12 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     TeamMemberUpdateRequest,
     UpdateTeamRequest,
+    UserAPIKeyAuth,  # Import UserAPIKeyAuth
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
-    user_api_key_auth,  # Assuming this dependency is needed
-)
-from litellm.proxy.management_endpoints.team_endpoints import (
+    _STRIP_DELETED_TEAM_FROM_USERS_SQL,
     GetTeamMemberPermissionsResponse,
     UpdateTeamMemberPermissionsRequest,
-    _STRIP_DELETED_TEAM_FROM_USERS_SQL,
     _persist_deleted_team_records,
     _save_deleted_team_records,
     _transform_teams_to_deleted_records,
@@ -56,6 +52,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     team_member_delete,
     team_member_update,
     update_team,
+    user_api_key_auth,  # Assuming this dependency is needed
     validate_team_org_change,
 )
 from litellm.proxy.management_helpers.access_group_team_sync import (
@@ -70,6 +67,10 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     BulkTeamMemberAddRequest,
     BulkTeamMemberAddResponse,
     TeamMemberAddResult,
+)
+from tests.test_litellm.proxy.management_endpoints.jwt_key_mapping_doubles import (
+    CascadingJWTMappingTable,
+    JWTMappingRow,
 )
 
 # Setup TestClient
@@ -2788,7 +2789,7 @@ async def test_upsert_team_member_budget_table_existing_budget():
     """
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    from litellm.proxy._types import LitellmUserRoles, LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import (
         TeamMemberBudgetHandler,
     )
@@ -2849,7 +2850,7 @@ async def test_upsert_team_member_budget_table_no_existing_budget():
     """
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    from litellm.proxy._types import LitellmUserRoles, LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import (
         TeamMemberBudgetHandler,
     )
@@ -6092,9 +6093,9 @@ async def test_new_team_standalone_validates_against_user_models(monkeypatch):
     - Team is created WITHOUT organization_id and models=['gpt-4']
     - Expected: Should fail with "Model not in allowed user models"
     """
-    import litellm
     from fastapi import Request
 
+    import litellm
     from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
@@ -9180,27 +9181,6 @@ async def test_team_member_delete_persists_deleted_keys(monkeypatch):
     assert cache.get_cache(key="unrelated-key") == {"retained": True}
 
 
-class _JWTMappingRow:
-    def __init__(self, token, jwt_claim_name, jwt_claim_value, jwt_issuer=None):
-        self.token = token
-        self.jwt_claim_name = jwt_claim_name
-        self.jwt_claim_value = jwt_claim_value
-        self.jwt_issuer = jwt_issuer
-
-
-class _CascadingJWTMappingTable:
-    """Mapping rows that LiteLLM_JWTKeyMapping_token_fkey drops when their key row is deleted."""
-
-    def __init__(self, rows):
-        self.rows = rows
-
-    async def find_many(self, where, **kwargs):
-        return [row for row in self.rows if row.token in where["token"]["in"]]
-
-    def cascade(self, deleted_tokens):
-        self.rows = [row for row in self.rows if row.token not in deleted_tokens]
-
-
 def _seed_jwt_mapping_cache(cache, mapping_rows):
     from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 
@@ -9224,11 +9204,11 @@ async def test_team_member_delete_evicts_jwt_key_mapping_cache_of_the_keys_it_de
     from litellm.proxy.management_endpoints.key_management_endpoints import LiteLLM_VerificationToken
 
     doomed_rows: Final = (
-        _JWTMappingRow("hashed-token-1", "sub", "user-123"),
-        _JWTMappingRow("hashed-token-1", "sub", "user-123", "https://issuer.example"),
+        JWTMappingRow("hashed-token-1", "sub", "user-123"),
+        JWTMappingRow("hashed-token-1", "sub", "user-123", "https://issuer.example"),
     )
-    kept_row: Final = _JWTMappingRow("hashed-other-key", "sub", "user-999")
-    jwt_table: Final = _CascadingJWTMappingTable([*doomed_rows, kept_row])
+    kept_row: Final = JWTMappingRow("hashed-other-key", "sub", "user-999")
+    jwt_table: Final = CascadingJWTMappingTable([*doomed_rows, kept_row])
 
     team = LiteLLM_TeamTable(
         team_id="team-1",
@@ -9271,7 +9251,7 @@ async def test_team_member_delete_evicts_jwt_key_mapping_cache_of_the_keys_it_de
 
     assert all(cache.get_cache(key=cache_key) is None for cache_key in doomed_cache_keys)
     assert cache.get_cache(key=kept_cache_key) == "hashed-other-key"
-    assert jwt_table.rows == [kept_row]
+    assert jwt_table.rows == (kept_row,)
 
 
 @pytest.mark.asyncio
@@ -9286,11 +9266,11 @@ async def test_delete_team_evicts_jwt_key_mapping_cache_of_the_keys_it_deletes(
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     doomed_rows: Final = (
-        _JWTMappingRow("hashed-doomed-key", "sub", "svc-account"),
-        _JWTMappingRow("hashed-doomed-key", "sub", "svc-account", "https://issuer.example"),
+        JWTMappingRow("hashed-doomed-key", "sub", "svc-account"),
+        JWTMappingRow("hashed-doomed-key", "sub", "svc-account", "https://issuer.example"),
     )
-    kept_row: Final = _JWTMappingRow("hashed-unrelated-key", "sub", "svc-account", "https://other-issuer.example")
-    jwt_table: Final = _CascadingJWTMappingTable([*doomed_rows, kept_row])
+    kept_row: Final = JWTMappingRow("hashed-unrelated-key", "sub", "svc-account", "https://other-issuer.example")
+    jwt_table: Final = CascadingJWTMappingTable([*doomed_rows, kept_row])
 
     team = LiteLLM_TeamTable(
         team_id="team-doomed",
@@ -9346,7 +9326,7 @@ async def test_delete_team_evicts_jwt_key_mapping_cache_of_the_keys_it_deletes(
 
     assert all(cache.get_cache(key=cache_key) is None for cache_key in doomed_cache_keys)
     assert cache.get_cache(key=kept_cache_key) == "hashed-unrelated-key"
-    assert jwt_table.rows == [kept_row]
+    assert jwt_table.rows == (kept_row,)
 
 
 @pytest.mark.asyncio
@@ -10570,7 +10550,7 @@ def test_new_team_request_accepts_team_member_budget_duration():
 async def test_create_team_member_budget_table_with_duration():
     """Verify that create_team_member_budget_table passes budget_duration
     through to the new_budget call when team_member_budget_duration is provided."""
-    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth, LitellmUserRoles
+    from litellm.proxy._types import LitellmUserRoles, NewTeamRequest, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import (
         TeamMemberBudgetHandler,
     )
@@ -11060,7 +11040,7 @@ async def test_team_member_me_matches_email_only_member(mock_db_client):
 @pytest.mark.asyncio
 async def test_team_member_me_returns_404_for_non_member(mock_db_client):
     """A user who is not a member of the team gets 404, regardless of role."""
-    from fastapi import Request, HTTPException
+    from fastapi import HTTPException, Request
 
     from litellm.proxy.management_endpoints.team_endpoints import team_member_me
 
@@ -11094,7 +11074,7 @@ async def test_team_member_me_returns_404_for_proxy_admin_not_in_team(
     Proxy admins get 404 if they are not actually a member of the team.
     `me` only resolves for actual team members; admins use /team/info instead.
     """
-    from fastapi import Request, HTTPException
+    from fastapi import HTTPException, Request
 
     from litellm.proxy.management_endpoints.team_endpoints import team_member_me
 
@@ -11155,7 +11135,7 @@ async def test_team_member_me_returns_defaults_when_no_membership_row(mock_db_cl
 @pytest.mark.asyncio
 async def test_team_member_me_rejects_team_key_without_user_id(mock_db_client):
     """A team key with no user_id can't resolve 'me' — must return 400."""
-    from fastapi import Request, HTTPException
+    from fastapi import HTTPException, Request
 
     from litellm.proxy.management_endpoints.team_endpoints import team_member_me
 
@@ -11173,7 +11153,7 @@ async def test_team_member_me_rejects_team_key_without_user_id(mock_db_client):
 @pytest.mark.asyncio
 async def test_team_member_me_returns_404_for_unknown_team(mock_db_client):
     """Unknown team_id returns 404 — propagated from get_team_object."""
-    from fastapi import Request, HTTPException
+    from fastapi import HTTPException, Request
 
     from litellm.proxy.management_endpoints.team_endpoints import team_member_me
 

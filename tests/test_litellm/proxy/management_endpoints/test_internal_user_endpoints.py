@@ -4,10 +4,9 @@ from types import SimpleNamespace
 from typing import Final
 
 import pytest
-from fastapi.testclient import TestClient
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
-
 
 from litellm.proxy._types import (
     LiteLLM_UserTableFiltered,
@@ -27,6 +26,10 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     ui_view_users,
 )
 from litellm.proxy.proxy_server import app
+from tests.test_litellm.proxy.management_endpoints.jwt_key_mapping_doubles import (
+    CascadingJWTMappingTable,
+    JWTMappingRow,
+)
 
 client = TestClient(app)
 
@@ -2679,27 +2682,6 @@ async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
         assert condition[field] == {"in": ["admin-creator"]}
 
 
-class _JWTMappingRow:
-    def __init__(self, token, jwt_claim_name, jwt_claim_value, jwt_issuer=None):
-        self.token = token
-        self.jwt_claim_name = jwt_claim_name
-        self.jwt_claim_value = jwt_claim_value
-        self.jwt_issuer = jwt_issuer
-
-
-class _CascadingJWTMappingTable:
-    """Mapping rows that LiteLLM_JWTKeyMapping_token_fkey drops when their key row is deleted."""
-
-    def __init__(self, rows):
-        self.rows = rows
-
-    async def find_many(self, where, **kwargs):
-        return [row for row in self.rows if row.token in where["token"]["in"]]
-
-    def cascade(self, deleted_tokens):
-        self.rows = [row for row in self.rows if row.token not in deleted_tokens]
-
-
 @pytest.mark.asyncio
 async def test_delete_user_evicts_jwt_key_mapping_cache_of_its_keys(mocker):
     """/user/delete bulk-deletes the user's keys without going through /key/delete, so the
@@ -2719,11 +2701,11 @@ async def test_delete_user_evicts_jwt_key_mapping_cache_of_its_keys(mocker):
     global_cache_key: Final = jwt_key_mapping_cache_key("sub", "jwt-user", None)
     issuer_cache_key: Final = jwt_key_mapping_cache_key("sub", "jwt-user", "https://issuer.example")
     unrelated_cache_key: Final = jwt_key_mapping_cache_key("sub", "other-user", None)
-    jwt_table: Final = _CascadingJWTMappingTable(
+    jwt_table: Final = CascadingJWTMappingTable(
         [
-            _JWTMappingRow("hashed-jwt-key", "sub", "jwt-user"),
-            _JWTMappingRow("hashed-issuer-key", "sub", "jwt-user", "https://issuer.example"),
-            _JWTMappingRow("hashed-unrelated-key", "sub", "other-user"),
+            JWTMappingRow("hashed-jwt-key", "sub", "jwt-user"),
+            JWTMappingRow("hashed-issuer-key", "sub", "jwt-user", "https://issuer.example"),
+            JWTMappingRow("hashed-unrelated-key", "sub", "other-user"),
         ]
     )
     cache: Final = UserApiKeyCache()

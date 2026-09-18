@@ -1,6 +1,5 @@
 import asyncio
 import json
-from litellm._uuid import uuid
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Mapping, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,6 +8,11 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from litellm._uuid import uuid
+from tests.test_litellm.proxy.management_endpoints.jwt_key_mapping_doubles import (
+    CascadingJWTMappingTable,
+    JWTMappingRow,
+)
 
 
 @pytest.mark.asyncio
@@ -499,8 +503,9 @@ async def test_organization_info_includes_user_email(monkeypatch):
     """
     Test that GET /organization/info returns user_email in members list.
     """
-    from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
     from datetime import datetime
+
+    from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
 
     # Simulate a membership row with a nested user object that has user_email
     raw_membership = {
@@ -573,6 +578,10 @@ async def test_organization_member_add_rejects_unauthorized_caller(patched_org_p
     # ``organization_member_add`` catches HTTPException in its
     # catch-all and re-wraps as ProxyException with the original status
     # code preserved.
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
     from litellm.proxy._types import (
         OrganizationMemberAddRequest,
         OrgMember,
@@ -581,9 +590,6 @@ async def test_organization_member_add_rejects_unauthorized_caller(patched_org_p
     from litellm.proxy.management_endpoints.organization_endpoints import (
         organization_member_add,
     )
-    from unittest.mock import Mock
-
-    from fastapi import Request
 
     data = OrganizationMemberAddRequest(
         organization_id="org-victim",
@@ -1440,27 +1446,6 @@ def test_organization_routes_reach_their_handler_with_enterprise_license(monkeyp
     )
 
 
-class _JWTMappingRow:
-    def __init__(self, token, jwt_claim_name, jwt_claim_value, jwt_issuer=None):
-        self.token = token
-        self.jwt_claim_name = jwt_claim_name
-        self.jwt_claim_value = jwt_claim_value
-        self.jwt_issuer = jwt_issuer
-
-
-class _CascadingJWTMappingTable:
-    """Mapping rows that LiteLLM_JWTKeyMapping_token_fkey drops when their key row is deleted."""
-
-    def __init__(self, rows):
-        self.rows = rows
-
-    async def find_many(self, where, **kwargs):
-        return [row for row in self.rows if row.token in where["token"]["in"]]
-
-    def cascade(self, deleted_tokens):
-        self.rows = [row for row in self.rows if row.token not in deleted_tokens]
-
-
 @pytest.mark.asyncio
 async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monkeypatch):
     """/organization/delete bulk-deletes the org's keys without going through /key/delete, so the
@@ -1479,11 +1464,11 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
         jwt_key_mapping_cache_key("sub", "svc-account", "https://issuer.example"),
     )
     kept_cache_keys: Final = ("hashed-other-key", jwt_key_mapping_cache_key("sub", "other-account", None))
-    kept_row: Final = _JWTMappingRow("hashed-other-key", "sub", "other-account")
-    jwt_table: Final = _CascadingJWTMappingTable(
+    kept_row: Final = JWTMappingRow("hashed-other-key", "sub", "other-account")
+    jwt_table: Final = CascadingJWTMappingTable(
         [
-            _JWTMappingRow("hashed-org-key", "sub", "svc-account"),
-            _JWTMappingRow("hashed-org-key", "sub", "svc-account", "https://issuer.example"),
+            JWTMappingRow("hashed-org-key", "sub", "svc-account"),
+            JWTMappingRow("hashed-org-key", "sub", "svc-account", "https://issuer.example"),
             kept_row,
         ]
     )
@@ -1516,4 +1501,4 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
 
     assert all(cache.get_cache(key=cache_key) is None for cache_key in doomed_cache_keys)
     assert all(cache.get_cache(key=cache_key) == {"retained": True} for cache_key in kept_cache_keys)
-    assert jwt_table.rows == [kept_row]
+    assert jwt_table.rows == (kept_row,)
