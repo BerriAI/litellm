@@ -294,14 +294,16 @@ def _models_this_test_can_call(config: RequestComplexityRouterConfig) -> tuple[s
     Excludes every tier's models: the prompt is never sent to the model it routed to.
     """
     return tuple(
-        model
-        for model in (
-            config.classifier_llm_config.model
-            if config.uses_llm_classifier and config.classifier_llm_config is not None
-            else None,
-            config.embedding_model if config.semantic_keyword_matching else None,
+        dependency.model_name
+        for dependency in strategy_router_dependencies(
+            MappingProxyType(
+                {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": config.model_dump(exclude_none=True),
+                }
+            )
         )
-        if model is not None
+        if dependency.role in ("classifier", "embedding", "evaluation")
     )
 
 

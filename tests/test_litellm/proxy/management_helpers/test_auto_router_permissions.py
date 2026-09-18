@@ -7,12 +7,17 @@ from fastapi import HTTPException
 
 from litellm.proxy._types import (
     UI_TEAM_ID,
+    LiteLLM_OrganizationTable,
+    LiteLLM_ProjectTable,
+    LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LitellmUserRoles,
     Member,
+    ProxyException,
     UserAPIKeyAuth,
 )
 from litellm.proxy.management_helpers.auto_router_permissions import (
+    MemberAutoRouterDependencyObjects,
     authorize_member_auto_router_dependencies,
     authorize_member_auto_router_team,
     authorize_member_auto_router_write,
@@ -23,9 +28,7 @@ from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDe
 
 
 class _ReadTable:
-    async def find_unique(
-        self, where: Mapping[str, object], include: Mapping[str, object] | None = None
-    ) -> None:
+    async def find_unique(self, where: Mapping[str, object], include: Mapping[str, object] | None = None) -> None:
         return None
 
 
@@ -239,3 +242,69 @@ async def test_member_dependencies_require_plain_configured_models(target: str) 
             llm_router=catalog,
         )
     assert denied.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restricted", ["key", "team", None])
+async def test_jev_evaluation_requires_model_access_but_no_completion_deployment(
+    catalog: Router, restricted: str | None
+) -> None:
+    permitted: Final = ["allowed", "typesafe/jev-latest"]
+    operation: Final = authorize_member_auto_router_dependencies(
+        config=validate_member_auto_router_config(
+            {"tiers": {"SIMPLE": "allowed"}, "classifier_type": "jev", "jev_classifier_config": {}}
+        ),
+        default_model=None,
+        user_api_key_dict=_actor(models=["allowed"] if restricted == "key" else permitted),
+        team=_team(models=["allowed"] if restricted == "team" else permitted),
+        prisma_client=_Client(),
+        llm_router=catalog,
+    )
+    if restricted is not None:
+        with pytest.raises(ProxyException, match="jev-latest"):
+            await operation
+        return
+    await operation
+    assert not catalog.get_model_list("typesafe/jev-latest")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restricted", ["member", "project", "organization", None])
+async def test_jev_evaluation_obeys_each_containing_scope(catalog: Router, restricted: str | None) -> None:
+    allowed: Final = ["allowed", "typesafe/jev-latest"]
+    membership: Final = LiteLLM_TeamMembership.model_validate(
+        {
+            "user_id": "owner",
+            "team_id": "team-a",
+            "litellm_budget_table": {"allowed_models": ["allowed"] if restricted == "member" else allowed},
+        }
+    )
+    organization: Final = LiteLLM_OrganizationTable.model_validate(
+        {
+            "organization_id": "org-a",
+            "models": ["allowed"] if restricted == "organization" else allowed,
+            "budget_id": "org-budget",
+            "created_by": "admin",
+            "updated_by": "admin",
+        }
+    )
+    project: Final = LiteLLM_ProjectTable.model_validate(
+        {"project_id": "project-a", "team_id": "team-a", "models": ["allowed"] if restricted == "project" else allowed}
+    )
+    operation: Final = authorize_member_auto_router_dependencies(
+        config=validate_member_auto_router_config(
+            {"tiers": {"SIMPLE": "allowed"}, "classifier_type": "jev", "jev_classifier_config": {}}
+        ),
+        default_model=None,
+        user_api_key_dict=_actor(models=allowed, project_id="project-a"),
+        team=_team(models=allowed, organization_id="org-a"),
+        prisma_client=_Client(),
+        llm_router=catalog,
+        dependency_objects=MemberAutoRouterDependencyObjects(membership, organization, project),
+    )
+    if restricted is not None:
+        with pytest.raises(ProxyException, match="jev-latest"):
+            await operation
+        return
+    await operation
+    assert not catalog.get_model_list("typesafe/jev-latest")
