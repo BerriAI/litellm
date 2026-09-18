@@ -2205,6 +2205,7 @@ def _is_async_request(
         or kwargs.get("amoderation", False) is True
         or kwargs.get("atext_completion", False) is True
         or kwargs.get("atranscription", False) is True
+        or kwargs.get("aspeech", False) is True
         or kwargs.get("arerank", False) is True
         or kwargs.get("_arealtime", False) is True
         or kwargs.get("acreate_batch", False) is True

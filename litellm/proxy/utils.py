@@ -2984,6 +2984,12 @@ class ProxyLogging:
 
         request_data.update(await offload_token_count(_failure_fields_to_lift)(request_data))
 
+        if request_data.get("call_type") is None:
+            _route_for_call_type: Final = route or getattr(user_api_key_dict, "request_route", None)
+            _inferred_call_type: Final = _call_type_for_route(_route_for_call_type)
+            if _inferred_call_type is not None:
+                request_data["call_type"] = _inferred_call_type
+
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
 

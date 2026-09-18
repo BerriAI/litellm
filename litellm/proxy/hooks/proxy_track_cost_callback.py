@@ -539,7 +539,7 @@ class _ProxyDBLogger(CustomLogger):
 
         if general_settings.get("disable_error_logs") is True:
             return False
-        return
+        return True
 
 
 def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:

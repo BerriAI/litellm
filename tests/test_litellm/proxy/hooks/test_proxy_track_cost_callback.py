@@ -19,10 +19,10 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (
     run_spend_event,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
-from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, Usage
 
 
@@ -87,6 +87,57 @@ async def test_async_post_call_failure_hook():
         assert metadata["status"] == "failure"
         assert "error_information" in metadata
         assert metadata["original_key"] == "original_value"
+
+
+def test_async_post_call_failure_hook_audio_speech() -> None:
+    """LIT-41521 regression: _ProxyDBLogger writes spend log for failed audio_speech call."""
+    import litellm
+
+    async def _test() -> None:
+        logger: Final = _ProxyDBLogger()
+        user_api_key_dict: Final = UserAPIKeyAuth(
+            api_key="test_api_key",
+            key_alias="test_alias",
+            user_email="test@example.com",
+            user_id="test_user_id",
+            team_id="test_team_id",
+            org_id="test_org_id",
+            team_alias="test_team_alias",
+            end_user_id="test_end_user_id",
+            request_route="/v1/audio/speech",
+        )
+        request_data: Final = {
+            "model": "tts-1",
+            "input": "hello",
+            "voice": "alloy",
+            "call_type": "aspeech",
+            "litellm_call_id": "call-speech-fail-41521",
+        }
+        exc: Final = litellm.BadRequestError(
+            message="Voice not supported",
+            model="tts-1",
+            llm_provider="openai",
+        )
+        with patch(
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ) as mock_update:
+            await logger.async_post_call_failure_hook(
+                request_data=request_data,
+                original_exception=exc,
+                user_api_key_dict=user_api_key_dict,
+            )
+            mock_update.assert_called_once()
+            call_args: Final = mock_update.call_args.kwargs
+            assert call_args["token"] == "test_api_key"
+            assert call_args["response_cost"] == 0.0
+            assert call_args["completion_response"] == exc
+            litellm_params: Final = call_args["kwargs"].get("litellm_params", {})
+            metadata: Final = litellm_params.get("metadata", {})
+            assert metadata["status"] == "failure"
+            assert metadata["error_information"]["error_class"] == "BadRequestError"
+
+    asyncio.run(_test())
 
 
 @pytest.mark.asyncio
@@ -2029,9 +2080,15 @@ async def test_track_cost_callback_keeps_guardrail_cost_on_cache_hit():
     }
 
     with (
-        patch("litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock) as mock_increment,  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
-        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),  # test-quality-ok: same function-body import, no injection seam
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,  # test-quality-ok: same function-body import, no injection seam
+        patch(
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ) as mock_increment,  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
+        patch(
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ),  # test-quality-ok: same function-body import, no injection seam
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging,  # test-quality-ok: same function-body import, no injection seam
     ):
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
         mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
