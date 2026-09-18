@@ -1,0 +1,19 @@
+[package]
+name = "litellm-host-python"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+futures-util.workspace = true
+litellm-callbacks.workspace = true
+pyo3.workspace = true
+pyo3-async-runtimes.workspace = true
+pythonize.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+rstest.workspace = true
+serde_json.workspace = true

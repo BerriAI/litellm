@@ -1,6 +1,6 @@
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { Plus, SearchIcon, X } from "lucide-react";
+import { Folder, Plus, SearchIcon, X } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import { useMemo, useState } from "react";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -9,6 +9,7 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "
 import { CreateProjectModal } from "./ProjectModals/CreateProjectModal";
 import { ProjectDetail } from "./ProjectDetailsPage";
 import { ProjectsTable } from "./ProjectsTable";
+import { useClearProjectKeysTableState, useProjectsTableState } from "./useProjectsUrlState";
 
 export function ProjectsPage() {
   const { data: projects, isLoading } = useProjects();
@@ -18,8 +19,9 @@ export function ProjectsPage() {
     "project",
     parseAsString.withOptions({ history: "push" }),
   );
+  const clearProjectKeysTableState = useClearProjectKeysTableState();
+  const { search: searchText, setSearch: setSearchText } = useProjectsTableState();
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
-  const [searchText, setSearchText] = useState("");
 
   const teamAliasMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -44,31 +46,30 @@ export function ProjectsPage() {
     });
   }, [projects, searchText, teamAliasMap]);
 
+  const closeProject = () => {
+    void setSelectedProjectId(null, { history: "replace" });
+    clearProjectKeysTableState();
+  };
+
   if (selectedProjectId) {
-    return (
-      <ProjectDetail
-        projectId={selectedProjectId}
-        onBack={() => void setSelectedProjectId(null, { history: "replace" })}
-      />
-    );
+    return <ProjectDetail projectId={selectedProjectId} onBack={closeProject} />;
   }
 
   return (
-    <div className="p-6 px-12">
-      <div className="mb-4">
-        <PageHeader
-          title="Projects"
-          subtitle="Manage projects within your teams"
-          actions={
-            <Button onClick={() => setIsCreateModalVisible(true)}>
-              <Plus className="size-4" />
-              Create Project
-            </Button>
-          }
-        />
-      </div>
+    <div className="p-8">
+      <PageHeader
+        icon={<Folder />}
+        title="Projects"
+        subtitle="Manage projects within your teams"
+        primaryAction={
+          <Button onClick={() => setIsCreateModalVisible(true)}>
+            <Plus className="size-4" />
+            Create Project
+          </Button>
+        }
+      />
 
-      <div className="mb-3 flex items-center">
+      <div className="mt-6 mb-3 flex items-center">
         <InputGroup className="max-w-[400px]">
           <InputGroupAddon>
             <SearchIcon className="size-4 text-muted-foreground" />

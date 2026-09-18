@@ -17,6 +17,8 @@ interface SectionHeaderProps {
   turnCount?: number;
 }
 
+const SUMMARY_CLASSES = "flex flex-1 items-center gap-4";
+
 export function SectionHeader({
   type,
   tokens,
@@ -26,42 +28,53 @@ export function SectionHeader({
   onToggleCollapse,
   turnCount,
 }: SectionHeaderProps) {
+  const summary = (
+    <>
+      {onToggleCollapse &&
+        (isCollapsed ? (
+          <ChevronDown className="size-2.5 text-muted-foreground" />
+        ) : (
+          <ChevronUp className="size-2.5 text-muted-foreground" />
+        ))}
+
+      <div className="flex items-center gap-2">
+        {type === "input" ? (
+          <MessageSquare className="size-3.5 text-muted-foreground" />
+        ) : (
+          <span className="text-sm opacity-60 grayscale">✨</span>
+        )}
+        <span className="text-sm font-medium">{type === "input" ? "Input" : "Output"}</span>
+      </div>
+
+      {tokens !== undefined && <span className="text-xs text-muted-foreground">Tokens: {tokens.toLocaleString()}</span>}
+
+      {cost !== undefined && <span className="text-xs text-muted-foreground">Cost: ${cost.toFixed(6)}</span>}
+
+      {turnCount !== undefined && turnCount > 0 && (
+        <span className="text-xs text-muted-foreground">Turns: {turnCount}</span>
+      )}
+    </>
+  );
+
   return (
     <div
-      onClick={onToggleCollapse}
       className={cn(
         "flex items-center justify-between bg-muted px-4 py-2.5 transition-colors",
         isCollapsed ? "border-b-0" : "border-b border-border",
-        onToggleCollapse ? "cursor-pointer hover:bg-accent" : "cursor-default",
       )}
     >
-      <div className="flex items-center gap-4">
-        {onToggleCollapse &&
-          (isCollapsed ? (
-            <ChevronDown className="size-2.5 text-muted-foreground" />
-          ) : (
-            <ChevronUp className="size-2.5 text-muted-foreground" />
-          ))}
-
-        <div className="flex items-center gap-2">
-          {type === "input" ? (
-            <MessageSquare className="size-3.5 text-muted-foreground" />
-          ) : (
-            <span className="text-sm opacity-60 grayscale">✨</span>
-          )}
-          <span className="text-sm font-medium">{type === "input" ? "Input" : "Output"}</span>
-        </div>
-
-        {tokens !== undefined && (
-          <span className="text-xs text-muted-foreground">Tokens: {tokens.toLocaleString()}</span>
-        )}
-
-        {cost !== undefined && <span className="text-xs text-muted-foreground">Cost: ${cost.toFixed(6)}</span>}
-
-        {turnCount !== undefined && turnCount > 0 && (
-          <span className="text-xs text-muted-foreground">Turns: {turnCount}</span>
-        )}
-      </div>
+      {onToggleCollapse ? (
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          aria-expanded={!isCollapsed}
+          className={cn(SUMMARY_CLASSES, "-mx-2 cursor-pointer rounded-md px-2 py-1 text-left hover:bg-accent")}
+        >
+          {summary}
+        </button>
+      ) : (
+        <div className={SUMMARY_CLASSES}>{summary}</div>
+      )}
 
       <Tooltip>
         <TooltipTrigger
@@ -69,7 +82,7 @@ export function SectionHeader({
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label="Copy"
+              aria-label={type === "input" ? "Copy input" : "Copy output"}
               onClick={(e) => {
                 e.stopPropagation();
                 onCopy();

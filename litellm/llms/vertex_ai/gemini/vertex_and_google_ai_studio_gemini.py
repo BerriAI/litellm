@@ -23,6 +23,8 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
+from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _encode_tool_call_id_with_signature,
 )
@@ -77,6 +79,7 @@ from litellm.utils import (
     CustomStreamWrapper,
     ModelResponse,
     is_base64_encoded,
+    is_explicitly_disabled_factory,
     supports_reasoning,
 )
 
@@ -88,6 +91,7 @@ from ..common_utils import (
     supports_response_json_schema,
 )
 from ..vertex_llm_base import VertexBase
+from .grounding_requests import calculate_grounding_requests
 from .transformation import (
     _gemini_convert_messages_with_history,
     async_transform_request_body,
@@ -104,6 +108,27 @@ if TYPE_CHECKING:
 else:
     LoggingClass = Any
     StreamingChoices = Any
+
+
+SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "none", "disable")
+
+
+def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsError:
+    return UnsupportedParamsError(
+        message=(
+            f"Invalid `reasoning_effort`: {reasoning_effort!r}. "
+            f"Must be one of: {', '.join(repr(effort) for effort in SUPPORTED_REASONING_EFFORTS)}. "
+            "To drop this param, set `litellm.drop_params = True` or pass in `(.., drop_params=True)` "
+            "in the request - https://docs.litellm.ai/docs/completion/drop_params"
+        ),
+        status_code=400,
+    )
+
+
+def _served_model_name(model_version: object) -> str | None:
+    if not isinstance(model_version, str) or not model_version:
+        return None
+    return model_version.split("@", 1)[0]
 
 
 class VertexAIBaseConfig:
@@ -840,7 +865,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "includeThoughts": False,
             }
         else:
-            raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
+            raise _unsupported_reasoning_effort(reasoning_effort)
+
+    @staticmethod
+    def _supports_minimal_thinking_level(model: str) -> bool:
+        lowered: Final = model.lower()
+        is_gemini3flash: Final = "gemini-3" in lowered and "flash" in lowered
+        return is_gemini3flash and not is_explicitly_disabled_factory(
+            model=model, custom_llm_provider=None, key="supports_minimal_reasoning_effort"
+        )
 
     @staticmethod
     def _map_reasoning_effort_to_thinking_level(
@@ -856,13 +889,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Returns:
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
-        # Check if this is gemini-3-flash which supports MINIMAL thinking level
-        # Covers gemini-3-flash, gemini-3-flash-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview,
-        # gemini-3.5-flash, and any future 3.x-flash variants.
         is_gemini3flash: Final = model and ("flash" in model.lower() and "gemini-3" in model.lower())
+        supports_minimal: Final = bool(model) and VertexGeminiConfig._supports_minimal_thinking_level(model)
         is_gemini31pro: Final = model and ("gemini-3.1-pro-preview" in model.lower())
         if reasoning_effort == "minimal":
-            if is_gemini3flash:
+            if supports_minimal:
                 return {"thinkingLevel": "minimal", "includeThoughts": True}
             else:
                 return {"thinkingLevel": "low", "includeThoughts": True}
@@ -875,20 +906,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 return {"thinkingLevel": "high", "includeThoughts": True}
         elif reasoning_effort == "high":
             return {"thinkingLevel": "high", "includeThoughts": True}
-        elif reasoning_effort == "disable":
-            # Gemini 3 cannot fully disable thinking, so we use "minimal" for gemini-3-flash-preview, "low" for others
-            if is_gemini3flash:
-                return {"thinkingLevel": "minimal", "includeThoughts": False}
-            else:
-                return {"thinkingLevel": "low", "includeThoughts": False}
-        elif reasoning_effort == "none":
-            # For gemini-3-flash-preview, use "minimal" instead of "low"
-            if is_gemini3flash:
-                return {"thinkingLevel": "minimal", "includeThoughts": False}
-            else:
-                return {"thinkingLevel": "low", "includeThoughts": False}
+        elif reasoning_effort in ("disable", "none"):
+            return {
+                "thinkingLevel": "minimal" if supports_minimal else "low",
+                "includeThoughts": False,
+            }
         else:
-            raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
+            raise _unsupported_reasoning_effort(reasoning_effort)
 
     @staticmethod
     def _is_thinking_budget_zero(thinking_budget: int | None) -> bool:
@@ -947,14 +971,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # For Gemini 3+ models, use thinkingLevel instead of thinkingBudget
         if model and VertexGeminiConfig._is_gemini_3_or_newer(model):
             if thinking_enabled:
-                if thinking_budget is None or thinking_budget == 0:
+                if thinking_budget == 0:
                     params["includeThoughts"] = False
                 else:
                     params["includeThoughts"] = True
                     # Follow provider defaults unless explicitly opted into legacy behavior.
                     if litellm.enable_gemini_default_thinking_level_low is True:
-                        is_gemini3flash: Final = "gemini-3" in model.lower() and "flash" in model.lower()
-                        params["thinkingLevel"] = "minimal" if is_gemini3flash else "low"
+                        params["thinkingLevel"] = (
+                            "minimal" if VertexGeminiConfig._supports_minimal_thinking_level(model) else "low"
+                        )
             else:
                 # Thinking disabled
                 params["includeThoughts"] = False
@@ -1716,14 +1741,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
     ) -> bool:
         """
-        Whether the response used Grounding with Google Search, detected via
-        groundingMetadata.webSearchQueries (an actual web search was performed).
+        Whether the response used Grounding with Google Search or Grounding with Google Maps,
+        detected via groundingMetadata.webSearchQueries (an actual web search was performed) or
+        groundingMetadata.groundingChunks[].maps (a Maps lookup was performed).
 
-        Google bills grounding-with-Google-Search retrieved tokens separately (a per-request /
-        per-query search fee) and excludes them from input token billing, unlike URL context /
-        File Search / code execution whose tool-use tokens are charged at the input token rate.
-        URL context also emits groundingMetadata (with groundingChunks but no webSearchQueries),
-        so presence of groundingMetadata alone is not a sufficient signal.
+        Google bills both groundings separately (a per-request / per-query fee) and excludes their
+        retrieved tokens from input token billing, unlike URL context / File Search / code execution
+        whose tool-use tokens are charged at the input token rate. URL context also emits
+        groundingMetadata (with web groundingChunks but no webSearchQueries), so presence of
+        groundingMetadata alone is not a sufficient signal.
         See https://ai.google.dev/gemini-api/docs/pricing and
         https://github.com/BerriAI/litellm/discussions/33198
         """
@@ -1731,7 +1757,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return False
         for candidate in completion_response["candidates"] or []:
             grounding_metadata, _, _, _ = VertexGeminiConfig._extract_candidate_metadata(candidate)
-            if VertexGeminiConfig._calculate_web_search_requests(grounding_metadata):
+            if calculate_grounding_requests(grounding_metadata).has_billable_grounding():
                 return True
         return False
 
@@ -1932,6 +1958,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _check_prompt_level_content_filter(
         processed_chunk: GenerateContentResponseBody,
         response_id: str | None,
+        model: str | None = None,
     ) -> Optional["ModelResponseStream"]:
         """
         Check if prompt is blocked due to content filtering at the prompt level.
@@ -1971,23 +1998,23 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 enhancements=None,
             )
 
-            model_response: Final = ModelResponseStream(choices=[choice], id=response_id)
+            model_response: Final = ModelResponseStream(choices=[choice], id=response_id, model=model)
             return model_response
 
         return None
 
     @staticmethod
     def _calculate_web_search_requests(grounding_metadata: list[dict]) -> int | None:
-        web_search_requests: int | None = None
+        return calculate_grounding_requests(grounding_metadata).web_search_requests
 
-        if grounding_metadata and isinstance(grounding_metadata, list) and len(grounding_metadata) > 0:
-            for grounding_metadata_item in grounding_metadata:
-                web_search_queries = grounding_metadata_item.get("webSearchQueries")
-                if web_search_queries and web_search_requests:
-                    web_search_requests += len([q for q in web_search_queries if q])
-                elif web_search_queries:
-                    web_search_requests = len([q for q in web_search_queries if q])
-        return web_search_requests
+    @staticmethod
+    def _set_grounding_usage_counters(usage: Usage, grounding_metadata: Sequence[Mapping[str, object]]) -> None:
+        grounding_requests: Final = calculate_grounding_requests(grounding_metadata)
+        details: Final = cast(PromptTokensDetailsWrapper, usage.prompt_tokens_details)
+        if grounding_requests.web_search_requests is not None:
+            details.web_search_requests = grounding_requests.web_search_requests
+        if grounding_requests.google_maps_grounding_requests is not None:
+            details.google_maps_grounding_requests = grounding_requests.google_maps_grounding_requests
 
     @staticmethod
     def _create_streaming_choice(
@@ -2415,7 +2442,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             completion_response = GenerateContentResponseBody(**completion_response)
 
         ## GET MODEL ##
-        model_response.model = model
+        served: Final = _served_model_name(completion_response.get("modelVersion"))
+        model_response.model = served if served is not None else model
 
         ## CHECK IF RESPONSE FLAGGED
         if "promptFeedback" in completion_response and "blockReason" in completion_response["promptFeedback"]:
@@ -2453,9 +2481,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             usage: Final = VertexGeminiConfig._calculate_usage(completion_response=completion_response)
 
-            web_search_requests: Final = VertexGeminiConfig._calculate_web_search_requests(grounding_metadata)
-            if web_search_requests is not None:
-                cast(PromptTokensDetailsWrapper, usage.prompt_tokens_details).web_search_requests = web_search_requests
+            VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
 
             setattr(model_response, "usage", usage)
 
@@ -2675,8 +2701,6 @@ class VertexLLM(VertexBase):
         gemini_api_key: str | None = None,
         extra_headers: dict | None = None,
     ) -> CustomStreamWrapper:
-        should_use_v1beta1_features: Final = self.is_using_v1beta1_features(optional_params=optional_params)
-
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -2696,7 +2720,6 @@ class VertexLLM(VertexBase):
             stream=stream,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
-            should_use_v1beta1_features=should_use_v1beta1_features,
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
@@ -2771,8 +2794,6 @@ class VertexLLM(VertexBase):
         gemini_api_key: str | None = None,
         extra_headers: dict | None = None,
     ) -> ModelResponse | CustomStreamWrapper:
-        should_use_v1beta1_features: Final = self.is_using_v1beta1_features(optional_params=optional_params)
-
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -2792,7 +2813,6 @@ class VertexLLM(VertexBase):
             stream=stream,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
-            should_use_v1beta1_features=should_use_v1beta1_features,
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
@@ -2955,8 +2975,6 @@ class VertexLLM(VertexBase):
                 extra_headers=extra_headers,
             )
 
-        should_use_v1beta1_features: Final = self.is_using_v1beta1_features(optional_params=optional_params)
-
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -2976,7 +2994,6 @@ class VertexLLM(VertexBase):
             stream=stream,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
-            should_use_v1beta1_features=should_use_v1beta1_features,
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
         headers: Final = VertexGeminiConfig().validate_environment(
@@ -3087,13 +3104,21 @@ class ModelResponseIterator:
         self.streaming_response = streaming_response
         self.response = response
         self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
-        self.accumulated_json = ""
+        self._json_buffer = JSONFragmentAccumulator()
         self.sent_first_chunk = False
         self.logging_obj = logging_obj
         self.response_headers = response_headers or {}
         self.is_function_call = check_is_function_call(logging_obj)
         self.cumulative_tool_call_index: int = 0
         self.has_seen_tool_calls: bool = False
+
+    @property
+    def accumulated_json(self) -> str:
+        return self._json_buffer.snapshot()
+
+    @accumulated_json.setter
+    def accumulated_json(self, value: str) -> None:
+        self._json_buffer.set(value)
 
     @staticmethod
     def _check_streaming_error(chunk: dict) -> None:
@@ -3212,9 +3237,7 @@ class ModelResponseIterator:
             completion_response=processed_chunk,
         )
 
-        web_search_requests: Final = VertexGeminiConfig._calculate_web_search_requests(grounding_metadata)
-        if web_search_requests is not None:
-            cast(PromptTokensDetailsWrapper, usage.prompt_tokens_details).web_search_requests = web_search_requests
+        VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
 
         traffic_type: Final = processed_chunk.get("usageMetadata", {}).get("trafficType")
         if traffic_type:
@@ -3241,12 +3264,18 @@ class ModelResponseIterator:
 
             processed_chunk: Final = GenerateContentResponseBody(**chunk)
             response_id: Final = processed_chunk.get("responseId")
-            model_response = ModelResponseStream(choices=[], id=response_id)
+            served: Final = _served_model_name(processed_chunk.get("modelVersion"))
+            model_response = ModelResponseStream(
+                choices=[],
+                id=response_id,
+                model=served,
+            )
 
             # Check if prompt is blocked due to content filtering
             blocked_response: Final = VertexGeminiConfig._check_prompt_level_content_filter(
                 processed_chunk=processed_chunk,
                 response_id=response_id,
+                model=served,
             )
             if blocked_response is not None:
                 model_response = blocked_response
@@ -3298,8 +3327,8 @@ class ModelResponseIterator:
         return self.chunk_parser(chunk=json_chunk)
 
     def handle_accumulated_json_chunk(self, chunk: str, is_final: bool = False) -> Optional["ModelResponseStream"]:
-        message: Final = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
-        self.accumulated_json = (self.accumulated_json + message.replace("\n\n", "")).strip()
+        message: Final = (litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or "").replace("\n\n", "")
+        self._json_buffer.append(message)
 
         # Mid-stream, defer parsing until the buffer's last byte can close a value:
         # attempting a parse after every fragment of one large object is O(n^2) and
@@ -3307,27 +3336,23 @@ class ModelResponseIterator:
         # data is coming, so drain whatever complete values remain regardless of the
         # trailing byte, otherwise a complete leading value sitting behind a truncated
         # trailing one would be silently dropped.
-        if not is_final and (not self.accumulated_json or self.accumulated_json[-1] not in "}]"):
+        if not is_final and not self._json_buffer.could_close_json():
             return None
 
         # Peel one complete JSON value from the front of the buffer and keep the
         # unconsumed tail. Running json.loads over the whole buffer would fail
         # forever once it held more than one concatenated value ("Extra data") while
         # never resetting the buffer, so the buffer grew without bound and pinned the
-        # core. raw_decode reports where the value ended, so concatenated values drain
-        # one call at a time. A leading non-dict value (never emitted by Gemini in
-        # practice) is consumed and skipped so it cannot block the dict values behind it.
-        decoder: Final = json.JSONDecoder()
-        while self.accumulated_json:
-            try:
-                raw_value = decoder.raw_decode(self.accumulated_json)
-            except json.JSONDecodeError:
+        # core. pop_next_value reports where the value ended, so concatenated values
+        # drain one call at a time. A leading non-dict value (never emitted by Gemini
+        # in practice) is consumed and skipped so it cannot block the dict values
+        # behind it.
+        while True:
+            found, decoded = self._json_buffer.pop_next_value()
+            if not found:
                 return None
-            decoded, end_index = cast("tuple[object, int]", raw_value)  # cast-ok: raw_decode -> tuple[Any,int]
-            self.accumulated_json = self.accumulated_json[end_index:].strip()
             if isinstance(decoded, dict):
                 return self.chunk_parser(chunk=decoded)
-        return None
 
     def _common_chunk_parsing_logic(self, chunk: str) -> Optional["ModelResponseStream"]:
         try:
@@ -3351,7 +3376,7 @@ class ModelResponseIterator:
         try:
             chunk: Final = self.response_iterator.__next__()
         except StopIteration:
-            if self.chunk_type == "accumulated_json" and self.accumulated_json:
+            if self.chunk_type == "accumulated_json" and self._json_buffer:
                 result: Final = self.handle_accumulated_json_chunk(chunk="", is_final=True)
                 if result is not None:
                     return result
@@ -3375,7 +3400,7 @@ class ModelResponseIterator:
         try:
             chunk: Final = await self.async_response_iterator.__anext__()
         except StopAsyncIteration:
-            if self.chunk_type == "accumulated_json" and self.accumulated_json:
+            if self.chunk_type == "accumulated_json" and self._json_buffer:
                 result: Final = self.handle_accumulated_json_chunk(chunk="", is_final=True)
                 if result is not None:
                     return result

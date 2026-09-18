@@ -1,7 +1,9 @@
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Any, Final
+from typing import Final
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -19,6 +21,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.utils import _hash_token_if_needed
+from litellm.secret_managers.base_secret_manager import BaseSecretManager
 
 # NOTE: This is the prefix for all virtual keys stored in AWS Secrets Manager
 LITELLM_PREFIX_STORED_VIRTUAL_KEYS: Final = "litellm/"
@@ -43,6 +46,7 @@ class KeyManagementEventHooks:
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
             get_audit_log_changed_by,
+            is_audit_logging_enabled,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
@@ -53,8 +57,7 @@ class KeyManagementEventHooks:
             except Exception as e:
                 verbose_proxy_logger.warning("Failed to send key created email: %s", e)
 
-        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-        if litellm.store_audit_logs is True:
+        if is_audit_logging_enabled():
             _updated_values: Final = response.model_dump_json(exclude_none=True)
             asyncio.create_task(
                 create_audit_log_for_update(
@@ -89,8 +92,8 @@ class KeyManagementEventHooks:
     @staticmethod
     async def async_key_updated_hook(
         data: UpdateKeyRequest,
-        existing_key_row: Any,
-        response: Any,
+        existing_key_row: LiteLLM_VerificationToken,
+        response: object,
         user_api_key_dict: UserAPIKeyAuth,
         litellm_changed_by: str | None = None,
     ):
@@ -98,40 +101,53 @@ class KeyManagementEventHooks:
         Post /key/update processing hook
 
         Handles the following:
+        - Renaming the key's secret in the secret manager when the alias changes
         - Storing Audit Logs for key update
         """
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
             get_audit_log_changed_by,
+            is_audit_logging_enabled,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-        if litellm.store_audit_logs is True:
-            _updated_values: Final = json.dumps(data.json(exclude_none=True), default=str)
-
-            _before_value = existing_key_row.json(exclude_none=True)
-            _before_value = json.dumps(_before_value, default=str)
-
-            asyncio.create_task(
-                create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=get_audit_log_changed_by(
-                            litellm_changed_by=litellm_changed_by,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        ),
-                        changed_by_api_key=user_api_key_dict.api_key,
-                        table_name=LitellmTableNames.KEY_TABLE_NAME,
-                        object_id=_hash_token_if_needed(data.key),
-                        action="updated",
-                        updated_values=_updated_values,
-                        before_value=_before_value,
-                    )
+        if data.key_alias is not None and data.key_alias != existing_key_row.key_alias:
+            try:
+                await KeyManagementEventHooks._rename_virtual_key_in_secret_manager(
+                    current_secret_name=existing_key_row.key_alias or f"virtual-key-{existing_key_row.token}",
+                    new_secret_name=data.key_alias,
+                    team_id=existing_key_row.team_id,
                 )
+            except Exception as e:
+                verbose_proxy_logger.warning("Failed to rename virtual key in secret manager: %s", e)
+
+        if is_audit_logging_enabled():
+            updated_fields: Final = {
+                **data.model_dump(exclude_none=True),
+                **({"project_id": data.project_id} if "project_id" in data.model_fields_set else {}),
+            }
+            audit_log: Final = LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by=get_audit_log_changed_by(
+                    litellm_changed_by=litellm_changed_by,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_proxy_admin_name=litellm_proxy_admin_name,
+                ),
+                changed_by_api_key=user_api_key_dict.api_key,
+                table_name=LitellmTableNames.KEY_TABLE_NAME,
+                object_id=_hash_token_if_needed(data.key),
+                action="updated",
+                updated_values=json.dumps(updated_fields, default=str),
+                before_value=json.dumps(existing_key_row.json(exclude_none=True), default=str),
             )
+            masked_values: Final = TypeAdapter(dict[str, object]).validate_json(str(audit_log.updated_values))
+            request_data: Final = (
+                audit_log.model_copy(update={"updated_values": json.dumps({**masked_values, "project_id": None})})
+                if "project_id" in data.model_fields_set and data.project_id is None
+                else audit_log
+            )
+            asyncio.create_task(create_audit_log_for_update(request_data=request_data))
 
     @staticmethod
     async def async_key_rotated_hook(
@@ -144,14 +160,16 @@ class KeyManagementEventHooks:
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
             get_audit_log_changed_by,
+            is_audit_logging_enabled,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
         # Store the generated key in the secret manager - non-blocking, independent operation
-        if data is not None and response.token_id is not None:
+        if response.token_id is not None:
             try:
                 initial_secret_name: Final = existing_key_row.key_alias or f"virtual-key-{existing_key_row.token}"
-                new_secret_name: Final = response.key_alias or data.key_alias or initial_secret_name
+                requested_alias: Final = data.key_alias if data is not None else None
+                new_secret_name: Final = response.key_alias or requested_alias or initial_secret_name
                 verbose_proxy_logger.info(
                     "Updating secret in secret manager: secret_name=%s",
                     new_secret_name,
@@ -180,7 +198,7 @@ class KeyManagementEventHooks:
             verbose_proxy_logger.warning("Failed to send key rotated email: %s", e)
 
         # store the audit log
-        if litellm.store_audit_logs is True and existing_key_row.token is not None:
+        if is_audit_logging_enabled() and existing_key_row.token is not None:
             asyncio.create_task(
                 create_audit_log_for_update(
                     request_data=LiteLLM_AuditLogs(
@@ -218,12 +236,12 @@ class KeyManagementEventHooks:
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
             get_audit_log_changed_by,
+            is_audit_logging_enabled,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
-        if litellm.store_audit_logs is True and data.keys is not None:
+        if is_audit_logging_enabled() and data.keys is not None:
             # make an audit log for each key deleted
             for key in keys_being_deleted:
                 if key.token is None:
@@ -300,21 +318,66 @@ class KeyManagementEventHooks:
             new_secret_value: New value of the virtual key (example: sk-1234)
             team_id: Optional team ID to get team-specific secret manager settings
         """
-        if litellm._key_management_settings is not None:
-            if litellm._key_management_settings.store_virtual_keys is True:
-                from litellm.secret_managers.base_secret_manager import (
-                    BaseSecretManager,
-                )
+        secret_manager: Final = KeyManagementEventHooks._stored_virtual_key_secret_manager()
+        if secret_manager is None:
+            return
+        optional_params: Final = await KeyManagementEventHooks._get_secret_manager_optional_params(team_id)
+        await secret_manager.async_rotate_secret(
+            current_secret_name=KeyManagementEventHooks._get_secret_name(current_secret_name),
+            new_secret_name=KeyManagementEventHooks._get_secret_name(new_secret_name),
+            new_secret_value=new_secret_value,
+            optional_params=optional_params,
+        )
 
-                # store the key in the secret manager
-                if isinstance(litellm.secret_manager_client, BaseSecretManager):
-                    optional_params: Final = await KeyManagementEventHooks._get_secret_manager_optional_params(team_id)
-                    await litellm.secret_manager_client.async_rotate_secret(
-                        current_secret_name=KeyManagementEventHooks._get_secret_name(current_secret_name),
-                        new_secret_name=KeyManagementEventHooks._get_secret_name(new_secret_name),
-                        new_secret_value=new_secret_value,
-                        optional_params=optional_params,
-                    )
+    @staticmethod
+    def _stored_virtual_key_secret_manager() -> BaseSecretManager | None:
+        """
+        The secret manager client that stores virtual keys, or None when virtual keys are not stored in one
+        """
+        if litellm._key_management_settings is None or litellm._key_management_settings.store_virtual_keys is not True:
+            return None
+        if not isinstance(litellm.secret_manager_client, BaseSecretManager):
+            return None
+        return litellm.secret_manager_client
+
+    @staticmethod
+    async def _rename_virtual_key_in_secret_manager(
+        current_secret_name: str,
+        new_secret_name: str,
+        team_id: str | None = None,
+    ) -> None:
+        """
+        Move a virtual key to a new secret name, keeping its current value
+
+        Args:
+            current_secret_name: Current name of the virtual key
+            new_secret_name: New name of the virtual key
+            team_id: Optional team ID to get team-specific secret manager settings
+        """
+        secret_manager: Final = KeyManagementEventHooks._stored_virtual_key_secret_manager()
+        if secret_manager is None:
+            return
+        optional_params: Final = await KeyManagementEventHooks._get_secret_manager_optional_params(team_id)
+        current_secret_value: Final = await secret_manager.async_read_secret(
+            secret_name=KeyManagementEventHooks._get_secret_name(current_secret_name),
+            optional_params=optional_params,
+        )
+        if current_secret_value is None:
+            verbose_proxy_logger.warning(
+                "Secret %s not found in secret manager, skipping rename to %s", current_secret_name, new_secret_name
+            )
+            return
+        verbose_proxy_logger.info(
+            "Renaming secret in secret manager: current_secret_name=%s new_secret_name=%s",
+            current_secret_name,
+            new_secret_name,
+        )
+        await secret_manager.async_rotate_secret(
+            current_secret_name=KeyManagementEventHooks._get_secret_name(current_secret_name),
+            new_secret_name=KeyManagementEventHooks._get_secret_name(new_secret_name),
+            new_secret_value=current_secret_value,
+            optional_params=optional_params,
+        )
 
     @staticmethod
     def _get_secret_name(secret_name: str) -> str:

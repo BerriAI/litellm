@@ -8,12 +8,9 @@ from typing import TYPE_CHECKING, Final, Optional
 from pydantic import BaseModel, ValidationError
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    _get_token_base_cost,
-    _get_web_search_requests,
-    calculate_cache_writing_cost,
     generic_cost_per_token,
     get_provider_specific_geo_multiplier,
-    parse_prompt_tokens_details,
+    get_web_search_requests_from_usage,
 )
 
 if TYPE_CHECKING:
@@ -21,44 +18,9 @@ if TYPE_CHECKING:
 import litellm
 
 
-def _compute_cache_only_cost(model_info: "ModelInfo", usage: "Usage", service_tier: str | None = None) -> float:
-    """
-    Return only the cache-related portion of the prompt cost (cache read + cache write).
-
-    These costs must NOT be scaled by the ``fast`` speed multiplier because the old
-    explicit ``fast/`` model entries carried unchanged cache rates while
-    multiplying only the regular input/output token costs. Regional pricing, by
-    contrast, uplifts every token type, so the geo multiplier does scale them.
-    """
-    if usage.prompt_tokens_details is None:
-        return 0.0
-
-    prompt_tokens_details: Final = parse_prompt_tokens_details(usage)
-    (
-        _,
-        _,
-        cache_creation_cost,
-        cache_creation_cost_above_1hr,
-        cache_read_cost,
-    ) = _get_token_base_cost(model_info=model_info, usage=usage, service_tier=service_tier)
-
-    cache_cost = float(prompt_tokens_details["cache_hit_tokens"]) * cache_read_cost
-
-    if (
-        prompt_tokens_details["cache_creation_tokens"]
-        or prompt_tokens_details["cache_creation_token_details"] is not None
-    ):
-        cache_cost += calculate_cache_writing_cost(
-            cache_creation_tokens=prompt_tokens_details["cache_creation_tokens"],
-            cache_creation_token_details=prompt_tokens_details["cache_creation_token_details"],
-            cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
-            cache_creation_cost=cache_creation_cost,
-        )
-
-    return cache_cost
-
-
-def cost_per_token(model: str, usage: "Usage", service_tier: str | None = None) -> tuple[float, float]:
+def cost_per_token(
+    model: str, usage: "Usage", service_tier: str | None = None, model_info: "ModelInfo | None" = None
+) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -67,6 +29,7 @@ def cost_per_token(model: str, usage: "Usage", service_tier: str | None = None) 
         - usage: LiteLLM Usage block, containing anthropic caching information
         - service_tier: the service tier the request was served at (e.g. "priority"),
           read from the Anthropic response usage and used to select tier-specific pricing
+        - model_info: effective deployment prices, when they override public rates
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -76,21 +39,27 @@ def cost_per_token(model: str, usage: "Usage", service_tier: str | None = None) 
         usage=usage,
         custom_llm_provider="anthropic",
         service_tier=service_tier,
+        model_info=model_info,
     )
 
     # Apply provider_specific_entry multipliers for geo/speed routing
     try:
-        model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="anthropic")
-        provider_specific_entry: Final[dict] = model_info.get("provider_specific_entry") or {}
+        effective_info: Final = (
+            model_info
+            if model_info is not None
+            else litellm.get_model_info(model=model, custom_llm_provider="anthropic")
+        )
+        provider_specific_entry: Final = effective_info.get("provider_specific_entry")
 
-        geo_multiplier: Final = get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
+        geo_multiplier: Final = get_provider_specific_geo_multiplier(model_info=effective_info, usage=usage)
         speed_multiplier: Final = (
-            provider_specific_entry.get("fast", 1.0) if getattr(usage, "speed", None) == "fast" else 1.0
+            provider_specific_entry.get("fast", 1.0)
+            if provider_specific_entry and getattr(usage, "speed", None) == "fast"
+            else 1.0
         )
 
         if speed_multiplier != 1.0:
-            cache_cost: Final = _compute_cache_only_cost(model_info=model_info, usage=usage, service_tier=service_tier)
-            prompt_cost = (prompt_cost - cache_cost) * speed_multiplier + cache_cost
+            prompt_cost *= speed_multiplier
             completion_cost *= speed_multiplier
 
         if geo_multiplier != 1.0:
@@ -145,7 +114,7 @@ def get_cost_for_anthropic_web_search(
 
     if usage is None:
         return 0.0
-    web_search_requests: Final = _get_web_search_requests(getattr(usage, "server_tool_use", None))
+    web_search_requests: Final = get_web_search_requests_from_usage(usage)
     if web_search_requests is None:
         return 0.0
 

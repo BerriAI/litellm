@@ -1,4 +1,4 @@
-import { CircleCheck, ChevronDown, TriangleAlert, X } from "lucide-react";
+import { CircleCheck, ChevronDown, MinusCircle, TriangleAlert, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import moment from "moment";
 import React, { useState } from "react";
@@ -10,28 +10,35 @@ import type { LogEntry as ViewLogsLogEntry } from "@/components/view_logs/column
 import type { LogEntry } from "./mockData";
 
 const actionConfig: Record<
-  "blocked" | "passed" | "flagged",
+  "blocked" | "passed" | "flagged" | "not_run",
   { icon: React.ElementType; color: string; bg: string; border: string; label: string }
 > = {
+  not_run: {
+    icon: MinusCircle,
+    color: "text-muted-foreground",
+    bg: "bg-muted",
+    border: "border-border",
+    label: "Not run",
+  },
   blocked: {
     icon: X,
-    color: "text-red-600",
-    bg: "bg-red-50",
-    border: "border-red-200",
+    color: "text-destructive",
+    bg: "bg-destructive/10",
+    border: "border-destructive/20",
     label: "Blocked",
   },
   passed: {
     icon: CircleCheck,
-    color: "text-green-600",
-    bg: "bg-green-50",
-    border: "border-green-200",
+    color: "text-success",
+    bg: "bg-success/10",
+    border: "border-success/20",
     label: "Passed",
   },
   flagged: {
     icon: TriangleAlert,
-    color: "text-amber-600",
-    bg: "bg-amber-50",
-    border: "border-amber-200",
+    color: "text-warning",
+    bg: "bg-warning/10",
+    border: "border-warning/20",
     label: "Flagged",
   },
 };
@@ -92,7 +99,8 @@ export function LogViewer({
     enabled: Boolean(accessToken && selectedRequestId && drawerOpen),
   });
 
-  const selectedLog: ViewLogsLogEntry | null = fullLogResponse?.data?.[0] ?? null;
+  const selectedLog: ViewLogsLogEntry | null =
+    fullLogResponse?.data?.find((log) => log.request_id === selectedRequestId) ?? fullLogResponse?.data?.[0] ?? null;
 
   const handleLogClick = (log: LogEntry) => {
     setSelectedRequestId(log.id);
@@ -105,14 +113,14 @@ export function LogViewer({
   };
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg">
-      <div className="p-4 border-b border-gray-200">
+    <div className="bg-card border border-border rounded-lg">
+      <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h3 className="text-base font-semibold text-gray-900">
+            <h3 className="text-base font-semibold text-foreground">
               {guardrailName ? `Logs — ${guardrailName}` : "Request Logs"}
             </h3>
-            <p className="text-xs text-gray-500 mt-0.5">
+            <p className="text-xs text-muted-foreground mt-0.5">
               {logsLoading
                 ? "Loading…"
                 : logs.length > 0
@@ -134,9 +142,9 @@ export function LogViewer({
                   </Button>
                 ))}
               </div>
-              <div className="h-4 w-px bg-gray-200" />
+              <div className="h-4 w-px bg-border" />
               <div className="flex items-center gap-1">
-                <span className="text-xs text-gray-500 mr-1">Sample:</span>
+                <span className="text-xs text-muted-foreground mr-1">Sample:</span>
                 {sampleSizes.map((size) => (
                   <Button
                     key={size}
@@ -159,10 +167,12 @@ export function LogViewer({
         </div>
       )}
       {!logsLoading && displayLogs.length === 0 && (
-        <div className="py-12 text-center text-sm text-gray-500">No logs to display. Adjust filters or date range.</div>
+        <div className="py-12 text-center text-sm text-muted-foreground">
+          No logs to display. Adjust filters or date range.
+        </div>
       )}
       {!logsLoading && displayLogs.length > 0 && (
-        <div className="divide-y divide-gray-100">
+        <div className="divide-y divide-border">
           {displayLogs.map((log) => {
             const config = actionConfig[log.action];
             const ActionIcon = config.icon;
@@ -171,7 +181,7 @@ export function LogViewer({
                 key={log.id}
                 type="button"
                 onClick={() => handleLogClick(log)}
-                className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors flex items-start gap-3"
+                className="w-full text-left px-4 py-3 hover:bg-accent transition-colors flex items-start gap-3"
               >
                 <ActionIcon className={`w-4 h-4 mt-0.5 shrink-0 ${config.color}`} />
                 <div className="flex-1 min-w-0">
@@ -181,13 +191,15 @@ export function LogViewer({
                     >
                       {config.label}
                     </span>
-                    <span className="text-xs text-gray-400">{log.timestamp}</span>
-                    <span className="text-xs text-gray-400">·</span>
-                    {log.model && <span className="min-w-0 text-xs break-words text-gray-500">{log.model}</span>}
+                    <span className="text-xs text-muted-foreground">{log.timestamp}</span>
+                    <span className="text-xs text-muted-foreground">·</span>
+                    {log.model && (
+                      <span className="min-w-0 text-xs break-words text-muted-foreground">{log.model}</span>
+                    )}
                   </div>
-                  <p className="text-sm text-gray-800 truncate">{log.input_snippet ?? log.input ?? "—"}</p>
+                  <p className="text-sm text-foreground truncate">{log.input_snippet ?? log.input ?? "—"}</p>
                 </div>
-                <ChevronDown className="w-4 h-4 text-gray-400 shrink-0 mt-1" />
+                <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0 mt-1" />
               </button>
             );
           })}

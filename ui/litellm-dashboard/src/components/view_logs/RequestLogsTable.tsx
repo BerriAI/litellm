@@ -28,7 +28,7 @@ interface RequestLogsTableProps {
   onRefresh: () => void;
   onRowClick: (log: LogEntry) => void;
   onKeyHashClick: (keyHash: string) => void;
-  onSessionClick: (sessionId: string) => void;
+  onSessionClick: (log: LogEntry) => void;
   teams: Team[];
   logsWindow: LogsWindow;
   toolbarChildren?: ReactNode;
@@ -85,6 +85,7 @@ export function RequestLogsTable({
       data={data}
       columns={columns}
       getRowId={(row) => row.request_id}
+      fillHeight
       sortingMode="server"
       sorting={sorting}
       onSortingChange={onSortingChange}
@@ -106,7 +107,7 @@ export function RequestLogsTable({
             table={table}
             searchValue={searchValue}
             onSearchChange={onSearchChange}
-            searchPlaceholder="Search by Request ID"
+            searchPlaceholder="Search logs by ID…"
             onRefresh={onRefresh}
             isRefreshing={isRefreshing}
             onOpenFilters={() => setFiltersOpen(true)}

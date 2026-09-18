@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FormProvider, useForm } from "react-hook-form";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,17 +12,6 @@ vi.mock("./networking", () => ({
   serviceHealthCheck: vi.fn(),
   deleteCallback: vi.fn(),
   alertingSettingsCall: vi.fn().mockResolvedValue([]),
-}));
-
-vi.mock("./molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-    info: vi.fn(),
-    warning: vi.fn(),
-    clear: vi.fn(),
-  },
 }));
 
 vi.mock("./alerting/alerting_settings", () => ({
@@ -88,21 +77,21 @@ describe("Settings", () => {
   });
 
   it("should render the logging callbacks tab when access token is provided", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    render(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+      expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
     });
   });
 
   it("should display additional settings tabs", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    render(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(getByText("CloudZero Cost Tracking")).toBeInTheDocument();
-      expect(getByText("Alerting Types")).toBeInTheDocument();
-      expect(getByText("Alerting Settings")).toBeInTheDocument();
-      expect(getByText("Email Alerts")).toBeInTheDocument();
+      expect(screen.getByText("CloudZero Cost Tracking")).toBeInTheDocument();
+      expect(screen.getByText("Alerting Types")).toBeInTheDocument();
+      expect(screen.getByText("Alerting Settings")).toBeInTheDocument();
+      expect(screen.getByText("Email Alerts")).toBeInTheDocument();
     });
   });
 
@@ -200,7 +189,7 @@ describe("Settings", () => {
     });
 
     await user.clear(screen.getByLabelText("Host"));
-    await user.type(screen.getByLabelText("Host"), "https://edited.langfuse.com");
+    fireEvent.change(screen.getByLabelText("Host"), { target: { value: "https://edited.langfuse.com" } });
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
@@ -230,6 +219,196 @@ describe("Settings", () => {
     expect(vi.mocked(setCallbacksCall)).not.toHaveBeenCalled();
   });
 
+  const mockOtelCallback = (variables: Record<string, string | null>) => {
+    mockGetCallbacksCall.mockResolvedValue({
+      callbacks: [{ name: "otel", variables }],
+      available_callbacks: {
+        otel: {
+          litellm_callback_name: "otel",
+          litellm_callback_params: ["OTEL_EXPORTER", "OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_ENDPOINT", "OTEL_HEADERS"],
+          ui_callback_name: "OpenTelemetry",
+        },
+      },
+      alerts: [],
+    });
+    mockGetCallbackConfigsCall.mockResolvedValue([
+      {
+        id: "otel",
+        displayName: "Open Telemetry",
+        dynamic_params: {
+          otel_endpoint: { type: "text", ui_name: "Endpoint URL", required: true },
+          otel_exporter_otlp_protocol: {
+            type: "select",
+            ui_name: "Export Protocol",
+            options: ["http/protobuf", "http/json"],
+            required: false,
+          },
+        },
+      },
+    ]);
+  };
+
+  const openOtelEditModal = async () => {
+    const user = userEvent.setup();
+    render(<Settings {...defaultProps} />);
+    await user.click(await screen.findByTestId("callback-actions-otel-success"));
+    await user.click(await screen.findByTestId("callback-action-edit"));
+    return user;
+  };
+
+  it("should post the chosen export protocol when a select dynamic param is saved", async () => {
+    mockOtelCallback({ OTEL_ENDPOINT: "http://collector:4318" });
+    const user = await openOtelEditModal();
+
+    expect(await screen.findByLabelText("Endpoint URL")).toHaveValue("http://collector:4318");
+    await user.click(screen.getByLabelText("Export Protocol"));
+    await user.click(await screen.findByRole("option", { name: "http/json" }));
+    expect(screen.getByLabelText("Export Protocol")).toHaveTextContent("http/json");
+
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith(
+        "token",
+        expect.objectContaining({
+          environment_variables: expect.objectContaining({
+            callback: "otel",
+            otel_endpoint: "http://collector:4318",
+            otel_exporter_otlp_protocol: "http/json",
+          }),
+        }),
+      );
+    });
+  });
+
+  it("should show the saved export protocol in the edit modal and keep it on an unchanged save", async () => {
+    mockOtelCallback({ OTEL_ENDPOINT: "http://collector:4318", OTEL_EXPORTER_OTLP_PROTOCOL: "http/json" });
+    const user = await openOtelEditModal();
+
+    expect(await screen.findByLabelText("Endpoint URL")).toHaveValue("http://collector:4318");
+    expect(screen.getByLabelText("Export Protocol")).toHaveTextContent("http/json");
+
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith("token", {
+        environment_variables: {
+          callback: "otel",
+          otel_endpoint: "http://collector:4318",
+          otel_exporter_otlp_protocol: "http/json",
+        },
+        litellm_settings: { success_callback: ["otel"] },
+      });
+    });
+  });
+
+  const mockS3Callback = (variables: Record<string, string | null>, callbackName = "s3") => {
+    mockGetCallbacksCall.mockResolvedValue({
+      callbacks: [{ name: callbackName, variables }],
+      available_callbacks: {
+        s3: {
+          litellm_callback_name: "s3",
+          litellm_callback_params: [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_REGION_NAME",
+            "S3_LOG_PROMPTS_ONLY",
+          ],
+          ui_callback_name: "s3 Bucket (AWS)",
+        },
+      },
+      alerts: [],
+    });
+    mockGetCallbackConfigsCall.mockResolvedValue([
+      {
+        id: "s3",
+        displayName: "S3",
+        dynamic_params: {
+          s3_bucket_name: { type: "text", ui_name: "S3 Bucket Name", required: false },
+          s3_log_prompts_only: { type: "boolean", ui_name: "Log Prompts Only", required: false },
+        },
+      },
+    ]);
+  };
+
+  const openS3EditModal = async (callbackName = "s3") => {
+    const user = userEvent.setup();
+    render(<Settings {...defaultProps} />);
+    await user.click(await screen.findByTestId(`callback-actions-${callbackName}-success`));
+    await user.click(await screen.findByTestId("callback-action-edit"));
+    return user;
+  };
+
+  it("should render a saved boolean dynamic param as a checked switch and post false when toggled off", async () => {
+    mockS3Callback({ S3_LOG_PROMPTS_ONLY: "true" });
+    const user = await openS3EditModal();
+
+    const promptsOnlySwitch = await screen.findByRole("switch", { name: "Log Prompts Only" });
+    expect(promptsOnlySwitch).toBeChecked();
+
+    await user.click(promptsOnlySwitch);
+    expect(promptsOnlySwitch).not.toBeChecked();
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith(
+        "token",
+        expect.objectContaining({
+          environment_variables: expect.objectContaining({ callback: "s3", s3_log_prompts_only: "false" }),
+        }),
+      );
+    });
+  });
+
+  it("should render an unset boolean dynamic param as an unchecked switch and post true when toggled on", async () => {
+    mockS3Callback({ S3_LOG_PROMPTS_ONLY: null });
+    const user = await openS3EditModal();
+
+    const promptsOnlySwitch = await screen.findByRole("switch", { name: "Log Prompts Only" });
+    expect(promptsOnlySwitch).not.toBeChecked();
+
+    await user.click(promptsOnlySwitch);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith(
+        "token",
+        expect.objectContaining({
+          environment_variables: expect.objectContaining({ callback: "s3", s3_log_prompts_only: "true" }),
+        }),
+      );
+    });
+  });
+
+  it.each(["True", "1"])("should render a boolean dynamic param stored as %s as a checked switch", async (stored) => {
+    mockS3Callback({ S3_LOG_PROMPTS_ONLY: stored });
+    await openS3EditModal();
+
+    expect(await screen.findByRole("switch", { name: "Log Prompts Only" })).toBeChecked();
+  });
+
+  it("should resolve the s3_v2 callback to the s3 dynamic params and post under the s3_v2 name", async () => {
+    mockS3Callback({ S3_LOG_PROMPTS_ONLY: null }, "s3_v2");
+    const user = await openS3EditModal("s3_v2");
+
+    const promptsOnlySwitch = await screen.findByRole("switch", { name: "Log Prompts Only" });
+    expect(promptsOnlySwitch).not.toBeChecked();
+    expect(within(screen.getByRole("dialog")).getByRole("combobox", { name: "Callback" })).toHaveValue("S3");
+
+    await user.click(promptsOnlySwitch);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith(
+        "token",
+        expect.objectContaining({
+          environment_variables: expect.objectContaining({ callback: "s3_v2", s3_log_prompts_only: "true" }),
+          litellm_settings: { success_callback: ["s3_v2"] },
+        }),
+      );
+    });
+  });
+
   it("should send the typed webhook url for an alert type when the alerting tab is saved", async () => {
     const user = userEvent.setup();
     render(<Settings {...defaultProps} />);
@@ -238,7 +417,7 @@ describe("Settings", () => {
 
     const webhookInput = document.querySelector('input[name="llm_exceptions"]') as HTMLInputElement;
     expect(webhookInput).not.toBeNull();
-    await user.type(webhookInput, "https://hooks.example.com/llm-exceptions");
+    fireEvent.change(webhookInput, { target: { value: "https://hooks.example.com/llm-exceptions" } });
 
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
@@ -290,13 +469,13 @@ describe("Settings", () => {
   });
 
   it("should display CloudZero Cost Tracking tab", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    render(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+      expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
     });
 
-    expect(getByText("CloudZero Cost Tracking")).toBeInTheDocument();
+    expect(screen.getByText("CloudZero Cost Tracking")).toBeInTheDocument();
   });
 });
 
@@ -345,7 +524,7 @@ describe("CallbackSelector logos", () => {
 
     expect(await screen.findByAltText("Langfuse logo")).toHaveAttribute("src", "/ui/assets/logos/langfuse.png");
     expect(screen.getByAltText("Hosted logo")).toHaveAttribute("src", "https://logos.example.com/hosted.png");
-    expect(screen.queryByAltText("NoLogo logo")).toBeNull();
+    expect(screen.queryByAltText("NoLogo logo")).not.toBeInTheDocument();
     expect(screen.getByText("N")).toBeInTheDocument();
   });
 });

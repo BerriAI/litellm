@@ -90,12 +90,12 @@ def test_config_model_wiring():
 
 
 def test_init_rejects_empty_api_key():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='api_key must be non-empty'):
         StraikerGuardrail(api_key="")
 
 
 def test_init_rejects_invalid_fallback():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="unreachable_fallback must be 'fail_open' or 'fail_closed';"):
         StraikerGuardrail(api_key="k", unreachable_fallback="nope")
 
 
@@ -109,7 +109,7 @@ def test_supported_hooks_limited_to_pre_and_post():
 
 
 def test_during_call_mode_rejected_at_init():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="during_call is not in the supported event hooks"):
         StraikerGuardrail(api_key="k", event_hook="during_call")
 
 
@@ -596,6 +596,29 @@ async def test_non_streamed_response_intervention_redacts():
 
 
 @pytest.mark.asyncio
+async def test_response_scan_omits_request_context_from_response_content():
+    g = _make_guardrail()
+    g.async_handler.post.return_value = _mock_response("NONE")
+    request_messages = [{"role": "user", "content": "What is the capital of France?"}]
+    lookup_tool = {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}
+    await g.apply_guardrail(
+        inputs={
+            "texts": ["Paris."],
+            "structured_messages": [*request_messages, {"role": "assistant", "content": "Paris."}],
+            "tools": [lookup_tool],
+            "model": "gpt-4o-mini",
+        },
+        request_data={"model": "gpt-4o-mini", "messages": request_messages, "tools": [lookup_tool]},
+        input_type="response",
+        logging_obj=_logging_obj(),
+    )
+    payload = _posted_payload(g)
+    assert payload["response"]["texts"] == ["Paris."]
+    assert "structured_messages" not in payload["response"]
+    assert "tools" not in payload["response"]
+
+
+@pytest.mark.asyncio
 async def test_guardrail_intervened_without_texts_blocks():
     g = _make_guardrail()
     g.async_handler.post.return_value = _mock_response("GUARDRAIL_INTERVENED")
@@ -1067,3 +1090,29 @@ async def test_anthropic_non_streaming_response_reports_usage():
     payload = _posted_payload(g)
     assert payload["usage"] == {"input_tokens": 10, "output_tokens": 5}
     assert payload["response"]["finish_reason"] == "end_turn"
+
+
+def test_fail_closed_backend_failure_is_not_reported_as_a_content_verdict():
+    """A drop-one-record consumer must be able to tell a verdict from an outage; _fail is not a verdict."""
+    from litellm.exceptions import GuardrailRaisedException
+
+    guardrail = _make_guardrail()
+
+    with pytest.raises(GuardrailRaisedException) as unreachable:
+        guardrail._fail(
+            inputs={},
+            request_data={"model": "m"},
+            input_type="request",
+            error="connection refused",
+            is_unreachable=True,
+        )
+    assert unreachable.value.blocked_content is False
+
+    with pytest.raises(GuardrailRaisedException) as verdict:
+        guardrail._block(
+            request_data={"model": "m"},
+            input_type="request",
+            message="blocked",
+            blocked_content=True,
+        )
+    assert verdict.value.blocked_content is True

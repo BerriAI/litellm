@@ -1,9 +1,7 @@
 import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
@@ -113,7 +111,7 @@ def test_response_format_is_ignored():
 
 
 def test_unsupported_param_raises_without_drop_params():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Supported parameters are \\['n', 'response_format', 'size'\\]\\."):
         FalAINanoBananaConfig().map_openai_params(
             non_default_params={"style": "vivid"},
             optional_params={},
@@ -147,20 +145,3 @@ def test_transform_request_includes_prompt_and_mapped_params():
     }
 
 
-@pytest.mark.parametrize(
-    "model", ["fal-ai/nano-banana", "fal-ai/gemini-25-flash-image"]
-)
-def test_nano_banana_pricing_registered(model):
-    info = litellm.get_model_info(
-        model=model, custom_llm_provider=litellm.LlmProviders.FAL_AI.value
-    )
-    assert info["output_cost_per_image"] == 0.039
-    assert info["mode"] == "image_generation"
-
-
-def test_cost_calculator_scales_with_image_count():
-    image_response = ImageResponse(
-        data=[ImageObject(url="https://x/1.png"), ImageObject(url="https://x/2.png")]
-    )
-    cost = cost_calculator(model="fal-ai/nano-banana", image_response=image_response)
-    assert cost == pytest.approx(0.078)

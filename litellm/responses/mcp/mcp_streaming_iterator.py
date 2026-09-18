@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
@@ -22,6 +23,8 @@ from litellm.types.llms.openai import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
+
     from mcp.types import Tool as MCPTool
 
     from litellm.proxy._types import UserAPIKeyAuth
@@ -511,7 +514,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         if self.base_iterator:
             if hasattr(self.base_iterator, "__anext__"):
                 try:
-                    chunk: Final = await cast(Any, self.base_iterator).__anext__()
+                    chunk: Final[ResponsesAPIStreamingResponse] = await cast(  # cast-ok: hasattr __anext__ checked
+                        "AsyncIterator[ResponsesAPIStreamingResponse]", self.base_iterator
+                    ).__anext__()
 
                     # Capture the response ID from the first event to ensure consistency
                     if self._cached_response_id is None and hasattr(chunk, "response"):
@@ -569,7 +574,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         if not self.base_iterator or not hasattr(self.base_iterator, "__anext__"):
             raise StopAsyncIteration
 
-        chunk: Final = await cast(Any, self.base_iterator).__anext__()
+        chunk: Final[ResponsesAPIStreamingResponse] = await cast(  # cast-ok: hasattr __anext__ checked above
+            "AsyncIterator[ResponsesAPIStreamingResponse]", self.base_iterator
+        ).__anext__()
 
         if self._cached_response_id is None and hasattr(chunk, "response"):
             new_response: Final[ResponsesAPIResponse | None] = getattr(chunk, "response", None)
@@ -603,7 +610,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         """Create the initial response iterator by making the first LLM call"""
         try:
             # Import the core aresponses function that doesn't have MCP logic
-            from litellm.responses.main import aresponses
+            from litellm.responses.main import aresponses  # noqa: TID251  # core call without MCP logic
 
             # Make the initial response API call - but avoid the MCP wrapper
             params: Final[dict[str, object]] = self.original_request_params.copy()
@@ -692,6 +699,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 litellm_call_id=self.litellm_call_id,
                 litellm_trace_id=self.litellm_trace_id,
                 request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(self.original_request_params),
+                guardrail_context=MCPRequestContext.resolve_guardrail_context(self.original_request_params),
             )
 
             # Create completion events and output_item.done events for tool execution
@@ -767,7 +775,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             self.base_iterator = None
             return
 
-        from litellm.responses.main import aresponses
+        from litellm.responses.main import aresponses  # noqa: TID251  # follow-up call without MCP logic
         from litellm.responses.mcp.litellm_proxy_mcp_handler import (
             LiteLLM_Proxy_MCP_Handler,
         )
@@ -775,10 +783,15 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         try:
             # Create follow-up input
             if self.collected_response is not None:
+                persistence_disabled: Final = LiteLLM_Proxy_MCP_Handler._is_persistence_disabled(
+                    self.original_request_params
+                )
+
                 follow_up_input: Final = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
                     response=self.collected_response,
                     tool_results=self.tool_results,
                     original_input=self.original_request_params.get("input"),
+                    preserve_reasoning=persistence_disabled,
                 )
 
                 # Make follow-up call with streaming
@@ -834,7 +847,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         if not self.is_async:
             try:
                 if self.base_iterator and hasattr(self.base_iterator, "__next__"):
-                    return next(cast(Any, self.base_iterator))
+                    return next(
+                        cast("Iterator[ResponsesAPIStreamingResponse]", self.base_iterator)  # cast-ok: hasattr-checked
+                    )
                 else:
                     raise StopIteration
             except StopIteration:

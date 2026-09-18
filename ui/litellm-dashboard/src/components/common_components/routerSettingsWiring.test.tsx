@@ -58,8 +58,8 @@ describe("key router settings wiring, /key/info payload through to rendered outp
   it("should not leak a field the accordion has no control for into the editor", async () => {
     render(renderAccordion(KEY_INFO_ROUTER_SETTINGS));
 
-    await waitFor(() => expect(screen.getByTestId("loadbalancing")).toBeInTheDocument());
-    expect(screen.getByTestId("loadbalancing").textContent).not.toContain("tag_routing_prefix");
+    expect(await screen.findByTestId("loadbalancing")).toBeInTheDocument();
+    expect(screen.getByTestId("loadbalancing")).not.toHaveTextContent(/tag_routing_prefix/);
   });
 
   it("should render an empty editor for a key holding only fields it cannot show", async () => {

@@ -7,8 +7,7 @@
 import React, { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import MessageManager from "@/components/molecules/message_manager";
-import NotificationManager from "../../../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { AddFallbacksModal } from "./AddFallbacksModal";
 import { FallbackGroup } from "./FallbackGroupConfig";
@@ -82,9 +81,7 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
     // Validation
     const invalidGroups = groups.filter((g) => !g.primaryModel || g.fallbackModels.length === 0);
     if (invalidGroups.length > 0) {
-      MessageManager.error(
-        `Please complete configuration for all groups. ${invalidGroups.length} group(s) incomplete.`,
-      );
+      toast.error(`Please complete configuration for all groups. ${invalidGroups.length} group(s) incomplete.`);
       return;
     }
 
@@ -104,7 +101,7 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
       setIsSaving(true);
       try {
         await onChange(updatedFallbacks);
-        NotificationManager.success(`${groups.length} fallback configuration(s) added successfully!`);
+        toast.success(`${groups.length} fallback configuration(s) added successfully!`);
         handleCancel();
       } catch (error) {
         // Error handling is done in handleFallbacksChange, so we don't need to show another notification here
@@ -113,7 +110,7 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
         setIsSaving(false);
       }
     } else {
-      NotificationManager.fromBackend("onChange callback not provided");
+      toast.fromError("onChange callback not provided");
     }
   };
 
@@ -134,7 +131,7 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
         />
         {/* Footer with Cancel and Save buttons */}
         {groups.length > 0 && (
-          <div className="flex items-center justify-end space-x-3 pt-6 mt-6 border-t border-gray-100">
+          <div className="flex items-center justify-end space-x-3 pt-6 mt-6 border-t border-border">
             <Button variant="outline" onClick={handleCancel} disabled={isSaving}>
               Cancel
             </Button>

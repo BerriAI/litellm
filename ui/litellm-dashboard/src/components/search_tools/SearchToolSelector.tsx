@@ -79,12 +79,7 @@ const SearchToolSelector: React.FC<SearchToolSelectorProps> = ({
             ))
           }
         </ComboboxValue>
-        <ComboboxChipsInput
-          className="border-0 bg-transparent"
-          placeholder={placeholder}
-          aria-label={placeholder}
-          disabled={disabled}
-        />
+        <ComboboxChipsInput placeholder={placeholder} aria-label={placeholder} disabled={disabled} />
         {value && value.length > 0 && <ComboboxClear aria-label="Clear all search tools" disabled={disabled} />}
       </ComboboxChips>
       <ComboboxContent anchor={anchor}>
