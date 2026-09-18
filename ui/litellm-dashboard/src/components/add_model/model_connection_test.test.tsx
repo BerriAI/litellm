@@ -1,16 +1,13 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { testConnectionRequest } from "../networking";
 import { prepareModelAddRequest } from "./handle_add_model_submit";
 import ModelConnectionTest from "./model_connection_test";
 
 vi.mock("../networking", () => ({ testConnectionRequest: vi.fn() }));
 vi.mock("./handle_add_model_submit", () => ({ prepareModelAddRequest: vi.fn() }));
-vi.mock("../molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
 
 const preparedRequest = [{ litellmParamsObj: { model: "openai/gpt-4o-mini" }, modelInfoObj: { mode: "chat" } }];
 
@@ -56,7 +53,7 @@ describe("ModelConnectionTest", () => {
       "chat",
     );
     expect(screen.getByTestId("connection-success-msg")).toHaveTextContent("Connection to GPT-4o mini successful!");
-    expect(NotificationsManager.success).toHaveBeenCalledWith("Connection test successful!");
+    expect(toast.success).toHaveBeenCalledWith("Connection test successful!");
     expect(onTestComplete).toHaveBeenCalledTimes(1);
   });
 
@@ -93,7 +90,7 @@ describe("ModelConnectionTest", () => {
     fireEvent.click(screen.getByRole("button", { name: /Copy to Clipboard/ }));
 
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining("https://api.example.test/v1/chat/completions"));
-    expect(NotificationsManager.success).toHaveBeenCalledWith("Copied to clipboard");
+    expect(toast.success).toHaveBeenCalledWith("Copied to clipboard");
   });
 
   it("shows a preparation failure without sending a connection request", async () => {

@@ -1,9 +1,6 @@
-import os
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+import pytest
+
 from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
 )
@@ -166,6 +163,240 @@ def test_messages_to_responses_input_with_tool():
     }
 
 
+def test_messages_to_responses_input_preserves_images():
+    """An image block must survive the round trip, or OpenAI counts only the text.
+
+    A 256x256 image is worth 255 tokens to OpenAI's counting API; dropping it
+    turned a 268-token request into a 13-token one.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,iVBORw0KGgo=", "detail": "high"},
+                },
+            ],
+        }
+    ]
+
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert instructions is None
+    assert input_items == [
+        {
+            "role": "user",
+            "content": (
+                {"type": "input_text", "text": "What is in this image?"},
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,iVBORw0KGgo=",
+                    "detail": "high",
+                },
+            ),
+        }
+    ]
+
+
+def test_messages_to_responses_input_image_without_detail_defaults_to_auto():
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}],
+        }
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items[0]["content"] == (
+        {"type": "input_image", "image_url": "https://example.com/cat.png", "detail": "auto"},
+    )
+
+
+def test_messages_to_responses_input_bare_string_image_url_is_preserved():
+    messages = [{"role": "user", "content": [{"type": "image_url", "image_url": "https://example.com/cat.png"}]}]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items[0]["content"] == (
+        {"type": "input_image", "image_url": "https://example.com/cat.png", "detail": "auto"},
+    )
+
+
+def test_messages_to_responses_input_text_only_blocks_stay_a_joined_string():
+    """Text-only content must keep collapsing to a string so existing counts do not shift."""
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "first"}, {"type": "text", "text": "second"}],
+        }
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items == [{"role": "user", "content": "first\nsecond"}]
+
+
+def test_messages_to_responses_input_drops_unmappable_blocks():
+    """A block with no Responses API equivalent is skipped, never forwarded verbatim."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "hi"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+                {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
+            ],
+        }
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items[0]["content"] == (
+        {"type": "input_text", "text": "hi"},
+        {"type": "input_image", "image_url": "https://example.com/cat.png", "detail": "auto"},
+    )
+
+
+def test_messages_to_responses_input_assistant_blocks_collapse_to_a_string():
+    """An assistant turn must never forward chat `text` blocks.
+
+    The Responses API only accepts output_text and refusal inside an assistant turn, so
+    forwarding them 400s the whole request and silently drops the count back to the local
+    tokenizer, which is exactly what defeats the image fix above.
+    """
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "What is the capital of France?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Paris."}]},
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items == [
+        {"role": "user", "content": "What is the capital of France?"},
+        {"role": "assistant", "content": "Paris."},
+    ]
+
+
+def test_messages_to_responses_input_assistant_image_block_is_dropped():
+    """An image part is illegal inside an assistant turn, so it must not reach the provider."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Here it is"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+            ],
+        }
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items == [{"role": "assistant", "content": "Here it is"}]
+
+
+def test_messages_to_responses_input_keeps_user_image_alongside_an_assistant_turn():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this image?"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+            ],
+        },
+        {"role": "assistant", "content": [{"type": "text", "text": "A cat."}]},
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items == [
+        {
+            "role": "user",
+            "content": (
+                {"type": "input_text", "text": "What is in this image?"},
+                {"type": "input_image", "image_url": "https://example.com/cat.png", "detail": "auto"},
+            ),
+        },
+        {"role": "assistant", "content": "A cat."},
+    ]
+
+
+def test_messages_to_responses_input_preserves_inline_files():
+    """An inline file must survive the round trip, or the count silently drops the file.
+
+    A small PDF is worth 36 tokens to OpenAI's counting API; dropping it left the same
+    request counting 13, the text-only total.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize this file."},
+                {
+                    "type": "file",
+                    "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64,JVBERi0="},
+                },
+            ],
+        }
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items == [
+        {
+            "role": "user",
+            "content": (
+                {"type": "input_text", "text": "Summarize this file."},
+                {
+                    "type": "input_file",
+                    "filename": "report.pdf",
+                    "file_data": "data:application/pdf;base64,JVBERi0=",
+                },
+            ),
+        }
+    ]
+
+
+def test_messages_to_responses_input_drops_a_file_with_no_inline_data():
+    """OpenAI rejects `file_data` without a `filename`, and a rejected request loses the whole count."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize this file."},
+                {"type": "file", "file": {"file_data": "data:application/pdf;base64,JVBERi0="}},
+                {"type": "file", "file": {"file_id": "file-abc123"}},
+            ],
+        }
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items == [{"role": "user", "content": "Summarize this file."}]
+
+
+def test_messages_to_responses_input_assistant_file_block_is_dropped():
+    """A file part is illegal inside an assistant turn, so it must not reach the provider."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Here it is"},
+                {
+                    "type": "file",
+                    "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64,JVBERi0="},
+                },
+            ],
+        }
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items == [{"role": "assistant", "content": "Here it is"}]
+
+
 def test_validate_request_valid():
     """Test that valid requests pass validation."""
     config = OpenAICountTokensConfig()
@@ -175,21 +406,19 @@ def test_validate_request_valid():
 def test_validate_request_missing_model():
     """Test that missing model raises ValueError."""
     config = OpenAICountTokensConfig()
-    try:
+    with pytest.raises(ValueError, match="model") as exc_info:
         config.validate_request(model="", input="Hello")
-        assert False, "Should have raised ValueError"
-    except ValueError as e:
-        assert "model" in str(e)
+    e = exc_info.value
+    assert "model" in str(e)
 
 
 def test_validate_request_missing_input():
     """Test that missing input raises ValueError."""
     config = OpenAICountTokensConfig()
-    try:
+    with pytest.raises(ValueError, match="input") as exc_info:
         config.validate_request(model="gpt-4o", input="")
-        assert False, "Should have raised ValueError"
-    except ValueError as e:
-        assert "input" in str(e)
+    e = exc_info.value
+    assert "input" in str(e)
 
 
 def test_get_endpoint_default():

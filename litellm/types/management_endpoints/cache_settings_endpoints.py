@@ -187,6 +187,19 @@ CACHE_SETTINGS_FIELDS: Final[list[CacheSettingsField]] = [
         ui_field_name="Embedding Model",
         redis_type="semantic",
     ),
+    CacheSettingsField(
+        field_name="semantic_cache_scope",
+        field_type="String",
+        field_value=None,
+        field_description=(
+            "Isolation granularity for semantic cache hits. 'key' shares hits between all end users of a key/team/org."
+            " 'end_user' also isolates per end user; requests without an end user fall back to the key scope."
+        ),
+        field_default="key",
+        options=["key", "end_user"],
+        ui_field_name="Semantic Cache Scope",
+        redis_type="semantic",
+    ),
     # GCP IAM authentication fields
     CacheSettingsField(
         field_name="gcp_service_account",
@@ -222,6 +235,51 @@ CACHE_SETTINGS_FIELDS: Final[list[CacheSettingsField]] = [
         field_description="Enable SSL hostname verification",
         field_default=None,
         ui_field_name="SSL Check Hostname",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="aws_iam_auth",
+        field_type="Boolean",
+        field_value=None,
+        field_description="Enable AWS ElastiCache IAM authentication",
+        field_default=False,
+        ui_field_name="AWS IAM Authentication",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="aws_iam_user_name",
+        field_type="String",
+        field_value=None,
+        field_description="AWS ElastiCache IAM user name",
+        field_default=None,
+        ui_field_name="AWS IAM User Name",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="aws_iam_cache_name",
+        field_type="String",
+        field_value=None,
+        field_description="AWS ElastiCache cache name",
+        field_default=None,
+        ui_field_name="AWS IAM Cache Name",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="aws_iam_region",
+        field_type="String",
+        field_value=None,
+        field_description="AWS region for ElastiCache IAM authentication",
+        field_default=None,
+        ui_field_name="AWS IAM Region",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="aws_iam_serverless",
+        field_type="Boolean",
+        field_value=None,
+        field_description="The ElastiCache cache is serverless rather than a self-designed cluster",
+        field_default=False,
+        ui_field_name="AWS IAM Serverless Cache",
         redis_type=None,
     ),
 ]

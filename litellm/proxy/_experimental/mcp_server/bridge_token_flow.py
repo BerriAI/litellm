@@ -1,6 +1,8 @@
 """Bridge token flow: litellm identity resolution and the DCR-bridge oauth_delegate mint/refresh pipeline."""
 
 import math
+import os
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Literal
@@ -12,9 +14,13 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.oauth_utils import TOKEN_NO_CACHE_HEADERS
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    _V2_GCM_PREFIX,  # pyright: ignore[reportPrivateUsage]  # reuse the encrypted credential's format discriminator
+)
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if TYPE_CHECKING:
+    from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _BridgeAuthorizationCode
     from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
         EnvelopeIdentity,
@@ -23,6 +29,7 @@ if TYPE_CHECKING:
         UpstreamTokenGrant,
     )
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.handle_jwt import JWTIdentity
 
 
 def _litellm_key_from_request(request: Request) -> str | None:
@@ -45,6 +52,64 @@ def _litellm_key_from_request(request: Request) -> str | None:
         if value:
             return value
     return None
+
+
+async def oauth_authorization_uses_gateway_credential(request: Request) -> bool:
+    """Classify credentials for browser authorize; candidates still require full authorization."""
+    from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # startup owns the active auth configuration
+        jwt_handler,
+        master_key,
+        user_custom_auth,
+    )
+
+    if "x-litellm-api-key" in request.headers:
+        return True
+    token: Final = _litellm_key_from_request(request)
+    if token is None:
+        return "authorization" in request.headers
+    if token.startswith("sk-") or (master_key and secrets.compare_digest(token.encode(), master_key.encode())):
+        return True
+    if user_custom_auth is not None or jwt_handler.litellm_jwtauth.oidc_userinfo_enabled:
+        return True
+    if not JWTHandler.is_jwt(token):
+        return await _opaque_bearer_is_gateway_credential(token)
+    claims: Final = JWTHandler.get_unverified_claims(token)
+    issuer: Final = claims.get("iss") if claims is not None else None
+    global_issuer: Final = os.getenv("JWT_ISSUER")
+    # An unscoped global validator can accept issuers absent from the configured issuer list.
+    if not isinstance(issuer, str) or not issuer or not global_issuer:
+        return True
+    return issuer == global_issuer or any(
+        issuer == configured.issuer for configured in jwt_handler.litellm_jwtauth.issuers or ()
+    )
+
+
+async def _opaque_bearer_is_gateway_credential(token: str) -> bool:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+        is_envelope,  # noqa: PLC0415  # envelope imports bridge types
+        is_refresh_envelope,
+    )
+    from litellm.proxy._types import hash_token  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.resolvers.store import IdentityStore  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # startup owns the identity store dependencies
+        prisma_client,
+        user_api_key_cache,
+    )
+
+    if is_envelope(token) or is_refresh_envelope(token) or token.startswith(_V2_GCM_PREFIX):
+        return True
+    try:
+        if ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(token) is not None:
+            return True
+        await IdentityStore(prisma_client, user_api_key_cache).resolve(hashed_token=hash_token(token))
+    except KeyNotFoundError:
+        return False
+    except Exception as exc:  # noqa: BLE001  # an identity lookup fault must not permit cookie fallback
+        verbose_logger.debug("OAuth bearer ownership could not be checked (%s)", type(exc).__name__)
+    return True
 
 
 def _key_is_active(key_obj: "UserAPIKeyAuth") -> bool:
@@ -100,16 +165,27 @@ class _ResolvedKey:
     key: "UserAPIKeyAuth"
 
 
-_KeyResolutionFailure = Literal["no_active_key", "unavailable", "unresolvable"]
+_KeyResolutionFailure = Literal["no_active_key", "unavailable", "faulted", "unresolvable"]
 """Why a token request yielded no active litellm key, kept distinct so a caller statuses each truthfully
 instead of blaming the client for a gateway problem:
 - ``no_active_key``: none was presented, or the presented key is unknown / blocked / expired (the
   caller's request is at fault)
 - ``unavailable``: the auth database was transiently unreachable while resolving (retryable)
+- ``faulted``: the auth database's query engine reported a fault that retrying will not clear (still a
+  503, but the wording must not tell the operator to wait)
 - ``unresolvable``: the gateway cannot resolve identity right now (no DB connection, or an unexpected
   error) -- a gateway fault, not the caller's
 The classification mirrors admission's ``_reload_admitted_key`` so the mint (ingress) and admission
 (egress) never disagree on the status of the same outage."""
+
+
+def _database_failure(exc: Exception) -> Literal["unavailable", "faulted"]:
+    from litellm.proxy.db.exception_handler import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        PrismaDBExceptionHandler,
+    )
+
+    fault: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(exc) or exc
+    return "faulted" if PrismaDBExceptionHandler.is_permanent_database_fault(fault) else "unavailable"
 
 
 async def _resolve_active_litellm_key(request: Request) -> "_ResolvedKey | _KeyResolutionFailure":
@@ -169,7 +245,7 @@ async def _reload_active_key_by_hash(key_hash: str) -> "_ResolvedKey | _KeyResol
         return "no_active_key"
     except Exception as exc:  # noqa: BLE001  # classify: a DB outage is retryable, anything else is an opaque gateway fault
         if PrismaDBExceptionHandler.is_database_service_unavailable_error(exc):
-            return "unavailable"
+            return _database_failure(exc)
         verbose_logger.debug(
             "_reload_active_key_by_hash: unexpected key-resolution error (%s)",
             type(exc).__name__,
@@ -181,7 +257,13 @@ async def _reload_active_key_by_hash(key_hash: str) -> "_ResolvedKey | _KeyResol
 
 
 async def _reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | None":
-    """Re-validate a live litellm user by id, returning ``None`` when the user is active or a precise
+    """``None`` when the user is live, else the precise failure ``load_active_user_by_id`` found."""
+    loaded: Final = await load_active_user_by_id(user_id)
+    return loaded if isinstance(loaded, str) else None
+
+
+async def load_active_user_by_id(user_id: str) -> "LiteLLM_UserTable | _KeyResolutionFailure":
+    """Load a live litellm user by id, returning the record when the user is active or a precise
     failure otherwise. The interactive DCR client authenticates via SSO, so its refresh envelope seals a
     user subject; renewing it must re-check the user is still live (present and not SCIM-deactivated) so a
     deactivated user cannot keep refreshing, mirroring how admission re-validates the same user subject on
@@ -218,15 +300,20 @@ async def _reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | No
     except (ProxyException, HTTPException):
         return "no_active_key"
     except Exception as exc:  # noqa: BLE001  # a DB outage is retryable; a missing user (get_user_object's wrapped ValueError) or any other resolution failure fails closed as no_active_key, never a 500
-        if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(exc):
-            return "unavailable"
+        outage: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(exc)
+        if outage is not None:
+            return _database_failure(outage)
         verbose_logger.debug("_reload_active_user_by_id: user-resolution error (%s)", type(exc).__name__)
         return "no_active_key"
     if user_object is None:
         return "no_active_key"
+    return _active_user_record(user_object)
+
+
+def _active_user_record(user_object: "LiteLLM_UserTable") -> "LiteLLM_UserTable | Literal['no_active_key']":
     if isinstance(user_object.metadata, dict) and user_object.metadata.get("scim_active") is False:
         return "no_active_key"
-    return None
+    return user_object
 
 
 async def _key_owner_scim_deactivated(key: "UserAPIKeyAuth") -> bool:
@@ -282,15 +369,137 @@ async def _revalidate_active_subject(identity: "EnvelopeIdentity") -> "_KeyResol
 
 
 async def _extract_user_id_from_request(request: Request) -> str | None:
-    """The litellm ``user_id`` for the token request, so a per-user token is stored under the same
-    identity the egress later reads it by. Storage is best-effort, so every non-resolved outcome
-    (including a transient DB outage) collapses to ``None`` here and the caller simply skips the store;
-    the bridge mint, which must status those outcomes differently, consumes
-    :func:`_resolve_active_litellm_key` directly."""
-    resolved: Final = await _resolve_active_litellm_key(request)
-    if not isinstance(resolved, _ResolvedKey):
+    """Resolve the caller for identity binding without granting credential-write permission."""
+    from litellm.proxy.auth.handle_jwt import JWTIdentity  # noqa: PLC0415  # proxy import cycle
+
+    resolved: Final = await _resolve_request_auth(request)
+    if isinstance(resolved, JWTIdentity):
+        return resolved.user_id
+    return _active_key_user_id(resolved) if resolved is not None else None
+
+
+async def authorize_oauth_credential_request(request: Request, server_id: str) -> str | None:
+    from litellm.proxy._types import UserAPIKeyAuth  # noqa: PLC0415  # proxy import cycle
+
+    resolved: Final = await _resolve_request_auth(request, f"/v1/mcp/server/{server_id}/oauth-user-credential")
+    if not isinstance(resolved, UserAPIKeyAuth) or not _active_key_user_id(resolved):
         return None
-    return _active_key_user_id(resolved.key)
+    if not await can_store_oauth_credential(request, resolved, server_id):
+        return None
+    return resolved.user_id
+
+
+async def _resolve_request_auth(
+    request: Request, write_route: str | None = None
+) -> "UserAPIKeyAuth | JWTIdentity | None":
+    from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
+
+    token: Final = _litellm_key_from_request(request)
+    if token is not None and JWTHandler.is_jwt(token):
+        return await _resolve_jwt_auth(request, token, write_route)
+    resolved: Final = await _resolve_active_litellm_key(request)
+    return resolved.key if isinstance(resolved, _ResolvedKey) else None
+
+
+async def can_store_oauth_credential(request: Request, auth: "UserAPIKeyAuth", server_id: str) -> bool:
+    """Apply the same write policy to request credentials and verified signed-callback users."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # registry imports auth helpers
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+        can_access_mcp_server,  # noqa: PLC0415  # proxy import cycle
+    )
+    from litellm.proxy.auth.route_checks import RouteChecks  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.user_api_key_auth import (  # noqa: PLC0415  # proxy import cycle
+        _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse admission policy for the credential-write action
+    )
+
+    write_route: Final = f"/v1/mcp/server/{server_id}/oauth-user-credential"
+    try:
+        RouteChecks.is_virtual_key_allowed_to_call_route(route=write_route, valid_token=auth, request=request)
+        await _run_centralized_common_checks(
+            user_api_key_auth_obj=auth,
+            request=request,
+            request_data={},
+            route=write_route,
+        )
+        return await can_access_mcp_server(auth, server_id, global_mcp_server_manager.get_allowed_mcp_servers)
+    except Exception as exc:  # noqa: BLE001  # authorization failure must never write credentials
+        verbose_logger.debug("OAuth credential write not authorized (%s)", type(exc).__name__)
+        return False
+
+
+async def _resolve_jwt_auth(
+    request: Request,
+    token: str,
+    write_route: str | None,
+) -> "UserAPIKeyAuth | JWTIdentity | None":
+    from litellm.proxy._types import UserAPIKeyAuth  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.user_api_key_auth import (  # noqa: PLC0415  # proxy import cycle
+        _resolve_jwt_to_virtual_key,  # pyright: ignore[reportPrivateUsage]  # reuse admission mapping policy without provisioning a new key
+    )
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # proxy globals initialized at startup
+        general_settings,
+        jwt_handler,
+        premium_user,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if general_settings.get("enable_jwt_auth") is not True or premium_user is not True or prisma_client is None:
+        return None
+    try:
+        if jwt_handler.litellm_jwtauth.is_virtual_key_mapping_configured():
+            claims: Final = await jwt_handler.auth_jwt(token=token)
+            validate: Final = jwt_handler.litellm_jwtauth.custom_validate
+            if validate is not None and not validate(claims):
+                return None
+            mapped: Final = await _resolve_jwt_to_virtual_key(
+                jwt_claims=claims,
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if isinstance(mapped, UserAPIKeyAuth):
+                return None if await _key_owner_scim_deactivated(mapped) or not _active_key_user_id(mapped) else mapped
+            if mapped is not None:
+                return None
+        if write_route is None:
+            identity: Final = await JWTAuthManager.resolve_identity(
+                api_key=token,
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if identity.user_object is not None and isinstance(_active_user_record(identity.user_object), str):
+                return None
+            return identity
+        authorized: Final = await JWTAuthManager.authorize_jwt(
+            api_key=token,
+            jwt_handler=jwt_handler,
+            request_data={},
+            general_settings=general_settings,
+            route=write_route,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+            request_headers=dict(request.headers),
+            request_method=request.method,
+        )
+        resolved_user: Final = authorized["user_object"]
+        if resolved_user is not None and isinstance(_active_user_record(resolved_user), str):
+            return None
+        return JWTAuthManager.user_api_key_auth_from_result(authorized)
+    except Exception as exc:  # noqa: BLE001  # public OAuth exchange stays available; unvalidated identities never write credentials
+        verbose_logger.debug("OAuth JWT identity could not be validated (%s)", type(exc).__name__)
+        return None
 
 
 _UpstreamGrantRejection = Literal["no_access_token", "expired_lifetime"]
@@ -299,15 +508,15 @@ _UpstreamGrantRejection = Literal["no_access_token", "expired_lifetime"]
 - ``expired_lifetime``: the response reports a parseable, non-positive ``expires_in``, i.e. an upstream
   token that is already dead, so sealing it would forward a bearer the edge cannot use
 An absent or unparseable ``expires_in`` is NOT a rejection; the lifetime is merely unknown and the
-envelope caps it, the by-design behaviour for an upstream that omits the field."""
+envelope uses its fallback lifetime, the by-design behaviour for an upstream that omits the field."""
 
 
 def _classify_upstream_lifetime(raw_expires_in: object) -> "int | Literal['unspecified', 'expired']":
     """Classify an upstream ``expires_in`` into a positive number of seconds, ``"unspecified"`` (absent
-    or unparseable, so the envelope caps it), or ``"expired"`` (a non-positive value the upstream reports
+    or unparseable, so the envelope uses its fallback), or ``"expired"`` (a non-positive value the upstream reports
     as already elapsed). Telling "we do not know the lifetime" apart from "the upstream says it is
-    already dead" is what stops an explicitly-expired token from silently receiving the envelope's 1h
-    cap. The expired decision is made on the parsed numeric value, not on ``int(...)`` of it, so a
+    already dead" is what stops an explicitly-expired token from silently receiving the envelope's
+    one-hour fallback. The expired decision is made on the parsed numeric value, not on ``int(...)`` of it, so a
     positive sub-second lifetime in ``(0, 1)`` is not truncated to ``0`` and misread as elapsed; the
     envelope works in whole seconds, so such a lifetime clamps up to its 1s floor. ``bool`` is excluded
     (an ``int`` subclass but never a real lifetime), and the conversions can raise on ``NaN`` /
@@ -328,7 +537,7 @@ def _bridge_grant_from_token_response(token_response: object) -> "UpstreamTokenG
     """Validate an upstream OAuth token response into a typed grant, or say why it cannot back an
     envelope. Each field is isinstance-checked so nothing untyped from ``response.json()`` reaches the
     grant. ``expires_in`` is read three ways (see :func:`_classify_upstream_lifetime`): an unknown
-    lifetime leaves the grant ``expires_in`` ``None`` for the envelope to cap, a positive value is
+    lifetime leaves the grant ``expires_in`` ``None`` for the envelope fallback, a positive value is
     honoured, and an explicit already-elapsed value is a rejection rather than a silent fall-through to
     the cap."""
     from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # inline import avoids a module-load circular import
@@ -350,8 +559,8 @@ def _bridge_grant_from_token_response(token_response: object) -> "UpstreamTokenG
         token_type=token_type if isinstance(token_type, str) and token_type else "Bearer",
         # The upstream refresh_token is deliberately NOT sealed: the edge never consumes it (it forwards
         # only token_type + access_token), so it would be dead weight embedding a long-lived upstream
-        # credential in the client-held bearer, and it enlarges the envelope. Refresh support is a
-        # follow-up (a dedicated refresh-envelope); the client re-runs authorization_code at the cap.
+        # credential in the client-held bearer, and it enlarges the envelope. The dedicated refresh
+        # envelope carries that credential separately.
         refresh_token=None,
         scope=scope if isinstance(scope, str) and scope else None,
         expires_in=lifetime if isinstance(lifetime, int) else None,
@@ -376,10 +585,12 @@ _BridgeMintError = Literal[
     "no_identity",
     "invalid_refresh",
     "identity_unavailable",
+    "identity_faulted",
     "identity_unresolvable",
     "not_configured",
     "no_upstream_token",
     "upstream_token_expired",
+    "upstream_lifetime_unrepresentable",
     "too_large",
 ]
 
@@ -425,6 +636,13 @@ def _bridge_mint_error_response(error: _BridgeMintError) -> JSONResponse:
                 "temporarily_unavailable",
                 "the authentication database is temporarily unreachable; retry shortly",
             )
+        case "identity_faulted":
+            status, code, desc = (
+                503,
+                "temporarily_unavailable",
+                "the authentication database reported a fault that is not a transient outage; "
+                "retrying will not help until the gateway deployment is repaired",
+            )
         case "identity_unresolvable":
             status, code, desc = (
                 500,
@@ -449,6 +667,12 @@ def _bridge_mint_error_response(error: _BridgeMintError) -> JSONResponse:
                 "server_error",
                 "the upstream token response reports an already-expired lifetime",
             )
+        case "upstream_lifetime_unrepresentable":
+            status, code, desc = (
+                502,
+                "server_error",
+                "the upstream token response reports an unrepresentable lifetime",
+            )
         case "too_large":
             status, code, desc = (
                 502,
@@ -471,6 +695,8 @@ def _key_resolution_failure_to_mint_error(failure: _KeyResolutionFailure) -> _Br
             return "no_identity"
         case "unavailable":
             return "identity_unavailable"
+        case "faulted":
+            return "identity_faulted"
         case "unresolvable":
             return "identity_unresolvable"
         case _:
@@ -555,6 +781,8 @@ def _refresh_key_failure_to_mint_error(failure: _KeyResolutionFailure) -> _Bridg
             return "invalid_refresh"
         case "unavailable":
             return "identity_unavailable"
+        case "faulted":
+            return "identity_faulted"
         case "unresolvable":
             return "identity_unresolvable"
         case _:
@@ -612,6 +840,7 @@ def _finish_bridge_mint(
         build_bridge_token_response,
     )
     from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        EnvelopeLifetimeUnrepresentable,
         SealedEnvelope,
         UpstreamTokenGrant,
     )
@@ -620,6 +849,8 @@ def _finish_bridge_mint(
     if not isinstance(grant, UpstreamTokenGrant):
         return _upstream_rejection_to_mint_error(grant)
     sealed: Final = build_bridge_token_response(ready.identity, grant, ready.keys, now)
+    if isinstance(sealed, EnvelopeLifetimeUnrepresentable):
+        return "upstream_lifetime_unrepresentable"
     if not isinstance(sealed, SealedEnvelope):
         return "too_large"
     # Report expires_in from the JWT's own second-truncated exp, rounding the elapsed portion up, so the

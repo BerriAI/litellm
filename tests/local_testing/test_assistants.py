@@ -1,5 +1,3 @@
-import os
-import sys
 
 import pytest
 from dotenv import load_dotenv
@@ -7,7 +5,6 @@ from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_deleted import AssistantDeleted
 
 load_dotenv()
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import create_thread, get_thread

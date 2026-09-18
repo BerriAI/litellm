@@ -27,9 +27,9 @@ export const FONT_SIZE_MEDIUM = 13;
 export const FONT_SIZE_HEADER = 16;
 
 // Colors
-export const COLOR_BORDER = "#f0f0f0";
-export const COLOR_BACKGROUND = "#fff";
-export const COLOR_BG_LIGHT = "#fafafa";
+export const COLOR_BORDER = "var(--color-border)";
+export const COLOR_BACKGROUND = "var(--color-background)";
+export const COLOR_BG_LIGHT = "var(--color-muted)";
 
 // Spacing
 export const SPACING_SMALL = 4;

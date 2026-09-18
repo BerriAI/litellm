@@ -29,7 +29,7 @@ def test_hands_the_alter_statement_to_the_prisma_cli():
         return subprocess.CompletedProcess(cmd, 0)
 
     with patch(
-        "litellm_proxy_extras.replica_identity.subprocess.run", side_effect=capture
+        "litellm_proxy_extras.replica_identity.run_prisma", side_effect=capture
     ):
         applied = apply_replica_identity_full(
             schema_path="/somewhere/schema.prisma",
@@ -60,7 +60,7 @@ def test_hands_the_alter_statement_to_the_prisma_cli():
 )
 def test_every_failure_is_reported_instead_of_raised(failure):
     with patch(
-        "litellm_proxy_extras.replica_identity.subprocess.run", side_effect=failure
+        "litellm_proxy_extras.replica_identity.run_prisma", side_effect=failure
     ):
         assert (
             apply_replica_identity_full(

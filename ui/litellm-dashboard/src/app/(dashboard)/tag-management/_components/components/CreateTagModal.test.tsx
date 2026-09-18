@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import CreateTagModal from "./CreateTagModal";
@@ -41,7 +41,7 @@ describe("CreateTagModal", () => {
     render(<CreateTagModal {...defaultProps} />);
 
     const tagNameInput = screen.getByLabelText("Tag Name");
-    await user.type(tagNameInput, "test-tag");
+    fireEvent.change(tagNameInput, { target: { value: "test-tag" } });
 
     const submitButton = screen.getByRole("button", { name: /Create Tag/i });
     await user.click(submitButton);

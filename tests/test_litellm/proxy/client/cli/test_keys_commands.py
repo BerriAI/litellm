@@ -1,13 +1,9 @@
 import json
 import os
-import sys
 from unittest.mock import patch
 
 import requests
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 import pytest
@@ -124,7 +120,6 @@ def test_async_keys_generate_error_handling(mock_keys_client, cli_runner):
 
 
 def test_async_keys_delete_error_handling(mock_keys_client, cli_runner):
-    import requests
 
     # Mock a connection error that would normally happen in CI
     mock_keys_client.return_value.delete.side_effect = (
@@ -146,7 +141,6 @@ def test_async_keys_delete_error_handling(mock_keys_client, cli_runner):
 def test_async_keys_delete_http_error_handling(mock_keys_client, cli_runner):
     from unittest.mock import Mock
 
-    import requests
 
     # Create a mock response object for HTTPError
     mock_response = Mock()

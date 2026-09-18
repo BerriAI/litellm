@@ -1,83 +1,157 @@
 import React from "react";
-import { Form, Input, Select, Collapse } from "antd";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { FieldGroup } from "@/components/ui/field";
 import { AgentCreateInfo, AgentCredentialFieldMetadata } from "@/components/networking";
+import { PasswordInput } from "@/components/shared/PasswordInput";
 import { AGENT_FORM_CONFIG } from "./agent_config";
-import CostConfigFields from "./cost_config_fields";
-
-const { Panel } = Collapse;
+import CostConfigFields, { COST_FIELD_NAMES } from "./cost_config_fields";
+import {
+  AgentFormField,
+  AgentFormPanel,
+  AgentRequestPayload,
+  AgentFormValues,
+  CollapsiblePanelsState,
+  labelWithHint,
+} from "./AgentFormKit";
 
 interface DynamicAgentFormFieldsProps {
   agentTypeInfo: AgentCreateInfo;
+  panels: CollapsiblePanelsState;
 }
 
-/**
- * Form fields for dynamic agent types (e.g., LangGraph).
- * Renders common fields (agent name, display name, description) plus
- * credential fields defined by the agent type metadata.
- */
-const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({ agentTypeInfo }) => {
+export const unmountedDynamicFieldNames = (mountedPanels: readonly string[]): readonly string[] =>
+  mountedPanels.includes(AGENT_FORM_CONFIG.cost.key) ? [] : COST_FIELD_NAMES;
+
+// A field's validation_pattern is server-supplied metadata; if it's ever not a valid regex, skip
+// validation rather than throwing during render and taking the whole form down with it.
+const buildValidationPatternRule = (
+  field: AgentCredentialFieldMetadata,
+): { value: RegExp; message: string } | undefined => {
+  if (!field.validation_pattern) return undefined;
+  try {
+    return {
+      value: new RegExp(field.validation_pattern),
+      message: field.validation_message || `${field.label} looks incomplete or malformed`,
+    };
+  } catch {
+    return undefined;
+  }
+};
+
+const CredentialField = ({ field }: { field: AgentCredentialFieldMetadata }) => {
+  const patternRule = buildValidationPatternRule(field);
   return (
-    <>
-      <Form.Item
-        label="Agent Name"
-        name="agent_name"
-        rules={[{ required: true, message: "Please enter a unique agent name" }]}
-        tooltip="Unique identifier for the agent"
-      >
-        <Input placeholder="e.g., my-langgraph-agent" />
-      </Form.Item>
-
-      <Form.Item label="Description" name="description" tooltip="Brief description of what this agent does">
-        <Input.TextArea rows={2} placeholder="Describe what this agent does..." />
-      </Form.Item>
-
-      {agentTypeInfo.credential_fields.map((field: AgentCredentialFieldMetadata) => (
-        <Form.Item
-          key={field.key}
-          label={field.label}
-          name={field.key}
-          rules={field.required ? [{ required: true, message: `Please enter ${field.label}` }] : undefined}
-          tooltip={field.tooltip}
-          initialValue={field.default_value}
-        >
-          {field.field_type === "password" ? (
-            <Input.Password placeholder={field.placeholder || ""} />
-          ) : field.field_type === "textarea" ? (
-            <Input.TextArea rows={3} placeholder={field.placeholder || ""} />
-          ) : field.field_type === "select" && field.options ? (
-            <Select placeholder={field.placeholder || ""}>
-              {field.options.map((opt) => (
-                <Select.Option key={opt} value={opt}>
-                  {opt}
-                </Select.Option>
-              ))}
+    <AgentFormField
+      name={field.key}
+      label={field.tooltip ? labelWithHint(field.label, field.tooltip) : field.label}
+      defaultValue={field.default_value ?? undefined}
+      rules={{
+        ...(field.required ? { required: `Please enter ${field.label}` } : {}),
+        ...(patternRule ? { pattern: patternRule } : {}),
+      }}
+    >
+      {({ value, onChange, ref, ...control }) => {
+        const text = typeof value === "string" ? value : "";
+        if (field.field_type === "password") {
+          return (
+            <PasswordInput
+              {...control}
+              value={typeof value === "string" ? value : ""}
+              onChange={onChange}
+              ref={ref}
+              placeholder={field.placeholder || ""}
+            />
+          );
+        }
+        if (field.field_type === "textarea") {
+          return (
+            <Textarea
+              {...control}
+              ref={ref}
+              rows={3}
+              placeholder={field.placeholder || ""}
+              value={text}
+              onChange={onChange}
+            />
+          );
+        }
+        if (field.field_type === "select" && field.options) {
+          return (
+            <Select value={text || null} onValueChange={onChange}>
+              <SelectTrigger {...control} className="w-full">
+                <SelectValue placeholder={field.placeholder || ""} />
+              </SelectTrigger>
+              <SelectContent>
+                {field.options.map((option) => (
+                  <SelectItem key={option} value={option} title={option}>
+                    {option}
+                  </SelectItem>
+                ))}
+              </SelectContent>
             </Select>
-          ) : (
-            <Input placeholder={field.placeholder || ""} />
-          )}
-        </Form.Item>
-      ))}
-
-      <Collapse style={{ marginBottom: 16 }}>
-        <Panel header={AGENT_FORM_CONFIG.cost.title} key={AGENT_FORM_CONFIG.cost.key}>
-          <CostConfigFields />
-        </Panel>
-      </Collapse>
-    </>
+          );
+        }
+        return <Input {...control} ref={ref} placeholder={field.placeholder || ""} value={text} onChange={onChange} />;
+      }}
+    </AgentFormField>
   );
 };
 
-/**
- * Builds agent data from form values for dynamic agent types.
- * Uses configuration from agentTypeInfo to determine which fields to include.
- */
-export const buildDynamicAgentData = (values: any, agentTypeInfo: AgentCreateInfo) => {
-  // Build litellm_params from template
-  const litellmParams: Record<string, any> = {
+const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({ agentTypeInfo, panels }) => (
+  <>
+    <FieldGroup className="mb-4">
+      <AgentFormField
+        name="agent_name"
+        label={labelWithHint("Agent Name", "Unique identifier for the agent")}
+        rules={{ required: "Please enter a unique agent name" }}
+      >
+        {({ value, onChange, ref, ...control }) => (
+          <Input
+            {...control}
+            ref={ref}
+            placeholder="e.g., my-langgraph-agent"
+            value={typeof value === "string" ? value : ""}
+            onChange={onChange}
+          />
+        )}
+      </AgentFormField>
+
+      <AgentFormField
+        name="description"
+        label={labelWithHint("Description", "Brief description of what this agent does")}
+      >
+        {({ value, onChange, ref, ...control }) => (
+          <Textarea
+            {...control}
+            ref={ref}
+            rows={2}
+            placeholder="Describe what this agent does..."
+            value={typeof value === "string" ? value : ""}
+            onChange={onChange}
+          />
+        )}
+      </AgentFormField>
+
+      {agentTypeInfo.credential_fields.map((field) => (
+        <CredentialField key={field.key} field={field} />
+      ))}
+    </FieldGroup>
+
+    <div className="mb-4 rounded-md border border-border px-4">
+      <AgentFormPanel panelKey={AGENT_FORM_CONFIG.cost.key} title={AGENT_FORM_CONFIG.cost.title} panels={panels}>
+        <CostConfigFields />
+      </AgentFormPanel>
+    </div>
+  </>
+);
+
+export const buildDynamicAgentData = (values: AgentFormValues, agentTypeInfo: AgentCreateInfo): AgentRequestPayload => {
+  const litellmParams: Record<string, unknown> = {
     ...(agentTypeInfo.litellm_params_template || {}),
   };
 
-  // Add credential fields marked with include_in_litellm_params
   for (const field of agentTypeInfo.credential_fields) {
     const value = values[field.key];
     if (value && field.include_in_litellm_params !== false) {
@@ -85,31 +159,25 @@ export const buildDynamicAgentData = (values: any, agentTypeInfo: AgentCreateInf
     }
   }
 
-  // Add cost configuration
   if (values.cost_per_query) {
-    litellmParams.cost_per_query = parseFloat(values.cost_per_query);
+    litellmParams.cost_per_query = parseFloat(String(values.cost_per_query));
   }
   if (values.input_cost_per_token) {
-    litellmParams.input_cost_per_token = parseFloat(values.input_cost_per_token);
+    litellmParams.input_cost_per_token = parseFloat(String(values.input_cost_per_token));
   }
   if (values.output_cost_per_token) {
-    litellmParams.output_cost_per_token = parseFloat(values.output_cost_per_token);
+    litellmParams.output_cost_per_token = parseFloat(String(values.output_cost_per_token));
   }
 
-  // Apply model_template if defined (e.g., "bedrock/agentcore/{agent_runtime_arn}")
   if (agentTypeInfo.model_template) {
-    let model = agentTypeInfo.model_template;
-    // Replace {field_key} placeholders with actual values
-    for (const field of agentTypeInfo.credential_fields) {
+    litellmParams.model = agentTypeInfo.credential_fields.reduce((model, field) => {
       const placeholder = `{${field.key}}`;
-      if (model.includes(placeholder) && values[field.key]) {
-        model = model.replace(placeholder, values[field.key]);
-      }
-    }
-    litellmParams.model = model;
+      const value = values[field.key];
+      return model.includes(placeholder) && value ? model.replace(placeholder, String(value)) : model;
+    }, agentTypeInfo.model_template);
   }
 
-  const agentData: Record<string, any> = {
+  const agentData: AgentRequestPayload = {
     agent_name: values.agent_name,
     agent_card_params: {
       protocolVersion: "1.0",

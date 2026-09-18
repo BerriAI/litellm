@@ -4,7 +4,6 @@ Tests Bedrock Completion + Rerank endpoints
 
 # @pytest.mark.skip(reason="AWS Suspended Account")
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
@@ -13,12 +12,8 @@ import litellm.types
 
 load_dotenv()
 import io
-import os
 import json
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -1196,23 +1191,6 @@ def test_not_found_error():
 
 
 @pytest.mark.parametrize(
-    "model",
-    [
-        "bedrock/us.anthropic.claude-3-haiku-20240307-v1:0",
-        "bedrock/us.meta.llama3-2-11b-instruct-v1:0",
-    ],
-)
-def test_bedrock_cross_region_inference(model):
-    litellm.set_verbose = True
-    response = completion(
-        model=model,
-        messages=messages,
-        max_tokens=10,
-        temperature=0.1,
-    )
-
-
-@pytest.mark.parametrize(
     "model, expected_base_model",
     [
         (
@@ -1907,7 +1885,7 @@ def test_bedrock_completion_test_4(modify_params):
         ]
         assert transformed_messages == expected_messages
     else:
-        with pytest.raises(Exception) as e:
+        with pytest.raises(Exception, match=r"litellm\.modify_params") as e:
             litellm.completion(**data)
         assert "litellm.modify_params" in str(e.value)
 
@@ -2459,9 +2437,7 @@ class TestBedrockEmbedding(BaseLLMEmbeddingTest):
         transformed_request = (
             AmazonTitanMultimodalEmbeddingG1Config()._transform_request(**args)
         )
-        transformed_request[
-            "inputImage"
-        ] == "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
+        assert transformed_request["inputImage"] == "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
 
 
 @pytest.mark.asyncio

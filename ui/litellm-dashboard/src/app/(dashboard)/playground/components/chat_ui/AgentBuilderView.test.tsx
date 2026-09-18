@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,10 +32,6 @@ vi.mock("@/components/llm_calls/fetch_models", () => ({
 
 vi.mock("@/components/CodeBlock", () => ({
   default: ({ code }: { code: string }) => <pre data-testid="code-block">{code}</pre>,
-}));
-
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
 }));
 
 const StatefulPanel = ({ label }: { label: string }) => {
@@ -132,7 +128,7 @@ describe("AgentBuilderView", () => {
 
     expect(screen.getByRole("button", { name: "research-agent litellm_agent" })).toBeInTheDocument();
     expect(screen.getByText("Agent Builder")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByDisplayValue("support-agent")).toBeInTheDocument());
+    expect(await screen.findByDisplayValue("support-agent")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Be helpful.")).toBeInTheDocument();
     expect(screen.getByDisplayValue("0.3")).toBeInTheDocument();
   });
@@ -144,7 +140,7 @@ describe("AgentBuilderView", () => {
 
     await user.click(screen.getByRole("button", { name: "research-agent litellm_agent" }));
 
-    await waitFor(() => expect(screen.getByDisplayValue("research-agent")).toBeInTheDocument());
+    expect(await screen.findByDisplayValue("research-agent")).toBeInTheDocument();
   });
 
   it("offers a blank draft and a save control for a new agent", async () => {
@@ -165,7 +161,7 @@ describe("AgentBuilderView", () => {
     await waitForRoster();
 
     await user.click(screen.getByRole("button", { name: /New agent/i }));
-    await user.type(screen.getByPlaceholderText("My Agent"), "billing-agent");
+    fireEvent.change(screen.getByPlaceholderText("My Agent"), { target: { value: "billing-agent" } });
     await user.click(screen.getByRole("button", { name: /Save Agent/i }));
 
     await waitFor(() => expect(modelCreateCall).toHaveBeenCalled());
@@ -262,7 +258,7 @@ describe("AgentBuilderView", () => {
 
     await user.click(screen.getByRole("tab", { name: /Chat/i }));
     const scratch = await screen.findByLabelText("chat scratch");
-    await user.type(scratch, "half a thought");
+    fireEvent.change(scratch, { target: { value: "half a thought" } });
     expect(scratch).toHaveValue("half a thought");
 
     await user.click(screen.getByRole("tab", { name: /Configure/i }));
@@ -278,7 +274,7 @@ describe("AgentBuilderView", () => {
     await waitForRoster();
 
     await user.click(screen.getByRole("tab", { name: /Batch Test/i }));
-    await user.type(await screen.findByLabelText("batch scratch"), "seven cases");
+    fireEvent.change(await screen.findByLabelText("batch scratch"), { target: { value: "seven cases" } });
 
     await user.click(screen.getByRole("tab", { name: /Connect/i }));
     await screen.findByTestId("code-block");

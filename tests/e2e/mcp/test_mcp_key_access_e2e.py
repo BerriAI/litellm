@@ -13,12 +13,14 @@ and must be refused with a 403 on `tools/call`.
 from __future__ import annotations
 
 import pytest
+from typing import Final
 
 from datadog_mcp import SEARCH_LOGS_TOOL, register_datadog_mcp
 from e2e_config import DD_SEARCH_FROM, unique_marker
 from e2e_http import unwrap
 from lifecycle import ResourceManager
 from mcp_client import McpClient
+from models import KeyGenerateBody, ObjectPermission
 
 pytestmark = pytest.mark.e2e
 
@@ -28,6 +30,34 @@ def _key(client: McpClient, resources: ResourceManager, *, mcp_servers: list[str
     key = client.generate_key(user_id=f"e2e-mcp-{label}-{unique_marker()}", mcp_servers=mcp_servers)
     resources.defer(lambda: client.proxy.delete_key(key))
     return key
+
+
+class TestMcpKeyGrantByAlias:
+    def test_alias_grant_persists_verbatim_and_lists_tools(
+        self,
+        client: McpClient,
+        resources: ResourceManager,
+    ) -> None:
+        """A key granted an MCP server by its alias must store the alias, not the
+        resolved server_id: in a shared-DB multi-region deployment each instance
+        derives a different id for the same config server, so only the alias
+        grants access on every region. The same key must still see the server's
+        tools, proving the alias grant is honored at request time."""
+        server_id = register_datadog_mcp(client, resources)
+        registered = client.await_registered(server_id)
+        alias = registered.alias
+        assert alias, f"registered server {server_id} has no alias to grant by"
+
+        key = _key(client, resources, mcp_servers=[alias])
+
+        stored = client.proxy.key_info(key).object_permission
+        assert stored is not None and stored.mcp_servers == [alias], (
+            f"alias grant was rewritten before persisting (expected [{alias!r}]): "
+            f"{stored.mcp_servers if stored else None}. A stored server_id is region-local "
+            f"and breaks the grant on every other instance sharing this database"
+        )
+
+        _ = client.await_tool(key, server_id, SEARCH_LOGS_TOOL)
 
 
 class TestMcpKeyWithoutAccessIsDenied:
@@ -51,16 +81,6 @@ class TestMcpKeyWithoutAccessIsDenied:
             f"boundary: {denied_tools}"
         )
 
-    @pytest.mark.skip(
-        reason=(
-            "LIT-5052: the control call proving a granted key CAN invoke the tool sends a "
-            "`telemetry` argument that Datadog's search_datadog_logs tool now rejects, so it "
-            "errors with 'unexpected additional properties [\"telemetry\"]' and the denial "
-            "assertion is never reached. `telemetry` was never a documented Datadog "
-            "parameter; the test relied on the server ignoring unknown properties. Unskip "
-            "once the argument is dropped."
-        )
-    )
     @pytest.mark.covers("mcp.call_tool.api_key.denied_without_permission")
     def test_call_tool_denied_without_permission(
         self,
@@ -80,7 +100,6 @@ class TestMcpKeyWithoutAccessIsDenied:
             "from": DD_SEARCH_FROM,
             "to": "now",
             "max_tokens": 1000,
-            "telemetry": {"intent": "e2e control call proving granted key can invoke Datadog MCP"},
         }
         permitted_call = client.await_call_tool(
             permitted_key, server_id=server_id, name=tool_name, arguments=search_args
@@ -91,3 +110,42 @@ class TestMcpKeyWithoutAccessIsDenied:
             denied_key, server_id=server_id, name=tool_name, arguments=search_args
         )
         assert "access_denied" in denied.body, f"403 was not an MCP access denial: {denied.body}"
+
+
+class TestMcpHealthVisibility:
+    def test_route_restricted_health_matches_server_grants(
+        self,
+        client: McpClient,
+        resources: ResourceManager,
+    ) -> None:
+        server_x: Final = register_datadog_mcp(client, resources)
+        server_y: Final = register_datadog_mcp(client, resources)
+        client.await_registered(server_x)
+        client.await_registered(server_y)
+        owned: Final = {server_x, server_y}
+        permitted: Final = _key(client, resources, mcp_servers=[server_x])
+        tool: Final = client.await_tool(permitted, server_x, SEARCH_LOGS_TOOL)
+        result: Final = client.await_call_tool(
+            permitted, server_id=server_x, name=tool,
+            arguments={"query": "service:litellm", "from": DD_SEARCH_FROM, "to": "now", "max_tokens": 1000},
+        )
+        assert result.is_error is not True, f"permitted control failed: {result}"
+
+        for grants in ([server_x], [server_y], []):
+            key = client.proxy.generate_key(KeyGenerateBody(
+                user_id=f"e2e-mcp-health-{unique_marker()}",
+                allowed_routes=["/v1/mcp/server", "/v1/mcp/server/health"],
+                object_permission=ObjectPermission(mcp_servers=grants),
+            ))
+            resources.defer(lambda key=key: client.proxy.delete_key(key))
+            listed = unwrap(client.list_servers(key)).root
+            assert {row.server_id for row in listed}.intersection(owned) == set(grants)
+            for requested in (None, [server_y], [server_x, server_y]):
+                health = unwrap(client.server_health(key, requested)).root
+                expected = set(grants) if requested is None else set(grants).intersection(requested)
+                assert {row.server_id for row in health}.intersection(owned) == expected, (
+                    f"health disclosed servers outside grants {grants}, requested {requested}: {health}"
+                )
+                assert all(row.status == "healthy" for row in health if row.server_id in owned), (
+                    f"upstream control unhealthy: {health}"
+                )

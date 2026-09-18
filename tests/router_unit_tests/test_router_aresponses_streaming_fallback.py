@@ -10,14 +10,11 @@ Targets the four helpers introduced on Router:
   - _aresponses_streaming_iterator
 """
 
-import os
-import sys
 from typing import Any, AsyncIterator, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm import Router
 from litellm.types.llms.openai import (
@@ -375,7 +372,7 @@ async def test_aresponses_fallback_on_in_stream_error_event():
     raised = mock_fallback.await_args.kwargs["e"]
     assert isinstance(raised, MidStreamFallbackError)
     assert raised.status_code == 429
-    assert isinstance(raised.original_exception, litellm.APIError)
+    assert isinstance(raised.original_exception, litellm.RateLimitError)
     assert raised.original_exception.status_code == 429
     assert mock_fallback.await_args.kwargs["kwargs"]["input"] == "original question"
 

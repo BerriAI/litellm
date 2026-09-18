@@ -14,7 +14,7 @@ import AddPluginForm from "./add_plugin_form";
 import PluginTable from "./PluginTable";
 import SkillDetail from "@/components/claude_code_plugins/skill_detail";
 import { isAdminRole } from "@/utils/roles";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Plugin, ListPluginsResponse } from "@/components/claude_code_plugins/types";
 
 interface ClaudeCodePluginsPanelProps {
@@ -66,11 +66,11 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
     setIsDeleting(true);
     try {
       await deleteClaudeCodePlugin(accessToken, pluginToDelete.name);
-      NotificationsManager.success(`Skill "${pluginToDelete.displayName}" deleted successfully`);
+      toast.success(`Skill "${pluginToDelete.displayName}" deleted successfully`);
       fetchPlugins();
     } catch (error) {
       console.error("Error deleting skill:", error);
-      NotificationsManager.error("Failed to delete skill");
+      toast.error("Failed to delete skill");
     } finally {
       setIsDeleting(false);
       setPluginToDelete(null);
@@ -91,9 +91,9 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
         <>
           <div className="flex flex-col gap-2 mb-4">
             <h1 className="text-2xl font-bold">Skills</h1>
-            <p className="text-sm text-gray-600">
+            <p className="text-sm text-muted-foreground">
               Register Claude Code skills. Published skills appear in the Skill Hub for all users and are served via{" "}
-              <code className="bg-gray-100 px-1 rounded-sm">/claude-code/marketplace.json</code>.
+              <code className="bg-muted px-1 rounded-sm">/claude-code/marketplace.json</code>.
             </p>
             <div className="mt-2 flex gap-2">
               <Button onClick={() => setIsAddModalVisible(true)} disabled={!accessToken || !isAdmin}>

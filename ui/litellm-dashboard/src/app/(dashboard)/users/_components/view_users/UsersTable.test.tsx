@@ -3,7 +3,7 @@ import type { PaginationState, RowSelectionState, SortingState } from "@tanstack
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
 import { UserInfo } from "@/components/networking";
 
@@ -39,7 +39,7 @@ interface HarnessOverrides {
   onUserClick?: (userId: string, openInEditMode?: boolean) => void;
   onDeleteUser?: (user: UserInfo) => void;
   onResetPassword?: (userId: string) => void;
-  onSortingChange?: ReturnType<typeof vi.fn>;
+  onSortingChange?: Mock;
 }
 
 /**
@@ -119,7 +119,7 @@ describe("UsersTable", () => {
       "Created At",
       "Updated At",
     ].forEach((header) => {
-      expect(headerRow.textContent).toContain(header);
+      expect(headerRow).toHaveTextContent(header);
     });
   });
 
@@ -251,7 +251,7 @@ describe("UsersTable", () => {
 
       await user.click(screen.getByTestId("datatable-select-row-user-1"));
 
-      expect(screen.getByTestId("datatable-select-all")).toHaveAttribute("aria-checked", "mixed");
+      expect(screen.getByTestId("datatable-select-all")).toBePartiallyChecked();
     });
   });
 

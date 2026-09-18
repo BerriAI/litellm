@@ -380,11 +380,12 @@ class StraikerGuardrail(CustomGuardrail):
         call_id: Final = getattr(logging_obj, "litellm_call_id", None) if logging_obj else None
         event_id: Final = f"{call_id or 'litellm'}:{input_type}"
 
+        is_request: Final = input_type == "request"
         content: Final = StraikerWebhookContent(
             texts=list(inputs.get("texts") or []),
             images=list(inputs.get("images") or []),
-            structured_messages=_opaque_dict_list(inputs.get("structured_messages")),
-            tools=_opaque_dict_list(inputs.get("tools")),
+            structured_messages=_opaque_dict_list(inputs.get("structured_messages")) if is_request else None,
+            tools=_opaque_dict_list(inputs.get("tools")) if is_request else None,
             tool_calls=_opaque_dict_list(inputs.get("tool_calls")),
         )
 
@@ -536,12 +537,14 @@ class StraikerGuardrail(CustomGuardrail):
         request_data: dict,
         input_type: Literal["request", "response"],
         message: str,
+        blocked_content: bool = False,
     ) -> NoReturn:
         if input_type == "request":
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name or GUARDRAIL_NAME,
                 message=message,
                 should_wrap_with_default_message=False,
+                blocked_content=blocked_content,
             )
         raise ModifyResponseException(
             message=message,
@@ -623,6 +626,7 @@ class StraikerGuardrail(CustomGuardrail):
                 request_data=request_data,
                 input_type=input_type,
                 message=parsed.blocked_reason or DEFAULT_BLOCK_MESSAGE,
+                blocked_content=True,
             )
         if parsed.action == "GUARDRAIL_INTERVENED":
             is_streamed_response: Final = input_type == "response" and _is_streamed_request(request_data)
@@ -631,6 +635,7 @@ class StraikerGuardrail(CustomGuardrail):
                     request_data=request_data,
                     input_type=input_type,
                     message=parsed.blocked_reason or DEFAULT_BLOCK_MESSAGE,
+                    blocked_content=True,
                 )
             return self._intervened_inputs(inputs, parsed)
         return inputs

@@ -29,7 +29,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any, Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
@@ -89,9 +89,7 @@ async def test_run_reconnect_cycle_direct_path_recreates_when_probe_fails(
     prisma_client._cleanup_engine_watcher = MagicMock()
 
     writer = MagicMock()
-    writer.query_raw = AsyncMock(
-        side_effect=[ConnectionError("probe failed"), [{"?column?": 1}]]
-    )
+    writer.query_raw = AsyncMock(side_effect=[ConnectionError("probe failed"), [{"?column?": 1}]])
     monkeypatch.setattr(
         PrismaClient,
         "writer_db",
@@ -109,6 +107,34 @@ async def test_run_reconnect_cycle_direct_path_recreates_when_probe_fails(
         "recreate_called": 1,
         "start_watcher_called": 1,
         "writer_query_raw_calls": 2,
+        "cleanup_called": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_reconnect_cycle_direct_path_recreates_when_writer_is_read_only(
+    prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgres://x:y@h:5432/db")
+    prisma_client._engine_confirmed_dead = False
+    prisma_client._engine_pid = 0
+    prisma_client._start_engine_watcher = AsyncMock()
+    prisma_client._cleanup_engine_watcher = MagicMock()
+
+    writer: Final = MagicMock()
+    writer.query_raw = AsyncMock(side_effect=[[{"transaction_read_only": "on"}], [{"?column?": 1}]])
+    writer.recreate_prisma_client = AsyncMock()
+    prisma_client.db = writer
+
+    await prisma_client._run_reconnect_cycle(timeout_seconds=5)
+    pinned = {
+        "recreate_called": writer.recreate_prisma_client.await_count,
+        "start_watcher_called": prisma_client._start_engine_watcher.await_count,
+        "cleanup_called": prisma_client._cleanup_engine_watcher.call_count,
+    }
+    assert pinned == {
+        "recreate_called": 1,
+        "start_watcher_called": 1,
         "cleanup_called": 1,
     }
 
@@ -171,9 +197,7 @@ async def test_run_reconnect_cycle_passes_writer_generation_to_recreate(
 
     writer = MagicMock()
     writer._engine_generation = 7
-    writer.query_raw = AsyncMock(
-        side_effect=[ConnectionError("probe failed"), [{"?column?": 1}]]
-    )
+    writer.query_raw = AsyncMock(side_effect=[ConnectionError("probe failed"), [{"?column?": 1}]])
     monkeypatch.setattr(
         PrismaClient,
         "writer_db",
@@ -229,9 +253,7 @@ async def test_attempt_reconnect_inside_lock_runs_cycle_and_resets_counter(
     prisma_client._consecutive_reconnect_failures = 2
     prisma_client._run_reconnect_cycle = AsyncMock()
 
-    ok = await prisma_client._attempt_reconnect_inside_lock(
-        force=True, reason="test", timeout_seconds=1
-    )
+    ok = await prisma_client._attempt_reconnect_inside_lock(force=True, reason="test", timeout_seconds=1)
     pinned = {
         "returned": ok,
         "cycle_called": prisma_client._run_reconnect_cycle.await_count,
@@ -254,9 +276,7 @@ async def test_attempt_reconnect_inside_lock_skips_when_in_cooldown(
     prisma_client._db_last_reconnect_attempt_ts = time.time()
     prisma_client._run_reconnect_cycle = AsyncMock()
 
-    ok = await prisma_client._attempt_reconnect_inside_lock(
-        force=False, reason="test", timeout_seconds=1
-    )
+    ok = await prisma_client._attempt_reconnect_inside_lock(force=False, reason="test", timeout_seconds=1)
     assert ok is False
     assert prisma_client._run_reconnect_cycle.await_count == 0
 
@@ -269,9 +289,7 @@ async def test_attempt_reconnect_inside_lock_increments_failure_counter_on_error
     prisma_client._consecutive_reconnect_failures = 0
     prisma_client._run_reconnect_cycle = AsyncMock(side_effect=RuntimeError("boom"))
 
-    ok = await prisma_client._attempt_reconnect_inside_lock(
-        force=True, reason="failing_test", timeout_seconds=1
-    )
+    ok = await prisma_client._attempt_reconnect_inside_lock(force=True, reason="failing_test", timeout_seconds=1)
     assert ok is False
     assert prisma_client._consecutive_reconnect_failures == 1
 
@@ -316,9 +334,7 @@ async def test_attempt_db_reconnect_lock_timeout_returns_false(
     by replacing ``asyncio.wait`` with a callable that returns the loser
     task as still-pending after it's already been completed elsewhere.
     """
-    completed_task: asyncio.Task[bool] = asyncio.get_running_loop().create_task(
-        _no_op_returning_true()
-    )
+    completed_task: asyncio.Task[bool] = asyncio.get_running_loop().create_task(_no_op_returning_true())
     # Ensure the inner task has finished before attempt_db_reconnect sees it.
     await completed_task
 
@@ -329,7 +345,7 @@ async def test_attempt_db_reconnect_lock_timeout_returns_false(
     monkeypatch.setattr(
         asyncio,
         "create_task",
-        lambda coro, *a, **kw: (coro.close() or completed_task),
+        lambda coro, *a, **kw: coro.close() or completed_task,
     )
 
     prisma_client._db_last_reconnect_attempt_ts = 0.0
@@ -465,9 +481,7 @@ async def test_db_health_watchdog_loop_triggers_reconnect_on_timeout(
     await prisma_client._db_health_watchdog_loop()
     pinned = {
         "reconnect_called": prisma_client.attempt_db_reconnect.await_count,
-        "reconnect_reason": prisma_client.attempt_db_reconnect.await_args.kwargs[
-            "reason"
-        ],
+        "reconnect_reason": prisma_client.attempt_db_reconnect.await_args.kwargs["reason"],
         "wait_for_calls": call_count["n"],
         "loop_exited_clean": True,
     }
@@ -502,6 +516,93 @@ async def test_db_health_watchdog_loop_swallows_non_db_errors(
     assert prisma_client.attempt_db_reconnect.await_count == 0
 
 
+def _routing_db_with_writer_sessions(*transaction_read_only: str) -> tuple[RoutingPrismaWrapper, MagicMock]:
+    """One watchdog cycle per value, then the loop is cancelled."""
+    writer: Final = MagicMock()
+    writer.query_raw = AsyncMock(side_effect=[[{"transaction_read_only": value}] for value in transaction_read_only])
+    reader: Final = MagicMock()
+    reader.query_raw = AsyncMock(
+        side_effect=[[{"?column?": 1}] for _ in transaction_read_only] + [asyncio.CancelledError()]
+    )
+    return RoutingPrismaWrapper(writer=writer, reader=reader), writer
+
+
+@pytest.mark.asyncio
+async def test_db_health_watchdog_loop_forces_recreate_when_writer_is_read_only(
+    prisma_client: PrismaClient,
+) -> None:
+    prisma_client._db_health_watchdog_interval_seconds = 0
+    prisma_client.attempt_db_reconnect = AsyncMock(side_effect=asyncio.CancelledError())
+    prisma_client.db, _ = _routing_db_with_writer_sessions("on")
+
+    await prisma_client._db_health_watchdog_loop()
+    assert prisma_client.attempt_db_reconnect.await_args is not None
+    assert prisma_client.attempt_db_reconnect.await_args.kwargs == {
+        "reason": "db_health_watchdog_writer_read_only",
+        "timeout_seconds": prisma_client._db_watchdog_reconnect_timeout_seconds,
+        "force_recreate": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_db_health_watchdog_loop_leaves_writable_writer_alone(
+    prisma_client: PrismaClient,
+) -> None:
+    prisma_client._db_health_watchdog_interval_seconds = 0
+    prisma_client.attempt_db_reconnect = AsyncMock()
+    prisma_client.db, writer = _routing_db_with_writer_sessions("off")
+
+    await prisma_client._db_health_watchdog_loop()
+    assert (prisma_client.attempt_db_reconnect.await_count, writer.query_raw.await_count) == (0, 1)
+
+
+@pytest.mark.asyncio
+async def test_db_health_watchdog_loop_backs_off_while_database_stays_read_only(
+    prisma_client: PrismaClient,
+) -> None:
+    prisma_client._db_health_watchdog_interval_seconds = 0
+    prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+    prisma_client.db, writer = _routing_db_with_writer_sessions("on", "on", "on")
+
+    await prisma_client._db_health_watchdog_loop()
+    assert (prisma_client.attempt_db_reconnect.await_count, writer.query_raw.await_count) == (1, 3)
+
+
+@pytest.mark.asyncio
+async def test_db_health_watchdog_loop_recreates_again_once_writer_was_writable_in_between(
+    prisma_client: PrismaClient,
+) -> None:
+    prisma_client._db_health_watchdog_interval_seconds = 0
+    prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+    prisma_client.db, _ = _routing_db_with_writer_sessions("on", "off", "on")
+
+    await prisma_client._db_health_watchdog_loop()
+    assert prisma_client.attempt_db_reconnect.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_recreate_read_only_writer_retries_after_backoff_elapses(
+    prisma_client: PrismaClient,
+) -> None:
+    prisma_client._db_reconnect_cooldown_seconds = 15
+    prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+
+    first: Final = await prisma_client.recreate_read_only_writer(reason="postgres_read_only_transaction")
+    within_backoff: Final = await prisma_client.recreate_read_only_writer(reason="postgres_read_only_transaction")
+    prisma_client._db_read_only_recreate_ts -= 30
+    after_backoff: Final = await prisma_client.recreate_read_only_writer(reason="postgres_read_only_transaction")
+    prisma_client._db_read_only_recreate_ts -= 30
+    still_within_doubled_backoff: Final = await prisma_client.recreate_read_only_writer(
+        reason="postgres_read_only_transaction"
+    )
+
+    assert (first, within_backoff, after_backoff, still_within_doubled_backoff) == (True, False, True, False)
+    assert prisma_client.attempt_db_reconnect.await_args_list == [
+        call(reason="postgres_read_only_transaction", timeout_seconds=None, force_recreate=True),
+        call(reason="postgres_read_only_transaction", timeout_seconds=None, force_recreate=True),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_iam_refresh_racing_reconnect_recreates_engine_only_once(
     prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
@@ -522,10 +623,7 @@ async def test_iam_refresh_racing_reconnect_recreates_engine_only_once(
     from litellm.proxy.db.prisma_client import PrismaWrapper
 
     def token_db_url(created: datetime) -> str:
-        token = (
-            f"host/?X-Amz-Date={created.strftime('%Y%m%dT%H%M%SZ')}"
-            f"&X-Amz-Expires=900&X-Amz-Signature=abc"
-        )
+        token = f"host/?X-Amz-Date={created.strftime('%Y%m%dT%H%M%SZ')}&X-Amz-Expires=900&X-Amz-Signature=abc"
         return f"postgresql://user:{urllib.parse.quote(token, safe='')}@host:5432/db"
 
     # Old engine (PID 111) carries an expired token; in-flight queries on it
@@ -577,9 +675,7 @@ async def test_iam_refresh_racing_reconnect_recreates_engine_only_once(
     # In-flight transport-error path fires while the refresh holds the
     # wrapper's reconnection lock mid-recreate.
     reconnect_task = asyncio.create_task(
-        prisma_client.attempt_db_reconnect(
-            reason="in_flight_transport_error", force=True
-        )
+        prisma_client.attempt_db_reconnect(reason="in_flight_transport_error", force=True)
     )
     await asyncio.sleep(0.05)
     release_connect.set()
@@ -1096,3 +1192,27 @@ async def test_unrelated_reconnect_failure_does_not_erase_the_burst_record(
         "cycles_after": prisma_client._run_reconnect_cycle.await_count,
     }
     assert pinned == {"cycles_before": 2, "cycles_after": 2}
+
+
+@pytest.mark.asyncio
+async def test_attempt_db_reconnect_cancelled_while_waiting_does_not_strand_lock(
+    prisma_client: PrismaClient,
+) -> None:
+    """A reconnect cancelled while waiting on the lock (e.g. the readiness
+    probe deadline firing) must abandon its lock-acquisition task instead of
+    leaving it to grab the lock later with no owner to release it."""
+    prisma_client._db_last_reconnect_attempt_ts = 0.0
+    prisma_client._attempt_reconnect_inside_lock = AsyncMock(return_value=True)
+
+    await prisma_client._db_reconnect_lock.acquire()
+    waiting_reconnect: Final = asyncio.create_task(
+        prisma_client.attempt_db_reconnect(reason="probe_deadline", lock_timeout_seconds=30.0)
+    )
+    await asyncio.sleep(0.05)
+    waiting_reconnect.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting_reconnect
+
+    prisma_client._db_reconnect_lock.release()
+    await asyncio.sleep(0.05)
+    assert prisma_client._db_reconnect_lock.locked() is False

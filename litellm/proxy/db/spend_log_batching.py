@@ -10,10 +10,15 @@ hands the engine tens of megabytes in one statement and permanently costs
 hundreds of megabytes of RSS, which is what makes memory-based autoscaling
 read the wrong number.
 
-Bounding each statement by payload size instead caps that floor. Row-count
-batching alone cannot: the same 1000 rows range from well under a megabyte
-(spend counters only) to tens of megabytes (prompts stored), and only the
-byte budget tracks what the engine actually allocates.
+Bounding each statement caps that floor, and it takes two budgets because the
+engine charges for both terms. A byte budget is what tracks a prompt-carrying
+row, whose size swings by orders of magnitude, and a row budget is what tracks
+the engine's per-row bookkeeping, which a byte budget cannot see: rows holding
+attribution metadata only stay far under any useful byte budget, so it never
+binds and every statement runs at the caller's row cap. Measured on such a
+flush, the same 100,000 rows cost 151 MB of permanently resident engine RSS at
+1000 rows per statement against 25 MB at 100, with no statement anywhere near
+a 2 MB byte budget.
 """
 
 import json
@@ -99,16 +104,28 @@ def spend_log_queue_within_budget(
 def spend_log_write_batches(
     rows: Sequence[SpendLogRow],
     max_bytes: int,
+    max_rows: int,
 ) -> Iterator[Sequence[SpendLogRow]]:
-    """Yield consecutive slices of ``rows`` whose payload fits ``max_bytes``.
+    """Yield consecutive slices of ``rows`` within both ``max_bytes`` and ``max_rows``.
 
-    What is measured is the encoded slice, not the sum of its rows: rows become
-    one collection on the wire, so the brackets around them and the separator
-    between each pair count too. Summing rows alone under-states a slice by one
-    separator per row, which is negligible for prompt-carrying rows and is not
-    for a slice of many small ones, where the budget would be exceeded by the
-    row count. The two framing constants are derived from the serializer rather
-    than written down so they cannot drift from it.
+    What is measured for the byte budget is the encoded slice, not the sum of
+    its rows: rows become one collection on the wire, so the brackets around
+    them and the separator between each pair count too. Summing rows alone
+    under-states a slice by one separator per row, which is negligible for
+    prompt-carrying rows and is not for a slice of many small ones, where the
+    budget would be exceeded by the row count. The two framing constants are
+    derived from the serializer rather than written down so they cannot drift
+    from it.
+
+    Both budgets are needed because the engine's cost has two terms. Payload
+    bytes dominate when prompts are stored, and per-row bookkeeping dominates
+    when they are not: a slice of narrow rows costs the engine far more than
+    its bytes suggest, so a byte budget alone never binds on a deployment whose
+    rows carry no prompts and every statement stays at the caller's row cap.
+    Measured on a spend-log flush of rows carrying attribution metadata only,
+    writing the same 100,000 rows at 1000 rows per statement left 151 MB of
+    engine RSS resident against 25 MB at 100, with neither reaching a 2 MB byte
+    budget.
 
     Slices preserve input order and together cover every row exactly once. A
     row larger than ``max_bytes`` on its own is yielded alone rather than
@@ -120,7 +137,7 @@ def spend_log_write_batches(
     while start < len(rows):
         end = start + 1
         used = _STATEMENT_FRAMING_BYTES + sizes[start]
-        while end < len(rows) and used + _ROW_SEPARATOR_BYTES + sizes[end] <= max_bytes:
+        while end < len(rows) and end - start < max_rows and used + _ROW_SEPARATOR_BYTES + sizes[end] <= max_bytes:
             used += _ROW_SEPARATOR_BYTES + sizes[end]
             end += 1
         yield rows[start:end]

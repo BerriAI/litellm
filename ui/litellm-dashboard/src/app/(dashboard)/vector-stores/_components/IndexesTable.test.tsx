@@ -87,7 +87,7 @@ describe("IndexesTable", () => {
   it("should link created_by to the user detail deep link", () => {
     render(<IndexesTable data={[newerIndex]} resolveVectorStoreId={noResolve} onViewVectorStore={vi.fn()} />);
     const link = screen.getByRole("link", { name: "admin@example.com" });
-    expect(link.getAttribute("href")).toMatch(/\/users\?user=admin%40example\.com$/);
+    expect(link).toHaveAttribute("href", expect.stringMatching(/\/users\?user=admin%40example\.com$/));
   });
 
   it("should keep the dash fallback and render no link for a null created_by", () => {

@@ -1,4 +1,5 @@
 import re
+from collections.abc import Collection
 from typing import Final
 
 from fastapi import HTTPException, Request, status
@@ -23,10 +24,14 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES: Final = frozenset(
     [
         # user
         "/user/new",
+        "/management/v1/users/bulk",
         "/user/delete",
+        "/management/v1/users/bulk_delete",
         "/user/bulk_update",
         # team
         "/team/new",
+        "/management/v1/teams/{team_id}/members/bulk_delete",
+        "/management/v1/teams/{team_id}/members/bulk_update",
         "/team/update",
         "/team/delete",
         "/team/block",
@@ -135,6 +140,9 @@ class RouteChecks:
                     #  For llm_api_routes, also check registered pass-through endpoints
                     ################################################
                     if allowed_route == "llm_api_routes":
+                        if route == "/auto_router/session" and RouteChecks._get_request_method(request) == "GET":
+                            return True
+
                         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
                             InitPassThroughEndpointHelpers,
                         )
@@ -165,9 +173,22 @@ class RouteChecks:
                         if RouteChecks._is_get_mcp_server_discovery_route(route=route, request=request):
                             return True
 
+                        # Agent registry CRUD moved from llm_api_routes into
+                        # management_routes so DISABLE_LLM_API_ENDPOINTS stops
+                        # blocking it. Keys configured with
+                        # allowed_routes=["llm_api_routes"] before that split
+                        # could reach these paths, so keep them reachable here;
+                        # the handlers in agent_endpoints/endpoints.py still
+                        # enforce proxy-admin on writes and scope reads by role.
+                        if RouteChecks.check_route_access(
+                            route=route,
+                            allowed_routes=LiteLLMRoutes.agent_management_routes.value,
+                        ):
+                            return True
+
         # check if wildcard pattern is allowed
         for allowed_route in valid_token.allowed_routes:
-            if RouteChecks._route_matches_wildcard_pattern(route=route, pattern=allowed_route):
+            if RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route):
                 return True
 
         if denied_auth_enforced_pass_through_route:
@@ -305,7 +326,12 @@ class RouteChecks:
             pass
         elif route.startswith("/v1/mcp/") or route.startswith("/mcp-rest/"):
             pass  # authN/authZ handled by api itself
-        elif RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token):
+        elif RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token) or (
+            valid_token.is_team_service_account
+            and RouteChecks.check_route_access(
+                route=route, allowed_routes=LiteLLMRoutes.team_service_account_key_routes.value
+            )
+        ):
             pass
         elif valid_token.allowed_routes is not None:
             # check if route is in allowed_routes (exact match or prefix match)
@@ -315,7 +341,7 @@ class RouteChecks:
                     route_allowed = True
                     break
 
-                if RouteChecks._route_matches_wildcard_pattern(route=route, pattern=allowed_route):
+                if RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route):
                     route_allowed = True
                     break
 
@@ -367,7 +393,7 @@ class RouteChecks:
         if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.mcp_inference_routes.value):
             return True
 
-        if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.agent_routes.value):
+        if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.agent_inference_routes.value):
             return True
 
         if route in LiteLLMRoutes.litellm_native_routes.value:
@@ -383,7 +409,7 @@ class RouteChecks:
                     return True
             # Check for wildcard patterns like "/containers/*"
             if RouteChecks._is_wildcard_pattern(pattern=openai_route):
-                if RouteChecks._route_matches_wildcard_pattern(route=route, pattern=openai_route):
+                if RouteChecks.route_matches_wildcard_pattern(route=route, pattern=openai_route):
                     return True
 
         # Check for Google routes with placeholders like "/v1beta/models/{model_name}:generateContent"
@@ -483,10 +509,22 @@ class RouteChecks:
 
         def _placeholder_to_regex(match: re.Match) -> str:
             placeholder: Final = match.group(0).strip("{}")
-            if placeholder.endswith(":path"):
-                # allow "/" in the placeholder value, but don't eat the route suffix after ":"
-                return r"[^:]+"
-            return r"[^/]+"
+            if not placeholder.endswith(":path"):
+                return r"[^/]+"
+            # A ":path" placeholder takes whatever the router's own path
+            # converter takes, slashes and colons alike, so an id spelled with
+            # either (or both) still matches the template it was mounted under.
+            #
+            # Unless the template puts a ":" literal of its own after the
+            # placeholder: the Google routes end in ":generateContent" and
+            # friends, and there the value has to stop before that suffix
+            # rather than swallow it and match a different verb.
+            #
+            # "[\s\S]" rather than ".", because "." stops at a newline and the
+            # path converter does not: a %0A anywhere in the value would leave
+            # the route unmatched here while still reaching the handler, which
+            # turns this gate into a bypass for the lists built on it.
+            return r"[^:]+" if ":" in match.string[match.end() :] else r"[\s\S]+"
 
         pattern = re.sub(r"\{[^}]+\}", _placeholder_to_regex, pattern)
         # Anchor the pattern to match the entire string
@@ -503,7 +541,7 @@ class RouteChecks:
         return pattern.endswith("*")
 
     @staticmethod
-    def _route_matches_wildcard_pattern(route: str, pattern: str) -> bool:
+    def route_matches_wildcard_pattern(route: str, pattern: str) -> bool:
         """
         Check if route matches the wildcard pattern
 
@@ -558,13 +596,13 @@ class RouteChecks:
         return False
 
     @staticmethod
-    def check_route_access(route: str, allowed_routes: list[str]) -> bool:
+    def check_route_access(route: str, allowed_routes: Collection[str]) -> bool:
         """
         Check if a route has access by checking both exact matches and patterns
 
         Args:
             route (str): The route to check
-            allowed_routes (list): List of allowed routes/patterns
+            allowed_routes (Sequence): Allowed routes/patterns
 
         Returns:
             bool: True if route is allowed, False otherwise
@@ -579,10 +617,12 @@ class RouteChecks:
         # wildcard match route is in allowed_routes
         # e.g calling /anthropic/v1/messages is allowed if allowed_routes has /anthropic/*
         #########################################################
-        wildcard_allowed_routes = [route for route in allowed_routes if RouteChecks._is_wildcard_pattern(pattern=route)]
-        for allowed_route in wildcard_allowed_routes:
-            if RouteChecks._route_matches_wildcard_pattern(route=route, pattern=allowed_route):
-                return True
+        if any(
+            RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route)
+            for allowed_route in allowed_routes
+            if RouteChecks._is_wildcard_pattern(pattern=allowed_route)
+        ):
+            return True
 
         #########################################################
         # pattern match route is in allowed_routes
@@ -727,9 +767,13 @@ class RouteChecks:
     _ADMIN_VIEWER_BLOCKED_WRITE_ROUTES = frozenset(
         [
             "/user/new",
+            "/management/v1/users/bulk",
             "/user/delete",
+            "/management/v1/users/bulk_delete",
             "/user/bulk_update",
             "/team/new",
+            "/management/v1/teams/{team_id}/members/bulk_delete",
+            "/management/v1/teams/{team_id}/members/bulk_update",
             "/team/update",
             "/team/delete",
             "/model/new",
@@ -793,7 +837,7 @@ class RouteChecks:
                                 status_code=status.HTTP_403_FORBIDDEN,
                                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email and password can be updated",
                             )
-            elif route in _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES or (
+            elif RouteChecks.check_route_access(route=route, allowed_routes=_PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES) or (
                 route.startswith("/key/") and route.endswith(_PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES)
             ):
                 # Block write operations for PROXY_ADMIN_VIEW_ONLY
@@ -828,9 +872,9 @@ class RouteChecks:
         # Hard-block known write routes regardless of HTTP method (defensive
         # — these are POSTs in practice, but pinning them here protects
         # against future GET-shaped writes).
-        if route in RouteChecks._ADMIN_VIEWER_BLOCKED_WRITE_ROUTES or (
-            route.startswith("/key/") and route.endswith("/regenerate")
-        ):
+        if RouteChecks.check_route_access(
+            route=route, allowed_routes=RouteChecks._ADMIN_VIEWER_BLOCKED_WRITE_ROUTES
+        ) or (route.startswith("/key/") and route.endswith("/regenerate")):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",

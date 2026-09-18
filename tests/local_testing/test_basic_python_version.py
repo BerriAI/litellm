@@ -1,7 +1,6 @@
 import asyncio
 import os
 import subprocess
-import sys
 import time
 import traceback
 
@@ -9,9 +8,6 @@ import pytest
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 
 def _run_uv(*args: str, **kwargs) -> subprocess.CompletedProcess:
@@ -215,9 +211,7 @@ def test_locked_aiohttp_version_is_not_pool_poisoning():
 
 import os
 import subprocess
-import time
 
-import pytest
 import requests
 
 

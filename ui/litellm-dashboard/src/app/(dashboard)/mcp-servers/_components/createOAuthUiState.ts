@@ -14,7 +14,6 @@ export interface CreateUiSnapshot {
   readonly costConfig: MCPServerCostInfo;
   readonly allowedTools: readonly string[];
   readonly hasToolAllowlistInteraction: boolean;
-  readonly searchValue: string;
   readonly aliasManuallyEdited: boolean;
   readonly logoUrl: string | undefined;
   readonly authorizedIdentity: string | undefined;
@@ -29,7 +28,6 @@ export type RestoredUiSnapshot = {
   readonly costConfig?: MCPServerCostInfo;
   readonly allowedTools?: readonly string[];
   readonly hasToolAllowlistInteraction?: boolean;
-  readonly searchValue?: string;
   readonly aliasManuallyEdited?: boolean;
   readonly logoUrl?: string;
   readonly authorizedIdentity?: string;
@@ -83,7 +81,6 @@ export const readCreateUiSnapshot = (): RestoredUiSnapshot | null => {
       ...(typeof parsed.hasToolAllowlistInteraction === "boolean"
         ? { hasToolAllowlistInteraction: parsed.hasToolAllowlistInteraction }
         : {}),
-      ...(parsed.searchValue ? { searchValue: parsed.searchValue } : {}),
       ...(typeof parsed.aliasManuallyEdited === "boolean" ? { aliasManuallyEdited: parsed.aliasManuallyEdited } : {}),
       ...(parsed.logoUrl ? { logoUrl: parsed.logoUrl } : {}),
     };

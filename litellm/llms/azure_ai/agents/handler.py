@@ -22,10 +22,11 @@ import asyncio
 import json
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import AsyncIterator, Awaitable, Mapping
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict
 
 import httpx
+from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -33,7 +34,11 @@ from litellm.llms.azure_ai.agents.transformation import (
     AzureAIAgentsConfig,
     AzureAIAgentsError,
 )
-from litellm.types.utils import ModelResponse
+from litellm.types.llms.openai import (
+    ChatCompletionAnnotation,
+    ChatCompletionAnnotationURLCitation,
+)
+from litellm.types.utils import ModelResponse, ModelResponseStream
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -44,6 +49,67 @@ else:
     LiteLLMLoggingObj = Any
     HTTPHandler = Any
     AsyncHTTPHandler = Any
+
+
+class _AzureRawAnnotation(ChatCompletionAnnotation, total=False):
+    text: ReadOnly[str]
+    start_index: ReadOnly[int]
+    end_index: ReadOnly[int]
+
+
+_TransformedAnnotation: TypeAlias = ChatCompletionAnnotation
+
+
+class _AzureText(TypedDict, total=False):
+    value: ReadOnly[str]
+    annotations: ReadOnly[list[_AzureRawAnnotation]]
+
+
+class _AzureContentItem(TypedDict, total=False):
+    type: ReadOnly[str]
+    text: ReadOnly[_AzureText]
+
+
+class _AzureMessage(TypedDict, total=False):
+    role: ReadOnly[str]
+    content: ReadOnly[list[_AzureContentItem]]
+
+
+class _AzureMessagesData(TypedDict, total=False):
+    data: ReadOnly[list[_AzureMessage]]
+
+
+class _CreatedObject(TypedDict):
+    id: ReadOnly[str]
+
+
+class _RunError(TypedDict, total=False):
+    message: ReadOnly[str]
+
+
+class _RunStatus(TypedDict, total=False):
+    status: ReadOnly[str]
+    last_error: ReadOnly[_RunError]
+
+
+class _SSEDelta(TypedDict, total=False):
+    content: ReadOnly[list[_AzureContentItem]]
+
+
+class _SSEEventData(TypedDict, total=False):
+    id: ReadOnly[str]
+    content: ReadOnly[list[_AzureContentItem]]
+    delta: ReadOnly[_SSEDelta]
+
+
+class _SyncAgentRequest(Protocol):
+    def __call__(self, method: str, url: str, json_data: Mapping[str, object] | None = None) -> httpx.Response: ...
+
+
+class _AsyncAgentRequest(Protocol):
+    def __call__(
+        self, method: str, url: str, json_data: Mapping[str, object] | None = None
+    ) -> Awaitable[httpx.Response]: ...
 
 
 class AzureAIAgentsHandler:
@@ -89,7 +155,9 @@ class AzureAIAgentsHandler:
     # -------------------------------------------------------------------------
     # Response Helpers
     # -------------------------------------------------------------------------
-    def _extract_content_from_messages(self, messages_data: dict) -> tuple[str, list[dict[str, Any]] | None]:
+    def _extract_content_from_messages(
+        self, messages_data: _AzureMessagesData
+    ) -> tuple[str, list[_TransformedAnnotation] | None]:
         """Extract assistant content and annotations from the messages response.
 
         Returns (content, annotations) where annotations is a list of
@@ -108,8 +176,8 @@ class AzureAIAgentsHandler:
 
     def _transform_annotations(
         self,
-        raw_annotations: list[dict[str, Any]] | None,
-    ) -> list[dict[str, Any]] | None:
+        raw_annotations: list[_AzureRawAnnotation] | None,
+    ) -> list[_TransformedAnnotation] | None:
         """Transform Azure AI Foundry annotations to OpenAI-compatible format.
 
         Azure AI returns annotations like:
@@ -123,11 +191,11 @@ class AzureAIAgentsHandler:
         if not raw_annotations:
             return None
 
-        result: Final[list[dict[str, Any]]] = []
+        result: Final[list[_TransformedAnnotation]] = []
         for ann in raw_annotations:
             ann_type = ann.get("type")
             if ann_type == "url_citation":
-                url_citation = dict(ann.get("url_citation", {}))
+                url_citation: ChatCompletionAnnotationURLCitation = {**ann.get("url_citation", {})}
                 # Azure puts start/end_index at annotation level; OpenAI
                 # expects them inside url_citation
                 if "start_index" in ann and "start_index" not in url_citation:
@@ -147,24 +215,17 @@ class AzureAIAgentsHandler:
         content: str,
         model_response: ModelResponse,
         thread_id: str,
-        messages: list[dict[str, Any]],
-        annotations: list[dict[str, Any]] | None = None,
+        messages: list[dict[str, object]],
+        annotations: list[_TransformedAnnotation] | None = None,
     ) -> ModelResponse:
         """Build the ModelResponse from agent output."""
         from litellm.types.utils import Choices, Message, Usage
-
-        message_kwargs: Final[dict[str, Any]] = {
-            "content": content,
-            "role": "assistant",
-        }
-        if annotations:
-            message_kwargs["annotations"] = annotations
 
         model_response.choices = [
             Choices(
                 finish_reason="stop",
                 index=0,
-                message=Message(**message_kwargs),
+                message=Message(content=content, role="assistant", annotations=annotations or None),
             )
         ]
         model_response.model = model
@@ -201,7 +262,7 @@ class AzureAIAgentsHandler:
         api_key: str,
         optional_params: dict,
         headers: dict | None,
-    ) -> tuple:
+    ) -> tuple[dict[str, str], str, str, str | None, str]:
         """Prepare common parameters for completion.
 
         Azure Foundry Agents API uses Bearer token authentication:
@@ -241,7 +302,7 @@ class AzureAIAgentsHandler:
     def completion(
         self,
         model: str,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, object]],
         api_base: str,
         api_key: str,
         model_response: ModelResponse,
@@ -266,7 +327,7 @@ class AzureAIAgentsHandler:
             api_base,
         ) = self._prepare_completion_params(model, api_base, api_key, optional_params, headers)
 
-        def make_request(method: str, url: str, json_data: dict | None = None) -> httpx.Response:
+        def make_request(method: str, url: str, json_data: Mapping[str, object] | None = None) -> httpx.Response:
             if method == "GET":
                 return client.get(url=url, headers=headers)
             return client.post(
@@ -290,14 +351,14 @@ class AzureAIAgentsHandler:
 
     def _execute_agent_flow_sync(
         self,
-        make_request: Callable,
+        make_request: _SyncAgentRequest,
         api_base: str,
         api_version: str,
         agent_id: str,
         thread_id: str | None,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, object]],
         optional_params: dict,
-    ) -> tuple[str, str, list[dict[str, Any]] | None]:
+    ) -> tuple[str, str, list[_TransformedAnnotation] | None]:
         """Execute the agent flow synchronously. Returns (thread_id, content, annotations)."""
 
         # Step 1: Create thread if not provided
@@ -305,7 +366,8 @@ class AzureAIAgentsHandler:
             verbose_logger.debug("Creating thread at: %s", self._build_thread_url(api_base, api_version))
             response = make_request("POST", self._build_thread_url(api_base, api_version), {})
             self._check_response(response, [200, 201], "Failed to create thread")
-            thread_id = response.json()["id"]
+            thread_data: Final[_CreatedObject] = response.json()
+            thread_id = thread_data["id"]
             verbose_logger.debug("Created thread: %s", thread_id)
 
         # At this point thread_id is guaranteed to be a string
@@ -325,7 +387,8 @@ class AzureAIAgentsHandler:
 
         response = make_request("POST", self._build_runs_url(api_base, thread_id, api_version), run_payload)
         self._check_response(response, [200, 201], "Failed to create run")
-        run_id: Final = response.json()["id"]
+        run_data: Final[_CreatedObject] = response.json()
+        run_id: Final = run_data["id"]
         verbose_logger.debug("Created run: %s", run_id)
 
         # Step 4: Poll for completion
@@ -334,13 +397,15 @@ class AzureAIAgentsHandler:
             response = make_request("GET", status_url)
             self._check_response(response, [200], "Failed to get run status")
 
-            status = response.json().get("status")
+            status_data: _RunStatus = response.json()
+            status = status_data.get("status")
             verbose_logger.debug("Run status: %s", status)
 
             if status == "completed":
                 break
             elif status in ["failed", "cancelled", "expired"]:
-                error_msg = response.json().get("last_error", {}).get("message", "Unknown error")
+                error_data: _RunStatus = response.json()
+                error_msg = error_data.get("last_error", {}).get("message", "Unknown error")
                 raise AzureAIAgentsError(status_code=500, message=f"Run {status}: {error_msg}")
 
             time.sleep(self.config.POLL_INTERVAL_SECONDS)
@@ -351,7 +416,8 @@ class AzureAIAgentsHandler:
         response = make_request("GET", self._build_list_messages_url(api_base, thread_id, api_version))
         self._check_response(response, [200], "Failed to get messages")
 
-        content, annotations = self._extract_content_from_messages(response.json())
+        messages_data: Final[_AzureMessagesData] = response.json()
+        content, annotations = self._extract_content_from_messages(messages_data)
         return thread_id, content, annotations
 
     # -------------------------------------------------------------------------
@@ -360,7 +426,7 @@ class AzureAIAgentsHandler:
     async def acompletion(
         self,
         model: str,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, object]],
         api_base: str,
         api_key: str,
         model_response: ModelResponse,
@@ -389,7 +455,7 @@ class AzureAIAgentsHandler:
             api_base,
         ) = self._prepare_completion_params(model, api_base, api_key, optional_params, headers)
 
-        async def make_request(method: str, url: str, json_data: dict | None = None) -> httpx.Response:
+        async def make_request(method: str, url: str, json_data: Mapping[str, object] | None = None) -> httpx.Response:
             if method == "GET":
                 return await client.get(url=url, headers=headers)
             return await client.post(
@@ -413,14 +479,14 @@ class AzureAIAgentsHandler:
 
     async def _execute_agent_flow_async(
         self,
-        make_request: Callable,
+        make_request: _AsyncAgentRequest,
         api_base: str,
         api_version: str,
         agent_id: str,
         thread_id: str | None,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, object]],
         optional_params: dict,
-    ) -> tuple[str, str, list[dict[str, Any]] | None]:
+    ) -> tuple[str, str, list[_TransformedAnnotation] | None]:
         """Execute the agent flow asynchronously. Returns (thread_id, content, annotations)."""
 
         # Step 1: Create thread if not provided
@@ -428,7 +494,8 @@ class AzureAIAgentsHandler:
             verbose_logger.debug("Creating thread at: %s", self._build_thread_url(api_base, api_version))
             response = await make_request("POST", self._build_thread_url(api_base, api_version), {})
             self._check_response(response, [200, 201], "Failed to create thread")
-            thread_id = response.json()["id"]
+            thread_data: Final[_CreatedObject] = response.json()
+            thread_id = thread_data["id"]
             verbose_logger.debug("Created thread: %s", thread_id)
 
         # At this point thread_id is guaranteed to be a string
@@ -448,7 +515,8 @@ class AzureAIAgentsHandler:
 
         response = await make_request("POST", self._build_runs_url(api_base, thread_id, api_version), run_payload)
         self._check_response(response, [200, 201], "Failed to create run")
-        run_id: Final = response.json()["id"]
+        run_data: Final[_CreatedObject] = response.json()
+        run_id: Final = run_data["id"]
         verbose_logger.debug("Created run: %s", run_id)
 
         # Step 4: Poll for completion
@@ -457,13 +525,15 @@ class AzureAIAgentsHandler:
             response = await make_request("GET", status_url)
             self._check_response(response, [200], "Failed to get run status")
 
-            status = response.json().get("status")
+            status_data: _RunStatus = response.json()
+            status = status_data.get("status")
             verbose_logger.debug("Run status: %s", status)
 
             if status == "completed":
                 break
             elif status in ["failed", "cancelled", "expired"]:
-                error_msg = response.json().get("last_error", {}).get("message", "Unknown error")
+                error_data: _RunStatus = response.json()
+                error_msg = error_data.get("last_error", {}).get("message", "Unknown error")
                 raise AzureAIAgentsError(status_code=500, message=f"Run {status}: {error_msg}")
 
             await asyncio.sleep(self.config.POLL_INTERVAL_SECONDS)
@@ -474,7 +544,8 @@ class AzureAIAgentsHandler:
         response = await make_request("GET", self._build_list_messages_url(api_base, thread_id, api_version))
         self._check_response(response, [200], "Failed to get messages")
 
-        content, annotations = self._extract_content_from_messages(response.json())
+        messages_data: Final[_AzureMessagesData] = response.json()
+        content, annotations = self._extract_content_from_messages(messages_data)
         return thread_id, content, annotations
 
     # -------------------------------------------------------------------------
@@ -483,7 +554,7 @@ class AzureAIAgentsHandler:
     async def acompletion_stream(
         self,
         model: str,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, object]],
         api_base: str,
         api_key: str,
         logging_obj: LiteLLMLoggingObj,
@@ -491,7 +562,7 @@ class AzureAIAgentsHandler:
         litellm_params: dict,
         timeout: float,
         headers: dict | None = None,
-    ) -> AsyncIterator:
+    ) -> AsyncIterator[ModelResponseStream]:
         """Execute async streaming completion using Azure Agent Service with native SSE."""
         import litellm
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -505,12 +576,12 @@ class AzureAIAgentsHandler:
         ) = self._prepare_completion_params(model, api_base, api_key, optional_params, headers)
 
         # Build payload for create-thread-and-run with streaming
-        thread_messages: Final = []
+        thread_messages: Final[list[dict[str, object]]] = []
         for msg in messages:
             if msg.get("role") in ["user", "system"]:
                 thread_messages.append({"role": "user", "content": msg.get("content", "")})
 
-        payload: Final[dict[str, Any]] = {
+        payload: Final[dict[str, object]] = {
             "assistant_id": agent_id,
             "stream": True,
         }
@@ -552,14 +623,14 @@ class AzureAIAgentsHandler:
         self,
         response: httpx.Response,
         model: str,
-    ) -> AsyncIterator:
+    ) -> AsyncIterator[ModelResponseStream]:
         """Process SSE stream and yield OpenAI-compatible streaming chunks."""
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
         response_id: Final = f"chatcmpl-{uuid.uuid4().hex[:8]}"
         created: Final = int(time.time())
         thread_id = None
-        collected_annotations: list[dict[str, Any]] | None = None
+        collected_annotations: list[_TransformedAnnotation] | None = None
 
         current_event = None
 
@@ -575,9 +646,6 @@ class AzureAIAgentsHandler:
 
                 if data_str == "[DONE]":
                     # Send final chunk with finish_reason
-                    final_delta_kwargs: dict[str, Any] = {"content": None}
-                    if collected_annotations:
-                        final_delta_kwargs["annotations"] = collected_annotations
                     final_chunk = ModelResponseStream(
                         id=response_id,
                         created=created,
@@ -587,7 +655,7 @@ class AzureAIAgentsHandler:
                             StreamingChoices(
                                 finish_reason="stop",
                                 index=0,
-                                delta=Delta(**final_delta_kwargs),
+                                delta=Delta(content=None, annotations=collected_annotations or None),
                             )
                         ],
                     )
@@ -597,7 +665,7 @@ class AzureAIAgentsHandler:
                     return
 
                 try:
-                    data = json.loads(data_str)
+                    data: _SSEEventData = json.loads(data_str)
                 except json.JSONDecodeError:
                     continue
 

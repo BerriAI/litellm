@@ -48,7 +48,6 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
-// entityLinks -> migratedPages imports serverRootPath from the same module, so the mock must export it too.
 vi.mock("@/components/networking", () => {
   return {
     serverRootPath: "/",
@@ -277,6 +276,20 @@ describe("UserInfoView", () => {
         user_id: "user-123",
       });
     });
+  });
+
+  it("should keep the Details panel state while the Overview tab is shown", async () => {
+    const user = userEvent.setup();
+    render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} />);
+
+    await user.click(await screen.findByText("GitHub MCP (srv-1)"));
+    expect(await screen.findByText("list_issues")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(await screen.findByText(/of \$100\.00/)).toBeVisible();
+    await user.click(screen.getByRole("tab", { name: "Details" }));
+
+    expect(screen.getByText("list_issues")).toBeVisible();
   });
 
   describe("MCP permissions", () => {

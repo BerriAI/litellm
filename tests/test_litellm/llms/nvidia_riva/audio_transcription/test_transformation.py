@@ -5,12 +5,9 @@ These tests do not require ``nvidia-riva-client`` or any audio libs to be
 installed; the transformation layer is intentionally pure-Python on dicts.
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,

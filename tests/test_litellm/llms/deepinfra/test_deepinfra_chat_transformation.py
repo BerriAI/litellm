@@ -1,24 +1,22 @@
 import asyncio
 import json
 import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 # Add litellm to path
-sys.path.insert(0, os.path.abspath("../../../.."))
 import litellm
 
 
-def test_deepseek_supported_openai_params():
+def test_deepseek_supported_openai_params(monkeypatch):
     """
     Test "reasoning_effort" is an openai param supported for the DeepSeek model on deepinfra
     """
     from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
 
     # Ensure we're using the local model cost map
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     supported_openai_params = DeepInfraConfig().get_supported_openai_params(

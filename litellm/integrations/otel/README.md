@@ -35,6 +35,15 @@ span orphaned into its own trace). The anchor — a contextvar inherited by thos
 child tasks — gives a stable parent in both cases. DB/service spans keep ambient
 parenting so an auth DB lookup still nests under `auth`.
 
+The anchor is also what `litellm.request.route` is read from: `request_root_http_route`
+returns the server span's own `http.route`, so the LLM call span cannot disagree with
+its parent about which endpoint served the request. That means the route template on a
+normal route and the literal path on a passthrough prefix, because the passthrough hook
+rewrote the attribute; an MCP call anchors the same server span, so it reports the
+`/mcp` mount point. Attributes stay readable after a span ends, so the async close
+callback reads the same value. Where no server span was anchored at all, the route the
+proxy recorded at auth (`metadata.user_api_key_request_route`) is the backstop.
+
 **Which service calls become spans (`spans.span_role_for_service`).** LiteLLM's
 service-logging layer instruments many internal functions, but only some are
 traceable units of work:

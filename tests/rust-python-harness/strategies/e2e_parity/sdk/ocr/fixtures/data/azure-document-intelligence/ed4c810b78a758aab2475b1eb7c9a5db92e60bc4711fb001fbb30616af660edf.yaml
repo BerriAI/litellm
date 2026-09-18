@@ -1,0 +1,116 @@
+interactions:
+- request:
+    body: '{"urlSource":"https://dummyjson.com/image/800x300/ffffff/000000?text=invoice%20123&fontSize=24"}'
+    headers:
+      Accept:
+      - '*/*'
+      Content-Type:
+      - application/json
+      User-Agent:
+      - litellm/1.101.0
+    method: POST
+    uri: http://parity-provider.invalid/documentintelligence/documentModels/prebuilt-layout:analyze?api-version=2024-11-30
+  response:
+    body:
+      string: ''
+    headers:
+      Date:
+      - Wed, 02 Sep 2026 22:36:01 GMT
+      Operation-Location:
+      - http://parity-provider.invalid/documentintelligence/documentModels/prebuilt-layout/analyzeResults/42554c0a-83ec-4db4-8cf8-e3ff9cd9dd2a?api-version=2024-11-30
+      Server:
+      - istio-envoy
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      X-Content-Type-Options:
+      - nosniff
+      apim-request-id:
+      - 42554c0a-83ec-4db4-8cf8-e3ff9cd9dd2a
+      x-envoy-upstream-service-time:
+      - '670'
+      x-ms-region:
+      - West US 3
+    status:
+      code: 202
+      message: ''
+- request:
+    body: ''
+    headers:
+      Accept:
+      - '*/*'
+      User-Agent:
+      - litellm/1.101.0
+    method: GET
+    uri: http://parity-provider.invalid/documentintelligence/documentModels/prebuilt-layout/analyzeResults/42554c0a-83ec-4db4-8cf8-e3ff9cd9dd2a?api-version=2024-11-30
+  response:
+    body:
+      string: '{"status":"running","createdDateTime":"2026-09-02T22:36:01Z","lastUpdatedDateTime":"2026-09-02T22:36:01Z"}'
+    headers:
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Wed, 02 Sep 2026 22:36:01 GMT
+      Retry-After:
+      - '4'
+      Server:
+      - istio-envoy
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      X-Content-Type-Options:
+      - nosniff
+      apim-request-id:
+      - 011f699b-8d28-4ecb-917b-24cd42ffee29
+      x-envoy-upstream-service-time:
+      - '12'
+      x-ms-region:
+      - West US 3
+    status:
+      code: 200
+      message: ''
+- request:
+    body: ''
+    headers:
+      Accept:
+      - '*/*'
+      User-Agent:
+      - litellm/1.101.0
+    method: GET
+    uri: http://parity-provider.invalid/documentintelligence/documentModels/prebuilt-layout/analyzeResults/42554c0a-83ec-4db4-8cf8-e3ff9cd9dd2a?api-version=2024-11-30
+  response:
+    body:
+      string: '{"status":"succeeded","createdDateTime":"2026-09-02T22:36:01Z","lastUpdatedDateTime":"2026-09-02T22:36:02Z","analyzeResult":{"apiVersion":"2024-11-30","modelId":"prebuilt-layout","stringIndexType":"textElements","content":"invoice
+        123","pages":[{"pageNumber":1,"angle":-0.12780000269412994,"width":800,"height":300,"unit":"pixel","words":[{"content":"invoice","polygon":[338,138,418,139,418,160,338,160],"confidence":0.994,"span":{"offset":0,"length":7}},{"content":"123","polygon":[424,139,461,138,461,160,424,160],"confidence":0.999,"span":{"offset":8,"length":3}}],"lines":[{"content":"invoice
+        123","polygon":[338,138,460,138,461,160,338,160],"spans":[{"offset":0,"length":11}]}],"spans":[{"offset":0,"length":11}]}],"tables":[],"paragraphs":[{"spans":[{"offset":0,"length":11}],"boundingRegions":[{"pageNumber":1,"polygon":[338,138,460,138,461,160,338,160]}],"role":"title","content":"invoice
+        123"}],"styles":[],"contentFormat":"text","sections":[{"spans":[{"offset":0,"length":11}],"elements":["/paragraphs/0"]}]}}'
+    headers:
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Wed, 02 Sep 2026 22:36:06 GMT
+      Server:
+      - istio-envoy
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      X-Content-Type-Options:
+      - nosniff
+      apim-request-id:
+      - 8940c1a9-9c86-4188-86bf-8f34bb8fb537
+      x-envoy-upstream-service-time:
+      - '32'
+      x-ms-region:
+      - West US 3
+    status:
+      code: 200
+      message: ''
+recorded_at: '2026-09-02T22:36:06.585674+00:00'
+ttl_seconds: 0
+version: 1
+x-litellm:
+  case:
+    litellm_input:
+      document:
+        image_url: https://dummyjson.com/image/800x300/ffffff/000000?text=invoice%20123&fontSize=24
+        type: image_url
+      model: azure_ai/doc-intelligence/prebuilt-layout
+  request_source: recorded
+  schema_version: 1

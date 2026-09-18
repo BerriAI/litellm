@@ -6,7 +6,10 @@ to AWS Bedrock's CountTokens API format and vice versa.
 """
 
 import re
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final, Literal
+
+from pydantic import JsonValue
 
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
@@ -15,6 +18,48 @@ from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 # max_tokens field; CountTokens only counts input, so it has no effect
 # on any generation.
 DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS: Final = 1024
+
+
+def _json_dict(value: JsonValue) -> dict[str, JsonValue]:
+    return value if isinstance(value, dict) else {}
+
+
+def _json_list(value: JsonValue) -> list[JsonValue]:
+    return value if isinstance(value, list) else []
+
+
+def _to_converse_content(content: JsonValue) -> list[JsonValue]:
+    if isinstance(content, str):
+        return [{"text": content}]
+    if isinstance(content, list):
+        return content
+    return []
+
+
+def _to_converse_message(message: JsonValue) -> dict[str, JsonValue]:
+    fields: Final = _json_dict(message)
+    return {
+        "role": fields.get("role"),
+        "content": _to_converse_content(fields.get("content", "")),
+    }
+
+
+def _sanitized_bedrock_tool_name(raw_name: JsonValue) -> str:
+    name: Final = re.sub(r"[^a-zA-Z0-9_]", "_", raw_name if isinstance(raw_name, str) else "")
+    prefixed: Final = name if not name or name[0].isalpha() else f"t_{name}"
+    return prefixed[:64]
+
+
+def _to_bedrock_tool_spec(tool: JsonValue) -> dict[str, JsonValue]:
+    fields: Final = _json_dict(tool)
+    name: Final = _sanitized_bedrock_tool_name(fields.get("name", ""))
+    return {
+        "toolSpec": {
+            "name": name,
+            "description": fields.get("description") or name,
+            "inputSchema": {"json": fields.get("input_schema", {"type": "object", "properties": {}})},
+        }
+    }
 
 
 class BedrockCountTokensConfig(BaseAWSLLM):
@@ -27,7 +72,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
     - Response: {"inputTokens": <number>}
     """
 
-    def _detect_input_type(self, request_data: dict[str, Any]) -> str:
+    def _detect_input_type(self, request_data: Mapping[str, JsonValue]) -> Literal["converse", "invokeModel"]:
         """
         Detect whether to use 'converse' or 'invokeModel' input format.
 
@@ -57,8 +102,8 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
     def transform_anthropic_to_bedrock_count_tokens(
         self,
-        request_data: dict[str, Any],
-    ) -> dict[str, Any]:
+        request_data: Mapping[str, JsonValue],
+    ) -> dict[str, JsonValue]:
         """
         Transform request to Bedrock CountTokens format.
         Supports both Converse and InvokeModel input types.
@@ -95,27 +140,16 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         else:
             return self._transform_to_invoke_model_format(request_data)
 
-    def _transform_to_converse_format(self, request_data: dict[str, Any]) -> dict[str, Any]:
+    def _transform_to_converse_format(self, request_data: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
         """Transform to Converse input format, including system and tools."""
-        messages: Final = request_data.get("messages", [])
+        messages: Final = _json_list(request_data.get("messages"))
         system: Final = request_data.get("system")
         tools: Final = request_data.get("tools")
 
         # Transform messages
-        user_messages: Final = []
-        for message in messages:
-            transformed_message: dict[str, Any] = {
-                "role": message.get("role"),
-                "content": [],
-            }
-            content = message.get("content", "")
-            if isinstance(content, str):
-                transformed_message["content"].append({"text": content})
-            elif isinstance(content, list):
-                transformed_message["content"] = content
-            user_messages.append(transformed_message)
+        user_messages: Final[list[JsonValue]] = [_to_converse_message(message) for message in messages]
 
-        converse_input: Final[dict[str, Any]] = {"messages": user_messages}
+        converse_input: Final[dict[str, JsonValue]] = {"messages": user_messages}
 
         # Transform system prompt (string or list of blocks → Bedrock format)
         system_blocks: Final = self._transform_system(system)
@@ -129,7 +163,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         return {"input": {"converse": converse_input}}
 
-    def _transform_system(self, system: Any | None) -> list[dict[str, Any]]:
+    def _transform_system(self, system: JsonValue) -> list[JsonValue]:
         """Transform Anthropic system prompt to Bedrock system blocks."""
         if system is None:
             return []
@@ -140,36 +174,16 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             return [{"text": block.get("text", "")} for block in system if isinstance(block, dict)]
         return []
 
-    def _transform_tools(self, tools: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    def _transform_tools(self, tools: JsonValue) -> dict[str, JsonValue] | None:
         """Transform Anthropic tools to Bedrock toolConfig format."""
         if not tools:
             return None
 
-        bedrock_tools: Final = []
-        for tool in tools:
-            name = tool.get("name", "")
-            # Bedrock tool names must match [a-zA-Z][a-zA-Z0-9_]* and max 64 chars
-            name = re.sub(r"[^a-zA-Z0-9_]", "_", name)
-            if name and not name[0].isalpha():
-                name = "t_" + name
-            name = name[:64]
-
-            description = tool.get("description") or name
-            input_schema = tool.get("input_schema", {"type": "object", "properties": {}})
-
-            bedrock_tools.append(
-                {
-                    "toolSpec": {
-                        "name": name,
-                        "description": description,
-                        "inputSchema": {"json": input_schema},
-                    }
-                }
-            )
+        bedrock_tools: Final[list[JsonValue]] = [_to_bedrock_tool_spec(tool) for tool in _json_list(tools)]
 
         return {"tools": bedrock_tools}
 
-    def _transform_to_invoke_model_format(self, request_data: dict[str, Any]) -> dict[str, Any]:
+    def _transform_to_invoke_model_format(self, request_data: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
         """Transform to InvokeModel input format."""
         import base64
         import json
@@ -223,7 +237,9 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         return endpoint
 
-    def transform_bedrock_response_to_anthropic(self, bedrock_response: dict[str, Any]) -> dict[str, Any]:
+    def transform_bedrock_response_to_anthropic(
+        self, bedrock_response: Mapping[str, JsonValue]
+    ) -> dict[str, JsonValue]:
         """
         Transform Bedrock CountTokens response to Anthropic format.
 
@@ -241,7 +257,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         return {"input_tokens": input_tokens}
 
-    def validate_count_tokens_request(self, request_data: dict[str, Any]) -> None:
+    def validate_count_tokens_request(self, request_data: Mapping[str, JsonValue]) -> None:
         """
         Validate the incoming count tokens request.
         Supports both Converse and InvokeModel input formats.

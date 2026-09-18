@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setSecureItem } from "@/utils/secureStorage";
 import { CreateUiSnapshot, readCreateUiSnapshot, writeCreateUiSnapshot } from "./createOAuthUiState";
@@ -11,7 +13,6 @@ const fullSnapshot: CreateUiSnapshot = {
   costConfig: { default_cost_per_query: 0.02 },
   allowedTools: ["search"],
   hasToolAllowlistInteraction: true,
-  searchValue: "group-a",
   aliasManuallyEdited: true,
   logoUrl: "https://cdn/logo.png",
   authorizedIdentity: "identity-abc",
@@ -80,9 +81,8 @@ describe("createOAuthUiState", () => {
   });
 
   it("omits falsy scalars so a restore never blanks freshly mounted state", () => {
-    seedRaw({ searchValue: "", logoUrl: "", transportType: "", modalVisible: false });
+    seedRaw({ logoUrl: "", transportType: "", modalVisible: false });
     const restored = readCreateUiSnapshot();
-    expect(restored).not.toHaveProperty("searchValue");
     expect(restored).not.toHaveProperty("logoUrl");
     expect(restored).not.toHaveProperty("transportType");
     expect(restored).not.toHaveProperty("modalVisible");

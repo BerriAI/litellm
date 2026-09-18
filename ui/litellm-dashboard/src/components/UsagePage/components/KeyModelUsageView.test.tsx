@@ -31,7 +31,7 @@ describe("KeyModelUsageView", () => {
 
   it("should return null when topModels is empty", () => {
     const { container } = render(<KeyModelUsageView topModels={[]} />);
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should display Model Usage title", () => {
@@ -52,7 +52,7 @@ describe("KeyModelUsageView", () => {
   it("should default to table view", () => {
     render(<KeyModelUsageView topModels={mockTopModels} />);
     const tableButton = screen.getByRole("button", { name: "Table" });
-    expect(tableButton).toHaveClass("bg-blue-100");
+    expect(tableButton).toHaveClass("bg-info/15");
   });
 
   it("should display all table column headers", () => {
@@ -105,14 +105,14 @@ describe("KeyModelUsageView", () => {
   it("should display successful requests with green styling", () => {
     render(<KeyModelUsageView topModels={mockTopModels} />);
     const successfulElements = screen.getAllByText("100");
-    const greenElement = successfulElements.find((el) => el.closest("span")?.classList.contains("text-green-600"));
+    const greenElement = successfulElements.find((el) => el.closest("span")?.classList.contains("text-success"));
     expect(greenElement).toBeDefined();
   });
 
   it("should display failed requests with red styling", () => {
     render(<KeyModelUsageView topModels={mockTopModels} />);
     const failedElements = screen.getAllByText("5");
-    const redElement = failedElements.find((el) => el.closest("span")?.classList.contains("text-red-600"));
+    const redElement = failedElements.find((el) => el.closest("span")?.classList.contains("text-destructive"));
     expect(redElement).toBeDefined();
   });
 
@@ -169,9 +169,9 @@ describe("KeyModelUsageView", () => {
     const chartButton = screen.getByRole("button", { name: "Chart" });
     await user.click(chartButton);
 
-    expect(chartButton).toHaveClass("bg-blue-100");
+    expect(chartButton).toHaveClass("bg-info/15");
     const tableButton = screen.getByRole("button", { name: "Table" });
-    expect(tableButton).not.toHaveClass("bg-blue-100");
+    expect(tableButton).not.toHaveClass("bg-info/15");
   });
 
   it("should switch back to table view when table button is clicked", async () => {
@@ -184,8 +184,8 @@ describe("KeyModelUsageView", () => {
     await user.click(chartButton);
     await user.click(tableButton);
 
-    expect(tableButton).toHaveClass("bg-blue-100");
-    expect(chartButton).not.toHaveClass("bg-blue-100");
+    expect(tableButton).toHaveClass("bg-info/15");
+    expect(chartButton).not.toHaveClass("bg-info/15");
   });
 
   it("should display chart when chart view is selected", async () => {
@@ -276,7 +276,7 @@ describe("KeyModelUsageView", () => {
     ];
     render(<KeyModelUsageView topModels={modelsWithMissingFields} />);
     const zeroElements = screen.getAllByText("0");
-    const successfulZero = zeroElements.find((el) => el.closest("span")?.classList.contains("text-green-600"));
+    const successfulZero = zeroElements.find((el) => el.closest("span")?.classList.contains("text-success"));
     expect(successfulZero).toBeDefined();
   });
 

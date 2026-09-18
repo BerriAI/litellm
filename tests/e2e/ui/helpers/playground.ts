@@ -10,16 +10,15 @@ import { Page } from "../fixtures/pages";
  */
 export const onlyVisible = (locator: Locator): Locator => locator.filter({ visible: true }).first();
 
-/** The model dropdown, addressed by the placeholder it shows before selection. */
-export const modelSelect = (page: PlaywrightPage): Locator =>
-  onlyVisible(page.locator('.ant-select:has(.ant-select-selection-placeholder:text-is("Select a Model"))'));
+/** The model combobox, addressed by the placeholder its search input shows before selection. */
+export const modelSelect = (page: PlaywrightPage): Locator => onlyVisible(page.getByPlaceholder("Select a Model"));
 
-/** Send button is icon-only (an up-arrow), so there is no accessible name. */
-export const sendButton = (page: PlaywrightPage): Locator => onlyVisible(page.locator("button:has(.anticon-arrow-up)"));
+export const sendButton = (page: PlaywrightPage): Locator =>
+  onlyVisible(page.getByRole("button", { name: "Send message" }));
 
-/** The Virtual Key Source dropdown, addressed by its currently selected label. */
-export const keySourceSelect = (page: PlaywrightPage, current: string): Locator =>
-  onlyVisible(page.locator(`.ant-select:has(.ant-select-selection-item[title="${current}"])`));
+/** The Virtual Key Source dropdown, addressed by the accessible name on its trigger. */
+export const keySourceSelect = (page: PlaywrightPage): Locator =>
+  onlyVisible(page.getByLabel("Virtual Key Source"));
 
 export async function openPlayground(page: PlaywrightPage): Promise<void> {
   await navigateToPage(page, Page.LlmPlayground);
@@ -33,9 +32,8 @@ export async function selectModel(page: PlaywrightPage, model: string): Promise<
   const select = modelSelect(page);
   await select.click();
   // Virtualized: options outside the rendered window are absent from the DOM, so search first.
-  await select.locator("input.ant-select-selection-search-input").fill(model);
-  // antd portals its dropdown to the body; options carry the value as `title`.
-  await onlyVisible(page.locator(`.ant-select-item-option[title="${model}"]`)).click({ timeout: 15_000 });
+  await select.fill(model);
+  await onlyVisible(page.getByRole("option", { name: model, exact: true })).click({ timeout: 15_000 });
 }
 
 export async function sendMessage(page: PlaywrightPage, message: string): Promise<void> {

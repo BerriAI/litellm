@@ -134,9 +134,21 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                         payload.get("prompt_caching_savings_spend", 0) or 0
                     ) + daily_transaction.get("prompt_caching_savings_spend", 0)
 
+                    daily_transaction["gateway_injected_caching_savings_spend"] = (
+                        payload.get("gateway_injected_caching_savings_spend", 0) or 0
+                    ) + daily_transaction.get("gateway_injected_caching_savings_spend", 0)
+
                     daily_transaction["autorouter_savings_spend"] = (
                         payload.get("autorouter_savings_spend", 0) or 0
                     ) + daily_transaction.get("autorouter_savings_spend", 0)
+
+                    daily_transaction["total_response_time_ms"] = (
+                        payload.get("total_response_time_ms", 0) or 0
+                    ) + daily_transaction.get("total_response_time_ms", 0)
+
+                    daily_transaction["timed_requests"] = (
+                        payload.get("timed_requests", 0) or 0
+                    ) + daily_transaction.get("timed_requests", 0)
 
                 else:
                     aggregated_daily_spend_update_transactions[_key] = deepcopy(payload)

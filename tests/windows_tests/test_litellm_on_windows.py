@@ -1,16 +1,11 @@
 import asyncio
-import os
 import subprocess
-import sys
 import time
 import traceback
 import platform
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 
 def test_using_litellm_on_windows():

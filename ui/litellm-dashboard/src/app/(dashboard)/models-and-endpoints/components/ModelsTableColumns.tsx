@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Switch } from "@/components/ui/switch";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
-import { copyToClipboard } from "@/utils/dataUtils";
+import { copyToClipboard, formatPerSecondCost } from "@/utils/dataUtils";
 
 export const MODEL_ID_COLUMN_ID = "model_info_id";
 export const MODEL_NAME_COLUMN_ID = "model_name";
@@ -23,6 +23,19 @@ export const COSTS_COLUMN_ID = "input_cost";
 export const TEAM_ID_COLUMN_ID = "model_info_team_id";
 export const ACCESS_GROUPS_COLUMN_ID = "model_info_access_groups";
 export const STATUS_COLUMN_ID = "model_info_db_model";
+
+export const MODEL_TABLE_SORT_COLUMN_IDS = [
+  MODEL_NAME_COLUMN_ID,
+  CREATED_BY_COLUMN_ID,
+  UPDATED_AT_COLUMN_ID,
+  COSTS_COLUMN_ID,
+  STATUS_COLUMN_ID,
+] as const;
+
+export type ModelTableSortColumnId = (typeof MODEL_TABLE_SORT_COLUMN_IDS)[number];
+
+export const isModelTableSortColumnId = (columnId: string): columnId is ModelTableSortColumnId =>
+  (MODEL_TABLE_SORT_COLUMN_IDS as readonly string[]).includes(columnId);
 
 const COLUMN_ID_TO_SERVER_SORT_FIELD: Record<string, string> = {
   [COSTS_COLUMN_ID]: "costs",
@@ -123,7 +136,7 @@ function CredentialsHeader() {
           <div className="flex flex-col gap-3">
             <span className="text-sm font-medium text-foreground">Credential types</span>
             <div className="flex flex-col gap-1">
-              <span className="flex items-center gap-1.5 text-sm font-medium text-blue-600">
+              <span className="flex items-center gap-1.5 text-sm font-medium text-info">
                 <RefreshCw className="size-3.5" />
                 Reusable
               </span>
@@ -158,7 +171,7 @@ function CredentialsCell({ credentialName }: { credentialName: string | undefine
   }
 
   return (
-    <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-blue-600" title={credentialName}>
+    <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-info" title={credentialName}>
       <RefreshCw className="size-3 shrink-0" />
       <span className="truncate">{credentialName}</span>
     </span>
@@ -181,30 +194,33 @@ function CreatedByCell({ model }: { model: ModelData }) {
   );
 }
 
-function CostsCell({ model }: { model: ModelData }) {
-  const { input_cost: inputCost, output_cost: outputCost } = model;
+function CostRow({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="flex items-baseline gap-1.5">
+      <span className="text-[10px] font-semibold tracking-wider text-muted-foreground">{label}</span>
+      <span className="text-xs font-medium tabular-nums text-foreground">{value}</span>
+    </span>
+  );
+}
 
-  if (inputCost == null && outputCost == null) {
+function CostsCell({ model }: { model: ModelData }) {
+  const { input_cost: inputCost, output_cost: outputCost, output_cost_per_second: perSecond } = model;
+  const hasPerSecond = perSecond != null;
+  const showInput = inputCost != null && (!hasPerSecond || Number(inputCost) > 0);
+  const showOutput = outputCost != null && (!hasPerSecond || Number(outputCost) > 0);
+
+  if (!showInput && !showOutput && !hasPerSecond) {
     return <span className="text-sm text-muted-foreground">-</span>;
   }
 
   return (
     <CellTooltip
-      content="Cost per 1M tokens"
+      content={hasPerSecond ? "Cost per 1M tokens; /s is cost per second of output" : "Cost per 1M tokens"}
       trigger={
         <div className="flex flex-col gap-0.5 whitespace-nowrap">
-          {inputCost != null && (
-            <span className="flex items-baseline gap-1.5">
-              <span className="text-[10px] font-semibold tracking-wider text-muted-foreground">IN</span>
-              <span className="text-xs font-medium tabular-nums text-foreground">${inputCost}</span>
-            </span>
-          )}
-          {outputCost != null && (
-            <span className="flex items-baseline gap-1.5">
-              <span className="text-[10px] font-semibold tracking-wider text-muted-foreground">OUT</span>
-              <span className="text-xs font-medium tabular-nums text-foreground">${outputCost}</span>
-            </span>
-          )}
+          {showInput && <CostRow label="IN" value={`$${inputCost}`} />}
+          {showOutput && <CostRow label="OUT" value={`$${outputCost}`} />}
+          {hasPerSecond && <CostRow label="OUT" value={formatPerSecondCost(perSecond)} />}
         </div>
       }
     />
@@ -220,7 +236,7 @@ function AccessGroupsCell({ accessGroups }: { accessGroups: string[] | null }) {
 
   return (
     <div className="flex min-w-0 items-center gap-1">
-      <Badge variant="outline" className="max-w-36 truncate border-blue-200 bg-blue-50 font-normal text-blue-600">
+      <Badge variant="outline" className="max-w-36 truncate border-info/20 bg-info/10 font-normal text-info">
         {first}
       </Badge>
       {overflow.length > 0 && (
@@ -247,6 +263,7 @@ interface ModelRowActionsProps {
   model: ModelData;
   userRole: string;
   userID: string;
+  isViewOnly: boolean;
   isPausing: boolean;
   onDeleteClick?: (modelId: string) => void;
   onTogglePauseClick?: (modelId: string, blocked: boolean) => void | Promise<void>;
@@ -256,14 +273,15 @@ function ModelRowActions({
   model,
   userRole,
   userID,
+  isViewOnly,
   isPausing,
   onDeleteClick,
   onTogglePauseClick,
 }: ModelRowActionsProps) {
   const modelId = model.model_info?.id;
   const isConfigModel = !model.model_info?.db_model;
-  const isAdmin = userRole === "Admin";
-  const canEditModel = isAdmin || model.model_info?.created_by === userID;
+  const isAdmin = userRole === "Admin" && !isViewOnly;
+  const canEditModel = !isViewOnly && (isAdmin || model.model_info?.created_by === userID);
   const isBlocked = model.model_info?.blocked === true;
   const isPauseToggleable = !isConfigModel && isAdmin && Boolean(onTogglePauseClick);
 
@@ -340,6 +358,7 @@ function ModelRowActions({
 export interface ModelsTableColumnDeps {
   userRole: string;
   userID: string;
+  isViewOnly: boolean;
   onModelIdClick: (modelId: string) => void;
   onTeamIdClick: (teamId: string) => void;
   onDeleteClick?: (modelId: string) => void;
@@ -350,6 +369,7 @@ export interface ModelsTableColumnDeps {
 export const getModelsTableColumns = ({
   userRole,
   userID,
+  isViewOnly,
   onModelIdClick,
   onTeamIdClick,
   onDeleteClick,
@@ -479,6 +499,7 @@ export const getModelsTableColumns = ({
         model={row.original}
         userRole={userRole}
         userID={userID}
+        isViewOnly={isViewOnly}
         isPausing={pausingModelId === row.original.model_info?.id}
         onDeleteClick={onDeleteClick}
         onTogglePauseClick={onTogglePauseClick}

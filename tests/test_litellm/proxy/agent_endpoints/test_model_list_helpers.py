@@ -4,10 +4,7 @@ Test appending A2A agents to model lists.
 Maps to: litellm/proxy/agent_endpoints/model_list_helpers.py
 """
 
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from unittest.mock import AsyncMock, Mock, patch
 

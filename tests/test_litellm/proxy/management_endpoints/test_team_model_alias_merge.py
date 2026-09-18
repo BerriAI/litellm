@@ -6,13 +6,10 @@ Concurrent BYOK model creates must not overwrite each other's entries
 in team.models.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import (
     LitellmUserRoles,

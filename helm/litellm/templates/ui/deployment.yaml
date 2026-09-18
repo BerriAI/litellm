@@ -7,6 +7,10 @@ metadata:
     {{- include "litellm.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: ui
 spec:
+  {{- with .Values.ui.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "litellm.ui.selectorLabels" . | nindent 6 }}

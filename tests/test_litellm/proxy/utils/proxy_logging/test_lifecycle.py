@@ -130,6 +130,42 @@ def test_startup_event_initializes_slack_and_callbacks(proxy_logging):
     }
 
 
+@pytest.mark.asyncio
+async def test_startup_event_schedules_deprecation_check_before_its_alert_type_is_on(proxy_logging):
+    """Alerting config can enable the deprecation alert after startup, so the loop must already be running"""
+    proxy_logging.alerting = ["slack"]
+    proxy_logging.slack_alerting_instance = MagicMock()
+    proxy_logging.slack_alerting_instance.alert_types = []
+    proxy_logging.slack_alerting_instance.run_scheduled_deprecation_check = AsyncMock()
+    proxy_logging._init_litellm_callbacks = MagicMock()
+
+    proxy_logging.startup_event(llm_router=None, redis_usage_cache=None)
+
+    assert proxy_logging.deprecation_check_started is True
+    proxy_logging.slack_alerting_instance.run_scheduled_deprecation_check.assert_called_once_with(
+        pod_lock_manager=proxy_logging.db_spend_update_writer.pod_lock_manager
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_values_schedules_deprecation_check_when_alerting_arrives_later(proxy_logging):
+    """A proxy that boots without alerting still needs the loop once a config reload turns it on"""
+    proxy_logging.slack_alerting_instance = MagicMock()
+    proxy_logging.slack_alerting_instance.alert_types = []
+    proxy_logging.slack_alerting_instance.run_scheduled_deprecation_check = AsyncMock()
+    proxy_logging._init_litellm_callbacks = MagicMock()
+
+    proxy_logging.startup_event(llm_router=None, redis_usage_cache=None)
+    assert proxy_logging.deprecation_check_started is False
+
+    proxy_logging.update_values(alerting=["slack"])
+
+    assert proxy_logging.deprecation_check_started is True
+    proxy_logging.slack_alerting_instance.run_scheduled_deprecation_check.assert_called_once_with(
+        pod_lock_manager=proxy_logging.db_spend_update_writer.pod_lock_manager
+    )
+
+
 def test_startup_event_propagates_init_callbacks_failure_raises(proxy_logging):
     proxy_logging.slack_alerting_instance = MagicMock()
     proxy_logging.slack_alerting_instance.alert_types = []
@@ -184,7 +220,7 @@ def test_add_proxy_hooks_registers_callbacks(proxy_logging, monkeypatch):
     what gets registered. Verifies that the resulting instances land in
     ``proxy_logging.proxy_hook_mapping`` keyed by hook name.
     """
-    hook_keys = ["cache_control_check", "max_budget_limiter"]
+    hook_keys = ["cache_control_check", "max_iterations_limiter"]
     registered: List[Any] = []
 
     from litellm.proxy import utils as utils_mod
@@ -326,22 +362,22 @@ def test_add_proxy_hooks_unknown_hook_raises(proxy_logging, monkeypatch):
 
 def test_get_proxy_hook_returns_registered_instance(proxy_logging):
     s_cache = MagicMock()
-    s_budget = MagicMock()
+    s_iterations = MagicMock()
     s_parallel = MagicMock()
     proxy_logging.proxy_hook_mapping = {
         "cache_control_check": s_cache,
-        "max_budget_limiter": s_budget,
+        "max_iterations_limiter": s_iterations,
         "max_parallel_request_limiter": s_parallel,
     }
     snapshot = {
         "cache_control_check": proxy_logging.get_proxy_hook("cache_control_check") is s_cache,
-        "max_budget_limiter": proxy_logging.get_proxy_hook("max_budget_limiter") is s_budget,
+        "max_iterations_limiter": proxy_logging.get_proxy_hook("max_iterations_limiter") is s_iterations,
         "max_parallel_request_limiter": proxy_logging.get_proxy_hook("max_parallel_request_limiter") is s_parallel,
         "unknown_returns_none": proxy_logging.get_proxy_hook("unknown") is None,
     }
     assert snapshot == {
         "cache_control_check": True,
-        "max_budget_limiter": True,
+        "max_iterations_limiter": True,
         "max_parallel_request_limiter": True,
         "unknown_returns_none": True,
     }

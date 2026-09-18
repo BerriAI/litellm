@@ -750,8 +750,7 @@ async def test_admitted_subject_missing_stored_token_challenged_with_resource_me
     challenge = exc_info.value.headers["www-authenticate"]
     assert "authorization_uri=" not in challenge
     assert challenge == (
-        'Bearer resource_metadata="http://localhost:8000'
-        '/.well-known/oauth-protected-resource/mcp/repro_oauth_server"'
+        'Bearer resource_metadata="http://localhost:8000/.well-known/oauth-protected-resource/mcp/repro_oauth_server"'
     )
 
 
@@ -937,6 +936,11 @@ async def test_handle_streamable_http_mcp_delegated_server_surfaces_upstream_cha
         patch(
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=delegated_server,
+        ),
+        patch(  # test-quality-ok: registry is empty in unit tests; key owns the delegated server
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[delegated_server],
         ),
         patch.object(
             session_manager_stateful,
@@ -1411,6 +1415,8 @@ async def _run_passthrough_connect(
 ):
     """Drive handle_streamable_http_mcp through the preemptive-401 gate and report whether it
     challenged (raised) or forwarded to the session manager. Returns (challenged, www_authenticate)."""
+    from fastapi import HTTPException
+
     from litellm.proxy._experimental.mcp_server.server import (
         handle_streamable_http_mcp,
         session_manager_stateless,

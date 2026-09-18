@@ -60,6 +60,12 @@ SEARCH_PROMPT = "Use web search to tell me one recent news headline about Anthro
 
 
 class TestBedrockWebSearchServerTool:
+    @pytest.mark.skip(
+        reason="stage red: environment gap, the e2e stack neither enables the "
+        "websearch_interception callback nor declares a search backend, so the request "
+        "reaches bedrock's transformation and takes its by-design 400. Unskip once the "
+        "ephemeral stack ships the config in this module's docstring."
+    )
     @pytest.mark.covers("llm.messages.bedrock_invoke.web_search_server_tool.nonstream.works")
     def test_web_search_server_tool_is_served(
         self, endpoints_client: EndpointsClient, resources: ResourceManager

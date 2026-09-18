@@ -13,7 +13,7 @@ from ..chat.transformation import (
     FireworksAIConfig,
     effort_from_chat_template_kwargs,
 )
-from ..common_utils import FireworksAIMixin
+from ..common_utils import FireworksAIMixin, resolve_fireworks_resource_name
 
 _TEXT_COMPLETION_STRIP_PARAMS: Final = (
     frozenset({"truncate_prompt_tokens", "prompt_truncate_len"}) | NIM_VLLM_STRIP_PARAMS
@@ -167,11 +167,8 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
         translated_params: Final = self.map_extra_body_params(optional_params=optional_params, model=model)
         prompt: Final = _transform_prompt(messages=messages)
 
-        if not model.startswith("accounts/") and "#" not in model:
-            model = f"accounts/fireworks/models/{model}"
-
         data: Final = {
-            "model": model,
+            "model": resolve_fireworks_resource_name(model),
             "prompt": prompt,
             **translated_params,
         }
