@@ -134,7 +134,16 @@ def _known_connection_error_message(exc: BaseException, url: str | None, timeout
         return "Failed to connect to MCP server: the connection timed out."
     if isinstance(exc, (httpx.HTTPStatusError, httpx2.HTTPStatusError)):
         return f"Failed to connect to MCP server: it returned HTTP {exc.response.status_code}."
-    if isinstance(exc, (httpx.NetworkError, httpx.RemoteProtocolError, httpx2.NetworkError, httpx2.RemoteProtocolError, ConnectionError)):
+    if isinstance(
+        exc,
+        (
+            httpx.NetworkError,
+            httpx.RemoteProtocolError,
+            httpx2.NetworkError,
+            httpx2.RemoteProtocolError,
+            ConnectionError,
+        ),
+    ):
         return (
             "Failed to connect to MCP server: the connection was interrupted. "
             "Check the server and network connection, then retry."

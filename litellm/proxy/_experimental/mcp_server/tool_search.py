@@ -99,11 +99,20 @@ def mcp_tool_search_settings() -> MCPToolSearchSettings | ValidationError:
 
 
 def _tool_result(tool: Tool) -> ToolSearchResult:
-    return {"name": tool.name, "description": tool.description or "", "inputSchema": tool.input_schema}
+    return {
+        "name": tool.name,
+        "description": tool.description or "",
+        "inputSchema": tool.input_schema,
+    }  # mutable-ok: wire schema payload
 
 
 def _scored_result(tool: Tool, score: float) -> ToolSearchResult:
-    return {"name": tool.name, "description": tool.description or "", "inputSchema": tool.input_schema, "score": score}
+    return {
+        "name": tool.name,
+        "description": tool.description or "",
+        "inputSchema": tool.input_schema,
+        "score": score,
+    }  # mutable-ok: wire schema payload
 
 
 _MCP_PROXY_IDENTITY_META_KEY: Final[str] = "litellm.ai/proxy_tool_identity"

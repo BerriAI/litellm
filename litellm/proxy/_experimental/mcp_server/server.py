@@ -13,7 +13,7 @@ import time
 import traceback
 import types
 import uuid
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol
 
@@ -121,6 +121,7 @@ _MCP_TRANSPORT_SPAN_SCOPE_KEY: Final = "litellm_otel_transport_span"
 _MCP_DESTINATIONS_SCOPE_KEY: Final = "litellm_otel_request_destinations"
 _MCP_PROTOCOL_VERSION_HEADER: Final = b"mcp-protocol-version"
 
+
 def unsupported_protocol_version(scope: Scope) -> str | None:
     """Return the unsupported ``MCP-Protocol-Version`` header value, if any.
 
@@ -128,10 +129,11 @@ def unsupported_protocol_version(scope: Scope) -> str | None:
     ``HANDSHAKE_PROTOCOL_VERSIONS`` to the modern single-exchange path, which
     bypasses litellm's session/auth model, so the ASGI entry rejects it.
     """
-    headers: Final = scope.get("headers") or []
-    values: Final = [v for k, v in headers if k.lower() == _MCP_PROTOCOL_VERSION_HEADER]
-    for raw_value in values:
-        value: Final = raw_value.decode("latin-1").strip()
+    headers: Final[Iterable[tuple[bytes, bytes]]] = scope.get("headers") or ()
+    values: Final = tuple(
+        raw.decode("latin-1").strip() for key, raw in headers if key.lower() == _MCP_PROTOCOL_VERSION_HEADER
+    )
+    for value in values:
         if value and value not in HANDSHAKE_PROTOCOL_VERSIONS:
             return value
     return None
@@ -880,7 +882,7 @@ if MCP_AVAILABLE:
             verbose_logger.exception("Error in list_tools endpoint: %s", e)
             # Return empty list instead of failing completely
             # This prevents the HTTP stream from failing and allows the client to get a response
-            return ListToolsResult(tools=[])
+            return ListToolsResult(tools=[])  # mutable-ok: MCP result payload
         finally:
             _otel_reset_mcp_request_destinations(_destinations_token)
             _otel_reset_mcp_transport_span(_transport_token)
@@ -1191,7 +1193,7 @@ if MCP_AVAILABLE:
 
                 host_progress_callback: Final = _capture_host_progress_callback(ctx)
                 # Create a body date for logging
-                body_data: Final = {"name": params.name, "arguments": params.arguments}
+                body_data: Final = {"name": params.name, "arguments": params.arguments}  # mutable-ok: logging payload
                 # Set trace/session id from raw_headers so spend logs and logging_obj stay consistent (same as A2A)
                 chain_id: Final = get_chain_id_from_headers(raw_headers)
                 if chain_id:
@@ -1340,7 +1342,7 @@ if MCP_AVAILABLE:
             verbose_logger.exception("Error in list_prompts endpoint: %s", e)
             # Return empty list instead of failing completely
             # This prevents the HTTP stream from failing and allows the client to get a response
-            return ListPromptsResult(prompts=[])
+            return ListPromptsResult(prompts=[])  # mutable-ok: MCP result payload
         finally:
             active_mcp_session_var.reset(_session_reset_token)
             active_mcp_request_ctx_var.reset(_ctx_reset_token)
@@ -1416,7 +1418,7 @@ if MCP_AVAILABLE:
             return ListResourcesResult(resources=resources)
         except Exception as e:
             verbose_logger.exception("Error in list_resources endpoint: %s", e)
-            return ListResourcesResult(resources=[])
+            return ListResourcesResult(resources=[])  # mutable-ok: MCP result payload
         finally:
             active_mcp_session_var.reset(_session_reset_token)
             active_mcp_request_ctx_var.reset(_ctx_reset_token)
@@ -1461,7 +1463,7 @@ if MCP_AVAILABLE:
             return ListResourceTemplatesResult(resource_templates=resource_templates)
         except Exception as e:
             verbose_logger.exception("Error in list_resource_templates endpoint: %s", e)
-            return ListResourceTemplatesResult(resource_templates=[])
+            return ListResourceTemplatesResult(resource_templates=[])  # mutable-ok: MCP result payload
         finally:
             active_mcp_session_var.reset(_session_reset_token)
             active_mcp_request_ctx_var.reset(_ctx_reset_token)
@@ -3618,8 +3620,14 @@ if MCP_AVAILABLE:
             raise
         except Exception as e:
             verbose_logger.exception("Error executing local tool %s: %s", name, e)
-            return CallToolResult(content=[TextContent(text=f"Error: {e}", type="text")], is_error=True)
-        return CallToolResult(content=[TextContent(text=str(result), type="text")], is_error=False)
+            return CallToolResult(
+                content=[TextContent(text=f"Error: {e}", type="text")],  # mutable-ok: MCP result content
+                is_error=True,
+            )
+        return CallToolResult(
+            content=[TextContent(text=str(result), type="text")],  # mutable-ok: MCP result content
+            is_error=False,
+        )
 
     def _get_mcp_servers_in_path(path: str) -> list[str] | None:
         """
@@ -4363,7 +4371,7 @@ if MCP_AVAILABLE:
                 supported: Final = ", ".join(sorted(HANDSHAKE_PROTOCOL_VERSIONS))
                 await JSONResponse(
                     status_code=400,
-                    content={
+                    content={  # mutable-ok: JSON-RPC error payload
                         "jsonrpc": "2.0",
                         "id": None,
                         "error": {
