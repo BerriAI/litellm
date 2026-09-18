@@ -10,6 +10,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import verbose_logger
@@ -115,6 +116,7 @@ else:
 
 
 SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "none", "disable")
+_VERTEX_AI_CACHED_CONTENT_CREATION_ADAPTER: Final = TypeAdapter(VertexAICachedContentCreation)
 
 
 def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsError:
@@ -2490,7 +2492,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             base_usage: Final = VertexGeminiConfig._calculate_usage(completion_response=completion_response)
             cached_content_creation: Final = logging_obj.model_call_details.get(VERTEX_AI_CACHED_CONTENT_KEY)
             usage: Final = (
-                _add_cache_creation_usage(base_usage, cast(VertexAICachedContentCreation, cached_content_creation))
+                _add_cache_creation_usage(
+                    base_usage,
+                    _VERTEX_AI_CACHED_CONTENT_CREATION_ADAPTER.validate_python(cached_content_creation),
+                )
                 if isinstance(cached_content_creation, dict) and "total_token_count" in cached_content_creation
                 else base_usage
             )
@@ -3250,7 +3255,10 @@ class ModelResponseIterator:
         )
         cached_content_creation: Final = self.logging_obj.model_call_details.get(VERTEX_AI_CACHED_CONTENT_KEY)
         usage: Final = (
-            _add_cache_creation_usage(base_usage, cast(VertexAICachedContentCreation, cached_content_creation))
+            _add_cache_creation_usage(
+                base_usage,
+                _VERTEX_AI_CACHED_CONTENT_CREATION_ADAPTER.validate_python(cached_content_creation),
+            )
             if isinstance(cached_content_creation, dict) and "total_token_count" in cached_content_creation
             else base_usage
         )
