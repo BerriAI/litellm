@@ -8,6 +8,7 @@ import httpx
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     AZURE_SPEECH_BATCH_MODEL,
+    AZURE_SPEECH_BATCH_PATH_PREFIX,
     AZURE_SPEECH_CUSTOM_LLM_PROVIDER,
     AZURE_SPEECH_FAST_TRANSCRIPTION_MODEL,
     AZURE_SPEECH_FAST_TRANSCRIPTION_PATH,
@@ -30,7 +31,8 @@ from litellm.types.utils import StandardPassThroughResponseObject
 class AzureSpeechPassthroughLoggingHandler:
     @staticmethod
     def _is_short_audio_route(url_route: str) -> bool:
-        return urlparse(url_route).path.startswith(AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX)
+        path: Final = urlparse(url_route).path
+        return path.rfind(AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX) > path.rfind(AZURE_SPEECH_BATCH_PATH_PREFIX)
 
     @staticmethod
     def _is_fast_transcription_route(url_route: str) -> bool:
