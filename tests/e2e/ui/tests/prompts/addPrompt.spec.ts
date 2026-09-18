@@ -27,7 +27,7 @@ test.describe("Prompt upload form", () => {
           name: "e2e.prompt",
           mimeType: "text/plain",
           buffer: Buffer.from(
-            `model: fake-openai-gpt-4\ntemplate: "${promptContent}"\n`,
+            `---\nmodel: fake-openai-gpt-4\n---\n${promptContent}\n`,
           ),
         });
         await expect(page.getByText("Selected: e2e.prompt")).toBeVisible();
@@ -58,7 +58,7 @@ test.describe("Prompt upload form", () => {
             };
             return promptInfo.raw_prompt_template?.content;
           })
-          .toContain(promptContent);
+          .toBe(promptContent);
         await expect(page.getByText(promptId, { exact: true })).toBeVisible();
       },
       async () => {
