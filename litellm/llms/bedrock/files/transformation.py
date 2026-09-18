@@ -1325,7 +1325,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        litellm_params[RETRIEVE_FILE_ID_PARAM] = file_id
+        litellm_params[RETRIEVE_FILE_ID_PARAM] = file_id  # rebind-ok: response transform needs the original file ID
         return self._transform_s3_file_request(
             file_id=file_id,
             method="GET",
