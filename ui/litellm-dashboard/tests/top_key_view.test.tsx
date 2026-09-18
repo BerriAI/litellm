@@ -1,17 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderWithProviders, screen, fireEvent } from "./test-utils";
+import { renderWithProviders, screen, fireEvent, waitFor } from "./test-utils";
 import TopKeyView from "../src/components/UsagePage/components/EntityUsage/TopKeyView";
 import { TagUsage } from "../src/components/UsagePage/types";
 import useAuthorized from "../src/app/(dashboard)/hooks/useAuthorized";
+import { keyListCall } from "../src/components/networking";
 
 // Mock the networking module
 vi.mock("../src/components/networking", () => ({
-  keyInfoV1Call: vi.fn(),
+  keyListCall: vi.fn(),
 }));
 
-// Mock the transform function
-vi.mock("../src/components/key_team_helpers/transform_key_info", () => ({
-  transformKeyInfo: vi.fn((data) => data),
+vi.mock("../src/components/templates/key_info_view", () => ({
+  default: ({ keyData }: { keyData: { user_id?: string; user_email?: string; user?: { user_alias?: string } } }) => (
+    <div>{`Owner: ${keyData.user?.user_alias}|${keyData.user_email}|${keyData.user_id}`}</div>
+  ),
 }));
 
 vi.mock("../src/app/(dashboard)/hooks/useAuthorized", () => ({
@@ -20,6 +22,7 @@ vi.mock("../src/app/(dashboard)/hooks/useAuthorized", () => ({
 
 describe("TopKeyView", () => {
   const mockUseAuthorized = vi.mocked(useAuthorized);
+  const mockKeyListCall = vi.mocked(keyListCall);
   const mockProps = {
     topKeys: [],
     accessToken: "test-token",
@@ -304,6 +307,51 @@ describe("TopKeyView", () => {
 
       // Check that spend is formatted correctly
       expect(screen.getByText("$25.50")).toBeInTheDocument();
+    });
+
+    it("should expand the owner when opening key details", async () => {
+      mockKeyListCall.mockResolvedValue({
+        keys: [
+          {
+            token: "key-1",
+            user_id: "user-1",
+            user_email: null,
+            user: {
+              user_id: "user-1",
+              user_alias: "Alice Example",
+              user_email: "alice@example.com",
+            },
+          },
+        ],
+      } as Awaited<ReturnType<typeof keyListCall>>);
+
+      renderWithProviders(
+        <TopKeyView
+          {...mockProps}
+          topKeys={[{ api_key: "key-1", key_alias: "Test Key", spend: 25.5 }]}
+          topKeysLimit={5}
+          setTopKeysLimit={vi.fn()}
+        />,
+      );
+
+      fireEvent.click(screen.getByText("key-1"));
+
+      await waitFor(() =>
+        expect(mockKeyListCall).toHaveBeenCalledWith(
+          "test-token",
+          null,
+          null,
+          null,
+          null,
+          "key-1",
+          1,
+          1,
+          null,
+          null,
+          "user",
+        ),
+      );
+      expect(await screen.findByText("Owner: Alice Example|alice@example.com|user-1")).toBeInTheDocument();
     });
   });
 });
