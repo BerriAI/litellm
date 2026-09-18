@@ -4527,7 +4527,7 @@ def get_optional_params(
                     drop_params=bool(drop_params),
                 )
             else:
-                optional_params = litellm.MistralConfig().map_openai_params(
+                optional_params = litellm.VertexAIMistralConfig().map_openai_params(
                     model=model,
                     non_default_params=non_default_params,
                     optional_params=optional_params,
@@ -8398,7 +8398,7 @@ class ProviderConfigManager:
         elif model in litellm.vertex_mistral_models:
             if "codestral" in model:
                 return litellm.CodestralTextCompletionConfig()
-            return litellm.MistralConfig()
+            return litellm.VertexAIMistralConfig()
         elif model in litellm.vertex_ai_ai21_models:
             return litellm.VertexAIAi21Config()
         else:

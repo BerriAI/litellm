@@ -533,6 +533,8 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
             "vertex_credentials",
             "gcs_bucket_name",
             "bucket_name",
+            "s3_endpoint_url",
+            "s3_region_name",
             "timeout",
             "max_retries",
             "_litellm_internal_model_credentials",

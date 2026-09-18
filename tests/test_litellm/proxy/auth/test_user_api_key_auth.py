@@ -9029,3 +9029,31 @@ async def test_router_settings_model_group_alias_authorizes_target_for_team(monk
     await authorize()
     assert (await request.json())["model"] == target
     assert get_client_requested_model(request) == "AgentX-LLM"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["configured-voice", None])
+async def test_websocket_auth_explicit_model_overrides_query(monkeypatch, model):
+    import importlib
+    from unittest.mock import AsyncMock
+    from fastapi import WebSocket
+
+    from litellm.proxy import proxy_server
+
+    auth_module = importlib.import_module("litellm.proxy.auth.user_api_key_auth")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    seen = []
+
+    async def authenticate(request, api_key):
+        seen.append((await request.json(), api_key))
+        return "authenticated"
+
+    monkeypatch.setattr(auth_module, "user_api_key_auth", authenticate)
+    websocket = WebSocket({
+        "type": "websocket", "scheme": "ws", "server": ("localhost", 4000),
+        "path": "/v1/realtime", "path_params": {},
+        "query_string": b"model=untrusted-query",
+        "headers": [(b"x-litellm-api-key", b"owner")],
+    }, AsyncMock(), AsyncMock())
+    assert await auth_module.user_api_key_auth_websocket_for_model(websocket, model) == "authenticated"
+    assert seen == [({"model": model or ""}, "Bearer owner")]

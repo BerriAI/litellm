@@ -3778,6 +3778,7 @@ bedrock_batch_litellm_params: Final = (
     "aws_batch_role_arn",
     "s3_bucket_name",
     "s3_region_name",
+    "s3_endpoint_url",
     "s3_output_bucket_name",
     "bedrock_tags",
 )

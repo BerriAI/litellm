@@ -664,9 +664,11 @@ def get_websocket_api_key(websocket: WebSocket) -> str | None:
     )
 
 
-async def user_api_key_auth_websocket(websocket: WebSocket):
-    # Accept the WebSocket connection
+async def user_api_key_auth_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
+    return await user_api_key_auth_websocket_for_model(websocket, model=websocket.query_params.get("model"))
 
+
+async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str | None) -> UserAPIKeyAuth:
     ws_scope: Final = websocket.scope or {}
     scope_headers: Final = list(ws_scope.get("headers") or [])
     # ``get_request_route`` falls back to ``request.url.path`` when
@@ -701,16 +703,12 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
         from litellm.proxy.realtime_endpoints.call_sessions import decode_call
 
         call_token: Final = websocket.path_params.get("call_id") or websocket.query_params.get("call_id")
-        model: Final = (
-            decode_call(call_token, f"Bearer {api_key}").alias
-            if call_token is not None
-            else websocket.query_params.get("model")
-        )
+        resolved_model: Final = decode_call(call_token, f"Bearer {api_key}").alias if call_token is not None else model
         if call_token is not None:
-            request.scope["litellm_pinned_realtime_model"] = model
+            request.scope["litellm_pinned_realtime_model"] = resolved_model
 
         async def return_body():
-            return _realtime_request_body(model)
+            return _realtime_request_body(resolved_model)
 
         request.body = return_body
         return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
