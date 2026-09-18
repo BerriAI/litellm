@@ -4942,18 +4942,21 @@ async def test_unusable_upstream_cost_records_zero_not_the_flat_estimate():
 
 
 class FakeUpstreamWebSocket:
-    def __init__(self, first_frame: bytes):
-        self._first_frame = first_frame
+    """Serves the given frames in order, then closes normally, the way a real websockets connection does"""
+
+    def __init__(self, *frames: str | bytes):
+        self._frames = iter(frames)
         self.close = AsyncMock()
+        self.send = AsyncMock()
 
-    async def recv(self, decode: bool = True):
-        return self._first_frame
+    async def recv(self, decode: bool | None = None):
+        from websockets.exceptions import ConnectionClosedOK
+        from websockets.frames import Close
 
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        raise StopAsyncIteration
+        frame = next(self._frames, None)
+        if frame is None:
+            raise ConnectionClosedOK(rcvd=Close(1000, ""), sent=Close(1000, ""), rcvd_then_sent=True)
+        return frame
 
 
 class FakeUpstreamConnect:
@@ -4974,7 +4977,7 @@ async def test_websocket_passthrough_forwards_non_ascii_first_frame():
     first_frame = json.dumps(
         {"type": "session.created", "session": {"instructions": "Hablas español, ¿sí?"}},
         ensure_ascii=False,
-    ).encode("utf-8")
+    )
     upstream_ws = FakeUpstreamWebSocket(first_frame)
 
     websocket = MagicMock()
@@ -5028,7 +5031,7 @@ async def test_websocket_passthrough_propagates_active_trace_context(
     from starlette.websockets import WebSocketState
 
     captured: dict[str, dict[str, str]] = {}
-    upstream_ws = FakeUpstreamWebSocket(b"{}")
+    upstream_ws = FakeUpstreamWebSocket("{}")
 
     def fake_connect(target, additional_headers):
         captured["headers"] = additional_headers
@@ -5455,6 +5458,144 @@ async def test_websocket_passthrough_does_not_close_twice_when_success_logging_f
         )
 
     websocket.close.assert_awaited_once_with(code=1008, reason=upstream_reason)
+
+
+DEEPGRAM_LISTEN_TARGET = "wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000"
+DEEPGRAM_INTERIM_FRAME = json.dumps(
+    {
+        "type": "Results",
+        "start": 0.0,
+        "duration": 1.02,
+        "is_final": False,
+        "channel": {"alternatives": [{"transcript": "hello wor", "confidence": 0.71}]},
+    }
+)
+DEEPGRAM_FINAL_FRAME = json.dumps(
+    {
+        "type": "Results",
+        "start": 0.0,
+        "duration": 2.5,
+        "is_final": True,
+        "speech_final": True,
+        "channel": {"alternatives": [{"transcript": "hello world, ¿qué tal?", "confidence": 0.98}]},
+    },
+    ensure_ascii=False,
+)
+DEEPGRAM_METADATA_FRAME = json.dumps({"type": "Metadata", "request_id": "req-1", "duration": 2.5, "channels": 1})
+
+
+async def _relay_deepgram_listen(upstream_ws, client_receive):
+    """Runs the generic relay the way the Deepgram route does and returns (client websocket, success handler mock)"""
+    websocket = _client_websocket(client_receive)
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(  # test-quality-ok: pass_through_endpoint_logging is a module global read inside websocket_passthrough_request; there is no injection seam
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+            "pass_through_endpoint_logging.pass_through_async_success_handler",
+            new=AsyncMock(),
+        ) as success_handler,
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target=DEEPGRAM_LISTEN_TARGET,
+            custom_headers={"Authorization": "Token dg-provider-key"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/deepgram/v1/listen",
+            accept_websocket=False,
+        )
+    return websocket, success_handler
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_relays_deepgram_transcript_frames_verbatim_and_keeps_them_for_billing():
+    """Interim, final and Metadata frames reach the client byte for byte (no JSON round trip, non-ASCII intact,
+    a binary frame first) and every JSON object frame is what the success handler gets to bill from."""
+    upstream_ws = FakeUpstreamWebSocket(
+        b"\x00\x01binary-first",
+        DEEPGRAM_INTERIM_FRAME,
+        "not json at all",
+        DEEPGRAM_FINAL_FRAME,
+        DEEPGRAM_METADATA_FRAME,
+    )
+
+    websocket, success_handler = await _relay_deepgram_listen(upstream_ws, _pending_receive)
+
+    assert [call.args[0] for call in websocket.send_bytes.await_args_list] == [b"\x00\x01binary-first"]
+    assert [call.args[0] for call in websocket.send_text.await_args_list] == [
+        DEEPGRAM_INTERIM_FRAME,
+        "not json at all",
+        DEEPGRAM_FINAL_FRAME,
+        DEEPGRAM_METADATA_FRAME,
+    ]
+    success_call = success_handler.call_args.kwargs
+    assert success_call["url_route"] == "/deepgram/v1/listen"
+    assert success_call["response_body"] == [
+        json.loads(DEEPGRAM_INTERIM_FRAME),
+        json.loads(DEEPGRAM_FINAL_FRAME),
+        json.loads(DEEPGRAM_METADATA_FRAME),
+    ]
+    assert success_call["httpx_response"].request.url == DEEPGRAM_LISTEN_TARGET
+    assert success_call["logging_obj"].model_call_details.get("custom_llm_provider") is None
+    websocket.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_sends_deepgram_audio_bytes_and_control_text_upstream_unchanged():
+    upstream_ws = RecordingUpstreamWebSocket()
+    audio_chunk = bytes(range(256)) * 4
+    close_stream = json.dumps({"type": "CloseStream"})
+
+    await _relay_deepgram_listen(
+        upstream_ws,
+        AsyncMock(
+            side_effect=[
+                {"type": "websocket.receive", "bytes": audio_chunk},
+                {"type": "websocket.receive", "text": close_stream},
+                {"type": "websocket.disconnect"},
+            ]
+        ),
+    )
+
+    assert [call.args[0] for call in upstream_ws.send.await_args_list] == [audio_chunk, close_stream]
+    assert isinstance(upstream_ws.send.await_args_list[0].args[0], bytes)
+    upstream_ws.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_vertex_live_setup_ack_names_the_model_but_is_not_billed_as_usage():
+    """Vertex Live keeps its special first frame: the setup acknowledgement is forwarded verbatim, read for the
+    model, and left out of the frames the usage handler sees; later frames are kept as before."""
+    setup_ack = json.dumps(
+        {"setupComplete": {}, "model": "projects/p/locations/global/publishers/google/models/gemini-live-2.5-flash"}
+    )
+    server_content = json.dumps({"serverContent": {"turnComplete": True}, "usageMetadata": {"totalTokenCount": 12}})
+    upstream_ws = FakeUpstreamWebSocket(setup_ack, server_content)
+    websocket = _client_websocket(_pending_receive)
+
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(  # test-quality-ok: pass_through_endpoint_logging is a module global read inside websocket_passthrough_request; there is no injection seam
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+            "pass_through_endpoint_logging.pass_through_async_success_handler",
+            new=AsyncMock(),
+        ) as success_handler,
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+        )
+
+    assert [call.args[0] for call in websocket.send_text.await_args_list] == [setup_ack, server_content]
+    success_call = success_handler.call_args.kwargs
+    assert success_call["response_body"] == [json.loads(server_content)]
+    assert success_call["logging_obj"].model == "gemini-live-2.5-flash"
+    assert success_call["logging_obj"].model_call_details["custom_llm_provider"] == "vertex_ai_language_models"
 
 
 def _passthrough_kwargs_for_reservation(
