@@ -1,5 +1,6 @@
 """Tests for the LiteLLM_DailyGlobalSpend reconcile job (LIT-7818)."""
 
+import json
 import pathlib
 import re
 from datetime import date
@@ -14,6 +15,7 @@ from pytest_postgresql import factories
 from litellm.constants import DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM
 from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, build_bulk_upsert, merge_by_conflict_key
 from litellm.proxy.spend_tracking.daily_global_spend_rollup import (
+    _ADVANCE_MARKER_SQL,
     RECONCILE_DAY_SQL,
     read_marker,
     reconciled_through,
@@ -36,13 +38,21 @@ class _FakeConfigTable:
     def __init__(self) -> None:
         self.rows: dict[str, object] = {}
 
-    async def upsert(self, *, where: dict[str, str], data: dict[str, dict[str, str]]) -> _FakeConfigRow:
-        self.rows[where["param_name"]] = data["update"]["param_value"]
-        return _FakeConfigRow(where["param_name"], data["update"]["param_value"])
+    def advance(self, param_name: str, through: str | None, scanned_at: str | None) -> None:
+        """What ``_ADVANCE_MARKER_SQL`` does in Postgres: keep the later of stored and incoming per field."""
+        stored = self.rows.get(param_name)
+        current: dict[str, str | None] = json.loads(stored) if isinstance(stored, str) else {}
+        self.rows[param_name] = json.dumps(
+            {
+                "reconciled_through": _greatest(current.get("reconciled_through"), through),
+                "scanned_at": _greatest(current.get("scanned_at"), scanned_at),
+            }
+        )
 
-    async def find_unique(self, *, where: dict[str, str]) -> _FakeConfigRow | None:
-        stored = self.rows.get(where["param_name"])
-        return None if stored is None else _FakeConfigRow(where["param_name"], stored)
+
+def _greatest(stored: str | None, incoming: str | None) -> str | None:
+    present = [value for value in (stored, incoming) if value is not None]
+    return max(present) if present else None
 
 
 class _FakeDb:
@@ -67,9 +77,14 @@ class _FakeDb:
             {"date": d} for d, written in sorted(rows.items()) if d <= last and (d > marker or written >= scanned_at)
         ]
 
-    async def execute_raw(self, sql: str, *params: str) -> int:
+    async def execute_raw(self, sql: str, *params: str | None) -> int:
+        if sql == _ADVANCE_MARKER_SQL:
+            param_name, through, scanned_at = params
+            assert param_name is not None
+            self.litellm_config.advance(param_name, through, scanned_at)
+            return 1
         (day,) = params
-        if day in self._prisma.failing_days:
+        if day is None or day in self._prisma.failing_days:
             raise RuntimeError(f"day {day} exploded")
         self._prisma.reconciled.append(day)
         landing = self._prisma.marker_landing_on_day.get(day)
@@ -485,3 +500,33 @@ def test_reconcile_day_sql_makes_the_global_day_equal_the_per_key_sums(_rollup_p
     assert sum(int(r["total_response_time_ms"]) for r in global_rows) == 1600  # pyright: ignore[reportArgumentType]  # dict_row values are untyped
     assert [(r["model"], r["model_group"]) for r in global_rows] == [("gpt-5", ""), ("gpt-5", "gpt-5")]
     assert untouched == []
+
+
+_CONFIG_DDL: Final = 'CREATE TABLE "LiteLLM_Config" (param_name TEXT PRIMARY KEY, param_value JSONB)'
+_MARKER_SQL: Final = 'SELECT param_value FROM "LiteLLM_Config" WHERE param_name = %s'
+
+
+def test_advance_marker_sql_only_ever_moves_the_stored_marker_forward(_rollup_postgresql: psycopg.Connection):
+    """Against real Postgres: the statement a slower overlapping run issues after the faster run
+    already stored a later marker leaves that marker alone, whether it carries an older scan time or
+    none at all, while a run that is further along moves both fields on."""
+    conn: Final = _rollup_postgresql
+    conn.execute(_CONFIG_DDL)  # pyright: ignore[reportArgumentType]  # DDL literal
+    conn.commit()
+    param: Final = DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM
+
+    def stored() -> object:
+        with conn.cursor(row_factory=dict_row) as cur:
+            row = cur.execute(_MARKER_SQL, (param,)).fetchone()
+        return None if row is None else row["param_value"]
+
+    _execute_dollar_sql(conn, _ADVANCE_MARKER_SQL, (param, "2026-09-01", None))
+    assert stored() == {"reconciled_through": "2026-09-01", "scanned_at": None}
+
+    _execute_dollar_sql(conn, _ADVANCE_MARKER_SQL, (param, "2026-09-14", "2026-09-15 00:30:02.5"))
+    _execute_dollar_sql(conn, _ADVANCE_MARKER_SQL, (param, "2026-09-02", None))
+    _execute_dollar_sql(conn, _ADVANCE_MARKER_SQL, (param, "2026-09-03", "2026-09-15 00:30:01.25"))
+    assert stored() == {"reconciled_through": "2026-09-14", "scanned_at": "2026-09-15 00:30:02.5"}
+
+    _execute_dollar_sql(conn, _ADVANCE_MARKER_SQL, (param, "2026-09-15", "2026-09-16 00:30:00.75"))
+    assert stored() == {"reconciled_through": "2026-09-15", "scanned_at": "2026-09-16 00:30:00.75"}
