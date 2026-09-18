@@ -344,4 +344,15 @@ describe("RequestLogsFilters", () => {
 
     expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.CACHE_STATUS, undefined);
   });
+
+  it("clears the raw Error Code combobox through the undefined filter contract", async () => {
+    const user = userEvent.setup();
+    const { set } = renderFilters({ [LOG_FILTER_IDS.ERROR_CODE]: "429" });
+    const input = await screen.findByPlaceholderText("Select or type an error code");
+
+    await user.click(input);
+    await user.click(screen.getByRole("button", { name: "Clear", hidden: true }));
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.ERROR_CODE, undefined);
+  });
 });
