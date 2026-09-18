@@ -1,9 +1,10 @@
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Protocol, Self
+from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
+from typing_extensions import Self
 
 from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
 from litellm.types.realtime import (

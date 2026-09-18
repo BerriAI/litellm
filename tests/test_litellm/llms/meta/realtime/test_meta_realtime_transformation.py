@@ -6,7 +6,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
 from litellm.llms.meta.realtime.transformation import (
     DEFAULT_MUSE_REALTIME_URL,
     MUSE_MODEL,
@@ -161,7 +160,7 @@ def test_language_normalization_uses_official_muse_names(source: str, expected: 
     ],
 )
 def test_session_rejects_unsupported_audio_model_and_hints(session: dict[str, object], message: str):
-    with pytest.raises(RealtimeTranscriptionProtocolError, match=message):
+    with pytest.raises(MuseProtocolError, match=message):
         parse_session_update(_event("session.update", session={"type": "transcription", **session}), MUSE_MODEL)
 
 
@@ -585,7 +584,7 @@ def test_pcm_is_packetized_into_raw_binary_frames(rate: int, packet_bytes: int):
 def test_invalid_audio_appends_are_rejected(audio: object, message: str):
     config = _configured()
 
-    with pytest.raises(RealtimeTranscriptionProtocolError, match=message):
+    with pytest.raises(MuseProtocolError, match=message):
         config.transform_realtime_request(_event("input_audio_buffer.append", audio=audio), MUSE_MODEL)
 
 
