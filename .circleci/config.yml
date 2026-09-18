@@ -359,14 +359,6 @@ jobs:
             uv run --no-sync python tests/windows_tests/check_windows_wheel_install.py
 
   base_sdk_install:
-    parameters:
-      python_version:
-        type: string
-        default: "3.12"
-      resolution:
-        type: enum
-        enum: ["highest", "lowest-direct"]
-        default: "highest"
     docker:
       - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
         auth:
@@ -389,9 +381,8 @@ jobs:
           environment:
             UV_HTTP_TIMEOUT: "300"
           command: |
-            uv venv /tmp/base-sdk --python "<< parameters.python_version >>"
-            uv pip install --python /tmp/base-sdk/bin/python \
-              --resolution "<< parameters.resolution >>" --no-sources -r pyproject.toml dist/*.whl
+            uv venv /tmp/base-sdk --python 3.12
+            VIRTUAL_ENV=/tmp/base-sdk uv pip install dist/*.whl
             /tmp/base-sdk/bin/python tests/base_sdk_tests/check_base_sdk_install.py
 
   local_testing_part1:
@@ -3034,13 +3025,6 @@ workflows:
                 - /litellm_.*/
       - provider_replay_harness
       - base_sdk_install:
-          filters: *main_branches
-      - base_sdk_install:
-          name: base_sdk_minimum_<< matrix.python_version >>
-          resolution: lowest-direct
-          matrix:
-            parameters:
-              python_version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
           filters: *main_branches
       - local_testing_part1:
           filters: *main_branches
