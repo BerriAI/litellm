@@ -6074,3 +6074,32 @@ def test_prompt_blocked_chunk_keeps_served_model_version():
 
     assert streaming_chunk.model == "gemini-3.8-flash-001"
     assert streaming_chunk.choices[0].finish_reason == "content_filter"
+
+
+def test_vertex_ai_map_tool_with_top_level_anyof():
+    """
+    Vertex rejects functionDeclaration parameters that are not objects - https://github.com/BerriAI/litellm/issues/41639
+    """
+    v: Final = VertexGeminiConfig()
+    value: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "search",
+                "description": "Search by query or by url",
+                "parameters": {
+                    "anyOf": [
+                        {"type": "object", "properties": {"query": {"type": "string"}}},
+                        {"type": "object", "properties": {"url": {"type": "string"}}},
+                    ]
+                },
+            },
+        }
+    ]
+
+    tools: Final = v._map_function(value=value, optional_params={})
+
+    parameters: Final = tools[0]["function_declarations"][0]["parameters"]
+    assert parameters["type"] == "object"
+    assert "anyOf" not in parameters
+    assert set(parameters["properties"]) == {"query", "url"}

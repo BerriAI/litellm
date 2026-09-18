@@ -647,7 +647,53 @@ def _fix_enum_types(schema, depth=0):
                 _fix_enum_types(item, depth=depth + 1)
 
 
-def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
+def _merge_object_union_root(schema: dict[str, object]) -> dict[str, object]:
+    """
+    Vertex requires functionDeclaration parameters to be type OBJECT, and separately rejects anyOf when any
+    sibling field is set, so a root union of object branches cannot be expressed and is merged into a single
+    object. Only fields every branch requires stay required, since the caller may satisfy any one branch
+    """
+    branches: Final = schema.get("anyOf")
+    if not isinstance(branches, list) or not branches:
+        return schema
+
+    if not all(isinstance(branch, dict) and branch.get("type") == "object" for branch in branches):
+        return schema
+
+    property_sources: Final = tuple(
+        branch["properties"] for branch in branches if isinstance(branch.get("properties"), dict)
+    )
+    properties: Final = {  # mutable-ok: Vertex schemas stay plain dicts for JSON serialization
+        name: definition for source in property_sources for name, definition in source.items()
+    }
+    required_sets: Final = tuple(
+        frozenset(branch["required"]) if isinstance(branch.get("required"), list) else frozenset()
+        for branch in branches
+    )
+    shared_required: Final = frozenset.intersection(*required_sets)
+    carried: Final = {  # mutable-ok: Vertex schemas stay plain dicts for JSON serialization
+        key: value for key, value in schema.items() if key not in ("anyOf", "required")
+    }
+    merged: Final = {  # mutable-ok: Vertex schemas stay plain dicts for JSON serialization
+        **carried,
+        "type": "object",
+        "properties": properties,
+    }
+    ordered_required: Final = [  # mutable-ok: Vertex schemas stay plain lists for JSON serialization
+        name for name in properties if name in shared_required
+    ]
+
+    if not ordered_required:
+        return merged
+
+    return {**merged, "required": ordered_required}  # mutable-ok: Vertex schema must stay a plain dict
+
+
+def _build_vertex_schema(
+    parameters: dict,
+    add_property_ordering: bool = False,
+    enforce_object_root: bool = False,
+):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
 
@@ -657,6 +703,9 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
         parameters: dict - the json schema to build from
         add_property_ordering: bool - whether to add propertyOrdering to the schema. This is only applicable to schemas for structured outputs. See
           set_schema_property_ordering for more details.
+        enforce_object_root: bool - whether to merge a root union of object branches into a single object.
+          Vertex rejects function declarations whose parameters are not objects, and separately rejects
+          anyOf alongside any other field, so a root union cannot be sent as-is.
     Returns:
         parameters: dict - the input parameters, modified in place
     """
@@ -690,12 +739,13 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     # Postprocessing
     # Filter out fields that don't exist in Schema
 
-    parameters = filter_schema_fields(parameters, valid_schema_fields)
+    filtered: Final = filter_schema_fields(parameters, valid_schema_fields)
+    rooted: Final = _merge_object_union_root(filtered) if enforce_object_root else filtered
 
     if add_property_ordering:
-        set_schema_property_ordering(parameters)
+        set_schema_property_ordering(rooted)
 
-    return parameters
+    return rooted
 
 
 def _build_json_schema(parameters: dict) -> dict:
