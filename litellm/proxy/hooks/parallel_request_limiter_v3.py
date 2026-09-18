@@ -548,6 +548,38 @@ class RequestRateLimiterStash:
     batch_enqueued_reservation: BatchEnqueuedTokenReservation | None = None
     batch_tpd_refund_ops: tuple[ReservationAwareIncrementOperation, ...] = ()
     reservation_released: bool = False
+    tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
+
+
+@dataclass(frozen=True, slots=True)
+class TagRateLimit:
+    rpm_limit: int | None
+    tpm_limit: int | None
+
+
+TagRateLimitResolver: TypeAlias = Callable[[Sequence[str]], Awaitable[Mapping[str, TagRateLimit]]]
+
+
+async def resolve_tag_rate_limits_from_db(tag_names: Sequence[str]) -> Mapping[str, TagRateLimit]:
+    """Read the rpm/tpm limits stored on each tag's budget row, served from the tag object cache."""
+    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    if prisma_client is None or not tag_names:
+        return MappingProxyType({})
+    tag_objects: Final = await get_tag_objects_batch(
+        tag_names=tag_names,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    return MappingProxyType(
+        {
+            tag_name: TagRateLimit(rpm_limit=budget.rpm_limit, tpm_limit=budget.tpm_limit)
+            for tag_name, tag_object in tag_objects.items()
+            if (budget := tag_object.litellm_budget_table) is not None
+            and (budget.rpm_limit is not None or budget.tpm_limit is not None)
+        }
+    )
 
 
 _request_stash: Final[ContextVar[RequestRateLimiterStash | None]] = ContextVar(
@@ -613,9 +645,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         internal_usage_cache: InternalUsageCache,
         time_provider: Callable[[], datetime] | None = None,
+        tag_rate_limit_resolver: TagRateLimitResolver = resolve_tag_rate_limits_from_db,
     ):
         self.internal_usage_cache = internal_usage_cache
         self._time_provider = time_provider or datetime.now
+        self._tag_rate_limit_resolver = tag_rate_limit_resolver
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
             self.batch_rate_limiter_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 BATCH_RATE_LIMITER_SCRIPT
@@ -2686,6 +2720,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return descriptors
 
+    async def _create_tag_rate_limit_descriptors(self, data: Mapping[str, object]) -> tuple[RateLimitDescriptor, ...]:
+        """One ``tag`` descriptor per request tag whose tag object carries an rpm or tpm limit."""
+        tags: Final = tuple(dict.fromkeys(get_tags_from_request_body(data)))
+        if not tags:
+            return ()
+        tag_limits: Final = await self._tag_rate_limit_resolver(tags)
+        return tuple(
+            RateLimitDescriptor(
+                key="tag",
+                value=tag,
+                rate_limit={
+                    "requests_per_unit": limit.rpm_limit,
+                    "tokens_per_unit": limit.tpm_limit,
+                    "window_size": self.window_size,
+                },
+            )
+            for tag in tags
+            if (limit := tag_limits.get(tag)) is not None
+        )
+
     def _create_rate_limit_descriptors(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -3480,6 +3534,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return [  # mutable-ok: the shared generation reservation helpers require a list
             *descriptors,
             *self.create_organization_rate_limit_descriptor(user_api_key_dict, requested_model),
+            *await self._create_tag_rate_limit_descriptors(data),
         ]
 
     async def _release_request_capacity_when_admitted(
@@ -3573,6 +3628,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             user_api_key_dict=user_api_key_dict,
             data=request_data,
             call_type=call_type,
+        )
+        stash.tpm_limited_tags = frozenset(
+            d["value"]
+            for d in descriptors
+            if d["key"] == "tag" and d["rate_limit"] is not None and d["rate_limit"].get("tokens_per_unit") is not None
         )
 
         # Only check rate limits if we have descriptors with actual limits
@@ -4260,6 +4320,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         standard_logging_metadata: dict[str, Any],
         kwargs: object,
         model_group: str | None,
+        tpm_limited_tags: Set[str] = frozenset(),
     ) -> list[tuple[str, str]]:
         """
         Enumerate every (scope_key, scope_value) pair that *might* carry a
@@ -4315,6 +4376,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             targets.append(("agent", agent_id))
             if session_id:
                 targets.append(("agent_session", f"{agent_id}:{session_id}"))
+        targets.extend(("tag", tag) for tag in sorted(tpm_limited_tags))
         return targets
 
     def _build_reservation_aware_tpm_ops(
@@ -4488,6 +4550,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             standard_logging_metadata=standard_logging_metadata,
             kwargs=kwargs,
             model_group=reconcile_model,
+            tpm_limited_tags=stash.tpm_limited_tags if stash is not None else frozenset(),
         )
         charged_targets: Final = (
             [target for target in targets if target[0] != "model_per_team"]
