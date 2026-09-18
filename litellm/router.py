@@ -1098,6 +1098,21 @@ class Router:
                         f"treat_finish_reason_as_failure values must be one of {sorted(_FINISH_REASON_FAILURE_EXCEPTION_NAMES)}, got {exception_name}"
                     )
         self.treat_finish_reason_as_failure = treat_finish_reason_as_failure
+        if treat_finish_reason_as_failure:
+            verbose_router_logger.warning(
+                "treat_finish_reason_as_failure applies to non-streaming responses only; a streamed 200 with the mapped stop reason is delivered unchanged."
+            )
+            healthy_terminal_keys: Final = treat_finish_reason_as_failure.keys() & {
+                "stop",
+                "length",
+                "tool_calls",
+                "function_call",
+            }
+            if healthy_terminal_keys:
+                verbose_router_logger.warning(
+                    "treat_finish_reason_as_failure keys %s are healthy terminal reasons in the mapped OpenAI set; mapping them fails successful responses. Keys are matched against provider-native stop reasons.",
+                    sorted(healthy_terminal_keys),
+                )
 
         self.total_calls: defaultdict = defaultdict(int)  # dict to store total calls made to each model
         self.fail_calls: defaultdict = defaultdict(int)  # dict to store fail_calls made to each model
@@ -8678,12 +8693,13 @@ class Router:
         Account for a mapped finish-reason failure, then raise the configured exception into the
         fallback chain when a generic fallback can serve. Accounting happens before the gate:
         the raise lands after the 200 came back, so litellm's failure callbacks never fire for
-        it, and this is the only path that parks the deployment.
+        it, and this is the only path that parks the deployment. A deployment with no model_info
+        id cannot be accounted or parked, but the raise still applies to it.
         """
         exception: Final = self._account_mapped_finish_reason_failure(
             model=model, deployment=deployment, reason=reason, kwargs=kwargs
-        )
-        if exception is not None and self._generic_fallback_available(model, kwargs):
+        ) or self._finish_reason_failure_error(model=model, reason=reason)
+        if self._generic_fallback_available(model, kwargs):
             raise exception
 
     def _finish_reason_failure_error(self, model: str, reason: str) -> Exception:
