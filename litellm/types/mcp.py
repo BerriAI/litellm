@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlsplit
 
 import httpx
+import httpx2
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
@@ -332,7 +333,7 @@ def custom_credential_slot(headers: Mapping[str, str] | None) -> str | None:
 
 def credential_redirect_hook(
     configured_url: str, slot: str | None
-) -> Callable[[httpx.Request], Awaitable[None]] | None:
+) -> Callable[[httpx.Request | httpx2.Request], Awaitable[None]] | None:
     """An httpx request hook dropping ``slot`` once a redirect leaves ``configured_url``'s origin.
 
     None when no guard is needed, so callers do not each repeat the exemption: HTTP clients already
@@ -342,7 +343,7 @@ def credential_redirect_hook(
     if not configured_url or not slot or same_header(slot, DEFAULT_CREDENTIAL_HEADER):
         return None
 
-    async def guard(request: httpx.Request) -> None:
+    async def guard(request: httpx.Request | httpx2.Request) -> None:
         if slot in request.headers and crosses_origin(configured_url, str(request.url)):
             del request.headers[slot]
 

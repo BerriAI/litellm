@@ -524,7 +524,7 @@ if MCP_AVAILABLE:
                 normalized.append(
                     ReadResourceContents(
                         content=content.text,
-                        mime_type=content.mimeType,
+                        mime_type=content.mime_type,
                         meta=meta,
                     )
                 )
@@ -532,7 +532,7 @@ if MCP_AVAILABLE:
                 normalized.append(
                     ReadResourceContents(
                         content=content.blob,
-                        mime_type=content.mimeType,
+                        mime_type=content.mime_type,
                         meta=meta,
                     )
                 )
@@ -877,10 +877,10 @@ if MCP_AVAILABLE:
             }
             return ListToolsResult.model_validate({"tools": listing.tools, "_meta": outcome_meta})
         except HTTPException as e:
-            from mcp.shared.exceptions import McpError
-            from mcp.types import INVALID_REQUEST, ErrorData
+            from mcp.shared.exceptions import MCPError
+            from mcp.types import INVALID_REQUEST
 
-            raise McpError(ErrorData(code=INVALID_REQUEST, message=_http_detail_message(e.detail))) from e
+            raise MCPError(code=INVALID_REQUEST, message=_http_detail_message(e.detail)) from e
         except Exception as e:
             verbose_logger.exception("Error in list_tools endpoint: %s", e)
             # Return empty list instead of failing completely
@@ -906,7 +906,7 @@ if MCP_AVAILABLE:
 
         if not (host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta):
             return None
-        host_token: Final = getattr(host_ctx.meta, "progressToken", None)
+        host_token: Final = getattr(host_ctx.meta, "progress_token", None)
         if host_token is None or not (hasattr(host_ctx, "session") and host_ctx.session):
             return None
         host_session: Final = host_ctx.session
@@ -927,10 +927,10 @@ if MCP_AVAILABLE:
         return forward_progress
 
     def _reject_mcp_proxy_operation() -> NoReturn:
-        from mcp.shared.exceptions import McpError
-        from mcp.types import METHOD_NOT_FOUND, ErrorData
+        from mcp.shared.exceptions import MCPError
+        from mcp.types import METHOD_NOT_FOUND
 
-        raise McpError(ErrorData(code=METHOD_NOT_FOUND, message="Operation unavailable on /mcp/proxy"))
+        raise MCPError(code=METHOD_NOT_FOUND, message="Operation unavailable on /mcp/proxy")
 
     async def _build_virtual_call_logging_obj(
         name: str,
@@ -1005,7 +1005,7 @@ if MCP_AVAILABLE:
                 content=[  # mutable-ok: MCP result content
                     TextContent(type="text", text=f"Tool {name} is unavailable on /mcp/proxy")
                 ],
-                isError=True,
+                is_error=True,
             )
 
         if _mcp_proxy_mode.get() and name in MCP_PROXY_TOOL_NAMES:
@@ -1087,7 +1087,7 @@ if MCP_AVAILABLE:
                         text=f"Tool {name} requires mcp_tool_search_enabled on the key",
                     )
                 ],
-                isError=True,
+                is_error=True,
             )
 
         args: Final = arguments or {}
@@ -1256,7 +1256,7 @@ if MCP_AVAILABLE:
                 )
                 return CallToolResult(
                     content=[TextContent(text=str(e), type="text")],
-                    isError=True,
+                    is_error=True,
                 )
             except BlockedPiiEntityError as e:
                 verbose_logger.error("BlockedPiiEntityError in MCP tool call: %s", e)
@@ -1267,19 +1267,19 @@ if MCP_AVAILABLE:
                             type="text",
                         )
                     ],
-                    isError=True,
+                    is_error=True,
                 )
             except GuardrailRaisedException as e:
                 verbose_logger.error("GuardrailRaisedException in MCP tool call: %s", e)
                 return CallToolResult(
                     content=[TextContent(text=f"Error: Guardrail violation - {e}", type="text")],
-                    isError=True,
+                    is_error=True,
                 )
             except HTTPException as e:
                 verbose_logger.error("HTTPException in MCP tool call: %s", e)
                 return CallToolResult(
                     content=[TextContent(text=f"Error: {_http_detail_message(e.detail)}", type="text")],
-                    isError=True,
+                    is_error=True,
                 )
             except MCPUpstreamAuthError as e:
                 # The MCP session manager serializes handler exceptions as JSON-RPC errors, so a
@@ -1295,13 +1295,13 @@ if MCP_AVAILABLE:
                             type="text",
                         )
                     ],
-                    isError=True,
+                    is_error=True,
                 )
             except Exception as e:
                 verbose_logger.exception("MCP mcp_server_tool_call - error: %s", e)
                 return CallToolResult(
                     content=[TextContent(text=f"Error: {e}", type="text")],
-                    isError=True,
+                    is_error=True,
                 )
 
             return response
@@ -3290,11 +3290,11 @@ if MCP_AVAILABLE:
         Guardrails run before the success/failure logging so the masked text, not
         the raw one, is what gets logged.
 
-        A result with ``isError=True`` is logged as a failure (``status="failure"``
+        A result with ``is_error=True`` is logged as a failure (``status="failure"``
         payload, so OTel marks the span ERROR) while the HTTP wire behavior stays
         200 + ``isError: true`` per the MCP spec. The error check runs after
         ``async_post_mcp_tool_call_hook`` because guardrails may flip the result
-        to ``isError=True`` in that hook. Raised exceptions never reach here (the
+        to ``is_error=True`` in that hook. Raised exceptions never reach here (the
         ``@client`` wrapper and ``call_mcp_tool``'s except path log those), so
         this cannot double-log a failure.
 
@@ -3629,10 +3629,10 @@ if MCP_AVAILABLE:
         """Execute a local-registry tool and report whether it succeeded.
 
         Returns the result rather than bare content because the verdict is part of it: the content
-        alone cannot say whether the handler failed, so callers used to stamp isError=False on every
+        alone cannot say whether the handler failed, so callers used to stamp is_error=False on every
         outcome and an upstream rejection was served as tool output.
 
-        A failure is reported as ``isError=True`` here rather than raised, because the REST surface
+        A failure is reported as ``is_error=True`` here rather than raised, because the REST surface
         turns an unrecognized exception into a 500 and an upstream 403 or 429 is not a gateway crash.
         ``MCPUpstreamAuthError`` is the exception: it propagates so the caller is told to
         re-authenticate, which both renderers already know how to say.
@@ -3654,8 +3654,8 @@ if MCP_AVAILABLE:
             raise
         except Exception as e:
             verbose_logger.exception("Error executing local tool %s: %s", name, e)
-            return CallToolResult(content=[TextContent(text=f"Error: {e}", type="text")], isError=True)
-        return CallToolResult(content=[TextContent(text=str(result), type="text")], isError=False)
+            return CallToolResult(content=[TextContent(text=f"Error: {e}", type="text")], is_error=True)
+        return CallToolResult(content=[TextContent(text=str(result), type="text")], is_error=False)
 
     def _get_mcp_servers_in_path(path: str) -> list[str] | None:
         """
