@@ -6,7 +6,7 @@ usage/spend data by querying the aggregated daily activity endpoints.
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import date
-from typing import Any, Final, Literal, NamedTuple, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, cast, overload
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -17,6 +17,9 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
 from litellm.utils import CustomStreamWrapper, ModelResponse
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -443,6 +446,10 @@ def _sse(event: SSEEvent) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
+def _router_knows_model(router: "Router", model: str) -> bool:
+    return model in router.get_model_names() or router.pattern_router.route(request=model) is not None  # pyright: ignore[reportUnknownMemberType]  # PatternMatchDeployments.route returns untyped dicts
+
+
 async def _acompletion(
     model: str,
     messages: list[Mapping[str, object]],
@@ -453,7 +460,7 @@ async def _acompletion(
     from litellm.types.llms.openai import AllMessageValues
 
     completion_messages: Final = cast(list[AllMessageValues], messages)
-    if llm_router is not None and model in llm_router.get_model_names():
+    if llm_router is not None and _router_knows_model(llm_router, model):
         if stream:
             return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
                 model=model,
