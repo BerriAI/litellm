@@ -46,7 +46,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.straiker import (
     StraikerWebhookStream,
     StraikerWebhookUsage,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -382,14 +382,43 @@ def _v3_request_body(request_data: Mapping[str, object]) -> dict[str, object]:
     return body
 
 
-def _v3_answer_json(inputs: GenericGuardrailAPIInputs, request_data: Mapping[str, object]) -> str | None:
+def _v3_anthropic_messages_route(request_data: Mapping[str, object]) -> bool:
+    from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+
+    route: Final = _merged_metadata(dict(request_data)).get("user_api_key_request_route")
+    if not isinstance(route, str) or not route:
+        return False
+    return CallTypes.anthropic_messages in (get_call_types_for_route(route) or ())
+
+
+def _v3_answer(request_data: Mapping[str, object], model: str | None) -> dict[str, object] | None:
+    """The answer in the API shape the client spoke, which is what a relay forwards.
+
+    On a streamed Messages call the proxy rebuilds the answer as a chat completion before
+    the hook runs. Straiker's coding-agent reader parses a Messages answer, so a Claude Code
+    turn sent as a chat completion scores nothing; the proxy's own adapter turns it back.
+    """
+    response: Final = request_data.get("response")
+    if not isinstance(response, ModelResponse) or not _v3_anthropic_messages_route(request_data):
+        return _jsonable_dict(response)
+    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
+
+    translated: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response=response)
+    return _jsonable_dict({**translated, "model": response.model or model})
+
+
+def _v3_answer_json(
+    inputs: GenericGuardrailAPIInputs, request_data: Mapping[str, object], model: str | None
+) -> str | None:
     """The model's answer as the raw response body Straiker parses on the response phase.
 
     The real response object carries tool calls, which a coding-agent turn is scored on,
     so it is preferred. A streamed answer reaches the hook already assembled into texts,
     and those become a minimal chat completion so the answer is still scored.
     """
-    response: Final = _jsonable_dict(request_data.get("response"))
+    response: Final = _v3_answer(request_data, model)
     if response:
         return json.dumps(response, default=str)
     texts: Final = [t for t in (inputs.get("texts") or []) if isinstance(t, str) and t]
@@ -427,7 +456,7 @@ def _v3_payload(
             "model": context.model,
             "request": request_body,
         }
-        answer_json: Final = _v3_answer_json(inputs, request_data)
+        answer_json: Final = _v3_answer_json(inputs, request_data, context.model)
         if answer_json is not None:
             payload["sse"] = answer_json
 

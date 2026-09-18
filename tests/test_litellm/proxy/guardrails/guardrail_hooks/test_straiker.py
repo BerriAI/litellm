@@ -1431,3 +1431,70 @@ async def test_v3_client_and_format_hints_come_from_config():
     with pytest.raises(ValueError, match="format_hint must be"):
         _make_guardrail(api_key=V3_KEY, format_hint="grpc")
 
+
+
+# Captured 2026-09-18: the answer the proxy rebuilt for a streamed Claude Code turn on
+# /v1/messages (interactive Claude Code 2.0.21 through LiteLLM, a real Bash tool call).
+V3_CC_STREAMED_ANSWER = {
+    "id": "chatcmpl-48bdb900-37fe-44e5-8d86-e47431562176", "created": 1789753664, "object": "chat.completion",
+    "choices": [{"finish_reason": "tool_calls", "index": 0, "message": {
+        "content": "", "role": "assistant",
+        "tool_calls": [{"id": "toolu_01BnJ9m5ZHWFmyvcv8qc66op", "type": "function", "function": {
+            "name": "Bash",
+            "arguments": "{\"command\": \"echo straiker-e2e-tool-check\", \"description\": \"Echo straiker-e2e-tool-check to verify tool execution\"}"}}]}}],
+    "usage": {"completion_tokens": 94, "prompt_tokens": 20678, "total_tokens": 20772},
+}
+
+
+def _v3_claude_code_messages_call(**overrides) -> dict:
+    data = _v3_request_data(
+        stream=True,
+        system=[{"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."}],
+        tools=[{"name": "Bash", "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}}}],
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Use the Bash tool to run exactly: echo straiker-e2e-tool-check"}]}],
+        litellm_metadata={"user_api_key_request_route": "/v1/messages"},
+        response=ModelResponse(**V3_CC_STREAMED_ANSWER),
+    )
+    data["proxy_server_request"]["url"] = "http://localhost:4141/v1/messages"
+    data.update(overrides)
+    return data
+
+
+@pytest.mark.asyncio
+async def test_v3_streamed_messages_answer_is_sent_back_in_the_messages_shape():
+    g = _make_guardrail(api_key=V3_KEY, event_hook="post_call")
+    g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+    await g.apply_guardrail(inputs={"texts": [""]}, request_data=_v3_claude_code_messages_call(), input_type="response", logging_obj=_logging_obj())
+
+    answer = json.loads(_posted_payload(g)["sse"])
+    assert answer["type"] == "message" and answer["role"] == "assistant"
+    assert answer["model"] == "claude-haiku-4-5-20251001"
+    tool_use = [{k: block[k] for k in ("type", "id", "name", "input")} for block in answer["content"] if block["type"] == "tool_use"]
+    assert tool_use == [{"type": "tool_use", "id": "toolu_01BnJ9m5ZHWFmyvcv8qc66op", "name": "Bash",
+                         "input": {"command": "echo straiker-e2e-tool-check", "description": "Echo straiker-e2e-tool-check to verify tool execution"}}]
+    assert answer["stop_reason"] == "tool_use"
+    assert "choices" not in answer
+
+
+@pytest.mark.asyncio
+async def test_v3_chat_completions_answer_keeps_the_chat_completion_shape():
+    g = _make_guardrail(api_key=V3_KEY, event_hook="post_call")
+    g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+    data = _v3_claude_code_messages_call(litellm_metadata={"user_api_key_request_route": "/v1/chat/completions"})
+    data["proxy_server_request"]["url"] = "http://localhost:4141/v1/chat/completions"
+    await g.apply_guardrail(inputs={"texts": [""]}, request_data=data, input_type="response", logging_obj=_logging_obj())
+
+    answer = json.loads(_posted_payload(g)["sse"])
+    assert answer["object"] == "chat.completion"
+    assert answer["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "Bash"
+
+
+@pytest.mark.asyncio
+async def test_v3_buffered_messages_answer_is_relayed_untouched():
+    g = _make_guardrail(api_key=V3_KEY, event_hook="post_call")
+    g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+    native = {"id": "msg_01", "type": "message", "role": "assistant", "model": "claude-haiku-4-5-20251001",
+              "content": [{"type": "text", "text": "PONG"}], "stop_reason": "end_turn", "usage": {"input_tokens": 3, "output_tokens": 6}}
+    await g.apply_guardrail(inputs={"texts": ["PONG"]}, request_data=_v3_claude_code_messages_call(stream=False, response=native), input_type="response", logging_obj=_logging_obj())
+
+    assert json.loads(_posted_payload(g)["sse"]) == native
