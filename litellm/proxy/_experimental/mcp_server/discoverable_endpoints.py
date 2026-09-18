@@ -32,6 +32,9 @@ from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
     _prepare_bridge_mint,
     _prepare_bridge_refresh,
     _reload_active_user_by_id,
+    authorize_oauth_credential_request,
+    can_store_oauth_credential,
+    oauth_authorization_uses_gateway_credential,
 )
 from litellm.proxy._experimental.mcp_server.faults import (
     CallerRejected,
@@ -836,16 +839,30 @@ async def _user_can_reach_mcp_server(user_id: str, server_id: str) -> bool:
     return server_id in await global_mcp_server_manager.get_allowed_mcp_servers(admitted)
 
 
-async def _bridge_authorize_access_denial(
-    litellm_user_id: str,
+async def _resolve_oauth_authorization_user(
+    request: Request,
     mcp_server: MCPServer,
     redirect_uri: str,
     state: str,
-) -> RedirectResponse | None:
-    """The denial redirect for a signed-in user who cannot reach the target server, or None to proceed."""
-    if await _user_can_reach_mcp_server(litellm_user_id, mcp_server.server_id):
-        return None
-    return _bridge_access_denied_redirect(redirect_uri, state, mcp_server)
+    enforce_binding: bool,
+) -> str | RedirectResponse:
+    """Resolve the authorization subject without replacing denied credentials with cookie grants."""
+    from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (  # noqa: PLC0415  # proxy import cycle
+        _user_id_from_session_cookie,
+    )
+
+    use_gateway_credential: Final = enforce_binding and await oauth_authorization_uses_gateway_credential(request)
+    request_user_id: Final = (
+        await authorize_oauth_credential_request(request, mcp_server.server_id) if use_gateway_credential else None
+    )
+    if use_gateway_credential and request_user_id is None:
+        return _bridge_access_denied_redirect(redirect_uri, state, mcp_server)
+    user_id: Final = request_user_id or _user_id_from_session_cookie(request)
+    if user_id is None:
+        return _redirect_to_litellm_login(request)
+    if not await _user_can_reach_mcp_server(user_id, mcp_server.server_id):
+        return _bridge_access_denied_redirect(redirect_uri, state, mcp_server)
+    return user_id
 
 
 async def authorize_with_server(
@@ -911,23 +928,12 @@ async def authorize_with_server(
     # Seal the authenticated caller into state so the token exchange cannot select another credential owner.
     litellm_user_id: str | None = None
     if enforce_binding or (resolved_server.is_dcr_bridge and resolved_server.is_oauth_delegate):
-        from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (  # noqa: PLC0415  # inline import avoids a module-load circular import
-            _user_id_from_session_cookie,
+        subject: Final = await _resolve_oauth_authorization_user(
+            request, resolved_server, redirect_uri, state, enforce_binding
         )
-
-        litellm_user_id = (
-            await _extract_user_id_from_request(request) if enforce_binding else None
-        ) or _user_id_from_session_cookie(request)
-        if litellm_user_id is None:
-            return _redirect_to_litellm_login(request)
-        denial: Final = await _bridge_authorize_access_denial(
-            litellm_user_id=litellm_user_id,
-            mcp_server=resolved_server,
-            redirect_uri=redirect_uri,
-            state=state,
-        )
-        if denial is not None:
-            return denial
+        if isinstance(subject, RedirectResponse):
+            return subject
+        litellm_user_id = subject
 
     oauth_nonce: Final = secrets.token_urlsafe(32) if enforce_binding else None
     encoded_state: Final = encode_state_with_base_url(
@@ -1218,12 +1224,32 @@ async def exchange_token_with_server(
         user_id: Final = resolved_user_id
         if user_id:
             try:
-                await _store_per_user_token_server_side(
-                    server=resolved_server,
-                    user_id=user_id,
-                    token_response=token_response,
-                    identity_binding_proof=binding_proof,
+                # Identity binding above must retain the verified caller even when a write is
+                # denied. Authorize persistence separately, immediately before its side effect.
+                from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+                # A sealed code delegates a verified user for this authorized server. Raw
+                # request credentials retain their own JWT/key restrictions during resolution.
+                can_store: Final = (
+                    await can_store_oauth_credential(
+                        request, await MCPRequestHandler.reload_admitted_user(user_id), resolved_server.server_id
+                    )
+                    if bridge_identity is not None
+                    else await authorize_oauth_credential_request(request, resolved_server.server_id) == user_id
                 )
+                if can_store:
+                    await _store_per_user_token_server_side(
+                        server=resolved_server,
+                        user_id=user_id,
+                        token_response=token_response,
+                        identity_binding_proof=binding_proof,
+                    )
+                else:
+                    verbose_logger.warning(
+                        "OAuth credential storage not authorized for user=%s server=%s",
+                        user_id,
+                        resolved_server.server_id,
+                    )
             except Exception as exc:
                 verbose_logger.warning(
                     "exchange_token_with_server: server-side storage failed for user=%s server=%s: %s",
@@ -1236,8 +1262,9 @@ async def exchange_token_with_server(
                 "exchange_token_with_server: could not resolve a LiteLLM user_id for the request, "
                 "so the per-user token for server=%s was NOT stored. The authorization_code egress "
                 "requires the stored token, so the client will be challenged with 401 on reconnect. "
-                "Ensure the request carries a valid LiteLLM key (x-litellm-api-key or Authorization), "
-                "or store it via POST /mcp/server/{id}/oauth-user-credential.",
+                "Ensure the request carries a valid LiteLLM key or enabled JWT identity "
+                "(x-litellm-api-key or Authorization), "
+                "or store it via POST /v1/mcp/server/{id}/oauth-user-credential.",
                 resolved_server.server_id,
             )
 
@@ -2552,7 +2579,7 @@ def _jwt_auth_issuers() -> list:
     if env_issuer:
         issuers.append(env_issuer)
 
-    jwtauth: Final = general_settings.get("litellm_jwtauth") if isinstance(general_settings, dict) else None
+    jwtauth: Final = general_settings.get("litellm_jwtauth") if isinstance(general_settings, Mapping) else None
     raw_issuers: Final = jwtauth.get("issuers") if isinstance(jwtauth, dict) else getattr(jwtauth, "issuers", None)
     for cfg in raw_issuers or []:
         issuer = cfg.get("issuer") if isinstance(cfg, dict) else getattr(cfg, "issuer", None)

@@ -10,14 +10,18 @@ import {
   DataTableFilterDrawer,
   DataTableFilterField,
   DataTableToolbar,
+  usePersistedColumnVisibility,
+  useUrlTableState,
+  type UrlTableStateOptions,
 } from "@/components/shared/DataTable";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
-import { ColumnFiltersState, functionalUpdate, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
+import { ColumnFiltersState, functionalUpdate, OnChangeFn } from "@tanstack/react-table";
 import { KeyRound } from "lucide-react";
-import { createParser, parseAsInteger, parseAsString, parseAsStringLiteral, useQueryState, useQueryStates } from "nuqs";
+import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useMemo, useState } from "react";
 
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
@@ -28,7 +32,7 @@ interface VirtualKeysTableProps {
   headerActions?: React.ReactNode;
 }
 
-const FILTER_COLUMNS = ["team_id", "org_id", "user_id", "key_hash"] as const;
+const FILTER_COLUMNS = ["team_id", "org_id", "user_id", "key_hash", "status"] as const;
 type FilterColumn = (typeof FILTER_COLUMNS)[number];
 
 const FILTER_LABELS: Record<FilterColumn, string> = {
@@ -36,42 +40,49 @@ const FILTER_LABELS: Record<FilterColumn, string> = {
   org_id: "Organization",
   user_id: "User ID",
   key_hash: "Key ID",
+  status: "Status",
 };
 
-const DEFAULT_SORT_BY = "created_at";
-const DEFAULT_SORT_ORDER = "desc";
-const DEFAULT_PAGE_SIZE = 50;
-const MAX_PAGE_SIZE = 100;
-const MAX_PAGE = 100_000;
+const KEY_STATUS_VALUES = ["active", "expired", "revoked", "deleted"] as const;
+type KeyStatusFilter = (typeof KEY_STATUS_VALUES)[number];
+const ALL_STATUSES = "all";
 
-const boundedInteger = (min: number, max: number, fallback: number) =>
-  createParser({
-    parse: (value: string) => {
-      const parsed = parseAsInteger.parse(value);
-      return parsed === null ? null : Math.min(Math.max(parsed, min), max);
-    },
-    serialize: String,
-  }).withDefault(fallback);
-
-// The filters carry a prefix because /api-keys also takes team_id, key_alias and key_type
-// as create-key prefills; an unprefixed filter would hijack those deep links.
-const TABLE_STATE = {
-  key_search: parseAsString.withDefault(""),
-  sort_by: parseAsString.withDefault(DEFAULT_SORT_BY),
-  sort_order: parseAsStringLiteral(["asc", "desc"] as const).withDefault(DEFAULT_SORT_ORDER),
-  page: boundedInteger(1, MAX_PAGE, 1),
-  page_size: boundedInteger(1, MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE),
-  filter_team: parseAsString.withDefault(""),
-  filter_org: parseAsString.withDefault(""),
-  filter_user: parseAsString.withDefault(""),
-  filter_key_id: parseAsString.withDefault(""),
+const KEY_STATUS_LABELS: Record<KeyStatusFilter, string> = {
+  active: "Active",
+  expired: "Expired",
+  revoked: "Revoked (blocked)",
+  deleted: "Deleted",
 };
 
-const toSortOrder = (active: SortingState[number]): "asc" | "desc" => (active.desc ? "desc" : "asc");
+const STATUS_FILTER_ITEMS = [
+  { value: ALL_STATUSES, label: "All statuses" },
+  ...KEY_STATUS_VALUES.map((value) => ({ value, label: KEY_STATUS_LABELS[value] })),
+];
 
-const filterValue = (filters: ColumnFiltersState, column: FilterColumn): string | null => {
+const isKeyStatusFilter = (value: unknown): value is KeyStatusFilter =>
+  (KEY_STATUS_VALUES as readonly unknown[]).includes(value);
+
+const isUsableFilter = (filter: ColumnFiltersState[number]): boolean =>
+  filter.id !== "status" || isKeyStatusFilter(filter.value);
+
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<FilterColumn> = {
+  sortFields: KEY_TABLE_SORT_FIELDS,
+  defaultSort: { id: "created_at", desc: true },
+  defaultPageSize: 50,
+  maxPageSize: 100,
+  filterColumns: FILTER_COLUMNS,
+  urlKeys: {
+    search: "key_search",
+    filter_team_id: "filter_team",
+    filter_org_id: "filter_org",
+    filter_user_id: "filter_user",
+    filter_key_hash: "filter_key_id",
+  },
+};
+
+const appliedFilter = (filters: ColumnFiltersState, column: FilterColumn): string | undefined => {
   const value = filters.find((filter) => filter.id === column)?.value;
-  return (typeof value === "string" ? value.trim() : "") || null;
+  return typeof value === "string" ? value : undefined;
 };
 
 export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
@@ -81,102 +92,52 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const allTeams = useMemo<Team[]>(() => fetchedTeams ?? [], [fetchedTeams]);
 
   const [selectedKeyId, setSelectedKeyId] = useQueryState("key", parseAsString.withOptions({ history: "push" }));
-  const [tableState, setTableState] = useQueryStates(TABLE_STATE);
+  const {
+    search: searchInput,
+    setSearch,
+    sorting,
+    onSortingChange,
+    pagination,
+    onPaginationChange,
+    columnFilters: urlColumnFilters,
+    onColumnFiltersChange: setUrlColumnFilters,
+  } = useUrlTableState(TABLE_STATE_OPTIONS);
+  const columnFilters = useMemo(() => urlColumnFilters.filter(isUsableFilter), [urlColumnFilters]);
+  const onColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>(
+    (updaterOrValue) => setUrlColumnFilters(functionalUpdate(updaterOrValue, columnFilters)),
+    [columnFilters, setUrlColumnFilters],
+  );
+  const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility(
+    "virtual-keys",
+    KEY_TABLE_HIDDEN_COLUMNS,
+  );
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const searchInput = tableState.key_search;
   const [searchQuery] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
 
-  // A hand-edited sort_by the table cannot sort by would 400 at /key/list and leave the page loading.
-  const sortBy = KEY_TABLE_SORT_FIELDS.includes(tableState.sort_by) ? tableState.sort_by : DEFAULT_SORT_BY;
-  const sorting = useMemo<SortingState>(
-    () => [{ id: sortBy, desc: tableState.sort_order === "desc" }],
-    [sortBy, tableState.sort_order],
-  );
-  const tablePagination = useMemo<PaginationState>(
-    () => ({ pageIndex: tableState.page - 1, pageSize: tableState.page_size }),
-    [tableState.page, tableState.page_size],
-  );
-  const { filter_team, filter_org, filter_user, filter_key_id } = tableState;
-  const appliedFilters = useMemo(
-    () => ({
-      team_id: filter_team.trim(),
-      org_id: filter_org.trim(),
-      user_id: filter_user.trim(),
-      key_hash: filter_key_id.trim(),
-    }),
-    [filter_team, filter_org, filter_user, filter_key_id],
-  );
-  const columnFilters = useMemo<ColumnFiltersState>(
-    () =>
-      FILTER_COLUMNS.filter((column) => appliedFilters[column]).map((column) => ({
-        id: column,
-        value: appliedFilters[column],
-      })),
-    [appliedFilters],
-  );
-
+  const [activeSort] = sorting;
   const keyListOptions = {
-    teamID: appliedFilters.team_id || undefined,
-    organizationID: appliedFilters.org_id || undefined,
+    teamID: appliedFilter(columnFilters, "team_id"),
+    organizationID: appliedFilter(columnFilters, "org_id"),
     search: searchQuery.trim() || undefined,
-    userID: appliedFilters.user_id || undefined,
-    keyHash: appliedFilters.key_hash || undefined,
-    sortBy,
-    sortOrder: tableState.sort_order,
+    userID: appliedFilter(columnFilters, "user_id"),
+    keyHash: appliedFilter(columnFilters, "key_hash"),
+    status: appliedFilter(columnFilters, "status"),
+    sortBy: activeSort.id,
+    sortOrder: activeSort.desc ? "desc" : "asc",
     expand: "user",
   };
 
   const {
     data: keys,
-    isPending: isLoading,
+    isPending,
+    isPlaceholderData,
     isFetching,
+    isError,
     refetch,
-  } = useKeys(tablePagination.pageIndex + 1, tablePagination.pageSize, keyListOptions);
+  } = useKeys(pagination.pageIndex + 1, pagination.pageSize, keyListOptions);
 
   const keyList = useMemo(() => keys?.keys ?? [], [keys]);
   const rowCount = keys?.total_count ?? 0;
-
-  const handleSearchChange = useCallback(
-    (value: string) => {
-      void setTableState({ key_search: value || null, page: null });
-    },
-    [setTableState],
-  );
-
-  const handleSortingChange = useCallback<OnChangeFn<SortingState>>(
-    (updaterOrValue) => {
-      const active = functionalUpdate(updaterOrValue, sorting)[0];
-      void setTableState({
-        sort_by: active?.id ?? null,
-        sort_order: active ? toSortOrder(active) : null,
-        page: null,
-      });
-    },
-    [sorting, setTableState],
-  );
-
-  const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>(
-    (updaterOrValue) => {
-      const next = functionalUpdate(updaterOrValue, columnFilters);
-      const nextFilters = {
-        filter_team: filterValue(next, "team_id"),
-        filter_org: filterValue(next, "org_id"),
-        filter_user: filterValue(next, "user_id"),
-        filter_key_id: filterValue(next, "key_hash"),
-        page: null,
-      };
-      void setTableState(nextFilters);
-    },
-    [columnFilters, setTableState],
-  );
-
-  const handlePaginationChange = useCallback<OnChangeFn<PaginationState>>(
-    (updaterOrValue) => {
-      const next = functionalUpdate(updaterOrValue, tablePagination);
-      void setTableState({ page: next.pageIndex + 1, page_size: next.pageSize });
-    },
-    [tablePagination, setTableState],
-  );
 
   const columns = useMemo(
     () => getKeyTableColumns({ allTeams, organizations, onSelectKey: (key) => void setSelectedKeyId(key.token) }),
@@ -232,6 +193,9 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
       if (columnId === "org_id") {
         return organizations.find((org) => org.organization_id === raw)?.organization_alias || raw;
       }
+      if (columnId === "status" && isKeyStatusFilter(raw)) {
+        return KEY_STATUS_LABELS[raw];
+      }
       return raw;
     },
     [allTeams, organizations],
@@ -267,20 +231,22 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
         data={keyList}
         columns={columns}
         getRowId={(row) => row.token}
-        defaultColumnVisibility={KEY_TABLE_HIDDEN_COLUMNS}
+        columnVisibility={columnVisibility}
+        onColumnVisibilityChange={onColumnVisibilityChange}
         sortingMode="server"
         sorting={sorting}
-        onSortingChange={handleSortingChange}
+        onSortingChange={onSortingChange}
         paginationMode="server"
-        pagination={tablePagination}
-        onPaginationChange={handlePaginationChange}
+        pagination={pagination}
+        onPaginationChange={onPaginationChange}
         rowCount={rowCount}
         filterMode="server"
         columnFilters={columnFilters}
-        onColumnFiltersChange={handleColumnFiltersChange}
+        onColumnFiltersChange={onColumnFiltersChange}
         enableColumnResizing
         columnResizeMode="onChange"
-        isLoading={isLoading}
+        isLoading={isPending || isPlaceholderData}
+        isError={isError}
         loadingMessage="Loading keys..."
         noDataMessage="No keys found"
         fillHeight
@@ -290,7 +256,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
             <DataTableToolbar
               table={table}
               searchValue={searchInput}
-              onSearchChange={handleSearchChange}
+              onSearchChange={setSearch}
               searchPlaceholder="Search by key alias or ID…"
               onRefresh={() => refetch?.()}
               isRefreshing={isFetching}
@@ -338,6 +304,24 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
                       onChange={(event) => set("key_hash", event.target.value)}
                       placeholder="Enter Key ID…"
                     />
+                  </DataTableFilterField>
+                  <DataTableFilterField label="Status">
+                    <Select
+                      items={STATUS_FILTER_ITEMS}
+                      value={(get("status") as string) || ALL_STATUSES}
+                      onValueChange={(value) => set("status", value === ALL_STATUSES ? undefined : value)}
+                    >
+                      <SelectTrigger className="w-full" aria-label="Status">
+                        <SelectValue placeholder="All statuses" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {STATUS_FILTER_ITEMS.map((item) => (
+                          <SelectItem key={item.value} value={item.value}>
+                            {item.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </DataTableFilterField>
                 </>
               )}

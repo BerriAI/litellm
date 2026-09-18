@@ -120,9 +120,7 @@ class TestIBMWatsonXRerankTransform:
             logging_obj=mock_logging,
         )
 
-        # Verify response structure
-        # IBM watsonx.ai doesn't return "id", so it uses "model" as the id
-        assert result.id == "watsonx/cross-encoder/ms-marco-minilm-l-12-v2"
+        assert uuid.UUID(result.id).version == 4
         assert len(result.results) == 2
         assert result.results[0]["index"] == 0
         assert result.results[0]["relevance_score"] == 6.53515625
@@ -172,9 +170,7 @@ class TestIBMWatsonXRerankTransform:
             logging_obj=mock_logging,
         )
 
-        # Verify response structure
-        # IBM watsonx.ai doesn't return "id", so it uses "model" as the id
-        assert result.id == "watsonx/cross-encoder/ms-marco-minilm-l-12-v2"
+        assert uuid.UUID(result.id).version == 4
         assert len(result.results) == 2
 
         assert result.results[0]["index"] == 0
@@ -230,6 +226,30 @@ class TestIBMWatsonXRerankTransform:
                 model_response=model_response,
                 logging_obj=mock_logging,
             )
+
+    def test_transform_rerank_response_without_id_stamps_a_fresh_id_per_call(self):
+        response_data = {
+            "model_id": self.model,
+            "results": [{"index": 0, "score": 1.5}],
+            "input_token_count": 12,
+        }
+
+        def transform() -> str:
+            mock_response = MagicMock(spec=httpx.Response)
+            mock_response.json.return_value = response_data
+            mock_response.status_code = 200
+            mock_response.headers = {}
+            return self.config.transform_rerank_response(
+                model=self.model,
+                raw_response=mock_response,
+                model_response=RerankResponse(),
+                logging_obj=MagicMock(),
+            ).id
+
+        first, second = transform(), transform()
+
+        assert first != second
+        assert self.model not in (first, second)
 
     def test_get_supported_cohere_rerank_params(self):
         """Test getting supported parameters for IBM watsonx.ai rerank."""

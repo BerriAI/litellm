@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -264,6 +265,51 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buff
 
     popped_keys = [op["key"] for op in mock_redis_cache.async_lpop_pipeline.call_args.kwargs["lpop_list"]]
     assert popped_keys[6] == REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY
+
+
+@pytest.mark.asyncio
+async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_failure(
+    redis_update_buffer: RedisUpdateBuffer, mock_redis_cache: AsyncMock
+):
+    from litellm.proxy._types import Litellm_EntityType
+    from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
+        DailySpendUpdateQueue,
+    )
+    from litellm.proxy.db.db_transaction_queue.spend_update_queue import (
+        SpendUpdateQueue,
+    )
+
+    member_key: Final = "organization_id::org-1::user_id::user-1"
+    pod_json: Final = json.dumps({"org_member_list_transactions": {member_key: 0.25}})
+    mock_redis_cache.async_lpop_pipeline = AsyncMock(
+        return_value=[[pod_json, pod_json], None, None, None, None, None, None]
+    )
+
+    (db_spend, *_rest) = await redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
+
+    assert db_spend is not None
+    assert db_spend["org_member_list_transactions"] == {member_key: 0.5}
+
+    mock_redis_cache.async_rpush_pipeline = AsyncMock(side_effect=ConnectionError("redis went away"))
+    spend_queue: Final = SpendUpdateQueue()
+    await spend_queue.add_update(
+        {
+            "entity_type": Litellm_EntityType.ORGANIZATION_MEMBER,
+            "entity_id": member_key,
+            "response_cost": 1.5,
+        }
+    )
+    await redis_update_buffer.store_in_memory_spend_updates_in_redis(
+        spend_update_queue=spend_queue,
+        daily_spend_update_queue=DailySpendUpdateQueue(),
+        daily_team_spend_update_queue=DailySpendUpdateQueue(),
+        daily_org_spend_update_queue=DailySpendUpdateQueue(),
+        daily_end_user_spend_update_queue=DailySpendUpdateQueue(),
+        daily_agent_spend_update_queue=DailySpendUpdateQueue(),
+    )
+
+    restored_spend: Final = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert restored_spend["org_member_list_transactions"] == {member_key: 1.5}
 
 
 @pytest.mark.asyncio

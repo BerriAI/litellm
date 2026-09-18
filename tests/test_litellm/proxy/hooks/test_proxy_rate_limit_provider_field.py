@@ -6,7 +6,7 @@ Background
 ----------
 The proxy's internal rate-limit hooks (parallel_request_limiter,
 parallel_request_limiter_v3, dynamic_rate_limiter, dynamic_rate_limiter_v3,
-batch_rate_limiter, max_budget_limiter, max_iterations_limiter,
+batch_rate_limiter, max_iterations_limiter,
 max_budget_per_session_limiter) all fire from ``async_pre_call_hook`` —
 *before* :func:`litellm.get_llm_provider` runs anywhere else in the request
 lifecycle.
@@ -50,7 +50,6 @@ from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHand
 from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
     _PROXY_DynamicRateLimitHandlerV3,
 )
-from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.max_budget_per_session_limiter import (
     _PROXY_MaxBudgetPerSessionHandler,
 )
@@ -828,64 +827,6 @@ async def test_batch_rate_limiter_unknown_model_falls_back():
         )
 
     assert exc_info.value.llm_provider == PROXY_LLM_PROVIDER_FALLBACK
-
-
-# ---------------------------------------------------------------------------
-# max_budget_limiter
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_max_budget_limiter_populates_provider():
-    handler = _PROXY_MaxBudgetLimiter()
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="sk-budget",
-        user_id="user-1",
-        user_max_budget=10.0,
-    )
-
-    with patch(
-        "litellm.proxy.proxy_server.get_current_spend",
-        new=AsyncMock(return_value=10.0),
-    ):
-        with pytest.raises(HTTPException) as exc_info:
-            await handler.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                cache=DualCache(),
-                data={"model": "gpt-4o-mini"},
-                call_type="completion",
-            )
-
-    exc = exc_info.value
-    assert exc.status_code == 429
-    assert isinstance(exc, RateLimitError)
-    assert exc.llm_provider == "openai"
-    assert exc.model == "gpt-4o-mini"
-
-
-@pytest.mark.asyncio
-async def test_max_budget_limiter_no_model_falls_back():
-    handler = _PROXY_MaxBudgetLimiter()
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="sk-budget",
-        user_id="user-1",
-        user_max_budget=10.0,
-    )
-
-    with patch(
-        "litellm.proxy.proxy_server.get_current_spend",
-        new=AsyncMock(return_value=10.0),
-    ):
-        with pytest.raises(HTTPException) as exc_info:
-            await handler.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                cache=DualCache(),
-                data={},
-                call_type="completion",
-            )
-
-    assert exc_info.value.llm_provider == PROXY_LLM_PROVIDER_FALLBACK
-    assert exc_info.value.model == ""
 
 
 # ---------------------------------------------------------------------------

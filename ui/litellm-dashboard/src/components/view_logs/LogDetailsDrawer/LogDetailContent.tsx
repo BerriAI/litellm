@@ -700,20 +700,25 @@ const GUARDRAIL_JUMP_LINK_STYLE = {
   passed: { className: "border border-success/20 bg-success/10 text-success", glyph: "\u2713" },
   flagged: { className: "border border-warning/20 bg-warning/10 text-warning", glyph: "\u26A0" },
   failed: { className: "border border-destructive/20 bg-destructive/10 text-destructive", glyph: "\u2717" },
+  not_run: { className: "border border-border bg-muted text-muted-foreground", glyph: "\u2013" },
 } as const;
 
 const isPassedStatus = (status: unknown) => status === "pass" || status === "passed" || status === "success";
 const isFlaggedStatus = (status: unknown) => status === "flagged" || status === "guardrail_flagged";
+const isNotRunStatus = (status: unknown) => status === "not_run";
 
-const guardrailJumpLinkOutcome = (statuses: unknown[]): keyof typeof GUARDRAIL_JUMP_LINK_STYLE => {
-  if (statuses.every(isPassedStatus)) return "passed";
-  if (statuses.every((s) => isPassedStatus(s) || isFlaggedStatus(s))) return "flagged";
+const guardrailJumpLinkOutcome = (evaluated: unknown[]): keyof typeof GUARDRAIL_JUMP_LINK_STYLE => {
+  if (evaluated.length === 0) return "not_run";
+  if (evaluated.every(isPassedStatus)) return "passed";
+  if (evaluated.every((s) => isPassedStatus(s) || isFlaggedStatus(s))) return "flagged";
   return "failed";
 };
 
 export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[] }) {
-  const outcome = guardrailJumpLinkOutcome(guardrailEntries.map((e) => e?.guardrail_status || e?.status));
-  const { className, glyph } = GUARDRAIL_JUMP_LINK_STYLE[outcome];
+  const statuses = guardrailEntries.map((e) => e?.guardrail_status || e?.status);
+  const evaluated = statuses.filter((s) => !isNotRunStatus(s));
+  const notRunCount = statuses.length - evaluated.length;
+  const { className, glyph } = GUARDRAIL_JUMP_LINK_STYLE[guardrailJumpLinkOutcome(evaluated)];
 
   const handleClick = () => {
     const el = document.getElementById("guardrail-section");
@@ -736,8 +741,9 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
           fontWeight: 500,
         }}
       >
-        {glyph} {guardrailEntries.length} guardrail
-        {guardrailEntries.length !== 1 ? "s" : ""} evaluated
+        {glyph} {evaluated.length} guardrail
+        {evaluated.length !== 1 ? "s" : ""} evaluated
+        {notRunCount > 0 ? `, ${notRunCount} not run` : ""}
         <span style={{ fontSize: 11, opacity: 0.7 }}>{"\u2193"}</span>
       </div>
     </div>

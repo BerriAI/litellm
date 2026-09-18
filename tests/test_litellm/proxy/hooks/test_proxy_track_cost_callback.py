@@ -19,6 +19,7 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (
     run_spend_event,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
@@ -675,6 +676,149 @@ async def test_update_database_and_spend_counters_preserves_counter_exception_wh
         assert budget_reservation["finalized"] is True
 
     proxy_logging_obj.db_spend_update_writer.update_database.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_update_database_and_spend_counters_reconciles_reservation_before_db_update():
+    call_order: list[str] = []
+    proxy_logging_obj = MagicMock()
+
+    async def _update_database(**kwargs):
+        call_order.append("update_database")
+        return True
+
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(side_effect=_update_database)
+    increment_spend_counters = AsyncMock()
+    budget_reservation = {"reserved_cost": 0.5, "entries": []}
+
+    async def _reconcile(**kwargs):
+        call_order.append("reconcile")
+
+    with patch(  # test-quality-ok: the helper imports reconcile_budget_reservation in its body, no injection seam
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        new_callable=AsyncMock,
+        side_effect=_reconcile,
+    ) as mock_reconcile_budget_reservation:
+        charged = await _update_database_and_spend_counters(
+            proxy_logging_obj=proxy_logging_obj,
+            increment_spend_counters=increment_spend_counters,
+            user_api_key="test_api_key",
+            user_id="test_user_id",
+            end_user_id=None,
+            team_id="test_team_id",
+            org_id="test_org_id",
+            kwargs={},
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            response_cost=0.2,
+            budget_reservation=budget_reservation,
+        )
+
+    assert charged is True
+    assert call_order == ["reconcile", "update_database"]
+    mock_reconcile_budget_reservation.assert_awaited_once_with(
+        budget_reservation=budget_reservation,
+        actual_cost=0.2,
+        finalize=False,
+    )
+    increment_spend_counters.assert_awaited_once()
+    assert increment_spend_counters.await_args.kwargs["budget_reservation"] is budget_reservation
+
+
+@pytest.mark.asyncio
+async def test_update_database_and_spend_counters_releases_reservation_when_db_update_fails_after_early_reconcile():
+    proxy_logging_obj = MagicMock()
+    db_exception = RuntimeError("db unavailable")
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(side_effect=db_exception)
+    increment_spend_counters = AsyncMock()
+    budget_reservation = {"reserved_cost": 0.5, "entries": []}
+
+    with (
+        patch(  # test-quality-ok: the helper imports reconcile_budget_reservation in its body, no injection seam
+            "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+            new_callable=AsyncMock,
+        ) as mock_reconcile_budget_reservation,
+        patch(  # test-quality-ok: _release_budget_reservation imports the release in its body, no injection seam
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
+            new_callable=AsyncMock,
+        ) as mock_release_budget_reservation,
+    ):
+        with pytest.raises(RuntimeError) as exc_info:
+            await _update_database_and_spend_counters(
+                proxy_logging_obj=proxy_logging_obj,
+                increment_spend_counters=increment_spend_counters,
+                user_api_key="test_api_key",
+                user_id="test_user_id",
+                end_user_id=None,
+                team_id="test_team_id",
+                org_id="test_org_id",
+                kwargs={},
+                completion_response=None,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                response_cost=0.2,
+                budget_reservation=budget_reservation,
+            )
+
+        assert exc_info.value is db_exception
+        mock_reconcile_budget_reservation.assert_awaited_once_with(
+            budget_reservation=budget_reservation,
+            actual_cost=0.2,
+            finalize=False,
+        )
+        mock_release_budget_reservation.assert_awaited_once_with(
+            budget_reservation=budget_reservation,
+        )
+
+    increment_spend_counters.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_database_and_spend_counters_invalidates_reservation_when_early_reconcile_fails():
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(return_value=True)
+    increment_spend_counters = AsyncMock()
+    budget_reservation = {
+        "reserved_cost": 0.5,
+        "entries": [{"counter_key": "spend:key:test_api_key"}],
+    }
+
+    with (
+        patch(  # test-quality-ok: the helper imports reconcile_budget_reservation in its body, no injection seam
+            "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("redis unavailable"),
+        ) as mock_reconcile_budget_reservation,
+        patch(  # test-quality-ok: _invalidate_budget_reservation_counters imports it in its body, no injection seam
+            "litellm.proxy.spend_tracking.budget_reservation.invalidate_budget_reservation_counters",
+            new_callable=AsyncMock,
+        ) as mock_invalidate_budget_reservation_counters,
+    ):
+        charged = await _update_database_and_spend_counters(
+            proxy_logging_obj=proxy_logging_obj,
+            increment_spend_counters=increment_spend_counters,
+            user_api_key="test_api_key",
+            user_id="test_user_id",
+            end_user_id=None,
+            team_id="test_team_id",
+            org_id="test_org_id",
+            kwargs={},
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            response_cost=0.2,
+            budget_reservation=budget_reservation,
+        )
+
+    assert charged is True
+    mock_reconcile_budget_reservation.assert_awaited_once()
+    mock_invalidate_budget_reservation_counters.assert_awaited_once_with(
+        budget_reservation=budget_reservation,
+    )
+    assert budget_reservation["finalized"] is True
+    proxy_logging_obj.db_spend_update_writer.update_database.assert_awaited_once()
+    increment_spend_counters.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1912,14 +2056,15 @@ async def test_track_cost_callback_keeps_guardrail_cost_on_cache_hit():
         ("allm_passthrough_route", True),
         ("aretrieve_batch", True),
         ("acompletion", False),
-        ("call_mcp_tool", False),
+        ("call_mcp_tool", True),
         (None, False),
     ],
 )
 def test_should_track_cost_callback_pass_through_without_owner(call_type, expected):
     """Regression for LIT-3782: unauthenticated pass-through requests (auth=false)
     carry no key/user/team/end-user, yet must still be tracked so they land in
-    LiteLLM_SpendLogs. Other call types with no owner stay untracked.
+    LiteLLM_SpendLogs. Explicit MCP passthrough calls require the same handling.
+    Other call types with no owner stay untracked.
 
     aretrieve_batch is included for the same reason: CheckBatchCost's synthetic
     logging_obj for a completed managed batch only ever carries
@@ -1939,10 +2084,26 @@ def test_should_track_cost_callback_pass_through_without_owner(call_type, expect
     )
 
 
+def test_should_track_cost_callback_respects_disabled_spend_updates(monkeypatch):
+    monkeypatch.setattr(ProxyUpdateSpend, "disable_spend_updates", staticmethod(lambda: True))
+
+    assert (
+        _should_track_cost_callback(
+            user_api_key="key",
+            user_id="user",
+            team_id="team",
+            end_user_id="end-user",
+            call_type="call_mcp_tool",
+        )
+        is False
+    )
+
+
 @pytest.mark.parametrize(
     "call_type, expect_spend_log",
     [
         ("pass_through_endpoint", True),
+        ("call_mcp_tool", True),
         ("aretrieve_batch", True),
         ("acompletion", False),
         (None, False),
@@ -1953,8 +2114,8 @@ async def test_track_cost_callback_logs_unauthenticated_pass_through_request(cal
     """Regression for LIT-3782: a pass-through request with auth=false reaches the
     cost callback with no key/user/team/end-user. Before the fix the spend-log
     write was skipped and the request never appeared in request/usage logs. It
-    must now be written for pass-through call types while other unauthenticated
-    calls remain skipped.
+    must now be written for pass-through and MCP tool call types while other
+    unauthenticated calls remain skipped.
 
     aretrieve_batch is included because CheckBatchCost's completed-batch cost
     event reaches this same callback with no attributable key/user/team when

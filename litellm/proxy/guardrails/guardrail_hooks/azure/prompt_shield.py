@@ -341,6 +341,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         guardrail_response: Final = self._summarize_guardrail_response(
             response=response,
             original_inputs=original_inputs,
+            event_type=event_type,
         )
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,

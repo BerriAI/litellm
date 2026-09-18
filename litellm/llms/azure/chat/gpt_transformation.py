@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_tool_reference_parts_from_tool_messages,
     flatten_combinators_and_drop_non_python_regex_patterns,
     hoist_images_from_tool_messages,
+    system_messages_first,
     tool_with_sanitized_parameters,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -276,7 +277,8 @@ class AzureOpenAIConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(messages)
+        ordered_messages: Final = system_messages_first(messages) if litellm.openai_system_messages_first else messages
+        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(ordered_messages)
         azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(stripped_messages))
         return {
             "model": model,

@@ -304,6 +304,16 @@ def get_metadata_variable_name_from_kwargs(
     return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
 
 
+def max_retries_per_request_hit(kwargs: Mapping[str, object], num_retries_per_request: int | None) -> bool:
+    if num_retries_per_request is None:
+        return False
+    metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
+    if not isinstance(metadata, Mapping):
+        return False
+    retry_count: Final = metadata.get("request_retry_count")
+    return type(retry_count) is int and 0 < retry_count and num_retries_per_request <= retry_count
+
+
 def get_or_create_metadata_bucket(
     request_data: dict,
 ) -> tuple[Literal["metadata", "litellm_metadata"], dict]:

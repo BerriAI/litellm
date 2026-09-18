@@ -117,12 +117,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             log_event_on_langfuse, self.logger
         )
 
-        # Make sure _is_langfuse_v2 returns True
-        def mock_is_langfuse_v2(self):
-            return True
-
-        self.logger._is_langfuse_v2 = types.MethodType(mock_is_langfuse_v2, self.logger)
-
     def tearDown(self):
         # Clean up logger instance to prevent state leakage
         if hasattr(self, "logger"):
