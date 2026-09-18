@@ -13630,12 +13630,17 @@ def _enrich_model_info_with_litellm_data(
     discovered_model_info: Final = (
         llm_router.get_discovered_model_info(model_info.get("id")) if llm_router is not None else MappingProxyType({})
     )
-    for k, v in _pricing_override_stamps(model_info, model.get("litellm_params") or MappingProxyType({})).items():
-        model_info[k] = v
-    for k, v in MappingProxyType({**litellm_model_info, **discovered_model_info}).items():
-        if k not in model_info or (model_info[k] is None and k in discovered_model_info):
-            model_info[k] = v
-    model["model_info"] = model_info
+    stamped_model_info: Final = MappingProxyType(
+        {**model_info, **_pricing_override_stamps(model_info, model.get("litellm_params") or MappingProxyType({}))}
+    )
+    model["model_info"] = {
+        **stamped_model_info,
+        **{
+            k: v
+            for k, v in MappingProxyType({**litellm_model_info, **discovered_model_info}).items()
+            if k not in stamped_model_info or (stamped_model_info[k] is None and k in discovered_model_info)
+        },
+    }
     # don't return the api key / vertex credentials
     # don't return the llm credentials
     model = remove_sensitive_info_from_deployment(model, excluded_keys={"litellm_credential_name"})
@@ -15101,12 +15106,17 @@ def _get_proxy_model_info(model: dict) -> dict:
     discovered_model_info: Final = (
         llm_router.get_discovered_model_info(model_info.get("id")) if llm_router is not None else MappingProxyType({})
     )
-    for k, v in _pricing_override_stamps(model_info, model.get("litellm_params") or MappingProxyType({})).items():
-        model_info[k] = v
-    for k, v in MappingProxyType({**litellm_model_info, **discovered_model_info}).items():
-        if k not in model_info or (model_info[k] is None and k in discovered_model_info):
-            model_info[k] = v
-    model["model_info"] = model_info
+    stamped_model_info: Final = MappingProxyType(
+        {**model_info, **_pricing_override_stamps(model_info, model.get("litellm_params") or MappingProxyType({}))}
+    )
+    model["model_info"] = {
+        **stamped_model_info,
+        **{
+            k: v
+            for k, v in MappingProxyType({**litellm_model_info, **discovered_model_info}).items()
+            if k not in stamped_model_info or (stamped_model_info[k] is None and k in discovered_model_info)
+        },
+    }
     # don't return the llm credentials
     model = remove_sensitive_info_from_deployment(deployment_dict=model, excluded_keys={"litellm_credential_name"})
 
