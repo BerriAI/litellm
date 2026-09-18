@@ -3986,3 +3986,14 @@ class TestAllowedIpsEmptyListIsNotAnAllowlist:
         )
 
         assert status_code == 200
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("malformed_allowed_ips", ["", "127.0.0.1"])
+    async def test_a_malformed_allowlist_does_not_open_the_proxy(self, monkeypatch, malformed_allowed_ips):
+        status_code = await self._status_for(
+            monkeypatch,
+            general_settings={"allowed_ips": malformed_allowed_ips},
+            client_host="203.0.113.9",
+        )
+
+        assert status_code == 403

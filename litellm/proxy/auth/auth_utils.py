@@ -97,9 +97,11 @@ def _check_valid_ip(
 
     An empty allowlist means "no allowlist configured", the same as an unset
     one. Treating it as "allow nothing" would lock every caller out of the
-    proxy, including the endpoints needed to add an IP back.
+    proxy, including the endpoints needed to add an IP back. Only ``None`` and
+    an empty list mean that; any other value still goes through the membership
+    check below, so a malformed setting denies rather than admits.
     """
-    if not allowed_ips:
+    if allowed_ips is None or allowed_ips == []:
         return True, None
 
     # if general_settings.get("use_x_forwarded_for") is True then use x-forwarded-for
