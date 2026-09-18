@@ -13,6 +13,7 @@ from typing import IO, Final, Protocol, TypeAlias
 from urllib.parse import quote
 
 import httpx
+import soundfile
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
@@ -28,7 +29,6 @@ from litellm.constants import (
     TRANSCRIBE_MEDIA_FETCH_ATTEMPTS,
     TRANSCRIBE_MEDIA_LAST_MODIFIED_TOLERANCE_SECONDS,
 )
-from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
@@ -57,12 +57,12 @@ TRANSCRIBE_UNPRICED_OPERATIONS: Final = frozenset(
 )
 TRANSCRIBE_SURCHARGE_MEMBERS: Final = ("ContentRedaction", "ToxicityDetection")
 TRANSCRIBE_TERMINAL_JOB_STATUSES: Final = frozenset({"COMPLETED", "FAILED"})
+TRANSCRIBE_MISSING_JOB_ERRORS: Final = frozenset({"BadRequestException", "NotFoundException"})
 TRANSCRIBE_OWNER_TAG: Final = "litellm-owner"
 TRANSCRIBE_OWNED_JOB_OPERATIONS: Final = frozenset({"GetTranscriptionJob", "DeleteTranscriptionJob"})
 
 JobLookup: TypeAlias = Callable[[str], Awaitable[Mapping[str, object]]]  # mutable-ok: Callable parameter syntax
 MediaDurationProbe: TypeAlias = Callable[[str, float], Awaitable[float | None]]  # mutable-ok: Callable parameter syntax
-JobPricer: TypeAlias = Callable[[str, str, float], Awaitable[float]]  # mutable-ok: Callable parameter syntax
 
 
 class GetTranscriptionJobRequest(TypedDict):
@@ -80,7 +80,7 @@ class _JobTag(BaseModel):
     Value: str | None = None
 
 
-class _TranscriptionJob(BaseModel):
+class TranscriptionJobRecord(BaseModel):
     model_config = ConfigDict(frozen=True)
     TranscriptionJobStatus: str | None = None
     CreationTime: float | None = None
@@ -88,9 +88,18 @@ class _TranscriptionJob(BaseModel):
     Tags: tuple[_JobTag, ...] = ()
 
 
-class _GetTranscriptionJobResponse(BaseModel):
+class _TranscriptionJobResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
-    TranscriptionJob: _TranscriptionJob | None = None
+    TranscriptionJob: TranscriptionJobRecord | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MissingJob:
+    """Transcribe no longer knows the job, so polling it again can never reach a terminal status."""
+
+
+StartedJob: TypeAlias = TranscriptionJobRecord | None
+JobPricer: TypeAlias = Callable[[str, str, float, StartedJob], Awaitable[float]]  # mutable-ok: Callable params
 
 
 class _PricedCostMapEntry(BaseModel):
@@ -251,7 +260,7 @@ async def transcribe_job_access_refusal(
         404, f"No transcription job named {job_name} was started through this proxy by the calling key"
     )
     try:
-        job: Final = _GetTranscriptionJobResponse.model_validate(await get_job(job_name)).TranscriptionJob
+        job: Final = _TranscriptionJobResponse.model_validate(await get_job(job_name)).TranscriptionJob
     except Exception as e:  # noqa: BLE001  # a job that cannot be read cannot be shown to belong to the caller
         verbose_proxy_logger.warning("Looking up Transcribe job %s for an ownership check failed: %s", job_name, e)
         return not_found
@@ -269,9 +278,32 @@ def transcribe_max_job_cost(cost_per_second: float) -> float:
     return transcription_job_cost(TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS, cost_per_second)
 
 
-async def _poll_transcription_job(job_name: str, get_job: JobLookup) -> _TranscriptionJob | None:
+def started_transcription_job(response_body: str) -> TranscriptionJobRecord | None:
     try:
-        job: Final = _GetTranscriptionJobResponse.model_validate(await get_job(job_name)).TranscriptionJob
+        return _TranscriptionJobResponse.model_validate_json(response_body).TranscriptionJob
+    except ValidationError:
+        return None
+
+
+def aws_error_type(response: httpx.Response) -> str | None:
+    try:
+        error_type: Final = _JSON_OBJECT.validate_python(response.json()).get("__type")
+    except (ValueError, ValidationError):
+        return None
+    return error_type.rsplit("#", 1)[-1] if isinstance(error_type, str) else None
+
+
+async def _poll_transcription_job(job_name: str, get_job: JobLookup) -> TranscriptionJobRecord | MissingJob | None:
+    try:
+        job: Final = _TranscriptionJobResponse.model_validate(await get_job(job_name)).TranscriptionJob
+    except httpx.HTTPStatusError as e:
+        if aws_error_type(e.response) in TRANSCRIBE_MISSING_JOB_ERRORS:
+            verbose_proxy_logger.warning(
+                "Transcribe job %s no longer exists, pricing the media it was started with", job_name
+            )
+            return MissingJob()
+        verbose_proxy_logger.warning("Polling Transcribe job %s failed, retrying: %s", job_name, e)
+        return None
     except Exception as e:  # noqa: BLE001  # a failed poll is retried on the next tick instead of ending pricing
         verbose_proxy_logger.warning("Polling Transcribe job %s failed, retrying: %s", job_name, e)
         return None
@@ -283,7 +315,7 @@ async def await_transcription_job(
     get_job: JobLookup,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     max_attempts: int = TRANSCRIBE_JOB_MAX_POLLING_ATTEMPTS,
-) -> _TranscriptionJob | None:
+) -> TranscriptionJobRecord | MissingJob | None:
     for _ in range(max_attempts):
         job = await _poll_transcription_job(job_name, get_job)
         if job is not None:
@@ -316,22 +348,25 @@ async def price_transcription_job(
     media_seconds: MediaDurationProbe,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     max_attempts: int = TRANSCRIBE_JOB_MAX_POLLING_ATTEMPTS,
+    started_job: TranscriptionJobRecord | None = None,
 ) -> float:
     """
     Amazon Transcribe bills every second of the media file, silence included, and reports no
     duration itself, so the job is polled to completion and the media it transcribed is measured.
     The measurement only counts when the object has not been rewritten since the job was created,
-    which is what ties it to the bytes Transcribe read. Anything that stops the duration from
-    being read is charged as the longest media AWS accepts.
+    which is what ties it to the bytes Transcribe read. A job deleted before it is polled is
+    measured from the media named in its StartTranscriptionJob response. Anything that stops the
+    duration from being read is charged as the longest media AWS accepts.
     """
-    job: Final = await await_transcription_job(job_name, get_job, sleep=sleep, max_attempts=max_attempts)
-    if job is None:
+    outcome: Final = await await_transcription_job(job_name, get_job, sleep=sleep, max_attempts=max_attempts)
+    if outcome is None:
         verbose_proxy_logger.warning("Transcribe job %s did not finish while polling, charging maximum", job_name)
         return transcribe_max_job_cost(cost_per_second)
-    if job.TranscriptionJobStatus == "FAILED":
+    if isinstance(outcome, TranscriptionJobRecord) and outcome.TranscriptionJobStatus == "FAILED":
         return 0.0
-    media_uri: Final = job.Media.MediaFileUri if job.Media is not None else None
-    if media_uri is None or job.CreationTime is None:
+    job: Final = outcome if isinstance(outcome, TranscriptionJobRecord) else started_job
+    media_uri: Final = job.Media.MediaFileUri if job is not None and job.Media is not None else None
+    if job is None or media_uri is None or job.CreationTime is None:
         return transcribe_max_job_cost(cost_per_second)
     audio_seconds: Final = await measure_media_seconds(media_uri, job.CreationTime, media_seconds, sleep=sleep)
     if audio_seconds is None:
@@ -382,7 +417,8 @@ def s3_media_url(media_uri: str, aws_region_name: str) -> str | None:
     """
     dns_suffix: Final = get_aws_dns_suffix(aws_region_name)
     if not media_uri.startswith("s3://"):
-        return media_uri if httpx.URL(media_uri).host.endswith(f".{dns_suffix}") else None
+        url: Final = httpx.URL(media_uri)
+        return media_uri if url.scheme == "https" and url.host.endswith(f".{dns_suffix}") else None
     bucket, _, key = media_uri.removeprefix("s3://").partition("/")
     if "." in bucket:
         return f"https://s3.{aws_region_name}.{dns_suffix}/{bucket}/{quote(key)}"
@@ -405,6 +441,15 @@ async def write_media_within_limit(response: httpx.Response, media_file: IO[byte
         if media_file.tell() > max_bytes:
             return False
     return True
+
+
+def media_file_seconds(path: Path) -> float | None:
+    try:
+        with soundfile.SoundFile(str(path)) as audio:
+            return len(audio) / audio.samplerate
+    except (RuntimeError, ValueError, OSError) as e:
+        verbose_proxy_logger.warning("Transcribe media could not be decoded for its duration: %s", e)
+        return None
 
 
 def transcribe_media_duration_probe(aws_region_name: str, download_slots: asyncio.Semaphore) -> MediaDurationProbe:
@@ -440,13 +485,17 @@ def transcribe_media_duration_probe(aws_region_name: str, download_slots: asynci
                         )
                         return None
                 media_file.flush()
-                return await asyncio.to_thread(calculate_request_duration, Path(media_file.name))
+                return await asyncio.to_thread(media_file_seconds, Path(media_file.name))
 
     return media_seconds
 
 
 async def price_transcription_job_live(
-    job_name: str, aws_region_name: str, cost_per_second: float, download_slots: asyncio.Semaphore
+    job_name: str,
+    aws_region_name: str,
+    cost_per_second: float,
+    started_job: TranscriptionJobRecord | None,
+    download_slots: asyncio.Semaphore,
 ) -> float:
     try:
         return await price_transcription_job(
@@ -454,6 +503,7 @@ async def price_transcription_job_live(
             cost_per_second,
             get_job=transcribe_job_lookup(aws_region_name),
             media_seconds=transcribe_media_duration_probe(aws_region_name, download_slots),
+            started_job=started_job,
         )
     except Exception as e:  # noqa: BLE001  # an unreadable job must still be charged, so fail closed at the maximum
         verbose_proxy_logger.exception("Pricing Transcribe job %s failed, charging maximum: %s", job_name, e)
@@ -535,7 +585,10 @@ class TranscribePassthroughLoggingHandler:
         job_name: Final = request_body.get("TranscriptionJobName")
         aws_region_name: Final = httpx_response.request.url.host.split(".")[1]
         response_cost: Final = await self._job_pricer(
-            job_name if isinstance(job_name, str) else "", aws_region_name, cost_per_second
+            job_name if isinstance(job_name, str) else "",
+            aws_region_name,
+            cost_per_second,
+            started_transcription_job(result),
         )
         payload: Final = self.transcribe_passthrough_handler(
             httpx_response=httpx_response,
