@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -6,6 +7,7 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 
 from litellm.llms.vertex_ai.common_utils import (
+    _build_vertex_schema,
     _get_vertex_url,
     convert_anyof_null_to_nullable,
     get_vertex_location_from_url,
@@ -1618,6 +1620,74 @@ def test_build_vertex_schema_empty_properties():
     assert (
         "go_back" in parent_schema["properties"]
     ), "go_back should still be in parent properties"
+
+
+def test_build_vertex_schema_merges_object_union_root_for_tool_parameters():
+    schema: Final = {
+        "anyOf": [
+            {"type": "object", "properties": {"query": {"type": "string"}}},
+            {"type": "object", "properties": {"url": {"type": "string"}}},
+        ]
+    }
+
+    result: Final = _build_vertex_schema(schema, enforce_object_root=True)
+
+    assert result["type"] == "object"
+    assert "anyOf" not in result
+    assert set(result["properties"]) == {"query", "url"}
+
+
+def test_build_vertex_schema_keeps_only_required_fields_shared_by_every_branch():
+    schema: Final = {
+        "anyOf": [
+            {
+                "type": "object",
+                "properties": {"query": {"type": "string"}, "lang": {"type": "string"}},
+                "required": ["query", "lang"],
+            },
+            {
+                "type": "object",
+                "properties": {"url": {"type": "string"}, "lang": {"type": "string"}},
+                "required": ["url", "lang"],
+            },
+        ]
+    }
+
+    result: Final = _build_vertex_schema(schema, enforce_object_root=True)
+
+    assert result["required"] == ["lang"]
+
+
+def test_build_vertex_schema_leaves_non_object_union_root_alone():
+    schema: Final = {
+        "anyOf": [
+            {"type": "string"},
+            {"type": "object", "properties": {"url": {"type": "string"}}},
+        ]
+    }
+
+    result: Final = _build_vertex_schema(schema, enforce_object_root=True)
+
+    assert "anyOf" in result
+
+
+def test_build_vertex_schema_leaves_response_schema_root_untouched():
+    schema: Final = {"anyOf": [{"type": "object", "properties": {"query": {"type": "string"}}}]}
+
+    result: Final = _build_vertex_schema(schema)
+
+    assert "type" not in result
+
+
+def test_build_vertex_schema_still_strips_fields_beside_nested_anyof():
+    schema: Final = {
+        "type": "object",
+        "properties": {"value": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": "x"}},
+    }
+
+    result: Final = _build_vertex_schema(schema, enforce_object_root=True)
+
+    assert "default" not in result["properties"]["value"]
 
 
 def test_add_object_type_schema_with_no_properties_and_no_type():
