@@ -17589,6 +17589,7 @@ async def _persist_general_settings_ui_litellm_field(
     field_name: str, value: object, user_api_key_dict: UserAPIKeyAuth
 ) -> dict:
     validated: Final = _validate_general_settings_ui_litellm_value(field_name, value)
+    proxy_config.reject_config_owned_writes(section_name="litellm_settings", changed_keys={field_name: validated})
     config: Final = await proxy_config.get_config()
     before_value: Final = config.get("litellm_settings", {}).get(field_name)
     setattr(litellm, field_name, validated)
@@ -17601,9 +17602,10 @@ async def _persist_general_settings_ui_litellm_field(
 
 
 async def _reset_general_settings_ui_litellm_field(field_name: str, user_api_key_dict: UserAPIKeyAuth) -> dict:
+    default_value: Final = _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name])
+    proxy_config.reject_config_owned_writes(section_name="litellm_settings", changed_keys={field_name: default_value})
     config: Final = await proxy_config.get_config()
     before_value: Final = config.get("litellm_settings", {}).get(field_name)
-    default_value: Final = _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name])
     setattr(litellm, field_name, default_value)
     if "litellm_settings" in config:
         config["litellm_settings"].pop(field_name, None)
@@ -17768,6 +17770,7 @@ async def get_config_list(
             stored_in_db_litellm = False
         else:
             stored_in_db_litellm = None
+        _litellm_source = proxy_config.litellm_settings.source(litellm_field_name)
         return_val.append(
             ConfigList(
                 field_name=litellm_field_name,
@@ -17779,6 +17782,8 @@ async def get_config_list(
                 field_options=list(spec.get("options", ())) or None,
                 field_tab=spec.get("tab"),
                 nested_fields=None,
+                source=_litellm_source,
+                editable=_litellm_source != "config",
             )
         )
 
@@ -17857,6 +17862,7 @@ async def delete_config_general_settings(
         },
     )
     await invalidate_config_param("general_settings")
+    proxy_config.settings.apply_db_row("general_settings", general_settings)
     asyncio.create_task(
         create_config_audit_log(
             "general_settings", "deleted", before_general_settings, general_settings, user_api_key_dict
