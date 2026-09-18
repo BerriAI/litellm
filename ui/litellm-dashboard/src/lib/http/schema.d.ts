@@ -7859,7 +7859,10 @@ export interface paths {
          *
          *     Returns:
          *     - key: str - The key that was looked up, echoed back as it was passed in
-         *     - info: dict - The key's row, minus the hashed token
+         *     - info: dict - The key's row, minus the hashed token. Deleted keys are served from the
+         *       LiteLLM_DeletedVerificationToken archive and carry deleted_at / deleted_by
+         *         - status: "active" | "expired" | "revoked" | "deleted" - Derived from blocked, expires and
+         *           whether the row came from the archive
          *         - key_alias: str | None - User-friendly key alias
          *         - spend: float - Amount spent by the key. When budget_duration is set this covers only the
          *           current budget window, not the key's lifetime
@@ -7917,7 +7920,9 @@ export interface paths {
          *
          *     Parameters:
          *         expand: Optional[List[str]] - Expand related objects (e.g. 'user' to include user information)
-         *         status: Optional[str] - Filter by status. Currently supports "deleted" to query deleted keys.
+         *         status: Optional[str] - Filter by status: "active", "expired", "revoked" (blocked) or "deleted".
+         *         "deleted" reads the LiteLLM_DeletedVerificationToken archive; the other values partition the
+         *         live key table, so every live key matches exactly one of them.
          *
          *     Returns:
          *         {
@@ -8533,6 +8538,45 @@ export interface paths {
          *     ```
          */
         post: operations["bulk_delete_team_members_action_management_v1_teams__team_id__members_bulk_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/teams/{team_id}/members/bulk_update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Update Team Member Budgets Action
+         * @description Set per-member limits for up to 500 members of one team in one call. Same
+         *     authorization and member addressing as `/team/member_update`: proxy admins, the team's
+         *     admins, and admins of the team's organization, with each member named by exactly one of
+         *     `user_id` or `user_email`. Unknown body fields are a 422 and an unknown team is a 404.
+         *
+         *     Each row is a merge patch of that member's limits: a field left out is untouched, a
+         *     field sent as null is cleared, and clearing the last limit drops the member back to the
+         *     team default. A budget row shared by several memberships, the team default included, is
+         *     copied for the member being patched rather than written in place, so one member's new
+         *     cap never lands on anybody else.
+         *
+         *     `data` holds one result per requested member, in request order, carrying the limits in
+         *     force after the write. A row is `success: false` with an `error` when it names nobody on
+         *     the team or repeats an earlier row. Roles are not part of this route; `/team/member_update`
+         *     still owns them.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location 'http://0.0.0.0:4000/management/v1/teams/team-1/members/bulk_update'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{"members": [{"user_id": "user-1", "max_budget_in_team": 10}, {"user_email": "user-2@example.com", "max_budget_in_team": 10, "budget_duration": "30d"}]}'
+         *     ```
+         */
+        post: operations["bulk_update_team_member_budgets_action_management_v1_teams__team_id__members_bulk_update_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -15682,6 +15726,7 @@ export interface paths {
          *     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
          *     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
          *     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
+         *     - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
@@ -15908,6 +15953,7 @@ export interface paths {
          *     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
          *     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
          *     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
+         *     - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
@@ -16428,6 +16474,42 @@ export interface paths {
          *     will be rejected with a 403.
          */
         patch: operations["toolset_mcp_route_toolset__toolset_name__mcp_patch"];
+        trace?: never;
+    };
+    "/typesafe/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        get: operations["typesafe_proxy_route_typesafe__endpoint__get"];
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        put: operations["typesafe_proxy_route_typesafe__endpoint__put"];
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        post: operations["typesafe_proxy_route_typesafe__endpoint__post"];
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        delete: operations["typesafe_proxy_route_typesafe__endpoint__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        patch: operations["typesafe_proxy_route_typesafe__endpoint__patch"];
         trace?: never;
     };
     "/update/default_team_settings": {
@@ -24922,6 +25004,22 @@ export interface components {
             } | null;
         };
         /**
+         * BulkTeamMemberBudgetUpdateRequest
+         * @description Body of `POST /management/v1/teams/{team_id}/members/bulk_update`.
+         */
+        BulkTeamMemberBudgetUpdateRequest: {
+            /** Members */
+            members: components["schemas"]["TeamMemberBudgetPatch"][];
+        };
+        /**
+         * BulkTeamMemberBudgetUpdateResponse
+         * @description `{data: [...]}` with one `TeamMemberBudgetUpdateResult` per requested member, in request order.
+         */
+        BulkTeamMemberBudgetUpdateResponse: {
+            /** Data */
+            data: components["schemas"]["TeamMemberBudgetUpdateResult"][];
+        };
+        /**
          * BulkTeamMemberDeleteRequest
          * @description Body of `POST /management/v1/teams/{team_id}/members/bulk_delete`.
          */
@@ -28988,6 +29086,44 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
+        /** JevClassifierConfig */
+        JevClassifierConfig: {
+            /**
+             * Api Base
+             * @description TypeSafe API base, falling back to TYPESAFE_API_BASE and then https://api.typesafe.ai
+             */
+            api_base?: string | null;
+            /**
+             * Api Key
+             * @description TypeSafe API key, falling back to TYPESAFE_API_KEY
+             */
+            api_key?: string | null;
+            /**
+             * Circuit Breaker Cooldown Seconds
+             * @default 30
+             */
+            circuit_breaker_cooldown_seconds: number;
+            /**
+             * Circuit Breaker Enabled
+             * @default true
+             */
+            circuit_breaker_enabled: boolean;
+            /**
+             * Instructions
+             * @description Replaces the built-in Jev question instructions
+             */
+            instructions?: string | null;
+            /**
+             * Model
+             * @default jev-latest
+             */
+            model: string;
+            /**
+             * Timeout Ms
+             * @default 3000
+             */
+            timeout_ms: number;
+        };
         JsonValue: unknown;
         /** KeyHealthResponse */
         KeyHealthResponse: {
@@ -29648,6 +29784,8 @@ export interface components {
             object_permission_id?: string | null;
             /** Org Id */
             org_id?: string | null;
+            /** Organization Id */
+            organization_id?: string | null;
             /**
              * Permissions
              * @default {}
@@ -29686,6 +29824,11 @@ export interface components {
             team_id?: string | null;
             /** Token */
             token?: string | null;
+            /**
+             * Total Spend
+             * @default 0
+             */
+            total_spend: number;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -31259,6 +31402,11 @@ export interface components {
             team_id?: string | null;
             /** Token */
             token?: string | null;
+            /**
+             * Total Spend
+             * @default 0
+             */
+            total_spend: number;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -33419,6 +33567,13 @@ export interface components {
             model_aliases?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Model Max Budget
+             * @description Max budget per model for every key on the team, overridable per key (e.g. {'gpt-4o': {'max_budget': 10, 'budget_duration': '1d'}})
+             */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Model Rpm Limit */
             model_rpm_limit?: {
                 [key: string]: number;
@@ -34177,6 +34332,13 @@ export interface components {
             model_aliases?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Model Max Budget
+             * @description Max budget per model for every key on the team, overridable per key (e.g. {'gpt-4o': {'max_budget': 10, 'budget_duration': '1d'}})
+             */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Model Rpm Limit */
             model_rpm_limit?: {
                 [key: string]: number;
@@ -34455,6 +34617,11 @@ export interface components {
              */
             policy_name: string;
             /**
+             * Priority
+             * @description Explicit execution order, lower runs first. Prioritised attachments run before those without one.
+             */
+            priority?: number | null;
+            /**
              * Scope
              * @description Use '*' for global scope (applies to all requests).
              */
@@ -34512,6 +34679,11 @@ export interface components {
              * @description Name of the attached policy.
              */
             policy_name: string;
+            /**
+             * Priority
+             * @description Explicit execution order, lower runs first. Prioritised attachments run before those without one.
+             */
+            priority?: number | null;
             /**
              * Scope
              * @description Scope of the attachment.
@@ -35862,11 +36034,11 @@ export interface components {
             classifier_plugin_timeout_ms: number;
             /**
              * Classifier Type
-             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer everywhere except when its score lands near a tier boundary
+             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer everywhere except when its score lands near a tier boundary, or 'jev', a TypeSafe AI Jev structured choice call
              * @default heuristic
              * @enum {string}
              */
-            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "capability" | "llm_v2" | "custom" | "heuristic_first" | "hybrid";
+            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "capability" | "llm_v2" | "custom" | "heuristic_first" | "hybrid" | "jev";
             /**
              * Code Keywords
              * @description Keywords indicating code-related content
@@ -35920,7 +36092,7 @@ export interface components {
             enable_context_window_escalation: boolean;
             /**
              * Enable Non Reasoning Tier
-             * @description Add NON_REASONING as a fifth built-in tier below SIMPLE, for operational agent traffic that relays or reformats information rather than reasoning about it. Off by default: turning it on adds a rung to this router's ladder, a bullet to the LLM classifier's rubric, and a value the classifier may return, all of which move tier decisions and spend on an already-deployed router. Requires an LLM classifier or a custom classifier plugin, since the heuristic scorers cannot produce the tier, and a model in `tiers` under the NON_REASONING key. Escalation still walks up from it, and it is never the savings baseline or a `heuristic_v2` prediction.
+             * @description Add NON_REASONING as a fifth built-in tier below SIMPLE, for operational agent traffic that relays or reformats information rather than reasoning about it. Off by default: turning it on adds a rung to this router's ladder, a bullet to the LLM classifier's rubric, and a value the classifier may return, all of which move tier decisions and spend on an already-deployed router. Requires an LLM, Jev, or custom classifier plugin, since the heuristic scorers cannot produce the tier, and a model in `tiers` under the NON_REASONING key. Escalation still walks up from it, and it is never the savings baseline or a `heuristic_v2` prediction.
              * @default false
              */
             enable_non_reasoning_tier: boolean;
@@ -35955,6 +36127,7 @@ export interface components {
              * @description How close to a tier boundary a heuristic score has to land before the LLM classifier breaks the tie; required when classifier_type is 'hybrid' and rejected otherwise. Everything further than this from every active boundary routes on the scorer's own tier with no classifier call, at any tier, which is what separates 'hybrid' from 'heuristic_first' and its cheap-tier ceiling. A prompt where no dimension fired still goes to the classifier, since the scorer has no opinion to be near a boundary with. 0 escalates only scores sitting exactly on a boundary.
              */
             hybrid_boundary_margin?: number | null;
+            jev_classifier_config?: components["schemas"]["JevClassifierConfig"] | null;
             /**
              * Keyword Tier Rules
              * @description Rules that force a specific tier when their keywords match the prompt
@@ -36083,7 +36256,7 @@ export interface components {
             };
             /**
              * Tier Definitions
-             * @description Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet; entries named after a built-in tier may omit the description and inherit the built-in criteria. List order is ascending severity and decides which tier wins when several keyword_tier_rules match. Requires classifier_type 'llm' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, adaptive selection, session affinity, plugins, tier_labels, and the calibration-example rubric presets are unavailable with a custom tier set: the first four are built on the built-in tier ladder, and the last two rename or exemplify tiers the set replaces.
+             * @description Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet; entries named after a built-in tier may omit the description and inherit the built-in criteria. List order is ascending severity and decides which tier wins when several keyword_tier_rules match. Requires classifier_type 'llm', 'jev' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, adaptive selection, session affinity, plugins, tier_labels, and the calibration-example rubric presets are unavailable with a custom tier set: the first four are built on the built-in tier ladder, and the last two rename or exemplify tiers the set replaces.
              */
             tier_definitions?: components["schemas"]["TierDefinition"][] | null;
             /**
@@ -37227,7 +37400,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "jev_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Calibrated Capable P Solve */
             classifier_calibrated_capable_p_solve?: number;
             /** Classifier Calibrated Efficient P Solve */
@@ -37240,6 +37413,8 @@ export interface components {
             classifier_capability_boundary?: string;
             /** Classifier Capable P Solve */
             classifier_capable_p_solve?: number;
+            /** Classifier Confidence */
+            classifier_confidence?: number;
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Crux */
@@ -37254,6 +37429,10 @@ export interface components {
             classifier_p_solve?: number;
             /** Classifier Primary Rule */
             classifier_primary_rule?: string;
+            /** Classifier Probabilities */
+            classifier_probabilities?: {
+                [key: string]: number;
+            };
             /** Classifier Prompt Version */
             classifier_prompt_version?: string;
             /** Classifier Threshold */
@@ -37894,6 +38073,57 @@ export interface components {
             /** User Id */
             user_id?: string | null;
         };
+        /**
+         * TeamMemberBudgetPatch
+         * @description One member's per-member limits, merge-patch style: a field left out of the row is
+         *     untouched, a field sent as null is cleared, and clearing the last limit drops the
+         *     member back to the team default.
+         */
+        TeamMemberBudgetPatch: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Max Budget In Team */
+            max_budget_in_team?: number | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
+        /**
+         * TeamMemberBudgetUpdateResult
+         * @description Outcome for one requested member, in request order, carrying the limits in force
+         *     after the write rather than the ones that were asked for.
+         */
+        TeamMemberBudgetUpdateResult: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Budget Source */
+            max_budget_source?: ("member" | "team_default") | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Success */
+            success: boolean;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
         /** TeamMemberDeleteRequest */
         TeamMemberDeleteRequest: {
             /** Team Id */
@@ -37949,7 +38179,7 @@ export interface components {
         };
         /**
          * TeamMemberRef
-         * @description One member to remove, named by exactly one of `user_id` or `user_email`.
+         * @description One member, named by exactly one of `user_id` or `user_email`.
          */
         TeamMemberRef: {
             /** User Email */
@@ -39326,6 +39556,13 @@ export interface components {
             model_aliases?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Model Max Budget
+             * @description Max budget per model for every key on the team, overridable per key (e.g. {'gpt-4o': {'max_budget': 10, 'budget_duration': '1d'}})
+             */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Model Rpm Limit */
             model_rpm_limit?: {
                 [key: string]: number;
@@ -40037,6 +40274,10 @@ export interface components {
             team_model_aliases?: {
                 [key: string]: unknown;
             } | null;
+            /** Team Model Max Budget */
+            team_model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Team Models
              * @default []
@@ -40057,6 +40298,11 @@ export interface components {
             team_tpm_limit?: number | null;
             /** Token */
             token?: string | null;
+            /**
+             * Total Spend
+             * @default 0
+             */
+            total_spend: number;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -51366,7 +51612,7 @@ export interface operations {
                 sort_order?: string;
                 /** @description Expand related objects (e.g. 'user') */
                 expand?: string[] | null;
-                /** @description Filter by status (e.g. 'deleted') */
+                /** @description Filter by status: 'active' (not blocked, not expired), 'expired' (not blocked, past expiry), 'revoked' (blocked) or 'deleted' (archived keys). Omit to return live keys regardless of status. */
                 status?: string | null;
                 /** @description Filter keys by project ID */
                 project_id?: string | null;
@@ -52015,6 +52261,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BulkTeamMemberDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_update_team_member_budgets_action_management_v1_teams__team_id__members_bulk_update_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkTeamMemberBudgetUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkTeamMemberBudgetUpdateResponse"];
                 };
             };
             /** @description Validation Error */
@@ -61367,6 +61651,161 @@ export interface operations {
             header?: never;
             path: {
                 toolset_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
             };
             cookie?: never;
         };

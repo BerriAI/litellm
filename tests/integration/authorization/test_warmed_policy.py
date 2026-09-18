@@ -1,16 +1,18 @@
-from contextlib import ExitStack
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from hashlib import sha256
 from typing import Final
 import os
 
 import psycopg
 import pytest
+from pydantic import JsonValue
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
 
-from integration._support.client import Gateway, eventually, object_value
-from integration._support.database import read_rows
-from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
+from tests.integration._support.client import Gateway, eventually, object_value
+from tests.integration._support.database import read_rows
+from tests.integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
 
 
 def assert_serving(gateway: Gateway, model: str, key: str, status: int, error_type: str = "auth_error") -> None:
@@ -134,37 +136,58 @@ def test_scim_deactivation_blocks_null_and_false_keys_but_preserves_other_owners
                 assert_serving(gateway, model, token, 200)
 
 
+def _set_team_admin_editable_fields(gateway: Gateway, fields: list[JsonValue]) -> None:
+    response: Final = gateway.request("PATCH", "/update/ui_settings", {"team_admin_editable_team_fields": fields})
+    assert response.status_code == 200, response.text
+
+
+@contextmanager
+def _team_admins_may_edit(gateway: Gateway, fields: list[JsonValue]) -> Iterator[None]:
+    original: Final = object_value(gateway.get("/get/ui_settings")["values"]).get("team_admin_editable_team_fields")
+    _set_team_admin_editable_fields(gateway, fields)
+    try:
+        yield
+    finally:
+        _set_team_admin_editable_fields(gateway, original if isinstance(original, list) else [])
+
+
 @pytest.mark.covers("mgmt.team.member_update.demoted_role_cannot_write")
 def test_warmed_team_role_demotion_prevents_later_management_writes(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario:
+    with gateway.scenario() as scenario, _team_admins_may_edit(gateway, ["tpm_limit"]):
         model: Final = scenario.model()
         user: Final = scenario.user(user_role="internal_user")
-        team: Final = scenario.team(models=[model], members_with_roles=[{"user_id": user, "role": "admin"}])
-        control_team: Final = scenario.team(models=[model])
+        team: Final = scenario.team(
+            models=[model], tpm_limit=1000, members_with_roles=[{"user_id": user, "role": "admin"}]
+        )
+        control_team: Final = scenario.team(models=[model], tpm_limit=1000)
         caller: Final = scenario.key(
             user_id=user, team_id=team, models=[model], allowed_routes=["/team/update", "/v1/chat/completions"]
         )
         gateway.chat(model, key=caller)
-        changed: Final = gateway.request("POST", "/team/update", {"team_id": team, "team_alias": "permitted"}, key=caller)
+        changed: Final = gateway.request("POST", "/team/update", {"team_id": team, "tpm_limit": 5000}, key=caller)
         assert changed.status_code == 200, changed.text
+        assert read_rows('SELECT tpm_limit FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team,)) == [
+            {"tpm_limit": 5000}
+        ]
         unrelated_before: Final = read_rows(
-            'SELECT team_alias FROM "LiteLLM_TeamTable" WHERE team_id = %s', (control_team,)
+            'SELECT tpm_limit FROM "LiteLLM_TeamTable" WHERE team_id = %s', (control_team,)
         )
         unrelated: Final = gateway.request(
-            "POST", "/team/update", {"team_id": control_team, "team_alias": "must-not-persist"}, key=caller
+            "POST", "/team/update", {"team_id": control_team, "tpm_limit": 7000}, key=caller
         )
         assert unrelated.status_code == 403, unrelated.text
         assert read_rows(
-            'SELECT team_alias FROM "LiteLLM_TeamTable" WHERE team_id = %s', (control_team,)
+            'SELECT tpm_limit FROM "LiteLLM_TeamTable" WHERE team_id = %s', (control_team,)
         ) == unrelated_before
         gateway.post("/team/member_update", {"team_id": team, "user_id": user, "role": "user"})
         for target in (team, control_team):
-            before: Final = read_rows('SELECT team_alias FROM "LiteLLM_TeamTable" WHERE team_id = %s', (target,))
+            before: Final = read_rows('SELECT tpm_limit FROM "LiteLLM_TeamTable" WHERE team_id = %s', (target,))
             denied: Final = gateway.request(
-                "POST", "/team/update", {"team_id": target, "team_alias": "must-not-persist"}, key=caller
+                "POST", "/team/update", {"team_id": target, "tpm_limit": 9000}, key=caller
             )
             assert denied.status_code == 403, denied.text
-            assert read_rows('SELECT team_alias FROM "LiteLLM_TeamTable" WHERE team_id = %s', (target,)) == before
+            after: Final = read_rows('SELECT tpm_limit FROM "LiteLLM_TeamTable" WHERE team_id = %s', (target,))
+            assert after == before
         roster: Final = read_rows('SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team,))
         members: Final = roster[0]["members_with_roles"]
         assert isinstance(members, list)

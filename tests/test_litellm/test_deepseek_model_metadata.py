@@ -15,7 +15,6 @@ import os
 import litellm
 from litellm.utils import (
     _supports_factory,
-    supports_response_schema,
 )
 
 # ---------------------------------------------------------------------------

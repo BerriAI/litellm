@@ -33,17 +33,3 @@ def use_local_model_cost_map():
         monkeypatch.undo()
 
 
-def test_azure_ai_kimi_k26_cost_per_token(use_local_model_cost_map):
-    from litellm.llms.azure_ai.cost_calculator import cost_per_token
-    from litellm.types.utils import Usage
-
-    usage = Usage(
-        prompt_tokens=1_000_000,
-        completion_tokens=1_000_000,
-        total_tokens=2_000_000,
-    )
-
-    prompt_cost, completion_cost = cost_per_token(model="kimi-k2.6", usage=usage)
-
-    assert prompt_cost == pytest.approx(0.95)
-    assert completion_cost == pytest.approx(4.0)

@@ -25,6 +25,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    ModelAccessDeniedProxyException,
     ProxyErrorTypes,
     ProxyException,
     SSOUserDefinedValues,
@@ -50,6 +51,8 @@ from litellm.proxy.auth.auth_checks import (
     get_key_object,
     get_user_object,
     invalidate_team_member_spend_state,
+    request_skips_budget_checks,
+    route_skips_budget_checks,
     vector_store_access_check,
 )
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -530,12 +533,14 @@ async def test_can_team_access_model_error_lists_direct_and_access_group_models(
         assert await can_team_access_model("direct-model", team_object, None) is True
         assert await can_team_access_model("group-model", team_object, None) is True
 
-        with pytest.raises(ProxyException) as exc_info:
+        with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
             await can_team_access_model("blocked-model", team_object, None)
 
     assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
-    assert "direct-model" in exc_info.value.message
-    assert "group-model" in exc_info.value.message
+    assert "direct-model" in exc_info.value.internal_message
+    assert "group-model" in exc_info.value.internal_message
+    assert "direct-model" not in exc_info.value.message
+    assert "group-model" not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -1675,8 +1680,126 @@ def test_can_object_call_model_no_access_to_alias_or_underlying():
 
     # Should raise ProxyException with appropriate error type
     assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
-    assert "key not allowed to access model" in str(exc_info.value.message)
+    assert "is not available for this API key" in str(exc_info.value.message)
     assert "my-fake-gpt" in str(exc_info.value.message)
+
+
+_DENIED_MESSAGE_TEMPLATE: Final = (
+    "The requested model '{model}' is not available for this API key, or the model name is invalid. "
+    "Check the models available to you and try again."
+)
+
+
+def test_can_object_call_model_denial_hides_allowlist_and_keeps_detail_on_exception(caplog):
+    with caplog.at_level("DEBUG", logger="LiteLLM Proxy"):
+        with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
+            _can_object_call_model(
+                model="anthropic-sonnet-4-5",
+                llm_router=None,
+                models=["internal-models"],
+                object_type="key",
+            )
+
+    assert exc_info.value.message == _DENIED_MESSAGE_TEMPLATE.format(model="anthropic-sonnet-4-5")
+    assert "internal-models" not in exc_info.value.message
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+    assert exc_info.value.param == "model"
+    assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
+    assert exc_info.value.internal_message == (
+        "key not allowed to access model. This key can only access models=['internal-models']. "
+        "Tried to access anthropic-sonnet-4-5"
+    )
+    assert "internal-models" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_access_group_fallback_grant_does_not_log_a_denial(caplog):
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    team_object = LiteLLM_TeamTable(team_id="team-123", models=["direct-model"], access_group_ids=["ag-1"])
+
+    with (
+        patch(  # test-quality-ok: access-group lookup has no dependency-injection seam
+            "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+            new=AsyncMock(return_value=["group-model"]),
+        ),
+        caplog.at_level("DEBUG", logger="LiteLLM Proxy"),
+    ):
+        assert await can_team_access_model("group-model", team_object, None) is True
+
+    assert "not allowed to access model" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "object_type, expected_type",
+    [
+        ("team", ProxyErrorTypes.team_model_access_denied),
+        ("user", ProxyErrorTypes.user_model_access_denied),
+        ("org", ProxyErrorTypes.org_model_access_denied),
+    ],
+)
+def test_can_object_call_model_denial_same_client_message_for_every_object_type(object_type, expected_type):
+    with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
+        _can_object_call_model(
+            model="anthropic-sonnet-4-5",
+            llm_router=None,
+            models=["internal-models"],
+            object_type=object_type,
+        )
+
+    assert exc_info.value.message == _DENIED_MESSAGE_TEMPLATE.format(model="anthropic-sonnet-4-5")
+    assert exc_info.value.type == expected_type
+    assert f"{object_type} not allowed to access model" in exc_info.value.internal_message
+
+
+@pytest.mark.asyncio
+async def test_can_user_call_model_no_default_models_hides_policy_detail():
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import can_user_call_model
+
+    user_object = LiteLLM_UserTable(user_id="test-user", models=[SpecialModelNames.no_default_models.value])
+
+    with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
+        await can_user_call_model(model="restricted-model", llm_router=None, user_object=user_object)
+
+    assert exc_info.value.message == _DENIED_MESSAGE_TEMPLATE.format(model="restricted-model")
+    assert "only team models allowed" in exc_info.value.internal_message
+    assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.asyncio
+async def test_check_team_member_model_access_denied_hides_member_allowlist():
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.auth.auth_checks import _check_team_member_model_access
+    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
+
+    membership = LiteLLM_TeamMembership(
+        user_id="alice",
+        team_id="team-a",
+        litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["fast-models"]),
+    )
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id="alice", team_id="team-a"),
+        value=membership,
+        model_type=LiteLLM_TeamMembership,
+    )
+
+    with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
+        await _check_team_member_model_access(
+            model="mock-vision",
+            team_object=LiteLLM_TeamTable(team_id="team-a"),
+            valid_token=UserAPIKeyAuth(token="sk-test", user_id="alice", team_id="team-a"),
+            llm_router=_make_team_scoped_router(),
+            prisma_client=None,
+            user_api_key_cache=cache,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert exc_info.value.message == _DENIED_MESSAGE_TEMPLATE.format(model="mock-vision")
+    assert "fast-models" not in exc_info.value.message
+    assert "Allowed member models = ['fast-models']" in exc_info.value.internal_message
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
 
 
 # -- Team-member access-group resolution with team-scoped DB models -----------
@@ -5484,6 +5607,65 @@ async def test_common_checks_personal_user_budget_blocks_in_gather():
     assert "User=u1" in str(over.value)
 
 
+async def _common_checks_for_over_budget_personal_key(*, model: str) -> bool:
+    from litellm import Router
+    from litellm.proxy.auth.auth_checks import _is_model_cost_zero, common_checks
+
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "free-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                "model_info": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+            },
+            {
+                "model_name": "paid-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+            },
+        ]
+    )
+    user: Final = LiteLLM_UserTable(user_id="u1", spend=0.0, max_budget=1.0)
+    token: Final = UserAPIKeyAuth(token="k1", user_id="u1")
+
+    async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 5.0 if counter_key == "spend:user:u1" else 0.0
+
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.get_current_spend", _spend_by_counter),
+    ):
+        result: Final = await common_checks(
+            request_body={"model": model, "messages": [{"role": "user", "content": "hi"}]},
+            team_object=None,
+            user_object=user,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/chat/completions",
+            llm_router=llm_router,
+            proxy_logging_obj=proxy_logging_obj,
+            valid_token=token,
+            request=MagicMock(spec=Request),
+            skip_budget_checks=_is_model_cost_zero(model=model, llm_router=llm_router),
+        )
+        await asyncio.sleep(0)
+    return result
+
+
+@pytest.mark.asyncio
+async def test_common_checks_over_budget_user_can_still_call_zero_cost_model():
+    """LIT-7464: an exhausted personal budget must not block a model priced at 0/0,
+    while the same user is still rejected on a priced model."""
+    assert await _common_checks_for_over_budget_personal_key(model="free-model") is True
+
+    with pytest.raises(litellm.BudgetExceededError) as over:
+        await _common_checks_for_over_budget_personal_key(model="paid-model")
+    assert "ExceededBudget: User=u1" in str(over.value)
+
+
 async def _run_internal_user_budget_alert(
     *,
     spend: float,
@@ -8267,3 +8449,15 @@ async def test_access_group_model_fallback_uses_the_injected_database(channel: s
                 llm_router=None, prisma_client=client,
             ) is True
     reader.assert_awaited_once_with(where={"access_group_id": "group-a"})
+
+
+def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
+    assert route_skips_budget_checks(route="/v1/models") is True
+    assert route_skips_budget_checks(route="/spend/logs") is True
+    assert route_skips_budget_checks(route="/health") is False
+    assert route_skips_budget_checks(route="/v1/chat/completions") is False
+
+
+def test_request_skips_budget_checks_extends_route_rule_with_zero_cost_models() -> None:
+    assert request_skips_budget_checks(route="/v1/models", model=None, llm_router=None) is True
+    assert request_skips_budget_checks(route="/v1/chat/completions", model=None, llm_router=None) is False

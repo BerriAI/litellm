@@ -1,24 +1,29 @@
-use std::collections::HashMap;
-use std::io;
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    io,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use futures_util::{SinkExt, StreamExt};
 use rustls::{ClientConfig, RootCertStore};
-use tokio::net::TcpStream;
-use tokio::sync::Mutex;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::error::TlsError;
-use tokio_tungstenite::tungstenite::handshake::client::Response;
-use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
+use tokio::{net::TcpStream, sync::Mutex};
 use tokio_tungstenite::{
     Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config,
+    tungstenite::{
+        Message,
+        client::IntoClientRequest,
+        error::TlsError,
+        handshake::client::Response,
+        http::{HeaderName, HeaderValue},
+    },
 };
 
-use crate::Error;
-use crate::constants::{OPENAI_RESPONSES_DEFAULT_API_BASE, OPENAI_RESPONSES_PATH};
-use crate::responses::types::{ResponsesWsEvent, ResponsesWsEventType, ResponsesWsTransformResult};
+use super::Error;
+use crate::{
+    constants::{OPENAI_RESPONSES_DEFAULT_API_BASE, OPENAI_RESPONSES_PATH},
+    responses::types::{ResponsesWsEvent, ResponsesWsEventType, ResponsesWsTransformResult},
+};
 
 pub trait ResponsesWebSocketProviderConfig: Sync {
     fn supports_native_websocket(&self) -> bool {
@@ -204,9 +209,9 @@ impl ResponsesWebSocketConnection {
         headers: &HashMap<String, String>,
         timeout: Option<Duration>,
     ) -> Result<Self, Error> {
-        let mut request = url
-            .into_client_request()
-            .map_err(|error| Error::Network(error.to_string()))?;
+        let mut request = url.into_client_request().map_err(|error| {
+            Error::Transport(crate::transport::Error::Network(error.to_string()))
+        })?;
         for (name, value) in headers {
             let header_name = name
                 .parse::<HeaderName>()
@@ -217,17 +222,21 @@ impl ResponsesWebSocketConnection {
         }
         let connect = connect_upstream(request);
         let result = match timeout {
-            Some(timeout) => tokio::time::timeout(timeout, connect)
-                .await
-                .map_err(|_| Error::Network("Responses WebSocket connection timed out".into()))?,
+            Some(timeout) => tokio::time::timeout(timeout, connect).await.map_err(|_| {
+                Error::Transport(crate::transport::Error::Network(
+                    "Responses WebSocket connection timed out".into(),
+                ))
+            })?,
             None => connect.await,
         };
         let (socket, _) = result.map_err(|error| match *error {
-            tokio_tungstenite::tungstenite::Error::Http(response) => Error::Http {
-                status: response.status().as_u16(),
-                body: String::new(),
-            },
-            other => Error::Network(other.to_string()),
+            tokio_tungstenite::tungstenite::Error::Http(response) => {
+                Error::Transport(crate::transport::Error::Http {
+                    status: response.status().as_u16(),
+                    body: String::new(),
+                })
+            }
+            other => Error::Transport(crate::transport::Error::Network(other.to_string())),
         })?;
         Ok(Self {
             socket: Arc::new(Mutex::new(Some(socket))),
@@ -237,12 +246,14 @@ impl ResponsesWebSocketConnection {
     pub async fn send_text(&self, text: String) -> Result<(), Error> {
         let mut socket = self.socket.lock().await;
         let Some(socket) = socket.as_mut() else {
-            return Err(Error::Network("Responses WebSocket is closed".into()));
+            return Err(Error::Transport(crate::transport::Error::Network(
+                "Responses WebSocket is closed".into(),
+            )));
         };
         socket
             .send(Message::Text(text))
             .await
-            .map_err(|error| Error::Network(error.to_string()))
+            .map_err(|error| Error::Transport(crate::transport::Error::Network(error.to_string())))
     }
 
     pub async fn recv_text(&self) -> Result<Option<String>, Error> {
@@ -257,17 +268,18 @@ impl ResponsesWebSocketConnection {
                 .map_err(|error| Error::InvalidResponse(error.to_string())),
             Some(Ok(Message::Close(_))) | None => Ok(None),
             Some(Ok(_)) => Ok(None),
-            Some(Err(error)) => Err(Error::Network(error.to_string())),
+            Some(Err(error)) => Err(Error::Transport(crate::transport::Error::Network(
+                error.to_string(),
+            ))),
         }
     }
 
     pub async fn close(&self) -> Result<(), Error> {
         let mut socket = self.socket.lock().await;
         if let Some(socket) = socket.as_mut() {
-            socket
-                .close(None)
-                .await
-                .map_err(|error| Error::Network(error.to_string()))?;
+            socket.close(None).await.map_err(|error| {
+                Error::Transport(crate::transport::Error::Network(error.to_string()))
+            })?;
         }
         *socket = None;
         Ok(())

@@ -1,6 +1,7 @@
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { organizationKeys, useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useQueryClient } from "@tanstack/react-query";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import { MoneyCell } from "@/components/shared/table_cells";
 import CopyButton from "@/components/shared/CopyButton";
@@ -25,6 +26,7 @@ import {
 import ObjectPermissionsView from "../object_permissions_view";
 import MemberModal from "../team/EditMembership";
 import { OrgSettingsForm } from "./org-settings/OrgSettingsForm";
+import { ORGANIZATION_TAB_URL_KEY, ORGANIZATION_TABS, type OrganizationTab } from "./organizationTabs";
 
 interface OrganizationInfoProps {
   organizationId: string;
@@ -33,7 +35,6 @@ interface OrganizationInfoProps {
   is_org_admin: boolean;
   is_proxy_admin: boolean;
   userModels: string[];
-  editOrg: boolean;
 }
 
 const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
@@ -43,7 +44,6 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   is_org_admin,
   is_proxy_admin,
   userModels,
-  editOrg,
 }) => {
   const queryClient = useQueryClient();
   const { data: orgData, isLoading: loading } = useOrganization(organizationId);
@@ -53,9 +53,15 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const canEditOrg = is_org_admin || is_proxy_admin;
   const { data: teams } = useTeams();
-  const { onTabChange, hasVisited } = useVisitedTabs(editOrg ? "settings" : "overview");
+  const [tab, setTab] = useUrlTab(ORGANIZATION_TABS, "overview", ORGANIZATION_TAB_URL_KEY);
+  const { onTabChange, hasVisited } = useVisitedTabs(tab);
 
   const teamAliasMap = useMemo(() => createTeamAliasMap(teams), [teams]);
+
+  const handleTabChange = (value: OrganizationTab) => {
+    setTab(value);
+    onTabChange(value);
+  };
 
   const handleMemberAdd = async (values: any) => {
     try {
@@ -158,7 +164,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         </div>
       </div>
 
-      <Tabs defaultValue={editOrg ? "settings" : "overview"} onValueChange={onTabChange} className="mb-4">
+      <Tabs value={tab} onValueChange={handleTabChange} className="mb-4">
         <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             Overview
