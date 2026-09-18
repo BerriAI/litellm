@@ -95,7 +95,8 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
     assert result.status_code == 200, result.text
     assert message in result.text
     if path == "/v1/responses":
-        assert frames[-1].startswith("event: response.failed\n"), result.text
+        assert frames[-1] == "data: [DONE]", result.text
+        assert frames[-2].startswith("event: response.failed\n"), result.text
         if partial:
             assert [event["type"] for event in events] == [
                 "response.created", "response.output_item.added",

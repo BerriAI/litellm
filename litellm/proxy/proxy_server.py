@@ -8865,6 +8865,7 @@ def _format_streaming_sse_chunk(chunk: str | bytes) -> str | bytes:
 
 
 _SSE_FRAME_DELIMITERS: Final = ("\r\n\r\n", "\n\n", "\r\r")
+_OPENAI_STREAM_DONE_FRAME: Final = "data: [DONE]\n\n"
 _MAX_RAW_SSE_BUFFER_CHARS: Final = 8 * 1024 * 1024
 
 
@@ -9272,8 +9273,7 @@ async def async_data_generator(
             yield error_message
         # OpenAI-compatible streams terminate with data: [DONE]; Google GenAI (?alt=sse) does not.
         if not request_data.get("_litellm_skip_openai_stream_done"):
-            done_message: Final = "[DONE]"
-            yield f"data: {done_message}\n\n"
+            yield _OPENAI_STREAM_DONE_FRAME
     except (asyncio.CancelledError, GeneratorExit):
         # Client disconnected mid-stream. CancelledError / GeneratorExit are
         # BaseException, so they bypass the success/failure logging callbacks
@@ -9303,6 +9303,8 @@ async def async_data_generator(
             error_frame: Final = error_state.format_failure(e)
             if error_frame is not None:
                 yield error_frame
+            if not request_data.get("_litellm_skip_openai_stream_done"):
+                yield _OPENAI_STREAM_DONE_FRAME
             return
         if isinstance(e, HTTPException):
             raise e
