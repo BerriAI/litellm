@@ -669,6 +669,10 @@ def _get_batch_job_usage_from_response_body(
     """
     Get the tokens of a batch job from the response body
     """
+    if custom_llm_provider == "bedrock":
+        embedding_usage: Final = _bedrock_embedding_usage(response_body)
+        if embedding_usage is not None:
+            return embedding_usage
     if custom_llm_provider in ("anthropic", "bedrock"):
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
         from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
@@ -695,6 +699,13 @@ def _get_batch_job_usage_from_response_body(
         return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(_usage_dict)
     usage: Final[Usage] = Usage(**_usage_dict)
     return usage
+
+
+def _bedrock_embedding_usage(response_body: Mapping[str, Any]) -> Usage | None:
+    token_count: Final = response_body.get("inputTextTokenCount")
+    if not isinstance(token_count, int):
+        return None
+    return Usage(prompt_tokens=token_count, completion_tokens=0, total_tokens=token_count)
 
 
 def _get_anthropic_result_from_batch_results_line(batch_results_line: Mapping[str, Any]) -> Mapping[str, Any]:
