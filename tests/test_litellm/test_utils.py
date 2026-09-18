@@ -61,6 +61,7 @@ from litellm.utils import (
     _snapshot_exception_for_hook,
     async_post_call_failure_deployment_hook,
     async_post_call_success_deployment_hook,
+    calculate_max_parallel_requests,
     client,
     get_non_default_completion_params,
     get_optional_params_image_gen,
@@ -5774,3 +5775,32 @@ def test_register_model_without_a_provider_never_inherits_another_providers_entr
         assert info["output_cost_per_token"] == 4e-07
     finally:
         _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(
+    ("max_parallel_requests", "rpm", "tpm", "default_max_parallel_requests", "expected"),
+    [
+        (3, 100, 100_000, 7, 3),
+        (None, 100, 100_000, 7, 100),
+        (None, None, 100_000, 7, 600),
+        (None, None, 50, 7, 1),
+        (None, None, None, 7, 7),
+        (None, None, None, None, None),
+    ],
+)
+def test_calculate_max_parallel_requests_precedence(
+    max_parallel_requests: int | None,
+    rpm: int | None,
+    tpm: int | None,
+    default_max_parallel_requests: int | None,
+    expected: int | None,
+) -> None:
+    assert (
+        calculate_max_parallel_requests(
+            max_parallel_requests=max_parallel_requests,
+            rpm=rpm,
+            tpm=tpm,
+            default_max_parallel_requests=default_max_parallel_requests,
+        )
+        == expected
+    )
