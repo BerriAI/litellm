@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import litellm
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
@@ -182,3 +182,39 @@ def test_search_uses_registry_credentials():
             assert getattr(called_params, "aws_region_name") == "us-east-1"
     finally:
         litellm.vector_store_registry = original_registry
+
+
+@pytest.mark.asyncio
+async def test_config_vector_store_survives_db_check():
+    """Config-defined vector stores are not in the DB and must not be evicted when a DB is connected."""
+    registry = VectorStoreRegistry()
+    registry.load_vector_stores_from_config(
+        [
+            {
+                "vector_store_name": "config-kb",
+                "litellm_params": {
+                    "vector_store_id": "CONFIGKB",
+                    "custom_llm_provider": "bedrock",
+                },
+            }
+        ]
+    )
+
+    db_store = LiteLLM_ManagedVectorStore(
+        vector_store_id="DBONLY",
+        custom_llm_provider="bedrock",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    registry.add_vector_store_to_registry(db_store)
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+    result = await registry.pop_vector_stores_to_run_with_db_fallback(
+        non_default_params={"vector_store_ids": ["CONFIGKB", "DBONLY"]},
+        prisma_client=mock_prisma_client,
+    )
+
+    assert [vs.get("vector_store_id") for vs in result] == ["CONFIGKB"]
+    assert any(vs.get("vector_store_id") == "CONFIGKB" for vs in registry.vector_stores)
+    assert not any(vs.get("vector_store_id") == "DBONLY" for vs in registry.vector_stores)
