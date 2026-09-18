@@ -42,10 +42,20 @@ const isAllowedClient = (entry: unknown): entry is AllowedClient => {
   return typeof alias === "string" && typeof value === "string";
 };
 
-const parseStoredClients = (fieldValue: unknown): AllowedClient[] | null =>
-  Array.isArray(fieldValue) && fieldValue.every(isAllowedClient)
-    ? fieldValue.map(({ alias, value }) => ({ alias, value }))
-    : null;
+type StoredAllowlist =
+  | { readonly kind: "absent" }
+  | { readonly kind: "clients"; readonly clients: AllowedClient[] }
+  | { readonly kind: "malformed" };
+
+const ABSENT: StoredAllowlist = { kind: "absent" };
+
+const parseStoredClients = (fieldValue: unknown): StoredAllowlist => {
+  if (fieldValue === null || fieldValue === undefined) return ABSENT;
+  if (Array.isArray(fieldValue) && fieldValue.every(isAllowedClient)) {
+    return { kind: "clients", clients: fieldValue.map(({ alias, value }) => ({ alias, value })) };
+  }
+  return { kind: "malformed" };
+};
 
 let nextRowKey = 0;
 const newRow = (client: AllowedClient = { alias: "", value: "" }): AllowedClientRow => ({
@@ -66,8 +76,16 @@ const sameClients = (a: AllowedClient[], b: AllowedClient[]) =>
 const unchangedSinceLoad = (value: string[], stored: string[] | null) =>
   stored === null ? value.length === 0 : value.length > 0 && sameList(value, stored);
 
-const clientsUnchangedSinceLoad = (value: AllowedClient[], stored: AllowedClient[] | null) =>
-  stored === null ? value.length === 0 : value.length > 0 && sameClients(value, stored);
+const clientsUnchangedSinceLoad = (value: AllowedClient[], stored: StoredAllowlist) => {
+  switch (stored.kind) {
+    case "absent":
+      return value.length === 0;
+    case "clients":
+      return value.length > 0 && sameClients(value, stored.clients);
+    case "malformed":
+      return false;
+  }
+};
 
 const headerUnchangedSinceLoad = (value: string, stored: string | null) =>
   stored === null ? value === "" : value !== "" && value === stored;
@@ -79,7 +97,7 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
   const [allowedClients, setAllowedClients] = useState<AllowedClientRow[]>([]);
   const [clientIdHeader, setClientIdHeader] = useState("");
   const [storedRanges, setStoredRanges] = useState<string[] | null>(null);
-  const [storedClients, setStoredClients] = useState<AllowedClient[] | null>(null);
+  const [storedClients, setStoredClients] = useState<StoredAllowlist>(ABSENT);
   const [storedClientIdHeader, setStoredClientIdHeader] = useState<string | null>(null);
   const [currentIp, setCurrentIp] = useState<string | null>(null);
   const [rangeDraft, setRangeDraft] = useState("");
@@ -100,11 +118,9 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
           setStoredRanges(field.field_value);
         }
         if (field.field_name === "mcp_allowed_clients") {
-          const clients = parseStoredClients(field.field_value);
-          if (clients !== null) {
-            setAllowedClients(clients.map(newRow));
-            setStoredClients(clients);
-          }
+          const stored = parseStoredClients(field.field_value);
+          setAllowedClients(stored.kind === "clients" ? stored.clients.map(newRow) : []);
+          setStoredClients(stored);
         }
         if (field.field_name === "mcp_client_id_header" && typeof field.field_value === "string") {
           setClientIdHeader(field.field_value);
@@ -145,11 +161,11 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
     if (clientsUnchangedSinceLoad(clients, storedClients)) return;
     if (clients.length > 0) {
       await updateConfigFieldSetting(token, "mcp_allowed_clients", clients);
-      setStoredClients(clients);
+      setStoredClients({ kind: "clients", clients });
       return;
     }
     await deleteConfigFieldSetting(token, "mcp_allowed_clients");
-    setStoredClients(null);
+    setStoredClients(ABSENT);
   };
 
   const persistClientIdHeader = async (token: string) => {
@@ -216,7 +232,8 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
   }
 
   const suggestedRange = currentIp ? ipToSlash24(currentIp) : null;
-  const storedAllowlistDeniesEveryone = storedClients !== null && storedClients.length === 0;
+  const storedAllowlistIsMalformed = storedClients.kind === "malformed";
+  const storedAllowlistIsEmpty = storedClients.kind === "clients" && storedClients.clients.length === 0;
 
   return (
     <div className="space-y-6 p-4">
@@ -303,7 +320,13 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
         <div className="mb-2 flex items-center">
           <p className="text-sm font-medium">Allowed Clients</p>
         </div>
-        {storedAllowlistDeniesEveryone && (
+        {storedAllowlistIsMalformed && (
+          <p className="mb-2 text-sm text-destructive">
+            The stored allowlist is not a list of alias and value pairs, so every client is denied. Add the clients you
+            want and save to replace it, or save with the list empty to remove it and allow every client again.
+          </p>
+        )}
+        {storedAllowlistIsEmpty && (
           <p className="mb-2 text-sm text-destructive">
             An empty allowlist is currently stored, so every client is denied. Save with the list empty to remove it and
             allow every client again.

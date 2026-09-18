@@ -154,16 +154,39 @@ describe("MCPNetworkSettings", () => {
     expect(screen.getByRole("textbox", { name: "Client 2 value" })).toHaveValue("codex-mcp-client");
   });
 
-  it("ignores a stored allowlist in the old plain-string shape instead of rendering it", async () => {
+  it("warns that a stored allowlist in the old plain-string shape denies every client and lets Save remove it", async () => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([
       { field_name: "mcp_allowed_clients", field_value: ["antigravity-cli"] },
     ]);
 
     renderSettings();
 
-    await screen.findByText("Allowed Clients");
+    expect(await screen.findByText(/stored allowlist is not a list of alias and value pairs/)).toBeVisible();
     expect(screen.queryByRole("textbox", { name: "Client 1 value" })).not.toBeInTheDocument();
-    expect(screen.queryByText(/every client is denied/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() => expect(deleteConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients"));
+    expect(updateConfigFieldSetting).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText(/stored allowlist is not a list/)).not.toBeInTheDocument());
+  });
+
+  it("replaces a stored allowlist in the old plain-string shape with the clients the admin adds", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      { field_name: "mcp_allowed_clients", field_value: ["antigravity-cli"] },
+    ]);
+
+    renderSettings();
+
+    await screen.findByText(/stored allowlist is not a list of alias and value pairs/);
+    await addClient(ANTIGRAVITY.alias, ANTIGRAVITY.value);
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() =>
+      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", [ANTIGRAVITY]),
+    );
+    expect(deleteConfigFieldSetting).not.toHaveBeenCalledWith("tok", "mcp_allowed_clients");
+    await waitFor(() => expect(screen.queryByText(/stored allowlist is not a list/)).not.toBeInTheDocument());
   });
 
   it("adds clients as alias and value pairs and saves them under mcp_allowed_clients", async () => {
