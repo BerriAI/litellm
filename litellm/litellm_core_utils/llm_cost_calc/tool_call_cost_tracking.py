@@ -2,7 +2,7 @@
 Helper utilities for tracking the cost of built-in tools.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Final, Literal, cast
 
 from pydantic import ValidationError
@@ -133,8 +133,8 @@ class StandardBuiltInToolCostTracking:
             google_maps_grounding_cost
             + image_generation_cost
             + StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
                 standard_built_in_tools_params=standard_built_in_tools_params,
             )
         )
@@ -256,9 +256,7 @@ class StandardBuiltInToolCostTracking:
         quality: Final = _output_item_field(output_item, "quality")
         size: Final = _output_item_field(output_item, "size")
         try:
-            # the Responses image_generation tool item does not report the model, so price with
-            # gpt-image-1, OpenAI's default model for that tool
-            return cast(Callable[..., float], default_image_cost_calculator)(
+            return default_image_cost_calculator(
                 model="gpt-image-1",
                 custom_llm_provider=custom_llm_provider or "openai",
                 quality=quality if isinstance(quality, str) and quality != "auto" else None,
