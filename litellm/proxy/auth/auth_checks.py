@@ -4012,6 +4012,34 @@ async def get_org_object(
     return _org_obj
 
 
+async def get_org_object_for_request(
+    org_id: str,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+    proxy_logging_obj: ProxyLogging | None,
+) -> LiteLLM_OrganizationTable | None:
+    try:
+        return await get_org_object(
+            org_id=org_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            include_budget_table=True,
+        )
+    except OrganizationNotFoundError:
+        return None
+    except Exception as e:  # noqa: BLE001  # only a DB outage may fail auth here, anything else degrades to no org limits
+        if (
+            PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e)
+            and not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+        ):
+            raise
+        verbose_proxy_logger.debug("org lookup failed, continuing without org limits", exc_info=True)
+        return None
+
+
 async def _get_resources_from_access_groups(
     access_group_ids: Sequence[str],
     resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids"],

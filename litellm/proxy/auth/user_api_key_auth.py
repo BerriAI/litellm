@@ -41,7 +41,6 @@ from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
-    OrganizationNotFoundError,
     TeamNotFoundError,
     _cache_key_object,
     _can_object_call_model,
@@ -59,7 +58,7 @@ from litellm.proxy.auth.auth_checks import (
     get_jwt_key_mapping_object,
     get_key_end_user_budget_id,
     get_object_permission,
-    get_org_object,
+    get_org_object_for_request,
     get_project_object,
     get_team_membership,
     get_team_object,
@@ -2630,25 +2629,13 @@ async def _inherit_org_identity(
     )
     if user_api_key_auth_obj.org_id is None or already_populated or prisma_client is None:
         return
-    try:
-        org_object: Final = await get_org_object(
-            org_id=user_api_key_auth_obj.org_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-            include_budget_table=True,
-        )
-    except OrganizationNotFoundError:
-        return
-    except Exception as e:  # noqa: BLE001  # only a DB outage may fail auth here, anything else degrades to no org limits
-        if (
-            PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e)
-            and not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
-        ):
-            raise
-        verbose_proxy_logger.debug("org lookup failed, continuing without org limits", exc_info=True)
-        return
+    org_object: Final = await get_org_object_for_request(
+        org_id=user_api_key_auth_obj.org_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
     if org_object is None:
         return
     user_api_key_auth_obj.organization_alias = org_object.organization_alias
