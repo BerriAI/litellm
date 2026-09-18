@@ -582,25 +582,25 @@ async def _upsert_budget_and_membership(
         )
         return
 
-    create_data: Final[dict[str, Any]] = {
+    source_row: Final = (
+        await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id}) if is_shared_default else None
+    )
+    source: Final[Mapping[str, Any]] = source_row.model_dump() if source_row is not None else MappingProxyType({})
+
+    create_data: Final[dict[str, Any]] = {  # mutable-ok: Prisma create payloads are dict-shaped
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
+        **MappingProxyType(
+            {f: source[f] for f in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS if _is_set_budget_value(source.get(f))}
+        ),
+        **write_data,
     }
 
-    if is_shared_default:
-        default_budget_row: Final = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
-        if default_budget_row is not None:
-            default_budget_dict: Final = default_budget_row.model_dump()
-            for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS:
-                value = default_budget_dict.get(field)
-                if _is_set_budget_value(value):
-                    create_data[field] = value
-
-    create_data.update(write_data)
-
-    if create_data.get("budget_duration") is not None:
-        create_data["budget_reset_at"] = get_budget_reset_time(budget_duration=create_data["budget_duration"])
-    else:
+    # Restarting an inherited window on an unrelated edit hands the member a free period.
+    carried: Final = source.get("budget_reset_at") if "budget_duration" not in budget_patch else None
+    if carried is not None:
+        create_data["budget_reset_at"] = carried
+    if create_data.get("budget_reset_at") is None:
         create_data.pop("budget_reset_at", None)
 
     if not _has_meaningful_budget_limit(create_data):
