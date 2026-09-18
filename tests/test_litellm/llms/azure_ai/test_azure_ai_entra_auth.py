@@ -263,6 +263,40 @@ def test_agent_entra_token_failure_names_the_credential_fields():
         get_azure_ai_agent_entra_token({"azure_scope": "https://ai.azure.com/.default"})
 
 
+def test_agent_oidc_token_without_agent_ids_never_borrows_the_host_identity(monkeypatch):
+    """The shared OIDC helper fills a missing client and tenant id from AZURE_CLIENT_ID and AZURE_TENANT_ID,
+    which would exchange the host's federated token for the host's identity at that agent's URL."""
+    monkeypatch.setenv("AZURE_TENANT_ID", "host-tenant")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "host-client")
+
+    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_oidc") as mock_oidc:  # test-quality-ok: stubs the OIDC exchange so a host-identity leak would show up as a call instead of a network round trip
+        mock_oidc.return_value = "host-minted-token"
+
+        with pytest.raises(ValueError, match="oidc/"):
+            get_azure_ai_agent_entra_token({"azure_ad_token": "oidc/github"})
+        with pytest.raises(ValueError, match="oidc/"):
+            get_azure_ai_agent_entra_token({"azure_ad_token": "oidc/github", "tenant_id": "agent-tenant"})
+
+    mock_oidc.assert_not_called()
+
+
+def test_agent_oidc_token_exchanges_with_the_agent_ids_and_scope():
+    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_oidc") as mock_oidc:  # test-quality-ok: stubs the OIDC exchange to assert the agent's own ids and the Foundry scope reach it
+        mock_oidc.return_value = "agent-minted-token"
+
+        token = get_azure_ai_agent_entra_token(
+            {"azure_ad_token": "oidc/github", "tenant_id": "agent-tenant", "client_id": "agent-client"}
+        )
+
+    assert token == "agent-minted-token"
+    mock_oidc.assert_called_once_with(
+        azure_ad_token="oidc/github",
+        azure_client_id="agent-client",
+        azure_tenant_id="agent-tenant",
+        scope="https://ai.azure.com/.default",
+    )
+
+
 @pytest.mark.asyncio
 async def test_agent_auth_header_is_the_entra_bearer():
     headers = await resolve_azure_ai_agent_auth_header({"azure_ad_token": "entra-token"})
