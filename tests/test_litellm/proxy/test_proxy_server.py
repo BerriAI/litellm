@@ -7496,7 +7496,15 @@ async def test_update_general_settings_db_pass_through_endpoint_cannot_override_
         assert still_open.api_key is None
 
 
+@pytest.fixture
+def app_routes_restored():
+    routes_before: Final = tuple(app.router.routes)
+    yield
+    app.router.routes[:] = routes_before
+
+
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("app_routes_restored")
 async def test_deleting_the_stored_pass_through_row_takes_the_route_out_of_service():
     """A pass-through route the database declared has to stop serving when that row is
     deleted. The proxy's own registry of live pass-through routes is what decides whether
@@ -7524,6 +7532,7 @@ async def test_deleting_the_stored_pass_through_row_takes_the_route_out_of_servi
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("app_routes_restored")
 async def test_a_stored_pass_through_row_never_disturbs_the_config_declared_routes():
     """``pass_through_endpoints`` is config-owned once the file declares it, so writing and then
     deleting a stored row resolves to the same list both times and the config file's routes keep
