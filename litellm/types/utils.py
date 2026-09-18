@@ -1567,6 +1567,19 @@ class Delta(SafeAttributeModel, OpenAIObject):
         setattr(self, key, value)
 
 
+def map_finish_reason_and_stash_native(
+    finish_reason: str, provider_specific_fields: dict[str, Any] | None
+) -> tuple[OpenAIChatCompletionFinishReason, dict[str, Any] | None]:
+    """Map a provider-native finish reason to the OpenAI set; when the native value differs
+    from the mapped one, preserve it under provider_specific_fields["native_finish_reason"]
+    so downstream consumers can still see what the provider actually sent."""
+    mapped: Final = map_finish_reason(finish_reason)
+    if finish_reason != mapped:
+        provider_specific_fields = dict(provider_specific_fields) if provider_specific_fields else {}
+        provider_specific_fields["native_finish_reason"] = finish_reason
+    return mapped, provider_specific_fields
+
+
 class Choices(SafeAttributeModel, OpenAIObject):
     finish_reason: OpenAIChatCompletionFinishReason
     index: int
@@ -1586,11 +1599,10 @@ class Choices(SafeAttributeModel, OpenAIObject):
         **params,
     ) -> None:
         if finish_reason is not None:
-            mapped: Final = map_finish_reason(finish_reason)
+            mapped, provider_specific_fields = map_finish_reason_and_stash_native(
+                finish_reason, provider_specific_fields
+            )
             params["finish_reason"] = mapped
-            if finish_reason != mapped:
-                provider_specific_fields = dict(provider_specific_fields) if provider_specific_fields else {}
-                provider_specific_fields["native_finish_reason"] = finish_reason
         else:
             params["finish_reason"] = "stop"
         if index is not None:

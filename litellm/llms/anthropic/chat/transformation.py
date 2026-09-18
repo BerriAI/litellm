@@ -22,7 +22,6 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     sanitize_input_schema_for_anthropic,
 )
@@ -75,6 +74,7 @@ from litellm.types.responses.main import (
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
+    map_finish_reason_and_stash_native,
     PromptTokensDetailsWrapper,
     ServerToolUse,
 )
@@ -2626,21 +2626,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         model_response.choices[0].message = _message
         model_response._hidden_params["original_response"] = completion_response["content"]
-        _finish_reason: Final = cast(
-            OpenAIChatCompletionFinishReason,
-            map_finish_reason(completion_response["stop_reason"]),
+        _choice = model_response.choices[0]
+        _mapped_reason, _provider_specific_fields = map_finish_reason_and_stash_native(
+            completion_response["stop_reason"], getattr(_choice, "provider_specific_fields", None)
         )
-        model_response.choices[0].finish_reason = _finish_reason
-        if completion_response["stop_reason"] and completion_response["stop_reason"] != _finish_reason:
-            _choice = model_response.choices[0]
-            setattr(
-                _choice,
-                "provider_specific_fields",
-                {
-                    **(getattr(_choice, "provider_specific_fields", None) or {}),
-                    "native_finish_reason": completion_response["stop_reason"],
-                },
-            )
+        _choice.finish_reason = _mapped_reason
+        if _provider_specific_fields is not None:
+            setattr(_choice, "provider_specific_fields", _provider_specific_fields)
 
         usage: Final = self.calculate_usage(
             usage_object=completion_response["usage"],

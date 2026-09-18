@@ -708,6 +708,20 @@ def as_output_cap(value: object) -> int | None:
     return cap if cap >= 0 else None
 
 
+## Exception classes a treat_finish_reason_as_failure value may name: resolved from litellm at
+## use time, validated at Router construction.
+_FINISH_REASON_FAILURE_EXCEPTION_NAMES: Final = frozenset(
+    {
+        "RateLimitError",
+        "APIError",
+        "BadRequestError",
+        "Timeout",
+        "ServiceUnavailableError",
+        "InternalServerError",
+    }
+)
+
+
 class Router:
     model_names: set = set()
     cache_responses: bool | None = False
@@ -1076,24 +1090,12 @@ class Router:
 
         ## treat_finish_reason_as_failure: map a terminal finish/stop reason on a 200 response to a
         ## router-understood exception class, so the mapped reason engages allowed_fails/cooldowns/
-        ## fallbacks like any failure. Values must name one of: RateLimitError, APIError,
-        ## BadRequestError, Timeout, ServiceUnavailableError, InternalServerError (resolved from
-        ## litellm at use time). Reason strings are matched exactly.
-        _finish_reason_failure_exception_names: Final = frozenset(
-            {
-                "RateLimitError",
-                "APIError",
-                "BadRequestError",
-                "Timeout",
-                "ServiceUnavailableError",
-                "InternalServerError",
-            }
-        )
+        ## fallbacks like any failure. Reason strings are matched exactly.
         if treat_finish_reason_as_failure is not None:
             for exception_name in treat_finish_reason_as_failure.values():
-                if exception_name not in _finish_reason_failure_exception_names:
+                if exception_name not in _FINISH_REASON_FAILURE_EXCEPTION_NAMES:
                     raise ValueError(
-                        f"treat_finish_reason_as_failure values must be one of {sorted(_finish_reason_failure_exception_names)}, got {exception_name}"
+                        f"treat_finish_reason_as_failure values must be one of {sorted(_FINISH_REASON_FAILURE_EXCEPTION_NAMES)}, got {exception_name}"
                     )
         self.treat_finish_reason_as_failure = treat_finish_reason_as_failure
 
@@ -2578,11 +2580,9 @@ class Router:
             if isinstance(response, ModelResponse):
                 _mapped_reason = self._get_mapped_finish_reason(response)
                 if _mapped_reason is not None:
-                    self._account_mapped_finish_reason_failure(
+                    self._handle_mapped_finish_reason_failure(
                         model=model, deployment=deployment, reason=_mapped_reason, kwargs=kwargs
                     )
-                    if self._should_raise_mapped_finish_reason_error(model=model, response=response, kwargs=kwargs):
-                        raise self._finish_reason_failure_error(model=model, reason=_mapped_reason)
 
             if (
                 isinstance(response, CustomStreamWrapper)
@@ -3712,13 +3712,9 @@ class Router:
                 if isinstance(response, ModelResponse):
                     _mapped_reason = self._get_mapped_finish_reason(response)
                     if _mapped_reason is not None:
-                        self._account_mapped_finish_reason_failure(
+                        self._handle_mapped_finish_reason_failure(
                             model=model, deployment=deployment, reason=_mapped_reason, kwargs=kwargs
                         )
-                        if self._should_raise_mapped_finish_reason_error(
-                            model=model, response=response, kwargs=kwargs
-                        ):
-                            raise self._finish_reason_failure_error(model=model, reason=_mapped_reason)
 
                 if (
                     isinstance(response, CustomStreamWrapper)
@@ -5437,16 +5433,16 @@ class Router:
                 refusal_details: Final = cast(dict, response["stop_details"])  # cast-ok: gate verified the shape
                 raise safeguard_refusal_error(model=model, stop_details=refusal_details)
 
-            if getattr(original_generic_function, "__name__", "") == "anthropic_messages" and isinstance(
-                response, dict
+            if (
+                self.treat_finish_reason_as_failure
+                and getattr(original_generic_function, "__name__", "") == "anthropic_messages"
+                and isinstance(response, dict)
             ):
                 stop_reason: Final = response.get("stop_reason")
-                if stop_reason in (self.treat_finish_reason_as_failure or {}):
-                    self._account_mapped_finish_reason_failure(
+                if stop_reason in self.treat_finish_reason_as_failure:
+                    self._handle_mapped_finish_reason_failure(
                         model=model, deployment=deployment, reason=stop_reason, kwargs=kwargs
                     )
-                    if self._finish_reason_failure_fallback_available(model, kwargs):
-                        raise self._finish_reason_failure_error(model=model, reason=stop_reason)
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("ageneric_api_call_with_fallbacks(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -8638,16 +8634,7 @@ class Router:
         content_policy_fallbacks: Final = kwargs.get("content_policy_fallbacks", self.content_policy_fallbacks)
         if content_policy_fallbacks is not None:
             return self._has_content_policy_fallback(model_group, kwargs)
-        if self._has_default_fallbacks():
-            return True
-        fallbacks: Final = kwargs.get("fallbacks", self.fallbacks)
-        if fallbacks is None:
-            return False
-        resolved, _ = get_fallback_model_group_for_lookup_groups(
-            fallbacks=fallbacks,
-            lookup_groups=fallback_lookup_groups(kwargs, model_group),
-        )
-        return resolved is not None
+        return self._generic_fallback_available(model_group, kwargs)
 
     def _get_mapped_finish_reason(self, response: ModelResponse) -> str | None:
         """
@@ -8668,12 +8655,10 @@ class Router:
             return native_reason
         return None
 
-    def _finish_reason_failure_fallback_available(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
+    def _generic_fallback_available(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
         """
-        Whether a generic fallback can serve the retry after a mapped finish-reason failure.
-        Mirrors the tail of _refusal_fallback_available without the content-policy branch: the
-        dispatcher falls through to the generic fallbacks lookup, so the gate arms on default
-        fallbacks or a resolving generic chain.
+        Whether a generic fallback can serve a retry: default fallbacks set, or a generic chain
+        resolving for this request. Shared tail of the fallback-availability gates.
         """
         if fallbacks_disabled_for_request(kwargs):
             return False
@@ -8688,15 +8673,18 @@ class Router:
         )
         return resolved is not None
 
-    def _should_raise_mapped_finish_reason_error(self, model: str, response: ModelResponse, kwargs: dict) -> bool:
+    def _handle_mapped_finish_reason_failure(self, model: str, deployment: dict, reason: str, kwargs: dict) -> None:
         """
-        True when the response carries a reason from treat_finish_reason_as_failure and a generic
-        fallback can serve the retry. When a reason is mapped but no fallback is available the
-        caller must still account for the failure via _account_mapped_finish_reason_failure.
+        Account for a mapped finish-reason failure, then raise the configured exception into the
+        fallback chain when a generic fallback can serve. Accounting happens before the gate:
+        the raise lands after the 200 came back, so litellm's failure callbacks never fire for
+        it, and this is the only path that parks the deployment.
         """
-        if self._get_mapped_finish_reason(response) is None:
-            return False
-        return self._finish_reason_failure_fallback_available(model, kwargs)
+        exception: Final = self._account_mapped_finish_reason_failure(
+            model=model, deployment=deployment, reason=reason, kwargs=kwargs
+        )
+        if exception is not None and self._generic_fallback_available(model, kwargs):
+            raise exception
 
     def _finish_reason_failure_error(self, model: str, reason: str) -> Exception:
         """Build the exception instance configured for a mapped finish reason."""
@@ -8707,18 +8695,30 @@ class Router:
             return exception_cls(status_code=500, message=message, llm_provider="", model=model)
         return exception_cls(message=message, llm_provider="", model=model)
 
-    def _account_mapped_finish_reason_failure(self, model: str, deployment: dict, reason: str, kwargs: dict) -> None:
+    def _account_mapped_finish_reason_failure(
+        self, model: str, deployment: dict, reason: str, kwargs: dict
+    ) -> Exception | None:
         """
         Count and park a mapped finish-reason failure: increment the per-minute failure counter
-        and set the cooldown. The raise sites call this too, because the router raises after the
-        200 came back, so litellm's failure callbacks never fire for this exception.
+        and set the cooldown, honoring a deployment-level cooldown_time like
+        deployment_callback_on_failure does (the retry-after-header tier has no counterpart
+        here: the exception is synthesized, it carries no response headers). Returns the built
+        exception so the caller can raise the same instance it accounted for, or None when the
+        deployment has no id to account against.
         """
-        if reason is None:
-            return
         model_info: Final = deployment.get("model_info") or {}
-        deployment_id: Final = model_info.get("id")
+        deployment_id: Final = model_info.get("id") if isinstance(model_info, dict) else None
         if deployment_id is None:
-            return
+            return None
+        litellm_params: Final = deployment.get("litellm_params") or {}
+        deployment_cooldown: Final = _first_present(
+            model_info if isinstance(model_info, dict) else None, litellm_params, key="cooldown_time"
+        )
+        time_to_cooldown: Final = (
+            deployment_cooldown
+            if deployment_cooldown is not None and deployment_cooldown >= 0
+            else self.cooldown_time
+        )
         exception: Final = self._finish_reason_failure_error(model=model, reason=reason)
         increment_deployment_failures_for_current_minute(
             litellm_router_instance=self,
@@ -8729,9 +8729,10 @@ class Router:
             exception_status=exception.status_code,
             original_exception=exception,
             deployment=deployment_id,
-            time_to_cooldown=self.cooldown_time,
+            time_to_cooldown=time_to_cooldown,
             requested_model_group=(get_litellm_metadata_from_kwargs(kwargs) or {}).get("model_group"),
         )
+        return exception
 
     def _should_raise_content_policy_error(self, model: str, response: ModelResponse, kwargs: dict) -> bool:
         """
