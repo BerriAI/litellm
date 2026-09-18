@@ -3050,6 +3050,18 @@
         },
         "DailySpendMetadata": {
           "properties": {
+            "api_key_limit": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When set, api_keys and every api_key_breakdown list at most this many keys, ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.",
+              "title": "Api Key Limit"
+            },
             "has_more": {
               "default": false,
               "title": "Has More",
@@ -3059,6 +3071,18 @@
               "default": 1,
               "title": "Page",
               "type": "integer"
+            },
+            "total_api_keys": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key lists are truncated to the highest-spend keys.",
+              "title": "Total Api Keys"
             },
             "total_api_requests": {
               "default": 0,
@@ -38542,6 +38566,7 @@
           "type": "object"
         },
         "SCIMMultiValuedAttribute": {
+          "additionalProperties": true,
           "properties": {
             "display": {
               "anyOf": [
@@ -38577,13 +38602,17 @@
               "title": "Type"
             },
             "value": {
-              "title": "Value",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Value"
             }
           },
-          "required": [
-            "value"
-          ],
           "title": "SCIMMultiValuedAttribute",
           "type": "object"
         },
