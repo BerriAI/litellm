@@ -2519,7 +2519,7 @@ async def get_user_object(
         raise Exception("No db connected")
     try:
         db_access_time_key: Final = f"user_id:{user_id}"
-        should_check_db: Final = _should_check_db(
+        should_check_db: Final = bool(check_db_only) or _should_check_db(
             key=db_access_time_key,
             last_db_access_time=last_db_access_time,
             db_cache_expiry=db_cache_expiry,
