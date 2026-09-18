@@ -34019,6 +34019,20 @@
               "title": "Policy Name",
               "type": "string"
             },
+            "priority": {
+              "anyOf": [
+                {
+                  "maximum": 2147483647.0,
+                  "minimum": -2147483648.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
+              "title": "Priority"
+            },
             "scope": {
               "anyOf": [
                 {
@@ -34131,6 +34145,18 @@
               "description": "Name of the attached policy.",
               "title": "Policy Name",
               "type": "string"
+            },
+            "priority": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
+              "title": "Priority"
             },
             "scope": {
               "anyOf": [
@@ -36151,6 +36177,20 @@
               "description": "Name of the policy to attach.",
               "title": "Policy Name",
               "type": "string"
+            },
+            "priority": {
+              "anyOf": [
+                {
+                  "maximum": 2147483647.0,
+                  "minimum": -2147483648.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
+              "title": "Priority"
             },
             "scope": {
               "anyOf": [

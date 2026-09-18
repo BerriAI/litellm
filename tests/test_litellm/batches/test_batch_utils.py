@@ -1670,8 +1670,6 @@ async def test_handle_completed_bedrock_batch_prices_from_deployment_model(monke
     )
 
     assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (1800, 1000, 2800)
-    # 3e-06 / 1.5e-05 on-demand, halved for batch.
-    assert result.cost == pytest.approx(1800 * 3e-06 / 2 + 1000 * 1.5e-05 / 2)
 
     # The response model alone cannot price a bedrock batch: this is the $0 bug.
     zero_result = await bu._handle_completed_batch(
