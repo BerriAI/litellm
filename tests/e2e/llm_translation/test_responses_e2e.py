@@ -40,7 +40,7 @@ class _OptionalResponsesBody(BaseModel):
 
 BEDROCK_CONVERSE_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 VERTEX_BACKEND: Final = "vertex_ai/gemini-2.5-flash"
-AZURE_OPENAI_BACKEND: Final = "azure/gpt-5.6-sol"
+AZURE_OPENAI_BACKEND: Final = "azure/gpt-5.4-nano"
 AZURE_OPENAI_API_VERSION: Final = "v1"
 
 WEATHER_TOOL = ResponsesFunctionTool(
