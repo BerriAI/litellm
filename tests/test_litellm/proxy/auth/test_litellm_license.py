@@ -35,8 +35,8 @@ def test_is_over_limit():
 
 
 def test_auto_router_capability_limit() -> None:
-    """Only the signed license's auto_router feature lifts the one-router limit; an API-verified
-    license (no airgapped data) and an airgapped license without the feature keep it."""
+    """The signed license's auto_router feature or its "*" wildcard lifts the one-router limit; an
+    API-verified license (no airgapped data) and an airgapped license without either keep it."""
     license_check = LicenseCheck()
     license_check.airgapped_license_data = {"expiration_date": "2999-01-01", "allowed_features": ["auto_router"]}
     assert license_check.auto_router_capability_limit() is None
@@ -47,8 +47,17 @@ def test_auto_router_capability_limit() -> None:
     }
     assert license_check.auto_router_capability_limit() is None
 
+    license_check.airgapped_license_data = {"expiration_date": "2999-01-01", "allowed_features": ["*"]}
+    assert license_check.auto_router_capability_limit() is None
+
+    license_check.airgapped_license_data = {"expiration_date": "2999-01-01", "allowed_features": ["sso", "*"]}
+    assert license_check.auto_router_capability_limit() is None
+
     license_check.airgapped_license_data = {"expiration_date": "2999-01-01", "allowed_features": ["sso"]}
     assert license_check.auto_router_capability_limit() == 1
+
+    license_check.airgapped_license_data = {"expiration_date": "2999-01-01", "allowed_features": "*"}
+    assert license_check.auto_router_capability_limit() is None
 
     license_check.airgapped_license_data = {"expiration_date": "2999-01-01"}
     assert license_check.auto_router_capability_limit() == 1
@@ -57,7 +66,9 @@ def test_auto_router_capability_limit() -> None:
     assert license_check.auto_router_capability_limit() == 1
 
 
-def _signed_license(expiration_date: str) -> tuple[RSAPublicKey, str]:
+def _signed_license(
+    expiration_date: str, allowed_features: tuple[str, ...] = ("auto_router",)
+) -> tuple[RSAPublicKey, str]:
     import base64
 
     from cryptography.hazmat.primitives import hashes
@@ -65,7 +76,7 @@ def _signed_license(expiration_date: str) -> tuple[RSAPublicKey, str]:
 
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     message = json.dumps(
-        {"expiration_date": expiration_date, "user_id": "u", "allowed_features": ["auto_router"]}
+        {"expiration_date": expiration_date, "user_id": "u", "allowed_features": list(allowed_features)}
     ).encode()
     signature = private_key.sign(
         message,
@@ -99,3 +110,19 @@ def test_valid_signed_license_with_auto_router_lifts_the_limit() -> None:
 
     assert license_check.verify_license_without_api_request(public_key=public_key, license_key=license_key) is True
     assert license_check.auto_router_capability_limit() is None
+
+
+def test_valid_signed_wildcard_license_lifts_the_limit() -> None:
+    """The license generator defaults allowed_features to ["*"], meaning every feature, so a wildcard
+    license grants auto_router the same way a license that names it does."""
+    license_check = LicenseCheck()
+    public_key, license_key = _signed_license("2999-01-01", allowed_features=("*",))
+
+    assert license_check.verify_license_without_api_request(public_key=public_key, license_key=license_key) is True
+    assert license_check.grants_feature("auto_router") is True
+    assert license_check.auto_router_capability_limit() is None
+
+    named_public_key, named_key = _signed_license("2999-01-01", allowed_features=("sso", "audit_logs"))
+    assert license_check.verify_license_without_api_request(public_key=named_public_key, license_key=named_key) is True
+    assert license_check.grants_feature("auto_router") is False
+    assert license_check.auto_router_capability_limit() == 1

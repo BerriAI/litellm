@@ -27,6 +27,7 @@ from collections.abc import (
     Sequence,
 )
 from datetime import datetime, timedelta, timezone
+from itertools import chain
 from types import MappingProxyType, UnionType
 from typing import (
     TYPE_CHECKING,
@@ -436,6 +437,7 @@ from litellm.proxy.config_resolvers.alerting import (
     MS_TEAMS_DESCRIPTORS,
     SLACK_DESCRIPTORS,
 )
+from litellm.proxy.config_resolvers.changed_section_keys import changed_section_keys
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
@@ -4756,13 +4758,56 @@ def should_load_db_object(object_type: str | SupportedDBObjectType) -> bool:
     return any(str(obj) == object_type_str for obj in supported_db_objects)
 
 
+_CONFIG_PERSISTED_SECTIONS: Final = ("general_settings", "router_settings", "litellm_settings")
+_CONFIG_UNMANAGED_EXCLUSIONS: Final = frozenset(("environment_variables", "model_list"))
+_CONFIG_SECTION_VALUES: Final = TypeAdapter(Mapping[str, JsonValue])
+_CONFIG_SECTION_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))"
+
+
+class _ConfigParamWhere(TypedDict):
+    param_name: ReadOnly[str]
+
+
+class _ConfigParamCreate(TypedDict):
+    param_name: ReadOnly[str]
+    param_value: ReadOnly[str]
+
+
+class _ConfigParamUpdate(TypedDict):
+    param_value: ReadOnly[str]
+
+
+class _ConfigParamUpsert(TypedDict):
+    create: ReadOnly[_ConfigParamCreate]
+    update: ReadOnly[_ConfigParamUpdate]
+
+
+class _EnvironmentVariablesConfigData(TypedDict):
+    environment_variables: ReadOnly[object]
+
+
+class _ConfigWithBaseline(dict[str, object]):
+    def __init__(self, config: Mapping[str, object]) -> None:
+        super().__init__(config)
+        self._baseline: Mapping[str, object] = MappingProxyType(
+            {key: copy.deepcopy(value) for key, value in config.items()}
+        )
+
+    @property
+    def baseline(self) -> Mapping[str, object]:
+        return self._baseline
+
+    def update_baseline(self, config: Mapping[str, object]) -> None:
+        self._baseline = MappingProxyType({key: copy.deepcopy(value) for key, value in config.items()})
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
     """
 
     def __init__(self) -> None:
-        self.config: dict[str, Any] = {}
+        self.config: Mapping[str, object] = MappingProxyType({})
         self._last_semantic_filter_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
         self._last_cyberark_config: dict[str, object] | None = None  # mutable-ok: change-detection cache
@@ -4869,50 +4914,130 @@ class ProxyConfig:
 
         return await resolve_includes(config=config, location=config_file_path, resolve=resolve, read=read_included)
 
-    async def save_config(self, new_config: dict, include_env_vars: bool = False):
+    async def save_config(self, new_config: Mapping[str, object], include_env_vars: bool = False) -> None:
         global prisma_client, general_settings, user_config_file_path, store_model_in_db
-        # Load existing config
-        ## DB - writes valid config to db
-        """
-        - Do not write restricted params like 'api_key' to the database
-        - if api_key is passed, save that to the local environment or connected secret manage (maybe expose `litellm.save_secret()`)
-        """
-
         if prisma_client is not None and (
             general_settings.get("store_model_in_db", False) is True or store_model_in_db
         ):
-            # if using - db for config - models are in ModelTable
-
-            # Make a copy to avoid mutating the original config
-            config_to_save: Final = new_config.copy()
-
-            # environment_variables are persisted to the DB only when a caller
-            # explicitly opts in. Most callers reach save_config after
-            # get_config() merged YAML + OS env into new_config (with
-            # os.environ/ placeholders already resolved to plaintext), so
-            # persisting them here would snapshot file/container env vars into
-            # a config row that then shadows those sources on every restart.
-            # The dedicated /config/update path writes env vars directly, so
-            # no current caller needs include_env_vars=True.
-            if not include_env_vars:
-                config_to_save.pop("environment_variables", None)
-
-            # SECURITY: Always encrypt environment_variables before DB write.
-            # _encrypt_env_variables_for_db is idempotent — a caller that
-            # already encrypted the values (or re-submitted ciphertext read
-            # back from the DB) will not get a stacked second layer.
-            if "environment_variables" in config_to_save and config_to_save["environment_variables"]:
-                config_to_save["environment_variables"] = self._encrypt_env_variables_for_db(
-                    environment_variables=config_to_save["environment_variables"]
+            baseline: Final[Mapping[str, object]] = (
+                new_config.baseline if isinstance(new_config, _ConfigWithBaseline) else self.get_config_state()
+            )
+            for section_name in _CONFIG_PERSISTED_SECTIONS:
+                await self._save_changed_config_section(
+                    section_name=section_name,
+                    baseline=baseline,
+                    new_config=new_config,
+                    prisma_client=prisma_client,
                 )
 
-            config_to_save.pop("model_list", None)
-            await prisma_client.insert_data(data=config_to_save, table_name="config")
-        else:
-            # Save the updated config - if user is not using a dB
-            ## YAML
-            with open(f"{user_config_file_path}", "w") as config_file:
-                yaml.dump(new_config, config_file, default_flow_style=False)
+            unmanaged_config: Final[Mapping[str, object]] = MappingProxyType(
+                {
+                    key: value
+                    for key, value in new_config.items()
+                    if key not in _CONFIG_PERSISTED_SECTIONS
+                    and key not in _CONFIG_UNMANAGED_EXCLUSIONS
+                    and (key not in baseline or baseline[key] != value)
+                }
+            )
+            if unmanaged_config:
+                await prisma_client.insert_data(data=unmanaged_config, table_name="config")
+
+            environment_variables: Final = new_config.get("environment_variables")
+            if include_env_vars and environment_variables is not None:
+                encrypted_environment_variables: Final = (
+                    self._encrypt_env_variables_for_db(environment_variables=environment_variables)
+                    if isinstance(environment_variables, dict) and environment_variables
+                    else environment_variables
+                )
+                environment_variables_data: Final[_EnvironmentVariablesConfigData] = {
+                    "environment_variables": encrypted_environment_variables
+                }
+                await prisma_client.insert_data(data=environment_variables_data, table_name="config")
+            next_config: Final[Mapping[str, object]] = MappingProxyType({**baseline, **new_config})
+            self.update_config_state(config=next_config)
+            if isinstance(new_config, _ConfigWithBaseline):
+                new_config.update_baseline(config=next_config)
+            return
+
+        with open(f"{user_config_file_path}", "w") as config_file:
+            yaml.dump(
+                dict(new_config), config_file, default_flow_style=False
+            )  # mutable-ok: YAML must serialize a plain dict
+
+    async def _save_changed_config_section(
+        self,
+        *,
+        section_name: str,
+        baseline: Mapping[str, object],
+        new_config: Mapping[str, object],
+        prisma_client: PrismaClient,
+    ) -> None:
+        if section_name not in new_config:
+            return
+        baseline_value: Final = baseline.get(section_name)
+        new_value: Final = new_config[section_name]
+        baseline_section: Final[Mapping[str, JsonValue]] = (
+            _CONFIG_SECTION_VALUES.validate_python(baseline_value)
+            if isinstance(baseline_value, Mapping)
+            else MappingProxyType({})
+        )
+        new_section: Final[Mapping[str, JsonValue]] = (
+            _CONFIG_SECTION_VALUES.validate_python(new_value)
+            if isinstance(new_value, Mapping)
+            else MappingProxyType({})
+        )
+        changed_keys, removed_keys = changed_section_keys(baseline_section, new_section)
+        if not changed_keys and not removed_keys:
+            return
+        wrote_section: Final = await self._upsert_changed_config_section(
+            section_name=section_name,
+            changed_keys=changed_keys,
+            removed_keys=removed_keys,
+            prisma_client=prisma_client,
+        )
+        if not wrote_section:
+            return
+        await invalidate_config_param(section_name)
+
+    async def _upsert_changed_config_section(
+        self,
+        *,
+        section_name: str,
+        changed_keys: Mapping[str, JsonValue],
+        removed_keys: frozenset[str],
+        prisma_client: PrismaClient,
+    ) -> bool:
+        async with prisma_client.tx() as tx:
+            await tx.query_raw(_CONFIG_SECTION_LOCK_SQL, section_name)
+            config_table: Final = cast("TableActions[_ConfigParamRow]", tx.litellm_config)
+            config_where: Final[_ConfigParamWhere] = {"param_name": section_name}
+            existing_row: Final[_ConfigParamRow | None] = await config_table.find_first(where=config_where)
+            existing_value: Final[object] = cast(object, existing_row.param_value) if existing_row is not None else None
+            existing_section: Final[Mapping[str, JsonValue]] = (
+                _CONFIG_SECTION_VALUES.validate_json(existing_value)
+                if isinstance(existing_value, str)
+                else _CONFIG_SECTION_VALUES.validate_python(existing_value)
+                if isinstance(existing_value, Mapping)
+                else MappingProxyType({})
+            )
+            merged_section: Final[Mapping[str, JsonValue]] = MappingProxyType(
+                {
+                    key: value
+                    for key, value in chain(
+                        ((key, value) for key, value in existing_section.items() if key not in removed_keys),
+                        changed_keys.items(),
+                    )
+                }
+            )
+            if merged_section == existing_section:
+                return False
+            serialized_section: Final = json.dumps(dict(merged_section))  # mutable-ok: JSON encoder requires a dict
+            config_data: Final[_ConfigParamUpsert] = {
+                "create": {"param_name": section_name, "param_value": serialized_section},
+                "update": {"param_value": serialized_section},
+            }
+            await config_table.upsert(where=config_where, data=config_data)
+            return True
 
     async def save_environment_variables(self, updates: dict[str, str | None]) -> None:
         """Persist specific environment variables to the DB config row.
@@ -5264,26 +5389,26 @@ class ProxyConfig:
 
         self.update_config_state(config=config)
 
-        return config
+        return _ConfigWithBaseline(config)
 
-    def update_config_state(self, config: dict):
-        self.config = config
+    def update_config_state(self, config: Mapping[str, object]) -> None:
+        self.config = MappingProxyType({key: copy.deepcopy(value) for key, value in config.items()})
 
-    def get_config_state(self):
+    def get_config_state(self) -> Mapping[str, object]:
         """
         Returns a deep copy of the config,
 
         Do this, to avoid mutating the config state outside of allowed methods
         """
         try:
-            return copy.deepcopy(self.config)
+            return MappingProxyType({key: copy.deepcopy(value) for key, value in self.config.items()})
         except Exception as e:
             verbose_proxy_logger.debug(
                 "ProxyConfig:get_config_state(): Error returning copy of config state. self.config=%s\nError: %s",
                 self.config,
                 e,
             )
-            return {}
+            return MappingProxyType({})
 
     def load_credential_list(self, config: dict) -> list[CredentialItem]:
         """
