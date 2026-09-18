@@ -17119,6 +17119,8 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "maximum_spend_logs_cleanup_run_budget": "String",
         "maximum_spend_logs_cleanup_batch_timeout": "String",
         "mcp_internal_ip_ranges": "List",
+        "mcp_allowed_clients": "List",
+        "mcp_client_id_header": "String",
         "mcp_trusted_proxy_ranges": "List",
         "mcp_xff_num_trusted_hops": "Integer",
         "always_include_stream_usage": "Boolean",

@@ -2867,7 +2867,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     mcp_allowed_clients: list[str] | None = Field(
         None,
-        description="MCP client applications admitted by the gateway, matched exactly against the clientInfo.name the client sends in its initialize request (for example 'claude-code'). When set, an initialize from any other client, or one that does not identify itself, is rejected with 403. Unset means every client is admitted. The name is client-supplied, so this is a policy control rather than a security boundary.",
+        description="MCP client applications admitted by the gateway. When set, every MCP request must carry a client identity that matches one of these values exactly: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.",
+    )
+    mcp_client_id_header: str | None = Field(
+        None,
+        description="Request header whose value names the calling MCP client application (for example 'x-mcp-client') for callers that did not authenticate with a JWT, used only while mcp_allowed_clients is set. The client picks this value itself, so it is a policy control rather than a security boundary; prefer litellm_jwtauth.mcp_client_id_jwt_field where callers use JWTs.",
     )
     mcp_trusted_proxy_ranges: list[str] | None = Field(
         None,
@@ -5073,6 +5077,15 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "The field in the JWT token that identifies the calling agent (e.g. 'azp' for a Microsoft Entra ID "
             "app token). Supports dot notation. The value is matched against a registered agent's agent_id, "
             "then agent_name, and the request is rejected when it matches neither."
+        ),
+    )
+    mcp_client_id_jwt_field: str | None = Field(
+        default=None,
+        description=(
+            "The field in the JWT token that identifies the MCP client application (harness) making the request, "
+            "e.g. 'azp' or 'client_id'. Supports dot notation. Only consulted while general_settings.mcp_allowed_clients "
+            "is set: the claim value must be listed there or the MCP request is rejected with 403. Distinct from "
+            "agent_id_jwt_field, which identifies an AI agent rather than the client software."
         ),
     )
     public_key_ttl: float = 600

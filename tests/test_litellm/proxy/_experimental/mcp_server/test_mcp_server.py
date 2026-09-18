@@ -1,9 +1,7 @@
 import asyncio
 import contextlib
 import contextvars
-import json
 import os
-from collections.abc import Iterator
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Final
@@ -20,9 +18,9 @@ from mcp.types import (
     TextContent,
     TextResourceContents,
 )
+from pydantic import TypeAdapter
 from starlette.types import Receive, Scope, Send
 
-from litellm.constants import MCP_ALLOWLIST_PEEK_MAX_BYTES
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPTransport,
@@ -2040,75 +2038,81 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless(
         assert not any(name.startswith(b"x-mcp-debug") for name in headers)
 
 
-_CLAUDE_CODE_INITIALIZE: Final = (
-    b'{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18",'
-    b'"capabilities":{},"clientInfo":{"name":"claude-code","version":"2.1.274"}}}'
-)
-_ANTIGRAVITY_INITIALIZE: Final = (
+_FORBIDDEN_BODY_ADAPTER: Final[TypeAdapter[dict[str, str]]] = TypeAdapter(dict[str, str])
+_BODY_CHUNK_ADAPTER: Final[TypeAdapter[bytes]] = TypeAdapter(bytes)
+_INITIALIZE: Final = (
     b'{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18",'
     b'"capabilities":{},"clientInfo":{"name":"antigravity-cli","version":"1.0.0"}}}'
 )
-_ANONYMOUS_INITIALIZE: Final = b'{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{}}}'
 _TOOLS_LIST: Final = b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+_ALLOWLIST_SETTINGS: Final[dict[str, object]] = {
+    "mcp_allowed_clients": ["antigravity-cli"],
+    "litellm_jwtauth": {"mcp_client_id_jwt_field": "azp"},
+    "mcp_client_id_header": "x-mcp-client",
+}
+_LISTED_JWT: Final[dict[str, object]] = {"azp": "antigravity-cli", "sub": "user-1"}
+_UNLISTED_JWT: Final[dict[str, object]] = {"azp": "claude-code", "sub": "user-1"}
+_LISTED_HEADER: Final[list[tuple[bytes, bytes]]] = [(b"x-mcp-client", b"antigravity-cli")]
+_UNLISTED_HEADER: Final[list[tuple[bytes, bytes]]] = [(b"x-mcp-client", b"claude-code")]
 
 
 async def _drain_body(receive: Receive) -> bytes:
-    chunks: list[bytes] = []
-    while True:
-        message = await receive()
-        chunks.append(message.get("body", b""))
-        if not message.get("more_body", False):
-            return b"".join(chunks)
+    first: Final = await receive()
+    body: Final = _BODY_CHUNK_ADAPTER.validate_python(first.get("body", b""))
+    if not first.get("more_body", False):
+        return body
+    return body + await _drain_body(receive)
 
 
-def _forbidden_client_response(send: AsyncMock) -> tuple[int, dict[str, str]]:
-    start: Final = send.call_args_list[0].args[0]
-    body: Final = b"".join(call.args[0].get("body", b"") for call in send.call_args_list[1:])
-    return start["status"], json.loads(body)
-
-
-@contextlib.contextmanager
-def _client_allowlist_patches(allowed_clients: list[str] | list[dict[str, str]] | str | None) -> Iterator[None]:
-    settings: Final = {} if allowed_clients is None else {"mcp_allowed_clients": allowed_clients}
-    with (
+def _client_allowlist_patches(
+    settings: dict[str, object], jwt_claims: dict[str, object] | None
+) -> contextlib.ExitStack:
+    stack: Final = contextlib.ExitStack()
+    stack.enter_context(
         patch(  # test-quality-ok: the ASGI handler resolves auth through a module-level function; no injection seam
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
-            return_value=(UserAPIKeyAuth(user_id="allowlist-user"), None, None, None, None, {}),
-        ),
+            return_value=(UserAPIKeyAuth(user_id="allowlist-user", jwt_claims=jwt_claims), None, None, None, None, {}),
+        )
+    )
+    stack.enter_context(
         patch(  # test-quality-ok: module flag guarding lazy session-manager startup; no injection seam
             "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED", True
-        ),
+        )
+    )
+    stack.enter_context(
         patch(  # test-quality-ok: the allowlist is read off this module global; no injection seam
             "litellm.proxy.proxy_server.general_settings", settings
-        ),
-    ):
-        yield
+        )
+    )
+    return stack
+
+
+def _forbidden_body(denied: HTTPException) -> dict[str, str]:
+    return _FORBIDDEN_BODY_ADAPTER.validate_python(denied.detail)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("request_body", "expected_details"),
+    ("jwt_claims", "headers", "request_body", "expected_fragment"),
     (
-        (
-            _CLAUDE_CODE_INITIALIZE,
-            "MCP client 'claude-code' is not listed in this gateway's mcp_allowed_clients.",
-        ),
-        (
-            _ANONYMOUS_INITIALIZE,
-            "MCP initialize request did not identify the client application (clientInfo.name). "
-            "This gateway only admits clients listed in mcp_allowed_clients.",
-        ),
+        (_UNLISTED_JWT, [], _INITIALIZE, "MCP client 'claude-code' (from JWT claim 'azp')"),
+        (_UNLISTED_JWT, _LISTED_HEADER, _INITIALIZE, "MCP client 'claude-code' (from JWT claim 'azp')"),
+        ({"sub": "user-1"}, _LISTED_HEADER, _INITIALIZE, "no 'azp' claim"),
+        (None, _UNLISTED_HEADER, _INITIALIZE, "MCP client 'claude-code' (from header 'x-mcp-client')"),
+        (None, [], _INITIALIZE, "no 'x-mcp-client' header"),
+        (_UNLISTED_JWT, [(b"mcp-session-id", b"session-1")], _TOOLS_LIST, "MCP client 'claude-code'"),
     ),
 )
-async def test_streamable_http_rejects_initialize_from_unlisted_client_before_session_creation(
-    request_body: bytes, expected_details: str
+async def test_streamable_http_rejects_unlisted_client_before_any_session_work(
+    jwt_claims: dict[str, object] | None,
+    headers: list[tuple[bytes, bytes]],
+    request_body: bytes,
+    expected_fragment: str,
 ) -> None:
-    from starlette.types import Scope
-
     from litellm.proxy._experimental.mcp_server import server as mcp_module
 
-    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": headers}
     receive: Final = AsyncMock(return_value={"type": "http.request", "body": request_body, "more_body": False})
     send: Final = AsyncMock()
     stateful_handle: Final = AsyncMock()
@@ -2116,7 +2120,7 @@ async def test_streamable_http_rejects_initialize_from_unlisted_client_before_se
     session_cap: Final = AsyncMock(return_value=True)
 
     with (
-        _client_allowlist_patches(["antigravity-cli"]),
+        _client_allowlist_patches(_ALLOWLIST_SETTINGS, jwt_claims),
         patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
             "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
             SimpleNamespace(handle_request=stateful_handle),
@@ -2128,10 +2132,17 @@ async def test_streamable_http_rejects_initialize_from_unlisted_client_before_se
         patch(  # test-quality-ok: module-level cap check; asserting it is never reached is the point
             "litellm.proxy._experimental.mcp_server.server._enforce_stateful_session_cap_for_owner", session_cap
         ),
+        pytest.raises(HTTPException) as denied,
     ):
         await mcp_module.handle_streamable_http_mcp(scope, receive, send)
 
-    assert _forbidden_client_response(send) == (403, {"error": "Forbidden", "details": expected_details})
+    assert denied.value.status_code == 403
+    body: Final = _forbidden_body(denied.value)
+    assert body["error"] == "Forbidden"
+    assert expected_fragment in body["details"]
+    assert "mcp_allowed_clients" in body["details"]
+    receive.assert_not_awaited()
+    send.assert_not_awaited()
     stateful_handle.assert_not_awaited()
     stateless_handle.assert_not_awaited()
     session_cap.assert_not_awaited()
@@ -2139,26 +2150,25 @@ async def test_streamable_http_rejects_initialize_from_unlisted_client_before_se
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("allowed_clients", "request_body"),
+    ("settings", "jwt_claims", "headers"),
     (
-        (["antigravity-cli"], _ANTIGRAVITY_INITIALIZE),
-        (["claude-code", "antigravity-cli"], _CLAUDE_CODE_INITIALIZE),
-        (None, _CLAUDE_CODE_INITIALIZE),
-        (None, _ANONYMOUS_INITIALIZE),
+        (_ALLOWLIST_SETTINGS, _LISTED_JWT, []),
+        (_ALLOWLIST_SETTINGS, _LISTED_JWT, _UNLISTED_HEADER),
+        (_ALLOWLIST_SETTINGS, None, _LISTED_HEADER),
+        ({}, _UNLISTED_JWT, _UNLISTED_HEADER),
+        ({}, None, []),
     ),
 )
-async def test_streamable_http_admits_listed_or_unrestricted_initialize_and_replays_body(
-    allowed_clients: list[str] | None, request_body: bytes
+async def test_streamable_http_admits_listed_or_unrestricted_clients_and_hands_the_body_downstream(
+    settings: dict[str, object], jwt_claims: dict[str, object] | None, headers: list[tuple[bytes, bytes]]
 ) -> None:
-    from starlette.types import Receive, Scope, Send
-
     from litellm.proxy._experimental.mcp_server import server as mcp_module
 
-    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": headers}
     receive: Final = AsyncMock(
         side_effect=[
-            {"type": "http.request", "body": request_body[:20], "more_body": True},
-            {"type": "http.request", "body": request_body[20:], "more_body": False},
+            {"type": "http.request", "body": _INITIALIZE[:20], "more_body": True},
+            {"type": "http.request", "body": _INITIALIZE[20:], "more_body": False},
         ]
     )
     send: Final = AsyncMock()
@@ -2171,7 +2181,7 @@ async def test_streamable_http_admits_listed_or_unrestricted_initialize_and_repl
     stateless_handle: Final = AsyncMock()
 
     with (
-        _client_allowlist_patches(allowed_clients),
+        _client_allowlist_patches(settings, jwt_claims),
         patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
             "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
             SimpleNamespace(handle_request=stateful_handle),
@@ -2183,351 +2193,29 @@ async def test_streamable_http_admits_listed_or_unrestricted_initialize_and_repl
     ):
         await mcp_module.handle_streamable_http_mcp(scope, receive, send)
 
-    assert downstream_bodies == [request_body]
+    assert downstream_bodies == [_INITIALIZE]
     stateless_handle.assert_not_awaited()
-    send.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("allowed_clients", ([], "claude-code", [{"name": "claude-code"}]))
-async def test_streamable_http_empty_or_malformed_allowlist_admits_nobody(
-    allowed_clients: list[str] | list[dict[str, str]] | str,
-) -> None:
-    from starlette.types import Scope
-
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
-
-    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
-    receive: Final = AsyncMock(
-        return_value={"type": "http.request", "body": _CLAUDE_CODE_INITIALIZE, "more_body": False}
-    )
-    send: Final = AsyncMock()
-    stateful_handle: Final = AsyncMock()
-
-    with (
-        _client_allowlist_patches(allowed_clients),
-        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
-            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
-            SimpleNamespace(handle_request=stateful_handle),
-        ),
-    ):
-        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
-
-    status, body = _forbidden_client_response(send)
-    assert status == 403
-    assert body["details"] == "MCP client 'claude-code' is not listed in this gateway's mcp_allowed_clients."
-    stateful_handle.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_streamable_http_allowlist_refuses_sessionless_posts_that_are_not_initialize() -> None:
-    from starlette.types import Scope
-
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
-
-    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
-    receive: Final = AsyncMock(side_effect=[{"type": "http.request", "body": _TOOLS_LIST, "more_body": False}])
-    send: Final = AsyncMock()
-    stateful_handle: Final = AsyncMock()
-    stateless_handle: Final = AsyncMock()
-
-    with (
-        _client_allowlist_patches(["antigravity-cli"]),
-        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
-            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
-            SimpleNamespace(handle_request=stateful_handle),
-        ),
-        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
-            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
-            SimpleNamespace(handle_request=stateless_handle),
-        ),
-    ):
-        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
-
-    status, body = _forbidden_client_response(send)
-    assert status == 403
-    assert body["error"] == "Forbidden"
-    assert body["details"].startswith("While mcp_allowed_clients is set, an MCP POST without a live mcp-session-id")
-    stateful_handle.assert_not_awaited()
-    stateless_handle.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_streamable_http_allowlist_returns_404_for_a_session_unknown_to_this_worker() -> None:
-    from starlette.types import Scope
-
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
-
-    scope: Final[Scope] = {
-        "type": "http",
-        "method": "POST",
-        "path": "/mcp",
-        "headers": [(b"mcp-session-id", b"stale-session-from-another-worker")],
-    }
-    receive: Final = AsyncMock(side_effect=[{"type": "http.request", "body": _TOOLS_LIST, "more_body": False}])
-    send: Final = AsyncMock()
-    stateful_handle: Final = AsyncMock()
-    stateless_handle: Final = AsyncMock()
-
-    with (
-        _client_allowlist_patches(["antigravity-cli"]),
-        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
-            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
-            SimpleNamespace(handle_request=stateful_handle, _server_instances={}),
-        ),
-        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
-            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
-            SimpleNamespace(handle_request=stateless_handle),
-        ),
-    ):
-        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
-
-    status, body = _forbidden_client_response(send)
-    assert status == 404
-    assert body["error"] == "Not Found"
-    assert "stale-session-from-another-worker" in body["details"]
-    stateful_handle.assert_not_awaited()
-    stateless_handle.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_streamable_http_without_allowlist_still_serves_sessionless_posts_statelessly() -> None:
-    from starlette.types import Receive, Scope, Send
-
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
-
-    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
-    receive: Final = AsyncMock(side_effect=[{"type": "http.request", "body": _TOOLS_LIST, "more_body": False}])
-    send: Final = AsyncMock()
-    downstream_bodies: Final[list[bytes]] = []
-
-    async def handle_request(_: Scope, downstream_receive: Receive, __: Send) -> None:
-        downstream_bodies.append(await _drain_body(downstream_receive))
-
-    with (
-        _client_allowlist_patches(None),
-        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
-            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
-            SimpleNamespace(handle_request=AsyncMock(side_effect=handle_request)),
-        ),
-    ):
-        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
-
-    assert downstream_bodies == [_TOOLS_LIST]
-    send.assert_not_awaited()
-
-
-def _oversized_initialize(client_name: str, peek_cap: int) -> bytes:
-    return _padded_initialize(client_name, peek_cap * 2)
-
-
-def _padded_initialize(client_name: str, padding: int) -> bytes:
-    return json.dumps(
-        {
-            "jsonrpc": "2.0",
-            "id": 0,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2025-06-18",
-                "capabilities": {"experimental": {"padding": "x" * padding}},
-                "clientInfo": {"name": client_name, "version": "1.0.0"},
-            },
-        }
-    ).encode()
-
-
-def _chunked_receive(body: bytes, chunk_size: int) -> AsyncMock:
-    chunks: Final = [body[i : i + chunk_size] for i in range(0, len(body), chunk_size)]
-    return AsyncMock(
-        side_effect=[
-            {"type": "http.request", "body": chunk, "more_body": i + 1 < len(chunks)} for i, chunk in enumerate(chunks)
-        ]
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("client_name", "admitted"), (("antigravity-cli", True), ("claude-code", False)))
-async def test_streamable_http_allowlist_reads_past_the_routing_peek_cap_for_initialize(
-    client_name: str, admitted: bool
-) -> None:
-    from starlette.types import Receive, Scope, Send
-
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
-
-    request_body: Final = _oversized_initialize(client_name, mcp_module._MCP_ROUTING_PEEK_MAX_BYTES)
-    assert len(request_body) > mcp_module._MCP_ROUTING_PEEK_MAX_BYTES
-    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
-    receive: Final = _chunked_receive(request_body, 1024)
-    send: Final = AsyncMock()
-    downstream_bodies: Final[list[bytes]] = []
-
-    async def handle_request(_: Scope, downstream_receive: Receive, __: Send) -> None:
-        downstream_bodies.append(await _drain_body(downstream_receive))
-
-    stateful_handle: Final = AsyncMock(side_effect=handle_request)
-    stateless_handle: Final = AsyncMock(side_effect=handle_request)
-
-    with (
-        _client_allowlist_patches(["antigravity-cli"]),
-        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
-            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
-            SimpleNamespace(handle_request=stateful_handle),
-        ),
-        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
-            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
-            SimpleNamespace(handle_request=stateless_handle),
-        ),
-    ):
-        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
-
-    if admitted:
-        assert downstream_bodies == [request_body]
-        stateless_handle.assert_not_awaited()
-        send.assert_not_awaited()
-        return
-    assert downstream_bodies == []
-    status, body = _forbidden_client_response(send)
-    assert status == 403
-    assert body["details"] == "MCP client 'claude-code' is not listed in this gateway's mcp_allowed_clients."
-
-
-@pytest.mark.asyncio
-async def test_streamable_http_allowlist_bounds_the_body_it_buffers_for_unidentified_posts() -> None:
-    from starlette.types import Scope
-
-    from litellm.proxy._experimental.mcp_server import client_allowlist
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
-
-    chunk_size: Final = 1024
-    request_body: Final = _oversized_initialize("antigravity-cli", MCP_ALLOWLIST_PEEK_MAX_BYTES)
-    assert len(request_body) > 2 * MCP_ALLOWLIST_PEEK_MAX_BYTES
-    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
-    receive: Final = _chunked_receive(request_body, chunk_size)
-    send: Final = AsyncMock()
-    stateful_handle: Final = AsyncMock()
-    stateless_handle: Final = AsyncMock()
-
-    with (
-        _client_allowlist_patches(["antigravity-cli"]),
-        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
-            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
-            SimpleNamespace(handle_request=stateful_handle),
-        ),
-        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
-            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
-            SimpleNamespace(handle_request=stateless_handle),
-        ),
-    ):
-        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
-
-    status, body = _forbidden_client_response(send)
-    assert status == 403
-    assert body == client_allowlist.oversized_unidentified_request_body()
-    assert receive.await_count <= MCP_ALLOWLIST_PEEK_MAX_BYTES // chunk_size + 1
-    stateful_handle.assert_not_awaited()
-    stateless_handle.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_streamable_http_allowlist_admits_an_initialize_of_exactly_the_peek_cap() -> None:
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
-
-    request_body: Final = _padded_initialize(
-        "antigravity-cli", MCP_ALLOWLIST_PEEK_MAX_BYTES - len(_padded_initialize("antigravity-cli", 0))
-    )
-    assert len(request_body) == MCP_ALLOWLIST_PEEK_MAX_BYTES
-    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
-    receive: Final = AsyncMock(
-        side_effect=[
-            {"type": "http.request", "body": request_body, "more_body": True},
-            {"type": "http.request", "body": b"", "more_body": False},
-        ]
-    )
-    send: Final = AsyncMock()
-    downstream_bodies: Final[list[bytes]] = []
-
-    async def handle_request(_: Scope, downstream_receive: Receive, __: Send) -> None:
-        downstream_bodies.append(await _drain_body(downstream_receive))
-
-    with (
-        _client_allowlist_patches(["antigravity-cli"]),
-        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
-            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
-            SimpleNamespace(handle_request=AsyncMock(side_effect=handle_request)),
-        ),
-        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
-            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
-            SimpleNamespace(handle_request=AsyncMock(side_effect=handle_request)),
-        ),
-    ):
-        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
-
-    assert downstream_bodies == [request_body]
-    send.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_streamable_http_allowlist_streams_large_posts_on_an_admitted_session() -> None:
-    from starlette.types import Receive, Scope, Send
-
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
-
-    request_body: Final = json.dumps(
-        {
-            "jsonrpc": "2.0",
-            "id": 7,
-            "method": "tools/call",
-            "params": {
-                "name": "echo",
-                "arguments": {"text": "x" * (2 * MCP_ALLOWLIST_PEEK_MAX_BYTES)},
-            },
-        }
-    ).encode()
-    scope: Final[Scope] = {
-        "type": "http",
-        "method": "POST",
-        "path": "/mcp",
-        "headers": [(b"mcp-session-id", b"admitted-session")],
-    }
-    receive: Final = _chunked_receive(request_body, 1024)
-    send: Final = AsyncMock()
-    downstream_bodies: Final[list[bytes]] = []
-
-    async def handle_request(_: Scope, downstream_receive: Receive, __: Send) -> None:
-        downstream_bodies.append(await _drain_body(downstream_receive))
-
-    stateful_handle: Final = AsyncMock(side_effect=handle_request)
-
-    with (
-        _client_allowlist_patches(["antigravity-cli"]),
-        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
-            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
-            SimpleNamespace(handle_request=stateful_handle, _server_instances={"admitted-session": object()}),
-        ),
-    ):
-        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
-
-    assert downstream_bodies == [request_body]
     send.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("request_body", "admitted"),
-    ((_ANTIGRAVITY_INITIALIZE, True), (_CLAUDE_CODE_INITIALIZE, False), (_ANONYMOUS_INITIALIZE, False)),
+    ("jwt_claims", "headers", "admitted"),
+    (
+        (_LISTED_JWT, [], True),
+        (None, _LISTED_HEADER, True),
+        (_UNLISTED_JWT, _LISTED_HEADER, False),
+        (None, _UNLISTED_HEADER, False),
+        (None, [], False),
+    ),
 )
-async def test_sse_endpoint_applies_the_same_client_allowlist(request_body: bytes, admitted: bool) -> None:
-    from starlette.types import Receive, Scope, Send
-
+async def test_sse_endpoint_applies_the_same_client_allowlist(
+    jwt_claims: dict[str, object] | None, headers: list[tuple[bytes, bytes]], admitted: bool
+) -> None:
     from litellm.proxy._experimental.mcp_server import server as mcp_module
 
-    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp/sse", "headers": []}
-    receive: Final = AsyncMock(
-        side_effect=[
-            {"type": "http.request", "body": request_body, "more_body": False},
-            {"type": "http.request", "body": b"not-the-replayed-initialize", "more_body": False},
-        ]
-    )
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp/sse", "headers": headers}
+    receive: Final = AsyncMock(return_value={"type": "http.request", "body": _INITIALIZE, "more_body": False})
     send: Final = AsyncMock()
     downstream_bodies: Final[list[bytes]] = []
 
@@ -2535,7 +2223,7 @@ async def test_sse_endpoint_applies_the_same_client_allowlist(request_body: byte
         downstream_bodies.append(await _drain_body(downstream_receive))
 
     with (
-        _client_allowlist_patches(["antigravity-cli"]),
+        _client_allowlist_patches(_ALLOWLIST_SETTINGS, jwt_claims),
         patch(  # test-quality-ok: module-level pre-auth probe unrelated to the allowlist under test; no injection seam
             "litellm.proxy._experimental.mcp_server.server._raise_preemptive_401_for_unauthenticated_servers",
             new_callable=AsyncMock,
@@ -2548,54 +2236,20 @@ async def test_sse_endpoint_applies_the_same_client_allowlist(request_body: byte
             mcp_module.sse_session_manager, "handle_request", side_effect=handle_request
         ),
     ):
-        await mcp_module.handle_sse_mcp(scope, receive, send)
+        if admitted:
+            await mcp_module.handle_sse_mcp(scope, receive, send)
+            assert downstream_bodies == [_INITIALIZE]
+            send.assert_not_awaited()
+            return
+        with pytest.raises(HTTPException) as denied:
+            await mcp_module.handle_sse_mcp(scope, receive, send)
 
-    if admitted:
-        assert downstream_bodies == [request_body]
-        send.assert_not_awaited()
-        return
-    assert downstream_bodies == []
-    status, body = _forbidden_client_response(send)
-    assert status == 403
+    assert denied.value.status_code == 403
+    body: Final = _forbidden_body(denied.value)
     assert body["error"] == "Forbidden"
     assert "mcp_allowed_clients" in body["details"]
-
-
-@pytest.mark.asyncio
-async def test_sse_endpoint_rejects_posts_larger_than_the_allowlist_peek_cap() -> None:
-    from starlette.types import Scope
-
-    from litellm.proxy._experimental.mcp_server import client_allowlist
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
-
-    chunk_size: Final = 1024
-    request_body: Final = _oversized_initialize("antigravity-cli", MCP_ALLOWLIST_PEEK_MAX_BYTES)
-    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp/sse", "headers": []}
-    receive: Final = _chunked_receive(request_body, chunk_size)
-    send: Final = AsyncMock()
-    sse_handle: Final = AsyncMock()
-
-    with (
-        _client_allowlist_patches(["antigravity-cli"]),
-        patch(  # test-quality-ok: module-level pre-auth probe unrelated to the allowlist under test; no injection seam
-            "litellm.proxy._experimental.mcp_server.server._raise_preemptive_401_for_unauthenticated_servers",
-            new_callable=AsyncMock,
-        ),
-        patch(  # test-quality-ok: module-level upstream auth probe unrelated to the allowlist under test; no injection seam
-            "litellm.proxy._experimental.mcp_server.server._check_passthrough_upstream_auth",
-            new_callable=AsyncMock,
-        ),
-        patch.object(  # test-quality-ok: SSE manager is a module singleton; the downstream call is the observable
-            mcp_module.sse_session_manager, "handle_request", sse_handle
-        ),
-    ):
-        await mcp_module.handle_sse_mcp(scope, receive, send)
-
-    status, body = _forbidden_client_response(send)
-    assert status == 403
-    assert body == client_allowlist.oversized_unidentified_request_body()
-    assert receive.await_count <= MCP_ALLOWLIST_PEEK_MAX_BYTES // chunk_size + 1
-    sse_handle.assert_not_awaited()
+    assert downstream_bodies == []
+    send.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -5736,11 +5390,12 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
     Ensure list-tools logging path calls `async_success_handler` when enabled.
     """
     try:
+        from mcp.types import Tool as MCPTool
+
         from litellm.proxy._experimental.mcp_server.server import (
             _get_tools_from_mcp_servers,
         )
         from litellm.proxy._types import UserAPIKeyAuth
-        from mcp.types import Tool as MCPTool
     except ImportError:
         pytest.skip("MCP server not available")
 
@@ -8690,10 +8345,10 @@ async def test_fire_mcp_tool_call_logging_iserror_logs_failure():
     """Regression test: a CallToolResult with isError=True must go
     down the failure logging path (async_failure_handler + post_call_failure_hook),
     never async_success_handler."""
+    from litellm.proxy._experimental.mcp_server.exceptions import MCPToolResultError
     from litellm.proxy._experimental.mcp_server.server import (
         _fire_mcp_tool_call_logging,
     )
-    from litellm.proxy._experimental.mcp_server.exceptions import MCPToolResultError
 
     logging_obj = _mock_mcp_logging_obj()
     proxy_logging_mock = _mock_mcp_proxy_logging()
@@ -9043,11 +8698,11 @@ async def test_call_mcp_tool_skips_failure_hook_for_upstream_auth_error():
     caller-must-reauth signal, not a failed call, so call_mcp_tool must re-raise it WITHOUT firing
     post_call_failure_hook (which records a failure and can trip LLM exception alerts). The
     streamable handler downgrades it to an informational isError result afterward."""
+    from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
     from litellm.proxy._experimental.mcp_server.server import (
         call_mcp_tool,
         global_mcp_server_manager,
     )
-    from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
     from litellm.proxy._types import MCPTransport, UserAPIKeyAuth
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
