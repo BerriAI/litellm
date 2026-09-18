@@ -55,6 +55,7 @@ from litellm.proxy.auth.auth_checks import (
     _delete_cache_key_object,
     can_team_access_model,
     get_jwt_key_mapping_cache_keys_for_token,
+    get_key_end_user_budget_id,
     get_org_object,
     get_project_object,
     get_team_object,
@@ -509,6 +510,16 @@ def _get_user_in_team(team_table: LiteLLM_TeamTableCachedObj, user_id: str | Non
     return None
 
 
+def _get_caller_team_role(
+    team_table: LiteLLM_TeamTableCachedObj,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Literal["admin", "user"] | None:
+    if user_api_key_dict.is_team_service_account and user_api_key_dict.team_id == team_table.team_id:
+        return "user"
+    member: Final = _get_user_in_team(team_table=team_table, user_id=user_api_key_dict.user_id)
+    return None if member is None else member.role
+
+
 def _calculate_key_rotation_time(rotation_interval: str) -> datetime:
     """
     Helper function to calculate the next rotation time for a key based on the rotation interval.
@@ -603,7 +614,7 @@ def _team_key_operation_team_member_check(
                 detail=f"User={assigned_user_id} not assigned to team={team_table.team_id}",
             )
 
-    team_member_object: Final = _get_user_in_team(team_table=team_table, user_id=user_api_key_dict.user_id)
+    caller_team_role: Final = _get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
 
     is_admin: Final = (
         user_api_key_dict.user_role is not None and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
@@ -611,22 +622,22 @@ def _team_key_operation_team_member_check(
 
     if is_admin:
         return True
-    elif team_member_object is None:
+    elif caller_team_role is None:
         raise HTTPException(
             status_code=400,
             detail=f"User={user_api_key_dict.user_id} not assigned to team={team_table.team_id}",
         )
     elif (
         "allowed_team_member_roles" in team_key_generation
-        and team_member_object.role not in team_key_generation["allowed_team_member_roles"]
+        and caller_team_role not in team_key_generation["allowed_team_member_roles"]
     ):
         raise HTTPException(
             status_code=400,
-            detail=f"Team member role {team_member_object.role} not in allowed_team_member_roles={team_key_generation['allowed_team_member_roles']}",
+            detail=f"Team member role {caller_team_role} not in allowed_team_member_roles={team_key_generation['allowed_team_member_roles']}",
         )
 
     TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
-        team_member_object=team_member_object,
+        team_member_role=caller_team_role,
         team_table=team_table,
         route=route,
     )
@@ -746,6 +757,12 @@ def key_generation_check(
     """
     Check if admin has restricted key creation to certain roles for teams or individuals
     """
+
+    if user_api_key_dict.is_team_service_account and data.team_id != user_api_key_dict.team_id:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Service account keys can only create keys for their own team. team_id={user_api_key_dict.team_id}",
+        )
 
     ## check if key is for team or individual
     is_team_key: Final = _is_team_key(data=data)
@@ -1174,6 +1191,13 @@ async def _common_key_generation_helper(
             status_code=403,
             detail={"error": "Only proxy admins can enable throttle_on_budget_exceeded on a key."},
         )
+
+    await _validate_end_user_budget_id_change(
+        requested_budget_id=_requested_end_user_budget_id(data),
+        existing_budget_id=None,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
 
     enforce_output_token_estimates_are_admin_only(
         data=data,
@@ -1930,6 +1954,7 @@ async def generate_key_fn(
     - organization_id: Optional[str] - The organization id of the key. If not set, and team_id is set, the organization id will be the same as the team id. If conflict, an error will be raised.
     - project_id: Optional[str] - The project id of the key. When set, models and max_budget are validated against the project's limits.
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
+    - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Takes precedence over `litellm_settings.max_end_user_budget_id`.
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
@@ -2142,6 +2167,7 @@ async def generate_service_account_key_fn(
     - team_id: Optional[str] - The team id of the key
     - user_id: Optional[str] - [NON-FUNCTIONAL] THIS WILL BE IGNORED. The user id of the key
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
+    - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
@@ -2222,6 +2248,14 @@ async def generate_service_account_key_fn(
         team_id=data.team_id,
         prisma_client=prisma_client,
     )
+
+    if data.metadata is None or data.metadata.get("service_account_id") is None:
+        service_account_id: Final = data.key_alias or str(uuid.uuid4())
+        stamped_metadata: Final = {  # mutable-ok: GenerateKeyRequest.metadata is a plain dict field
+            **(data.metadata or MappingProxyType({})),
+            "service_account_id": service_account_id,
+        }
+        data.metadata = stamped_metadata  # rebind-ok: the request carries the stamp so it persists on the key
 
     verbose_proxy_logger.debug("entered /key/generate")
 
@@ -2887,6 +2921,40 @@ def _require_prisma_client(prisma_client: PrismaClient | None) -> PrismaClient:
     return prisma_client
 
 
+def _requested_end_user_budget_id(data: KeyRequestBase) -> str | None:
+    """A ``metadata`` body replaces the stored metadata wholesale, so one without the field clears it."""
+    if data.end_user_budget_id is not None:
+        return data.end_user_budget_id
+    if data.metadata is None:
+        return None
+    return get_key_end_user_budget_id(data.metadata) or ""
+
+
+async def _validate_end_user_budget_id_change(
+    requested_budget_id: str | None,
+    existing_budget_id: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+) -> None:
+    """A key's default end-user budget overrides the proxy-wide one, so only proxy admins
+    may change it, and a non-empty value must name an existing budget (empty clears it)."""
+    if requested_budget_id is None or requested_budget_id == (existing_budget_id or ""):
+        return
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        forbidden_detail: Final = {  # mutable-ok: FastAPI detail contract
+            "error": "Only proxy admins can set end_user_budget_id on a key."
+        }
+        raise HTTPException(status_code=403, detail=forbidden_detail)
+    if requested_budget_id == "":
+        return
+    budget_row: Final = await BudgetRepository(_require_prisma_client(prisma_client)).find_by_id(requested_budget_id)
+    if budget_row is None:
+        missing_detail: Final = {  # mutable-ok: FastAPI detail contract
+            "error": f"end_user_budget_id={requested_budget_id} does not match any budget."
+        }
+        raise HTTPException(status_code=400, detail=missing_detail)
+
+
 async def _validate_update_key_data(
     data: UpdateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
@@ -2994,6 +3062,15 @@ async def _validate_update_key_data(
             status_code=403,
             detail={"error": "Only proxy admins can enable throttle_on_budget_exceeded on a key."},
         )
+
+    await _validate_end_user_budget_id_change(
+        requested_budget_id=_requested_end_user_budget_id(data),
+        existing_budget_id=get_key_end_user_budget_id(
+            _existing_metadata if isinstance(_existing_metadata, dict) else None
+        ),
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=checked_prisma_client,
+    )
 
     enforce_output_token_estimates_are_admin_only(
         data=data,
@@ -3182,6 +3259,7 @@ async def update_key_fn(
     - project_id: Optional[str] - Omit to retain the project, or send null to detach. A different project ID is rejected.
     - organization_id: Optional[str] - The organization id of the key.
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
+    - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
     - models: Optional[list] - Model_name's a user is allowed to call
     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
@@ -3837,8 +3915,10 @@ async def validate_key_team_change(
                 detail=f"Key={key.token} has a rpm_limit={key.rpm_limit} which is greater than the team's rpm_limit={team.rpm_limit}.",
             )
 
+    team_table: Final = cast(LiteLLM_TeamTableCachedObj, team)
+
     # Check if the key's user_id is a member of the team
-    member_object: Final = _get_user_in_team(team_table=cast(LiteLLM_TeamTableCachedObj, team), user_id=key.user_id)
+    member_object: Final = _get_user_in_team(team_table=team_table, user_id=key.user_id)
     if key.user_id is not None:
         if not member_object:
             raise HTTPException(
@@ -3854,8 +3934,8 @@ async def validate_key_team_change(
             team_obj=team,
         )
         or TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
-            team_member_object=member_object,
-            team_table=cast(LiteLLM_TeamTableCachedObj, team),
+            team_member_role=None if member_object is None else member_object.role,
+            team_table=team_table,
             route=KeyManagementRoutes.KEY_UPDATE.value,
         )
     ):
@@ -5384,6 +5464,14 @@ async def _execute_virtual_key_regeneration(
             existing_metadata=_existing_key_metadata if isinstance(_existing_key_metadata, dict) else None,
             user_api_key_dict=user_api_key_dict,
             entity="key",
+        )
+        await _validate_end_user_budget_id_change(
+            requested_budget_id=_requested_end_user_budget_id(data),
+            existing_budget_id=get_key_end_user_budget_id(
+                _existing_key_metadata if isinstance(_existing_key_metadata, dict) else None
+            ),
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
         )
 
     new_token: Final = await get_new_token(data=data)

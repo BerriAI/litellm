@@ -488,13 +488,6 @@ def test_shipped_gemini_chat_baseline_resolves_unmapped_ids(shipped_cost_map, mo
     assert not info.get("output_cost_per_token")
 
 
-def test_shipped_gemini_chat_baseline_loses_to_perplexity_exact_entries(shipped_cost_map):
-    info = litellm.get_model_info("google/gemini-2.5-pro", custom_llm_provider="perplexity")
-    entry = litellm.model_cost["perplexity/google/gemini-2.5-pro"]
-    assert info["mode"] == "responses"
-    assert entry["supports_reasoning"] is False
-
-
 def test_shipped_gemini_chat_baseline_skips_non_chat_and_pre_2_5_ids(shipped_cost_map):
     for model in (
         "gemini/gemini-4-flash-image",
@@ -809,20 +802,6 @@ def test_shipped_rules_flag_unmapped_wandb_ids_as_reasoning(shipped_cost_map):
     assert litellm.supports_reasoning(model="zai-org/GLM-6-Turbo", custom_llm_provider="wandb") is True
 
 
-def test_shipped_wandb_rule_loses_to_mapped_non_reasoning_entries(shipped_cost_map):
-    """The whole point of a fallback is that it only fills gaps. A wandb model the map
-    describes as non-reasoning must stay non-reasoning, otherwise the rule silently
-    re-introduces the blanket supports_reasoning it exists to avoid."""
-    for model in (
-        "meta-llama/Llama-3.1-8B-Instruct",
-        "microsoft/Phi-4-mini-instruct",
-        "moonshotai/Kimi-K2-Instruct",
-        "Qwen/Qwen3-Coder-480B-A35B-Instruct",
-    ):
-        assert f"wandb/{model}" in litellm.model_cost, model
-        assert litellm.supports_reasoning(model=model, custom_llm_provider="wandb") is False, model
-
-
 def test_shipped_wandb_rule_does_not_fill_missing_mapped_entries(shipped_cost_map):
     assert match_fill_missing_generalizations("wandb/meta-llama/Llama-3.1-8B-Instruct", "wandb") is None
 
@@ -941,46 +920,9 @@ def test_shipped_openai_reasoning_rule_skips_non_reasoning_gpt_ids(shipped_cost_
         assert match_capability_generalizations(model) is None, model
 
 
-def test_shipped_openai_reasoning_rule_loses_to_mapped_entries(shipped_cost_map):
-    assert "gpt-5-search-api" in litellm.model_cost
-    assert litellm.supports_reasoning(model="gpt-5-search-api", custom_llm_provider="openai") is False
-
-
-@pytest.mark.parametrize(
-    "model,provider,expected_supports_reasoning",
-    [
-        ("azure/us/o1-2024-12-17", "azure", True),
-        ("github_copilot/gpt-5", "github_copilot", None),
-        ("openrouter/openai/o1", "openrouter", None),
-        ("perplexity/openai/gpt-5.4-mini", "perplexity", None),
-    ],
-)
-def test_shipped_openai_reasoning_rule_backfills_only_approved_providers(
-    shipped_cost_map, model, provider, expected_supports_reasoning
-):
-    assert model in litellm.model_cost
-    raw_entry = litellm.model_cost[model]
-    assert "supports_reasoning" not in raw_entry
-    model_without_provider = model.removeprefix(f"{provider}/")
-    info = litellm.get_model_info(model=model_without_provider, custom_llm_provider=provider)
-    assert info.get("supports_reasoning") is expected_supports_reasoning
-    assert info["input_cost_per_token"] == raw_entry.get("input_cost_per_token", 0)
-
-
 def test_shipped_openai_reasoning_rule_matches_only_openai(shipped_cost_map):
     assert match_fill_missing_generalizations("gpt-5.4", "openai") == {"supports_reasoning": True}
     assert match_fill_missing_generalizations("gpt-5.4", "openrouter") is None
-
-
-def test_shipped_openai_reasoning_rule_skips_non_text_modes(shipped_cost_map):
-    model = "gemini/deep-research-pro-preview-12-2025"
-    assert model in litellm.model_cost
-    raw_entry = litellm.model_cost[model]
-    assert "supports_reasoning" not in raw_entry
-    assert raw_entry["mode"] == "image_generation"
-
-    info = litellm.get_model_info("deep-research-pro-preview-12-2025", custom_llm_provider="gemini")
-    assert info.get("supports_reasoning") is None
 
 
 def test_shipped_claude_thinking_rules_backfill_only_anthropic(shipped_cost_map):

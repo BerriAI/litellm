@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.router import Router
 
-COMPRESSION_GUARDRAIL_PROVIDERS: Final = frozenset({"headroom", "compresr"})
+COMPRESSION_GUARDRAIL_PROVIDERS: Final = frozenset({"headroom", "compresr", "typesafe"})
 _NO_COMPRESSION: Final = "none"
 
 # A ContextVar, not metadata: metadata reaches spend logs the caller can read, and a
