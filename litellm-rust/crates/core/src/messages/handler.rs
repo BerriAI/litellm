@@ -1,10 +1,11 @@
-use super::Error;
-use super::client::http_client;
-use super::common_utils::truncate_error_body;
-use super::prepare::prepare_provider_request;
-use super::types::{AnthropicMessagesResponse, MessagesRequest};
-use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
-use crate::http_utils::http_request;
+use super::{
+    Error,
+    client::http_client,
+    common_utils::truncate_error_body,
+    prepare::prepare_provider_request,
+    types::{AnthropicMessagesResponse, MessagesRequest},
+};
+use crate::{constants::ANTHROPIC_MESSAGES_PROVIDER, http_utils::http_request};
 
 pub(super) async fn execute_messages_provider_call(
     request: MessagesRequest<'_>,
