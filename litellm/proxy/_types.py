@@ -470,6 +470,7 @@ class LiteLLMRoutes(enum.Enum):
     mapped_pass_through_routes = [
         "/bedrock",
         "/comprehendmedical",
+        "/transcribe",
         "/vertex-ai",
         "/vertex_ai",
         "/cohere",
@@ -2425,6 +2426,8 @@ class ConfigList(LiteLLMPydanticObjectBase):
     nested_fields: list[FieldDetail] | None = None  # For nested dictionary or Pydantic fields
     field_options: list[str] | None = None  # Allowed values, for field_type == "Select"
     field_tab: str | None = None  # Admin UI sub-tab this field renders under; None groups it with the rest
+    source: Literal["config", "db", "env", "default", "unset"] = "unset"
+    editable: bool = True
 
 
 class UserHeaderMapping(LiteLLMPydanticObjectBase):
@@ -2784,6 +2787,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     enable_openai_websocket_passthrough: bool | None = Field(
         default=None,
         description="Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.",
+    )
+    transcribe_media_buckets: list[str] | None = Field(
+        default=None,
+        description="S3 bucket names that keys other than proxy admins may read media from and write transcripts to through the Amazon Transcribe pass-through. Unset means only proxy admins can start transcription jobs.",
     )
     user_header_name: str | None = Field(
         None,
@@ -3695,6 +3702,8 @@ class InvitationClaim(LiteLLMPydanticObjectBase):
 class ConfigFieldInfo(LiteLLMPydanticObjectBase):
     field_name: str
     field_value: Any
+    source: Literal["config", "db", "env", "default", "unset"] = "unset"
+    editable: bool = True
 
 
 class CallbackOnUI(LiteLLMPydanticObjectBase):

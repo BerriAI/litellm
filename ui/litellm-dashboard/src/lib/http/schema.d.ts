@@ -16476,6 +16476,61 @@ export interface paths {
         patch: operations["toolset_mcp_route_toolset__toolset_name__mcp_patch"];
         trace?: never;
     };
+    "/transcribe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transcribe Sdk Proxy Route
+         * @description AWS-SDK-shaped pass-through for Amazon Transcribe: point the SDK's `endpoint_url`
+         *     at `/transcribe` and the operation is read from the `X-Amz-Target` header, per the
+         *     AWS JSON 1.1 protocol.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/transcribe)
+         */
+        post: operations["transcribe_sdk_proxy_route_transcribe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/transcribe/{operation}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transcribe Proxy Route
+         * @description Pass-through for the Amazon Transcribe API, e.g. `POST /transcribe/StartTranscriptionJob`.
+         *
+         *     The request body is forwarded to the AWS JSON 1.1 API and signed with SigV4 using the
+         *     proxy's AWS credentials. Standard jobs are tagged with the calling key's owner so that
+         *     only that owner (or a proxy admin) can read or delete them, and keys other than proxy
+         *     admins may only read media from and write transcripts to the S3 buckets listed in
+         *     `general_settings.transcribe_media_buckets`; account-wide operations
+         *     such as ListTranscriptionJobs are limited to proxy admins. Streaming transcription
+         *     (`transcribestreaming`) uses a separate HTTP/2 event-stream protocol and is not served
+         *     by this route.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/transcribe)
+         */
+        post: operations["transcribe_proxy_route_transcribe__operation__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/typesafe/{endpoint}": {
         parameters: {
             query?: never;
@@ -16488,16 +16543,28 @@ export interface paths {
          * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
          */
         get: operations["typesafe_proxy_route_typesafe__endpoint__get"];
-        put?: never;
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        put: operations["typesafe_proxy_route_typesafe__endpoint__put"];
         /**
          * Typesafe Proxy Route
          * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
          */
         post: operations["typesafe_proxy_route_typesafe__endpoint__post"];
-        delete?: never;
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        delete: operations["typesafe_proxy_route_typesafe__endpoint__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        patch: operations["typesafe_proxy_route_typesafe__endpoint__patch"];
         trace?: never;
     };
     "/update/default_team_settings": {
@@ -26377,10 +26444,21 @@ export interface components {
         };
         /** ConfigFieldInfo */
         ConfigFieldInfo: {
+            /**
+             * Editable
+             * @default true
+             */
+            editable: boolean;
             /** Field Name */
             field_name: string;
             /** Field Value */
             field_value: unknown;
+            /**
+             * Source
+             * @default unset
+             * @enum {string}
+             */
+            source: "config" | "db" | "env" | "default" | "unset";
         };
         /** ConfigFieldUpdate */
         ConfigFieldUpdate: {
@@ -26807,6 +26885,11 @@ export interface components {
              */
             supported_db_objects?: components["schemas"]["SupportedDBObjectType"][] | null;
             /**
+             * Transcribe Media Buckets
+             * @description S3 bucket names that keys other than proxy admins may read media from and write transcripts to through the Amazon Transcribe pass-through. Unset means only proxy admins can start transcription jobs.
+             */
+            transcribe_media_buckets?: string[] | null;
+            /**
              * Trusted Proxy Ranges
              * @description CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler.
              */
@@ -26862,6 +26945,11 @@ export interface components {
         };
         /** ConfigList */
         ConfigList: {
+            /**
+             * Editable
+             * @default true
+             */
+            editable: boolean;
             /** Field Default Value */
             field_default_value: unknown;
             /** Field Description */
@@ -26883,6 +26971,12 @@ export interface components {
              * @default false
              */
             premium_field: boolean;
+            /**
+             * Source
+             * @default unset
+             * @enum {string}
+             */
+            source: "config" | "db" | "env" | "default" | "unset";
             /** Stored In Db */
             stored_in_db: boolean | null;
         };
@@ -61664,6 +61758,57 @@ export interface operations {
             };
         };
     };
+    transcribe_sdk_proxy_route_transcribe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    transcribe_proxy_route_transcribe__operation__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     typesafe_proxy_route_typesafe__endpoint__get: {
         parameters: {
             query?: never;
@@ -61695,7 +61840,100 @@ export interface operations {
             };
         };
     };
+    typesafe_proxy_route_typesafe__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     typesafe_proxy_route_typesafe__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__patch: {
         parameters: {
             query?: never;
             header?: never;

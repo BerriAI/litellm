@@ -4407,12 +4407,14 @@ async def test_pass_through_request_relays_non_json_body_without_buffering():
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_json_response_stays_buffered_for_logging():
+@pytest.mark.parametrize("content_type", ["application/json", "application/x-amz-json-1.1"])
+async def test_pass_through_request_json_response_stays_buffered_for_logging(content_type: str):
     """
-    JSON responses (content-type application/json) must keep the buffered
-    behavior: spend logging and guardrails inspect the parsed body, so the
-    handler reads the full upstream body and passes the parsed dict to the
-    success handler.
+    JSON responses (content-type application/json, and the AWS JSON protocol
+    media types AWS services such as Amazon Transcribe answer with) must keep
+    the buffered behavior: spend logging and guardrails inspect the parsed body,
+    so the handler reads the full upstream body and passes the parsed dict to
+    the success handler instead of handing it a relayed, already closed response.
     """
     from fastapi.responses import StreamingResponse
 
@@ -4423,7 +4425,7 @@ async def test_pass_through_request_json_response_stays_buffered_for_logging():
     fake_client, cleanup = _inject_fake_passthrough_client(
         _FakeUpstreamTransport(
             status_code=200,
-            headers={"content-type": "application/json"},
+            headers={"content-type": content_type},
             stream=upstream_stream,
         ),
         timeout=312.0,
