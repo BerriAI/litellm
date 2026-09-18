@@ -48,6 +48,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vertex_discovery_proxy_route,
     vertex_proxy_route,
     vllm_proxy_route,
+    xai_proxy_route,
 )
 from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.handle_jwt import JWTHandler
@@ -6222,3 +6223,115 @@ class TestTypeSafePassthroughRoute:
             custom_llm_provider="typesafe",
             is_streaming_request=False,
         )
+
+
+class TestXAIPassthroughRoute:
+    @staticmethod
+    def _request(body: Mapping[str, object], path: str) -> Request:
+        payload: Final = json.dumps(body).encode("utf-8")
+
+        async def receive() -> dict[str, object]:
+            return {"type": "http.request", "body": payload, "more_body": False}
+
+        return Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": path,
+                "headers": [(b"content-type", b"application/json")],
+                "query_string": b"",
+            },
+            receive=receive,
+        )
+
+    @staticmethod
+    def _install(monkeypatch: pytest.MonkeyPatch, api_base: str | None) -> Mock:
+        monkeypatch.setenv("XAI_API_KEY", "xai-test-key")
+        if api_base is None:
+            monkeypatch.delenv("XAI_API_BASE", raising=False)
+        else:
+            monkeypatch.setenv("XAI_API_BASE", api_base)
+        create_route: Final = Mock(return_value=AsyncMock(return_value={"ok": True}))
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            create_route,
+        )
+        return create_route
+
+    @pytest.fixture
+    def client(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+        from litellm.proxy.proxy_server import app
+
+        monkeypatch.setenv("XAI_API_KEY", "xai-test-key")
+        monkeypatch.delenv("XAI_API_BASE", raising=False)
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+        yield TestClient(app)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "api_base, expected_target",
+        [
+            (None, "https://api.x.ai/v1/responses"),
+            ("https://api.x.ai", "https://api.x.ai/v1/responses"),
+            ("https://xai.example/gateway", "https://xai.example/gateway/v1/responses"),
+        ],
+    )
+    async def test_target_carries_the_callers_version_path_exactly_once(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        api_base: str | None,
+        expected_target: str,
+    ) -> None:
+        create_route: Final = self._install(monkeypatch, api_base)
+
+        result: Final = await xai_proxy_route(
+            endpoint="v1/responses",
+            request=self._request({"model": "grok-4.20", "input": "ping"}, "/xai/v1/responses"),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
+        )
+
+        assert result == {"ok": True}
+        create_route.assert_called_once_with(
+            endpoint="v1/responses",
+            target=expected_target,
+            custom_headers={"Authorization": "Bearer xai-test-key"},
+            is_streaming_request=False,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stream, expected", [(True, True), (False, False)])
+    async def test_streaming_flag_follows_the_request_body(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        stream: bool,
+        expected: bool,
+    ) -> None:
+        create_route: Final = self._install(monkeypatch, None)
+
+        await xai_proxy_route(
+            endpoint="v1/chat/completions",
+            request=self._request(
+                {"model": "grok-4.20", "messages": [], "stream": stream},
+                "/xai/v1/chat/completions",
+            ),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
+        )
+
+        assert create_route.call_args.kwargs["is_streaming_request"] is expected
+
+    def test_native_responses_call_reaches_xai_with_the_resolved_credential(self, client: TestClient) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post("https://api.x.ai/v1/responses").mock(
+                return_value=httpx.Response(200, json={"id": "resp_123"})
+            )
+            response = client.post("/xai/v1/responses", json={"model": "grok-4.20", "input": "ping"})
+
+            assert (response.status_code, response.json()) == (200, {"id": "resp_123"})
+            sent: Final = route.calls.last.request
+            assert sent.headers["authorization"] == "Bearer xai-test-key"
+            assert json.loads(sent.content) == {"model": "grok-4.20", "input": "ping"}

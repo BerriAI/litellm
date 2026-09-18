@@ -562,6 +562,40 @@ async def typesafe_proxy_route(
 
 
 @router.api_route(
+    "/xai/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: FastAPI route metadata requires a list
+    tags=["xAI Pass-through", "pass-through"],  # mutable-ok: FastAPI route metadata requires a list
+)
+async def xai_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """[Docs](https://docs.litellm.ai/docs/pass_through/xai)"""
+    base_target_url: Final = get_secret_str("XAI_API_BASE") or "https://api.x.ai"
+    encoded_endpoint: Final = httpx.URL(endpoint).path
+    normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
+    base_url: Final = httpx.URL(base_target_url)
+    updated_url: Final = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, normalized_endpoint),
+    )
+    xai_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="xai",
+        region_name=None,
+    )
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers={  # mutable-ok: pass-through request headers require a mutable mapping
+            "Authorization": f"Bearer {xai_api_key}",
+        },
+        is_streaming_request=await is_streaming_request_fn(request),
+    )
+    return await endpoint_func(request, fastapi_response, user_api_key_dict)
+
+
+@router.api_route(
     "/milvus/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     tags=["Milvus Pass-through", "pass-through"],
