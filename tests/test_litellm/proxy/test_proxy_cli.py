@@ -2920,9 +2920,7 @@ class TestValidateConfigFlag:
             )
         )
 
-        result = CliRunner().invoke(
-            run_server, ["--config", str(config_path), "--validate_config"]
-        )
+        result = CliRunner().invoke(run_server, ["--config", str(config_path), "--validate_config"])
 
         assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
         assert "config OK" in result.output
@@ -2949,9 +2947,7 @@ class TestValidateConfigFlag:
             )
         )
 
-        result = CliRunner().invoke(
-            run_server, ["--config", str(config_path), "--validate_config"]
-        )
+        result = CliRunner().invoke(run_server, ["--config", str(config_path), "--validate_config"])
 
         assert result.exit_code == 1, f"exit_code={result.exit_code}, output={result.output}"
         assert "per_server_oauth_discovery must be a boolean" in result.output
