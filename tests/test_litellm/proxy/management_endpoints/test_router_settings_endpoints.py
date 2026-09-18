@@ -146,6 +146,8 @@ class TestRouterSettingsEndpoints:
         response = await get_router_settings(user_api_key_dict=admin_user)
 
         assert response.current_values.get("routing_groups") == groups
+        assert response.current_values["timeout"] is not None
+        assert response.source["timeout"] == "default"
 
         rg_field = next(f for f in response.fields if f.field_name == "routing_groups")
         assert rg_field.field_value == groups
