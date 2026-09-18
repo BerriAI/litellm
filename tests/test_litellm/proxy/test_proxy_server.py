@@ -11543,6 +11543,83 @@ async def test_update_config_general_settings_emits_audit_log(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_delete_config_general_settings_is_visible_to_the_next_read(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldDelete
+    from litellm.proxy.config_resolvers import SettingsStore
+    from litellm.proxy.proxy_server import delete_config_general_settings, get_config_general_settings
+
+    fake = _fake_prisma_with_config({"max_request_size_mb": 42})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+
+    settings = SettingsStore("general_settings")
+    settings.load_yaml({})
+    settings.apply_db_row("general_settings", {"max_request_size_mb": 42})
+    monkeypatch.setattr(proxy_server_module.proxy_config, "settings", settings)
+
+    admin = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await delete_config_general_settings(
+        data=ConfigFieldDelete(field_name="max_request_size_mb", config_type="general_settings"),
+        user_api_key_dict=admin,
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        await get_config_general_settings(field_name="max_request_size_mb", user_api_key_dict=admin)
+    assert excinfo.value.status_code == 400
+    assert "is not set" in excinfo.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_ui_litellm_field_write_refuses_a_key_the_config_file_declares(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import ProxyConfig, update_config_general_settings
+
+    pc = ProxyConfig()
+    pc._load_yaml_settings_stores({"litellm_settings": {"enable_anthropic_prompt_caching": True}})
+    monkeypatch.setattr(proxy_server_module, "proxy_config", pc)
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+
+    fake = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+
+    admin = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(HTTPException) as excinfo:
+        await update_config_general_settings(
+            data=ConfigFieldUpdate(
+                field_name="enable_anthropic_prompt_caching", field_value=False, config_type="general_settings"
+            ),
+            user_api_key_dict=admin,
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail["keys"] == ["enable_anthropic_prompt_caching"]
+    assert litellm.enable_anthropic_prompt_caching is True
+    fake.db.litellm_config.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ui_litellm_field_reset_refuses_a_key_the_config_file_declares(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy.proxy_server import ProxyConfig, _reset_general_settings_ui_litellm_field
+
+    pc = ProxyConfig()
+    pc._load_yaml_settings_stores({"litellm_settings": {"enable_anthropic_prompt_caching": True}})
+    monkeypatch.setattr(proxy_server_module, "proxy_config", pc)
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+
+    fake = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+
+    admin = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(HTTPException) as excinfo:
+        await _reset_general_settings_ui_litellm_field("enable_anthropic_prompt_caching", admin)
+
+    assert excinfo.value.status_code == 400
+    assert litellm.enable_anthropic_prompt_caching is True
+
+
+@pytest.mark.asyncio
 async def test_update_config_general_settings_refuses_a_key_the_config_file_declares(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import ConfigFieldUpdate
