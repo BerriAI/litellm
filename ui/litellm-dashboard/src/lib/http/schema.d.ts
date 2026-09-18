@@ -16488,16 +16488,28 @@ export interface paths {
          * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
          */
         get: operations["typesafe_proxy_route_typesafe__endpoint__get"];
-        put?: never;
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        put: operations["typesafe_proxy_route_typesafe__endpoint__put"];
         /**
          * Typesafe Proxy Route
          * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
          */
         post: operations["typesafe_proxy_route_typesafe__endpoint__post"];
-        delete?: never;
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        delete: operations["typesafe_proxy_route_typesafe__endpoint__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        patch: operations["typesafe_proxy_route_typesafe__endpoint__patch"];
         trace?: never;
     };
     "/update/default_team_settings": {
@@ -42720,8 +42732,6 @@ export interface operations {
                 object_team_id?: string | null;
                 /** @description Filter by token (key hash) present in before_value or updated_values JSON (PostgreSQL only) */
                 object_key_hash?: string | null;
-                /** @description Match a row whose id, object_id, changed_by, or changed_by_api_key equals this value */
-                search?: string | null;
                 /** @description Column to sort by (e.g. 'updated_at', 'action', 'table_name') */
                 sort_by?: string | null;
                 /** @description Sort order ('asc' or 'desc') */
@@ -61695,7 +61705,100 @@ export interface operations {
             };
         };
     };
+    typesafe_proxy_route_typesafe__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     typesafe_proxy_route_typesafe__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__patch: {
         parameters: {
             query?: never;
             header?: never;
