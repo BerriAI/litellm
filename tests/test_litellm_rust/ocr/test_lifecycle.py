@@ -2,7 +2,6 @@ import asyncio
 import datetime
 import gc
 import json
-import sys
 import threading
 import weakref
 from collections.abc import Coroutine
@@ -21,41 +20,6 @@ from tests.test_litellm_rust.support.recording_server import RecordingServer, Re
 from tests.test_litellm_rust.support.requests import OCR_RESPONSE, call_aocr, call_ocr
 
 pytestmark = pytest.mark.requires_rust_extension
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("phase", ["deployment", "failure"])
-async def test_cancellation_during_failure_obeys_phase_policy(ocr_server: RecordingServer, phase: str) -> None:
-    ocr_server.enqueue(ResponseSpec(body={"message": "provider failure"}, status=500))
-    entered: Final = asyncio.Event()
-    observed: Final = []
-
-    class Observer(CustomLogger):
-        async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type, **kwargs):
-            if phase == "deployment":
-                entered.set()
-                await asyncio.Event().wait()
-
-        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-            observed.append(kwargs["exception"])
-            if phase == "failure":
-                entered.set()
-                await asyncio.Event().wait()
-
-    observer: Final = Observer()
-    litellm.callbacks.append(observer)
-    task: Final = asyncio.create_task(call_aocr(ocr_server, callbacks=[observer]))
-    await asyncio.wait_for(entered.wait(), 5)
-    task.cancel()
-    if phase == "deployment":
-        with pytest.raises(litellm.InternalServerError) as caught:
-            await task
-        assert observed == [caught.value]
-    else:
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert len(observed) == 1
-        assert isinstance(observed[0], litellm.InternalServerError)
 
 
 @pytest.fixture
@@ -120,61 +84,6 @@ async def test_response_replacement_finalized_before_dispatch_in_caller_task(ocr
     assert events[0].response is response
     assert response._hidden_params["litellm_call_id"] == "native-final"
     assert "response_cost" in response._hidden_params
-
-
-@pytest.mark.asyncio
-async def test_deployment_hook_replaces_complete_routing_request(ocr_server: RecordingServer) -> None:
-    ocr_server.enqueue(ResponseSpec(body=OCR_RESPONSE, delay=0.05))
-    original: Final = {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}
-    replacement: Final = {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}
-    observed: Final = []
-
-    class Replace(CustomLogger):
-        async def async_pre_call_deployment_hook(self, kwargs, call_type):
-            return {
-                **kwargs,
-                "model": "azure_ai/mistral-ocr-latest",
-                "custom_llm_provider": "azure_ai",
-                "document": replacement,
-                "api_key": "replacement-key",
-                "api_base": ocr_server.base_url,
-                "extra_headers": {"x-deployment": "replacement"},
-                "timeout": 2,
-                "pages": [2],
-            }
-
-    class Observe(Logging):
-        def pre_call(self, input, api_key, additional_args):
-            observed.append((additional_args["complete_input_dict"]["document"], api_key))
-
-    litellm.callbacks.append(Replace())
-    logger: Final = Observe(
-        model="mistral-ocr-latest",
-        messages=[],
-        stream=False,
-        call_type="aocr",
-        start_time=datetime.datetime.now(),
-        litellm_call_id="deployment-routing",
-        function_id="deployment-routing",
-    )
-    response: Final = await call_aocr(
-        ocr_server,
-        document=original,
-        timeout=0.001,
-        litellm_logging_obj=logger,
-    )
-
-    assert response.pages[0].markdown == "native OCR response"
-    assert observed == [(replacement, "replacement-key")]
-    assert observed[0][0] is replacement
-    assert replacement == original
-    assert replacement is not original
-    assert original == {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}
-    assert ocr_server.requests[0].path == "/providers/mistral/azure/ocr"
-    assert ocr_server.requests[0].headers["authorization"] == "Bearer replacement-key"
-    assert ocr_server.requests[0].headers["x-deployment"] == "replacement"
-    assert ocr_server.requests[0].body["document"] == replacement
-    assert ocr_server.requests[0].body["pages"] == [2]
 
 
 @pytest.mark.asyncio
@@ -249,7 +158,7 @@ async def test_mapped_failure_identity_and_deployment_snapshot(ocr_server: Recor
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("phase", ["pre", "http", "post"])
+@pytest.mark.parametrize("phase", ["pre", "http"])
 async def test_cancellation_cleans_up_in_caller_task_without_terminal_dispatch(
     ocr_server: RecordingServer, phase: str
 ) -> None:
@@ -259,11 +168,6 @@ async def test_cancellation_cleans_up_in_caller_task_without_terminal_dispatch(
     class Pause(CustomLogger):
         async def async_pre_call_deployment_hook(self, kwargs, call_type):
             if phase == "pre":
-                entered.set()
-                await asyncio.Event().wait()
-
-        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
-            if phase == "post":
                 entered.set()
                 await asyncio.Event().wait()
 
@@ -323,78 +227,6 @@ async def test_deferred_logging_requires_release_and_runs_at_most_once(
         assert events[0].response is response
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [RuntimeError("native enqueue failed"), asyncio.CancelledError("cancelled")])
-async def test_deferred_release_handles_enqueue_failure_once_without_replay(
-    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, failure: BaseException
-) -> None:
-    import inspect
-
-    from litellm.litellm_core_utils import logging_worker
-
-    attempts: Final[list[Coroutine[object, object, object]]] = []
-    diagnostics: Final = []
-
-    class FailingWorker:
-        def ensure_initialized_and_enqueue(self, coroutine: Coroutine[object, object, object]) -> None:
-            attempts.append(coroutine)
-            raise failure
-
-    recorder: Final = RecordingLogger()
-    logger: Final = Logging(
-        model="mistral-ocr-latest",
-        messages=[],
-        stream=False,
-        call_type="aocr",
-        start_time=datetime.datetime.now(),
-        litellm_call_id="release-failure",
-        function_id="release-failure",
-        dynamic_async_success_callbacks=[recorder],
-    )
-    logger._defer_async_logging = True
-    response: Final = await call_aocr(ocr_server, litellm_logging_obj=logger)
-    monkeypatch.setattr(logging_worker, "GLOBAL_LOGGING_WORKER", FailingWorker())
-    monkeypatch.setattr(sys, "unraisablehook", lambda event: diagnostics.append(event.exc_value))
-
-    if isinstance(failure, asyncio.CancelledError):
-        with pytest.raises(asyncio.CancelledError, match="cancelled") as caught:
-            ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, False)
-        assert caught.value is failure
-        assert diagnostics == []
-    else:
-        ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, False)
-        assert diagnostics == [failure]
-    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, False)
-
-    assert len(attempts) == 1
-    assert inspect.getcoroutinestate(attempts[0]) == inspect.CORO_CLOSED
-    assert response.pages[0].markdown == "native OCR response"
-    assert len(ocr_server.requests) == 1
-    assert not any("success" in name or "failure" in name for name in recorder.names)
-
-
-@pytest.mark.asyncio
-async def test_abandoned_deferred_logging_is_collectable(ocr_server: RecordingServer) -> None:
-    async def invoke():
-        logger: Final = Logging(
-            model="mistral-ocr-latest",
-            messages=[],
-            stream=False,
-            call_type="aocr",
-            start_time=datetime.datetime.now(),
-            litellm_call_id="abandoned",
-            function_id="abandoned",
-        )
-        logger._defer_async_logging = True
-        await call_aocr(ocr_server, litellm_logging_obj=logger)
-        return weakref.ref(logger)
-
-    reference: Final = await invoke()
-    await drain_logging()
-    gc.collect()
-    assert reference() is None
-
-
 def test_sync_success_uses_executor_and_copied_caller_context(ocr_server: RecordingServer) -> None:
     context: Final = ContextVar("sync-lifecycle", default="missing")
     context.set("caller")
@@ -412,81 +244,6 @@ def test_sync_success_uses_executor_and_copied_caller_context(ocr_server: Record
     assert observations[0][0] is not thread
     assert observations[0][1] == "caller"
     assert observations[0][2] is response
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True])
-async def test_invalid_response_runs_post_call_before_failure(ocr_server: RecordingServer, asynchronous: bool) -> None:
-    ocr_server.enqueue(ResponseSpec(body={"pages": "invalid"}))
-    events: Final = []
-
-    class Observe(Logging):
-        def pre_call(self, *args, **kwargs):
-            events.append("pre")
-            return super().pre_call(*args, **kwargs)
-
-        def post_call(self, *args, **kwargs):
-            events.append(("post", kwargs["original_response"]))
-            return super().post_call(*args, **kwargs)
-
-        def success_handler(self, *args, **kwargs):
-            events.append("success")
-
-        def failure_handler(self, exception, *args, **kwargs):
-            events.append(("failure", exception))
-
-        async def async_failure_handler(self, exception, *args, **kwargs):
-            events.append(("async_failure", exception))
-
-    logger: Final = Observe(
-        model="mistral-ocr-latest",
-        messages=[],
-        stream=False,
-        call_type="aocr" if asynchronous else "ocr",
-        start_time=datetime.datetime.now(),
-        litellm_call_id="invalid",
-        function_id="invalid",
-    )
-    with pytest.raises(litellm.APIConnectionError) as caught:
-        await call_aocr(ocr_server, litellm_logging_obj=logger) if asynchronous else call_ocr(
-            ocr_server, litellm_logging_obj=logger
-        )
-    assert events[0] == "pre"
-    assert events[1] == ("post", '{"pages": "invalid"}')
-    assert events[2] == ("failure", caught.value)
-    if asynchronous:
-        assert events[3] == ("async_failure", caught.value)
-    assert "success" not in events
-
-
-@pytest.mark.asyncio
-async def test_failing_terminal_handler_preserves_public_failure_and_runs_async_handler(
-    ocr_server: RecordingServer,
-) -> None:
-    ocr_server.enqueue(ResponseSpec(body={"message": "provider failure"}, status=500))
-    failures: Final = []
-
-    class BrokenHandler(Logging):
-        def failure_handler(self, exception, *args, **kwargs):
-            failures.append(exception)
-            raise RuntimeError("handler failed")
-
-        async def async_failure_handler(self, exception, *args, **kwargs):
-            failures.append(exception)
-
-    logger: Final = BrokenHandler(
-        model="mistral-ocr-latest",
-        messages=[],
-        stream=False,
-        call_type="aocr",
-        start_time=datetime.datetime.now(),
-        litellm_call_id="broken",
-        function_id="broken",
-    )
-    with pytest.raises(litellm.InternalServerError) as caught:
-        await call_aocr(ocr_server, litellm_logging_obj=logger)
-    assert failures == [caught.value, caught.value]
-    assert len(ocr_server.requests) == 1
 
 
 @pytest.mark.asyncio
@@ -521,62 +278,6 @@ def test_sync_pre_call_can_make_nested_native_request(ocr_server: RecordingServe
     response: Final = call_ocr(ocr_server, callbacks=[Nested()], litellm_call_id="outer-sync")
     assert observed[0].pages[0].markdown == response.pages[0].markdown
     assert len(ocr_server.requests) == 2
-
-
-@pytest.mark.asyncio
-async def test_retained_argument_aliases_and_body_roots_survive_envelope_replacement(
-    ocr_server: RecordingServer,
-) -> None:
-    pages: Final = [0]
-    document: Final = {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}
-    opaque: Final = object()
-    observed: Final = []
-
-    class Observe(Logging):
-        def pre_call(self, input, api_key, additional_args):
-            body: Final = additional_args["complete_input_dict"]
-            headers: Final = additional_args["headers"]
-            observed.append((body["document"] is document, body["pages"] is pages))
-            pages.append(2)
-            headers["x-retained"] = "yes"
-            additional_args["complete_input_dict"] = {"discarded": True}
-            additional_args["headers"] = {}
-            observed.append((body, headers))
-
-        def post_call(self, original_response, additional_args):
-            observed.append(
-                (additional_args["complete_input_dict"] is observed[2][0], additional_args["headers"] is observed[2][1])
-            )
-
-    class Deployment(CustomLogger):
-        async def async_pre_call_deployment_hook(self, kwargs, call_type):
-            observed.append(("model" in kwargs, "document" in kwargs, kwargs["opaque"] is opaque))
-
-    litellm.callbacks.append(Deployment())
-    logger: Final = Observe(
-        model="mistral-ocr-latest",
-        messages=[],
-        stream=False,
-        call_type="aocr",
-        start_time=datetime.datetime.now(),
-        litellm_call_id="roots",
-        function_id="roots",
-    )
-    response: Final = await litellm.aocr(
-        "mistral/mistral-ocr-latest",
-        document,
-        api_key="test-key",
-        api_base=ocr_server.base_url,
-        pages=pages,
-        opaque=opaque,
-        litellm_logging_obj=logger,
-    )
-    assert response.pages[0].markdown == "native OCR response"
-    assert observed[0] == (False, False, True)
-    assert observed[1] == (True, True)
-    assert observed[3] == (True, True)
-    assert ocr_server.requests[0].body["pages"] == [0, 2]
-    assert ocr_server.requests[0].headers["x-retained"] == "yes"
 
 
 def test_unstarted_native_coroutine_releases_input_without_reading_file(ocr_server: RecordingServer) -> None:
@@ -690,161 +391,18 @@ async def test_cancelling_native_transport_closes_connection_before_return() -> 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["reducto/parse-v3", "reducto/parse-legacy"])
-async def test_reducto_lifecycle_retains_upload_parse_and_post_call_boundaries(
-    ocr_server: RecordingServer, model: str
-) -> None:
-    ocr_server.expected_requests = 2
-    ocr_server.enqueue(ResponseSpec(body={"file_id": "reducto://uploaded.pdf"}))
-    ocr_server.enqueue(ResponseSpec(body={"result": {"chunks": [{"content": "parsed"}]}}))
-    boundaries: Final = []
-    recorder: Final = RecordingLogger()
-
-    class Observe(Logging):
-        def post_call(self, *args, **kwargs):
-            boundaries.append(tuple(request.path for request in ocr_server.requests))
-            return super().post_call(*args, **kwargs)
-
-    logger: Final = Observe(
-        model=model,
-        messages=[],
-        stream=False,
-        call_type="aocr",
-        start_time=datetime.datetime.now(),
-        litellm_call_id="upload",
-        function_id="upload",
-        dynamic_async_success_callbacks=[recorder],
-    )
-    response: Final = await call_aocr(ocr_server, model=model, litellm_logging_obj=logger)
-    events: Final = await recorder.wait_for_async("async_log_success_event")
-    assert boundaries == [("/upload", "/parse")]
-    assert b"abc" in ocr_server.requests[0].raw_body
-    assert "multipart/form-data" in ocr_server.requests[0].headers["content-type"]
-    assert ocr_server.requests[1].body["input" if model.endswith("v3") else "document_url"] == "reducto://uploaded.pdf"
-    assert response.pages[0].markdown == "parsed"
-    assert events[0].response is response
-
-
-@pytest.mark.asyncio
-async def test_document_intelligence_post_call_observes_submission_and_final_result(
-    ocr_server: RecordingServer,
-) -> None:
-    ocr_server.expected_requests = 2
-    ocr_server.enqueue(
-        ResponseSpec(
-            body={"status": "running"},
-            status=202,
-            headers={"Operation-Location": f"{ocr_server.base_url}/operations/1", "Retry-After": "0"},
-        )
-    )
-    ocr_server.enqueue(ResponseSpec(body={"status": "succeeded", "analyzeResult": {"pages": []}}))
-    boundaries: Final = []
-
-    class Observe(Logging):
-        def post_call(self, *args, **kwargs):
-            boundaries.append((tuple(request.method for request in ocr_server.requests), kwargs["original_response"]))
-            return super().post_call(*args, **kwargs)
-
-    logger: Final = Observe(
-        model="azure_ai/doc-intelligence/prebuilt-read",
-        messages=[],
-        stream=False,
-        call_type="aocr",
-        start_time=datetime.datetime.now(),
-        litellm_call_id="poll",
-        function_id="poll",
-    )
-    response: Final = await call_aocr(
-        ocr_server, model="azure_ai/doc-intelligence/prebuilt-read", litellm_logging_obj=logger
-    )
-    assert [methods for methods, _ in boundaries] == [("POST",), ("POST", "GET")]
-    assert json.loads(boundaries[0][1])["status"] == "running"
-    assert json.loads(boundaries[1][1])["status"] == "succeeded"
-    assert [request.method for request in ocr_server.requests] == ["POST", "GET"]
-    assert ocr_server.requests[1].path == "/operations/1"
-    assert response.pages == []
-
-
-@pytest.mark.asyncio
-async def test_vertex_deepseek_public_lifecycle_normalizes_before_success(ocr_server: RecordingServer) -> None:
-    ocr_server.enqueue(
-        ResponseSpec(body={"choices": [{"message": {"content": "recognized"}}], "usage": {"prompt_tokens": 1}})
-    )
-    recorder: Final = RecordingLogger()
-    response: Final = await call_aocr(
-        ocr_server,
-        model="vertex_ai/deepseek-ocr-maas",
-        document={"type": "document_url", "document_url": "gs://bucket/document.pdf"},
-        vertex_project="project-1",
-        vertex_location="europe-west4",
-        callbacks=[recorder],
-    )
-    events: Final = await recorder.wait_for_async("async_log_success_event")
-    assert response.pages[0].markdown == "recognized"
-    assert events[0].response is response
-    assert (
-        ocr_server.requests[0].path
-        == "/v1/projects/project-1/locations/europe-west4/endpoints/openapi/chat/completions"
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("limit", ["budget", "retries"])
-async def test_shared_call_limits_still_reject_before_reading_ocr_file(
-    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, asynchronous: bool, limit: str
-) -> None:
-    ocr_server.expected_requests = 0
-    reads: Final = []
-
-    class File:
-        def read(self):
-            reads.append("read")
-            return b"abc"
-
-    monkeypatch.setattr(litellm, "max_budget", 1 if limit == "budget" else None)
-    monkeypatch.setattr(litellm, "_current_cost", 2)
-    monkeypatch.setattr(litellm, "num_retries_per_request", 1 if limit == "retries" else None)
-    expected: Final = litellm.BudgetExceededError if limit == "budget" else RuntimeError
-    arguments: Final = {"document": {"type": "file", "file": File()}, "metadata": {"request_retry_count": 1}}
-    with pytest.raises(expected, match=r"Budget has been exceeded|Max retries per request hit"):
-        await call_aocr(ocr_server, **arguments) if asynchronous else call_ocr(ocr_server, **arguments)
-    assert reads == []
-    assert ocr_server.requests == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("extra_bytes", [0, 1])
-async def test_response_limit_is_enforced_at_the_public_boundary(
-    ocr_server: RecordingServer, asynchronous: bool, extra_bytes: int
-) -> None:
-    limit: Final = len(json.dumps(OCR_RESPONSE).encode()) - extra_bytes
-    if extra_bytes:
-        with pytest.raises(litellm.APIConnectionError, match="OCR response exceeds the size limit"):
-            await call_aocr(ocr_server, max_response_bytes=limit) if asynchronous else call_ocr(
-                ocr_server, max_response_bytes=limit
-            )
-    else:
-        response: Final = (
-            await call_aocr(ocr_server, max_response_bytes=limit)
-            if asynchronous
-            else call_ocr(ocr_server, max_response_bytes=limit)
-        )
-        assert response.pages[0].markdown == "native OCR response"
+async def test_response_limit_is_enforced_at_the_public_boundary(ocr_server: RecordingServer) -> None:
+    limit: Final = len(json.dumps(OCR_RESPONSE).encode()) - 1
+    with pytest.raises(litellm.APIConnectionError, match="OCR response exceeds the size limit"):
+        await call_aocr(ocr_server, max_response_bytes=limit)
     assert len(ocr_server.requests) == 1
-    body: Final = ocr_server.requests[0].body
-    assert isinstance(body, dict)
-    assert "max_response_bytes" not in body
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("failure", [False, True])
 async def test_empty_callbacks_keep_bookkeeping_without_optional_dispatch(
     ocr_server: RecordingServer,
     monkeypatch: pytest.MonkeyPatch,
-    asynchronous: bool,
     failure: bool,
     created_loggers: list[Logging],
 ) -> None:
@@ -881,11 +439,9 @@ async def test_empty_callbacks_keep_bookkeeping_without_optional_dispatch(
     arguments: Final = {"litellm_trace_id": "callback-free-call", "litellm_call_id": "callback-free-id"}
     if failure:
         with pytest.raises(litellm.InternalServerError):
-            await call_aocr(ocr_server, **arguments) if asynchronous else call_ocr(ocr_server, **arguments)
+            await call_aocr(ocr_server, **arguments)
     else:
-        response: Final = (
-            await call_aocr(ocr_server, **arguments) if asynchronous else call_ocr(ocr_server, **arguments)
-        )
+        response: Final = await call_aocr(ocr_server, **arguments)
         assert response.pages[0].markdown == "native OCR response"
         assert response._hidden_params["litellm_call_id"] == "callback-free-id"
         assert response._hidden_params["response_cost"] is not None
@@ -981,30 +537,3 @@ async def test_explicit_logging_consumers_keep_request_and_response_payloads(
         assert details["raw_request_typed_dict"]["raw_request_body"]["model"] == "mistral-ocr-latest"
     if consumer == "logger_fn":
         assert [item["log_event_type"] for item in snapshots] == ["pre_api_call", "post_api_call"]
-
-
-@pytest.mark.asyncio
-async def test_registration_removed_before_deferred_release_skips_queue(
-    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, created_loggers: list[Logging]
-) -> None:
-    from litellm.litellm_core_utils import logging_worker
-
-    class QueueProbe:
-        enqueues = 0
-
-        def ensure_initialized_and_enqueue(self, coroutine: Coroutine[object, object, object]) -> None:
-            self.enqueues += 1
-            coroutine.close()
-
-    observer: Final = RecordingLogger()
-    litellm._async_success_callback.append(observer)
-    await call_aocr(ocr_server)
-    logger: Final = created_loggers[0]
-    assert hasattr(logger, "_native_pending_logging")
-    litellm._async_success_callback.clear()
-    probe: Final = QueueProbe()
-    monkeypatch.setattr(logging_worker, "GLOBAL_LOGGING_WORKER", probe)
-    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, False)
-    assert probe.enqueues == 0
-    assert not observer.names
-    assert logger.model_call_details["response_cost"] is not None

@@ -195,6 +195,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -7497,6 +7498,7 @@ def _check_and_merge_model_level_guardrails(
     data: dict,
     llm_router: Router | None,
     trust_client_model_info: bool = True,
+    model_alias: str | None = None,
 ) -> dict:
     """
     Check if the model has guardrails defined and merge them with existing guardrails in the request data.
@@ -7504,6 +7506,7 @@ def _check_and_merge_model_level_guardrails(
     Args:
         data: The request data dict
         llm_router: The LLM router instance to get deployment info from
+        model_alias: Resolve guardrails for this model group instead of data["model"]
         trust_client_model_info: If False, ignore metadata.model_info.id and
             resolve guardrails by alias-union only. Set to False on the
             pre_call path because add_litellm_data_to_request preserves
@@ -7548,13 +7551,13 @@ def _check_and_merge_model_level_guardrails(
         # set on ANY eligible deployment still fires (#29652; addresses
         # veria-ai HIGH on the single-deployment fallback that would skip
         # non-first deployments).
-        model_alias: Final = data.get("model")
-        if not isinstance(model_alias, str) or not model_alias:
+        alias: Final = model_alias if model_alias is not None else data.get("model")
+        if not isinstance(alias, str) or not alias:
             return data
         # Pass team_id so team-scoped public model names resolve the same way
         # route_request resolves them; otherwise team-scoped deployments are
         # invisible to this lookup and their guardrails are silently dropped.
-        deployments: Final = llm_router.get_model_list(model_name=model_alias, team_id=team_id) or []
+        deployments: Final = llm_router.get_model_list(model_name=alias, team_id=team_id) or []
         seen: Final[set] = set()
         union: Final[list] = []
         for dep in deployments:
@@ -8204,18 +8207,23 @@ def create_model_info_response(
         "owned_by": provider,
     }
 
-    listing_info: Final = llm_router.get_model_listing_info(model_id) if llm_router is not None else None
+    alias_target: Final = (
+        resolve_model_group_alias(llm_router.model_group_alias, model_id) if llm_router is not None else None
+    )
+    lookup_model: Final = alias_target if alias_target is not None else model_id
+
+    listing_info: Final = llm_router.get_model_listing_info(lookup_model) if llm_router is not None else None
 
     # One entry per distinct model behind the listed name; (None,) when the router knows
     # nothing about it, so the listed name is resolved on its own as before.
     deployment_models: Final[tuple[str | None, ...]] = (
         listing_info.cost_map_keys if listing_info is not None and listing_info.cost_map_keys else (None,)
     )
-    listed_info: Final = _safe_get_model_info(model_id, get_model_info)
+    listed_info: Final = _safe_get_model_info(lookup_model, get_model_info)
     candidate_sets: Final = tuple(
         _resolve_listing_model_info(
             deployment_model=deployment_model,
-            listed_model=model_id,
+            listed_model=lookup_model,
             listed_info=listed_info,
             get_model_info=get_model_info,
         )
@@ -8246,7 +8254,7 @@ def create_model_info_response(
             max_output_tokens = listing_info.max_output_tokens
 
     if llm_router is not None:
-        configured_mode: Final = llm_router.get_configured_mode(model_id)
+        configured_mode: Final = llm_router.get_configured_mode(lookup_model)
         if isinstance(configured_mode, str):
             base["mode"] = configured_mode
 

@@ -278,6 +278,8 @@ def test_extract_credentials_all_supported_keys():
         "vertex_credentials",
         "gcs_bucket_name",
         "bucket_name",
+        "s3_endpoint_url",
+        "s3_region_name",
         "timeout",
         "max_retries",
     }
@@ -1753,6 +1755,44 @@ def test_bedrock_anthropic_shaped_batch_usage_still_parsed():
     body = {"model": "claude-sonnet-4-6", "usage": {"input_tokens": 18, "output_tokens": 10}}
     usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="bedrock")
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (18, 10, 28)
+
+
+def test_bedrock_titan_embedding_batch_usage_is_parsed():
+    """Titan embedding batch lines carry a top-level inputTextTokenCount and no usage block."""
+    body = {"embedding": [0.1, 0.2], "embeddingsByType": {"float": [0.1, 0.2]}, "inputTextTokenCount": 17}
+    usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="bedrock")
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (17, 0, 17)
+
+
+def test_bedrock_titan_embedding_batch_is_billed():
+    """Binary embedding rows carry only embeddingsByType and must bill like float rows."""
+    rows = [
+        {"recordId": "0", "modelOutput": {"embedding": [0.1], "inputTextTokenCount": 10}},
+        {"recordId": "1", "modelOutput": {"embeddingsByType": {"binary": [1, 0]}, "inputTextTokenCount": 7}},
+    ]
+    result = bu._aggregate_batch_cost_usage_models(
+        entries=rows,
+        custom_llm_provider="bedrock",
+        model_name="amazon.titan-embed-text-v2:0",
+        model_info={"input_cost_per_token_batches": 1e-6, "output_cost_per_token_batches": 0.0},
+    )
+    assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (17, 0, 17)
+    assert result.cost == pytest.approx(17 * 1e-6)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"embedding": [0.1], "inputTextTokenCount": "17"},
+        {"embedding": [0.1], "inputTextTokenCount": True},
+        {"embedding": [0.1], "inputTextTokenCount": None},
+        {"results": [{"outputText": "hi", "tokenCount": 2}], "inputTextTokenCount": 17},
+    ],
+)
+def test_bedrock_input_text_token_count_outside_embedding_lines_is_not_billed(body):
+    """Only embedding lines are parsed here; Titan text generation lines are left as they were."""
+    usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="bedrock")
+    assert usage.total_tokens == 0
 
 
 def test_unparsable_bedrock_batch_usage_warns(caplog):

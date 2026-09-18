@@ -8,7 +8,7 @@ from base64 import b64encode
 from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from itertools import groupby
+from itertools import count, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 from urllib.parse import urlencode, urlparse
@@ -53,6 +53,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.managed_resources.utils import (
@@ -1024,7 +1025,7 @@ async def pass_through_request(
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
-            upstream_headers,
+            _get_masked_values(upstream_headers),
             _parsed_body,
         )
 
@@ -2121,6 +2122,14 @@ def _resolved_vertex_live_setup(
     return {**setup_data, "model": setup_model_rewriter(setup_model)}
 
 
+def _json_object_frame(frame: str | bytes) -> dict[str, object] | None:
+    try:
+        decoded: Final = json.loads(frame if isinstance(frame, str) else frame.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
 def _truncated_close_reason(reason: str) -> str:
     """
     Fit a close reason inside the byte budget a WebSocket close frame allows, without splitting a character
@@ -2402,70 +2411,41 @@ async def websocket_passthrough_request(
                     )
                     await upstream_ws.close()
 
+            def _extract_vertex_live_model_from_setup_response(setup_response: Mapping[str, object]) -> None:
+                extracted_model: Final = _extract_model_from_vertex_ai_setup(setup_response)
+                if not extracted_model:
+                    verbose_proxy_logger.warning(
+                        "WebSocket passthrough (%s): Failed to extract model from server setup response: %s",
+                        endpoint,
+                        setup_response,
+                    )
+                    return
+                kwargs["model"] = extracted_model
+                kwargs["custom_llm_provider"] = "vertex_ai_language_models"
+                logging_obj.model = extracted_model
+                logging_obj.model_call_details["model"] = extracted_model
+                logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai_language_models"
+
+            is_vertex_live: Final = bool(endpoint and "/vertex_ai/live" in endpoint)
+            json_frame_ordinal: Final = count()
+
+            async def relay_upstream_frame(upstream_message: str | bytes) -> None:
+                if isinstance(upstream_message, bytes):
+                    await websocket.send_bytes(upstream_message)
+                else:
+                    await websocket.send_text(upstream_message)
+                message_data: Final = _json_object_frame(upstream_message)
+                if message_data is None:
+                    return
+                if is_vertex_live and next(json_frame_ordinal) == 0:
+                    _extract_vertex_live_model_from_setup_response(message_data)
+                    return
+                websocket_messages.append(message_data)
+
             async def forward_upstream_to_client() -> Close | None:
-                """Forward messages from upstream to client WebSocket, returning the upstream's close frame"""
                 try:
-                    # Wait for the first response from upstream
-                    raw_response = await upstream_ws.recv(decode=False)
-                    # Ensure raw_response is bytes before decoding
-                    if isinstance(raw_response, str):
-                        raw_response = raw_response.encode("utf-8")
-                    setup_response: Final[Mapping[str, object]] = json.loads(raw_response.decode("utf-8"))
-                    verbose_proxy_logger.debug("Setup response: %s", setup_response)
-
-                    # Extract model and provider from setup response for Vertex AI Live
-                    if endpoint and "/vertex_ai/live" in endpoint:
-                        verbose_proxy_logger.debug(
-                            "WebSocket passthrough (%s): Processing server setup response for model extraction",
-                            endpoint,
-                        )
-                        extracted_model: Final = _extract_model_from_vertex_ai_setup(setup_response)
-                        if extracted_model:
-                            kwargs["model"] = extracted_model
-                            kwargs["custom_llm_provider"] = "vertex_ai_language_models"
-                            # Update logging object with correct model
-                            logging_obj.model = extracted_model
-                            logging_obj.model_call_details["model"] = extracted_model
-                            logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai_language_models"
-                            verbose_proxy_logger.debug(
-                                "WebSocket passthrough (%s): Successfully extracted model '%s' and set provider to 'vertex_ai' from server setup response",
-                                endpoint,
-                                extracted_model,
-                            )
-                        else:
-                            verbose_proxy_logger.warning(
-                                "WebSocket passthrough (%s): Failed to extract model from server setup response: %s",
-                                endpoint,
-                                setup_response,
-                            )
-                    else:
-                        verbose_proxy_logger.debug(
-                            "WebSocket passthrough (%s): Not a Vertex AI Live endpoint, skipping model extraction",
-                            endpoint,
-                        )
-
-                    # Send the setup response to the client
-                    await websocket.send_text(json.dumps(setup_response))
-
-                    # Now continuously forward messages from upstream to client
-                    async for upstream_message in upstream_ws:
-                        if isinstance(upstream_message, bytes):
-                            await websocket.send_bytes(upstream_message)
-                            # Parse and collect for cost tracking
-                            try:
-                                message_data: dict[str, object] = json.loads(upstream_message.decode())
-                                websocket_messages.append(message_data)
-                            except (json.JSONDecodeError, UnicodeDecodeError):
-                                pass
-                        else:
-                            await websocket.send_text(upstream_message)
-                            # Parse and collect for cost tracking
-                            try:
-                                message_data = json.loads(upstream_message)
-                                websocket_messages.append(message_data)
-                            except json.JSONDecodeError:
-                                pass
-
+                    while True:
+                        await relay_upstream_frame(await upstream_ws.recv())
                 except (ConnectionClosedOK, ConnectionClosedError) as e:
                     verbose_proxy_logger.debug("Upstream WebSocket connection closed: %s", e)
                     return e.rcvd
@@ -2669,17 +2649,22 @@ def _should_buffer_passthrough_response(response: httpx.Response) -> bool:
     """
     Decide from the response headers whether the body must be read into memory.
 
-    JSON bodies (and upstream errors) stay buffered: spend logging, guardrails and
-    managed-id rewriting inspect them, and they are small in practice. Everything
-    else (jsonl batch results, octet-stream files, ...) is relayed to the client
-    chunk by chunk so a large body is never resident in full (LIT-4009). A missing
-    content-type is buffered because the body cannot be classified.
+    JSON bodies (including the AWS JSON protocol media types) and upstream errors
+    stay buffered: spend logging, guardrails and managed-id rewriting inspect them,
+    and they are small in practice. Everything else (jsonl batch results,
+    octet-stream files, ...) is relayed to the client chunk by chunk so a large
+    body is never resident in full (LIT-4009). A missing content-type is buffered
+    because the body cannot be classified.
     """
     if response.status_code >= 400:
         return True
     content_type_header: Final[str] = response.headers.get("content-type", "")
     media_type: Final = content_type_header.split(";")[0].strip().lower()
-    return media_type in ("", "application/json") or media_type.endswith("+json")
+    return (
+        media_type in ("", "application/json")
+        or media_type.endswith("+json")
+        or media_type.startswith("application/x-amz-json")
+    )
 
 
 async def _relay_passthrough_response_bytes(
