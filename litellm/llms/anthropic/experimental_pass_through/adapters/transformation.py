@@ -591,7 +591,7 @@ class LiteLLMAnthropicMessagesAdapter:
                     if isinstance(content, dict) and content.get("type") is not None
                 }
             )
-            type_list = ", ".join(unrecognized_block_types) or "unknown"
+            type_list = ", ".join(json.dumps(block_type) for block_type in unrecognized_block_types) or "unknown"
             raise litellm.BadRequestError(
                 message=f"Anthropic pass-through: every message's content blocks were of unrecognized types ({type_list}), so translation produced an empty conversation. Refusing to dispatch a request with no messages.",
                 model=model,

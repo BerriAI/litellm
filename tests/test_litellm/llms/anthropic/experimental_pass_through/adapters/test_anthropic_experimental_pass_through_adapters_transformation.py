@@ -4890,6 +4890,15 @@ def test_translate_anthropic_to_openai_rejects_all_unrecognized_content_blocks()
     with pytest.raises(litellm.BadRequestError, match="not_a_real_block"):
         LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
 
+    control_chars = {
+        **request,
+        "messages": [{"role": "user", "content": [{"type": "forged\nERROR: injected"}]}],
+    }
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(control_chars)
+    assert "forged\\nERROR: injected" in str(exc_info.value)
+    assert "forged\nERROR: injected" not in str(exc_info.value)
+
     with_system = {
         **request,
         "messages": [
