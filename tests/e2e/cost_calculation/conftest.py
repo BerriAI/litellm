@@ -2,9 +2,8 @@
 
 Runs against a dedicated proxy whose whole model cost map is the test-owned
 ``tests/e2e/cost_map.json`` (LITELLM_MODEL_COST_MAP_URL); every map entry is a
-deployment under test, the request shapes live in ``cases.json``, and the
-asserted goldens live in ``expected.json`` (regenerate proposals with
-``generate_expected.py``). Provider calls are answered by the
+deployment under test, and the request shapes plus asserted goldens live in
+``cases.json``. Provider calls are answered by the
 scripted-provider sidecar (``scripted_provider.py``), registered per scenario
 over its control API.
 

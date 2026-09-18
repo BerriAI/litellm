@@ -1,7 +1,8 @@
 """Token-pricing e2e: every (map entry, case) cell derived from cost_map.json x
 cases.json runs a scripted-usage call through a deployment registered on the
 cost-map proxy, and the spend row plus response-cost header must equal the
-reviewed golden in expected.json verbatim -- no rate arithmetic lives here.
+reviewed golden in the case's ``expected`` cell verbatim -- no rate arithmetic
+lives here.
 
 Nothing here touches a real provider or the bundled cost map: the proxy's
 upstream is the scripted-provider sidecar and its entire cost map is
@@ -15,13 +16,11 @@ from typing import Final
 
 from conftest import CostCalcClient, cost_rows, register_scenario_deployment
 from cost_matrix import (
-    EXPECTED,
     FRONTIER_MODELS,
     IMAGE_INPUT_DATA_URL,
     Case,
     FrontierModel,
     cases_for,
-    expected_key,
     matrix_data_errors,
     recount_cost,
 )
@@ -142,7 +141,7 @@ class TestTokenPricing:
             cost_rows.assert_total_is_sum_of_components(row)
             return
 
-        golden: Final = EXPECTED[expected_key(model, case)]
+        golden: Final = case.expected_for(model)
 
         if not case.stream:
             # Streamed responses commit headers before the bill is computed, so
