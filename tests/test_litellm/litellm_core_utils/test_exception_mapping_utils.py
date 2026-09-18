@@ -1209,6 +1209,38 @@ def test_bedrock_mantle_context_overflow_maps_to_context_window_exceeded():
     assert "prompt is too long: 1055489 tokens > 1050000 maximum" in excinfo.value.message
 
 
+def test_bedrock_mantle_openai_envelope_context_overflow_maps_to_context_window_exceeded():
+    """Mantle's OpenAI-style overflow envelope is a second, separate wording.
+
+    Mantle returns context overflow either as a structured ``validation_error``
+    carrying token counts, or as this OpenAI-shaped
+    ``context_length_exceeded`` body. Only the first was matched, so an overflow
+    in the second shape reached callers as a generic ``BadRequestError`` that
+    Claude Code cannot recognise, and its reactive compaction never retried.
+    """
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=400,
+        message=(
+            '{"error":{"code":"context_length_exceeded",'
+            '"message":"Your input exceeds the context window of this model. '
+            'Please adjust your input and try again.",'
+            '"param":"input","type":"invalid_request_error"}}'
+        ),
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="openai.gpt-5.6-sol",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "prompt is too long" in excinfo.value.message
+
+
 def test_branchless_provider_transport_error_maps_to_api_connection_error():
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
