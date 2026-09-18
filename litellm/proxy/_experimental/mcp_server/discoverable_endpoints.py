@@ -2579,7 +2579,7 @@ def _jwt_auth_issuers() -> list:
     if env_issuer:
         issuers.append(env_issuer)
 
-    jwtauth: Final = general_settings.get("litellm_jwtauth") if isinstance(general_settings, dict) else None
+    jwtauth: Final = general_settings.get("litellm_jwtauth") if isinstance(general_settings, Mapping) else None
     raw_issuers: Final = jwtauth.get("issuers") if isinstance(jwtauth, dict) else getattr(jwtauth, "issuers", None)
     for cfg in raw_issuers or []:
         issuer = cfg.get("issuer") if isinstance(cfg, dict) else getattr(cfg, "issuer", None)
