@@ -3706,6 +3706,8 @@ agentic_loop_internal_litellm_params: Final = [
 # the provider.
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 
+ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
+
 # Bedrock managed-batch deployment config, read from litellm_params by the batch and
 # files transformations. Listed for the same reason as the fields above: these sit on
 # a deployment that also serves chat, so leaking them into extra_body makes Bedrock
@@ -3720,7 +3722,7 @@ bedrock_batch_litellm_params: Final = (
 
 all_litellm_params = (
     agentic_loop_internal_litellm_params
-    + [TRUSTED_CALLBACK_VARS_FIELD, *bedrock_batch_litellm_params]
+    + [TRUSTED_CALLBACK_VARS_FIELD, ADDRESSED_RESPONSE_ID_FIELD, *bedrock_batch_litellm_params]
     + [
         "metadata",
         "litellm_metadata",
