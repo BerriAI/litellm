@@ -13,7 +13,7 @@ mod handle;
 mod marshal;
 
 pub use adapter::{
-    HostOpError, LifecycleStep, PublicValue, PythonLifecycle, RouteHost, missing_state,
+    HostOpError, LifecycleEvent, LifecycleStep, PythonLifecycle, RouteHost, missing_state,
 };
 pub use argument::lookup;
 pub use callable::wrap_failure;

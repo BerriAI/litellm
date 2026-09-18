@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use litellm_callbacks::{
-    event::{CallEvent, WireRequest},
+    event::{CallEvent, MachineEvent, WireRequest},
     host::{Host, HostOp, HostResult},
     machine::{HostFailure, Machine, MachineStep},
 };
@@ -195,11 +195,9 @@ async fn facade_uses_the_injected_http_client() {
 fn event_name(event: &CallEvent) -> &'static str {
     match event {
         CallEvent::Started { .. } => "started",
-        CallEvent::ResponseReceived { .. } => "response",
+        CallEvent::Machine(MachineEvent::ResponseReceived { .. }) => "response",
         CallEvent::Succeeded { .. } => "success",
         CallEvent::Failed { .. } => "failure",
-        CallEvent::Opened => "opened",
-        CallEvent::Delivered => "delivered",
     }
 }
 
@@ -377,6 +375,7 @@ async fn drive_until(
                 intercept(*wire).map(|wire| HostResult::BeforeSend(Box::new(wire)))
             }
             HostOp::Emit(event) => {
+                let event = CallEvent::Machine(event);
                 ops.push(event_name(&event));
                 host.emit(&event)
                     .await
@@ -420,7 +419,7 @@ async fn invalid_provider_response_emits_response_received_before_normalization_
     let observed = responses_received.clone();
     let host = LocalOcrHost::new(wire_request("mistral/model", &base, json!({}))).with_observer(
         move |event| {
-            if let CallEvent::ResponseReceived { raw } = event {
+            if let CallEvent::Machine(MachineEvent::ResponseReceived { raw }) = event {
                 observed.lock().unwrap().push(raw.body.clone());
             }
         },

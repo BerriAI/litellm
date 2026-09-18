@@ -1,6 +1,6 @@
 use futures_util::future::BoxFuture;
 use litellm_auth::SecretValue;
-use litellm_callbacks::event::{CallEvent, RawResponse, RequestContext, WireRequest};
+use litellm_callbacks::event::{MachineEvent, RawResponse, RequestContext, WireRequest};
 use litellm_llms::{
     base_llm::ocr::{
         error::Error,
@@ -71,7 +71,7 @@ impl CallHooks<Error> for OcrCallHooks {
     }
 
     fn response_received<'a>(&'a self, body: &'a [u8]) -> BoxFuture<'a, Result<(), Error>> {
-        Box::pin(self.host.emit(CallEvent::ResponseReceived {
+        Box::pin(self.host.emit(MachineEvent::ResponseReceived {
             raw: RawResponse {
                 body: String::from_utf8_lossy(body).into_owned(),
             },

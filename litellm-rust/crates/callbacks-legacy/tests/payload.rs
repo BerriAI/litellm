@@ -1,8 +1,8 @@
 use std::ffi::CStr;
 
 use litellm_auth::SecretValue;
-use litellm_callbacks::event::{CallEvent, RawResponse, RequestContext, WireRequest};
-use litellm_host_python::{LifecycleStep, PythonLifecycle, to_py};
+use litellm_callbacks::event::{MachineEvent, RawResponse, RequestContext, WireRequest};
+use litellm_host_python::{LifecycleEvent, LifecycleStep, PythonLifecycle, to_py};
 use proptest::prelude::*;
 use pyo3::prelude::*;
 use rstest::rstest;
@@ -94,13 +94,13 @@ fn before_send_bound(
             body,
         };
         let step = logging.before_send(py, Box::new(wire), &context).unwrap();
-        let raw = CallEvent::ResponseReceived {
+        let raw = MachineEvent::ResponseReceived {
             raw: RawResponse {
                 body: "raw response".into(),
             },
         };
         assert!(matches!(
-            logging.emit(py, &raw, None).unwrap(),
+            logging.emit(py, LifecycleEvent::Machine(&raw)).unwrap(),
             LifecycleStep::Done
         ));
         run(py, &locals, c"check()");

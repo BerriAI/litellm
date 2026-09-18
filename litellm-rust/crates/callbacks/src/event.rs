@@ -52,18 +52,20 @@ pub enum FailureOrigin {
     Host,
 }
 
+/// What a machine reports while it runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MachineEvent {
+    ResponseReceived { raw: RawResponse },
+}
+
+/// What an in-process host observes: the machine's own events between the driver's
+/// start and terminal ones.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CallEvent {
     Started {
         start_time: f64,
     },
-    ResponseReceived {
-        raw: RawResponse,
-    },
-    /// The call streams and its stream was handed to the caller.
-    Opened,
-    /// One chunk of an open stream reached the caller.
-    Delivered,
+    Machine(MachineEvent),
     Succeeded {
         timing: Timing,
     },

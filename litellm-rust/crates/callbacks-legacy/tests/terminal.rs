@@ -1,7 +1,7 @@
 use std::ffi::CStr;
 
-use litellm_callbacks::event::{CallEvent, FailureOrigin, Timing};
-use litellm_host_python::{LifecycleStep, PublicValue, PythonLifecycle};
+use litellm_callbacks::event::{FailureOrigin, Timing};
+use litellm_host_python::{LifecycleEvent, LifecycleStep, PythonLifecycle};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::exceptions::asyncio::CancelledError;
 use pyo3::prelude::*;
@@ -33,8 +33,10 @@ fn succeed(
     logging
         .emit(
             py,
-            &CallEvent::Succeeded { timing: TIMING },
-            Some(PublicValue::Response(&response)),
+            LifecycleEvent::Succeeded {
+                timing: TIMING,
+                response: &response,
+            },
         )
         .unwrap()
 }
@@ -44,11 +46,11 @@ fn fail(py: Python<'_>, locals: &Bound<'_, PyDict>, logging: &mut LegacyLogging)
     logging
         .emit(
             py,
-            &CallEvent::Failed {
+            LifecycleEvent::Failed {
                 timing: TIMING,
                 origin: FailureOrigin::Host,
+                error: &failure,
             },
-            Some(PublicValue::Error(&failure)),
         )
         .unwrap()
 }
