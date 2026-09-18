@@ -1001,9 +1001,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           .map((w) => `${w.budget_duration}:${w.max_budget}`)
           .sort()
           .join("|");
-      const validWindows = (values.budget_limits ?? []).filter(
-        (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
-      );
+      const validWindows = (
+        (values.budget_limits ?? []) as { budget_duration: string; max_budget: number | null }[]
+      ).filter((w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined);
       if (windowSignature(info.budget_limits) !== windowSignature(validWindows)) {
         updateData.budget_limits = validWindows;
       }

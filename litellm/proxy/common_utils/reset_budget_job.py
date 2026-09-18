@@ -390,8 +390,8 @@ async def _write_team_windows(prisma_client: PrismaClient, row_id: str, payload:
 
 async def _write_user_windows(prisma_client: PrismaClient, row_id: str, payload: str) -> None:
     await UserRepository(prisma_client).table.update(
-        where={"user_id": row_id},
-        data={"budget_limits": payload},
+        where={"user_id": row_id},  # mutable-ok: prisma where filter must be a dict
+        data={"budget_limits": payload},  # mutable-ok: prisma update payload must be a dict
     )
 
 

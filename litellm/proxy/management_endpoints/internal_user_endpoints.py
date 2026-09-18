@@ -1256,11 +1256,16 @@ def _prepare_user_budget_limits(value: object) -> str:
 
     if not value:
         return json.dumps(None)
-    initialized_windows: Final = []
-    for window in cast(Sequence[object], value):
-        w = window if isinstance(window, dict) else window.model_dump()  # pyright: ignore[reportAttributeAccessIssue]  # BudgetLimitEntry or its JSON dict
-        w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
-        initialized_windows.append(w)
+    initialized_windows: Final = tuple(
+        {  # mutable-ok: prisma stores a dict row per budget window
+            **w,
+            "reset_at": get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat(),
+        }
+        for w in (
+            window if isinstance(window, dict) else window.model_dump()  # pyright: ignore[reportAttributeAccessIssue]  # BudgetLimitEntry or its JSON dict
+            for window in cast(Sequence[object], value)
+        )
+    )
     return json.dumps(initialized_windows)
 
 

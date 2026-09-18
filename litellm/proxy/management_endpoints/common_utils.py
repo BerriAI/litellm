@@ -59,11 +59,14 @@ def validate_budget_limits(budget_limits: Sequence[object] | None, status_code: 
     for window in windows:
         error: Final = budget_duration_error(window.budget_duration)
         if error is not None:
-            raise HTTPException(status_code=status_code, detail={"error": error})
+            raise HTTPException(
+                status_code=status_code,
+                detail={"error": error},  # mutable-ok: HTTPException detail must be a dict
+            )
         if not math.isfinite(window.max_budget) or window.max_budget <= 0:
             raise HTTPException(
                 status_code=status_code,
-                detail={
+                detail={  # mutable-ok: HTTPException detail must be a dict
                     "error": f"budget_limits entry max_budget ({window.max_budget}) must be a positive finite number."
                 },
             )
@@ -72,7 +75,9 @@ def validate_budget_limits(budget_limits: Sequence[object] | None, status_code: 
     if duplicate is not None:
         raise HTTPException(
             status_code=status_code,
-            detail={"error": f"budget_limits has a duplicate budget_duration '{duplicate}'."},
+            detail={  # mutable-ok: HTTPException.detail has no immutable form
+                "error": f"budget_limits has a duplicate budget_duration '{duplicate}'."
+            },
         )
 
 
