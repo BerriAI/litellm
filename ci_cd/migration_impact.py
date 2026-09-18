@@ -12,20 +12,21 @@ This script diffs the migration set between two refs, classifies every statement
 to a pod still running the base version, and renders the result as markdown (for the release body)
 or JSON. Severities, worst first:
 
-- `breaking`       — the old pods cannot recover on their own: a column they read is gone, renamed
-                     or retyped, or a constraint now rejects the rows they write
-- `prepared-plan`  — the change alters the result type of a query the old pods have prepared
-                     (a `SELECT <alias>.*` gaining a column, or a column changing type), so the
-                     plans cached on their pooled connections are rejected with
-                     `cached plan must not change result type` until those connections are
-                     recreated
-- `lock`           — the migration takes a blocking lock (or rewrites rows) on a table that is
-                     already serving traffic
-- `info`           — no effect on the old pods (new tables, and changes to them)
+- `breaking`: the old pods cannot recover on their own. A column they select is dropped, renamed
+  or changed to a type their client cannot read, or a NOT NULL now rejects the rows they write
+- `write-reject`: a new constraint the old pods never enforced. Rows they write that violate it
+  are rejected; whether any do depends on the data
+- `prepared-plan`: the result type of a query the old pods have prepared changes (a whole-row
+  `SELECT <alias>.*` gains a column, or a column widens), so the plans cached on their pooled
+  connections are rejected with `cached plan must not change result type` until those
+  connections are recreated
+- `lock`: the migration takes a blocking lock, or rewrites rows, on a table already serving traffic
+- `info`: no effect on the old pods (new tables, changes to them, columns they do not know)
 
-The tables that are read through `SELECT <alias>.*` are discovered from the source tree at `--base`
-(the code the old pods are running) rather than hardcoded, so the report keeps working as those
-queries move.
+The evidence for what the old pods read and write is the base version itself: `schema.prisma` at
+`--base` lists every column the old Prisma client selects and inserts, and the source tree at
+`--base` holds the raw `SELECT <alias>.*` queries. Nothing is hardcoded, so the report keeps
+working as the schema and those queries move.
 
     python3 ci_cd/migration_impact.py --base v1.93.0 --head v1.99.0
 
@@ -52,11 +53,34 @@ TABLE_MARKER: Final = 'FROM "'
 VIEW_MARKER: Final = re.compile(r"\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:MATERIALIZED\s+)?VIEW\b", re.IGNORECASE)
 
 BREAKING: Final = "breaking"
+WRITE_REJECT: Final = "write-reject"
 PREPARED_PLAN: Final = "prepared-plan"
 LOCK: Final = "lock"
 INFO: Final = "info"
-SEVERITY_ORDER: Final = (BREAKING, PREPARED_PLAN, LOCK, INFO)
-SEVERITY_ICON: Final = {BREAKING: "🚨", PREPARED_PLAN: "⚠️", LOCK: "🔒", INFO: "ℹ️"}
+SEVERITY_ORDER: Final = (BREAKING, WRITE_REJECT, PREPARED_PLAN, LOCK, INFO)
+SEVERITY_LABEL: Final = {
+    BREAKING: "BREAKING",
+    WRITE_REJECT: "WRITE-REJECT",
+    PREPARED_PLAN: "PREPARED-PLAN",
+    LOCK: "LOCK",
+    INFO: "INFO",
+}
+SCHEMA_PATHS: Final = ("schema.prisma", "litellm/proxy/schema.prisma")
+PRISMA_SCALARS: Final = frozenset(
+    {"String", "Int", "BigInt", "Float", "Decimal", "Boolean", "DateTime", "Json", "Bytes"}
+)
+# Postgres types a column of each Prisma type can become and still be read by the old client.
+# Anything else is rated breaking: the plan is rejected once, and the retry cannot map the value.
+WIDENING: Final = {
+    "Int": frozenset({"INT", "INT4", "INTEGER", "BIGINT", "INT8", "NUMERIC", "DECIMAL", "DOUBLE", "REAL", "FLOAT"}),
+    "BigInt": frozenset({"BIGINT", "INT8", "NUMERIC", "DECIMAL"}),
+    "Float": frozenset({"DOUBLE", "REAL", "FLOAT", "NUMERIC", "DECIMAL"}),
+    "Decimal": frozenset({"NUMERIC", "DECIMAL"}),
+    "String": frozenset({"TEXT", "VARCHAR", "CHARACTER", "CHAR", "CITEXT"}),
+    "DateTime": frozenset({"TIMESTAMP", "TIMESTAMPTZ"}),
+    "Json": frozenset({"JSON", "JSONB"}),
+    "Boolean": frozenset({"BOOLEAN", "BOOL"}),
+}
 
 # Words that can follow a table name where an alias would sit, so they are never read as one.
 ALIAS_STOPWORDS: Final = frozenset(
@@ -121,6 +145,36 @@ _DEFAULT: Final = re.compile(r"\bDEFAULT\b", re.IGNORECASE)
 _CONCURRENTLY: Final = re.compile(r"\bCONCURRENTLY\b", re.IGNORECASE)
 _ADD_CONSTRAINT: Final = re.compile(r"\bADD\s+CONSTRAINT\b", re.IGNORECASE)
 _NOT_VALID: Final = re.compile(r"\bNOT\s+VALID\b", re.IGNORECASE)
+_UNIQUE_INDEX: Final = re.compile(r"\bCREATE\s+UNIQUE\s+INDEX\b", re.IGNORECASE)
+
+_DROP_COLUMN_NAME: Final = re.compile(r'\bDROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?"?(?P<column>\w+)"?', re.IGNORECASE)
+_RENAME_COLUMN: Final = re.compile(r'\bRENAME\s+COLUMN\s+"?(?P<column>\w+)"?\s+TO\b', re.IGNORECASE)
+_RENAME_TABLE: Final = re.compile(r"\bRENAME\s+TO\b", re.IGNORECASE)
+_SET_NOT_NULL_COLUMN: Final = re.compile(
+    r'\bALTER\s+(?:COLUMN\s+)?"?(?P<column>\w+)"?\s+SET\s+NOT\s+NULL', re.IGNORECASE
+)
+_TYPE_CHANGE: Final = re.compile(
+    r'\bALTER\s+(?:COLUMN\s+)?"?(?P<column>\w+)"?\s+(?:SET\s+DATA\s+)?TYPE\s+(?P<type>\w+)', re.IGNORECASE
+)
+_CONSTRAINT_COLUMNS: Final = re.compile(
+    r"\b(?:FOREIGN\s+KEY|UNIQUE|PRIMARY\s+KEY)\s*\((?P<columns>[^)]*)\)", re.IGNORECASE
+)
+_CHECK_BODY: Final = re.compile(r"\bCHECK\s*\((?P<body>.*)\)", re.IGNORECASE | re.DOTALL)
+_INDEX_COLUMNS: Final = re.compile(
+    r'\bON\s+(?:ONLY\s+)?"?\w+"?\s*(?:USING\s+\w+\s*)?\((?P<columns>[^)]*)\)', re.IGNORECASE
+)
+_DROP_INDEX_NAME: Final = re.compile(
+    r'\bDROP\s+INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+EXISTS\s+)?"?(?P<index>\w+)"?', re.IGNORECASE
+)
+_QUOTED_IDENTIFIER: Final = re.compile(r'"(?P<name>\w+)"')
+
+_MODEL_BLOCK: Final = re.compile(r"^\s*model\s+(?P<model>\w+)\s*\{(?P<body>.*?)^\s*\}", re.MULTILINE | re.DOTALL)
+_ENUM_NAME: Final = re.compile(r"^\s*enum\s+(?P<name>\w+)", re.MULTILINE)
+_PRISMA_FIELD: Final = re.compile(
+    r"^\s*(?P<name>\w+)\s+(?P<type>\w+)(?P<optional>\?)?(?P<array>\[\])?(?P<rest>[^\n]*)$", re.MULTILINE
+)
+_FIELD_MAP: Final = re.compile(r'@map\("(?P<name>[^"]+)"\)')
+_TABLE_MAP: Final = re.compile(r'@@map\("(?P<name>[^"]+)"\)')
 
 _SQL_LITERAL: Final = re.compile(r"(?P<quote>\"{3}|'{3})(?P<body>.*?)(?P=quote)", re.DOTALL)
 _FROM_JOIN: Final = re.compile(
@@ -140,6 +194,37 @@ class StarRead:
     alias: str
     joined: tuple[str, ...]
     location: str
+
+
+@dataclass(frozen=True, slots=True)
+class Column:
+    """One column as the base version's Prisma client knows it."""
+
+    required: bool
+    prisma_type: str
+
+
+Schema = dict[str, dict[str, Column]]
+
+
+@dataclass(frozen=True, slots=True)
+class UpgradeContext:
+    """Everything a statement is rated against: what this upgrade creates, and what the old pods use."""
+
+    fresh_tables: frozenset[str]
+    star_reads: tuple[StarRead, ...]
+    schema: Schema | None
+    dropped_indexes: frozenset[str] = frozenset()
+
+    def column(self, table: str, column: str) -> Column | None:
+        return None if self.schema is None else self.schema.get(table, {}).get(column)
+
+    def knows_table(self, table: str) -> bool:
+        return self.schema is None or table in self.schema
+
+    def knows_column(self, table: str, column: str) -> bool:
+        """Whether the old client selects or writes this column. Without a schema, assume it does."""
+        return self.schema is None or self.column(table, column) is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +252,7 @@ class Report:
     migrations: tuple[str, ...]
     findings: tuple[Finding, ...]
     star_reads: tuple[StarRead, ...]
+    schema_tables: int | None = None
 
     @property
     def worst(self) -> str | None:
@@ -249,6 +335,59 @@ def tables_created_before(repo: Path, ref: str) -> frozenset[str]:
     return frozenset(match.group("table") for match in _CREATE_TABLE.finditer(listing or ""))
 
 
+def parse_prisma_schema(text: str) -> Schema:
+    """The tables and columns a Prisma client generated from this schema selects and writes.
+
+    Relation fields are not columns and are skipped; `@map` / `@@map` give the real names.
+    """
+    enums: Final = frozenset(_ENUM_NAME.findall(text))
+    schema: Final[Schema] = {}
+    for block in _MODEL_BLOCK.finditer(text):
+        body: Final = block.group("body")
+        table_map: Final = _TABLE_MAP.search(body)
+        table: Final = table_map.group("name") if table_map is not None else block.group("model")
+        columns: Final[dict[str, Column]] = {}
+        for field in _PRISMA_FIELD.finditer(body):
+            prisma_type: Final = field.group("type")
+            if prisma_type not in PRISMA_SCALARS and prisma_type not in enums:
+                continue
+            field_map: Final = _FIELD_MAP.search(field.group("rest"))
+            name: Final = field_map.group("name") if field_map is not None else field.group("name")
+            columns[name] = Column(required=field.group("optional") is None, prisma_type=prisma_type)
+        schema[table] = columns
+    return schema
+
+
+def load_base_schema(repo: Path, ref: str) -> Schema | None:
+    for path in SCHEMA_PATHS:
+        text: Final = _git_or_none(repo, "show", f"{ref}:{path}")
+        if text is not None:
+            parsed: Final = parse_prisma_schema(text)
+            if parsed:
+                return parsed
+    return None
+
+
+def _identifiers(fragment: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(match.group("name") for match in _QUOTED_IDENTIFIER.finditer(fragment)))
+
+
+def _constraint_columns(statement: str) -> tuple[str, ...]:
+    """The columns of this table that a new constraint checks on every write."""
+    listed: Final = [
+        name for match in _CONSTRAINT_COLUMNS.finditer(statement) for name in _identifiers(match.group("columns"))
+    ]
+    check: Final = _CHECK_BODY.search(statement)
+    if check is not None:
+        listed.extend(_identifiers(check.group("body")))
+    return tuple(dict.fromkeys(listed))
+
+
+def _index_columns(statement: str) -> tuple[str, ...]:
+    match: Final = _INDEX_COLUMNS.search(statement)
+    return _identifiers(match.group("columns")) if match is not None else ()
+
+
 def _alias_map(body: str) -> tuple[dict[str, str], tuple[str, ...]]:
     aliases: Final[dict[str, str]] = {}
     tables: Final[list[str]] = []
@@ -321,77 +460,204 @@ def _joined_read_for(table: str, star_reads: Sequence[StarRead]) -> StarRead | N
     return next((read for read in star_reads if table in read.joined), None)
 
 
-def classify(
-    migration: str,
-    statement: str,
-    fresh_tables: frozenset[str],
-    star_reads: Sequence[StarRead],
-) -> Finding:
-    """Rate one statement by what it does to a pod still running the base version."""
-    table: Final = statement_table(statement)
+@dataclass(frozen=True, slots=True)
+class _Site:
+    """One statement under rating, with what the rules need to know about it."""
 
-    def finding(severity: str, effect: str) -> Finding:
-        return Finding(severity=severity, migration=migration, table=table, statement=statement, effect=effect)
+    migration: str
+    statement: str
+    table: str
+    context: UpgradeContext
+    star: StarRead | None
 
-    if _CREATE_TABLE.search(statement) is not None:
-        return finding(INFO, "New table. The previous version does not read or write it.")
-    if table and table in fresh_tables:
-        return finding(INFO, "Table is created by this same upgrade, so no old pod reads or writes it yet.")
+    @property
+    def where(self) -> str:
+        return f" (`{self.star.location}`)" if self.star is not None else ""
 
-    star: Final = _star_read_for(table, star_reads)
-    where: Final = f" (`{star.location}`)" if star is not None else ""
+    def rate(self, severity: str, effect: str) -> Finding:
+        return Finding(
+            severity=severity, migration=self.migration, table=self.table, statement=self.statement, effect=effect
+        )
 
-    if _DROP_COLUMN.search(statement) is not None or _DROP_TABLE.search(statement) is not None:
-        return finding(
+    def knows(self, column: str) -> bool:
+        return self.context.knows_column(self.table, column)
+
+
+def _rule_new_table(site: _Site) -> Finding | None:
+    if _CREATE_TABLE.search(site.statement) is not None:
+        return site.rate(INFO, "New table. The previous version does not read or write it.")
+    if site.table and site.table in site.context.fresh_tables:
+        return site.rate(INFO, "Table is created by this same upgrade, so no old pod reads or writes it yet.")
+    return None
+
+
+def _rule_drop(site: _Site) -> Finding | None:
+    if _DROP_TABLE.search(site.statement) is not None:
+        if site.context.knows_table(site.table):
+            return site.rate(
+                BREAKING, "Drops a table the previous version still queries. Old pods keep failing until they are gone."
+            )
+        return site.rate(INFO, "Drops a table the previous version does not know.")
+    dropped: Final = _DROP_COLUMN_NAME.search(site.statement)
+    if dropped is None:
+        return None
+    column: Final = dropped.group("column")
+    if site.knows(column):
+        return site.rate(
             BREAKING,
-            f"Removes something the previous version still reads{where}. Old pods keep failing until they are gone; "
-            "reconnecting does not help.",
+            f"Drops `{column}`, which the previous version's client selects on every read of this table{site.where}. "
+            "Old pods keep failing until they are gone; reconnecting does not help.",
         )
-    if _ALTER_TABLE.search(statement) is not None and _RENAME.search(statement) is not None:
-        return finding(
+    return site.rate(INFO, f"Drops `{column}`, a column the previous version does not know.")
+
+
+def _rule_rename(site: _Site) -> Finding | None:
+    renamed: Final = _RENAME_COLUMN.search(site.statement)
+    if renamed is not None:
+        old_name: Final = renamed.group("column")
+        if site.knows(old_name):
+            return site.rate(
+                BREAKING,
+                f"Renames `{old_name}`, which the previous version still selects and writes by that name{site.where}. "
+                "Old pods cannot recover on their own.",
+            )
+        return site.rate(INFO, f"Renames `{old_name}`, a column the previous version does not know.")
+    if _ALTER_TABLE.search(site.statement) is None or _RENAME_TABLE.search(site.statement) is None:
+        return None
+    if site.context.knows_table(site.table):
+        return site.rate(BREAKING, "Renames a table the previous version still queries by its old name.")
+    return site.rate(INFO, "Renames a table the previous version does not know.")
+
+
+def _rule_not_null(site: _Site) -> Finding | None:
+    required: Final = [match.group("column") for match in _SET_NOT_NULL_COLUMN.finditer(site.statement)]
+    if required:
+        unguarded: Final = [
+            column
+            for column in required
+            if (known := site.context.column(site.table, column)) is None or not known.required
+        ]
+        if unguarded or site.context.schema is None:
+            return site.rate(
+                BREAKING,
+                f"Requires `{'`, `'.join(unguarded or required)}`, which the previous version may write as NULL. "
+                "Those writes are now rejected.",
+            )
+        return site.rate(INFO, "The previous version already always writes this column, so nothing changes for it.")
+    if _ADD_COLUMN.search(site.statement) is not None and _adds_not_null_without_default(site.statement):
+        return site.rate(BREAKING, "Adds a NOT NULL column with no default, so inserts from the previous version fail.")
+    return None
+
+
+def _rule_type_change(site: _Site) -> Finding | None:
+    changes: Final = list(_TYPE_CHANGE.finditer(site.statement))
+    if not changes:
+        return None
+    narrowing: Final = [
+        f"`{match.group('column')}` to {match.group('type').upper()}"
+        for match in changes
+        if (known := site.context.column(site.table, match.group("column"))) is None
+        or match.group("type").upper() not in WIDENING.get(known.prisma_type, frozenset())
+    ]
+    if narrowing:
+        return site.rate(
             BREAKING,
-            f"Renames something the previous version still addresses by its old name{where}. Old pods cannot "
-            "recover on their own.",
+            f"Changes {', '.join(narrowing)}, which the previous version's client cannot be shown to read. Its "
+            "prepared plans are rejected once, and the retry may still fail to map the value.",
         )
-    if _SET_NOT_NULL.search(statement) is not None:
-        return finding(BREAKING, "Rows the previous version writes without this column are now rejected.")
-    if _ADD_COLUMN.search(statement) is not None and _adds_not_null_without_default(statement):
-        return finding(BREAKING, "Adds a NOT NULL column with no default, so inserts from the previous version fail.")
-    if _ALTER_TYPE.search(statement) is not None:
-        return finding(
-            PREPARED_PLAN,
-            "Changes a column's type, so every prepared query on the previous version that returns it is rejected "
-            "with `cached plan must not change result type` until its connection is recreated. If the new type "
-            "is one the old client cannot map, it keeps failing after that.",
+    return site.rate(
+        PREPARED_PLAN,
+        "Widens a column's type. Every prepared query on the previous version that returns it is rejected with "
+        "`cached plan must not change result type` until its connection is recreated, then reads it fine.",
+    )
+
+
+def _rule_constraint(site: _Site) -> Finding | None:
+    if _ADD_CONSTRAINT.search(site.statement) is not None:
+        checked: Final = [column for column in _constraint_columns(site.statement) if site.knows(column)]
+        if checked:
+            return site.rate(
+                WRITE_REJECT,
+                f"Adds a rule on `{'`, `'.join(checked)}` that the previous version never enforced. Rows it writes "
+                "that violate the rule are now rejected; whether any do depends on the data.",
+            )
+        if _NOT_VALID.search(site.statement) is not None:
+            return site.rate(
+                INFO, "Constraint on columns the previous version does not write, with no validation scan."
+            )
+        return site.rate(LOCK, "Validates the constraint against every existing row while holding the table lock.")
+    if _UNIQUE_INDEX.search(site.statement) is None:
+        return None
+    covered: Final = _index_columns(site.statement)
+    replaces: Final = any(name.startswith(f"{site.table}_") for name in site.context.dropped_indexes)
+    if covered and all(site.knows(column) for column in covered) and not replaces:
+        return site.rate(
+            WRITE_REJECT,
+            f"Makes `{'`, `'.join(covered)}` unique, which the previous version never enforced. Duplicate rows it "
+            "writes are now rejected; whether any are depends on the data.",
         )
-    if _ADD_COLUMN.search(statement) is not None and star is not None:
-        return finding(
-            PREPARED_PLAN,
-            f"Read whole-row by `{_shape(star)}`{where}, so the prepared plans cached on the previous version's "
-            "pooled connections are rejected with `cached plan must not change result type` until those "
-            "connections are recreated.",
-        )
-    if _CREATE_INDEX.search(statement) is not None and _CONCURRENTLY.search(statement) is None:
-        joined: Final = _joined_read_for(table, star_reads)
+    return None
+
+
+def _rule_whole_row_read(site: _Site) -> Finding | None:
+    if _ADD_COLUMN.search(site.statement) is None or site.star is None:
+        return None
+    return site.rate(
+        PREPARED_PLAN,
+        f"Read whole-row by `{_shape(site.star)}`{site.where}, so the prepared plans cached on the previous "
+        "version's pooled connections are rejected with `cached plan must not change result type` until those "
+        "connections are recreated.",
+    )
+
+
+def _rule_lock(site: _Site) -> Finding | None:
+    if _CREATE_INDEX.search(site.statement) is not None and _CONCURRENTLY.search(site.statement) is None:
+        joined: Final = _joined_read_for(site.table, site.context.star_reads)
         read_note: Final = (
             f" The table is joined by `{_shape(joined)}` (`{joined.location}`), so that read waits too."
             if joined is not None
             else ""
         )
-        return finding(
+        return site.rate(
             LOCK,
             "Blocks writes to the table (reads continue) until the index is built; the wait scales with the "
             f"table's size.{read_note}",
         )
-    if _ADD_CONSTRAINT.search(statement) is not None and _NOT_VALID.search(statement) is None:
-        return finding(LOCK, "Validates the constraint against every existing row while holding the table lock.")
-    if _UPDATE.search(statement) is not None:
-        return finding(LOCK, "Rewrites existing rows, so it holds row locks for as long as the backfill runs.")
-    if _ADD_COLUMN.search(statement) is not None:
-        return finding(INFO, "Adds a nullable column to a table the previous version does not read whole-row.")
-    if _INSERT.search(statement) is not None:
-        return finding(INFO, "Inserts rows. The previous version is not affected.")
-    return finding(INFO, "No effect on the previous version.")
+    if _UPDATE.search(site.statement) is not None:
+        return site.rate(LOCK, "Rewrites existing rows, so it holds row locks for as long as the backfill runs.")
+    return None
+
+
+def _rule_rest(site: _Site) -> Finding:
+    if _ADD_COLUMN.search(site.statement) is not None:
+        return site.rate(INFO, "Adds a nullable column to a table the previous version does not read whole-row.")
+    if _INSERT.search(site.statement) is not None:
+        return site.rate(INFO, "Inserts rows. The previous version is not affected.")
+    return site.rate(INFO, "No effect on the previous version.")
+
+
+# Worst-first: the first rule that has something to say about a statement decides its rating.
+RULES: Final = (
+    _rule_new_table,
+    _rule_drop,
+    _rule_rename,
+    _rule_not_null,
+    _rule_type_change,
+    _rule_constraint,
+    _rule_whole_row_read,
+    _rule_lock,
+)
+
+
+def classify(migration: str, statement: str, context: UpgradeContext) -> Finding:
+    """Rate one statement by what it does to a pod still running the base version."""
+    table: Final = statement_table(statement)
+    site: Final = _Site(migration, statement, table, context, _star_read_for(table, context.star_reads))
+    for rule in RULES:
+        found: Final = rule(site)
+        if found is not None:
+            return found
+    return _rule_rest(site)
 
 
 def _adds_not_null_without_default(statement: str) -> bool:
@@ -419,20 +685,36 @@ def build_report(repo: Path, base: str, head: str) -> Report:
     )
     # A re-declared `CREATE TABLE IF NOT EXISTS` of a table the old pods already use is not a new table.
     fresh_tables: Final = created_here - tables_created_before(repo, base)
+    schema: Final = load_base_schema(repo, base)
 
     findings: Final[list[Finding]] = []
     for name, sql in sql_by_migration.items():
-        for statement in split_statements(sql):
-            findings.append(classify(name, statement, fresh_tables, star_reads))
+        statements: Final = split_statements(sql)
+        dropped: Final = frozenset(
+            match.group("index") for statement in statements if (match := _DROP_INDEX_NAME.search(statement))
+        )
+        context: Final = UpgradeContext(fresh_tables, star_reads, schema, dropped)
+        findings.extend(classify(name, statement, context) for statement in statements)
 
     ranked: Final = sorted(findings, key=lambda finding: (SEVERITY_ORDER.index(finding.severity), finding.migration))
-    return Report(base=base, head=head, migrations=new_names, findings=tuple(ranked), star_reads=star_reads)
+    return Report(
+        base=base,
+        head=head,
+        migrations=new_names,
+        findings=tuple(ranked),
+        star_reads=star_reads,
+        schema_tables=None if schema is None else len(schema),
+    )
 
 
 PROCEDURE: Final = {
     BREAKING: (
         "**Do not run the old and new versions side by side.** Take the previous version out of service before the "
         "new version applies these migrations, or split the change across two releases."
+    ),
+    WRITE_REJECT: (
+        "Writes from the previous version that break the new rule are rejected until those pods are gone. Confirm "
+        "the previous version already satisfies it on your data; if you cannot, do not overlap the two versions."
     ),
     PREPARED_PLAN: (
         "Expect the queries cited above to fail on pods still running the previous version until their pooled "
@@ -472,7 +754,7 @@ def render_markdown(report: Report) -> str:
     notable: Final = [finding for finding in report.findings if finding.severity != INFO]
     for finding in notable[:MAX_ROWS]:
         lines.append(
-            f"| {SEVERITY_ICON[finding.severity]} | `{finding.migration}` | `{_clip(finding.statement)}` | "
+            f"| **{SEVERITY_LABEL[finding.severity]}** | `{finding.migration}` | `{_clip(finding.statement)}` | "
             f"{finding.effect} |"
         )
     if len(notable) > MAX_ROWS:
@@ -483,12 +765,23 @@ def render_markdown(report: Report) -> str:
 
     worst: Final = report.worst
     if worst is None or worst == INFO:
-        lines.append("| ℹ️ | — | — | Nothing in this release affects a pod running the previous version. |")
+        lines.append("| **INFO** | - | - | Nothing in this release affects a pod running the previous version. |")
     lines.extend(["", PROCEDURE[worst or INFO], ""])
+    evidence: Final[list[str]] = []
+    if report.schema_tables is None:
+        evidence.append(
+            f"no `schema.prisma` at `{report.base}`, so drops, renames and constraints are rated as if the previous "
+            "version used every column"
+        )
+    else:
+        evidence.append(
+            f"columns the previous version uses: `schema.prisma` at `{report.base}` ({report.schema_tables} tables)"
+        )
     cited: Final = _cited_reads(report)
     if cited:
         shapes: Final = ", ".join(sorted({f"`{_shape(read)}` on `{read.table}` (`{read.location}`)" for read in cited}))
-        lines.append(f"<sub>Whole-row reads considered: {shapes}.</sub>")
+        evidence.append(f"whole-row reads: {shapes}")
+    lines.append(f"<sub>Evidence: {'; '.join(evidence)}.</sub>")
     lines.append("")
     return "\n".join(lines)
 
@@ -513,6 +806,7 @@ def render_json(report: Report) -> str:
         "base": report.base,
         "head": report.head,
         "worst_severity": report.worst,
+        "schema_tables": report.schema_tables,
         "migrations": list(report.migrations),
         "findings": [finding.as_dict() for finding in report.findings],
         "star_reads": [
@@ -555,7 +849,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", help="write the report here instead of stdout")
     parser.add_argument(
         "--fail-on",
-        choices=(BREAKING, PREPARED_PLAN, LOCK),
+        choices=(BREAKING, WRITE_REJECT, PREPARED_PLAN, LOCK),
         help="exit 1 when a finding at this severity or worse is present",
     )
     return parser.parse_args(argv)

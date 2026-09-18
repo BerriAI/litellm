@@ -130,13 +130,16 @@ migration set between two refs and rates every statement by what it does to thos
 
 | Severity | Meaning |
 |---|---|
-| `breaking` | The old pods cannot recover on their own — a column they read is gone, renamed or retyped, or a constraint now rejects the rows they write |
-| `prepared-plan` | The change alters the result type of a query the old pods have prepared - a `SELECT <alias>.*` gaining a column, or a column changing type - so the plans cached on their pooled connections are rejected with `cached plan must not change result type` until those connections are recreated ([#36418](https://github.com/BerriAI/litellm/issues/36418)) |
+| `breaking` | The old pods cannot recover on their own. A column their client selects is dropped, renamed or changed to a type it cannot read, or a NOT NULL now rejects the rows they write |
+| `write-reject` | A new constraint (foreign key, check, unique) on columns the old pods write. Rows they write that violate it are rejected; whether any do depends on the data |
+| `prepared-plan` | The result type of a query the old pods have prepared changes: a whole-row `SELECT <alias>.*` gains a column, or a column widens. The plans cached on their pooled connections are rejected with `cached plan must not change result type` until those connections are recreated ([#36418](https://github.com/BerriAI/litellm/issues/36418)) |
 | `lock` | The migration takes a blocking lock, or rewrites rows, on a table already serving traffic |
-| `info` | No effect on the old pods (new tables, and changes to them) |
+| `info` | No effect on the old pods: new tables, changes to them, and columns the old pods do not know |
 
-The tables read whole-row are discovered from the source tree at `--base` - the code the old pods
-are running - not hardcoded, so the report follows those queries as they move.
+The evidence is the base version itself, not a hardcoded list. `schema.prisma` at `--base` says
+which columns the old Prisma client selects and writes, so dropping a column that schema never
+declared is `info`, and dropping one it does declare is `breaking`. The source tree at `--base`
+holds the raw `SELECT <alias>.*` queries whose plans go stale. The report's footnote names both.
 
 `create-release.yml` runs this and puts the result at the top of the release body. To see it for
 any pair of versions yourself:
@@ -147,7 +150,8 @@ python3 ci_cd/migration_impact.py --base v1.93.0 --head v1.99.0 --format json
 ```
 
 Standard library only, so it needs no `uv sync`. `--fail-on breaking` exits non-zero when a
-migration in the range is not safe to apply under a rolling upgrade.
+migration in the range is not safe to apply under a rolling upgrade; `--fail-on write-reject`
+also stops on constraints the old pods might violate.
 
 ---
 

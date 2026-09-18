@@ -72,8 +72,64 @@ def _auth_read() -> object:
     return reads[0]
 
 
-def _classify(statement: str, fresh: frozenset[str] = frozenset(), reads: tuple[object, ...] = ()) -> object:
-    return impact.classify("20260713230852_add_key_type", statement, fresh, reads)
+BASE_SCHEMA: Final = """
+enum KeyType {
+  llm_api
+  management
+}
+
+model LiteLLM_VerificationToken {
+    token      String   @id
+    key_name   String?
+    spend      Float    @default(0.0)
+    models     String[]
+    team_id    String?
+    key_type   KeyType?
+    litellm_budget_table LiteLLM_BudgetTable? @relation(fields: [budget_id], references: [budget_id])
+    budget_id  String?
+    @@index([team_id])
+}
+
+model LiteLLM_BudgetTable {
+    budget_id  String @id
+    max_budget Float?
+    keys       LiteLLM_VerificationToken[]
+}
+
+model LiteLLM_ModelTable {
+    id            Int      @id @default(autoincrement())
+    model_aliases Json?    @map("aliases")
+    created_at    DateTime @default(now()) @map("created_at")
+}
+
+model ClaudeCodePlugin {
+    id String @id
+    @@map("LiteLLM_ClaudeCodePluginTable")
+}
+"""
+
+
+def _context(
+    fresh: frozenset[str] = frozenset(),
+    reads: tuple[object, ...] = (),
+    schema: object = None,
+    dropped: frozenset[str] = frozenset(),
+) -> object:
+    return impact.UpgradeContext(fresh, reads, schema, dropped)
+
+
+def _classify(
+    statement: str,
+    fresh: frozenset[str] = frozenset(),
+    reads: tuple[object, ...] = (),
+    schema: object = None,
+    dropped: frozenset[str] = frozenset(),
+) -> object:
+    return impact.classify("20260713230852_add_key_type", statement, _context(fresh, reads, schema, dropped))
+
+
+def _base_schema() -> object:
+    return impact.parse_prisma_schema(BASE_SCHEMA)
 
 
 def test_split_statements_descends_into_dollar_quoted_blocks() -> None:
@@ -146,10 +202,29 @@ def test_index_builds_are_rated_by_whether_they_lock() -> None:
     assert concurrent.severity == impact.INFO
 
 
-def test_unvalidated_constraint_is_not_a_lock() -> None:
-    validating = _classify('ALTER TABLE "LiteLLM_SpendLogs" ADD CONSTRAINT "fk" FOREIGN KEY ("t") REFERENCES "T"("id")')
+def test_constraint_on_a_column_the_old_client_writes_can_reject_its_writes() -> None:
+    # NOT VALID only skips the scan of existing rows; new writes from the old pods are still checked.
+    schema = _base_schema()
+    checked = _classify(
+        'ALTER TABLE "LiteLLM_VerificationToken" ADD CONSTRAINT "fk" FOREIGN KEY ("budget_id") '
+        'REFERENCES "LiteLLM_BudgetTable"("budget_id") NOT VALID',
+        schema=schema,
+    )
+    assert checked.severity == impact.WRITE_REJECT
+    assert "`budget_id`" in checked.effect
+
+
+def test_constraint_on_a_column_the_old_client_does_not_know_is_rated_by_its_scan() -> None:
+    schema = _base_schema()
+    validating = _classify(
+        'ALTER TABLE "LiteLLM_VerificationToken" ADD CONSTRAINT "fk" FOREIGN KEY ("project_id") '
+        'REFERENCES "LiteLLM_ProjectTable"("project_id")',
+        schema=schema,
+    )
     deferred = _classify(
-        'ALTER TABLE "LiteLLM_SpendLogs" ADD CONSTRAINT "fk" FOREIGN KEY ("t") REFERENCES "T"("id") NOT VALID'
+        'ALTER TABLE "LiteLLM_VerificationToken" ADD CONSTRAINT "fk" FOREIGN KEY ("project_id") '
+        'REFERENCES "LiteLLM_ProjectTable"("project_id") NOT VALID',
+        schema=schema,
     )
     assert validating.severity == impact.LOCK
     assert deferred.severity == impact.INFO
@@ -180,7 +255,7 @@ def test_markdown_leads_with_the_worst_finding_and_its_procedure() -> None:
     finding = _classify('ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN "key_type" TEXT', reads=(_auth_read(),))
     rendered = impact.render_markdown(_report(findings=(finding,)))
     assert "20260713230852_add_key_type" in rendered
-    assert impact.SEVERITY_ICON[impact.PREPARED_PLAN] in rendered
+    assert "| **PREPARED-PLAN** |" in rendered
     assert impact.PROCEDURE[impact.PREPARED_PLAN] in rendered
     assert "`SELECT v.*` on `LiteLLM_VerificationToken`" in rendered
 
@@ -188,7 +263,7 @@ def test_markdown_leads_with_the_worst_finding_and_its_procedure() -> None:
 def test_markdown_caps_the_table_and_says_where_the_rest_is() -> None:
     finding = _classify('ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN "key_type" TEXT', reads=(_auth_read(),))
     rendered = impact.render_markdown(_report(findings=tuple([finding] * (impact.MAX_ROWS + 3))))
-    assert rendered.count("| ⚠️ |") == impact.MAX_ROWS
+    assert rendered.count("| **PREPARED-PLAN** |") == impact.MAX_ROWS
     assert "…and 3 more" in rendered
 
 
@@ -247,7 +322,8 @@ def test_foreign_key_on_update_is_not_a_backfill() -> None:
         'ALTER TABLE "LiteLLM_JWTKeyMapping" ADD CONSTRAINT "fk" FOREIGN KEY ("token") '
         'REFERENCES "LiteLLM_VerificationToken"("token") ON DELETE CASCADE ON UPDATE CASCADE NOT VALID'
     )
-    assert finding.severity == impact.INFO
+    assert finding.severity == impact.WRITE_REJECT
+    assert "backfill" not in finding.effect
     backfill = _classify('UPDATE "LiteLLM_SpendLogs" SET "created_at" = "startTime" WHERE "created_at" IS NULL')
     assert backfill.severity == impact.LOCK
 
@@ -257,10 +333,30 @@ def test_index_rename_is_not_breaking() -> None:
     assert finding.severity == impact.INFO
 
 
-def test_type_change_is_a_prepared_plan_change_not_a_permanent_break() -> None:
-    finding = _classify('ALTER TABLE "LiteLLM_DailyTagSpend" ALTER COLUMN "prompt_tokens" SET DATA TYPE BIGINT')
+SPEND_SCHEMA: Final = "model LiteLLM_DailyTagSpend {\n  id String @id\n  prompt_tokens Int\n}\n"
+
+
+def test_widening_a_type_is_a_prepared_plan_change() -> None:
+    finding = _classify(
+        'ALTER TABLE "LiteLLM_DailyTagSpend" ALTER COLUMN "prompt_tokens" SET DATA TYPE BIGINT',
+        schema=impact.parse_prisma_schema(SPEND_SCHEMA),
+    )
     assert finding.severity == impact.PREPARED_PLAN
     assert "cached plan must not change result type" in finding.effect
+
+
+def test_a_type_the_old_client_cannot_read_is_breaking() -> None:
+    finding = _classify(
+        'ALTER TABLE "LiteLLM_DailyTagSpend" ALTER COLUMN "prompt_tokens" SET DATA TYPE TEXT',
+        schema=impact.parse_prisma_schema(SPEND_SCHEMA),
+    )
+    assert finding.severity == impact.BREAKING
+    assert "`prompt_tokens` to TEXT" in finding.effect
+
+
+def test_type_change_without_a_schema_to_check_against_is_breaking() -> None:
+    finding = _classify('ALTER TABLE "LiteLLM_DailyTagSpend" ALTER COLUMN "prompt_tokens" SET DATA TYPE BIGINT')
+    assert finding.severity == impact.BREAKING
 
 
 def test_not_null_is_judged_per_add_column_clause() -> None:
@@ -325,6 +421,7 @@ def _two_version_repo(tmp_path: Path) -> Path:
     _git(repo, "config", "user.name", "test")
     (repo / "litellm" / "proxy").mkdir(parents=True)
     (repo / "litellm" / "proxy" / "utils.py").write_text(BASE_SOURCE, encoding="utf-8")
+    (repo / "schema.prisma").write_text(BASE_SCHEMA, encoding="utf-8")
     _write_migration(
         repo,
         "20250101000000_baseline",
@@ -344,7 +441,11 @@ def _two_version_repo(tmp_path: Path) -> Path:
         'CREATE TABLE IF NOT EXISTS "LiteLLM_VerificationToken" ("token" TEXT PRIMARY KEY);\n'
         'ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN "key_type" TEXT;\n'
         'CREATE TABLE "LiteLLM_NewTable" ("id" TEXT PRIMARY KEY);\n'
-        'CREATE INDEX "new_idx" ON "LiteLLM_NewTable"("id");\n',
+        'CREATE INDEX "new_idx" ON "LiteLLM_NewTable"("id");\n'
+        # A column the base schema never declared: the old client cannot miss it.
+        'ALTER TABLE "LiteLLM_TeamTable" DROP COLUMN IF EXISTS "legacy_flag";\n'
+        # A column it does declare: the old client selects it on every read.
+        'ALTER TABLE "LiteLLM_VerificationToken" DROP COLUMN "key_name";\n',
     )
     _git(repo, "add", ".")
     _git(repo, "commit", "-q", "-m", "head")
@@ -366,7 +467,12 @@ def test_report_rates_migrations_against_the_queries_the_old_pods_run(tmp_path: 
     assert add_column.severity == impact.PREPARED_PLAN
     new_index = by_statement['CREATE INDEX "new_idx" ON "LiteLLM_NewTable"("id")']
     assert new_index.severity == impact.INFO
-    assert report.worst == impact.PREPARED_PLAN
+    unknown_drop = by_statement['ALTER TABLE "LiteLLM_TeamTable" DROP COLUMN IF EXISTS "legacy_flag"']
+    assert unknown_drop.severity == impact.INFO
+    known_drop = by_statement['ALTER TABLE "LiteLLM_VerificationToken" DROP COLUMN "key_name"']
+    assert known_drop.severity == impact.BREAKING
+    assert report.schema_tables == 4
+    assert report.worst == impact.BREAKING
 
 
 def test_report_for_the_same_ref_twice_has_nothing_to_say(tmp_path: Path) -> None:
@@ -375,3 +481,89 @@ def test_report_for_the_same_ref_twice_has_nothing_to_say(tmp_path: Path) -> Non
     assert report.migrations == ()
     assert report.findings == ()
     assert "No database schema changes since `v1.1.0`." in impact.render_markdown(report)
+
+
+def test_schema_parser_reads_columns_maps_and_enums_and_skips_relations() -> None:
+    schema = _base_schema()
+    token = schema["LiteLLM_VerificationToken"]
+    assert token["token"] == impact.Column(required=True, prisma_type="String")
+    assert token["key_name"] == impact.Column(required=False, prisma_type="String")
+    assert token["models"].required  # a list column is NOT NULL
+    assert token["key_type"].prisma_type == "KeyType"  # enum-typed column
+    assert "litellm_budget_table" not in token  # relation field, not a column
+    assert "aliases" in schema["LiteLLM_ModelTable"]  # @map renames the column
+    assert "model_aliases" not in schema["LiteLLM_ModelTable"]
+    assert "LiteLLM_ClaudeCodePluginTable" in schema  # @@map renames the table
+    assert "ClaudeCodePlugin" not in schema
+
+
+def test_dropping_a_column_the_old_client_never_selects_is_not_breaking() -> None:
+    schema = _base_schema()
+    known = _classify('ALTER TABLE "LiteLLM_VerificationToken" DROP COLUMN "key_name"', schema=schema)
+    unknown = _classify('ALTER TABLE "LiteLLM_VerificationToken" DROP COLUMN "settings_updated_at"', schema=schema)
+    assert known.severity == impact.BREAKING
+    assert "`key_name`" in known.effect
+    assert unknown.severity == impact.INFO
+
+
+def test_renaming_a_column_is_rated_by_whether_the_old_client_uses_it() -> None:
+    schema = _base_schema()
+    known = _classify('ALTER TABLE "LiteLLM_VerificationToken" RENAME COLUMN "team_id" TO "owner_team"', schema=schema)
+    unknown = _classify('ALTER TABLE "LiteLLM_VerificationToken" RENAME COLUMN "tmp" TO "final"', schema=schema)
+    assert known.severity == impact.BREAKING
+    assert unknown.severity == impact.INFO
+
+
+def test_set_not_null_is_breaking_only_where_the_old_client_may_write_null() -> None:
+    schema = _base_schema()
+    optional_at_base = _classify(
+        'ALTER TABLE "LiteLLM_VerificationToken" ALTER COLUMN "key_name" SET NOT NULL', schema=schema
+    )
+    required_at_base = _classify(
+        'ALTER TABLE "LiteLLM_VerificationToken" ALTER COLUMN "spend" SET NOT NULL', schema=schema
+    )
+    assert optional_at_base.severity == impact.BREAKING
+    assert required_at_base.severity == impact.INFO
+
+
+def test_dropping_a_table_the_old_client_does_not_know_is_informational() -> None:
+    schema = _base_schema()
+    known = _classify('DROP TABLE "LiteLLM_BudgetTable"', schema=schema)
+    unknown = _classify('DROP TABLE "LiteLLM_TmpTable"', schema=schema)
+    assert known.severity == impact.BREAKING
+    assert unknown.severity == impact.INFO
+
+
+def test_unique_index_on_columns_the_old_client_writes_can_reject_duplicates() -> None:
+    finding = _classify(
+        'CREATE UNIQUE INDEX "LiteLLM_VerificationToken_key_name_key" ON "LiteLLM_VerificationToken"("key_name")',
+        schema=_base_schema(),
+    )
+    assert finding.severity == impact.WRITE_REJECT
+
+
+def test_unique_index_that_replaces_a_dropped_one_is_only_a_lock() -> None:
+    # The Daily*Spend migrations drop the old unique key and create a wider one in the same file.
+    finding = _classify(
+        'CREATE UNIQUE INDEX "LiteLLM_VerificationToken_key_name_team_id_key" ON "LiteLLM_VerificationToken"'
+        '("key_name", "team_id")',
+        schema=_base_schema(),
+        dropped=frozenset({"LiteLLM_VerificationToken_key_name_key"}),
+    )
+    assert finding.severity == impact.LOCK
+
+
+def test_unique_index_on_a_new_column_is_only_a_lock() -> None:
+    finding = _classify(
+        'CREATE UNIQUE INDEX "idx" ON "LiteLLM_VerificationToken"("settings_updated_at")', schema=_base_schema()
+    )
+    assert finding.severity == impact.LOCK
+
+
+def test_markdown_names_the_schema_it_used_as_evidence() -> None:
+    report = impact.Report(
+        base="v1.93.0", head="v1.99.0", migrations=("m",), findings=(), star_reads=(), schema_tables=65
+    )
+    assert "`schema.prisma` at `v1.93.0` (65 tables)" in impact.render_markdown(report)
+    blind = impact.Report(base="v1.93.0", head="v1.99.0", migrations=("m",), findings=(), star_reads=())
+    assert "no `schema.prisma` at `v1.93.0`" in impact.render_markdown(blind)
