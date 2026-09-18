@@ -1763,9 +1763,10 @@ def test_bedrock_titan_embedding_batch_usage_is_parsed():
 
 
 def test_bedrock_titan_embedding_batch_is_billed():
+    """Binary embedding rows carry only embeddingsByType and must bill like float rows."""
     rows = [
-        {"recordId": str(i), "modelOutput": {"embedding": [0.1], "inputTextTokenCount": count}}
-        for i, count in enumerate((10, 7))
+        {"recordId": "0", "modelOutput": {"embedding": [0.1], "inputTextTokenCount": 10}},
+        {"recordId": "1", "modelOutput": {"embeddingsByType": {"binary": [1, 0]}, "inputTextTokenCount": 7}},
     ]
     result = bu._aggregate_batch_cost_usage_models(
         entries=rows,
