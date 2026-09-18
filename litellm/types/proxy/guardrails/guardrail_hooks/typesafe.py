@@ -10,6 +10,8 @@ class TypeSafeGuardrailOptionalParams(BaseModel):
 
     relevance_threshold: float | None = Field(
         default=None,
+        ge=0.0,
+        le=1.0,
         description=(
             "Relevance cutoff in [0, 1]. A completed tool exchange is dropped when Jev "
             "scores the probability that it is still needed below this value. Defaults to 0.2."
@@ -17,14 +19,17 @@ class TypeSafeGuardrailOptionalParams(BaseModel):
     )
     min_chars_to_evaluate: int | None = Field(
         default=None,
+        ge=0,
         description=(
             "Skip tool exchanges whose combined tool-result text is shorter than this many characters. Defaults to 200."
         ),
     )
     max_result_chars_in_state: int | None = Field(
         default=None,
+        ge=1,
         description=(
-            "Tool result text is truncated to this many characters when sent to the Jev evaluator. Defaults to 4000."
+            "Tool result text is truncated to this many characters when sent to the Jev evaluator, "
+            "keeping the head and tail. Defaults to 4000."
         ),
     )
 

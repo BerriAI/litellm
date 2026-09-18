@@ -53,6 +53,7 @@ _JEV_TIMEOUT_SECONDS: Final = 30.0
 DROPPED_RESULT_TEXT: Final = (
     "[Tool result removed by TypeSafe compaction: judged no longer relevant to the current task]"
 )
+_ELISION_MARKER: Final = "\n... [middle truncated] ...\n"
 
 
 _STR_OBJECT_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -97,6 +98,17 @@ class _JevSystemOneResponse(BaseModel):
 
 
 _JEV_RESPONSE_ADAPTER: Final = TypeAdapter(_JevSystemOneResponse)
+
+
+def _truncate_for_state(text: str, max_chars: int) -> str:
+    """Keeps the head and tail within ``max_chars`` so Jev sees both ends of a long result."""
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= len(_ELISION_MARKER):
+        return text[:max_chars]
+    budget: Final = max_chars - len(_ELISION_MARKER)
+    head: Final = budget // 2
+    return text[:head] + _ELISION_MARKER + text[len(text) - (budget - head) :]
 
 
 def _question_instructions(question_id: str) -> str:
@@ -231,7 +243,7 @@ class TypeSafeGuardrail(CustomGuardrail):
             )
             tool_exchanges[f"e{ordinal}"] = {
                 "tool_calls": _tool_call_entries(messages[group[0]]),
-                "result": result_text[: self.max_result_chars_in_state],
+                "result": _truncate_for_state(result_text, self.max_result_chars_in_state),
             }
         return {"task": task, "system": system, "tool_exchanges": tool_exchanges}
 
@@ -324,6 +336,18 @@ class TypeSafeGuardrail(CustomGuardrail):
         response: Final = await self._call_systemone(state, question_ids)
         end_time: Final = time.monotonic()
         if response is None:
+            self.add_standard_logging_guardrail_information_to_request_data(  # pyright: ignore[reportUnknownMemberType]  # untyped base helper
+                guardrail_json_response={
+                    "error": "TypeSafe evaluation unavailable; request forwarded uncompacted",
+                    "model": self.jev_model,
+                },
+                request_data=request_data,
+                guardrail_status="guardrail_failed_to_respond",
+                guardrail_provider="typesafe",
+                start_time=start_time,
+                end_time=end_time,
+                duration=end_time - start_time,
+            )
             return inputs
 
         dropped_ordinals: Final = frozenset(

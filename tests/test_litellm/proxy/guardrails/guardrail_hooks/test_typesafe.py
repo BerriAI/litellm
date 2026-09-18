@@ -40,7 +40,7 @@ TOOL_OUTPUT_LONG = "Result: EV range comparison. " * 40  # > 200 chars
 TOOL_OUTPUT_SHORT = "short"
 
 
-def _exchange(call_id: str, tool_text: str, name: str = "web_search") -> list[dict]:
+def _exchange(call_id: str, tool_text: str, name: str = "web_search") -> list[dict[str, object]]:
     return [
         {
             "role": "assistant",
@@ -57,7 +57,7 @@ def _exchange(call_id: str, tool_text: str, name: str = "web_search") -> list[di
     ]
 
 
-def _messages(*, tail: list | None = None) -> list[dict]:
+def _messages(*, tail: list[dict[str, object]] | None = None) -> list[dict[str, object]]:
     base = [
         {"role": "system", "content": SYSTEM_TEXT},
         {"role": "user", "content": USER_TEXT},
@@ -65,16 +65,21 @@ def _messages(*, tail: list | None = None) -> list[dict]:
     return base + (tail or [])
 
 
-def _make_guardrail(handler: MagicMock | None = None, **kwargs) -> TypeSafeGuardrail:
-    defaults = dict(
+def _make_guardrail(
+    handler: MagicMock | None = None,
+    *,
+    max_result_chars_in_state: int | None = None,
+    unreachable_fallback: str | None = None,
+) -> TypeSafeGuardrail:
+    return TypeSafeGuardrail(
         api_base=FAKE_API_BASE,
         api_key=FAKE_API_KEY,
         guardrail_name="typesafe",
         default_on=True,
         async_handler=handler or _make_handler({"e0": 0.9}),
+        max_result_chars_in_state=max_result_chars_in_state,
+        unreachable_fallback=unreachable_fallback,
     )
-    defaults.update(kwargs)
-    return TypeSafeGuardrail(**defaults)
 
 
 def _make_handler(answers: dict[str, float], status: int = 200) -> MagicMock:
@@ -91,11 +96,13 @@ def _make_handler(answers: dict[str, float], status: int = 200) -> MagicMock:
     return handler
 
 
-def _inputs(messages: list) -> GenericGuardrailAPIInputs:
+def _inputs(messages: list[dict[str, object]]) -> GenericGuardrailAPIInputs:
     return GenericGuardrailAPIInputs(structured_messages=messages)
 
 
-async def _apply(guardrail: TypeSafeGuardrail, messages: list, input_type: str = "request"):
+async def _apply(
+    guardrail: TypeSafeGuardrail, messages: list[dict[str, object]], input_type: str = "request"
+) -> GenericGuardrailAPIInputs:
     return await guardrail.apply_guardrail(
         inputs=_inputs(messages),
         request_data={},
@@ -188,7 +195,9 @@ async def test_request_body_shape_and_truncation():
     assert "e0" in payload["questions"]["e0"]["instructions"]
     assert payload["state"]["task"] == USER_TEXT
     exchange = payload["state"]["tool_exchanges"]["e0"]
-    assert exchange["result"] == TOOL_OUTPUT_LONG[:50]
+    assert len(exchange["result"]) == 50
+    assert exchange["result"].startswith(TOOL_OUTPUT_LONG[:10])
+    assert exchange["result"].endswith(TOOL_OUTPUT_LONG[-11:])
     assert exchange["tool_calls"] == [{"name": "web_search", "arguments": '{"query": "ev"}'}]
 
 
