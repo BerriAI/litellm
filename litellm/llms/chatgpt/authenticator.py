@@ -49,8 +49,9 @@ class Authenticator:
         self.auth_file = os.path.join(self.token_dir, os.getenv("CHATGPT_AUTH_FILE", "auth.json"))
         self._ensure_token_dir()
 
-    def get_api_base(self) -> str:
-        return os.getenv("CHATGPT_API_BASE") or os.getenv("OPENAI_CHATGPT_API_BASE") or CHATGPT_API_BASE
+    @staticmethod
+    def get_api_base(default_base: str = CHATGPT_API_BASE) -> str:
+        return os.getenv("CHATGPT_API_BASE") or os.getenv("OPENAI_CHATGPT_API_BASE") or default_base
 
     def get_access_token(self) -> str:
         auth_data: Final = self._read_auth_file()

@@ -3399,6 +3399,82 @@ async def test_refused_session_does_not_stamp_the_reservation_ownership_marker()
     assert REALTIME_SESSION_SUCCESS_LOGGED_KEY not in session.logging.model_call_details
 
 
+def test_live_terminal_usage_survives_filtered_event_logging(monkeypatch):
+    from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
+
+    def terminal():
+        return {"type": "session.closed", "usage": {"audio_duration_ms": 4000, "backend_model_usage": []}}
+
+    monkeypatch.setattr(litellm, "logged_real_time_event_types", [])
+    stream = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    event = {**terminal(), "private_transcript": "Do not retain this text"}
+    stream.store_message(event)
+    assert stream.messages == [terminal()]
+    usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(stream.messages)
+    assert usage.total_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_live_attachment_does_not_dispatch_duplicate_usage():
+    worker = MagicMock()
+    logger = MagicMock()
+    stream = RealTimeStreaming(MagicMock(), MagicMock(), logger, logging_worker=worker, account_usage=False)
+    stream.store_message({"type": "session.closed", "usage": {"audio_duration_ms": 4000}})
+    await stream.log_messages()
+    worker.ensure_initialized_and_enqueue.assert_not_called()
+    logger.dispatch_success_handlers.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_log_messages_flush_awaits_dispatch_instead_of_enqueueing():
+    worker = MagicMock()
+    logger = MagicMock()
+    logger.model_call_details = {}
+    logger.dispatch_success_handlers = AsyncMock()
+    stream = RealTimeStreaming(MagicMock(), MagicMock(), logger, logging_worker=worker)
+    stream.store_message({"type": "session.created"})
+
+    await stream.log_messages(wait_for_dispatch=True)
+
+    logger.dispatch_success_handlers.assert_awaited_once_with(stream.messages, prefer_async_handlers=True)
+    worker.ensure_initialized_and_enqueue.assert_not_called()
+    assert logger.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account_usage", [False, True])
+async def test_attachment_cleanup_runs_in_owning_context_only(account_usage):
+    from litellm.litellm_core_utils.realtime_streaming import realtime_attachment_cleanup
+
+    contexts = []
+
+    async def one(name):
+        task = asyncio.current_task()
+        callback = AsyncMock(side_effect=lambda: contexts.append((name, asyncio.current_task() is task)))
+        token = realtime_attachment_cleanup.set(callback)
+        try:
+            websocket = MagicMock()
+            websocket.receive_text = AsyncMock(side_effect=RuntimeError("disconnected"))
+            backend = MagicMock()
+
+            async def recv(**kwargs):
+                await asyncio.Event().wait()
+
+            backend.recv = recv
+            stream = RealTimeStreaming(websocket, backend, MagicMock(), account_usage=account_usage)
+            await stream.bidirectional_forward()
+            if account_usage:
+                callback.assert_not_awaited()
+            else:
+                callback.assert_awaited_once()
+        finally:
+            realtime_attachment_cleanup.reset(token)
+
+    await asyncio.gather(one("first"), one("second"))
+    assert sorted(contexts) == ([] if account_usage else [("first", True), ("second", True)])
+    assert realtime_attachment_cleanup.get() is None
+
+
 @pytest.mark.asyncio
 async def test_refused_session_stamps_the_failure_ownership_marker():
     """LIT-6463: the enqueued failure callback releases the key's max_parallel_requests
@@ -3550,3 +3626,43 @@ async def test_provider_bytes_are_sent_raw_after_pacing():
 
     assert [call.args[0] for call in backend_ws.send.await_args_list] == [b"\x00\x01", '{"type":"endStream"}']
     provider_config.pace_backend_send.assert_awaited_once_with(b"\x00\x01")
+
+
+def test_public_live_accounting_survives_filtered_logging(monkeypatch):
+    monkeypatch.setattr(litellm, "logged_real_time_event_types", [])
+    stream = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    events = [
+        {"type": "session.usage.updated", "usage": {"seconds": 15}},
+        {
+            "type": "response.event",
+            "event": {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_one",
+                    "model": "gpt-backend",
+                    "usage": {"total_tokens": 12},
+                },
+            },
+        },
+        {"type": "session.closed", "usage": {"seconds": 30}},
+    ]
+    for event in events:
+        stream.store_message({**event, "private_transcript": "do not retain"})
+    stream.store_message(
+        {"type": "response.event", "event": {"type": "response.output_text.delta", "delta": "private"}}
+    )
+    assert stream.messages == events
+
+
+@pytest.mark.parametrize("account_usage,expected", [(True, 1), (False, 0)])
+def test_live_initialization_is_retained_only_by_accounting_owner(account_usage, expected):
+    stream = RealTimeStreaming(
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        account_usage=account_usage,
+        live_initialization_seconds=15,
+    )
+    assert len(stream.messages) == expected
+    if account_usage:
+        assert stream.messages == [{"type": "litellm.live.initialization", "usage": {"seconds": 15}}]

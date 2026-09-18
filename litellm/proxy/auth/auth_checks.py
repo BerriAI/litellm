@@ -2296,23 +2296,19 @@ async def _load_team_membership_on_cache_miss(
     parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging | None,
 ) -> LiteLLM_TeamMembership | None:
-    try:
-        redis_cached: Final[object] = await user_api_key_cache.async_get_cache(key=cache_key)
-        redis_membership: Final = _membership_from_cached_payload(redis_cached)
-        if not isinstance(redis_membership, _TeamMembershipCacheMiss):
-            return redis_membership
+    redis_cached: Final[object] = await user_api_key_cache.async_get_cache(key=cache_key)
+    redis_membership: Final = _membership_from_cached_payload(redis_cached)
+    if not isinstance(redis_membership, _TeamMembershipCacheMiss):
+        return redis_membership
 
-        return await _fetch_team_membership_from_db(
-            user_id=user_id,
-            team_id=team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    except Exception:
-        verbose_proxy_logger.exception("Error getting team membership")
-        return None
+    return await _fetch_team_membership_from_db(
+        user_id=user_id,
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
 
 async def get_team_membership(
@@ -2322,6 +2318,7 @@ async def get_team_membership(
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    raise_on_error: bool = False,
 ) -> Optional["LiteLLM_TeamMembership"]:
     """
     Returns team membership object if user is member of team.
@@ -2340,7 +2337,17 @@ async def get_team_membership(
 
     inflight: Final[object] = _team_membership_inflight.get(_key)
     if isinstance(inflight, asyncio.Task):
-        return _membership_from_shared_load(await asyncio.shield(inflight))
+        try:
+            return _membership_from_shared_load(await asyncio.shield(inflight))
+        except Exception:
+            verbose_proxy_logger.exception(
+                "Error getting team membership for user_id: %s, team_id: %s",
+                user_id,
+                team_id,
+            )
+            if raise_on_error:
+                raise
+            return None
 
     if prisma_client is None:
         raise Exception("No db connected")
@@ -2363,7 +2370,17 @@ async def get_team_membership(
             _team_membership_inflight.pop(_key, None)
 
     task.add_done_callback(_clear_inflight)
-    return _membership_from_shared_load(await asyncio.shield(task))
+    try:
+        return _membership_from_shared_load(await asyncio.shield(task))
+    except Exception:
+        verbose_proxy_logger.exception(
+            "Error getting team membership for user_id: %s, team_id: %s",
+            user_id,
+            team_id,
+        )
+        if raise_on_error:
+            raise
+        return None
 
 
 def model_in_access_group(model: str, team_models: list[str] | None, llm_router: Router | None) -> bool:
@@ -4318,6 +4335,8 @@ async def _team_member_granted_models(
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    *,
+    strict_grant_lookup: bool = False,
     team_membership: LiteLLM_TeamMembership | None = None,
     team_membership_loaded: bool = False,
 ) -> Sequence[str]:
@@ -4332,6 +4351,7 @@ async def _team_member_granted_models(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            raise_on_error=strict_grant_lookup,
         )
     return () if team_membership is None else _member_allowed_models(team_membership)
 
@@ -4342,6 +4362,8 @@ async def _org_granted_models(
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    *,
+    strict_grant_lookup: bool = False,
 ) -> Sequence[str]:
     """The org allowlist reached through the key, or through its team when the key names no org."""
     org_id: Final = valid_token.org_id or (team_object.organization_id if team_object is not None else None)
@@ -4357,6 +4379,8 @@ async def _org_granted_models(
         )
     except Exception as e:  # noqa: BLE001  # fail-safe: attribution degrades to "no org grant", it must never break auth
         verbose_proxy_logger.debug("access group attribution: org lookup failed: %s", e)
+        if strict_grant_lookup:
+            raise
         return ()
     return org_object.models if org_object is not None else ()
 
@@ -4368,6 +4392,8 @@ async def _granted_model_lists(
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    *,
+    strict_grant_lookup: bool = False,
     team_membership: LiteLLM_TeamMembership | None = None,
     team_membership_loaded: bool = False,
 ) -> tuple[Sequence[str], ...]:
@@ -4381,6 +4407,7 @@ async def _granted_model_lists(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            strict_grant_lookup=strict_grant_lookup,
             team_membership=team_membership,
             team_membership_loaded=team_membership_loaded,
         ),
@@ -4391,6 +4418,7 @@ async def _granted_model_lists(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            strict_grant_lookup=strict_grant_lookup,
         ),
     )
 
@@ -4477,6 +4505,8 @@ async def collect_matched_model_access_groups(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    *,
+    strict_grant_lookup: bool = False,
     team_membership: LiteLLM_TeamMembership | None = None,
     team_membership_loaded: bool = False,
 ) -> tuple[str, ...]:
@@ -4494,7 +4524,9 @@ async def collect_matched_model_access_groups(
 
     The whole walk is gated on the budget registry, because collecting every match costs a full scan
     of each allowlist where the plain access check stops at the first hit. An empty registry means no
-    group carries a budget, so there is nothing to attribute and no work worth doing.
+    group carries a budget, so there is nothing to attribute and no work worth doing. The strict
+    lookup mode is reserved for enforcement paths that must not treat an unavailable inherited grant
+    as absent; the default remains fail-safe attribution for ordinary request telemetry.
     """
     if model is None or valid_token is None or llm_router is None or prisma_client is None:
         return ()
@@ -4524,6 +4556,7 @@ async def collect_matched_model_access_groups(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            strict_grant_lookup=strict_grant_lookup,
             team_membership=team_membership,
             team_membership_loaded=team_membership_loaded,
         )
@@ -6061,7 +6094,9 @@ def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:
         bool: True if model matches the pattern, False otherwise
     """
     if "*" in allowed_model_pattern:
-        pattern: Final = f"^{allowed_model_pattern.replace('*', '.*')}$"
+        # Treat the configured model pattern as a glob; only '*' is special.
+        escaped_pattern: Final = re.escape(allowed_model_pattern)
+        pattern: Final = "^" + escaped_pattern.replace("\\*", ".*") + "$"
         return bool(re.match(pattern, model))
 
     return False

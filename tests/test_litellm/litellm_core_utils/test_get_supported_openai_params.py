@@ -57,10 +57,11 @@ def test_base_model_is_additive_not_replacement():
     assert real_only <= combined
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 def test_base_model_adds_capabilities_the_real_model_lacks():
     """Regression for #27717 (the behavior the union must preserve).
 
-    ``gemini-exp-9999`` isn't in the cost map so it advertises no reasoning support,
+    ``gemini-exp-9999`` isn't in the bundled cost map, so it advertises no reasoning support,
     but the registered ``gemini-3.1-pro-preview`` base_model does. The hint must add
     ``reasoning_effort``/``thinking`` without the call erroring."""
     real_only = set(get_supported_openai_params(model="gemini-exp-9999", custom_llm_provider="gemini"))

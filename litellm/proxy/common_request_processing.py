@@ -1935,6 +1935,8 @@ class ProxyBaseLLMRequestProcessing:
         model: str | None = None,
         llm_router: Router | None = None,
         rate_limited_model: str | None = None,
+        *,
+        internal_realtime_observer: bool = False,
     ) -> tuple[dict, LiteLLMLoggingObj]:
         start_time: Final = datetime.now()  # start before calling guardrail hooks
 
@@ -2123,6 +2125,11 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict,
             data=self.data,
             call_type=route_type,
+            **(
+                MappingProxyType({"internal_realtime_observer": True})
+                if internal_realtime_observer
+                else MappingProxyType({})
+            ),
         )
         await _enforce_guardrail_added_tag_budgets(
             data=self.data,

@@ -547,6 +547,8 @@ async def test_virtual_key_max_budget_check(
             False,
         ),  # don't match on pattern
         ("openai/gpt-4o", ["openai/*"], True),  # openai wildcard access
+        ("openai/gpt+4", ["openai/gpt+*"], True),  # regex metacharacters stay literal
+        ("openai/gpttt4", ["openai/gpt+*"], False),  # regex metacharacters do not overmatch
         ("gpt-4", ["gpt-3.5-turbo"], False),  # model not in allowed list
         ("claude-3", [], True),  # empty model list (allows all)
     ],

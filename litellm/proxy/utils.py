@@ -2117,6 +2117,8 @@ class ProxyLogging:
         data: None,
         call_type: CallTypesLiteral,
         guardrails_only: bool = False,
+        *,
+        internal_realtime_observer: bool = False,
     ) -> None:
         pass
 
@@ -2127,6 +2129,8 @@ class ProxyLogging:
         data: dict,
         call_type: CallTypesLiteral,
         guardrails_only: bool = False,
+        *,
+        internal_realtime_observer: bool = False,
     ) -> dict:
         pass
 
@@ -2136,6 +2140,8 @@ class ProxyLogging:
         data: dict | None,
         call_type: CallTypesLiteral,
         guardrails_only: bool = False,
+        *,
+        internal_realtime_observer: bool = False,
     ) -> dict | None:
         """
         Allows users to modify/reject the incoming request to the proxy, without having to deal with parsing Request body.
@@ -2234,6 +2240,10 @@ class ProxyLogging:
 
             deferred_route_exc: SensitiveDataRouteException | None = None
             for _callback in caps.resolved_callbacks:
+                if internal_realtime_observer and isinstance(
+                    _callback, (_PROXY_MaxParallelRequestsHandler, _PROXY_MaxParallelRequestsHandler_v3)
+                ):
+                    continue
                 start_time = time.time()
                 try:
                     if isinstance(_callback, CustomGuardrail) and data is not None:
@@ -4281,7 +4291,7 @@ class PrismaClient:
 
     def hash_token(self, token: str):
         # Hash the string using SHA-256
-        hashed_token: Final = hashlib.sha256(token.encode()).hexdigest()
+        hashed_token: Final = hashlib.sha256(token.encode(), usedforsecurity=False).hexdigest()
 
         return hashed_token
 
@@ -6708,7 +6718,7 @@ def hash_token(token: str):
     import hashlib
 
     # Hash the string using SHA-256
-    hashed_token: Final = hashlib.sha256(token.encode()).hexdigest()
+    hashed_token: Final = hashlib.sha256(token.encode(), usedforsecurity=False).hexdigest()
 
     return hashed_token
 
