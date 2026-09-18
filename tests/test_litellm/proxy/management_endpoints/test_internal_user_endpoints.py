@@ -4564,12 +4564,14 @@ def test_new_user_response_echoes_rollover_max_budget():
             "expires": None,
             "max_budget": 100.0,
             "rollover_max_budget": 250.0,
+            "metadata": '{"source": "ui"}',
         },
         attached_team_ids=("team-1",),
     )
 
     assert result.max_budget == 100.0
     assert result.rollover_max_budget == 250.0
+    assert result.metadata == {"source": "ui"}
     assert result.key == "sk-rollover"
     assert result.teams == ["team-1"]
     assert result.token_id is None

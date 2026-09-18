@@ -452,7 +452,7 @@ def _new_user_response(response: Mapping[str, object], attached_team_ids: Sequen
     overrides: Final = (("key", response.get("token", "")),) + (
         (("teams", tuple(attached_team_ids)),) if attached_team_ids is not None else ()
     )
-    return NewUserResponse.model_validate(MappingProxyType(dict(chain(echoed, overrides))))
+    return NewUserResponse.model_validate(dict(chain(echoed, overrides)))
 
 
 @router.post(
