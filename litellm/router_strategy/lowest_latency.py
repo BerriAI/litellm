@@ -3,7 +3,10 @@
 import random
 from collections.abc import Sequence
 from datetime import datetime, timedelta
+from math import ceil
 from typing import TYPE_CHECKING, Any, Final
+
+from pydantic import Field
 
 import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
@@ -24,12 +27,25 @@ class RoutingArgs(LiteLLMPydanticObjectBase):
     ttl: float = 1 * 60 * 60  # 1 hour
     lowest_latency_buffer: float = 0
     max_latency_list_size: int = 10
+    ttft_percentile: float | None = Field(default=None, gt=0, le=1)
 
 
 def _average_latency(samples: Sequence[float]) -> float:
     if not samples:
         return 0.0
     return sum(samples) / len(samples)
+
+
+def _percentile_latency(samples: Sequence[float], percentile: float) -> float:
+    values: Final = sorted(samples)
+    index: Final = ceil(len(values) * percentile) - 1
+    return values[index]
+
+
+def _ttft_seconds(elapsed: timedelta | float) -> float:
+    if isinstance(elapsed, timedelta):
+        return elapsed.total_seconds()
+    return float(elapsed)
 
 
 class LowestLatencyLoggingHandler(CustomLogger):
@@ -86,14 +102,13 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     # breaks JSON serialization when the router cache syncs to
                     # Redis (issue #33169)
                     response_ms = response_ms.total_seconds()
-                time_to_first_token_response_time = None
+                time_to_first_token: float | None = None
 
                 if kwargs.get("stream", None) is not None and kwargs["stream"] is True:
                     # only log ttft for streaming request
-                    time_to_first_token_response_time = kwargs.get("completion_start_time", end_time) - start_time
+                    time_to_first_token = _ttft_seconds(kwargs.get("completion_start_time", end_time) - start_time)
 
                 final_value: float = response_ms
-                time_to_first_token: float | None = None
                 total_tokens = 0
 
                 if isinstance(response_obj, ModelResponse):
@@ -110,13 +125,6 @@ class LowestLatencyLoggingHandler(CustomLogger):
                             final_value = float(normalized_value)
                         else:
                             final_value = response_seconds
-
-                        if time_to_first_token_response_time is not None:
-                            if isinstance(time_to_first_token_response_time, timedelta):
-                                ttft_seconds = time_to_first_token_response_time.total_seconds()
-                            else:
-                                ttft_seconds = time_to_first_token_response_time
-                            time_to_first_token = safe_divide_seconds(ttft_seconds, completion_tokens)
 
                 # ------------
                 # Update usage
@@ -138,14 +146,14 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 ## Time to first token
                 if time_to_first_token is not None:
                     if (
-                        len(request_count_dict[id].get("time_to_first_token", []))
+                        len(request_count_dict[id].get("time_to_first_token_seconds", []))
                         < self.routing_args.max_latency_list_size
                     ):
-                        request_count_dict[id].setdefault("time_to_first_token", []).append(time_to_first_token)
+                        request_count_dict[id].setdefault("time_to_first_token_seconds", []).append(time_to_first_token)
                     else:
-                        request_count_dict[id]["time_to_first_token"] = request_count_dict[id]["time_to_first_token"][
-                            1:
-                        ] + [time_to_first_token]
+                        request_count_dict[id]["time_to_first_token_seconds"] = request_count_dict[id][
+                            "time_to_first_token_seconds"
+                        ][1:] + [time_to_first_token]
 
                 if precise_minute not in request_count_dict[id]:
                     request_count_dict[id][precise_minute] = {}
@@ -252,7 +260,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     {model_group}_map: {
                         id: {
                             "latency": [..]
-                            "time_to_first_token": [..]
+                            "time_to_first_token_seconds": [..]
                             f"{date:hour:minute}" : {"tpm": 34, "rpm": 3}
                         }
                     }
@@ -273,14 +281,13 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     # breaks JSON serialization when the router cache syncs to
                     # Redis (issue #33169)
                     response_ms = response_ms.total_seconds()
-                time_to_first_token_response_time = None
+                time_to_first_token: float | None = None
                 if kwargs.get("stream", None) is not None and kwargs["stream"] is True:
                     # only log ttft for streaming request
-                    time_to_first_token_response_time = kwargs.get("completion_start_time", end_time) - start_time
+                    time_to_first_token = _ttft_seconds(kwargs.get("completion_start_time", end_time) - start_time)
 
                 final_value: float = response_ms
                 total_tokens = 0
-                time_to_first_token: float | None = None
 
                 if isinstance(response_obj, ModelResponse):
                     _usage: Final = getattr(response_obj, "usage", None)
@@ -296,13 +303,6 @@ class LowestLatencyLoggingHandler(CustomLogger):
                             final_value = float(normalized_value)
                         else:
                             final_value = response_seconds
-
-                        if time_to_first_token_response_time is not None:
-                            if isinstance(time_to_first_token_response_time, timedelta):
-                                ttft_seconds = time_to_first_token_response_time.total_seconds()
-                            else:
-                                ttft_seconds = time_to_first_token_response_time
-                            time_to_first_token = safe_divide_seconds(ttft_seconds, completion_tokens)
                 # ------------
                 # Update usage
                 # ------------
@@ -328,14 +328,14 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 ## Time to first token
                 if time_to_first_token is not None:
                     if (
-                        len(request_count_dict[id].get("time_to_first_token", []))
+                        len(request_count_dict[id].get("time_to_first_token_seconds", []))
                         < self.routing_args.max_latency_list_size
                     ):
-                        request_count_dict[id].setdefault("time_to_first_token", []).append(time_to_first_token)
+                        request_count_dict[id].setdefault("time_to_first_token_seconds", []).append(time_to_first_token)
                     else:
-                        request_count_dict[id]["time_to_first_token"] = request_count_dict[id]["time_to_first_token"][
-                            1:
-                        ] + [time_to_first_token]
+                        request_count_dict[id]["time_to_first_token_seconds"] = request_count_dict[id][
+                            "time_to_first_token_seconds"
+                        ][1:] + [time_to_first_token]
 
                 if precise_minute not in request_count_dict[id]:
                     request_count_dict[id][precise_minute] = {}
@@ -433,18 +433,21 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 or float("inf")
             )
             item_latency = item_map.get("latency", [])
-            item_ttft_latency = item_map.get("time_to_first_token", [])
+            item_ttft_latency = item_map.get("time_to_first_token_seconds", [])
             item_rpm = item_map.get(precise_minute, {}).get("rpm", 0)
             item_tpm = item_map.get(precise_minute, {}).get("tpm", 0)
 
-            # get average latency or average ttft (depending on streaming/non-streaming)
             use_ttft = (
                 request_kwargs is not None
                 and request_kwargs.get("stream", None) is not None
                 and request_kwargs["stream"] is True
                 and len(item_ttft_latency) > 0
             )
-            average_latency = _average_latency(item_ttft_latency if use_ttft else item_latency)
+            selected_latency = (
+                _percentile_latency(item_ttft_latency, self.routing_args.ttft_percentile)
+                if use_ttft and self.routing_args.ttft_percentile is not None
+                else _average_latency(item_ttft_latency if use_ttft else item_latency)
+            )
 
             # -------------- #
             # Debugging Logic
@@ -453,7 +456,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             # this helps a user to debug why the router picked a specfic deployment      #
             _deployment_api_base = _deployment.get("litellm_params", {}).get("api_base", "")
             if _deployment_api_base is not None:
-                _latency_per_deployment[_deployment_api_base] = average_latency
+                _latency_per_deployment[_deployment_api_base] = selected_latency
             # -------------- #
             # End of Debugging Logic
             # -------------- #
@@ -463,7 +466,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             ):  # if user passed in tpm / rpm in the model_list
                 continue
             else:
-                potential_deployments.append((_deployment, average_latency))
+                potential_deployments.append((_deployment, selected_latency))
 
         if len(potential_deployments) == 0:
             return None

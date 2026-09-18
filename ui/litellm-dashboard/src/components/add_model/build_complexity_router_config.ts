@@ -1,3 +1,9 @@
+import {
+  isForecastClassifier,
+  withoutForecastPromptOverrides,
+  type CapabilitySettings,
+  type FuseSettings,
+} from "./forecast_classifier_config";
 import type { ModelGroup } from "../llm_calls/fetch_models";
 import { KeywordTierRule } from "./KeywordTierRules";
 import {
@@ -11,6 +17,7 @@ import {
   tierRowByName,
 } from "./tier_rows";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
+import { type CustomDimension, type CustomDimensionRow, serializeCustomDimensions } from "./custom_dimensions";
 import {
   TierModelParams,
   TierModelParamsByTier,
@@ -92,6 +99,7 @@ interface ScorerKnobInputs {
   tierBoundaries: TierBoundaries | undefined;
   tokenThresholds: TokenThresholds | undefined;
   dimensionWeights: DimensionWeights | undefined;
+  customDimensions: CustomDimensionRow[] | undefined;
   reasoningOverrideMinScore: number | undefined;
 }
 
@@ -106,24 +114,76 @@ const scorerKnobPayload = ({
   tierBoundaries,
   tokenThresholds,
   dimensionWeights,
+  customDimensions,
   reasoningOverrideMinScore,
-}: ScorerKnobInputs) =>
-  heuristicScoringRoleFor(classifierType, classifierFallback) === "never"
+}: ScorerKnobInputs) => {
+  const role = heuristicScoringRoleFor(classifierType, classifierFallback);
+  return role === "never"
     ? {}
     : {
         ...(tierBoundaries && { tier_boundaries: tierBoundaries }),
         ...(tokenThresholds && { token_thresholds: tokenThresholds }),
         ...(dimensionWeights && { dimension_weights: dimensionWeights }),
+        // Only a scorer that decides accepts these; the backend rejects them on every other
+        // classifier, so a fallback-only router must not carry rows a switch left behind.
+        ...(role === "decides" &&
+          customDimensions !== undefined && { custom_dimensions: serializeCustomDimensions(customDimensions) }),
         ...(reasoningOverrideMinScore !== undefined && { reasoning_override_min_score: reasoningOverrideMinScore }),
       };
+};
+
+export interface StoredComplexityRouterConfig {
+  tiers?: Partial<Record<keyof ComplexityTiers, unknown>>;
+  enable_non_reasoning_tier?: boolean;
+  tier_model_configs?: unknown;
+  default_model?: string | null;
+  plan_mode_min_tier?: unknown;
+  classification_prompt?: unknown;
+  classification_examples?: unknown;
+  heuristic_first_max_tier?: unknown;
+  hybrid_boundary_margin?: unknown;
+  tier_labels?: unknown;
+  classifier_type?: ClassifierType;
+  capability_classifier_config?: unknown;
+  llm_v2_config?: unknown;
+  classifier_llm_config?: ClassifierLLMConfig;
+  classifier_context_window_size?: unknown;
+  classifier_context_budget_chars?: unknown;
+  classifier_context_include_assistant_turns?: unknown;
+  classifier_fallback?: unknown;
+  classification_mode?: unknown;
+  tier_boundaries?: unknown;
+  token_thresholds?: unknown;
+  dimension_weights?: unknown;
+  custom_dimensions?: unknown;
+  reasoning_override_min_score?: unknown;
+  session_affinity?: unknown;
+  session_affinity_ttl_seconds?: unknown;
+  modality_routing?: unknown;
+  modality_pin_override?: unknown;
+  deployment_affinity?: unknown;
+  adaptive?: boolean;
+  adaptive_weights?: AdaptiveRouterWeights;
+  tier_distance_penalty?: number;
+  adaptive_eligible?: AdaptiveEligible;
+  return_raw_model_name?: boolean;
+  enable_context_window_escalation?: unknown;
+  context_window_escalation_buffer?: unknown;
+  stall_escalation_enabled?: unknown;
+  stall_escalation_window?: unknown;
+  stall_escalation_repeat_threshold?: unknown;
+}
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
+  enableNonReasoningTier?: boolean;
   customTierSet?: CustomTierSet;
   defaultModel: string | undefined;
   planModeMinTier: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
+  capabilityClassifierConfig?: CapabilitySettings;
+  llmV2Config?: FuseSettings;
   classifierLlmConfig: ClassifierLLMConfigWire | undefined;
   classifierContextWindowSize: number | undefined;
   classifierContextBudgetChars: number | undefined;
@@ -155,6 +215,7 @@ export interface BuildComplexityRouterConfigParams {
   tierBoundaries?: TierBoundaries;
   tokenThresholds?: TokenThresholds;
   dimensionWeights?: DimensionWeights;
+  customDimensions?: CustomDimensionRow[];
   reasoningOverrideMinScore?: number;
   tierModelParams?: TierModelParamsByTier;
   enableContextWindowEscalation?: boolean;
@@ -180,12 +241,15 @@ export interface TierDefinitionPayload {
 
 export interface ComplexityRouterConfigPayload {
   tiers: ComplexityTiers | Record<string, string[]>;
+  enable_non_reasoning_tier?: boolean;
   tier_definitions?: TierDefinitionPayload[];
   fallback_tier?: string;
   default_model?: string;
   plan_mode_min_tier?: string;
   tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType;
+  capability_classifier_config?: CapabilitySettings;
+  llm_v2_config?: FuseSettings;
   classifier_llm_config?: ClassifierLLMConfig;
   classifier_context_window_size?: number;
   classifier_context_budget_chars?: number;
@@ -219,6 +283,7 @@ export interface ComplexityRouterConfigPayload {
   tier_boundaries?: TierBoundaries;
   token_thresholds?: TokenThresholds;
   dimension_weights?: DimensionWeights;
+  custom_dimensions?: CustomDimension[];
   reasoning_override_min_score?: number;
   enable_context_window_escalation?: boolean;
   context_window_escalation_buffer?: number;
@@ -372,6 +437,26 @@ export const customTierWireFields = (
   };
 };
 
+/** The built-in tier pools and the opt-in flag, read back from a stored config. `tiers` is
+ * rewritten wholesale on save, so a stored tier this misses is deleted by any unrelated edit. */
+export const hydrateBuiltInTiers = (
+  storedTiers: Partial<Record<keyof ComplexityTiers, unknown>> | undefined,
+  storedFlag: boolean | undefined,
+): { tiers: ComplexityTiers; enable_non_reasoning_tier: boolean } => {
+  const nonReasoning: string[] = normalizeTierModels(storedTiers?.NON_REASONING);
+  const enable_non_reasoning_tier: boolean = storedFlag === true || nonReasoning.length > 0;
+  return {
+    enable_non_reasoning_tier,
+    tiers: {
+      SIMPLE: normalizeTierModels(storedTiers?.SIMPLE),
+      MEDIUM: normalizeTierModels(storedTiers?.MEDIUM),
+      COMPLEX: normalizeTierModels(storedTiers?.COMPLEX),
+      REASONING: normalizeTierModels(storedTiers?.REASONING),
+      ...(enable_non_reasoning_tier && { NON_REASONING: nonReasoning }),
+    },
+  };
+};
+
 // plan_mode_min_tier rides the strip list because the base payload carries it as a row id;
 // customTierWireFields re-emits it as the row's name, and an unresolvable floor stays off.
 const CUSTOM_TIER_STRIPPED_KEYS: readonly string[] = [...CUSTOM_TIER_OMITTED_KEYS, "plan_mode_min_tier"];
@@ -435,36 +520,45 @@ const classifierWireFields = (
     | "classifierContextBudgetChars"
     | "classifierContextIncludeAssistantTurns"
   >,
-): Partial<ComplexityRouterConfigPayload> => ({
-  ...(usesLlmClassifier(effectiveType) &&
-    classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
-  ...(usesLlmClassifier(effectiveType) &&
-    classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
-  ...(effectiveType === "heuristic_first" &&
-    heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
-  ...(effectiveType === "hybrid" &&
-    hybridBoundaryMargin !== undefined && { hybrid_boundary_margin: hybridBoundaryMargin }),
-  ...(usesLlmClassifier(effectiveType) &&
-    classifierContextWindowSize !== undefined && {
-      classifier_context_window_size: classifierContextWindowSize,
-    }),
-  ...(usesLlmClassifier(effectiveType) &&
-    classifierContextBudgetChars !== undefined && {
-      classifier_context_budget_chars: classifierContextBudgetChars,
-    }),
-  ...(usesLlmClassifier(effectiveType) &&
-    classifierContextIncludeAssistantTurns !== undefined && {
-      classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
-    }),
-});
+): Partial<ComplexityRouterConfigPayload> => {
+  const supportsFallback = usesLlmClassifier(effectiveType) && !isForecastClassifier(effectiveType);
+  return {
+    ...(usesLlmClassifier(effectiveType) &&
+      classifierLlmConfig && {
+        classifier_llm_config: isForecastClassifier(effectiveType)
+          ? withoutForecastPromptOverrides(classifierLlmConfig)
+          : normalizeClassifierLlmConfig(classifierLlmConfig),
+      }),
+    ...(supportsFallback && classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
+    ...(effectiveType === "heuristic_first" &&
+      heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
+    ...(effectiveType === "hybrid" &&
+      hybridBoundaryMargin !== undefined && { hybrid_boundary_margin: hybridBoundaryMargin }),
+    ...(usesLlmClassifier(effectiveType) &&
+      classifierContextWindowSize !== undefined && {
+        classifier_context_window_size: classifierContextWindowSize,
+      }),
+    ...(usesLlmClassifier(effectiveType) &&
+      classifierContextBudgetChars !== undefined && {
+        classifier_context_budget_chars: classifierContextBudgetChars,
+      }),
+    ...(usesLlmClassifier(effectiveType) &&
+      classifierContextIncludeAssistantTurns !== undefined && {
+        classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
+      }),
+  };
+};
 
 export const buildComplexityRouterConfig = ({
   tiers,
+  enableNonReasoningTier,
   customTierSet,
   defaultModel,
   planModeMinTier,
   tierLabels,
   classifierType,
+  capabilityClassifierConfig,
+  llmV2Config,
   classifierLlmConfig,
   classifierContextWindowSize,
   classifierContextBudgetChars,
@@ -496,6 +590,7 @@ export const buildComplexityRouterConfig = ({
   tierBoundaries,
   tokenThresholds,
   dimensionWeights,
+  customDimensions,
   reasoningOverrideMinScore,
   tierModelParams,
   enableContextWindowEscalation,
@@ -517,6 +612,7 @@ export const buildComplexityRouterConfig = ({
     tierBoundaries,
     tokenThresholds,
     dimensionWeights,
+    customDimensions,
     reasoningOverrideMinScore,
   };
   const scorerKnobs = scorerKnobPayload(scorerInputs);
@@ -532,19 +628,26 @@ export const buildComplexityRouterConfig = ({
   // An edited tier set forces the LLM classifier, so llm-only inputs must survive a classifier_type
   // the form never rewrote. The UI gates the same controls on this, not on the raw value.
   const effectiveType: ClassifierType = customTierSet ? "llm" : classifierType;
+  const forecast = isForecastClassifier(effectiveType);
 
+  const supportsOpeningPrompt = !customTierSet && !forecast && usesLlmClassifier(effectiveType);
   const payload: ComplexityRouterConfigPayload = {
-    tiers,
+    tiers: forecast ? Object.fromEntries(Object.entries(tiers).filter(([, models]) => models.length > 0)) : tiers,
+    // The backend rejects the flag beside a custom tier set.
+    ...(!customTierSet && enableNonReasoningTier && { enable_non_reasoning_tier: true }),
     ...(serializedTierModelConfigs && { tier_model_configs: serializedTierModelConfigs }),
     ...(defaultModel?.trim() && { default_model: defaultModel }),
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
     ...classifierWireFields(effectiveType, classifierInputs),
+    ...(effectiveType === "capability" &&
+      capabilityClassifierConfig && { capability_classifier_config: capabilityClassifierConfig }),
+    ...(effectiveType === "llm_v2" && { llm_v2_config: llmV2Config }),
+    ...(forecast && { adaptive: false }),
     // A built-in router's opening instructions. Suppressed beside a legacy whole-prompt override,
     // which the backend rejects as a second override of the same prompt.
-    ...(!customTierSet &&
-      usesLlmClassifier(effectiveType) &&
+    ...(supportsOpeningPrompt &&
       !classifierLlmConfig?.system_prompt?.trim() && {
         ...(classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
         ...(classificationExamples?.trim() && { classification_examples: classificationExamples.trim() }),
@@ -556,7 +659,7 @@ export const buildComplexityRouterConfig = ({
     modality_pin_override: modalityPinOverride ?? false,
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
-    escalation_keywords: cleanedEscalationKeywords,
+    escalation_keywords: forecast ? [] : cleanedEscalationKeywords,
     // Only written when on: the backend rejects it alongside session_affinity, user_turn mode and
     // a custom tier set, so an off router must not carry the key into any of those saves.
     ...(stallEscalationEnabled && {
@@ -571,19 +674,22 @@ export const buildComplexityRouterConfig = ({
       embedding_model: embeddingModel,
       match_threshold: matchThreshold,
     }),
-    ...(adaptive && {
-      adaptive: true,
-      adaptive_weights: adaptiveWeights,
-      ...(adaptiveEligible === "all" && { tier_distance_penalty: tierDistancePenalty }),
-      adaptive_eligible: adaptiveEligible,
-    }),
+    ...(adaptive &&
+      !forecast && {
+        adaptive: true,
+        adaptive_weights: adaptiveWeights,
+        ...(adaptiveEligible === "all" && { tier_distance_penalty: tierDistancePenalty }),
+        adaptive_eligible: adaptiveEligible,
+      }),
     ...(returnRawModelName && { return_raw_model_name: true }),
-    ...(enableContextWindowEscalation !== undefined && {
-      enable_context_window_escalation: enableContextWindowEscalation,
+    // Omission enables the backend default, so hidden forecast controls need an explicit opt-out.
+    ...((forecast || enableContextWindowEscalation !== undefined) && {
+      enable_context_window_escalation: forecast ? false : enableContextWindowEscalation,
     }),
-    ...(contextWindowEscalationBuffer !== undefined && {
-      context_window_escalation_buffer: contextWindowEscalationBuffer,
-    }),
+    ...(!forecast &&
+      contextWindowEscalationBuffer !== undefined && {
+        context_window_escalation_buffer: contextWindowEscalationBuffer,
+      }),
     ...(sessionAffinityTtlSeconds !== undefined && {
       session_affinity_ttl_seconds: sessionAffinityTtlSeconds,
     }),

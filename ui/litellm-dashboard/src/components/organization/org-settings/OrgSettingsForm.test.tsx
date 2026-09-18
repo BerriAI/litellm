@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
 vi.mock("@/components/ModelSelect/ModelSelect", () => ({
   ModelSelect: ({ onChange }: { onChange: (values: string[]) => void }) => (
@@ -67,11 +67,7 @@ const org: Organization = {
   },
 };
 
-const renderForm = (overrides?: {
-  patchOrganization?: ReturnType<typeof vi.fn>;
-  onSaved?: () => void;
-  org?: Organization;
-}) => {
+const renderForm = (overrides?: { patchOrganization?: Mock; onSaved?: () => void; org?: Organization }) => {
   const patchOrganization = overrides?.patchOrganization ?? vi.fn().mockResolvedValue({});
   const onSaved = overrides?.onSaved ?? vi.fn();
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

@@ -238,6 +238,7 @@ class _ControlledUpstreamHandler(LocalHttpHandler):
         self.end_headers()
         self.wfile.write(body)
 
+
 def _controlled_upstream(
     stream_chunks: tuple[bytes, ...] = _SSE_CHUNKS,
 ) -> AbstractContextManager[_ControlledUpstream]:

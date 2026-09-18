@@ -3,6 +3,8 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from pydantic import BaseModel, ConfigDict, ValidationError
+
 import litellm
 from litellm.types.utils import ModelInfo
 
@@ -21,10 +23,27 @@ _EFFORT_DEGRADATION_CHAIN: Final[Mapping[str, tuple[str, ...]]] = MappingProxyTy
 _THINKING_OFF: Final = "none"
 
 
+class _ClaudeCodeUserId(BaseModel):
+    """The JSON Claude Code packs into ``metadata.user_id``; only ``session_id`` is per conversation."""
+
+    model_config = ConfigDict(frozen=True)
+
+    session_id: str
+
+
 def prompt_cache_key_from_user_id(user_id: object) -> str | None:
-    if user_id is None:
+    """The per-session key Claude Code carries inside ``metadata.user_id``, or nothing.
+
+    Anthropic defines ``user_id`` as an opaque end-user id, so a plain string names a person, not
+    a conversation. Keying the provider cache on it pins every parallel session and subagent of that
+    person to one slot, which caches worse than the provider's own prompt-prefix hashing does.
+    """
+    if not isinstance(user_id, str):
         return None
-    return str(user_id)[:OPENAI_MAX_PROMPT_CACHE_KEY_LENGTH] or None
+    try:
+        return _ClaudeCodeUserId.model_validate_json(user_id).session_id[:OPENAI_MAX_PROMPT_CACHE_KEY_LENGTH] or None
+    except ValidationError:
+        return None
 
 
 def litellm_logging_obj_from_kwargs(kwargs: Mapping[str, object]) -> "LiteLLMLoggingObject | None":

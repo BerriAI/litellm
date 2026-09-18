@@ -8,6 +8,8 @@ import { MemoryRow } from "@/components/networking";
 
 import { MemoryTable } from "./MemoryTable";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 const makeMemory = (overrides: Partial<MemoryRow> = {}): MemoryRow => ({
   memory_id: "mem-1",
   key: "user:profile",
@@ -36,6 +38,23 @@ const baseProps = {
 };
 
 describe("MemoryTable", () => {
+  it("links the User ID and Team ID cells to their detail pages", () => {
+    render(<MemoryTable {...baseProps} />);
+
+    expect(screen.getByRole("link", { name: "user-42" })).toHaveAttribute("href", "/ui/users?user=user-42");
+    expect(screen.getByRole("link", { name: "team-7" })).toHaveAttribute("href", "/ui/teams?team=team-7");
+  });
+
+  it("leaves the proxy admin and dashboard sentinels unlinked", () => {
+    const sentinelRow = makeMemory({ user_id: "default_user_id", team_id: "litellm-dashboard" });
+    render(<MemoryTable {...baseProps} data={[sentinelRow]} />);
+
+    expect(screen.getByText("default_user_id")).toBeInTheDocument();
+    expect(screen.getByText("litellm-dashboard")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "default_user_id" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "litellm-dashboard" })).not.toBeInTheDocument();
+  });
+
   it("renders every column header", () => {
     render(<MemoryTable {...baseProps} />);
     for (const header of ["ID", "Name", "Preview", "User ID", "Team ID", "Updated"]) {

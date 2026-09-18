@@ -117,6 +117,14 @@ def _get_weave_authorization_header(api_key: str) -> str:
     return f"Basic {auth_header}"
 
 
+def weave_otel_endpoint(host: str | None) -> str:
+    """The OTLP traces endpoint for a self-managed ``host``, else Weave cloud."""
+    if not host:
+        return WEAVE_BASE_URL + WEAVE_OTEL_ENDPOINT
+    normalized: Final = host if host.startswith("http") else f"https://{host}"
+    return normalized.rstrip("/") + WEAVE_OTEL_ENDPOINT
+
+
 def get_weave_otel_config() -> WeaveOtelConfig:
     """
     Retrieves the Weave OpenTelemetry configuration based on environment variables.
@@ -134,7 +142,6 @@ def get_weave_otel_config() -> WeaveOtelConfig:
     """
     api_key: Final = os.getenv("WANDB_API_KEY")
     project_id: Final = os.getenv("WANDB_PROJECT_ID")
-    host = os.getenv("WANDB_HOST")
 
     if not api_key:
         raise ValueError("WANDB_API_KEY must be set for Weave OpenTelemetry integration.")
@@ -144,15 +151,8 @@ def get_weave_otel_config() -> WeaveOtelConfig:
             "WANDB_PROJECT_ID must be set for Weave OpenTelemetry integration. Format: <entity>/<project_name>"
         )
 
-    if host:
-        if not host.startswith("http"):
-            host = "https://" + host
-        # Self-managed instances use a different path
-        endpoint = host.rstrip("/") + WEAVE_OTEL_ENDPOINT
-        verbose_logger.debug("Using Weave OTEL endpoint from host: %s", endpoint)
-    else:
-        endpoint = WEAVE_BASE_URL + WEAVE_OTEL_ENDPOINT
-        verbose_logger.debug("Using Weave cloud endpoint: %s", endpoint)
+    endpoint: Final = weave_otel_endpoint(os.getenv("WANDB_HOST"))
+    verbose_logger.debug("Using Weave OTEL endpoint: %s", endpoint)
 
     # Weave uses Basic auth with format: api:<WANDB_API_KEY>
     auth_header: Final = _get_weave_authorization_header(api_key=api_key)

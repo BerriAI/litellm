@@ -6,7 +6,8 @@ Langfuse ingests OTLP spans and reads from its own vendor namespace
 
 Every attribute is declared as a ``key -> extractor`` table entry (one callable
 per mapping operation): ``_LLM_CALL_ATTRS`` for scalars and ``_BLOB_ATTRS`` for
-the JSON-serialized payloads. ``_llm_call`` just applies both tables.
+the JSON-serialized payloads. ``trace_attributes`` maps the caller's trace controls
+(shared with the root observation); ``_llm_call`` applies both tables plus it.
 """
 
 import json
@@ -16,6 +17,7 @@ from typing import Final
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
     collect,
+    drop_none_pairs,
     json_if,
     output_messages,
     serialize_messages,
@@ -25,9 +27,14 @@ from litellm.integrations.otel.model.payloads import (
     LLMRequestParams,
     LLMUsage,
 )
+from litellm.integrations.otel.model.trace_controls import TraceControls
 
 LANGFUSE_OBSERVATION_INPUT: Final = "langfuse.observation.input"
 LANGFUSE_OBSERVATION_OUTPUT: Final = "langfuse.observation.output"
+LANGFUSE_TRACE_NAME: Final = "langfuse.trace.name"
+LANGFUSE_TRACE_USER_ID: Final = "user.id"
+LANGFUSE_TRACE_SESSION_ID: Final = "session.id"
+LANGFUSE_TRACE_TAGS: Final = "langfuse.trace.tags"
 
 
 class LangfuseMapper:
@@ -75,9 +82,21 @@ class LangfuseMapper:
             case _:
                 return {}
 
+    @staticmethod
+    def trace_attributes(trace: TraceControls) -> AttributeMap:
+        return drop_none_pairs(
+            (
+                (LANGFUSE_TRACE_NAME, trace.name or None),
+                (LANGFUSE_TRACE_USER_ID, trace.user_id or None),
+                (LANGFUSE_TRACE_SESSION_ID, trace.session_id or None),
+                (LANGFUSE_TRACE_TAGS, trace.tags or None),
+            )
+        )
+
     @classmethod
     def _llm_call(cls, data: LLMCallSpanData) -> AttributeMap:
         return {
             **collect(cls._LLM_CALL_ATTRS, data),
+            **cls.trace_attributes(data.trace),
             **collect(cls._BLOB_ATTRS, data),
         }

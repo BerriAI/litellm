@@ -1,9 +1,9 @@
-import { screen, within } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { TeamData } from "./TeamInfo";
-import TeamMembersComponent from "./TeamMemberTab";
+import TeamMembersComponent, { seedMemberBudgetFields } from "./TeamMemberTab";
 
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
   useUISettings: vi.fn(),
@@ -166,6 +166,27 @@ describe("TeamMembersComponent", () => {
     const table = screen.getByRole("table");
     expect(table).toHaveTextContent("member");
     expect(table).toHaveTextContent("admin");
+  });
+
+  it("clears the member search when a different team is shown", () => {
+    const props = {
+      canEditTeam: false,
+      handleMemberDelete: mockHandleMemberDelete,
+      setSelectedEditMember: mockSetSelectedEditMember,
+      setIsEditMemberModalVisible: mockSetIsEditMemberModalVisible,
+      setIsAddMemberModalVisible: mockSetIsAddMemberModalVisible,
+    };
+    const { rerender } = renderWithProviders(<TeamMembersComponent teamData={createMockTeamData()} {...props} />);
+
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "user2" } });
+    expect(screen.queryByText("user1@test.com")).not.toBeInTheDocument();
+
+    const otherTeam = createMockTeamData({ team_id: "team-456" });
+    rerender(<TeamMembersComponent teamData={otherTeam} {...props} />);
+
+    expect(screen.getByTestId("datatable-search")).toHaveValue("");
+    expect(screen.getAllByText("user1@test.com").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("user2@test.com").length).toBeGreaterThanOrEqual(1);
   });
 
   it("should render Add Member button", () => {
@@ -357,6 +378,35 @@ describe("TeamMembersComponent", () => {
 
     const zeroLimitsMember = { user_id: "user1@test.com", max_budget_in_team: 0, tpm_limit: 0, rpm_limit: 0 };
     expect(mockSetSelectedEditMember).toHaveBeenCalledWith(expect.objectContaining(zeroLimitsMember));
+  });
+
+  it("seeds the edit payload with the stored temporary budget increase and expiry, keeping a 0 increase as 0", () => {
+    const budget = {
+      ...createMockTeamData().team_memberships[0].litellm_budget_table,
+      temp_budget_increase: 0,
+      temp_budget_expiry: "2030-01-02T03:04:00Z",
+    };
+
+    const seeded = {
+      user_id: "user1@test.com",
+      role: "member",
+      max_budget_in_team: 1000,
+      tpm_limit: 10000,
+      rpm_limit: 100,
+      budget_duration: null,
+      allowed_models: [],
+      temp_budget_increase: 0,
+      temp_budget_expiry: "2030-01-02T03:04:00Z",
+    };
+    expect(seedMemberBudgetFields({ user_id: "user1@test.com", role: "member" }, budget)).toStrictEqual(seeded);
+  });
+
+  it("seeds null temporary budget fields for a member without a budget row", () => {
+    expect(seedMemberBudgetFields({ user_id: "user2@test.com", role: "admin" }, undefined)).toMatchObject({
+      max_budget_in_team: null,
+      temp_budget_increase: null,
+      temp_budget_expiry: null,
+    });
   });
 
   it("should call setIsAddMemberModalVisible when Add Member button is clicked", async () => {

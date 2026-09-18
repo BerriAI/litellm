@@ -6,6 +6,7 @@ ai21.jamba-instruct-v1:0
 twelvelabs.pegasus-1-2-v1:0
 us.twelvelabs.pegasus-1-2-v1:0
 eu.twelvelabs.pegasus-1-2-v1:0
+global.twelvelabs.pegasus-1-2-v1:0
 amazon.titan-text-express-v1
 amazon.titan-text-lite-v1
 amazon.titan-text-premier-v1:0

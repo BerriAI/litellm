@@ -1,5 +1,5 @@
-"""The separate metrics server must aggregate PROMETHEUS_MULTIPROC_DIR, expose only /metrics, and follow its
-parent's lifetime.
+"""The separate metrics server must aggregate PROMETHEUS_MULTIPROC_DIR, expose /metrics plus a probe-friendly
+/health, and follow its parent's lifetime.
 
 Everything here runs on loopback against a child of this test process; no LLM keys or external network.
 """
@@ -91,7 +91,10 @@ def test_metrics_app_aggregates_multiproc_dir_and_reports_pid(tmp_path: Path, mo
     assert metrics.headers[PID_HEADER] == str(os.getpid())
     assert 'litellm_requests_metric_total{model="gpt-5"} 5.0' in metrics.text
 
-    assert client.get("/health").status_code == 404
+    health: Final = client.get("/health")
+    assert health.status_code == 200
+    assert health.json() == {"status": "healthy", "multiproc_dir": str(tmp_path)}
+    assert client.get("/docs").status_code == 404
 
     empty: Final = TestClient(build_metrics_app(str(other_dir))).get("/metrics")
     assert empty.status_code == 200

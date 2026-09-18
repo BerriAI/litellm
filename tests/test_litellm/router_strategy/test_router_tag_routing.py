@@ -3031,6 +3031,21 @@ def test_request_tags_after_router_consumption_drops_only_the_consumed_tags():
     assert _request_tags_after_router_consumption(partially_consumed, "gemini-flash") == ("deploy:us",)
 
 
+def test_request_tags_after_router_consumption_ignores_tags_merged_from_prior_deployments():
+    from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY, ROUTING_REQUEST_TAGS_METADATA_KEY
+    from litellm.router_strategy.tag_based_routing import _request_tags_after_router_consumption
+    from litellm.types.router import ConsumedRequestTagsStamp
+
+    metadata = {
+        "tags": ["route", "&region:eu", "free"],
+        ROUTING_REQUEST_TAGS_METADATA_KEY: ("route", "&region:eu"),
+        "inherited_tags": ["&region:eu"],
+        CONSUMED_REQUEST_TAGS_METADATA_KEY: ConsumedRequestTagsStamp(model_group="gemini-flash", tags=("route",)),
+    }
+    assert _request_tags_after_router_consumption(metadata, "gemini-flash") == ("&region:eu",)
+    assert _request_tags_after_router_consumption(metadata, "other-group") == ["route", "&region:eu"]
+
+
 @pytest.mark.asyncio()
 async def test_non_router_tags_still_pick_the_matching_tier_deployment():
     # tags=["route", "deploy:us"]: "route" picks the router and is spent there,

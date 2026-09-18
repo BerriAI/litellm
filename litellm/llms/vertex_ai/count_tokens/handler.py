@@ -20,7 +20,6 @@ class VertexAITokenCounter(GoogleAIStudioTokenCounter, VertexBase):
         vertex_credentials: Final = self.get_vertex_ai_credentials(litellm_params=litellm_params)
         vertex_project = self.get_vertex_ai_project(litellm_params=litellm_params)
         vertex_location: Final = self.get_vertex_ai_location(litellm_params=litellm_params)
-        should_use_v1beta1_features: Final = self.is_using_v1beta1_features(litellm_params)
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -37,7 +36,6 @@ class VertexAITokenCounter(GoogleAIStudioTokenCounter, VertexBase):
             stream=False,
             custom_llm_provider="vertex_ai",
             api_base=None,
-            should_use_v1beta1_features=should_use_v1beta1_features,
             mode="count_tokens",
         )
         headers = {

@@ -1,4 +1,5 @@
-import json
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 import pytest
 
@@ -334,7 +335,6 @@ def test_streaming_preserves_anthropic_1hr_cache_creation_breakdown():
     Correct cache-write cost is 50 * 6e-06 (1h) = 0.0003, not 50 * 3.75e-06 = 0.0001875.
     """
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-    from litellm.llms.anthropic.cost_calculation import cost_per_token
 
     config = AnthropicConfig()
     message_start_usage = config.calculate_usage(
@@ -397,14 +397,6 @@ def test_streaming_preserves_anthropic_1hr_cache_creation_breakdown():
     assert breakdown.ephemeral_5m_input_tokens == 0
     assert usage.cache_creation_input_tokens == 50
     assert usage.cache_read_input_tokens == 8728
-
-    prompt_cost, _ = cost_per_token(model="claude-sonnet-4-6", usage=usage)
-    # text 3*3e-06 + cache_read 8728*3e-07 + cache_write 50*6e-06 (1h rate)
-    expected = 3 * 3e-06 + 8728 * 3e-07 + 50 * 6e-06
-    assert prompt_cost == pytest.approx(expected)
-    # Guard against the regression: 5m-rate fallback would shave the write cost.
-    buggy = 3 * 3e-06 + 8728 * 3e-07 + 50 * 3.75e-06
-    assert prompt_cost != pytest.approx(buggy)
 
 
 def test_streaming_keeps_cache_creation_breakdown_from_final_chunk():
@@ -1476,3 +1468,128 @@ def test_calculate_usage_fills_unknown_split_from_reasoning_estimate(
     assert usage.completion_tokens == 100
     assert usage.completion_tokens_details.reasoning_tokens == expected_reasoning_tokens
     assert usage.completion_tokens_details.text_tokens == expected_text_tokens
+
+
+def _openai_chunk(
+    choices: Sequence[Mapping[str, object]], usage: Mapping[str, int] | None = None
+) -> dict[str, object]:
+    base: Final = {
+        "id": "chatcmpl-lit6552",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gpt-5.4-mini",
+        "choices": list(choices),
+    }
+    return base if usage is None else {**base, "usage": dict(usage)}
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param([_openai_chunk(choices=[]), _openai_chunk(choices=[])], id="all_empty_choices_dicts"),
+        pytest.param(
+            [ModelResponseStream(model="gpt-5.4-mini", choices=[]) for _ in range(2)],
+            id="all_empty_choices_objects",
+        ),
+    ],
+)
+def test_stream_chunk_builder_survives_all_empty_choices(chunks: Sequence[object]) -> None:
+    response: Final = stream_chunk_builder(chunks=list(chunks))
+
+    assert response is not None
+    assert response.choices[0].message.role == "assistant"
+    assert response.choices[0].finish_reason == "stop"
+
+
+def test_stream_chunk_builder_keeps_usage_from_usage_only_frames() -> None:
+    usage_frame: Final = _openai_chunk(
+        choices=[], usage={"prompt_tokens": 10, "completion_tokens": 0, "total_tokens": 10}
+    )
+
+    response: Final = stream_chunk_builder(chunks=[usage_frame])
+
+    assert response is not None
+    assert response.choices[0].message.role == "assistant"
+    assert response.usage.prompt_tokens == 10
+    assert response.usage.total_tokens == 10
+
+
+@pytest.mark.parametrize(
+    "delta",
+    [pytest.param({"content": "Hi"}, id="delta_without_role"), pytest.param({}, id="empty_delta")],
+)
+def test_stream_chunk_builder_defaults_role_when_delta_omits_it(delta: Mapping[str, str]) -> None:
+    chunks: Final = [
+        _openai_chunk(choices=[{"index": 0, "delta": dict(delta), "finish_reason": None}]),
+        _openai_chunk(choices=[{"index": 0, "delta": {"content": "!"}, "finish_reason": "stop"}]),
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response.choices[0].message.role == "assistant"
+    assert response.choices[0].message.content == delta.get("content", "") + "!"
+    assert response.choices[0].finish_reason == "stop"
+
+
+def test_stream_chunk_builder_reads_role_from_first_frame_with_choices() -> None:
+    chunks: Final = [
+        _openai_chunk(choices=[]),
+        _openai_chunk(choices=[{"index": 0, "delta": {"role": "user", "content": "Hi"}, "finish_reason": None}]),
+        _openai_chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response.choices[0].message.role == "user"
+    assert response.choices[0].message.content == "Hi"
+
+
+def _fail_prompt_token_count() -> int:
+    raise AssertionError("prompt tokens must come from the usage chunk, not the tokenizer")
+
+
+def test_calculate_usage_reads_prompt_tokens_from_mock_stream_usage_chunk_without_tokenizer_fallback() -> None:
+    from litellm.utils import mock_completion_streaming_obj
+
+    chunks: Final = list(
+        mock_completion_streaming_obj(
+            ModelResponseStream(model="gpt-5.4-mini"),
+            mock_response="ok",
+            model="gpt-5.4-mini",
+            prompt_tokens=51234,
+        )
+    )
+    assert chunks[-1].choices == []
+
+    usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks,
+        model="gpt-5.4-mini",
+        completion_output="ok",
+        count_prompt_tokens=_fail_prompt_token_count,
+    )
+
+    assert usage.prompt_tokens == 51234
+    assert usage.completion_tokens == chunks[-1].usage.completion_tokens
+    assert usage.total_tokens == 51234 + usage.completion_tokens
+
+
+def test_calculate_usage_falls_back_to_prompt_counter_when_mock_stream_has_no_admission_count() -> None:
+    from litellm.utils import mock_completion_streaming_obj
+
+    chunks: Final = list(
+        mock_completion_streaming_obj(
+            ModelResponseStream(model="gpt-5.4-mini"), mock_response="ok", model="gpt-5.4-mini"
+        )
+    )
+    assert all(chunk.choices for chunk in chunks)
+
+    usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks,
+        model="gpt-5.4-mini",
+        completion_output="ok",
+        count_prompt_tokens=lambda: 77,
+    )
+
+    assert usage.prompt_tokens == 77

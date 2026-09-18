@@ -39,6 +39,8 @@ def is_serializable(value):
 
 
 class LangsmithLogger(CustomBatchLogger):
+    preserve_events_added_during_flush = True
+
     def __init__(
         self,
         langsmith_api_key: str | None = None,

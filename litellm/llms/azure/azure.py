@@ -323,6 +323,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                         "api_version": api_version,
                         "api_base": api_base,
                         "complete_input_dict": data,
+                        "openai_sdk": True,
                     },
                 )
                 if not isinstance(max_retries, int):
@@ -429,6 +430,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     "api_base": api_base,
                     "acompletion": True,
                     "complete_input_dict": data,
+                    "openai_sdk": True,
                 },
             )
 
@@ -559,6 +561,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         headers, response = self.make_sync_azure_openai_chat_completion_request(
             azure_client=azure_client, data=data, timeout=timeout
         )
+        logging_obj.model_call_details["response_headers"] = headers
         streamwrapper: Final = CustomStreamWrapper(
             completion_stream=response,
             model=model,

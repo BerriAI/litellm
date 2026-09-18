@@ -215,3 +215,11 @@ class TestMetadataFallsBackToLitellmMetadata:
         assert result["metadata"] is not litellm_metadata
         result["metadata"].pop("trace_id")
         assert litellm_metadata == {"trace_id": "trace-1"}
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [("true", True), ("false", False), (" TRUE ", True), (True, True), (None, None), ("os.environ/DROP_PARAMS", None)],
+)
+def test_drop_params_strings_reach_litellm_params_as_flags(value, expected):
+    assert get_litellm_params(drop_params=value)["drop_params"] is expected

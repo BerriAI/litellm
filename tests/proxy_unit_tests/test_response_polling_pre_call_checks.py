@@ -87,7 +87,7 @@ class TestSkipPreCallLogic:
                 await processor.base_process_llm_request(
                     request=MagicMock(spec=Request),
                     fastapi_response=MagicMock(spec=Response),
-                    user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                    user_api_key_dict=UserAPIKeyAuth(),
                     route_type="aresponses",
                     proxy_logging_obj=mock_proxy_logging,
                     llm_router=MagicMock(),

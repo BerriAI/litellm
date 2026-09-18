@@ -20,21 +20,25 @@ const DEFAULT_PROPS = {
   onSuccess: vi.fn(),
 };
 
-const URL_PLACEHOLDER = "https://github.com/org/repo or https://gitlab.com/org/repo";
+const URL_PLACEHOLDER = "https://github.com/org/repo or https://bucket.s3.amazonaws.com/my-skill.zip";
 const SUBPATH_PLACEHOLDER = "plugins/my-skill";
+const SHA256_PLACEHOLDER = "64 hex characters";
+const S3_ZIP_URL = "https://skills-bucket.s3.us-east-1.amazonaws.com/plugins/s3-skill-1.0.0.zip";
+const DIGEST = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 describe("AddPluginForm", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("renders the host-agnostic repository URL input and subfolder field", () => {
+  it("renders the host-agnostic source URL input and subfolder field, hiding the digest until a zip is entered", () => {
     renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
 
-    expect(screen.getByText("Repository URL")).toBeInTheDocument();
+    expect(screen.getByText("Source URL")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(URL_PLACEHOLDER)).toBeInTheDocument();
     expect(screen.getByText("Subfolder path (Optional)")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(SUBPATH_PLACEHOLDER)).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(SHA256_PLACEHOLDER)).not.toBeInTheDocument();
   });
 
   it("shows GitHub repo preview for a plain repo URL", async () => {
@@ -253,6 +257,85 @@ describe("AddPluginForm", () => {
         }),
       );
     });
+  });
+
+  it("shows a zip archive preview, disables the subfolder field, and reveals the digest field", async () => {
+    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
+
+    await typeUrl(S3_ZIP_URL);
+
+    expect(await screen.findByText(/Zip archive/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(SUBPATH_PLACEHOLDER)).toBeDisabled();
+    expect(screen.getByText("A zip archive is installed as a whole, so this field is disabled")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(SHA256_PLACEHOLDER)).toBeInTheDocument();
+    expect((screen.getByPlaceholderText("my-skill") as HTMLInputElement).value).toBe("s3-skill-1-0-0");
+  });
+
+  it("submits an archive source without a digest when the field is left empty", async () => {
+    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
+
+    await typeUrl(S3_ZIP_URL);
+    await submit();
+
+    await waitFor(() => {
+      expect(mockRegister).toHaveBeenCalledWith(
+        "sk-test",
+        expect.objectContaining({ source: { source: "archive", url: S3_ZIP_URL } }),
+      );
+    });
+  });
+
+  it("submits an archive source pinned to the lowercased digest", async () => {
+    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
+
+    await typeUrl(S3_ZIP_URL);
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText(SHA256_PLACEHOLDER), {
+        target: { value: ` ${DIGEST.toUpperCase()} ` },
+      });
+    });
+    await submit();
+
+    await waitFor(() => {
+      expect(mockRegister).toHaveBeenCalledWith(
+        "sk-test",
+        expect.objectContaining({ source: { source: "archive", url: S3_ZIP_URL, sha256: DIGEST } }),
+      );
+    });
+  });
+
+  it("drops the digest once the archive URL changes so a stale checksum is never sent for a new file", async () => {
+    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
+
+    await typeUrl(S3_ZIP_URL);
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText(SHA256_PLACEHOLDER), { target: { value: DIGEST } });
+    });
+    const otherZipUrl = S3_ZIP_URL.replace("1.0.0", "1.1.0");
+    await typeUrl(otherZipUrl);
+
+    expect(screen.getByPlaceholderText(SHA256_PLACEHOLDER)).toHaveValue("");
+    await submit();
+
+    await waitFor(() => {
+      expect(mockRegister).toHaveBeenCalledWith(
+        "sk-test",
+        expect.objectContaining({ source: { source: "archive", url: otherZipUrl } }),
+      );
+    });
+  });
+
+  it("blocks submission and shows the digest error for a malformed sha256", async () => {
+    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
+
+    await typeUrl(S3_ZIP_URL);
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText(SHA256_PLACEHOLDER), { target: { value: "not-a-digest" } });
+    });
+    await submit();
+
+    expect(await screen.findByText("SHA-256 must be a 64-character hex digest")).toBeInTheDocument();
+    expect(mockRegister).not.toHaveBeenCalled();
   });
 
   it("surfaces the backend error message when registration fails", async () => {

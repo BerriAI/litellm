@@ -7,9 +7,10 @@ import { CellTooltip, DateCell, IdCell, MoneyCell, StatusBadge } from "@/compone
 import { getSpendString } from "@/utils/dataUtils";
 
 import { getProviderLogoAndName } from "../provider_info_helpers";
+import { getBatchIdFromRequestId, getBatchRequestCounts, isBatchCallType } from "./batchLogUtils";
 import type { LogEntry } from "./columns";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
-import { AgentBadge, AgentIcon, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
+import { AgentBadge, AgentIcon, BatchBadge, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
 
 export interface RequestLogsTableColumnsDeps {
   onKeyHashClick: (keyHash: string) => void;
@@ -63,6 +64,9 @@ export const getRequestLogsTableColumns = ({
       const sessionAgentCount = log.session_agent_count ?? (isAgent ? sessionCount : 0);
       const sessionMcpCount = log.mcp_tool_call_count ?? (isMcp ? sessionCount : 0);
 
+      if (isBatchCallType(log.call_type)) {
+        return <BatchBadge />;
+      }
       if (sessionCount <= 1) {
         if (isMcp) return <McpBadge />;
         if (isAgent) return <AgentBadge />;
@@ -106,6 +110,17 @@ export const getRequestLogsTableColumns = ({
     cell: ({ row }) => {
       const status = readMetaString(row.original.metadata, "status") ?? "Success";
       const isSuccess = status.toLowerCase() !== "failure";
+      const batchCounts = isSuccess ? getBatchRequestCounts(row.original.metadata) : undefined;
+      if (batchCounts && batchCounts.failed > 0) {
+        const total = batchCounts.successful + batchCounts.failed;
+        return (
+          <StatusBadge
+            tone="warning"
+            label={`${batchCounts.successful}/${total} succeeded`}
+            tooltip={`${batchCounts.failed} of ${total} batch requests failed`}
+          />
+        );
+      }
       return <StatusBadge tone={isSuccess ? "success" : "error"} label={isSuccess ? "Success" : "Failure"} />;
     },
   },
@@ -122,7 +137,19 @@ export const getRequestLogsTableColumns = ({
     accessorKey: "request_id",
     header: "Request ID",
     enableSorting: false,
-    cell: ({ row }) => <IdCell value={row.original.request_id} variant="plain" />,
+    cell: ({ row }) => {
+      const log = row.original;
+      const batchId = isBatchCallType(log.call_type) ? getBatchIdFromRequestId(log.request_id) : undefined;
+      if (batchId) {
+        return (
+          <div className="flex flex-col">
+            <IdCell value={batchId} variant="plain" copyable tooltip={`Batch ${batchId} (row: ${log.request_id})`} />
+            <span className="text-[10px] text-muted-foreground">batch cost</span>
+          </div>
+        );
+      }
+      return <IdCell value={log.request_id} variant="plain" />;
+    },
   },
   {
     id: "spend",
@@ -136,7 +163,8 @@ export const getRequestLogsTableColumns = ({
       const mcpCount = log.mcp_tool_call_count || 0;
       const mcpSpend = log.mcp_tool_call_spend || 0;
       const isMultiCallSession = (log.session_total_count || 1) > 1;
-      const spend = isMultiCallSession && log.session_total_spend != null ? log.session_total_spend : log.spend;
+      const sessionTotalSpend = isMultiCallSession ? log.session_total_spend : undefined;
+      const spend = sessionTotalSpend ?? log.spend;
       const money = (
         <span>
           <MoneyCell value={spend} decimals={6} />
@@ -146,7 +174,7 @@ export const getRequestLogsTableColumns = ({
       return (
         <div className="flex flex-col items-end">
           {spend ? <CellTooltip content={`$${String(spend)}`} trigger={money} /> : money}
-          {isMultiCallSession && <span className="text-[10px] text-muted-foreground">session total</span>}
+          {sessionTotalSpend != null && <span className="text-[10px] text-muted-foreground">session total</span>}
           {mcpCount > 0 && mcpSpend > 0 && (
             <span className="text-[10px] text-warning">
               incl. {getSpendString(mcpSpend)} from {mcpCount} MCP
@@ -163,13 +191,19 @@ export const getRequestLogsTableColumns = ({
     enableSorting: true,
     meta: { numeric: true },
     cell: ({ row }) => {
-      const ms = row.original.request_duration_ms;
+      const log = row.original;
+      const isMultiCallSession = (log.session_total_count || 1) > 1;
+      const sessionTotalMs = isMultiCallSession ? log.session_total_duration_ms : undefined;
+      const ms = sessionTotalMs ?? log.request_duration_ms;
       if (ms == null) return <span>-</span>;
       return (
-        <CellTooltip
-          content={`${ms}ms`}
-          trigger={<span className="max-w-[15ch] truncate inline-block">{(ms / 1000).toFixed(2)}</span>}
-        />
+        <div className="flex flex-col items-end">
+          <CellTooltip
+            content={`${ms}ms`}
+            trigger={<span className="max-w-[15ch] truncate inline-block">{(ms / 1000).toFixed(2)}</span>}
+          />
+          {sessionTotalMs != null && <span className="text-[10px] text-muted-foreground">session total</span>}
+        </div>
       );
     },
   },

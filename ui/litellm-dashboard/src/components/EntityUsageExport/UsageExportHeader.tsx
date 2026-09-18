@@ -34,6 +34,7 @@ interface UsageExportHeaderProps {
   customTitle?: string;
   compactLayout?: boolean;
   teams?: Team[];
+  exportBlockedReason?: string;
 }
 
 const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
@@ -50,6 +51,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   customTitle,
   compactLayout = false,
   teams = [],
+  exportBlockedReason,
 }) => {
   const anchor = useComboboxAnchor();
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -121,10 +123,12 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
           )}
 
           <div className="justify-self-end">
-            <Button onClick={() => setIsExportModalOpen(true)}>
-              <Download />
-              Export Data
-            </Button>
+            <span title={exportBlockedReason}>
+              <Button disabled={exportBlockedReason !== undefined} onClick={() => setIsExportModalOpen(true)}>
+                <Download />
+                Export Data
+              </Button>
+            </span>
           </div>
         </div>
       </div>

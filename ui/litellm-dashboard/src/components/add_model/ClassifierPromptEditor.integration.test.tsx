@@ -1,6 +1,6 @@
 import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
 import { ClassificationRubric } from "./ComplexityRouterConfig";
 vi.mock(
@@ -26,7 +26,7 @@ beforeEach(() => {
 
 interface OpenEditorOptions {
   systemPrompt?: string;
-  onChange?: ReturnType<typeof vi.fn>;
+  onChange?: Mock;
   contextWindowSize?: number;
   tierLabels?: Record<string, string>;
   classificationRubric?: ClassificationRubric;
