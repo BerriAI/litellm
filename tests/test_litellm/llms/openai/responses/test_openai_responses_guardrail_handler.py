@@ -3646,6 +3646,23 @@ class TestResponsesScopingFlags:
         assert guardrail.seen == []
 
     @pytest.mark.asyncio
+    async def test_structured_messages_rewrite_of_a_screenshot_output_keeps_the_screenshot(self):
+        handler = OpenAIResponsesHandler()
+        screenshot = {"type": "computer_screenshot", "image_url": "data:image/png;base64,QUJD"}
+        request = {
+            "model": "gpt-5.4",
+            "input": [
+                {"role": "user", "content": "Click the button"},
+                {"type": "computer_call_output", "call_id": "call_s1", "output": screenshot},
+            ],
+        }
+
+        result = await handler.process_input_messages(data=request, guardrail_to_apply=ToolOutputRewriteGuardrail())
+
+        assert result["input"][1] == {"type": "computer_call_output", "call_id": "call_s1", "output": screenshot}
+        assert result["input"][0] == {"role": "user", "content": "Click the button"}
+
+    @pytest.mark.asyncio
     async def test_skip_tool_hides_custom_tool_output_items(self):
         handler = OpenAIResponsesHandler()
         guardrail = self._scoped_guardrail(skip_tool_message_in_guardrail=True)

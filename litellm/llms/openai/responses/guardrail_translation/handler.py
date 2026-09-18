@@ -251,8 +251,11 @@ def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapp
     field: Final = _item_rewrite_field(item)
     if field is None or not isinstance(rewritten, Mapping):
         return None
+    original: Final = item.get(field)
+    if isinstance(original, Mapping):
+        return item
     rewritten_content: Final = rewritten.get("content")
-    if isinstance(item.get(field), str) and isinstance(rewritten_content, str):
+    if isinstance(original, str) and isinstance(rewritten_content, str):
         return {**item, field: rewritten_content}  # mutable-ok: request input items must stay JSON-plain dicts
     rewritten_row: Final = cast("AllMessageValues", rewritten)  # cast-ok: guardrails hand back chat-shaped rows
     converted_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
