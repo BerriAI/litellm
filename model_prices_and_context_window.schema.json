@@ -375,6 +375,10 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
+        "input_cost_per_video_token": {
+          "type": "number",
+          "minimum": 0
+        },
         "input_dbu_cost_per_token": {
           "type": "number",
           "minimum": 0
