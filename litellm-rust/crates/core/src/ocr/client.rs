@@ -1,3 +1,4 @@
+use litellm_auth_gcp::VertexAuth;
 use litellm_http::{HttpClientConfig, HttpClientPool};
 use litellm_llms::{
     base_llm::ocr::{error::Error, transformation::LiteLLMOcrResponse},
@@ -19,7 +20,8 @@ pub async fn perform(
 pub async fn ocr(
     pool: &HttpClientPool,
     config: &HttpClientConfig,
+    vertex_auth: VertexAuth,
     request: LiteLLMOcrRequest,
 ) -> Result<LiteLLMOcrResponse, Error> {
-    perform(&OcrClient::new(pool, config)?, request).await
+    perform(&OcrClient::new(pool, config, vertex_auth)?, request).await
 }

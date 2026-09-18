@@ -42,12 +42,16 @@ pub struct OcrClient {
 }
 
 impl OcrClient {
-    pub fn new(pool: &HttpClientPool, config: &HttpClientConfig) -> Result<Self, transport::Error> {
+    pub fn new(
+        pool: &HttpClientPool,
+        config: &HttpClientConfig,
+        vertex_auth: VertexAuth,
+    ) -> Result<Self, transport::Error> {
         Ok(Self {
             provider_http: pool.client(config, ClientVariant::Provider)?,
             polling_http: pool.client(config, ClientVariant::NoRedirect)?,
             document_fetcher: MediaFetcher::new(pool, config)?,
-            vertex_auth: VertexAuth::default(),
+            vertex_auth,
         })
     }
 
