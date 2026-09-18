@@ -81,6 +81,9 @@ const readToolPermissions = (raw: unknown): unknown | undefined => {
   return Object.keys(permissions as object).length > 0 ? permissions : undefined;
 };
 
+export const isServiceAccountOwner = (keyOwner: string): boolean =>
+  keyOwner === "service_account" || keyOwner === "agent";
+
 const parseMetadata = (raw: unknown): unknown => {
   try {
     return JSON.parse((raw as string) || "{}");
@@ -92,7 +95,7 @@ const parseMetadata = (raw: unknown): unknown => {
 
 const buildMetadataJson = (values: Record<string, unknown>, input: KeyCreateInput): string => {
   const parsed = parseMetadata(values.metadata);
-  if (input.keyOwner === "service_account") {
+  if (isServiceAccountOwner(input.keyOwner)) {
     (parsed as Record<string, unknown>).service_account_id = values.key_alias;
   }
   const logged =
@@ -199,7 +202,7 @@ export const buildKeyCreatePayload = (input: KeyCreateInput): KeyPayloadResult =
 
   return {
     kind: "ok",
-    endpoint: input.keyOwner === "service_account" ? "service_account" : "standard",
+    endpoint: isServiceAccountOwner(input.keyOwner) ? "service_account" : "standard",
     payload: {
       ...withoutKeys(values, dropped),
       ...(values.organization_id === null && { organization_id: undefined }),

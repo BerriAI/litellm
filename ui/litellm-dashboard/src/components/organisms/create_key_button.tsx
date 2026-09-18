@@ -79,7 +79,7 @@ import {
 import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
-import { buildKeyCreatePayload, type KeyCreateInput } from "./createKeyPayload";
+import { buildKeyCreatePayload, isServiceAccountOwner, type KeyCreateInput } from "./createKeyPayload";
 import { simplifyKeyGenerateError } from "./utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -802,9 +802,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   }
                   name="team_id"
                   className="mt-4"
-                  required={keyOwner === "service_account"}
-                  rules={requiredRule(keyOwner === "service_account", "Please select a team for the service account")}
-                  help={keyOwner === "service_account" ? "required" : ""}
+                  required={isServiceAccountOwner(keyOwner)}
+                  rules={requiredRule(isServiceAccountOwner(keyOwner), "Please select a team for the service account")}
+                  help={isServiceAccountOwner(keyOwner) ? "required" : ""}
                 >
                   {(control) => (
                     <TeamDropdown
@@ -877,7 +877,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     required
                     rules={requiredRule(
                       true,
-                      `Please input a ${keyOwner === "you" ? "key name" : "service account ID"}`,
+                      `Please input a ${
+                        keyOwner === "you" || keyOwner === "another_user" ? "key name" : "service account ID"
+                      }`,
                     )}
                     help="required"
                   >

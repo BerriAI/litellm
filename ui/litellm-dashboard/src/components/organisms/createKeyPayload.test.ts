@@ -146,10 +146,17 @@ describe("key ownership", () => {
   });
 
   it("adds the selected agent id for an agent-owned key", () => {
-    const expected = { key_alias: "my-key", agent_id: "agent-1", duration: null, metadata: "{}" };
-    expect(payloadOf(build({ key_alias: "my-key" }, { keyOwner: "agent", selectedAgentId: "agent-1" }))).toStrictEqual(
-      expected,
-    );
+    const result = build({ key_alias: "my-key" }, { keyOwner: "agent", selectedAgentId: "agent-1" });
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") throw new Error("unreachable");
+    expect(result.endpoint).toBe("service_account");
+    const expected = {
+      key_alias: "my-key",
+      agent_id: "agent-1",
+      duration: null,
+      metadata: '{"service_account_id":"my-key"}',
+    };
+    expect(result.payload).toStrictEqual(expected);
   });
 
   it("reports agent_not_selected instead of building a payload when no agent is selected", () => {

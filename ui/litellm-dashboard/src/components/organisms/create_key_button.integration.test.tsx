@@ -83,7 +83,7 @@ vi.mock("../networking", async (importOriginal) => {
     getPromptsList: vi.fn().mockResolvedValue({ prompts: [] }),
     getPossibleUserRoles: vi.fn().mockResolvedValue({}),
     userFilterUICall: vi.fn().mockResolvedValue([]),
-    getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
+    getAgentsList: vi.fn().mockResolvedValue({ agents: [{ agent_id: "agent-1", agent_name: "test-agent" }] }),
     getClaudeCodePluginsList: vi.fn().mockResolvedValue({
       plugins: [
         { name: "public-skill", enabled: true },
@@ -646,6 +646,29 @@ describe("CreateKey", () => {
       const payload = vi.mocked(keyCreateServiceAccountCall).mock.calls[0][1] as Record<string, unknown>;
       expect(JSON.parse(String(payload.metadata))).toStrictEqual({ service_account_id: "svc-account-1" });
       expect(payload).not.toHaveProperty("user_id");
+    });
+
+    it("routes an agent through the service account endpoint with the selected agent", async () => {
+      state.teams = [{ team_id: "team-1", team_alias: "Team One", models: [] }];
+      await openModal({ teams: state.teams as unknown as Team[] });
+      await userEvent.click(screen.getByRole("radio", { name: /^Agent/ }));
+
+      await userEvent.click(await screen.findByPlaceholderText("Select an agent"));
+      await userEvent.click(await screen.findByRole("option", { name: "test-agent" }));
+      await userEvent.click(await screen.findByLabelText("Team"));
+      await userEvent.click(await screen.findByRole("option", { name: /Team One/ }));
+      await userEvent.type(await screen.findByLabelText(/Service Account ID/), "agent-key");
+
+      await submit();
+
+      await waitFor(() => {
+        expect(vi.mocked(keyCreateServiceAccountCall)).toHaveBeenCalled();
+      });
+      expect(vi.mocked(keyCreateCall)).not.toHaveBeenCalled();
+      const payload = vi.mocked(keyCreateServiceAccountCall).mock.calls[0][1] as Record<string, unknown>;
+      expect(payload).toMatchObject({ agent_id: "agent-1" });
+      expect(payload).not.toHaveProperty("user_id");
+      expect(JSON.parse(String(payload.metadata))).toStrictEqual({ service_account_id: "agent-key" });
     });
   });
 
