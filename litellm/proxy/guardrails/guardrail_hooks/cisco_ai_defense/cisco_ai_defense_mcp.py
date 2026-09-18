@@ -34,9 +34,11 @@ def _serialize_mcp_content_item(item: object) -> dict[str, object]:
     model_dump: Final = getattr(item, "model_dump", None)
     if callable(model_dump):
         try:
-            return dict(model_dump(exclude_none=True))
+            dumped: Final[dict[str, object]] = model_dump(exclude_none=True)
+            return dict(dumped)
         except TypeError:
-            return dict(model_dump())
+            dumped_fallback: Final[dict[str, object]] = model_dump()
+            return dict(dumped_fallback)
     text: Final = getattr(item, "text", None)
     if isinstance(text, str):
         return {"type": getattr(item, "type", "text"), "text": text}
@@ -507,8 +509,7 @@ class _CiscoAIDefenseMcpMixin:
         source: object = None,
     ) -> dict[str, object]:
         result: Final[dict[str, object]] = {"content": [_serialize_mcp_content_item(item) for item in content]}
-        for key in ("structuredContent", "isError"):
-            snake_key: Final = "structured_content" if key == "structuredContent" else "is_error"
+        for key, snake_key in (("structuredContent", "structured_content"), ("isError", "is_error")):
             value = source.get(key) if isinstance(source, dict) else getattr(source, snake_key, None)
             if value is not None and (key != "isError" or isinstance(value, bool)):
                 result[key] = value

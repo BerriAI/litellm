@@ -197,7 +197,9 @@ class UpstreamCredentialProvider:
                 return Error(CredError.of_not_implemented("api_key BYOK source not implemented yet"))
         assert_never(config.key_source)
 
-    async def _id_jag(self, subject: Subject, server: ServerSpec, config: IdJagConfig) -> Result[httpx2.Auth, CredError]:
+    async def _id_jag(
+        self, subject: Subject, server: ServerSpec, config: IdJagConfig
+    ) -> Result[httpx2.Auth, CredError]:
         match await self._id_jag_subject_token(subject):
             case Error(err):
                 return Error(err)

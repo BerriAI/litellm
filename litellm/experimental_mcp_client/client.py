@@ -14,18 +14,16 @@ from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypeVar
 
 import httpx2
-from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from mcp import ClientSession, MCPError, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
+from mcp.shared._stream_protocols import ReadStream, WriteStream
 from mcp.shared.message import SessionMessage
-from typing_extensions import Unpack
 
 _TransportStreams: TypeAlias = tuple[
-    MemoryObjectReceiveStream[SessionMessage | Exception],
-    MemoryObjectSendStream[SessionMessage],
-    Unpack[tuple[object, ...]],
+    ReadStream[SessionMessage | Exception],
+    WriteStream[SessionMessage],
 ]
 _TransportContext: TypeAlias = AbstractAsyncContextManager[_TransportStreams]
 
@@ -320,7 +318,9 @@ class MCPClient:
 
     async def prepare_request_auth(self) -> httpx2.Request:
         """Preview the authenticated request without sending it, closing the auth flow afterwards."""
-        request: Final = httpx2.Request("POST", self.server_url or "http://localhost/", headers=self._get_auth_headers())
+        request: Final = httpx2.Request(
+            "POST", self.server_url or "http://localhost/", headers=self._get_auth_headers()
+        )
         if self._resolved_auth is None:
             return request
         flow: Final = self._resolved_auth.async_auth_flow(request)
@@ -441,7 +441,8 @@ class MCPClient:
         transport: Final = await transport_ctx.__aenter__()
         in_flight_error: BaseException | None = None
         try:
-            read_stream, write_stream = transport[0], transport[1]
+            read_stream: Final = transport[0]
+            write_stream: Final = transport[1]
             stream_error: Final[asyncio.Future[Exception]] = asyncio.get_running_loop().create_future()
 
             async def receive_message(
@@ -917,7 +918,7 @@ class MCPClient:
         async def _list_resource_templates_operation(session: ClientSession) -> ListResourceTemplatesResult:
             capabilities: Final = session.server_capabilities
             if capabilities is not None and capabilities.resources is None:
-                return ListResourceTemplatesResult(resource_templates=[])
+                return ListResourceTemplatesResult(resource_templates=[])  # mutable-ok: MCP result payload
             try:
                 return await session.list_resource_templates()
             except MCPError as error:
@@ -926,7 +927,7 @@ class MCPClient:
                 verbose_logger.debug(
                     "MCP client list_resource_templates is unsupported by %s: %s", self.server_url or "stdio", error
                 )
-                return ListResourceTemplatesResult(resource_templates=[])
+                return ListResourceTemplatesResult(resource_templates=[])  # mutable-ok: MCP result payload
 
         try:
             result: Final = await self.run_with_session(_list_resource_templates_operation)

@@ -23,6 +23,7 @@ active_mcp_request_ctx_var: Final[ContextVar["ServerRequestContext | None"]] = C
 def get_active_mcp_request_ctx() -> "ServerRequestContext | None":
     return active_mcp_request_ctx_var.get()
 
+
 # Set server-side in proxy_server.py route handlers when a request arrives via
 # /toolset/{name}/mcp or the toolset fallback in dynamic_mcp_route.
 # Never populated from client-supplied headers.
