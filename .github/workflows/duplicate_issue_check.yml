@@ -98,8 +98,8 @@ jobs:
           codex-args: '["-c", "sandbox_workspace_write.network_access=true"]'
           model: ${{ vars.DUPLICATE_CHECK_MODEL }}
           codex-version: "0.154.0"
-          # Issue authors have no write access and the action refuses them by default; the
-          # prompt is fixed, the sandbox read-only, and the only token is read-only on a public repo
+          # Issue authors have no write access and the action refuses them by default; the prompt is
+          # fixed, writes stay inside the throwaway checkout, and the only token is read-only on a public repo
           allow-users: "*"
 
       - name: Summary
