@@ -15133,11 +15133,23 @@ def _deployment_matches_allowed_model_names(model: dict[str, JsonValue], allowed
     return isinstance(team_public_model_name, str) and team_public_model_name in allowed_model_names
 
 
-def _get_v1_model_info_allowed_model_names(
+async def _get_v1_model_info_allowed_model_names(
     user_api_key_dict: UserAPIKeyAuth,
     llm_router: Router,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache | None,
+    proxy_logging_obj: ProxyLogging | None,
 ) -> set[str] | None:
-    """Return key/team allowlisted public model names, or None if unrestricted."""
+    """Return key/team allowlisted public model names, or None if unrestricted.
+
+    Delegates to ``get_available_models_for_user`` — the same resolver
+    ``/v1/models`` uses — so DB-backed access-group grants
+    (``team.access_group_ids`` / key ``access_group_ids`` ->
+    ``LiteLLM_AccessGroupTable.access_model_names``) are expanded here too.
+    Before this, a team whose only access to a model was via an access group
+    got an allowlist missing those models and `/model/info` returned
+    `{"data": []}` while `/v1/models` listed them (#41730).
+    """
     model_access_groups: Final = llm_router.get_model_access_groups()
     proxy_model_list: Final = llm_router.get_model_names()
     key_models: Final = get_key_models(
@@ -15152,17 +15164,19 @@ def _get_v1_model_info_allowed_model_names(
     )
     if not key_models and not team_models:
         return None
-    return set(
-        get_complete_model_list(
-            key_models=key_models,
-            team_models=team_models,
-            proxy_model_list=proxy_model_list,
-            user_model=user_model,
-            infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
-            llm_router=llm_router,
-            return_wildcard_routes=False,
-        )
+
+    from litellm.proxy.utils import get_available_models_for_user
+
+    available_models: Final = await get_available_models_for_user(
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+        general_settings=general_settings,
+        user_model=user_model,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
     )
+    return set(available_models)
 
 
 def _filter_v1_model_info_deployments(
@@ -15370,9 +15384,12 @@ async def model_info_v1(
 
     all_models = expand_wildcard_deployments_for_model_info(all_models)
 
-    allowed_model_names: Final = _get_v1_model_info_allowed_model_names(
+    allowed_model_names: Final = await _get_v1_model_info_allowed_model_names(
         user_api_key_dict=user_api_key_dict,
         llm_router=llm_router,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     all_models = _filter_v1_model_info_deployments(

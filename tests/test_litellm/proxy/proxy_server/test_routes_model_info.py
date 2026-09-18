@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import litellm
@@ -458,7 +459,7 @@ def test_model_info_id_lookup_reports_the_same_cost_as_the_list(
     _invalidate_model_cost_lowercase_map()
 
 
-def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):
+async def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):
     from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
     from litellm.proxy.auth import model_checks
 
@@ -478,12 +479,15 @@ def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch
     monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
 
     expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info([deployment])
-    allowed_model_names = proxy_server._get_v1_model_info_allowed_model_names(
+    allowed_model_names = await proxy_server._get_v1_model_info_allowed_model_names(
         user_api_key_dict=UserAPIKeyAuth(
             api_key="sk-test",
             models=[SpecialModelNames.all_proxy_models.value],
         ),
         llm_router=router,
+        prisma_client=None,
+        user_api_key_cache=None,
+        proxy_logging_obj=None,
     )
 
     result = proxy_server._filter_v1_model_info_deployments(
@@ -593,6 +597,161 @@ def test_model_info_team_key_cannot_see_other_teams_byok_model(
 
 
 # ---------------------------------------------------------------------------
+# GET /model/info — DB-backed access-group grants (issue #41730)
+# ---------------------------------------------------------------------------
+
+_ACCESS_GROUP_ID = "ag-1"
+_ACCESS_GROUP_NAME = "team-models-group"
+_ACCESS_GROUPED_MODEL = "gpt-4o"
+_UNGROUPED_MODEL = "other-model"
+_ACCESS_GROUP_TEAM_ID = "team-access-group"
+
+
+@pytest.fixture
+def db_access_group_router(monkeypatch):
+    """Router with one grouped and one ungrouped deployment; the group's
+    membership lives in LiteLLM_AccessGroupTable (DB), not in deployment
+    `model_info.access_groups` tags, so the router's own access-group dict
+    is empty."""
+    deployments = [
+        {
+            "model_name": _ACCESS_GROUPED_MODEL,
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"id": "dep-grouped"},
+        },
+        {
+            "model_name": _UNGROUPED_MODEL,
+            "litellm_params": {"model": "openai/gpt-4o-mini"},
+            "model_info": {"id": "dep-other"},
+        },
+    ]
+    router = MagicMock()
+    router.model_list = deployments
+    router.get_model_list_from_model_alias = MagicMock(return_value=[])
+    router.get_model_names = MagicMock(return_value=[_ACCESS_GROUPED_MODEL, _UNGROUPED_MODEL])
+    router.get_model_access_groups = MagicMock(return_value={})
+    router.get_model_ids = MagicMock(return_value=[])
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", deployments)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    yield router
+
+
+@pytest.fixture
+def db_access_group_grants(monkeypatch):
+    """Fake the DB/cache seam for a team attached to access group `ag-1`:
+    the team row carries `access_group_ids=["ag-1"]` and the group's row
+    grants `access_model_names=["gpt-4o"]` — exactly what
+    `get_available_models_for_user` (the /v1/models resolver) reads."""
+    from types import SimpleNamespace
+
+    from litellm.models.team import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.auth import auth_checks
+
+    team_object = LiteLLM_TeamTableCachedObj(
+        team_id=_ACCESS_GROUP_TEAM_ID,
+        models=[_ACCESS_GROUP_NAME],
+        access_group_ids=[_ACCESS_GROUP_ID],
+    )
+
+    async def fake_get_team_object(
+        team_id, prisma_client=None, user_api_key_cache=None, proxy_logging_obj=None, **kwargs
+    ):
+        if team_id == _ACCESS_GROUP_TEAM_ID:
+            return team_object
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    async def fake_get_access_object(
+        access_group_id, prisma_client=None, user_api_key_cache=None, proxy_logging_obj=None
+    ):
+        if access_group_id == _ACCESS_GROUP_ID:
+            return SimpleNamespace(access_model_names=[_ACCESS_GROUPED_MODEL])
+        raise HTTPException(status_code=404, detail="Access group not found")
+
+    monkeypatch.setattr(auth_checks, "get_team_object", fake_get_team_object)
+    monkeypatch.setattr(auth_checks, "get_access_object", fake_get_access_object)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", MagicMock())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+
+
+@pytest.mark.parametrize("path", ["/v1/model/info", "/model/info"])
+def test_model_info_includes_models_granted_via_db_access_groups(
+    client, auth_as, db_access_group_router, db_access_group_grants, mock_prisma, monkeypatch, path
+):
+    """Regression for #41730: a team whose models list only names an access
+    group (membership stored in LiteLLM_AccessGroupTable, resolved from
+    team.access_group_ids) saw `{"data": []}` here while /v1/models listed
+    the group's members. /model/info must resolve DB access-group grants the
+    same way /v1/models does.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    mock_prisma.db.litellm_usertable.find_unique.return_value = None
+
+    with auth_as(
+        role=LitellmUserRoles.INTERNAL_USER,
+        user_id=None,
+        team_id=_ACCESS_GROUP_TEAM_ID,
+        team_models=[_ACCESS_GROUP_NAME],
+    ):
+        response = client.get(path)
+
+    assert response.status_code == 200
+    surfaced_names = [m.get("model_name") for m in response.json()["data"]]
+    assert _ACCESS_GROUPED_MODEL in surfaced_names
+    assert _UNGROUPED_MODEL not in surfaced_names
+
+
+@pytest.mark.parametrize("path", ["/v1/model/info", "/model/info"])
+def test_model_info_still_expands_config_tagged_access_groups(client, auth_as, mock_prisma, monkeypatch, path):
+    """Control for the #41730 fix: groups tagged on deployments
+    (`model_info.access_groups`, visible via the router's own
+    get_model_access_groups) keep expanding for a team that names the group —
+    this path worked before the fix and must not regress."""
+    from litellm.proxy._types import LitellmUserRoles
+
+    tagged = {
+        "model_name": _ACCESS_GROUPED_MODEL,
+        "litellm_params": {"model": "openai/gpt-4o"},
+        "model_info": {"id": "dep-grouped", "access_groups": ["config-group"]},
+    }
+    untagged = {
+        "model_name": _UNGROUPED_MODEL,
+        "litellm_params": {"model": "openai/gpt-4o-mini"},
+        "model_info": {"id": "dep-other"},
+    }
+    router = MagicMock()
+    router.model_list = [tagged, untagged]
+    router.get_model_list_from_model_alias = MagicMock(return_value=[])
+    router.get_model_names = MagicMock(return_value=[_ACCESS_GROUPED_MODEL, _UNGROUPED_MODEL])
+    router.get_model_access_groups = MagicMock(return_value={"config-group": [_ACCESS_GROUPED_MODEL]})
+    router.get_model_ids = MagicMock(return_value=[])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", [tagged, untagged])
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", None)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", None)
+    mock_prisma.db.litellm_usertable.find_unique.return_value = None
+
+    with auth_as(
+        role=LitellmUserRoles.INTERNAL_USER,
+        user_id=None,
+        team_id="team-1",
+        team_models=["config-group"],
+    ):
+        response = client.get(path)
+
+    assert response.status_code == 200
+    surfaced_names = [m.get("model_name") for m in response.json()["data"]]
+    assert surfaced_names == [_ACCESS_GROUPED_MODEL]
+
+
+# ---------------------------------------------------------------------------
 # GET /model_group/info
 # ---------------------------------------------------------------------------
 
@@ -671,7 +830,9 @@ def test_model_group_info_proxy_admin_ignores_key_model_restriction(
 
 
 @pytest.mark.parametrize("admin_role", ["proxy_admin", "proxy_admin_viewer"])
-def test_model_group_info_proxy_admin_expands_wildcard_deployments(client, auth_as, model_group_info_router, admin_role):
+def test_model_group_info_proxy_admin_expands_wildcard_deployments(
+    client, auth_as, model_group_info_router, admin_role
+):
     from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 
