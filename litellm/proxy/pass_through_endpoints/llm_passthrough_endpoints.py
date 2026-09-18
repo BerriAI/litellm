@@ -12,6 +12,7 @@ import hmac
 import inspect
 import json
 import os
+import posixpath
 import re
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -1408,6 +1409,18 @@ def azure_speech_path_manages_shared_resources(endpoint_path: str) -> bool:
     )
 
 
+def canonical_azure_speech_endpoint_path(endpoint: str) -> str:
+    """
+    The path Azure will actually serve, with ``.`` and ``..`` segments resolved, so the
+    endpoint family and the admin guard are decided on the same path the upstream request uses.
+    """
+    raw_path: Final = httpx.URL(endpoint).path
+    resolved_path: Final = posixpath.normpath(f"/{raw_path.lstrip('/')}")
+    if raw_path.endswith("/") and resolved_path != "/":
+        return f"{resolved_path}/"
+    return resolved_path
+
+
 @router.api_route(
     f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/{{endpoint:path}}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: fastapi route methods must be a list
@@ -1430,8 +1443,7 @@ async def azure_speech_proxy_route(
 
     [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
     """
-    endpoint_path: Final = httpx.URL(endpoint).path
-    normalized_endpoint_path: Final = endpoint_path if endpoint_path.startswith("/") else f"/{endpoint_path}"
+    normalized_endpoint_path: Final = canonical_azure_speech_endpoint_path(endpoint)
     base_url: Final = resolve_azure_speech_base_url(
         endpoint_path=normalized_endpoint_path,
         api_base=get_secret_str(secret_name="AZURE_SPEECH_API_BASE"),
