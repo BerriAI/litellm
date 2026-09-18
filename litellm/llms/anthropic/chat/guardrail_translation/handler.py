@@ -508,7 +508,8 @@ class AnthropicMessagesHandler(BaseTranslation):
             chat_completion_compatible_request,
             _tool_name_mapping,
         ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-            anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
+            anthropic_message_request=cast(AnthropicMessagesRequest, data.copy()),
+            preserve_midturn_system=True,
         )
         return chat_completion_compatible_request
 

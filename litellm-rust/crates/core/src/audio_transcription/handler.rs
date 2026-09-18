@@ -47,8 +47,8 @@ async fn signed_headers(
     use std::collections::BTreeMap;
     use std::time::SystemTime;
 
-    use crate::llms::base_llm::audio_transcription::transformation::AudioTranscriptionAuth;
     use litellm_auth_aws::{aws_auth_config, resolve_credentials, sign_bedrock_post};
+    use litellm_providers::base_llm::audio_transcription::transformation::AudioTranscriptionAuth;
 
     let AudioTranscriptionAuth::AwsSigV4 { region, .. } = &request.auth else {
         return Ok(request.upstream_headers.clone());

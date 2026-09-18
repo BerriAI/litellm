@@ -978,6 +978,8 @@ def test_llama_vision_supports_vision_from_model_map():
 
     for model in [
         "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct",
+        "fireworks_ai/accounts/fireworks/models/minimax-m3",
+        "fireworks_ai/minimax-m3",
     ]:
         assert supports_vision(model=model, custom_llm_provider="fireworks_ai") is True
         assert config.get_provider_info(model)["supports_vision"] is True

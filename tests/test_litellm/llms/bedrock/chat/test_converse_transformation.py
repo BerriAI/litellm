@@ -1198,6 +1198,12 @@ def test_get_supported_openai_params_bedrock_converse():
             id="tools-present-so-the-cachepoint-is-placed",
         ),
         pytest.param(None, "anthropic.claude-sonnet-4-5-20250929-v1:0", None, id="no-tools-so-nothing-is-placed"),
+        pytest.param(
+            [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}],
+            "global.openai.gpt-6-astra",
+            None,
+            id="openai-family-implicit-caching-only",
+        ),
     ],
 )
 def test_tool_config_cachepoint_is_credited_only_where_it_is_placed(tools, model, expected_marker):
@@ -5592,7 +5598,9 @@ def test_cache_control_injection_tool_config_drops_ttl_for_unsupported_model():
             True,
             id="unmapped-arn-keeps-emitting",
         ),
+        pytest.param("global.openai.gpt-6-astra", False, id="openai-family-implicit-caching-only"),
         pytest.param("openai.gpt-oss-120b-1:0", False, id="openai-gpt-oss"),
+        pytest.param("us.openai.gpt-99-unmapped", False, id="unmapped-openai-family-still-suppressed"),
     ],
 )
 def test_cache_points_emitted_only_for_models_that_support_prompt_caching(model, expects_cache_points, monkeypatch):

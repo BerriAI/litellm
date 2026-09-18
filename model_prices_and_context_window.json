@@ -23788,7 +23788,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct-hf": {
         "input_cost_per_token": 1.2e-06,
@@ -24114,7 +24114,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "fireworks_ai/qwen3p7-plus": {
         "cache_read_input_token_cost": 8e-08,
@@ -69183,6 +69183,27 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_vision": true
+    },
+    "typesafe/jev-1.13.0": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "typesafe",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.typesafe.ai/models"
+    },
+    "typesafe/jev-latest": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "typesafe",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.typesafe.ai/models"
+    },
+    "typesafe/jev-preview": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "typesafe",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.typesafe.ai/models"
     },
     "wandb/zai-org/GLM-5.3-Flash": {
         "cache_read_input_token_cost": 5e-08,
