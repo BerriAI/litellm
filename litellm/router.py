@@ -8731,9 +8731,7 @@ class Router:
             model_info if isinstance(model_info, dict) else None, litellm_params, key="cooldown_time"
         )
         time_to_cooldown: Final = (
-            deployment_cooldown
-            if deployment_cooldown is not None and deployment_cooldown >= 0
-            else self.cooldown_time
+            deployment_cooldown if deployment_cooldown is not None and deployment_cooldown >= 0 else self.cooldown_time
         )
         exception: Final = self._finish_reason_failure_error(model=model, reason=reason)
         increment_deployment_failures_for_current_minute(

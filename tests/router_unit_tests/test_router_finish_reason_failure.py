@@ -100,9 +100,7 @@ async def test_chat_completion_mapped_reason_falls_back_and_cools_down(monkeypat
     )
     fake.install(monkeypatch)
 
-    response = await router.acompletion(
-        model="fable-tier", max_tokens=16, messages=[{"role": "user", "content": "hi"}]
-    )
+    response = await router.acompletion(model="fable-tier", max_tokens=16, messages=[{"role": "user", "content": "hi"}])
 
     assert response.model == "claude-opus-5"
     assert len(fake.calls) == 2
@@ -148,9 +146,7 @@ async def test_mapped_reason_without_fallback_returns_response_and_counts_failur
     )
     fake.install(monkeypatch)
 
-    response = await router.acompletion(
-        model="fable-tier", max_tokens=16, messages=[{"role": "user", "content": "hi"}]
-    )
+    response = await router.acompletion(model="fable-tier", max_tokens=16, messages=[{"role": "user", "content": "hi"}])
 
     assert response.model == "claude-fable-5"
     assert len(fake.calls) == 1
@@ -166,9 +162,7 @@ async def test_knob_unset_ignores_terminal_stop_reason(monkeypatch: MonkeyPatch)
     router = Router(model_list=[FABLE_TIER], num_retries=0)
     fake.install(monkeypatch)
 
-    response = await router.acompletion(
-        model="fable-tier", max_tokens=16, messages=[{"role": "user", "content": "hi"}]
-    )
+    response = await router.acompletion(model="fable-tier", max_tokens=16, messages=[{"role": "user", "content": "hi"}])
 
     assert response.model == "claude-fable-5"
     assert len(fake.calls) == 1

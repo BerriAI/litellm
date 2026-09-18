@@ -62,7 +62,6 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
-    OpenAIChatCompletionFinishReason,
     OpenAIMcpServerTool,
     OpenAIWebSearchOptions,
 )
@@ -74,9 +73,9 @@ from litellm.types.responses.main import (
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
-    map_finish_reason_and_stash_native,
     PromptTokensDetailsWrapper,
     ServerToolUse,
+    map_finish_reason_and_stash_native,
 )
 from litellm.types.utils import Message as LitellmMessage
 from litellm.utils import (
