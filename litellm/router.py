@@ -715,13 +715,17 @@ def _merged_file_batch_headers(
     deployment_headers: Final = deployment_params.get("extra_headers")
     request_headers: Final = request_kwargs.get("extra_headers")
     if not isinstance(deployment_headers, Mapping) or not isinstance(request_headers, Mapping):
-        return {}
-    return {
-        "extra_headers": {
-            **cast(Mapping[str, object], deployment_headers),  # cast-ok: validated header mapping
-            **cast(Mapping[str, object], request_headers),  # cast-ok: validated header mapping
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            "extra_headers": MappingProxyType(
+                {
+                    **cast(Mapping[str, object], deployment_headers),  # cast-ok: validated header mapping
+                    **cast(Mapping[str, object], request_headers),  # cast-ok: validated header mapping
+                }
+            )
         }
-    }
+    )
 
 
 class Router:
