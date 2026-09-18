@@ -11,7 +11,7 @@ import asyncio
 import fnmatch
 import re
 import secrets
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from functools import partial
 from typing import Any, Final, NamedTuple, Protocol, Union, cast
@@ -318,6 +318,12 @@ class _TeamModelBudgetLimiter(Protocol):
     ) -> bool: ...
 
 
+class _ModelBudgetLimiter(_KeyModelBudgetLimiter, _UserModelBudgetLimiter, _TeamModelBudgetLimiter, Protocol):
+    async def is_end_user_within_model_budget(
+        self, end_user_id: str, end_user_model_max_budget: Mapping[str, object], model: str
+    ) -> bool: ...
+
+
 class _TokenTeamModels(Protocol):
     @property
     def team_models(self) -> list[str]: ...
@@ -368,7 +374,7 @@ async def _read_user_budget_row(
 
 async def _check_user_model_budget(
     valid_token: UserAPIKeyAuth,
-    model_max_budget_limiter: _UserModelBudgetLimiter,
+    model_max_budget_limiter: _ModelBudgetLimiter,
     models: list[str],
     request_data: dict | None = None,
     request: Request | None = None,
@@ -392,6 +398,7 @@ async def _check_user_model_budget(
         if request_data is not None and request is not None:
             await _check_model_budget_with_fallback(
                 check=check,
+                model_max_budget_limiter=model_max_budget_limiter,
                 budget_fallbacks=valid_token.user_budget_fallbacks,
                 model_name=model_name,
                 request_data=request_data,
@@ -406,7 +413,7 @@ async def _check_user_model_budget(
 
 async def _check_team_model_budget(
     valid_token: UserAPIKeyAuth,
-    model_max_budget_limiter: _TeamModelBudgetLimiter,
+    model_max_budget_limiter: _ModelBudgetLimiter,
     models: list[str],
     request_data: dict | None = None,
     request: Request | None = None,
@@ -429,6 +436,7 @@ async def _check_team_model_budget(
         if request_data is not None and request is not None:
             await _check_model_budget_with_fallback(
                 check=check,
+                model_max_budget_limiter=model_max_budget_limiter,
                 budget_fallbacks=valid_token.team_budget_fallbacks,
                 model_name=model_name,
                 request_data=request_data,
@@ -441,8 +449,39 @@ async def _check_team_model_budget(
             await check(model=model_name)
 
 
+def _iter_model_budget_scope_checks(
+    valid_token: UserAPIKeyAuth, model_max_budget_limiter: _ModelBudgetLimiter
+) -> Iterator[Callable[..., Awaitable[object]]]:
+    key_budget: Final = valid_token.model_max_budget
+    if valid_token.token is not None and isinstance(key_budget, Mapping) and key_budget:
+        yield partial(model_max_budget_limiter.is_key_within_model_budget, user_api_key_dict=valid_token)
+    user_budget: Final = valid_token.user_model_max_budget
+    if valid_token.user_id is not None and isinstance(user_budget, Mapping) and user_budget:
+        yield partial(
+            model_max_budget_limiter.is_user_within_model_budget,
+            user_id=valid_token.user_id,
+            user_model_max_budget=user_budget,
+        )
+    end_user_budget: Final = valid_token.end_user_model_max_budget
+    if valid_token.end_user_id is not None and isinstance(end_user_budget, Mapping) and end_user_budget:
+        yield partial(
+            model_max_budget_limiter.is_end_user_within_model_budget,
+            end_user_id=valid_token.end_user_id,
+            end_user_model_max_budget=end_user_budget,
+        )
+    team_budget: Final = valid_token.team_model_max_budget
+    if valid_token.team_id is not None and isinstance(team_budget, Mapping) and team_budget:
+        yield partial(
+            model_max_budget_limiter.is_team_within_model_budget,
+            team_id=valid_token.team_id,
+            team_model_max_budget=team_budget,
+            key_model_max_budget=valid_token.model_max_budget,
+        )
+
+
 async def _check_model_budget_with_fallback(
     check: Callable[..., Awaitable[object]],
+    model_max_budget_limiter: _ModelBudgetLimiter,
     budget_fallbacks: Mapping[str, Sequence[str]] | None,
     model_name: str,
     request_data: dict,
@@ -454,8 +493,10 @@ async def _check_model_budget_with_fallback(
     """
     Run `check` for `model_name`. If it exceeds its per-model budget and
     `budget_fallbacks` has a chain for `model_name`, reroute the request to
-    the first fallback model still within its own budget instead of
-    rejecting the request.
+    the first fallback model still within budget instead of
+    rejecting the request. Every candidate fallback is validated against all
+    applicable per-model budget scopes (key, internal user, end user, team),
+    not only the scope that failed.
 
     The selected fallback is validated against the key's model-access
     allowlist and the team's model restrictions so that budget_fallbacks
@@ -481,10 +522,18 @@ async def _check_model_budget_with_fallback(
         original_error: Final = e
     if request_data.get("model") != model_name:
         raise original_error
+    scope_checks: Final = (check, *_iter_model_budget_scope_checks(valid_token, model_max_budget_limiter))
+
+    async def _fallback_within_every_scope(fallback_model: str) -> bool:
+        for scope_check in scope_checks:
+            try:
+                await scope_check(model=fallback_model)
+            except litellm.BudgetExceededError:
+                return False
+        return True
+
     for fallback_model in budget_fallbacks.get(model_name, ()) if budget_fallbacks is not None else ():
-        try:
-            await check(model=fallback_model)
-        except litellm.BudgetExceededError:
+        if not await _fallback_within_every_scope(fallback_model):
             continue
         try:
             await can_key_call_model(
@@ -517,7 +566,7 @@ async def _check_model_budget_with_fallback(
 
 async def _check_key_model_budget_with_fallback(
     valid_token: UserAPIKeyAuth,
-    model_max_budget_limiter: _KeyModelBudgetLimiter,
+    model_max_budget_limiter: _ModelBudgetLimiter,
     model_name: str,
     request_data: dict,
     request: Request,
@@ -533,6 +582,7 @@ async def _check_key_model_budget_with_fallback(
             model_max_budget_limiter.is_key_within_model_budget,
             user_api_key_dict=valid_token,
         ),
+        model_max_budget_limiter=model_max_budget_limiter,
         budget_fallbacks=valid_token.budget_fallbacks,
         model_name=model_name,
         request_data=request_data,
@@ -2406,14 +2456,19 @@ async def _user_api_key_auth_builder(
 
                     # Check 5. Token Model Spend is under Model budget
                     max_budget_per_model: Final = valid_token.model_max_budget
-                    current_model = _get_model_from_request_context(
-                        request_data=request_data,
-                        route=route,
-                        request=request,
-                        llm_router=llm_router,
-                        team_id=valid_token.team_id,
-                    )
-                    current_models = _get_model_names_for_budget_checks(model=current_model)
+
+                    def _budget_models() -> list[str]:
+                        return _get_model_names_for_budget_checks(
+                            model=_get_model_from_request_context(
+                                request_data=request_data,
+                                route=route,
+                                request=request,
+                                llm_router=llm_router,
+                                team_id=valid_token.team_id,
+                            )
+                        )
+
+                    current_models = _budget_models()
 
                     if (
                         max_budget_per_model is not None
@@ -2435,16 +2490,7 @@ async def _user_api_key_auth_builder(
                                 llm_router=llm_router,
                             )
 
-                        # Recompute after a potential budget-fallback rewrite so
-                        # the end-user check below validates the final model
-                        current_model = _get_model_from_request_context(
-                            request_data=request_data,
-                            route=route,
-                            request=request,
-                            llm_router=llm_router,
-                            team_id=valid_token.team_id,
-                        )
-                        current_models = _get_model_names_for_budget_checks(model=current_model)
+                        current_models = _budget_models()  # rebind-ok: refresh after a budget-fallback rewrite
 
                     # Check 5a. Internal user model_max_budget
                     if current_models:
@@ -2457,6 +2503,7 @@ async def _user_api_key_auth_builder(
                             llm_model_list=llm_model_list,
                             llm_router=llm_router,
                         )
+                        current_models = _budget_models()  # rebind-ok: refresh after a budget-fallback rewrite
 
                     # Check 5b. End-user model max budget
                     end_user_mmb: Final = valid_token.end_user_model_max_budget

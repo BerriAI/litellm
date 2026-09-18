@@ -1929,7 +1929,7 @@ async def bulk_user_update(
                 ),
             )
 
-            if "model_max_budget" in non_default_values:
+            if "model_max_budget" in non_default_values or "budget_fallbacks" in non_default_values:
                 for start in range(0, len(all_users_in_db), _USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE):
                     await asyncio.gather(
                         *(
