@@ -13,6 +13,7 @@ export interface ModelInfo {
   access_groups: string[] | null;
   blocked?: boolean;
   team_public_model_name?: string;
+  key?: string;
 }
 
 export interface LiteLLMParams {
@@ -30,12 +31,12 @@ export interface ModelData {
   model_name: string;
   provider: string;
   litellm_model_name: string;
-  input_cost: number;
-  output_cost: number;
+  input_cost: string | null;
+  output_cost: string | null;
   output_cost_per_second?: number | null;
   output_cost_per_second_tiers?: PerSecondCostTier[];
-  max_tokens: number;
-  max_input_tokens: number;
+  max_tokens?: number;
+  max_input_tokens?: number;
   api_base?: string;
   litellm_params: LiteLLMParams;
   cleanedLitellmParams: Record<string, any>;

@@ -365,7 +365,7 @@ export default function ModelInfoView({
       // Parse the model_info from the form values
       let updatedModelInfo;
       try {
-        updatedModelInfo = values.model_info ? JSON.parse(values.model_info) : modelData.model_info;
+        updatedModelInfo = values.model_info ? JSON.parse(values.model_info) : modelData?.model_info;
         // Update access_groups from the form
         if (values.model_access_group) {
           updatedModelInfo = {

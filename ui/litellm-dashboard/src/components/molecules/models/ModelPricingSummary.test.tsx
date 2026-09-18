@@ -3,7 +3,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ModelPricingSummary } from "./ModelPricingSummary";
 
-const tokenPriced = { input_cost: "1.50" as unknown as number, output_cost: "2.00" as unknown as number };
+const tokenPriced = { input_cost: "1.50", output_cost: "2.00" };
 
 describe("ModelPricingSummary", () => {
   it("shows per-million-token rates for a token priced model", () => {
@@ -16,8 +16,8 @@ describe("ModelPricingSummary", () => {
     render(
       <ModelPricingSummary
         model={{
-          input_cost: "0.00" as unknown as number,
-          output_cost: "0.00" as unknown as number,
+          input_cost: "0.00",
+          output_cost: "0.00",
           output_cost_per_second: 0.1,
           output_cost_per_second_tiers: [
             { resolution: "1080p", cost: 0.12 },
@@ -36,8 +36,8 @@ describe("ModelPricingSummary", () => {
     render(
       <ModelPricingSummary
         model={{
-          input_cost: "0.60" as unknown as number,
-          output_cost: "0.00" as unknown as number,
+          input_cost: "0.60",
+          output_cost: "0.00",
           output_cost_per_second: 0.015,
         }}
       />,
@@ -49,7 +49,7 @@ describe("ModelPricingSummary", () => {
 
   it("renders a dash when the model has no pricing at all", () => {
     render(
-      <ModelPricingSummary model={{ input_cost: null as unknown as number, output_cost: null as unknown as number }} />,
+      <ModelPricingSummary model={{ input_cost: null, output_cost: null }} />,
     );
     expect(screen.getByText("-")).toBeInTheDocument();
     expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
