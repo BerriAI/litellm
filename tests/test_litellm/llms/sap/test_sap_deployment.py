@@ -152,4 +152,4 @@ def test_resolve_deployment_url_parses_live_rest_shape_and_queries_correctly():
 
 
 def test_query_response_defaults_to_empty_resources():
-    assert DeploymentQueryResponse.model_validate({}).resources == []
+    assert DeploymentQueryResponse.model_validate({}).resources == ()

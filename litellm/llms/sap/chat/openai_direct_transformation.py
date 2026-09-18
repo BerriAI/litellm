@@ -25,6 +25,7 @@ from ..direct_connect import (
     get_token_creator,
     resolve_sap_deployment_url,
     resource_group_from_params,
+    without_resource_group,
 )
 from ..submode import split_sap_submode
 
@@ -91,7 +92,7 @@ class SapDeploymentOpenAIChatConfig(OpenAIGPTConfig):
         headers: dict,  # mutable-ok: litellm base transform override signature
     ) -> dict:  # mutable-ok: litellm base transform override signature
         _, bare_model = split_sap_submode(model)
-        body: Final = super().transform_request(bare_model, messages, dict(optional_params), litellm_params, headers)
+        body: Final = super().transform_request(bare_model, messages, without_resource_group(optional_params), litellm_params, headers)
         return allowlist_openai_chat_body(body, frozenset(self.get_supported_openai_params(bare_model)))
 
     def validate_environment(
