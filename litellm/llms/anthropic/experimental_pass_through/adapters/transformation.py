@@ -198,6 +198,15 @@ def target_supports_mid_conversation_system(model: str | None, custom_llm_provid
     return supports_mid_conversation_system(model=model, custom_llm_provider=custom_llm_provider)
 
 
+def _chat_tool_param(function_chunk: ChatCompletionToolParamFunctionChunk, tool: object) -> ChatCompletionToolParam:
+    eager_input_streaming: Final = eager_input_streaming_flag(tool)
+    if eager_input_streaming is None:
+        return ChatCompletionToolParam(type="function", function=function_chunk)
+    return ChatCompletionToolParam(
+        type="function", function=function_chunk, eager_input_streaming=eager_input_streaming
+    )
+
+
 class AnthropicAdapter:
     def __init__(self) -> None:
         pass
@@ -810,14 +819,7 @@ class LiteLLMAnthropicMessagesAdapter:
             for k, v in tool.items():
                 if k not in mapped_tool_params:  # pass additional computer kwargs
                     function_chunk.setdefault("parameters", {}).update({k: v})
-            eager_input_streaming = eager_input_streaming_flag(tool)
-            tool_param = (
-                ChatCompletionToolParam(type="function", function=function_chunk)
-                if eager_input_streaming is None
-                else ChatCompletionToolParam(
-                    type="function", function=function_chunk, eager_input_streaming=eager_input_streaming
-                )
-            )
+            tool_param = _chat_tool_param(function_chunk, tool)
             self._add_cache_control_if_applicable(tool, tool_param, model)
             new_tools.append(tool_param)
 

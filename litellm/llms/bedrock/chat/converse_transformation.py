@@ -1518,9 +1518,6 @@ class AmazonConverseConfig(BaseConfig):
         """Process tools and collect anthropic_beta values."""
         bedrock_tools: list[ToolBlock] = []
 
-        # Collect anthropic_beta values from user headers
-        anthropic_beta_list: Final = list(get_anthropic_beta_from_headers(headers or {}))
-
         # Separate pre-formatted Bedrock tools (e.g. systemTool from web_search_options)
         # from OpenAI-format tools that need transformation via _bedrock_tools_pt
         filtered_tools: Final = []
@@ -1539,6 +1536,17 @@ class AmazonConverseConfig(BaseConfig):
                     # Tool search not supported in Converse API - skip it
                     continue
                 filtered_tools.append(tool)
+
+        base_model: Final = BedrockModelInfo.get_base_model(model)
+        client_beta_list: Final = get_anthropic_beta_from_headers(headers or {})
+        eager_beta: Final = (
+            (ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,)
+            if base_model.startswith("anthropic")
+            and AnthropicModelInfo().is_eager_input_streaming_used(filtered_tools)
+            and ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER not in client_beta_list
+            else ()
+        )
+        anthropic_beta_list: Final = [*client_beta_list, *eager_beta]
 
         # Only separate tools if computer use tools are actually present
         if filtered_tools and self.is_computer_use_tool_used(filtered_tools, model):
@@ -1617,7 +1625,6 @@ class AmazonConverseConfig(BaseConfig):
 
         # Opus 4.5 gates ``output_config.effort`` behind a beta header;
         # Claude 4.6/4.7 accept it without one.
-        base_model: Final = BedrockModelInfo.get_base_model(model)
         if base_model.startswith("anthropic"):
             output_config: Final = additional_request_params.get("output_config")
             if (
@@ -1631,12 +1638,6 @@ class AmazonConverseConfig(BaseConfig):
 
                 if ANTHROPIC_EFFORT_BETA_HEADER not in anthropic_beta_list:
                     anthropic_beta_list.append(ANTHROPIC_EFFORT_BETA_HEADER)
-
-            if (
-                AnthropicModelInfo().is_eager_input_streaming_used(filtered_tools)
-                and ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER not in anthropic_beta_list
-            ):
-                anthropic_beta_list.append(ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER)
 
             # Bedrock Converse: compact_20260112 edits only (+ beta header).
             AmazonConverseConfig._filter_context_management_for_bedrock_converse(
