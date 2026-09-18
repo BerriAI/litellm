@@ -133,7 +133,7 @@ OFF_PEAK_ENTRY: Final = MappingProxyType(
         "output_cost_per_token": 8e-6,
         "off_peak_pricing": {
             "hours_utc": "16:30-00:30",
-            "windows": [{"hours_utc": ["00:30-02:00"], "weekdays": [6, "Sunday"]}],
+            "windows": [{"hours_utc": ["00:30-02:00"], "weekdays": [6, "Sunday", "mon", "THURS"]}],
             "weekday_timezone": "Asia/Shanghai",
             "input_cost_per_token": 1e-6,
             "output_cost_per_token": 4e-6,
@@ -160,6 +160,11 @@ def test_generator_classifies_off_peak_pricing_as_a_windowed_rate_block():
         {"windows": [{"weekdays": [6]}], "input_cost_per_token": 1e-6},
         {"windows": [{"hours_utc": "00:30-02:00", "weekdays": [0]}], "input_cost_per_token": 1e-6},
         {"windows": [], "input_cost_per_token": 1e-6},
+        {"input_cost_per_token": 1e-6},
+        {"hours_utc": "16:30", "input_cost_per_token": 1e-6},
+        {"hours_utc": "25:00-01:00", "input_cost_per_token": 1e-6},
+        {"hours_utc": ["16:30-00:30", "4pm-midnight"], "input_cost_per_token": 1e-6},
+        {"windows": [{"hours_utc": "00:30-02:00", "weekdays": ["Funday"]}], "input_cost_per_token": 1e-6},
     ],
 )
 def test_generated_off_peak_schema_rejects_malformed_blocks(block: dict):
