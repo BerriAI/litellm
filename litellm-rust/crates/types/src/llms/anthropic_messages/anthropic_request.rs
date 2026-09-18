@@ -1,29 +1,5 @@
-use std::time::Duration;
-
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-
-use crate::base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig;
-
-pub struct MessagesRequest<'a> {
-    pub model: &'a str,
-    pub body: Value,
-    pub api_key: Option<&'a str>,
-    pub api_base: Option<&'a str>,
-    pub custom_llm_provider: Option<&'a str>,
-    pub extra_headers: Option<Map<String, Value>>,
-    pub timeout: Option<Duration>,
-}
-
-pub struct ProviderMessagesRequest {
-    pub provider: String,
-    pub model: String,
-    pub config: &'static dyn BaseAnthropicMessagesConfig,
-    pub url: String,
-    pub body: Value,
-    pub upstream_headers: Vec<(String, String)>,
-    pub timeout: Option<Duration>,
-}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -109,26 +85,6 @@ pub struct AnthropicMessagesRequest {
     pub speed: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inference_geo: Option<String>,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AnthropicMessagesResponse {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub message_type: String,
-    pub role: String,
-    pub model: String,
-    pub content: Vec<Value>,
-    // Anthropic always includes stop_reason / stop_sequence, null until the turn
-    // ends; serialize them even when None so callers see the same shape as Python.
-    pub stop_reason: Option<String>,
-    pub stop_sequence: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub container: Option<Value>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

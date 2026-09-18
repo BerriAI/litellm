@@ -1,15 +1,19 @@
-use std::collections::BTreeSet;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, Mutex},
+};
 
 use litellm_callbacks::event::{RequestContext, WireRequest};
 use rstest::rstest;
 use rstest_reuse::{self, apply, template};
 use serde_json::{Map, Value, json};
 
-use super::LocalOcrHost;
-use super::test_support::{
-    MockResponse, SERVED_DOCUMENT, document_server, mock_server, perform_ocr_with, request_body,
-    wire_request_with_document,
+use super::{
+    LocalOcrHost,
+    test_support::{
+        MockResponse, SERVED_DOCUMENT, document_server, mock_server, perform_ocr_with,
+        request_body, wire_request_with_document,
+    },
 };
 
 #[derive(Clone, Copy, Debug)]

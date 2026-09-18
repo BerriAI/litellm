@@ -1,3 +1,4 @@
+use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
 use strum::{EnumString, IntoStaticStr};
 
 use super::{
@@ -7,21 +8,18 @@ use super::{
         ResolvedOcrCredentials,
     },
 };
-use crate::{
-    litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider},
-    llms::{
-        azure_ai::ocr::{
-            cohere_parse_transformation::AzureAICohereParseConfig,
-            document_intelligence::transformation::AzureDocumentIntelligenceOcrConfig,
-            transformation::AzureAiOcrConfig,
-        },
-        base_llm::ocr::transformation::{BaseOcrConfig, OcrResponseContext},
-        cohere::ocr::transformation::CohereParseConfig,
-        mistral::ocr::transformation::MistralOcrConfig,
-        reducto::ocr::transformation::{ReductoParseLegacyConfig, ReductoParseV3Config},
-        vertex_ai::ocr::{
-            deepseek_transformation::VertexAIDeepSeekOCRConfig, transformation::VertexAiOcrConfig,
-        },
+use crate::llms::{
+    azure_ai::ocr::{
+        cohere_parse_transformation::AzureAICohereParseConfig,
+        document_intelligence::transformation::AzureDocumentIntelligenceOcrConfig,
+        transformation::AzureAiOcrConfig,
+    },
+    base_llm::ocr::transformation::{BaseOcrConfig, OcrResponseContext},
+    cohere::ocr::transformation::CohereParseConfig,
+    mistral::ocr::transformation::MistralOcrConfig,
+    reducto::ocr::transformation::{ReductoParseLegacyConfig, ReductoParseV3Config},
+    vertex_ai::ocr::{
+        deepseek_transformation::VertexAIDeepSeekOCRConfig, transformation::VertexAiOcrConfig,
     },
 };
 

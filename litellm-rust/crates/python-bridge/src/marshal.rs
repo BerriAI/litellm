@@ -1,13 +1,12 @@
-use std::collections::{BTreeMap, HashMap};
-use std::time::Duration;
-
-use pyo3::exceptions::PyValueError;
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
-use serde_json::{Map, Value};
+use std::{
+    collections::{BTreeMap, HashMap},
+    time::Duration,
+};
 
 use litellm_auth::InputSource;
 use litellm_host_python::{from_py, from_py_argument};
+use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
+use serde_json::{Map, Value};
 
 /// The keyword arguments every value route shares, validated at the Python boundary.
 pub(crate) struct RouteOptions {
@@ -156,9 +155,10 @@ pub(crate) fn marshal_headers(headers: Option<Value>) -> PyResult<HashMap<String
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pyo3::exceptions::PyTypeError;
     use serde_json::json;
+
+    use super::*;
 
     fn eval<'py>(py: Python<'py>, source: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = PyDict::new(py);

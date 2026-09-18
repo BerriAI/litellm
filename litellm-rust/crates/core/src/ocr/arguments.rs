@@ -1,5 +1,6 @@
+use litellm_core_utils::call_arguments::ArgumentSpec;
+
 use super::provider_config::{OcrConfigKind, resolve_provider_config};
-use crate::call_arguments::ArgumentSpec;
 
 const COMMON_OPTION_FIELDS: &[&str] = &["req_format", "extra_body", "max_response_bytes"];
 const AZURE_AUTH_OPTION_FIELDS: &[&str] = &[

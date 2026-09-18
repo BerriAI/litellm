@@ -1,9 +1,9 @@
 use litellm_auth_gcp::{self as vertex, VertexConfig};
+use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde_json::Value;
 
 use super::common_utils::validate_destination;
 use crate::{
-    call_arguments::CallArguments,
     llms::{
         base_llm::ocr::transformation::{BaseOcrConfig, OcrEnvironment, OcrRequestContext},
         mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
@@ -14,8 +14,6 @@ use crate::{
         prepare::credential_env,
         types::{LiteLLMOcrResponse, OcrConnection, OcrDocument, PreparedOcrRequest},
     },
-    params::OpaqueParams,
-    url_utils::ApiUrl,
 };
 
 const DEFAULT_LOCATION: &str = "us-central1";

@@ -12,8 +12,8 @@ use super::{
         has_bearer_auth, has_header, messages_provider_config, string_headers, truncate_error_body,
     },
     messages,
-    types::MessagesRequest,
 };
+use crate::messages::types::MessagesRequest;
 
 async fn read_http_request(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();

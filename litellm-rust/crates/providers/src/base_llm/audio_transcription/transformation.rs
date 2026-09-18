@@ -1,9 +1,25 @@
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::audio_transcription::Error;
-use crate::audio_transcription::types::{
-    AudioTranscriptionRequestData, AudioTranscriptionResponseData,
-};
+use crate::base_llm::chat::transformation::Error;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AudioTranscriptionRequestData {
+    pub body: Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AudioTranscriptionResponseData {
+    pub text: String,
+}
+
+impl AudioTranscriptionResponseData {
+    pub fn into_json(self) -> Value {
+        serde_json::json!({
+            "text": self.text,
+        })
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AudioTranscriptionAuth {

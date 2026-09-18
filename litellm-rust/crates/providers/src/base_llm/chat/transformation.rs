@@ -1,10 +1,39 @@
+use litellm_types::{
+    llms::openai::{ChatMessage, ChatMessageContent},
+    utils::ChatCompletionsResponse,
+};
 use serde_json::{Map, Value};
 
-use crate::chat::Error;
-use crate::chat::types::{
-    ChatCompletionsResponse, ChatMessage, ChatMessageContent, ProviderChatRequestData,
-    ProviderChatResponseData,
-};
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    #[error("expected {expected}, got {actual}")]
+    InvalidType {
+        expected: &'static str,
+        actual: &'static str,
+    },
+    #[error("missing required field: {0}")]
+    MissingField(&'static str),
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
+    #[error("invalid response: {0}")]
+    InvalidResponse(String),
+    #[error("unsupported: {0}")]
+    Unsupported(&'static str),
+    #[error(transparent)]
+    Auth(#[from] litellm_auth::Error),
+}
+
+/// The provider-shaped request body a config produces. Named rather than a bare
+/// `Value` so the transform contract stays a typed one, mirroring
+/// [`crate::base_llm::audio_transcription::transformation::AudioTranscriptionRequestData`].
+pub struct ProviderChatRequestData {
+    pub body: Value,
+}
+
+/// The raw provider response body handed back to a config for normalization.
+pub struct ProviderChatResponseData {
+    pub body: Value,
+}
 
 pub const STREAM_PARAM: &str = "stream";
 

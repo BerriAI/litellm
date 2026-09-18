@@ -1,3 +1,5 @@
+use litellm_providers::base_llm::chat::transformation::Error as LlmError;
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("invalid provider: {0}")]
@@ -28,18 +30,15 @@ pub enum Error {
     InvalidBedrockBase64(String),
 }
 
-impl From<litellm_providers::messages::Error> for Error {
-    fn from(error: litellm_providers::messages::Error) -> Self {
+impl From<LlmError> for Error {
+    fn from(error: LlmError) -> Self {
         match error {
-            litellm_providers::messages::Error::MissingField(field) => Self::MissingField(field),
-            litellm_providers::messages::Error::InvalidRequest(message) => {
-                Self::InvalidRequest(message)
-            }
-            litellm_providers::messages::Error::InvalidResponse(message) => {
-                Self::InvalidResponse(message)
-            }
-            litellm_providers::messages::Error::Unsupported(reason) => Self::Unsupported(reason),
-            litellm_providers::messages::Error::Auth(error) => Self::Auth(error),
+            error @ LlmError::InvalidType { .. } => Self::InvalidRequest(error.to_string()),
+            LlmError::MissingField(field) => Self::MissingField(field),
+            LlmError::InvalidRequest(message) => Self::InvalidRequest(message),
+            LlmError::InvalidResponse(message) => Self::InvalidResponse(message),
+            LlmError::Unsupported(reason) => Self::Unsupported(reason),
+            LlmError::Auth(error) => Self::Auth(error),
         }
     }
 }

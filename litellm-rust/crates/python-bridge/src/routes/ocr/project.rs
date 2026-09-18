@@ -1,17 +1,19 @@
-use litellm_core::ocr::wire::{
-    OcrWireRequest, consumed_optional_params, decode_document, decode_request_input,
+use litellm_core::ocr::{
+    LiteLLMOcrRequest, OcrDocumentInput,
+    wire::{OcrWireRequest, consumed_optional_params, decode_document, decode_request_input},
 };
-use litellm_core::ocr::{LiteLLMOcrRequest, OcrDocumentInput};
 use litellm_host_python::from_py;
-use pyo3::exceptions::PyValueError;
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde_json::{Map, Value};
 
-use super::document::{FileDocumentInput, PythonFileReader};
-use super::errors::to_pyerr as ocr_error_to_pyerr;
-use crate::credentials::{self, CallerTokenProvider};
-use crate::marshal::{project_optional_fields, python_timeout_seconds, request_input_sources};
+use super::{
+    document::{FileDocumentInput, PythonFileReader},
+    errors::to_pyerr as ocr_error_to_pyerr,
+};
+use crate::{
+    credentials::{self, CallerTokenProvider},
+    marshal::{project_optional_fields, python_timeout_seconds, request_input_sources},
+};
 
 /// What the host keeps after projection: the caller's callables that answer the document
 /// read and token operations, and the provider name the failure mapping reports.

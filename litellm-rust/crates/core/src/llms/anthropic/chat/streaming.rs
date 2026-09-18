@@ -1,19 +1,16 @@
 use std::collections::HashMap;
 
+use litellm_types::{
+    llms::openai::{ChatCompletionThinkingBlock, ChatCompletionToolCallChunk},
+    utils::{ChatCompletionChunk, ChatCompletionsUsage},
+};
 use serde_json::Value;
 
 use super::super::experimental_pass_through::messages::streaming::{
     AnthropicContentBlock, AnthropicContentBlockDelta, AnthropicMessagesStreamEvent,
     AnthropicStreamUsage,
 };
-use crate::chat_completions::{
-    Error,
-    streaming::StreamTransformer,
-    types::{
-        ChatCompletionChunk, ChatCompletionThinkingBlock, ChatCompletionToolCallChunk,
-        ChatCompletionsUsage,
-    },
-};
+use crate::chat_completions::{Error, streaming::StreamTransformer};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AnthropicJsonChunkType {

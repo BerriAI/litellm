@@ -6,6 +6,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-types.workspace = true
+litellm-core-utils.workspace = true
 litellm-auth.workspace = true
 litellm-auth-aws.workspace = true
 serde.workspace = true

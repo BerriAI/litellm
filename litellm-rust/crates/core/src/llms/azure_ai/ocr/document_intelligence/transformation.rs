@@ -3,6 +3,11 @@ use std::{collections::BTreeSet, time::Duration};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::AzureAuthInputs;
+use litellm_core_utils::{
+    call_arguments::CallArguments,
+    serde_compat::{FiniteF64, LaxI64},
+    url_utils::ApiUrl,
+};
 use reqwest::Url;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
@@ -10,7 +15,6 @@ use serde_with::serde_as;
 use tokio::time::Instant;
 
 use crate::{
-    call_arguments::CallArguments,
     constants::{
         AZURE_DI_API_VERSION, AZURE_DI_DEFAULT_DPI, AZURE_DI_DEFAULT_HEIGHT,
         AZURE_DI_DEFAULT_WIDTH, AZURE_DI_SUBSCRIPTION_HEADER, OCR_POLL_RETRY_SECS,
@@ -31,8 +35,6 @@ use crate::{
             ResolvedOcrCredentials,
         },
     },
-    serde_compat::{FiniteF64, LaxI64},
-    url_utils::ApiUrl,
 };
 
 const AZURE_DI_API_KEY_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY";

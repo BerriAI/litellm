@@ -2036,8 +2036,10 @@ dependencies = [
  "litellm-auth-azure",
  "litellm-auth-gcp",
  "litellm-callbacks",
+ "litellm-core-utils",
  "litellm-framing",
  "litellm-providers",
+ "litellm-types",
  "mime_guess",
  "moka",
  "rand 0.8.7",
@@ -2059,6 +2061,20 @@ dependencies = [
  "tokio-tungstenite",
  "url",
  "veil",
+]
+
+[[package]]
+name = "litellm-core-utils"
+version = "0.1.0"
+dependencies = [
+ "litellm-types",
+ "rstest",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_with",
+ "thiserror 2.0.19",
+ "url",
 ]
 
 [[package]]
@@ -2096,6 +2112,8 @@ version = "0.1.0"
 dependencies = [
  "litellm-auth",
  "litellm-auth-aws",
+ "litellm-core-utils",
+ "litellm-types",
  "rstest",
  "serde",
  "serde_json",
@@ -2114,6 +2132,7 @@ dependencies = [
  "litellm-core",
  "litellm-host-python",
  "litellm-token-counter",
+ "litellm-types",
  "pyo3",
  "pyo3-async-runtimes",
  "rstest",
@@ -2138,6 +2157,14 @@ dependencies = [
  "thiserror 2.0.19",
  "tokenizers",
  "unicode-normalization-alignments",
+]
+
+[[package]]
+name = "litellm-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

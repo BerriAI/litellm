@@ -10,8 +10,10 @@
 //! `_bedrock_converse_messages_pt` for the text-only surface this route
 //! accepts; anything richer is declined upstream by the capability gate.
 
-use super::types::{ChatMessage, ChatMessageContent};
-use crate::chat::EMPTY_TEXT_PLACEHOLDER;
+use litellm_types::llms::openai::{ChatMessage, ChatMessageContent};
+
+pub const EMPTY_TEXT_PLACEHOLDER: &str =
+    "[System: Empty message content sanitised to satisfy protocol]";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TurnRole {
@@ -203,8 +205,10 @@ mod tests {
             {"role": "assistant", "content": "   "},
             {"role": "user", "content": "real"}
         ])));
-        assert_eq!(conversation.turns[0].texts, vec![EMPTY_TEXT_PLACEHOLDER]);
-        assert_eq!(conversation.turns[1].texts, vec![EMPTY_TEXT_PLACEHOLDER]);
+        // Must equal `_EMPTY_TEXT_PLACEHOLDER` in litellm/litellm_core_utils/prompt_templates/factory.py
+        let placeholder = "[System: Empty message content sanitised to satisfy protocol]";
+        assert_eq!(conversation.turns[0].texts, vec![placeholder]);
+        assert_eq!(conversation.turns[1].texts, vec![placeholder]);
     }
 
     #[test]

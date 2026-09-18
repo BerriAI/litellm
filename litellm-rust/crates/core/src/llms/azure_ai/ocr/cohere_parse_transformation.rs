@@ -1,7 +1,7 @@
+use litellm_core_utils::{call_arguments::CallArguments, url_utils::ApiUrl};
 use serde_json::Value;
 
 use crate::{
-    call_arguments::CallArguments,
     llms::{
         base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext},
         cohere::ocr::{
@@ -15,7 +15,6 @@ use crate::{
         document::{inline_remote_document, validate_inline_document},
         types::{LiteLLMOcrResponse, OcrDocument, PreparedOcrRequest},
     },
-    url_utils::ApiUrl,
 };
 
 #[derive(Default)]

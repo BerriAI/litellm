@@ -1,16 +1,14 @@
-use litellm_providers::base_llm::chat::transformation::ChatCompletionsAuth;
+use litellm_providers::base_llm::chat::transformation::{
+    ChatCompletionsAuth, ProviderChatResponseData,
+};
+use litellm_types::utils::ChatCompletionsResponse;
 use serde_json::Value;
 
-use super::{
-    Error,
-    client::http_client,
-    prepare::prepare_provider_request,
-    types::{
-        ChatCompletionsResponse, ProviderChatCompletionsRequest, ProviderChatResponseData,
-        ResolvedChatCompletionsRequest,
-    },
+use super::{Error, client::http_client, prepare::prepare_provider_request};
+use crate::{
+    chat_completions::types::{ProviderChatCompletionsRequest, ResolvedChatCompletionsRequest},
+    http_utils::{http_request, truncate_error_body},
 };
-use crate::http_utils::{http_request, truncate_error_body};
 
 pub(super) async fn execute_chat_completions_provider_call(
     request: ResolvedChatCompletionsRequest<'_>,
