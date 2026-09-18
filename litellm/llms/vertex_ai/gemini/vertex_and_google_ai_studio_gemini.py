@@ -51,6 +51,7 @@ from litellm.types.llms.openai import (
     OpenAIChatCompletionFinishReason,
 )
 from litellm.types.llms.vertex_ai import (
+    VERTEX_AI_CACHED_CONTENT_KEY,
     VERTEX_AI_PROVIDER_METADATA_FIELDS,
     VERTEX_CREDENTIALS_TYPES,
     Candidates,
@@ -142,15 +143,17 @@ def _add_cache_creation_usage(usage: Usage, creation: VertexAICachedContentCreat
         if usage.prompt_tokens_details is not None
         else PromptTokensDetailsWrapper()
     )
-    cache_read_tokens: Final = getattr(usage, "_cache_read_input_tokens", 0) or 0
+    cache_read_tokens: Final = prompt_tokens_details.cached_tokens or 0
+    server_tool_use: Final = usage.server_tool_use if hasattr(usage, "server_tool_use") else None
+    cost: Final = usage.cost if hasattr(usage, "cost") else None
     return Usage(
         prompt_tokens=usage.prompt_tokens + creation_tokens,
         completion_tokens=usage.completion_tokens,
         total_tokens=usage.total_tokens + creation_tokens,
         prompt_tokens_details=prompt_tokens_details,
         completion_tokens_details=usage.completion_tokens_details,
-        server_tool_use=getattr(usage, "server_tool_use", None),
-        cost=getattr(usage, "cost", None),
+        server_tool_use=server_tool_use,
+        cost=cost,
         cache_creation_input_tokens=creation_tokens,
         **({"cache_read_input_tokens": cache_read_tokens} if cache_read_tokens > 0 else {}),
     )
@@ -2505,8 +2508,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 ) = VertexGeminiConfig._process_candidates(_candidates, model_response, logging_obj.optional_params)
 
             base_usage: Final = VertexGeminiConfig._calculate_usage(completion_response=completion_response)
-            from ..context_caching.vertex_ai_context_caching import VERTEX_AI_CACHED_CONTENT_KEY
-
             cached_content_creation: Final = logging_obj.model_call_details.get(VERTEX_AI_CACHED_CONTENT_KEY)
             usage: Final = (
                 _add_cache_creation_usage(base_usage, cast(VertexAICachedContentCreation, cached_content_creation))
@@ -3269,8 +3270,6 @@ class ModelResponseIterator:
         base_usage: Final = VertexGeminiConfig._calculate_usage(
             completion_response=processed_chunk,
         )
-        from ..context_caching.vertex_ai_context_caching import VERTEX_AI_CACHED_CONTENT_KEY
-
         cached_content_creation: Final = self.logging_obj.model_call_details.get(VERTEX_AI_CACHED_CONTENT_KEY)
         usage: Final = (
             _add_cache_creation_usage(base_usage, cast(VertexAICachedContentCreation, cached_content_creation))

@@ -576,6 +576,9 @@ class VertexAICachedContentCreation(TypedDict):
     expire_time: ReadOnly[str | None]
 
 
+VERTEX_AI_CACHED_CONTENT_KEY: Final = "vertex_ai_cached_content"
+
+
 class TaskTypeEnum(Enum):
     TASK_TYPE_UNSPECIFIED = "TASK_TYPE_UNSPECIFIED"
     RETRIEVAL_QUERY = "RETRIEVAL_QUERY"
