@@ -38,6 +38,7 @@ pub trait LegacyCallbacks {
         original_response: &str,
         api_key: Option<&str>,
         body: Option<&Py<PyDict>>,
+        headers: Option<&Py<PyDict>>,
     ) -> PyResult<()>;
 
     fn defers_async_logging(&self, py: Python<'_>) -> bool;
@@ -150,9 +151,11 @@ impl LegacyCallbacks for PythonLogger {
         original_response: &str,
         api_key: Option<&str>,
         body: Option<&Py<PyDict>>,
+        headers: Option<&Py<PyDict>>,
     ) -> PyResult<()> {
         let additional = PyDict::new(py);
         additional.set_item("complete_input_dict", body)?;
+        additional.set_item("headers", headers)?;
         Logging::PostCall.call(
             py,
             (self.object(py), original_response, api_key, &additional),

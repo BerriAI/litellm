@@ -44,6 +44,7 @@ pub struct LegacyLogging {
     response: Option<Py<PyAny>>,
     error: Option<Py<PyBaseException>>,
     body: Option<Py<PyDict>>,
+    headers: Option<Py<PyDict>>,
     context: Option<RequestContext>,
     asynchronous: bool,
     internal: bool,
@@ -77,6 +78,7 @@ impl LegacyLogging {
             response: None,
             error: None,
             body: None,
+            headers: None,
             context: None,
             asynchronous,
             internal: false,
@@ -245,6 +247,7 @@ impl PythonLifecycle for LegacyLogging {
             headers.set_item(name, value)?;
         }
         self.body = Some(body.clone().unbind());
+        self.headers = Some(headers.clone().unbind());
         self.context = Some(context.clone());
         self.logger()?.pre_call(
             py,
@@ -299,8 +302,13 @@ impl PythonLifecycle for LegacyLogging {
                     .as_ref()
                     .and_then(|context| context.api_key.as_ref())
                     .map(|api_key| api_key.expose());
-                self.logger()?
-                    .post_call(py, &raw.body, api_key, self.body.as_ref())?;
+                self.logger()?.post_call(
+                    py,
+                    &raw.body,
+                    api_key,
+                    self.body.as_ref(),
+                    self.headers.as_ref(),
+                )?;
                 Ok(LifecycleStep::Done)
             }
             (CallEvent::Succeeded { timing }, Some(PublicValue::Response(response))) => {
