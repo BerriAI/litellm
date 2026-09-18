@@ -1,3 +1,4 @@
+use litellm_http::{HttpClientConfig, HttpClientPool};
 use litellm_llms::{
     base_llm::ocr::{error::Error, transformation::LiteLLMOcrResponse},
     custom_httpx::llm_http_handler::OcrClient,
@@ -15,6 +16,10 @@ pub async fn perform(
     litellm_callbacks::run::run(ocr_machine(client.clone()), &LocalOcrHost::new(request)).await
 }
 
-pub async fn ocr(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
-    perform(&OcrClient::shared()?, request).await
+pub async fn ocr(
+    pool: &HttpClientPool,
+    config: &HttpClientConfig,
+    request: LiteLLMOcrRequest,
+) -> Result<LiteLLMOcrResponse, Error> {
+    perform(&OcrClient::new(pool, config)?, request).await
 }
