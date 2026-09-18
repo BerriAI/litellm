@@ -678,7 +678,7 @@ model LiteLLM_SpendLogs {
   @@index([end_user])
   @@index([session_id])
   @@index([litellm_call_id])
-  @@index([api_key, startTime])
+  @@index([api_key, startTime, spend])
 }
 
 model LiteLLM_BudgetWindowSpend {
