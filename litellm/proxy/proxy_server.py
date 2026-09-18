@@ -8671,9 +8671,9 @@ def _format_fallback_metadata_sse_event(
 
 def _restamp_streaming_chunk_model(
     *,
-    chunk: Any,
+    chunk: BaseModel | Mapping[str, object] | str | bytes | None,
     requested_model_from_client: str,
-    request_data: dict,
+    request_data: dict[str, object],
     model_mismatch_logged: bool,
     fallback_was_attempted: bool = False,
     fallback_model_from_metadata: str | None = None,
@@ -8716,12 +8716,12 @@ def _restamp_streaming_chunk_model(
         )
         model_mismatch_logged = True
 
-    if isinstance(chunk, dict):
-        chunk["model"] = target_model
-        return chunk, model_mismatch_logged
-
     try:
-        chunk.model = target_model
+        public_chunk: Final = copy.copy(chunk)
+        if isinstance(public_chunk, dict):
+            public_chunk["model"] = target_model
+        else:
+            setattr(public_chunk, "model", target_model)  # noqa: B010  # BaseModel subclasses define model dynamically
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm_call_id=%s: failed to override chunk.model=%r on chunk_type=%s. error=%s",
@@ -8731,6 +8731,8 @@ def _restamp_streaming_chunk_model(
             str(e),
             exc_info=True,
         )
+    else:
+        return public_chunk, model_mismatch_logged
 
     return chunk, model_mismatch_logged
 
