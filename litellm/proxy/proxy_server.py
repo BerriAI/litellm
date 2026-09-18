@@ -16982,7 +16982,9 @@ async def update_config(
             }
         )
         typed_router_settings: Final[Mapping[str, JsonValue]] = (
-            config_info.router_settings.model_dump(exclude_none=True) if config_info.router_settings is not None else {}
+            config_info.router_settings.model_dump(exclude_none=True, exclude_unset=True)
+            if config_info.router_settings is not None
+            else {}
         )
         router_settings_updates: Final[Mapping[str, JsonValue]] = {
             **typed_router_settings,
