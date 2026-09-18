@@ -3,7 +3,6 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { Copy, Info, Loader2, Pencil, RefreshCw, Trash2 } from "lucide-react";
 
-import { formatPerSecondCost } from "@/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ModelData } from "@/components/model_dashboard/types";
 import { DataTableSortHeader } from "@/components/shared/DataTable";
@@ -13,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Switch } from "@/components/ui/switch";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
-import { copyToClipboard } from "@/utils/dataUtils";
+import { copyToClipboard, formatPerSecondCost } from "@/utils/dataUtils";
 
 export const MODEL_ID_COLUMN_ID = "model_info_id";
 export const MODEL_NAME_COLUMN_ID = "model_name";
