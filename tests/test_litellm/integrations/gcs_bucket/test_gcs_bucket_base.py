@@ -132,6 +132,13 @@ class TestGCSBucketBase:
 
 class TestGCSBucketLoggerBucketName:
     @pytest.mark.asyncio
+    async def test_constructor_rejects_non_premium_user(self, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+
+        with pytest.raises(ValueError, match="GCS Bucket logging is a premium feature"):
+            GCSBucketLogger(bucket_name="config-bucket")
+
+    @pytest.mark.asyncio
     async def test_the_bucket_name_it_is_constructed_with_survives(self, monkeypatch):
         """Reading config.yaml out of a GCS bucket asks for that bucket, not the logging one (LIT-6982)."""
         monkeypatch.setenv("GCS_BUCKET_NAME", "logging-bucket")
@@ -145,3 +152,11 @@ class TestGCSBucketLoggerBucketName:
         monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
 
         assert GCSBucketLogger().BUCKET_NAME == "logging-bucket"
+
+    @pytest.mark.asyncio
+    async def test_async_logging_rejects_non_premium_user(self, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+        logger = object.__new__(GCSBucketLogger)
+
+        with pytest.raises(ValueError, match="GCS Bucket logging is a premium feature"):
+            await logger.async_log_success_event({}, None, None, None)
