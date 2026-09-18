@@ -87,6 +87,10 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         )
         self._deleted_runtime_keys = self._deleted_runtime_keys | frozenset((key,))
 
+    def clear(self) -> None:
+        self._deleted_runtime_keys = frozenset(key for key in self._keys() if not self.owned_by_config(key))
+        self._runtime_values = _EMPTY_VALUES
+
     def __iter__(self) -> Iterator[str]:
         return iter(
             key
