@@ -82,6 +82,19 @@ class FakeRedisCache(RedisCache):
     async def async_delete_cache(self, key: str):  # type: ignore[override]
         self._store.pop(key, None)
 
+    async def delete_cache_keys(self, keys):  # type: ignore[override]
+        for key in keys:
+            self._store.pop(key, None)
+
+
+class PartitionFailingRedisCache(FakeRedisCache):
+    """Fails the batch delete for the key-object partition and no other."""
+
+    async def delete_cache_keys(self, keys):  # type: ignore[override]
+        if any(is_user_key_cache_key(key) for key in keys):
+            raise ConnectionError("redis unavailable")
+        await super().delete_cache_keys(keys)
+
 
 def _make_key_obj(token: str = "tok") -> UserAPIKeyAuth:
     # Minimal object (UserAPIKeyAuth inherits token from base view).
@@ -330,6 +343,46 @@ class TestUserKeyObjectPartition:
 
         assert await cache.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth) is None
         assert await redis.async_get_cache(HASHED_TOKEN) is None
+
+    @pytest.mark.asyncio
+    async def test_batch_delete_routes_each_key_to_its_partition(self):
+        """A batch delete has to clear the same partition the single delete does.
+
+        ``DualCache``'s batch delete only knows about the main in-memory cache, so
+        inheriting it unchanged leaves a key object sitting in ``key_object_cache``
+        with its pre-reset spend, and the next request is authorized against that
+        stale copy until the local entry expires.
+        """
+        redis = FakeRedisCache()
+        cache = UserApiKeyCache(redis_cache=redis)
+        await cache.async_set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth)
+        await cache.async_set_cache(end_user_cache_key("u1"), {"user_id": "u1"})
+
+        await cache.async_delete_cache_keys([HASHED_TOKEN, end_user_cache_key("u1")])
+
+        assert await cache.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth) is None
+        assert await cache.async_get_cache(end_user_cache_key("u1")) is None
+        assert await redis.async_get_cache(HASHED_TOKEN) is None
+        assert await redis.async_get_cache(end_user_cache_key("u1")) is None
+
+    @pytest.mark.asyncio
+    async def test_batch_delete_clears_the_other_partition_when_one_fails(self):
+        """One partition failing must not cost the other its deletions.
+
+        A caller batching these has already committed the rows they cache, so a
+        partition that is skipped keeps authorizing against pre-reset spend until
+        the entry expires. The failure is still raised for the caller to report.
+        """
+        redis = PartitionFailingRedisCache()
+        cache = UserApiKeyCache(redis_cache=redis)
+        await cache.async_set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth)
+        await cache.async_set_cache(end_user_cache_key("u1"), {"user_id": "u1"})
+
+        with pytest.raises(ConnectionError):
+            await cache.async_delete_cache_keys([HASHED_TOKEN, end_user_cache_key("u1")])
+
+        assert await cache.async_get_cache(end_user_cache_key("u1")) is None
+        assert await redis.async_get_cache(end_user_cache_key("u1")) is None
 
     @pytest.mark.asyncio
     async def test_pipeline_write_routes_each_entry_to_its_partition(self):

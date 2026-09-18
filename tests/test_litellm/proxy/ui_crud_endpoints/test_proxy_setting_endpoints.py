@@ -3324,15 +3324,17 @@ class TestTeamAdminEditableTeamFieldsSetting:
         general_settings: dict = {"team_admin_editable_team_fields": []}
         monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
 
+        enabled = ["tpm_limit", "rpm_limit", "max_budget"]
+
         try:
-            response = client.patch("/update/ui_settings", json={"team_admin_editable_team_fields": ["tpm_limit"]})
+            response = client.patch("/update/ui_settings", json={"team_admin_editable_team_fields": enabled})
         finally:
             app.dependency_overrides.clear()
 
         assert response.status_code == 200
         stored = json.loads(mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]["create"]["ui_settings"])
-        assert stored["team_admin_editable_team_fields"] == ["tpm_limit"]
-        assert general_settings["team_admin_editable_team_fields"] == ["tpm_limit"]
+        assert stored["team_admin_editable_team_fields"] == enabled
+        assert general_settings["team_admin_editable_team_fields"] == enabled
 
     def test_patch_with_an_empty_list_turns_team_admin_editing_off_again(self, monkeypatch):
         mock_prisma = self._as_proxy_admin(monkeypatch)

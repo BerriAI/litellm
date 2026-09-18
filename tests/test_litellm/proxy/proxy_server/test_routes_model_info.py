@@ -9,13 +9,158 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import copy
+from collections.abc import Callable
+from contextlib import AbstractContextManager
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+from fastapi.testclient import TestClient
 
+import litellm
+from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy import proxy_server
+from litellm.utils import _invalidate_model_cost_lowercase_map
 
 from .conftest import normalize  # type: ignore[import-not-found]
+
+
+@pytest.mark.parametrize(
+    ("backend_model", "base_model"),
+    (
+        ("azure/hosted-model", "fallback-model"),
+        ("openai/org/fallback-model", None),
+        ("openai/hosted-model", "fallback-model"),
+        ("openai/fallback-model", "unknown-base-model"),
+    ),
+)
+@pytest.mark.parametrize("advertised_limit", (None, 2048))
+async def test_discovery_preserves_model_info_fallbacks(
+    backend_model: str, base_model: str | None, advertised_limit: int | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "local",
+                "litellm_params": {
+                    "model": backend_model,
+                    "api_base": "https://fallback.test/v1",
+                    "api_key": "local-key",
+                },
+                "model_info": {"id": "fallback-deployment", "base_model": base_model, "max_output_tokens": 333},
+            }
+        ]
+    )
+    builtin: Final = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "max_input_tokens": 7000,
+        "max_output_tokens": 2000,
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+    }
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "fallback-model": builtin,
+            "openai/fallback-model": builtin,
+            "fallback-deployment": {"litellm_provider": "openai", "mode": "chat"},
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": backend_model.split("/", 1)[1],
+                            "max_model_len": advertised_limit,
+                        }
+                    ]
+                },
+            )
+        )
+    ) as client:
+        handler.client = client
+        await router.arefresh_model_info(client=handler)
+    deployment: Final = {
+        **router.model_list[0],
+        "model_info": {**router.model_list[0]["model_info"], "mode": None},
+    }
+    enriched_models: Final = (
+        proxy_server._get_proxy_model_info(copy.deepcopy(deployment)),
+        proxy_server._enrich_model_info_with_litellm_data(copy.deepcopy(deployment), llm_router=router),
+    )
+    expected_input: Final = (
+        advertised_limit
+        if advertised_limit is not None and backend_model.startswith("openai/")
+        else builtin["max_input_tokens"]
+    )
+    for enriched in enriched_models:
+        info: Final = enriched["model_info"]
+        assert info.get("max_input_tokens") == expected_input
+        assert info["max_output_tokens"] == 333
+        assert info["input_cost_per_token"] == builtin["input_cost_per_token"]
+        assert info["output_cost_per_token"] == builtin["output_cost_per_token"]
+        assert info["mode"] is None
+    _invalidate_model_cost_lowercase_map()
+
+
+async def test_upstream_limits_reach_model_info_routes(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "local",
+                "litellm_params": {
+                    "model": "hosted_vllm/org/local-model",
+                    "api_base": "https://backend.test/v1",
+                    "api_key": "local-key",
+                },
+                "model_info": {"id": "local-deployment", "max_output_tokens": 512, "max_input_tokens": None},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/models"
+        return httpx.Response(200, json={"data": [{"id": "org/local-model", "max_model_len": 4096}]})
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as upstream:
+        handler.client = upstream
+        litellm.in_memory_llm_clients_cache.set_cache("async_httpx_clientopenai", handler)
+        await proxy_server.ProxyStartupEvent.refresh_model_info()
+        with auth_as():
+            for path in ("/v1/model/info", "/model/info"):
+                response: Final = client.get(path)
+                assert response.status_code == 200, response.text
+                info: Final = response.json()["data"][0]["model_info"]
+                assert (info["max_input_tokens"], info["max_output_tokens"]) == (4096, 512)
+            group_response: Final = client.get("/model_group/info")
+            assert group_response.status_code == 200, group_response.text
+            assert group_response.json()["data"][0]["max_input_tokens"] == 4096
+    _invalidate_model_cost_lowercase_map()
+
 
 # ---------------------------------------------------------------------------
 # GET /v2/model/info

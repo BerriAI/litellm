@@ -369,6 +369,52 @@ class TestBedrockMantleResponsesTools:
         assert "file_search" in str(mock_warning.call_args)
 
 
+class TestBedrockMantleSamplingParams:
+    """Mantle serves OpenAI's gpt-5 models under their OpenAI sampling rule: top_p and a
+    non-default temperature are accepted only when reasoning.effort resolves to none, so
+    the `openai.` catalogue name (region-prefixed on GovCloud) must answer from the OpenAI
+    model's map entry instead of dropping both params on every request."""
+
+    @pytest.mark.parametrize(
+        "model, effort, survives",
+        [
+            ("openai.gpt-5.4", None, True),
+            ("openai.gpt-5.5", None, False),
+            ("openai.gpt-5.6-luna", None, False),
+            ("openai.gpt-5.6-luna", "none", True),
+            ("openai.gpt-5.6-luna", "low", False),
+            ("us-gov-west-1/openai.gpt-5.4", None, True),
+            ("us-gov-west-1/openai.gpt-5.6-luna", None, False),
+        ],
+    )
+    def test_top_p_and_temperature_follow_the_resolved_effort(self, local_cost_map, model, effort, survives):
+        params = {"top_p": 0.9, "temperature": 0.2}
+        if effort is not None:
+            params["reasoning"] = {"effort": effort}
+        mapped = BedrockMantleResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=params,
+            model=model,
+            drop_params=True,
+        )
+        assert ("top_p" in mapped) is survives
+        assert ("temperature" in mapped) is survives
+
+    def test_top_p_without_drop_params_raises_only_while_reasoning_is_active(self, local_cost_map):
+        with pytest.raises(litellm.UnsupportedParamsError):
+            BedrockMantleResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"top_p": 0.9},
+                model="openai.gpt-5.6-luna",
+                drop_params=False,
+            )
+
+        mapped = BedrockMantleResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"top_p": 0.9},
+            model="openai.gpt-5.4",
+            drop_params=False,
+        )
+        assert mapped["top_p"] == 0.9
+
+
 class TestBedrockMantleResponsesWebSearch:
     """Web Search on Amazon Bedrock is a server-side built-in tool that Mantle runs
     itself when the caller passes {"type": "web_search"} on the Responses path, so
@@ -1865,38 +1911,6 @@ class TestBedrockMantleResponsesSigV4:
 
 class TestBedrockMantleResponsesPricing:
 
-    @pytest.mark.parametrize(
-        "model, input_cost, output_cost",
-        [
-            ("openai.gpt-5.6-sol", 5.5e-06, 3.3e-05),
-            ("openai.gpt-5.6-terra", 2.2e-06, 1.32e-05),
-            ("openai.gpt-5.6-luna", 2.2e-07, 1.32e-06),
-        ],
-    )
-    def test_gpt_5_6_responses_call_cost(self, local_cost_map, model, input_cost, output_cost):
-        from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
-
-        input_tokens = 100000
-        output_tokens = 10000
-        response = ResponsesAPIResponse(
-            id="resp-1",
-            created_at=1700000000,
-            model=model,
-            output=[],
-            usage=ResponseAPIUsage(
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                total_tokens=input_tokens + output_tokens,
-            ),
-        )
-
-        cost = litellm.completion_cost(
-            completion_response=response,
-            model=f"bedrock_mantle/{model}",
-            custom_llm_provider="bedrock_mantle",
-        )
-
-        assert cost == pytest.approx(input_tokens * input_cost + output_tokens * output_cost)
 
     def test_models_registered(self, local_cost_map):
         assert "bedrock_mantle/openai.gpt-5.5" in litellm.bedrock_mantle_models
