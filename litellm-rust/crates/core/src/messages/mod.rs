@@ -8,14 +8,16 @@
 //! can splice the event stream to its own caller.
 
 mod error;
+pub mod types;
 pub use error::Error;
 mod client;
 mod common_utils;
 mod handler;
 mod prepare;
 use handler::{execute_messages_provider_call, execute_messages_provider_stream};
-pub use litellm_providers::messages::types;
-use types::{AnthropicMessagesResponse, MessagesRequest};
+use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
+
+use crate::messages::types::MessagesRequest;
 
 pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesResponse, Error> {
     execute_messages_provider_call(request).await

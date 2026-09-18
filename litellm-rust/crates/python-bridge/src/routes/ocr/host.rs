@@ -1,13 +1,18 @@
 use litellm_auth::ResolvedCredential;
-use litellm_core::ocr::{LiteLLMOcrResponse, Ocr, OcrOp, OcrOpResult};
+use litellm_core::ocr::route::{Ocr, OcrOp, OcrOpResult};
 use litellm_host_python::{RouteHost, missing_state, to_py};
-use pyo3::exceptions::PyBaseException;
-use pyo3::gc::{PyTraverseError, PyVisit};
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use litellm_llms::base_llm::ocr::{error::Error, transformation::LiteLLMOcrResponse};
+use pyo3::{
+    exceptions::PyBaseException,
+    gc::{PyTraverseError, PyVisit},
+    prelude::*,
+    types::PyDict,
+};
 
-use super::errors::to_pyerr as ocr_error_to_pyerr;
-use super::project::{OcrHostHandles, project_request};
+use super::{
+    errors::to_pyerr as ocr_error_to_pyerr,
+    project::{OcrHostHandles, project_request},
+};
 
 enum OcrHostData {
     Unprojected,
@@ -37,7 +42,7 @@ impl OcrRouteHost {
         }
     }
 
-    fn read_document(&self, py: Python<'_>) -> PyResult<litellm_core::ocr::OcrFileContent> {
+    fn read_document(&self, py: Python<'_>) -> PyResult<litellm_core::ocr::types::OcrFileContent> {
         self.handles()?
             .reader
             .as_ref()
@@ -90,12 +95,12 @@ impl RouteHost for OcrRouteHost {
             .map(Bound::unbind)
     }
 
-    fn native_error(error: litellm_core::ocr::Error) -> PyErr {
+    fn native_error(error: Error) -> PyErr {
         ocr_error_to_pyerr(error)
     }
 
-    fn host_error(error: &PyErr) -> litellm_core::ocr::Error {
-        litellm_core::ocr::Error::InvalidRequest(error.to_string())
+    fn host_error(error: &PyErr) -> Error {
+        Error::InvalidRequest(error.to_string())
     }
 
     fn map_failure(&self, py: Python<'_>, error: &PyErr) -> PyResult<PyErr> {
