@@ -172,6 +172,19 @@ def test_flux2_cost_uses_mapped_dimensions_after_response_transformation(dimensi
     ) == pytest.approx(5e-08 * 2048 * 1024 * 2)
 
 
+def test_flux2_flex_cost_accepts_lowercase_model_spelling():
+    response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n"), ImageObject(b64_json="aW1n")])
+
+    cost: Final = litellm.completion_cost(
+        model="azure_ai/flux.2-flex",
+        completion_response=response,
+        optional_params={"width": 1536, "height": 1024, "num_images": 2},
+        call_type="image_generation",
+    )
+
+    assert cost == pytest.approx(5e-08 * 1536 * 1024 * 2)
+
+
 def test_flux2_response_preserves_mapped_dimensions():
     config = AzureFoundryFluxImageGenerationConfig()
     params = config.map_openai_params(
