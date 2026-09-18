@@ -25,6 +25,7 @@ fn run_ocr(
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
+    helpers: Bound<'_, PyAny>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     let client = OcrClient::shared().map_err(ocr_error_to_pyerr)?;
@@ -33,7 +34,7 @@ fn run_ocr(
         if asynchronous { ASYNC_SURFACE } else { SURFACE },
         PublicCall::capture(&request, &args, &kwargs)?,
         ocr_machine(client),
-        OcrRouteHost::new(request.unbind()),
+        OcrRouteHost::new(request.unbind(), helpers.unbind()),
         asynchronous,
     )
 }
@@ -44,8 +45,9 @@ pub(crate) fn ocr(
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
+    helpers: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    run_ocr(py, request, args, kwargs, false)
+    run_ocr(py, request, args, kwargs, helpers, false)
 }
 
 #[pyfunction]
@@ -54,6 +56,7 @@ pub(crate) fn aocr(
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
+    helpers: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    run_ocr(py, request, args, kwargs, true)
+    run_ocr(py, request, args, kwargs, helpers, true)
 }

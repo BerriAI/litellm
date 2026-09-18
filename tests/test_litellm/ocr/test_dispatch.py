@@ -20,7 +20,9 @@ from litellm.rust_bridge.ocr.entrypoints import (
     LiteLLMOcrRequest,
     NativeAocr,
     NativeOcr,
+    OcrHostHelpers,
 )
+from litellm.rust_bridge.ocr.route_host import HELPERS
 
 PYTHON_RULES: Final[Rules] = (Rule(Route.OCR, Rollout.PYTHON_ONLY),)
 RUST_RULES: Final[Rules] = (Rule(Route.OCR, Rollout.RUST_REQUIRED),)
@@ -346,7 +348,9 @@ def test_public_ocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> 
         request: LiteLLMOcrRequest,
         args: tuple[object, ...],
         kwargs: Mapping[str, object],
+        helpers: OcrHostHelpers,
     ) -> OCRResponse:
+        assert helpers is HELPERS
         captured.append(request)
         return expected
 
@@ -374,7 +378,9 @@ async def test_public_aocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPat
         request: LiteLLMOcrRequest,
         args: tuple[object, ...],
         kwargs: Mapping[str, object],
+        helpers: OcrHostHelpers,
     ) -> OCRResponse:
+        assert helpers is HELPERS
         captured.append(request)
         return expected
 
