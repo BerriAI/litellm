@@ -91,10 +91,16 @@ else:
 _REQUEST_RATE_LIMIT_DATA: Final = TypeAdapter(Mapping[str, object])
 
 
+def _sibling_counter_keys(window_key: str) -> tuple[str, str]:
+    prefix: Final = window_key.removesuffix(":window")
+    return f"{prefix}:requests", f"{prefix}:tokens"
+
+
 BATCH_RATE_LIMITER_SCRIPT: Final = """
 local results = {}
 local now = tonumber(ARGV[1])
 local window_size = tonumber(ARGV[2])
+local reset_windows = {}
 
 -- Process each window/counter pair
 for i = 1, #KEYS, 2 do
@@ -106,6 +112,11 @@ for i = 1, #KEYS, 2 do
     local window_start = redis.call('GET', window_key)
     if not window_start or (now - tonumber(window_start)) >= window_size then
         -- Reset window and counter
+        if not reset_windows[window_key] then
+            local prefix = string.sub(window_key, 1, -(#':window') - 1)
+            redis.call('DEL', prefix .. ':requests', prefix .. ':tokens')
+            reset_windows[window_key] = true
+        end
         redis.call('SET', window_key, tostring(now))
         redis.call('SET', counter_key, increment_value)
         redis.call('EXPIRE', window_key, window_size)
@@ -151,6 +162,7 @@ CHECK_AND_INCREMENT_BY_N_SCRIPT: Final = """
 local time_reply = redis.call('TIME')
 local now = tonumber(time_reply[1])
 local descriptor_count = #KEYS / 2
+local reset_windows = {}
 
 -- Pass 1: read state, validate. Abort without writing if any over limit.
 local descriptor_state = {}
@@ -201,6 +213,11 @@ for i = 1, descriptor_count do
 
     if window_expired then
         active_window_start = now
+        if not reset_windows[window_key] then
+            local prefix = string.sub(window_key, 1, -(#':window') - 1)
+            redis.call('DEL', prefix .. ':requests', prefix .. ':tokens')
+            reset_windows[window_key] = true
+        end
         redis.call('SET', window_key, tostring(now))
         redis.call('SET', counter_key, increment)
         redis.call('EXPIRE', window_key, window_size)
@@ -1019,6 +1036,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         This follows the same logic as the Redis Lua script but uses async cache operations.
         """
         results: Final[list[CacheCounterValue | None]] = []
+        reset_windows: Final[set[str]] = set()  # mutable-ok: tracks windows reset during this call
 
         # Process each window/counter pair
         for i in range(0, len(keys), 2):
@@ -1036,6 +1054,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # Check if window exists and is valid
             if window_start is None or (now_int - int(window_start)) >= window_size:
                 # Reset window and counter
+                if window_key not in reset_windows:
+                    for sibling_counter_key in _sibling_counter_keys(window_key):
+                        await self.internal_usage_cache.async_set_cache(
+                            key=sibling_counter_key,
+                            value=0,
+                            ttl=window_size,
+                            litellm_parent_otel_span=None,
+                            local_only=True,
+                        )
+                    reset_windows.add(window_key)
                 await self.internal_usage_cache.async_set_cache(
                     key=window_key,
                     value=str(now_int),
@@ -2049,9 +2077,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         # Pass 2: apply increments.
         statuses: Final[list[RateLimitStatus]] = []
+        reset_windows: Final[set[str]] = set()  # mutable-ok: tracks windows reset during this call
         for meta, state in zip(per_counter_meta, descriptor_state):
             new_counter = meta["increment"] if state["window_expired"] else state["current"] + meta["increment"]
             if state["window_expired"]:
+                if meta["window_key"] not in reset_windows:
+                    for sibling_counter_key in _sibling_counter_keys(meta["window_key"]):
+                        await self.internal_usage_cache.async_set_cache(
+                            key=sibling_counter_key,
+                            value=0,
+                            ttl=meta["window_size"],
+                            litellm_parent_otel_span=parent_otel_span,
+                            local_only=True,
+                        )
+                    reset_windows.add(meta["window_key"])
                 await self.internal_usage_cache.async_set_cache(
                     key=meta["window_key"],
                     value=str(now_int),

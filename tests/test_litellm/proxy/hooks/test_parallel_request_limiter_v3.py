@@ -5603,6 +5603,75 @@ async def _reserved_tokens_for(
 
 
 @pytest.mark.asyncio
+async def test_tpm_reservation_resets_sibling_tokens_with_request_window(monkeypatch):
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "true")
+    time_controller = TimeController()
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-window-reset-siblings"),
+        tpm_limit=1000,
+        rpm_limit=1000,
+    )
+
+    async def request(call_id):
+        data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 200,
+            "litellm_call_id": call_id,
+            "metadata": {
+                "user_api_key": user_api_key_dict.api_key,
+                "user_api_key_user_id": user_api_key_dict.user_id,
+            },
+        }
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type="completion",
+        )
+        await handler.async_log_success_event(
+            kwargs={
+                "litellm_call_id": call_id,
+                "litellm_params": {
+                    "metadata": {
+                        "user_api_key": user_api_key_dict.api_key,
+                        "user_api_key_user_id": user_api_key_dict.user_id,
+                        "model_group": "gpt-4o",
+                    }
+                },
+                "standard_logging_object": {
+                    "metadata": {
+                        "user_api_key_hash": user_api_key_dict.api_key,
+                        "user_api_key_user_id": user_api_key_dict.user_id,
+                    }
+                },
+            },
+            response_obj=ModelResponse(
+                model="gpt-4o",
+                usage=Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300),
+            ),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    tokens_key = handler.create_rate_limit_keys(
+        key="api_key", value=user_api_key_dict.api_key, rate_limit_type="tokens"
+    )
+    for index in range(3):
+        await request(f"call-{index}")
+        assert await local_cache.async_get_cache(key=tokens_key) == (index + 1) * 300
+
+    time_controller.advance(61)
+    await request("call-after-window-reset")
+    assert await local_cache.async_get_cache(key=tokens_key) == 300
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "key_metadata, team_metadata, expected_output_estimate, tier",
     [
