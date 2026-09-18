@@ -1788,7 +1788,9 @@ async def _validate_project_assignment(
     if project_obj is None:
         raise HTTPException(
             status_code=404,
-            detail={"error": f"Project not found, project_id={data.project_id}"},  # mutable-ok: HTTPException.detail has no immutable form
+            detail={  # mutable-ok: HTTPException.detail has no immutable form
+                "error": f"Project not found, project_id={data.project_id}"
+            },
         )
     team: Final = data.team_id if "team_id" in data.model_fields_set else existing_key_row.team_id
     if team is None or team != project_obj.team_id:
