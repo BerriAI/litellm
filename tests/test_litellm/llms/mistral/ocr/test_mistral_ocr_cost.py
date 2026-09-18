@@ -63,7 +63,6 @@ def test_ocr4_cost_scales_with_pages(model: str, pages_processed: int) -> None:
     assert cost == pytest.approx(OCR4_COST_PER_PAGE * pages_processed)
 
 
-
 @pytest.mark.parametrize("cost_map_path", [MAIN_COST_MAP, BACKUP_COST_MAP])
 def test_ocr3_pricing_entry(cost_map_path: Path) -> None:
     with open(cost_map_path) as f:
@@ -80,6 +79,7 @@ def test_ocr3_pricing_entry(cost_map_path: Path) -> None:
 def test_ocr3_model_info_price(local_model_cost_map) -> None:
     info = litellm.get_model_info(model=OCR3_MODEL, custom_llm_provider="mistral")
     assert info["ocr_cost_per_page"] == OCR3_COST_PER_PAGE
+    assert info["annotation_cost_per_page"] == OCR3_ANNOTATION_COST_PER_PAGE
 
 
 @pytest.mark.parametrize("pages_processed", [1, 3, 10])
