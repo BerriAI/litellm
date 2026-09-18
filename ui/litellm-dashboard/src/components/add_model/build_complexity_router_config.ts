@@ -629,6 +629,7 @@ export const buildComplexityRouterConfig = ({
   // the form never rewrote. The UI gates the same controls on this, not on the raw value.
   const effectiveType: ClassifierType = customTierSet ? "llm" : classifierType;
   const forecast = isForecastClassifier(effectiveType);
+  const preserveContextWindowBuffer = !forecast || enableContextWindowEscalation === true;
 
   const supportsOpeningPrompt = !customTierSet && !forecast && usesLlmClassifier(effectiveType);
   const payload: ComplexityRouterConfigPayload = {
@@ -682,11 +683,10 @@ export const buildComplexityRouterConfig = ({
         adaptive_eligible: adaptiveEligible,
       }),
     ...(returnRawModelName && { return_raw_model_name: true }),
-    // Omission enables the backend default, so hidden forecast controls need an explicit opt-out.
     ...((forecast || enableContextWindowEscalation !== undefined) && {
-      enable_context_window_escalation: forecast ? false : enableContextWindowEscalation,
+      enable_context_window_escalation: enableContextWindowEscalation ?? false,
     }),
-    ...(!forecast &&
+    ...(preserveContextWindowBuffer &&
       contextWindowEscalationBuffer !== undefined && {
         context_window_escalation_buffer: contextWindowEscalationBuffer,
       }),

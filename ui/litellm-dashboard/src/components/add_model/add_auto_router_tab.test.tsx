@@ -669,7 +669,7 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
-  it("carries a context-window escalation opt-out through to the create payload", async () => {
+  it("starts context-window escalation disabled and carries an explicit opt-in to the create payload", async () => {
     const user = userEvent.setup();
     vi.mocked(getMissingTiersError).mockReturnValue(null);
 
@@ -679,14 +679,15 @@ describe("AddAutoRouterTab", () => {
     expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Context Window Escalation"));
     const toggle = await screen.findByRole("switch", { name: "Escalate oversized prompts to a tier that fits" });
-    expect(toggle).toBeChecked();
+    expect(toggle).not.toBeChecked();
+    expect(screen.queryByLabelText("Window fit buffer")).not.toBeInTheDocument();
     await user.click(toggle);
 
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
-      enable_context_window_escalation: false,
+      enable_context_window_escalation: true,
     });
   });
 
@@ -699,6 +700,7 @@ describe("AddAutoRouterTab", () => {
     await user.type(screen.getByPlaceholderText(/smart_router/i), "ctx-buffer-router");
     expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Context Window Escalation"));
+    await user.click(screen.getByRole("switch", { name: "Escalate oversized prompts to a tier that fits" }));
     const buffer = await screen.findByLabelText("Window fit buffer");
     fireEvent.change(buffer, { target: { value: "1.5" } });
     fireEvent.blur(buffer, { target: { value: "1.5" } });
@@ -708,7 +710,7 @@ describe("AddAutoRouterTab", () => {
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
     const config = vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config;
     expect(config).toMatchObject({ context_window_escalation_buffer: 1 });
-    expect(config).not.toHaveProperty("enable_context_window_escalation");
+    expect(config).toHaveProperty("enable_context_window_escalation", true);
   });
 
   it("clearing the buffer removes it from the payload so the router tracks the backend default", async () => {
@@ -720,6 +722,7 @@ describe("AddAutoRouterTab", () => {
     await user.type(screen.getByPlaceholderText(/smart_router/i), "ctx-clear-router");
     expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Context Window Escalation"));
+    await user.click(screen.getByRole("switch", { name: "Escalate oversized prompts to a tier that fits" }));
     const buffer = await screen.findByLabelText("Window fit buffer");
     fireEvent.change(buffer, { target: { value: "0.8" } });
     fireEvent.blur(buffer, { target: { value: "0.8" } });
