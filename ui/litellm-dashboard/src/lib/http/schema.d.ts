@@ -19037,7 +19037,7 @@ export interface paths {
         post: operations["store_mcp_oauth_user_credential_v1_mcp_server__server_id__oauth_user_credential_post"];
         /**
          * Delete Mcp Oauth User Credential
-         * @description Revoke the calling user's stored OAuth2 token for an MCP server
+         * @description Revoke the calling user's stored OAuth2 token for an MCP server. A proxy admin may pass user_id to revoke another user's stored token.
          */
         delete: operations["delete_mcp_oauth_user_credential_v1_mcp_server__server_id__oauth_user_credential_delete"];
         options?: never;
@@ -19101,9 +19101,29 @@ export interface paths {
         post: operations["store_mcp_user_credential_v1_mcp_server__server_id__user_credential_post"];
         /**
          * Delete Mcp User Credential
-         * @description Delete the calling user's stored API key for a BYOK MCP server
+         * @description Delete the calling user's stored API key for a BYOK MCP server. A proxy admin may pass user_id to revoke another user's stored key.
          */
         delete: operations["delete_mcp_user_credential_v1_mcp_server__server_id__user_credential_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/server/{server_id}/user-credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Mcp Server User Credentials
+         * @description List every user's stored BYOK or OAuth2 credential for an MCP server (admin only, no secrets)
+         */
+        get: operations["list_mcp_server_user_credentials_v1_mcp_server__server_id__user_credentials_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -19151,7 +19171,11 @@ export interface paths {
         get: operations["get_mcp_gateway_sessions_v1_mcp_sessions_get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Mcp Gateway Sessions
+         * @description Force-close live stateful MCP gateway sessions on this proxy worker, selected by session id prefix and/or by the LiteLLM user that opened them (proxy admin only).
+         */
+        delete: operations["delete_mcp_gateway_sessions_v1_mcp_sessions_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -32654,6 +32678,18 @@ export interface components {
             worker_pid: number;
         };
         /**
+         * MCPGatewaySessionsTerminateResponse
+         * @description Stateful sessions an administrator force-closed on this proxy worker.
+         */
+        MCPGatewaySessionsTerminateResponse: {
+            /** Sessions */
+            sessions?: components["schemas"]["MCPGatewaySession"][];
+            /** Terminated Sessions */
+            terminated_sessions: number;
+            /** Worker Pid */
+            worker_pid: number;
+        };
+        /**
          * MCPOAuthUserCredentialRequest
          * @description Stores a user's OAuth2 token for an OpenAPI MCP server.
          */
@@ -32756,6 +32792,25 @@ export interface components {
             values: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * MCPServerUserCredentialListItem
+         * @description One user's stored credential for an MCP server, as an admin sees it. Never carries the secret.
+         */
+        MCPServerUserCredentialListItem: {
+            /** Connected At */
+            connected_at?: string | null;
+            /**
+             * Credential Type
+             * @enum {string}
+             */
+            credential_type: "oauth2" | "byok";
+            /** Expires At */
+            expires_at?: string | null;
+            /** Updated At */
+            updated_at: string;
+            /** User Id */
+            user_id: string;
         };
         /** MCPSubmissionsSummary */
         MCPSubmissionsSummary: {
@@ -65725,7 +65780,9 @@ export interface operations {
     };
     delete_mcp_oauth_user_credential_v1_mcp_server__server_id__oauth_user_credential_delete: {
         parameters: {
-            query?: never;
+            query?: {
+                user_id?: string | null;
+            };
             header?: never;
             path: {
                 server_id: string;
@@ -65857,7 +65914,9 @@ export interface operations {
     };
     delete_mcp_user_credential_v1_mcp_server__server_id__user_credential_delete: {
         parameters: {
-            query?: never;
+            query?: {
+                user_id?: string | null;
+            };
             header?: never;
             path: {
                 server_id: string;
@@ -65873,6 +65932,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MCPUserCredentialResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_mcp_server_user_credentials_v1_mcp_server__server_id__user_credentials_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPServerUserCredentialListItem"][];
                 };
             };
             /** @description Validation Error */
@@ -65999,6 +66089,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MCPGatewaySessionsResponse"];
+                };
+            };
+        };
+    };
+    delete_mcp_gateway_sessions_v1_mcp_sessions_delete: {
+        parameters: {
+            query?: {
+                session_id_prefix?: string | null;
+                user_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPGatewaySessionsTerminateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
