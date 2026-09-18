@@ -48,7 +48,7 @@ impl MessagesCall {
 }
 
 pub enum MessagesOutput {
-    Message(AnthropicMessagesResponse),
+    Message(Box<AnthropicMessagesResponse>),
     /// Every chunk already reached the host through `Deliver`.
     Streamed,
 }
@@ -174,7 +174,8 @@ async fn execute(host: MessagesHost) -> Result<MessagesOutput, Error> {
         raw: RawResponse { body: text.clone() },
     })
     .await?;
-    decode_response(request.config, &request.model, &text).map(MessagesOutput::Message)
+    decode_response(request.config, &request.model, &text)
+        .map(|message| MessagesOutput::Message(Box::new(message)))
 }
 
 /// Hands each upstream chunk to the caller as it arrives. A caller that stops reading

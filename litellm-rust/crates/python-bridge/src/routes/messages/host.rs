@@ -150,7 +150,7 @@ impl RouteHost for MessagesRouteHost {
             MessagesOutput::Message(message) => py
                 .import("litellm.rust_bridge.messages.route_host")?
                 .getattr("response")?
-                .call1((to_py(py, &message)?,))
+                .call1((to_py(py, message.as_ref())?,))
                 .map(Bound::unbind),
             MessagesOutput::Streamed => Ok(py.None()),
         }
