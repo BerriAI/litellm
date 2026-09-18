@@ -1,3 +1,6 @@
+import pytest
+
+import litellm
 from litellm.llms.cerebras.chat import CerebrasConfig
 
 

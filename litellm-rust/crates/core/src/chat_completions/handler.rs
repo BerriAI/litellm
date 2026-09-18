@@ -1,17 +1,17 @@
+use litellm_providers::base_llm::chat::transformation::ChatCompletionsAuth;
 use serde_json::Value;
 
-use crate::error::Error;
+use super::{
+    Error,
+    client::http_client,
+    prepare::prepare_provider_request,
+    types::{
+        ChatCompletionsResponse, ProviderChatCompletionsRequest, ProviderChatResponseData,
+        ResolvedChatCompletionsRequest,
+    },
+};
 use crate::http_utils::{http_request, truncate_error_body};
 
-use super::client::http_client;
-use super::prepare::prepare_provider_request;
-use super::transformation::ChatCompletionsAuth;
-use super::types::{
-    ChatCompletionsResponse, ProviderChatCompletionsRequest, ProviderChatResponseData,
-    ResolvedChatCompletionsRequest,
-};
-
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) async fn execute_chat_completions_provider_call(
     request: ResolvedChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
@@ -36,9 +36,9 @@ pub(super) async fn execute_chat_completions_provider_call(
         // so the host can still serve it. Everything else here, a timeout
         // above all, may have reached the provider and been answered.
         if err.is_connect() || err.is_builder() {
-            Error::Connect(err.to_string())
+            Error::Transport(crate::transport::Error::Connect(err.to_string()))
         } else {
-            Error::Network(err.to_string())
+            Error::Transport(crate::transport::Error::Network(err.to_string()))
         }
     })?;
 
@@ -46,13 +46,13 @@ pub(super) async fn execute_chat_completions_provider_call(
     let text = response
         .text()
         .await
-        .map_err(|err| Error::Network(err.to_string()))?;
+        .map_err(|err| Error::Transport(crate::transport::Error::Network(err.to_string())))?;
 
     if !status.is_success() {
-        return Err(Error::Http {
+        return Err(Error::Transport(crate::transport::Error::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
-        });
+        }));
     }
 
     let body: Value = serde_json::from_str(&text).map_err(|err| {
@@ -61,6 +61,7 @@ pub(super) async fn execute_chat_completions_provider_call(
     request
         .config
         .transform_response(&request.model, ProviderChatResponseData { body })
+        .map_err(Error::from)
         .map_err(as_response_error)
 }
 
@@ -75,20 +76,19 @@ pub(super) async fn execute_chat_completions_provider_call(
 /// can only mean the provider was already called.
 pub(super) fn as_response_error(err: Error) -> Error {
     match err {
-        already @ (Error::InvalidResponse(_) | Error::Http { .. }) => already,
+        already @ (Error::InvalidResponse(_)
+        | Error::Transport(crate::transport::Error::Http { .. })) => already,
         other => Error::InvalidResponse(other.to_string()),
     }
 }
 
-#[cfg(feature = "bedrock-auth")]
 pub(super) async fn signed_headers(
     request: &ProviderChatCompletionsRequest,
     body: &[u8],
 ) -> Result<Vec<(String, String)>, Error> {
-    use std::collections::BTreeMap;
-    use std::time::SystemTime;
+    use std::{collections::BTreeMap, time::SystemTime};
 
-    use crate::providers::bedrock::aws_base::{
+    use litellm_auth_aws::{
         aws_auth_config, aws_signature_headers, host_supplied_credentials,
         is_sigv4_computed_header, resolve_credentials, sign_bedrock_post,
     };
@@ -135,17 +135,4 @@ pub(super) async fn signed_headers(
     // as Python reattaches them. The guard above already rejected the names
     // that would collide, so no name appears twice.
     Ok(unsigned.into_iter().chain(signature).collect())
-}
-
-#[cfg(not(feature = "bedrock-auth"))]
-pub(super) async fn signed_headers(
-    request: &ProviderChatCompletionsRequest,
-    _body: &[u8],
-) -> Result<Vec<(String, String)>, Error> {
-    match &request.auth {
-        ChatCompletionsAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
-            "AWS SigV4 requires the bedrock-auth feature",
-        )),
-        _ => Ok(request.upstream_headers.clone()),
-    }
 }

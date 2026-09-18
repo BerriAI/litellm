@@ -6,8 +6,10 @@ from typing import Final, TypeAlias
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.responses.litellm_completion_transformation.custom_tools import custom_tool_grammar_suffix
 from litellm.responses.litellm_completion_transformation.transformation import (
     NAMESPACE_DESCRIPTION_SEPARATOR,
+    NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS,
     LiteLLMCompletionResponsesConfig,
 )
 
@@ -34,8 +36,8 @@ def _validated_tools(values: Iterable[object]) -> tuple[Tool, ...]:
     return tuple(tool for tool in validated if tool is not None)
 
 
-def _is_function(tool: Tool) -> bool:
-    return tool.get("type") == "function"
+def _has_chat_tool(member: Tool) -> bool:
+    return member.get("type") in NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS
 
 
 def _chat_tool_key(tool: Tool) -> str:
@@ -67,18 +69,19 @@ def _function_fields(tool: Tool) -> Tool:
     return function if function is not None else MappingProxyType({})
 
 
-def _without_namespace_prefix(key: str, value: object, prefix: str) -> object:
-    if key != "description" or not isinstance(value, str) or not value.startswith(prefix):
+def _member_description(key: str, value: object, prefix: str, suffix: str) -> object:
+    if key != "description" or not isinstance(value, str):
         return value
-    return value[len(prefix) :]
+    return value.replace(prefix, "", 1).replace(suffix, "", 1)
 
 
 def _rebuilt_member(member: Tool, flattened: Tool, guardrailed: Tool, namespace_description: str) -> Tool:
     flattened_function: Final = _function_fields(flattened)
     prefix: Final = f"{namespace_description}{NAMESPACE_DESCRIPTION_SEPARATOR}" if namespace_description else ""
+    suffix: Final = custom_tool_grammar_suffix(member.get("format")) if member.get("type") == "custom" else ""
     changed_function: Final = MappingProxyType(
         {
-            key: _without_namespace_prefix(key, value, prefix)
+            key: _member_description(key, value, prefix, suffix)
             for key, value in _function_fields(guardrailed).items()
             if flattened_function.get(key) != value
         }
@@ -93,8 +96,8 @@ def _rebuilt_member(member: Tool, flattened: Tool, guardrailed: Tool, namespace_
     return {**member, **changed_extras, **changed_function}  # mutable-ok: json.dumps rejects MappingProxyType
 
 
-def _rebuilt_function_members(
-    function_members: Sequence[Tool],
+def _rebuilt_flattened_members(
+    flattened_members: Sequence[Tool],
     flattened_group: Sequence[Tool],
     group_keys: Sequence[IndexedKey],
     guardrailed_by_key: Mapping[IndexedKey, Tool],
@@ -106,7 +109,7 @@ def _rebuilt_function_members(
         else member
         if guardrailed_by_key[key] == flattened
         else _rebuilt_member(member, flattened, guardrailed_by_key[key], namespace_description)
-        for member, flattened, key in zip(function_members, flattened_group, group_keys)
+        for member, flattened, key in zip(flattened_members, flattened_group, group_keys)
     )
 
 
@@ -118,9 +121,9 @@ def _rebuilt_namespace(
     guardrailed_by_key: Mapping[IndexedKey, Tool],
 ) -> tuple[Tool, ...]:
     namespace_description: Final = str(original.get("description") or "")
-    rebuilt_functions: Final = iter(
-        _rebuilt_function_members(
-            tuple(member for member in members if _is_function(member)),
+    rebuilt_flattened: Final = iter(
+        _rebuilt_flattened_members(
+            tuple(member for member in members if _has_chat_tool(member)),
             flattened_group,
             group_keys,
             guardrailed_by_key,
@@ -129,7 +132,7 @@ def _rebuilt_namespace(
     )
     rebuilt_members: Final = tuple(
         rebuilt
-        for rebuilt in (next(rebuilt_functions) if _is_function(member) else member for member in members)
+        for rebuilt in (next(rebuilt_flattened) if _has_chat_tool(member) else member for member in members)
         if rebuilt is not None
     )
     if not rebuilt_members:
@@ -149,7 +152,7 @@ def _merged_original(
     if guardrailed_group == tuple(flattened_group):
         return (original,)
     members: Final = _namespace_members(original) if original.get("type") == "namespace" else ()
-    if members and sum(map(_is_function, members)) == len(flattened_group):
+    if members and sum(map(_has_chat_tool, members)) == len(flattened_group):
         return _rebuilt_namespace(original, members, flattened_group, group_keys, guardrailed_by_key)
     if not guardrailed_group:
         return ()
