@@ -22458,157 +22458,6 @@
           ]
         }
       },
-      "/mcp/keyed/confirm": {
-        "post": {
-          "operationId": "keyed_authorization_confirm_mcp_keyed_confirm_post",
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            }
-          },
-          "summary": "Keyed Authorization Confirm",
-          "tags": [
-            "mcp_app"
-          ]
-        }
-      },
-      "/mcp/keyed/{flow}/authorize": {
-        "get": {
-          "operationId": "keyed_authorization_entry_mcp_keyed__flow__authorize_get_2",
-          "parameters": [
-            {
-              "in": "path",
-              "name": "flow",
-              "required": true,
-              "schema": {
-                "title": "Flow",
-                "type": "string"
-              }
-            },
-            {
-              "in": "query",
-              "name": "client_id",
-              "required": true,
-              "schema": {
-                "title": "Client Id",
-                "type": "string"
-              }
-            },
-            {
-              "in": "query",
-              "name": "redirect_uri",
-              "required": true,
-              "schema": {
-                "title": "Redirect Uri",
-                "type": "string"
-              }
-            },
-            {
-              "in": "query",
-              "name": "state",
-              "required": false,
-              "schema": {
-                "default": "",
-                "title": "State",
-                "type": "string"
-              }
-            },
-            {
-              "in": "query",
-              "name": "code_challenge",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Code Challenge"
-              }
-            },
-            {
-              "in": "query",
-              "name": "code_challenge_method",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Code Challenge Method"
-              }
-            },
-            {
-              "in": "query",
-              "name": "response_type",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Response Type"
-              }
-            },
-            {
-              "in": "query",
-              "name": "resource",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Resource"
-              }
-            }
-          ],
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "summary": "Keyed Authorization Entry",
-          "tags": [
-            "mcp_app"
-          ]
-        }
-      },
       "/mcp/proxy": {
         "delete": {
           "description": "Serve the fixed three-tool MCP proxy surface.",
@@ -22866,46 +22715,6 @@
           ]
         }
       },
-      "/.well-known/oauth-authorization-server/mcp/keyed/{flow}": {
-        "get": {
-          "operationId": "keyed_authorization_metadata__well_known_oauth_authorization_server_mcp_keyed__flow__get",
-          "parameters": [
-            {
-              "in": "path",
-              "name": "flow",
-              "required": true,
-              "schema": {
-                "title": "Flow",
-                "type": "string"
-              }
-            }
-          ],
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "summary": "Keyed Authorization Metadata",
-          "tags": [
-            "mcp_byok_oauth"
-          ]
-        }
-      },
       "/.well-known/oauth-authorization-server/mcp/{mcp_server_name}": {
         "get": {
           "description": "OAuth authorization server discovery endpoint using standard MCP URL pattern.\n\nStandard pattern: /mcp/{server_name}\nDiscovery path: /.well-known/oauth-authorization-server/mcp/{server_name}",
@@ -23075,40 +22884,6 @@
         "get": {
           "description": "OAuth protected resource discovery for the aggregate /mcp endpoint.\n\nThe single-segment ``/mcp`` path does not collide with any per-server PRM pattern\n(those are two-segment: ``/mcp/{server}`` or ``/{server}/mcp``), so this unambiguously\ndescribes the aggregate resource.",
           "operationId": "oauth_protected_resource_aggregate__well_known_oauth_protected_resource_mcp_get",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "mcp_server_name",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Mcp Server Name"
-              }
-            },
-            {
-              "in": "query",
-              "name": "flow",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Flow"
-              }
-            }
-          ],
           "responses": {
             "200": {
               "content": {
@@ -23117,16 +22892,6 @@
                 }
               },
               "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
             }
           },
           "summary": "Oauth Protected Resource Aggregate",
@@ -25158,46 +24923,6 @@
           ]
         }
       },
-      "/.well-known/oauth-authorization-server/mcp/keyed/{flow}": {
-        "get": {
-          "operationId": "keyed_authorization_metadata__well_known_oauth_authorization_server_mcp_keyed__flow__get_2",
-          "parameters": [
-            {
-              "in": "path",
-              "name": "flow",
-              "required": true,
-              "schema": {
-                "title": "Flow",
-                "type": "string"
-              }
-            }
-          ],
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "summary": "Keyed Authorization Metadata",
-          "tags": [
-            "mcp_discoverable"
-          ]
-        }
-      },
       "/.well-known/oauth-authorization-server/mcp/{mcp_server_name}": {
         "get": {
           "description": "OAuth authorization server discovery endpoint using standard MCP URL pattern.\n\nStandard pattern: /mcp/{server_name}\nDiscovery path: /.well-known/oauth-authorization-server/mcp/{server_name}",
@@ -25367,40 +25092,6 @@
         "get": {
           "description": "OAuth protected resource discovery for the aggregate /mcp endpoint.\n\nThe single-segment ``/mcp`` path does not collide with any per-server PRM pattern\n(those are two-segment: ``/mcp/{server}`` or ``/{server}/mcp``), so this unambiguously\ndescribes the aggregate resource.",
           "operationId": "oauth_protected_resource_aggregate__well_known_oauth_protected_resource_mcp_get_2",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "mcp_server_name",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Mcp Server Name"
-              }
-            },
-            {
-              "in": "query",
-              "name": "flow",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Flow"
-              }
-            }
-          ],
           "responses": {
             "200": {
               "content": {
@@ -25409,16 +25100,6 @@
                 }
               },
               "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
             }
           },
           "summary": "Oauth Protected Resource Aggregate",
@@ -26151,138 +25832,6 @@
             }
           ],
           "summary": "Introspect Endpoint",
-          "tags": [
-            "mcp_discoverable"
-          ]
-        }
-      },
-      "/mcp/keyed/{flow}/authorize": {
-        "get": {
-          "operationId": "keyed_authorization_entry_mcp_keyed__flow__authorize_get",
-          "parameters": [
-            {
-              "in": "path",
-              "name": "flow",
-              "required": true,
-              "schema": {
-                "title": "Flow",
-                "type": "string"
-              }
-            },
-            {
-              "in": "query",
-              "name": "client_id",
-              "required": true,
-              "schema": {
-                "title": "Client Id",
-                "type": "string"
-              }
-            },
-            {
-              "in": "query",
-              "name": "redirect_uri",
-              "required": true,
-              "schema": {
-                "title": "Redirect Uri",
-                "type": "string"
-              }
-            },
-            {
-              "in": "query",
-              "name": "state",
-              "required": false,
-              "schema": {
-                "default": "",
-                "title": "State",
-                "type": "string"
-              }
-            },
-            {
-              "in": "query",
-              "name": "code_challenge",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Code Challenge"
-              }
-            },
-            {
-              "in": "query",
-              "name": "code_challenge_method",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Code Challenge Method"
-              }
-            },
-            {
-              "in": "query",
-              "name": "response_type",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Response Type"
-              }
-            },
-            {
-              "in": "query",
-              "name": "resource",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Resource"
-              }
-            }
-          ],
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "summary": "Keyed Authorization Entry",
           "tags": [
             "mcp_discoverable"
           ]

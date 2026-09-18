@@ -13,10 +13,9 @@ import time
 import traceback
 import types
 import uuid
-from collections.abc import AsyncIterator, Callable, Collection, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol
-from urllib.parse import urlencode
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -4021,9 +4020,8 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         user_api_key_auth: UserAPIKeyAuth | None,
         client_ip: str | None,
-        allowed_server_ids: Collection[str] | None = None,
+        allowed_server_ids: set[str] | None = None,
         raw_headers: Mapping[str, str] | None = None,
-        force_keyed_authorization: bool = False,
     ) -> None:
         """Fail fast with HTTP 401 for MCP servers that need user auth but
         didn't receive it on this request. Covers both gateway-managed OAuth2
@@ -4078,9 +4076,7 @@ if MCP_AVAILABLE:
                     # authorization server is the gateway itself, vaulting via the
                     # authorize interlude); the per-server relay advertised below
                     # cannot vault without a litellm key on its token request.
-                    if not force_keyed_authorization and await global_mcp_server_manager.has_user_oauth_token(
-                        server, user_api_key_auth
-                    ):
+                    if await global_mcp_server_manager.has_user_oauth_token(server, user_api_key_auth):
                         continue
 
                     if _is_mcp_admitted_user_subject(user_api_key_auth):
@@ -4098,28 +4094,6 @@ if MCP_AVAILABLE:
                     request = StarletteRequest(scope)
                     base_url = get_request_base_url(request)
                     _path = get_route_relative_request_path(scope)
-
-                    if _path.rstrip("/") == "/mcp":
-                        from litellm.proxy._experimental.mcp_server.keyed_oauth_flow import start_keyed_oauth_flow
-
-                        keyed_flow = (
-                            start_keyed_oauth_flow(request, user_api_key_auth, server.server_id)
-                            if user_api_key_auth is not None and user_api_key_auth.via_virtual_key
-                            else None
-                        )
-                        raise HTTPException(
-                            status_code=401,
-                            detail="Unauthorized",
-                            headers=types.MappingProxyType(
-                                {
-                                    "www-authenticate": (
-                                        f'Bearer resource_metadata="{base_url}/.well-known/'
-                                        f"oauth-protected-resource{well_known_root_suffix()}/mcp?"
-                                        f'{urlencode((("mcp_server_name", server_name),) + ((("flow", keyed_flow),) if keyed_flow else ()))}"'
-                                    )
-                                }
-                            ),
-                        )
 
                     # Pick the well-known AS-metadata form that matches the inbound route
                     # so strict RFC 9728 §3.2 clients can resolve it correctly.

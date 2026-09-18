@@ -155,23 +155,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/.well-known/oauth-authorization-server/mcp/keyed/{flow}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Keyed Authorization Metadata */
-        get: operations["keyed_authorization_metadata__well_known_oauth_authorization_server_mcp_keyed__flow__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/.well-known/oauth-authorization-server/mcp/{mcp_server_name}": {
         parameters: {
             query?: never;
@@ -8790,40 +8773,6 @@ export interface paths {
          *     }
          */
         get: operations["list_tool_rest_api_mcp_rest_tools_list_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/mcp/keyed/confirm": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Keyed Authorization Confirm */
-        post: operations["keyed_authorization_confirm_mcp_keyed_confirm_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/mcp/keyed/{flow}/authorize": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Keyed Authorization Entry */
-        get: operations["keyed_authorization_entry_mcp_keyed__flow__authorize_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -41282,37 +41231,6 @@ export interface operations {
             };
         };
     };
-    keyed_authorization_metadata__well_known_oauth_authorization_server_mcp_keyed__flow__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                flow: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     oauth_authorization_server_mcp_standard__well_known_oauth_authorization_server_mcp__mcp_server_name__get: {
         parameters: {
             query?: never;
@@ -41430,10 +41348,7 @@ export interface operations {
     };
     oauth_protected_resource_aggregate__well_known_oauth_protected_resource_mcp_get: {
         parameters: {
-            query?: {
-                mcp_server_name?: string | null;
-                flow?: string | null;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -41447,15 +41362,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -52493,65 +52399,6 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    keyed_authorization_confirm_mcp_keyed_confirm_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    keyed_authorization_entry_mcp_keyed__flow__authorize_get: {
-        parameters: {
-            query: {
-                client_id: string;
-                redirect_uri: string;
-                state?: string;
-                code_challenge?: string | null;
-                code_challenge_method?: string | null;
-                response_type?: string | null;
-                resource?: string | null;
-            };
-            header?: never;
-            path: {
-                flow: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

@@ -377,20 +377,6 @@ model LiteLLM_MCPToolsetTable {
 }
 
 // Per-user BYOK credentials for MCP servers
-
-model LiteLLM_MCPKeyedOAuthGrant {
-  id           String   @id
-  binding_b64  String
-  status       String   @default("pending")
-  attempts     Int      @default(0)
-  code_hash    String?
-  refresh_hash String?
-  expires_at   DateTime
-  created_at   DateTime @default(now())
-
-  @@index([expires_at])
-}
-
 model LiteLLM_MCPUserCredentials {
   id             String   @id @default(uuid())
   user_id        String
