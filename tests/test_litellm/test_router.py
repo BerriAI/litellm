@@ -8230,6 +8230,16 @@ class TestRouterRequestTimeoutPropagation:
             == 60
         )
 
+    def test_passthrough_prefers_request_timeout_over_router_timeout(self, explicit_request_timeout):
+        router = self._make_router(timeout=330)
+        deployment: Final = router.model_list[0]
+        assert _passthrough_timeout(router, deployment, stream=False) == 300.0
+        assert _passthrough_timeout(router, deployment, stream=True) == 300.0
+
+    def test_passthrough_stream_timeout_still_wins_over_request_timeout(self, explicit_request_timeout):
+        router = self._make_router(timeout=330, stream_timeout=45)
+        assert _passthrough_timeout(router, router.model_list[0], stream=True) == 45.0
+
 
 # ---------------------------------------------------------------------------
 # Deferred-stream eager-fetch tests
