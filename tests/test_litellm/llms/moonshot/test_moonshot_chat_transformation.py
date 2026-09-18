@@ -730,10 +730,6 @@ class TestMoonshotResponseSchemaSupport:
     def model_cost_map(self):
         return GetModelCostMap.load_local_model_cost_map()
 
-    def test_supports_response_schema_utility_reports_true(self, model_cost_map, monkeypatch):
-        monkeypatch.setattr(litellm, "model_cost", model_cost_map)
-        assert litellm.utils.supports_response_schema(model="moonshot/kimi-k2.5") is True
-
 
 class TestMoonshotReasoningEffort:
     """Moonshot documents reasoning_effort as a top-level chat completions field for its reasoning

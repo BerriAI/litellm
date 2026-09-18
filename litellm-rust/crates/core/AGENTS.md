@@ -2,7 +2,7 @@ litellm-core is the LiteLLM SDK in Rust — it makes the LLM call. Each top-leve
 
 A route module owns the call entrypoint, runtime types, provider/auth/URL resolution, and the handler that performs the HTTP call. Provider code and base config traits live under `src/llms/`, mirroring their Python source paths. This applies to every API surface: shared orchestration stays in its route module (`ocr/`, `chat_completions/`, `messages/`, `audio_transcription/`, or `responses/`), while provider transformations live under the corresponding Python-mirrored `llms/<provider>/` path. Import implementations directly from their canonical paths; do not add a `src/providers/` layer or compatibility re-exports. Shared provider resolution lives under `src/litellm_core_utils/get_llm_provider_logic.rs`. Handlers belong in core, never in a host crate
 
-Not here: serving HTTP (axum routes, extractors), config file reading, rollout state, databases, or host-specific callback execution. Core owns lifecycle sequencing and callback payload construction; hosts execute the selected integrations. Env reads are limited to credential fallback in a route's `prepare.rs`.
+Not here: serving HTTP (axum routes, extractors), config file reading, rollout state, databases, or callback execution of any kind. Core runs each route as a machine that yields host operations and call events; which integrations consume those events is the host's business. Env reads are limited to credential fallback in a route's `prepare.rs`.
 
 Routes (messages, ocr, realtime) and providers (anthropic, mistral, openai) are modules, not crates.
 

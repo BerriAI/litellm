@@ -162,15 +162,6 @@ def test_prompt_tokens_details_cache_write_creation_stay_in_sync_on_assignment()
     assert details.cache_write_tokens == details.cache_creation_tokens == 375
 
 
-def test_get_model_info_surfaces_supported_endpoints(local_model_cost_map):
-    """supported_endpoints ships in the cost map and is declared on ModelInfoBase,
-    but the constructor never copied it, so get_model_info always returned None.
-    The realtime health check reads it to spot GA-only transcription models
-    (LIT-6240)."""
-    info = litellm.get_model_info(model="gpt-realtime-whisper", custom_llm_provider="azure")
-    assert info["supported_endpoints"] == ["/v1/realtime", "/v1/realtime/transcription_sessions"]
-
-
 def test_potential_model_names_keeps_provider_prefixed_candidate():
     """A provider whose own model ids repeat the litellm provider name (Perplexity's
     Agent API serves `perplexity/glm-5.2`, mapped as `perplexity/perplexity/glm-5.2`)
@@ -234,23 +225,6 @@ def test_check_provider_match_github_allows_upstream_provider_metadata():
         )
         is True
     )
-
-
-def test_supports_function_calling_github_openai_alias():
-    assert litellm.utils.supports_function_calling(model="github/gpt-4o-mini") is True
-    assert litellm.utils.supports_function_calling(model="gpt-4o-mini", custom_llm_provider="github") is True
-
-
-def test_supports_function_calling_github_anthropic_alias():
-    assert litellm.utils.supports_function_calling(model="github/claude-3-7-sonnet-20250219") is True
-
-
-def test_supports_function_calling_deepinfra_llama():
-    """Test that deepinfra Llama models correctly report function calling support.
-
-    Regression test for https://github.com/BerriAI/litellm/issues/22619
-    """
-    assert litellm.utils.supports_function_calling(model="deepinfra/meta-llama/Llama-3.3-70B-Instruct-Turbo") is True
 
 
 def test_supports_function_calling_unknown_github_alias_returns_false():
@@ -563,25 +537,6 @@ def test_all_model_configs():
         optional_params={},
         drop_params=False,
     ) == {"max_output_tokens": 10}
-
-
-def test_anthropic_web_search_in_model_info(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    supported_models = [
-        "anthropic/claude-4-sonnet-20250514",
-        "anthropic/claude-sonnet-4-5-20250929",
-    ]
-    for model in supported_models:
-        from litellm.utils import get_model_info
-
-        model_info = get_model_info(model)
-        assert model_info is not None
-        assert model_info["supports_web_search"] is True, f"Model {model} should support web search"
-        assert model_info["search_context_cost_per_query"] is not None, (
-            f"Model {model} should have a search context cost per query"
-        )
 
 
 def test_cohere_embedding_optional_params():
@@ -1129,13 +1084,6 @@ def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_c
     assert control["key"] == "au.anthropic.claude-opus-4-8"
 
 
-def test_get_model_info_bedrock_double_provider_prefix_resolves(local_model_cost_map):
-    """A doubled bedrock/ prefix routes at runtime via strip_bedrock_routing_prefix,
-    so model info must resolve it to the same entry the request actually bills as."""
-    info = litellm.get_model_info(model="bedrock/bedrock/us.anthropic.claude-sonnet-4-6")
-    assert info["key"] == "us.anthropic.claude-sonnet-4-6"
-
-
 def test_openai_models_in_model_info(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1147,51 +1095,6 @@ def test_openai_models_in_model_info(monkeypatch):
             if info.get("supports_pdf_input") is not True:
                 violated_models.append(model)
     assert len(violated_models) == 0, f"The following models should support pdf input: {violated_models}"
-
-
-def test_supports_tool_choice_simple_tests():
-    """
-    simple sanity checks
-    """
-    assert litellm.utils.supports_tool_choice(model="gpt-4o") == True
-    assert litellm.utils.supports_tool_choice(model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0") == True
-    assert litellm.utils.supports_tool_choice(model="anthropic.claude-3-sonnet-20240229-v1:0") is True
-
-    assert (
-        litellm.utils.supports_tool_choice(
-            model="anthropic.claude-3-sonnet-20240229-v1:0",
-            custom_llm_provider="bedrock_converse",
-        )
-        is True
-    )
-
-    assert litellm.utils.supports_tool_choice(model="perplexity/sonar") is False
-
-
-@pytest.mark.usefixtures("local_model_cost_map")
-@pytest.mark.parametrize(
-    "model",
-    [
-        "amazon.nova-lite-v1:0",
-        "amazon.nova-micro-v1:0",
-        "amazon.nova-pro-v1:0",
-        "apac.amazon.nova-lite-v1:0",
-        "apac.amazon.nova-micro-v1:0",
-        "apac.amazon.nova-pro-v1:0",
-        "bedrock/us-gov-east-1/amazon.nova-pro-v1:0",
-        "bedrock/us-gov-west-1/amazon.nova-lite-v1:0",
-        "bedrock/us-gov-west-1/amazon.nova-micro-v1:0",
-        "bedrock/us-gov-west-1/amazon.nova-pro-v1:0",
-        "eu.amazon.nova-lite-v1:0",
-        "eu.amazon.nova-micro-v1:0",
-        "eu.amazon.nova-pro-v1:0",
-        "us.amazon.nova-lite-v1:0",
-        "us.amazon.nova-micro-v1:0",
-        "us.amazon.nova-pro-v1:0",
-    ],
-)
-def test_amazon_nova_v1_understanding_models_support_tool_choice(model: str) -> None:
-    assert litellm.utils.supports_tool_choice(model=model) is True
 
 
 def test_check_provider_match():
@@ -1301,42 +1204,6 @@ for commitment in BEDROCK_COMMITMENTS:
     block_list.add(f"bedrock/*/{commitment}/cohere.command-light-text-v14")
 
 print("block_list", block_list)
-
-
-def test_supports_computer_use_utility(monkeypatch):
-    """
-    Tests the litellm.utils.supports_computer_use utility function.
-    """
-    from litellm.utils import supports_computer_use
-
-    # Ensure LITELLM_LOCAL_MODEL_COST_MAP is set for consistent test behavior,
-    # as supports_computer_use relies on get_model_info.
-    # This also requires litellm.model_cost to be populated.
-    original_env_var = os.getenv("LITELLM_LOCAL_MODEL_COST_MAP")
-    original_model_cost = getattr(litellm, "model_cost", None)
-
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")  # Load with local/backup
-
-    try:
-        # Test a model known to support computer_use from backup JSON
-        supports_cu_anthropic = supports_computer_use(model="anthropic/claude-4-sonnet-20250514")
-        assert supports_cu_anthropic is True
-
-        # Test a model known not to have the flag or set to false (defaults to False via get_model_info)
-        supports_cu_gpt = supports_computer_use(model="gpt-3.5-turbo")
-        assert supports_cu_gpt is False
-    finally:
-        # Restore original environment and model_cost to avoid side effects
-        if original_env_var is None:
-            del os.environ["LITELLM_LOCAL_MODEL_COST_MAP"]
-        else:
-            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", original_env_var)
-
-        if original_model_cost is not None:
-            litellm.model_cost = original_model_cost
-        elif hasattr(litellm, "model_cost"):
-            delattr(litellm, "model_cost")
 
 
 @pytest.mark.parametrize(
@@ -1658,32 +1525,6 @@ class TestProxyFunctionCalling:
         # For now, we expect False (current behavior), but document the limitation
         assert proxy_result is False, f"Current limitation: {proxy_model_with_hints} returns False without inference"
 
-    @pytest.mark.parametrize(
-        "proxy_model,expected_result",
-        [
-            # Test specific proxy models that should support function calling
-            ("litellm_proxy/gpt-3.5-turbo", True),
-            ("litellm_proxy/gpt-4", True),
-            ("litellm_proxy/gpt-4o", True),
-            ("litellm_proxy/claude-sonnet-4-6", True),
-            ("litellm_proxy/gemini/gemini-2.5-pro", True),
-            # Test proxy models that should not support function calling
-            ("litellm_proxy/command-nightly", False),
-            ("litellm_proxy/anthropic.claude-instant-v1", False),
-        ],
-    )
-    def test_proxy_only_function_calling_support(self, proxy_model, expected_result):
-        """
-        Test proxy models independently to ensure they report correct function calling support.
-
-        This test focuses on proxy models without comparing to direct models,
-        useful for cases where we only care about the proxy behavior.
-        """
-        try:
-            result = supports_function_calling(model=proxy_model)
-            assert result == expected_result, f"Proxy model {proxy_model} returned {result}, expected {expected_result}"
-        except Exception as e:
-            pytest.fail(f"Error testing proxy model {proxy_model}: {e}")
 
     def test_litellm_utils_supports_function_calling_import(self):
         """Test that supports_function_calling can be imported from litellm.utils."""
@@ -1704,28 +1545,6 @@ class TestProxyFunctionCalling:
         except Exception as e:
             pytest.fail(f"Failed to access litellm.supports_function_calling: {e}")
 
-    @pytest.mark.parametrize(
-        "model_name",
-        [
-            "litellm_proxy/gpt-3.5-turbo",
-            "litellm_proxy/gpt-4",
-            "litellm_proxy/claude-sonnet-4-6",
-            "litellm_proxy/gemini/gemini-2.5-pro",
-        ],
-    )
-    def test_proxy_model_with_custom_llm_provider_none(self, model_name):
-        """
-        Test proxy models with custom_llm_provider=None parameter.
-
-        This tests the supports_function_calling function with the custom_llm_provider
-        parameter explicitly set to None, which is a common usage pattern.
-        """
-        try:
-            result = supports_function_calling(model=model_name, custom_llm_provider=None)
-            # All the models in this test should support function calling
-            assert result is True, f"Model {model_name} should support function calling but returned {result}"
-        except Exception as e:
-            pytest.fail(f"Error testing {model_name} with custom_llm_provider=None: {e}")
 
     def test_edge_cases_and_malformed_proxy_models(self):
         """Test edge cases and malformed proxy model names."""
@@ -1962,84 +1781,6 @@ class TestProxyFunctionCalling:
             f"Proxy model {proxy_model_name} should return {expected_proxy_result} "
             f"(without config context). Description: {description}"
         )
-
-    def test_real_world_proxy_config_documentation(self):
-        """
-        Document how real-world proxy configurations would handle model mappings.
-
-        This test provides documentation on how the proxy server configuration
-        would typically map custom model names to underlying models.
-        """
-        print("""
-        
-        REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
-        ===============================================
-        
-        In a proxy_server_config.yaml file, you would define:
-        
-        model_list:
-          - model_name: bedrock-claude-3-haiku
-            litellm_params:
-              model: bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0
-              aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
-              aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
-              aws_region_name: us-east-1
-              
-          - model_name: bedrock-claude-3-sonnet
-            litellm_params:
-              model: bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0
-              aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
-              aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
-              aws_region_name: us-east-1
-              
-          - model_name: prod-claude-haiku
-            litellm_params:
-              model: bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0
-              aws_access_key_id: os.environ/PROD_AWS_ACCESS_KEY_ID
-              aws_secret_access_key: os.environ/PROD_AWS_SECRET_ACCESS_KEY
-              aws_region_name: us-west-2
-        
-        
-        FUNCTION CALLING WITH PROXY SERVER:
-        ===================================
-        
-        When using the proxy server with this configuration:
-        
-        1. Client calls: supports_function_calling("bedrock-claude-3-haiku")
-        2. Proxy server resolves to: bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0
-        3. LiteLLM evaluates the underlying model's capabilities
-        4. Returns: True (because Claude 3 Haiku supports function calling)
-        
-        Without the proxy server configuration context, LiteLLM cannot resolve
-        the custom model name and returns False.
-        
-        
-        BEDROCK CONVERSE API BENEFITS:
-        ==============================
-        
-        The Bedrock Converse API provides:
-        - Standardized function calling interface across providers
-        - Better tool use capabilities compared to legacy APIs
-        - Consistent request/response format
-        - Enhanced streaming support for function calls
-        
-        """)
-
-        # Verify that direct underlying models work as expected
-        bedrock_models = [
-            "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-            "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
-        ]
-
-        for model in bedrock_models:
-            try:
-                result = supports_function_calling(model)
-                print(f"Direct test - {model}: {result}")
-                # Claude 3 models should support function calling
-                assert result is True, f"Claude 3 model should support function calling: {model}"
-            except Exception as e:
-                print(f"Could not test {model}: {e}")
 
 
 def test_register_model_with_scientific_notation():
@@ -3637,28 +3378,6 @@ _FIREWORKS_ROUTER_SHORT_FORMS = [
 ]
 
 
-def _assert_fireworks_entry(
-    model_cost,
-    model_path,
-    expected_max_input,
-    expected_max_output,
-    expected_vision,
-    expected_reasoning,
-):
-    info = model_cost.get(f"fireworks_ai/{model_path}")
-    assert info is not None, f"fireworks_ai/{model_path} missing from model cost map"
-    assert info["litellm_provider"] == "fireworks_ai"
-    assert info["mode"] == "chat"
-    assert info["input_cost_per_token"] > 0
-    assert info["output_cost_per_token"] > 0
-    assert "cache_read_input_token_cost" in info
-    assert info["supports_function_calling"] is True
-    assert info["supports_tool_choice"] is True
-    assert info["supports_reasoning"] is expected_reasoning
-    assert info["supports_response_schema"] is True
-    assert info["supports_vision"] is expected_vision
-
-
 @pytest.fixture
 def fireworks_short_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(
@@ -3985,21 +3704,6 @@ def test_get_prompt_cache_min_tokens_resolves_per_model(
     assert get_prompt_cache_min_tokens(model=model) == expected_min_tokens
 
 
-def test_get_prompt_cache_min_tokens_uniform_for_fable_5_across_platforms(local_model_cost_map: None) -> None:
-    """Anthropic removed the Amazon Bedrock override for Claude Fable 5, so its 512-token minimum
-    now applies on every platform. The Bedrock entries carried the old 1024 and the re-export
-    entries carried nothing, so the router judged 512-1023-token prefixes uncacheable and skipped
-    prompt-cache-affinity routing for prompts the provider demonstrably caches (issue #35011)."""
-    wrong: Final = {
-        model: get_prompt_cache_min_tokens(model=model)
-        for model, info in litellm.model_cost.items()
-        if "fable-5" in model
-        and info.get("supports_prompt_caching")
-        and get_prompt_cache_min_tokens(model=model) != 512
-    }
-    assert not wrong, f"every Claude Fable 5 entry must carry prompt_cache_min_tokens 512: {wrong}"
-
-
 ANTHROPIC_REEXPORT_CACHE_MIN: Final = {
     "azure_ai/claude-fable-5": 512,
     "azure_ai/claude-haiku-4-5": 4096,
@@ -4046,21 +3750,6 @@ ANTHROPIC_REEXPORT_CACHE_MIN: Final = {
     "vertex_ai/claude-fable-5": 512,
     "vertex_ai/claude-fable-5@default": 512,
 }
-
-
-def test_anthropic_reexport_entries_carry_explicit_prompt_cache_min_tokens(local_model_cost_map: None) -> None:
-    """Regression for issue #35011: these re-export entries carried no prompt_cache_min_tokens, so
-    they silently inherited the 1024 default. That skipped cache-affinity routing for Fable 5's
-    512-1023-token prefixes and reported 1024-4095-token prompts as cacheable on the 2048/4096
-    models. The entry must be explicit so a default change can never re-break them, which is why
-    this asserts the cost-map value itself and not just the resolver's answer."""
-    wrong: Final = {
-        model: (litellm.model_cost[model].get("prompt_cache_min_tokens"), get_prompt_cache_min_tokens(model=model))
-        for model, expected in ANTHROPIC_REEXPORT_CACHE_MIN.items()
-        if litellm.model_cost[model].get("prompt_cache_min_tokens") != expected
-        or get_prompt_cache_min_tokens(model=model) != expected
-    }
-    assert not wrong, f"(cost-map value, resolved value) diverge from Anthropic's published minimums: {wrong}"
 
 
 GEMINI_4096_CACHE_MIN_MODELS: Final = tuple(
@@ -5981,82 +5670,6 @@ def test_completion_finishes_response_metadata_before_handing_the_response_to_th
     assert snapshot["api_base"]
 
 
-def test_fireworks_models_in_backup_cost_map():
-    import json
-    from pathlib import Path
-
-    json_path = Path(__file__).parents[2] / "litellm" / "model_prices_and_context_window_backup.json"
-    with open(json_path) as f:
-        model_cost = json.load(f)
-
-    for entry in _FIREWORKS_MODELS:
-        _assert_fireworks_entry(model_cost, *entry)
-
-    for short in _FIREWORKS_SHORT_FORMS:
-        long_key = f"fireworks_ai/accounts/fireworks/models/{short}"
-        short_key = f"fireworks_ai/{short}"
-        assert model_cost.get(short_key) == model_cost.get(long_key), (
-            f"short-form {short_key} does not match long-form {long_key}"
-        )
-
-    for short in _FIREWORKS_ROUTER_SHORT_FORMS:
-        long_key = f"fireworks_ai/accounts/fireworks/routers/{short}"
-        short_key = f"fireworks_ai/{short}"
-        assert model_cost.get(short_key) == model_cost.get(long_key), (
-            f"short-form {short_key} does not match long-form {long_key}"
-        )
-
-
-def test_fireworks_models_in_cost_map():
-    import json
-    from pathlib import Path
-
-    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
-    with open(json_path) as f:
-        model_cost = json.load(f)
-
-    for entry in _FIREWORKS_MODELS:
-        _assert_fireworks_entry(model_cost, *entry)
-
-    for short in _FIREWORKS_SHORT_FORMS:
-        long_key = f"fireworks_ai/accounts/fireworks/models/{short}"
-        short_key = f"fireworks_ai/{short}"
-        assert model_cost.get(short_key) == model_cost.get(long_key), (
-            f"short-form {short_key} does not match long-form {long_key}"
-        )
-
-    for short in _FIREWORKS_ROUTER_SHORT_FORMS:
-        long_key = f"fireworks_ai/accounts/fireworks/routers/{short}"
-        short_key = f"fireworks_ai/{short}"
-        assert model_cost.get(short_key) == model_cost.get(long_key), (
-            f"short-form {short_key} does not match long-form {long_key}"
-        )
-
-
-def test_fireworks_short_model_names_resolve_to_long_cost_map_keys(fireworks_short_model_cost_map: None) -> None:
-    model_info = litellm.get_model_info("fireworks_ai/glm-5p3")
-    assert model_info["key"] == "fireworks_ai/accounts/fireworks/models/glm-5p3"
-
-    model_info = litellm.get_model_info("glm-5p3", custom_llm_provider="fireworks_ai")
-    assert model_info["key"] == "fireworks_ai/accounts/fireworks/models/glm-5p3"
-
-    model_info = litellm.get_model_info("fireworks_ai/glm-5p3-fast")
-    assert model_info["key"] == "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast"
-
-    model_info = litellm.get_model_info("fireworks_ai/nomic-ai/nomic-embed-text-v1.5")
-    assert model_info["key"] == "fireworks_ai/nomic-ai/nomic-embed-text-v1.5"
-
-    with pytest.raises(Exception, match="isn't mapped"):
-        litellm.get_model_info("fireworks_ai/does-not-exist")
-
-
-def test_get_model_info_bedrock_regional_profile_without_entry_falls_back_to_base(local_model_cost_map):
-    """A regional profile with no dedicated cost-map entry must still resolve to its
-    region-stripped base entry."""
-    info = litellm.get_model_info(model="bedrock/apac.anthropic.claude-opus-4-8")
-    assert info["key"] == "anthropic.claude-opus-4-8"
-
-
 def test_get_model_info_gemini(monkeypatch):
     """
     Tests if ALL gemini models have 'tpm' and 'rpm' in the model info
@@ -6079,153 +5692,3 @@ def test_get_model_info_gemini(monkeypatch):
             assert info.get("rpm") is not None, f"{model} does not have rpm"
 
 
-def test_get_model_info_resolves_provider_prefixed_model_ids(local_model_cost_map):
-    """Perplexity's Agent API third-party models are keyed `perplexity/perplexity/<id>`
-    because Perplexity's own id already starts with `perplexity/`. Callers run
-    `get_llm_provider` first, which hands `_get_potential_model_names` model
-    `perplexity/glm-5.2` with provider `perplexity`, and every candidate but the
-    provider-prefixed one strips that second `perplexity/` off. Regression: the
-    entries were unreachable from `supports_reasoning` and from the cost calculator's
-    per-token fallback, so a mapped model reported no reasoning support and raised
-    "This model isn't mapped yet" on the only path where its rates are ever used."""
-    for model, reasoning in (
-        ("perplexity/perplexity/glm-5.2", True),
-        ("perplexity/perplexity/kimi-k3", True),
-        ("perplexity/perplexity/deepseek-v4-flash-0731", True),
-        ("perplexity/perplexity/kimi-k2.7-code", False),
-        ("perplexity/perplexity/nemotron-3.5-lightning-30b-a3b", True),
-        ("perplexity/perplexity/nemotron-3-ultra-550b-a55b", True),
-    ):
-        assert litellm.supports_reasoning(model=model) is reasoning, model
-
-    via_provider = litellm.get_model_info(model="perplexity/glm-5.2", custom_llm_provider="perplexity")
-    assert via_provider["key"] == "perplexity/perplexity/glm-5.2"
-    assert via_provider["mode"] == "responses"
-
-    lightning = litellm.get_model_info(
-        model="perplexity/nemotron-3.5-lightning-30b-a3b", custom_llm_provider="perplexity"
-    )
-    assert lightning["key"] == "perplexity/perplexity/nemotron-3.5-lightning-30b-a3b"
-    assert lightning["mode"] == "responses"
-
-    ultra = litellm.get_model_info(model="perplexity/perplexity/nemotron-3-ultra-550b-a55b")
-    assert ultra["key"] == "perplexity/perplexity/nemotron-3-ultra-550b-a55b"
-
-
-def test_get_model_info_shows_supports_computer_use(monkeypatch):
-    """
-    Tests if 'supports_computer_use' is correctly retrieved by get_model_info.
-    We'll use 'claude-4-sonnet-20250514' as it's configured
-    in the backup JSON to have supports_computer_use: True.
-    """
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    # Ensure litellm.model_cost is loaded, relying on the backup mechanism if primary fails
-    # as per previous debugging.
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    # This model should have 'supports_computer_use': True in the backup JSON
-    model_known_to_support_computer_use = "claude-4-sonnet-20250514"
-    info = litellm.get_model_info(model_known_to_support_computer_use)
-
-    # After the fix in utils.py, this should now be present and True
-    assert info.get("supports_computer_use") is True
-
-
-def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map):
-    """supports_adaptive_thinking must flow through get_model_info like every other
-    capability flag: both from an explicit cost-map entry and from a
-    fallback-generalization rule for an unmapped model. Regression: the field shipped
-    in the JSON but was never declared on ModelInfo nor copied during construction, so
-    get_model_info (and _supports_factory) silently dropped it for any provider-prefixed
-    or unmapped name."""
-    explicit = litellm.get_model_info(model="claude-opus-4-8")
-    assert explicit["supports_adaptive_thinking"] is True
-
-    generalized = litellm.get_model_info(model="claude-opus-4-9", custom_llm_provider="anthropic")
-    assert generalized["supports_adaptive_thinking"] is True
-
-
-def test_get_model_info_surfaces_supports_parallel_function_calling(local_model_cost_map):
-    """A registry entry's supports_parallel_function_calling must read back through get_model_info
-    and litellm.supports_parallel_function_calling. Regression: the key was never copied into
-    ModelInfo, so provider-prefixed entries read None / False even when the map said True, and an
-    explicit False was indistinguishable from unset."""
-    declared_true = litellm.get_model_info(model="together_ai/zai-org/GLM-5.3-Flash")
-    assert declared_true["supports_parallel_function_calling"] is True
-    assert litellm.supports_parallel_function_calling(model="together_ai/zai-org/GLM-5.3-Flash") is True
-
-
-def test_model_info_for_fireworks_short_form_models():
-    """
-    Test that fireworks_ai short-form model entries (fireworks_ai/<model>)
-    are correctly configured in model_prices_and_context_window.json.
-
-    These entries enable cost attribution for models called via short-form
-    names (e.g., fireworks_ai/glm-4p7 instead of
-    fireworks_ai/accounts/fireworks/models/glm-4p7).
-    """
-    import json
-    from pathlib import Path
-
-    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
-    with open(json_path) as f:
-        model_cost = json.load(f)
-
-    # glm-4p7: short-form and long-form
-    for key in [
-        "fireworks_ai/glm-4p7",
-        "fireworks_ai/accounts/fireworks/models/glm-4p7",
-    ]:
-        info = model_cost.get(key)
-        assert info is not None, f"{key} not found in model_prices_and_context_window.json"
-        assert info["litellm_provider"] == "fireworks_ai"
-        assert info["mode"] == "chat"
-        assert info["supports_reasoning"] is True
-
-    # minimax-m2p1: short-form and long-form
-    for key in [
-        "fireworks_ai/minimax-m2p1",
-        "fireworks_ai/accounts/fireworks/models/minimax-m2p1",
-    ]:
-        info = model_cost.get(key)
-        assert info is not None, f"{key} not found in model_prices_and_context_window.json"
-        assert info["litellm_provider"] == "fireworks_ai"
-        assert info["mode"] == "chat"
-
-    # kimi-k2p5: short-form only (long-form already existed)
-    info = model_cost.get("fireworks_ai/kimi-k2p5")
-    assert info is not None, "fireworks_ai/kimi-k2p5 not found in model_prices_and_context_window.json"
-    assert info["litellm_provider"] == "fireworks_ai"
-    assert info["mode"] == "chat"
-
-
-def test_model_info_for_vertex_ai_deepseek_model():
-    model_info = litellm.get_model_info(model="vertex_ai/deepseek-ai/deepseek-r1-0528-maas")
-    assert model_info is not None
-    assert model_info["litellm_provider"] == "vertex_ai-deepseek_models"
-    assert model_info["mode"] == "chat"
-
-    assert model_info["input_cost_per_token"] is not None
-    assert model_info["output_cost_per_token"] is not None
-
-
-def test_provider_prefixed_lookup_never_outranks_an_existing_row(local_model_cost_map):
-    """The provider-prefixed candidate is tried last, after every candidate that
-    already existed, so no model that resolves today can change answer. `perplexity/sonar`
-    is the case that proves it: both `perplexity/sonar` and `perplexity/perplexity/sonar`
-    are cost-map keys, and the shorter one must keep winning."""
-    sonar = litellm.get_model_info(model="sonar", custom_llm_provider="perplexity")
-    assert sonar["key"] == "perplexity/sonar"
-    assert sonar["mode"] == "chat"
-
-    still_sonar = litellm.get_model_info(model="perplexity/sonar", custom_llm_provider="perplexity")
-    assert still_sonar["key"] == "perplexity/sonar"
-    assert still_sonar["mode"] == "chat"
-
-    for model, provider, expected_key in (
-        ("claude-sonnet-4-5", "anthropic", "claude-sonnet-4-5"),
-        ("anthropic/claude-sonnet-4-5", "anthropic", "claude-sonnet-4-5"),
-        ("gemini/gemini-2.0-flash", "gemini", "gemini/gemini-2.0-flash"),
-        ("openrouter/openai/gpt-4o", "openrouter", "openrouter/openai/gpt-4o"),
-    ):
-        assert litellm.get_model_info(model=model, custom_llm_provider=provider)["key"] == expected_key

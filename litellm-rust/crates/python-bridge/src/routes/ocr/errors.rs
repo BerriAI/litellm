@@ -110,4 +110,86 @@ mod tests {
             );
         });
     }
+
+    #[test]
+    fn invalid_request_format_is_a_flagged_bad_request() {
+        Python::initialize();
+        Python::attach(|py| {
+            let mapped = to_pyerr(Error::RequestFormat);
+            let value = mapped.value(py);
+            assert!(mapped.is_instance_of::<PyValueError>(py));
+            assert!(
+                value
+                    .getattr("ocr_request_format_error")
+                    .unwrap()
+                    .extract::<bool>()
+                    .unwrap()
+            );
+            assert_eq!(
+                value
+                    .getattr("status_code")
+                    .unwrap()
+                    .extract::<u16>()
+                    .unwrap(),
+                400
+            );
+            assert_eq!(
+                value
+                    .getattr("message")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                Error::RequestFormat.to_string()
+            );
+        });
+    }
+
+    fn file_read(kind: std::io::ErrorKind) -> Error {
+        Error::FileRead {
+            path: "/missing/scan.pdf".into(),
+            source: std::sync::Arc::new(std::io::Error::new(kind, "disk said no")),
+        }
+    }
+
+    #[test]
+    fn missing_files_map_to_file_not_found_naming_the_path() {
+        Python::initialize();
+        Python::attach(|py| {
+            let mapped = to_pyerr(file_read(std::io::ErrorKind::NotFound));
+            assert!(mapped.is_instance_of::<PyFileNotFoundError>(py));
+            assert_eq!(
+                mapped.value(py).to_string(),
+                "File not found: /missing/scan.pdf"
+            );
+        });
+    }
+
+    #[test]
+    fn other_file_read_failures_map_to_os_error_with_the_io_message() {
+        Python::initialize();
+        Python::attach(|py| {
+            let mapped = to_pyerr(file_read(std::io::ErrorKind::PermissionDenied));
+            assert!(mapped.is_instance_of::<PyOSError>(py));
+            assert!(!mapped.is_instance_of::<PyFileNotFoundError>(py));
+            assert_eq!(mapped.value(py).to_string(), "disk said no");
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::oversized(Error::TooLarge { limit: 7 })]
+    #[case::malformed_field(Error::ResponseField { path: "pages[0].index".into() })]
+    fn response_failures_are_statusless_runtime_errors(#[case] error: Error) {
+        Python::initialize();
+        Python::attach(|py| {
+            let message = error.to_string();
+            let mapped = to_pyerr(error);
+            let value = mapped.value(py);
+            assert!(mapped.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py));
+            assert!(!mapped.is_instance_of::<RustUpstreamError>(py));
+            assert_eq!(value.to_string(), message);
+            for attribute in ["status_code", "ocr_request_format_error", "headers"] {
+                assert!(!value.hasattr(attribute).unwrap(), "{attribute}");
+            }
+        });
+    }
 }

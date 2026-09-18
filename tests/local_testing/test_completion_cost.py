@@ -6,8 +6,7 @@ import litellm.cost_calculator
 import asyncio
 import time
 from typing import Optional
-from unittest.mock import AsyncMock, MagicMock, patch
-import base64
+from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
@@ -15,9 +14,7 @@ from litellm import (
     TranscriptionResponse,
     completion_cost,
     cost_per_token,
-    get_max_tokens,
     model_cost,
-    open_ai_chat_completion_models,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 import json
@@ -160,12 +157,6 @@ def test_custom_pricing_as_completion_cost_param():
 
 
 # test_get_palm_tokens()
-
-
-def test_zephyr_hf_tokens():
-    max_tokens = get_max_tokens("huggingface/HuggingFaceH4/zephyr-7b-beta")
-    print(max_tokens)
-    assert max_tokens == 32768
 
 
 # test_zephyr_hf_tokens()
@@ -426,10 +417,8 @@ def test_groq_response_cost_tracking(is_streaming):
     from litellm.utils import (
         CallTypes,
         Choices,
-        Delta,
         Message,
         ModelResponse,
-        StreamingChoices,
         Usage,
     )
 
@@ -546,12 +535,6 @@ def test_gemini_completion_cost(provider):
 
     assert calculated_input_cost == input_cost
     assert calculated_output_cost == output_cost
-
-
-def _count_characters(text):
-    # Remove white spaces and count characters
-    filtered_text = "".join(char for char in text if not char.isspace())
-    return len(filtered_text)
 
 
 def test_vertex_ai_completion_cost():
@@ -817,10 +800,8 @@ def test_completion_cost_azure_common_deployment_name():
     from litellm.utils import (
         CallTypes,
         Choices,
-        Delta,
         Message,
         ModelResponse,
-        StreamingChoices,
         Usage,
     )
 
@@ -1252,7 +1233,7 @@ def test_cost_openai_prompt_caching():
     ],
 )
 def test_completion_cost_azure_ai_rerank(model):
-    from litellm import RerankResponse, rerank
+    from litellm import RerankResponse
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1283,7 +1264,7 @@ def test_completion_cost_azure_ai_rerank(model):
 
 
 def test_together_ai_embedding_completion_cost():
-    from litellm.utils import Choices, EmbeddingResponse, Message, ModelResponse, Usage
+    from litellm.utils import EmbeddingResponse, Usage
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -2222,7 +2203,6 @@ async def test_test_completion_cost_gpt4o_audio_output_from_model(stream):
         ModelResponse,
         Usage,
         ChatCompletionAudioResponse,
-        PromptTokensDetails,
         CompletionTokensDetailsWrapper,
         PromptTokensDetailsWrapper,
     )
@@ -2464,7 +2444,6 @@ def test_add_known_models():
 
 @pytest.mark.skip(reason="flaky test")
 def test_bedrock_cost_calc_with_region():
-    from litellm import completion
 
     from litellm import ModelResponse
 

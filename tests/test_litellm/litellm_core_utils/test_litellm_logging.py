@@ -2378,7 +2378,7 @@ async def test_e2e_generate_cold_storage_object_key_with_custom_logger_s3_path()
     Test that _generate_cold_storage_object_key uses s3_path from custom logger instance.
     """
     from datetime import datetime, timezone
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import MagicMock, patch
 
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
@@ -2425,7 +2425,7 @@ async def test_e2e_generate_cold_storage_object_key_with_logger_no_s3_path():
     Test that _generate_cold_storage_object_key falls back to empty s3_path when logger has no s3_path.
     """
     from datetime import datetime, timezone
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import MagicMock, patch
 
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
