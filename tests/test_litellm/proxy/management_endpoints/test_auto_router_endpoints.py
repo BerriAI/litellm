@@ -459,7 +459,7 @@ async def test_jev_test_routing_enforces_key_budget_before_provider_invocation(
         user_role=LitellmUserRoles.PROXY_ADMIN,
         api_key="sk-jev-budget-test",
         user_id="admin",
-        models=["cheap-model"],
+        models=["cheap-model", "typesafe/jev-test"],
         max_budget=max_budget,
         spend=spend,
     )
