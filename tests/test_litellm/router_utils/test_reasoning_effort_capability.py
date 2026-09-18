@@ -425,8 +425,12 @@ class TestNearestDeclaredReasoningEffort:
 
     def test_an_undeclared_level_rounds_up_to_the_next_declared_one(self):
         assert nearest_declared_reasoning_effort("medium", ("none", "high")) == "high"
-        assert nearest_declared_reasoning_effort("none", ("low", "high", "max")) == "low"
+        assert nearest_declared_reasoning_effort("minimal", ("low", "high", "max")) == "low"
         assert nearest_declared_reasoning_effort("xhigh", ("low", "high", "max")) == "max"
+
+    def test_none_is_a_switch_that_is_never_rounded_in_either_direction(self):
+        assert nearest_declared_reasoning_effort("none", ("low", "high", "max")) == "none"
+        assert nearest_declared_reasoning_effort("medium", ("none",)) == "medium"
 
     def test_a_level_above_the_ceiling_takes_the_strongest_declared_one(self):
         assert nearest_declared_reasoning_effort("max", ("none", "high")) == "high"
