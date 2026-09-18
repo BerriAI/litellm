@@ -11,10 +11,10 @@ use super::document::{FileDocumentInput, PythonFileReader};
 use super::errors::to_pyerr as ocr_error_to_pyerr;
 use crate::credentials::{self, CallerTokenProvider};
 use crate::marshal::{project_optional_fields, python_timeout_seconds, request_input_sources};
-use crate::projection::Projection;
 
-/// The Python objects the route keeps for the rest of the call.
-pub(super) struct OcrRetained {
+/// What the host keeps after projection: the caller's callables that answer the document
+/// read and token operations, and the provider name the failure mapping reports.
+pub(super) struct OcrHostHandles {
     pub reader: Option<PythonFileReader>,
     pub azure_ad_token_provider: Option<CallerTokenProvider>,
     pub provider: &'static str,
@@ -45,8 +45,8 @@ impl<'py> OcrArguments<'_, 'py> {
         self.lookup("document")
     }
 
-    fn api_key(&self) -> PyResult<Bound<'py, PyAny>> {
-        self.lookup("api_key")
+    fn api_key(&self) -> PyResult<Option<String>> {
+        self.lookup("api_key")?.extract()
     }
 
     fn api_base(&self) -> PyResult<Option<String>> {
@@ -112,7 +112,7 @@ impl ProjectedDocument {
 pub(super) fn project_request(
     request: &Bound<'_, PyAny>,
     kwargs: &Bound<'_, PyDict>,
-) -> PyResult<Projection<LiteLLMOcrRequest<OcrDocumentInput>, OcrRetained>> {
+) -> PyResult<(LiteLLMOcrRequest<OcrDocumentInput>, OcrHostHandles)> {
     let arguments = OcrArguments { request, kwargs };
     let model = arguments.model()?;
     let custom_llm_provider = arguments.custom_llm_provider()?;
@@ -134,7 +134,7 @@ pub(super) fn project_request(
     let wire = OcrWireRequest {
         model,
         document,
-        api_key: api_key.extract()?,
+        api_key,
         api_base: arguments.api_base()?,
         custom_llm_provider,
         extra_headers: arguments.extra_headers()?,
@@ -144,14 +144,14 @@ pub(super) fn project_request(
     };
     let request = decode_request_input(wire).map_err(ocr_error_to_pyerr)?;
     let provider = request.provider_name();
-    Ok(Projection {
-        native: request,
-        retained: OcrRetained {
+    Ok((
+        request,
+        OcrHostHandles {
             reader,
             azure_ad_token_provider,
             provider,
         },
-    })
+    ))
 }
 
 #[cfg(test)]
@@ -375,37 +375,6 @@ kwargs = {}
             reader.unwrap().read(py).unwrap();
             assert_eq!(arguments.api_base().unwrap().as_deref(), Some("mutated"));
             assert_eq!(arguments.timeout_seconds().unwrap(), Some(9.0));
-        });
-    }
-
-    #[test]
-    fn captured_api_key_keeps_the_original_python_object() {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = eval(
-                py,
-                c"
-key = object()
-class Request:
-    api_key = None
-request = Request()
-kwargs = {'api_key': key}
-",
-            );
-            let request = locals.get_item("request").unwrap().unwrap();
-            let kwargs = locals
-                .get_item("kwargs")
-                .unwrap()
-                .unwrap()
-                .cast_into::<PyDict>()
-                .unwrap();
-            let captured = arguments(&request, &kwargs).api_key().unwrap();
-            assert!(
-                captured
-                    .unbind()
-                    .bind(py)
-                    .is(locals.get_item("key").unwrap().unwrap())
-            );
         });
     }
 

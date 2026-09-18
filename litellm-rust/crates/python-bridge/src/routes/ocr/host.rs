@@ -7,11 +7,11 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use super::errors::to_pyerr as ocr_error_to_pyerr;
-use super::project::{OcrRetained, project_request};
+use super::project::{OcrHostHandles, project_request};
 
 enum OcrHostData {
     Unprojected,
-    Projected(Box<OcrRetained>),
+    Projected(Box<OcrHostHandles>),
     Released,
 }
 
@@ -30,15 +30,15 @@ impl OcrRouteHost {
         }
     }
 
-    fn projected(&self) -> PyResult<&OcrRetained> {
+    fn handles(&self) -> PyResult<&OcrHostHandles> {
         match &self.data {
-            OcrHostData::Projected(projected) => Ok(projected),
+            OcrHostData::Projected(handles) => Ok(handles),
             _ => Err(missing_state()),
         }
     }
 
     fn read_document(&self, py: Python<'_>) -> PyResult<litellm_core::ocr::OcrFileContent> {
-        self.projected()?
+        self.handles()?
             .reader
             .as_ref()
             .ok_or_else(missing_state)?
@@ -46,7 +46,7 @@ impl OcrRouteHost {
     }
 
     fn acquire_azure_ad_token(&self, py: Python<'_>) -> PyResult<ResolvedCredential> {
-        self.projected()?
+        self.handles()?
             .azure_ad_token_provider
             .as_ref()
             .ok_or_else(missing_state)?
@@ -68,11 +68,11 @@ impl RouteHost for OcrRouteHost {
                 let OcrHostData::Unprojected = self.data else {
                     return Err(missing_state());
                 };
-                let projection = project_request(self.request.bind(py), arguments)?;
-                let caller_token = projection.retained.azure_ad_token_provider.is_some();
-                self.data = OcrHostData::Projected(Box::new(projection.retained));
+                let (request, handles) = project_request(self.request.bind(py), arguments)?;
+                let caller_token = handles.azure_ad_token_provider.is_some();
+                self.data = OcrHostData::Projected(Box::new(handles));
                 Ok(OcrOpResult::Request {
-                    request: Box::new(projection.native),
+                    request: Box::new(request),
                     caller_token,
                 })
             }
@@ -100,7 +100,7 @@ impl RouteHost for OcrRouteHost {
 
     fn map_failure(&self, py: Python<'_>, error: &PyErr) -> PyResult<PyErr> {
         let provider = match &self.data {
-            OcrHostData::Projected(projected) => projected.provider,
+            OcrHostData::Projected(handles) => handles.provider,
             _ => "",
         };
         let mapped: Py<PyBaseException> = py
@@ -117,11 +117,11 @@ impl RouteHost for OcrRouteHost {
 
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.request)?;
-        if let OcrHostData::Projected(projected) = &self.data {
-            if let Some(reader) = &projected.reader {
+        if let OcrHostData::Projected(handles) = &self.data {
+            if let Some(reader) = &handles.reader {
                 reader.traverse(visit)?;
             }
-            if let Some(provider) = &projected.azure_ad_token_provider {
+            if let Some(provider) = &handles.azure_ad_token_provider {
                 provider.traverse(visit)?;
             }
         }

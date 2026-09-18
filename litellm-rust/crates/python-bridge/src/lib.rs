@@ -3,7 +3,6 @@ mod credentials;
 mod diagnostics;
 mod errors;
 mod marshal;
-mod projection;
 mod routes;
 mod token_counter;
 

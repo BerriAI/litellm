@@ -9,11 +9,12 @@ use litellm_host_python::{
 use pyo3::exceptions::{PyBaseException, PyException};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::PyDict;
 
 use crate::deferred::{PendingLogging, PendingSuccess};
 use crate::{
-    DeploymentHooks, LegacyCallbacks, PythonLogger, finalize, is_internal_call, prepare, setup,
+    DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger, finalize, is_internal_call,
+    prepare, setup,
 };
 
 /// What the legacy contract needs to know about the route it is logging.
@@ -33,9 +34,7 @@ enum Pending {
 
 pub struct LegacyLogging {
     surface: LegacySurface,
-    args: Py<PyTuple>,
-    kwargs: Py<PyDict>,
-    request: Py<PyAny>,
+    call: PublicCall,
     logger: Option<PythonLogger>,
     start: Py<PyAny>,
     end: Option<Py<PyAny>>,
@@ -63,16 +62,12 @@ impl LegacyLogging {
     pub fn new(
         py: Python<'_>,
         surface: LegacySurface,
-        args: Py<PyTuple>,
-        kwargs: Py<PyDict>,
-        request: Py<PyAny>,
+        call: PublicCall,
         asynchronous: bool,
     ) -> Self {
         Self {
             surface,
-            args,
-            kwargs,
-            request,
+            call,
             logger: None,
             start: py.None(),
             end: None,
@@ -92,18 +87,10 @@ impl LegacyLogging {
         })
     }
 
-    /// The caller's own value for a public argument: the keyword if given, else the
-    /// bound request's attribute.
-    fn lookup<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
-        if let Some(value) = self.kwargs.bind(py).get_item(name)? {
-            return Ok(Some(value));
-        }
-        self.request.bind(py).getattr_opt(name)
-    }
-
     fn prepare(&mut self, py: Python<'_>) -> PyResult<AdapterStep> {
-        self.kwargs = prepare(py, self.kwargs.bind(py), self.logger()?)?.unbind();
-        Ok(AdapterStep::Arguments(self.kwargs.clone_ref(py)))
+        let prepared = prepare(py, self.call.kwargs().bind(py), self.logger()?)?.unbind();
+        self.call.set_kwargs(prepared);
+        Ok(AdapterStep::Arguments(self.call.kwargs().clone_ref(py)))
     }
 
     fn finalize(&mut self, py: Python<'_>) -> PyResult<AdapterStep> {
@@ -111,7 +98,7 @@ impl LegacyLogging {
             py,
             &self.response,
             self.logger()?,
-            &self.kwargs,
+            self.call.kwargs(),
             &self.start,
             &self.end,
         )?;
@@ -153,7 +140,8 @@ impl LegacyLogging {
         }
         if !self.internal
             && self
-                .kwargs
+                .call
+                .kwargs()
                 .bind(py)
                 .get_item("fallbacks")?
                 .is_none_or(|value| value.is_none())
@@ -212,24 +200,24 @@ impl CallbackAdapter for LegacyLogging {
         arguments: Py<PyDict>,
         started_at: f64,
     ) -> PyResult<AdapterStep> {
-        self.kwargs = arguments;
+        self.call.set_kwargs(arguments);
         self.start = datetime(py, started_at)?;
         self.internal = is_internal_call(py)?;
         let result = setup(
             py,
             self.surface.call_type,
-            &self.args,
-            &self.kwargs,
+            self.call.args(),
+            self.call.kwargs(),
             &self.start,
             self.asynchronous,
         )?;
         self.logger = Some(result.logger()?);
-        self.kwargs = result.kwargs()?;
+        self.call.set_kwargs(result.kwargs()?);
         if DeploymentHooks::needed(py)? {
             self.pending = Some(Pending::DeploymentPreCall);
             return Ok(AdapterStep::Await(DeploymentHooks::before_call(
                 py,
-                &self.kwargs,
+                self.call.kwargs(),
                 self.surface.call_type,
             )?));
         }
@@ -238,7 +226,7 @@ impl CallbackAdapter for LegacyLogging {
 
     fn before_send(&mut self, py: Python<'_>, wire: Box<WireRequest>) -> PyResult<AdapterStep> {
         let logger = self.logger()?;
-        logger.update_from_kwargs(py, &self.kwargs, &wire)?;
+        logger.update_from_kwargs(py, self.call.kwargs(), &wire)?;
         if !logger.callbacks_needed(py, "payload")? {
             logger.record_api_call_start(py)?;
             return Ok(AdapterStep::Wire(wire));
@@ -248,7 +236,7 @@ impl CallbackAdapter for LegacyLogging {
             .cast_into::<PyDict>()?;
         for name in &wire.caller_fields {
             if body.contains(name)?
-                && let Some(value) = self.lookup(py, name)?
+                && let Some(value) = self.call.lookup(py, name)?
             {
                 body.set_item(name, value)?;
             }
@@ -259,7 +247,7 @@ impl CallbackAdapter for LegacyLogging {
         }
         self.body = Some(body.clone().unbind());
         self.headers = Some(headers.clone().unbind());
-        let api_key = self.lookup(py, "api_key")?;
+        let api_key = self.call.lookup(py, "api_key")?;
         self.logger()?.pre_call(
             py,
             self.surface.input_description,
@@ -291,7 +279,7 @@ impl CallbackAdapter for LegacyLogging {
             self.pending = Some(Pending::DeploymentPostCall);
             return Ok(AdapterStep::Await(DeploymentHooks::after_success(
                 py,
-                &self.kwargs,
+                self.call.kwargs(),
                 &self.response,
                 self.surface.call_type,
             )?));
@@ -330,7 +318,7 @@ impl CallbackAdapter for LegacyLogging {
                     self.pending = Some(Pending::DeploymentFailure);
                     return Ok(AdapterStep::Await(DeploymentHooks::after_failure(
                         py,
-                        &self.kwargs,
+                        self.call.kwargs(),
                         error,
                         self.surface.call_type,
                     )?));
@@ -344,7 +332,8 @@ impl CallbackAdapter for LegacyLogging {
     fn resume(&mut self, py: Python<'_>, result: PyResult<Py<PyAny>>) -> PyResult<AdapterStep> {
         match self.pending.take().ok_or_else(missing_state)? {
             Pending::DeploymentPreCall => {
-                self.kwargs = result?.into_bound(py).cast_into::<PyDict>()?.unbind();
+                self.call
+                    .set_kwargs(result?.into_bound(py).cast_into::<PyDict>()?.unbind());
                 self.prepare(py)
             }
             Pending::DeploymentPostCall => {
@@ -370,9 +359,7 @@ impl CallbackAdapter for LegacyLogging {
     }
 
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.args)?;
-        visit.call(&self.kwargs)?;
-        visit.call(&self.request)?;
+        self.call.traverse(visit)?;
         if let Some(logger) = &self.logger {
             logger.traverse(visit)?;
         }
@@ -387,6 +374,8 @@ impl CallbackAdapter for LegacyLogging {
 
 #[cfg(test)]
 mod tests {
+    use pyo3::types::PyTuple;
+
     use super::*;
 
     fn adapter(
@@ -400,9 +389,12 @@ mod tests {
                 call_type: "test",
                 input_description: "test input",
             },
-            args: PyTuple::empty(py).unbind(),
-            kwargs: PyDict::new(py).unbind(),
-            request: py.None(),
+            call: PublicCall::capture(
+                &py.None().into_bound(py),
+                &PyTuple::empty(py),
+                &PyDict::new(py),
+            )
+            .unwrap(),
             logger: Some(logger.extract(py).unwrap()),
             start: py.None(),
             end: Some(py.None()),

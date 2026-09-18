@@ -1,6 +1,7 @@
 - Target invariants, not completion claims; these supersede older conflicting bridge guidance
 - Keep this crate the product-specific PyO3 consumer of `litellm-host-python`
-  - Own registration, input projection, retained Python state, public response/error construction and the composition of machine, route host and callback adapter per call
+  - Own registration, input projection, the route host and the caller callables it answers operations with (file readers, token providers), public response/error construction and the per-call composition of machine, route host and callback contract
+  - Legacy callback sharing (the caller's args, kwargs and request object, body/header roots, `caller_fields` re-aliasing) lives in `litellm-callbacks-legacy` behind `PublicCall` and `run_legacy_call`; the bridge hands the public call over and keeps no copy
   - Value-oriented execution, sync waiting, nested-runtime checks, signal polling and panic containment live in `litellm-host-python`; native async work uses `pyo3-async-runtimes`, Serde output uses `Pythonized<T>`
   - Core owns typed native state, the route machine, provider preparation/I/O and normalization; the host driver owns terminal events; the legacy adapter in `litellm-callbacks-legacy` owns `Logging` dispatch policy
   - Python, Rust SDK and gateway use one lifecycle-bearing core route entrypoint; provider helpers stay private, never bridge-accessible transport drivers
@@ -8,8 +9,6 @@
 - Target GIL-enabled CPython explicitly with `#[pymodule(gil_used = true)]`; detach Rust-only work
   - Free-threading requires separate runtime/concurrency validation; omitting the attribute does not opt out on PyO3 0.28+
 - Preserve public argument binding and Python object provenance
-  - Retain complete boundary arguments, opaque unknown values, aliases, omitted/default distinctions and deliberate copies; preserve the established deployment-hook kwargs view
-  - Retain independently captured body/header roots; in-place mutation and logging-envelope field replacement have different effects
   - Project only consumed fields at reference read points; no eager whole-graph serialization or equality-based alias reconstruction
   - Preserve provider-specific upload/submission/poll observation and encoding boundaries; signed/build-captured bytes must not be silently reserialized
 - Conversion errors and every failure after the call starts are terminal

@@ -3,9 +3,8 @@ mod errors;
 mod host;
 mod project;
 
-use litellm_callbacks_legacy::{LegacyLogging, LegacySurface};
+use litellm_callbacks_legacy::{LegacySurface, PublicCall, run_legacy_call};
 use litellm_core::ocr::{OcrClient, ocr_machine};
-use litellm_host_python::run_call;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
@@ -29,21 +28,12 @@ fn run_ocr(
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     let client = OcrClient::shared().map_err(errors::to_pyerr)?;
-    let arguments = kwargs.copy()?.unbind();
-    let adapter = LegacyLogging::new(
+    run_legacy_call(
         py,
         if asynchronous { ASYNC_SURFACE } else { SURFACE },
-        args.unbind(),
-        arguments.clone_ref(py),
-        request.clone().unbind(),
-        asynchronous,
-    );
-    run_call(
-        py,
+        PublicCall::capture(&request, &args, &kwargs)?,
         ocr_machine(client),
         OcrRouteHost::new(request.unbind()),
-        Box::new(adapter),
-        arguments,
         asynchronous,
     )
 }

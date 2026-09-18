@@ -1,0 +1,11 @@
+- Target invariants, not completion claims
+- Keep this crate the whole legacy `Logging` contract and nothing else: `function_setup`, the deployment hooks, `pre_call`/`post_call`, the sync and async success and failure fan-out, the deferred proxy release, and the argument sharing those callbacks rely on
+  - The driver in `litellm-host-python`, the routes and core see one `CallbackAdapter`; they never learn which Python objects consume a call
+  - `PublicCall` is the caller's call as `Logging` sees it: the positional arguments, the keyword view as the legacy path rewrites it (setup, deployment hook, prepare) and the bound request object whose attributes back keywords the caller omitted; routes hand it over through `run_legacy_call` and keep no copy
+- Callbacks receive the caller's own objects and may mutate them; this crate alone carries that obligation
+  - Retain complete boundary arguments, opaque unknown values, aliases, omitted/default distinctions and deliberate copies; preserve the established deployment-hook kwargs view
+  - Re-alias every `caller_fields` body key to the caller's object before `pre_call`; a keyword wins over the request attribute even when it is an explicit `None`
+  - Retain independently captured body/header roots from `pre_call` to `post_call`; in-place mutation reaches the wire, envelope field replacement is visible to later callbacks only
+  - A later kind of callback host (WASM, in-process Rust) has none of these obligations, so they stay out of `litellm-callbacks`, `litellm-host-python` and the bridge; the only facts that cross from the route are the prepared keyword view and `WireRequest.caller_fields`
+- Success and failure handlers receive the exact selected public response or exception; ordinary handler errors are reported and swallowed, a cancellation ends the call
+- Traverse every retained Python edge; `close` is idempotent and restores the correlation context once
