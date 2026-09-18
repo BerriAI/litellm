@@ -995,6 +995,8 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
         for frame in event_frames
     )
 
+    assert decoded[-1] == "data: [DONE]\n\n"
+    assert len(decoded) == len(event_frames) + 1
     assert payloads[0]["response"]["id"] == "resp_visible"
     assert payloads[1] == tool_delta.model_dump()
     assert len(payloads) == 3
