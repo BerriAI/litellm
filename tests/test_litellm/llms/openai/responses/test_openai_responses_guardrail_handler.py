@@ -3593,7 +3593,11 @@ class TestResponsesScopingFlags:
         result = await handler.process_input_messages(data=request, guardrail_to_apply=guardrail)
 
         assert result["input"][1] == {"role": "user", "content": "What is the capital of France?"}
-        assert result["input"][3] == {"type": "function_call_output", "call_id": "call_1", "output": "TOOL SECRET [GUARDRAILED]"}
+        assert result["input"][3] == {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": "TOOL SECRET [GUARDRAILED]",
+        }
 
     @pytest.mark.parametrize("scan_only_tool_results", [None, True])
     @pytest.mark.asyncio
