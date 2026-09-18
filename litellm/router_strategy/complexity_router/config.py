@@ -1596,6 +1596,11 @@ class ComplexityRouterConfig(BaseModel):
             return self
         if jev is None:
             raise ValueError("jev_classifier_config is required when classifier_type is 'jev'")
+        from litellm.secret_managers.main import get_secret_str
+
+        key: Final = jev.api_key or get_secret_str("TYPESAFE_API_KEY")
+        if not key:
+            raise ValueError("jev_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'")
         return self
 
     @model_validator(mode="after")
