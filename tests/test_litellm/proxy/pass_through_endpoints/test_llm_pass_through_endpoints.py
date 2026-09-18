@@ -6149,6 +6149,10 @@ class TestTypeSafePassthroughRoute:
         request.json = AsyncMock(return_value=body)
         return request
 
+    @pytest.mark.parametrize("method", ["GET", "POST", "PUT", "DELETE", "PATCH"])
+    def test_route_serves_every_method(self, method: str):
+        assert _resolve_route_name(method, "/typesafe/v1/systemone") == "typesafe_proxy_route"
+
     @pytest.mark.asyncio
     async def test_forwards_target_auth_headers_provider_and_query(self, monkeypatch):
         monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
