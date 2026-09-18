@@ -26393,6 +26393,12 @@ export interface components {
             field_name: string;
             /** Field Value */
             field_value: unknown;
+            /**
+             * Source
+             * @default unset
+             * @enum {string}
+             */
+            source: "config" | "db" | "default" | "unset";
         };
         /** ConfigFieldUpdate */
         ConfigFieldUpdate: {
@@ -26895,6 +26901,12 @@ export interface components {
              * @default false
              */
             premium_field: boolean;
+            /**
+             * Source
+             * @default unset
+             * @enum {string}
+             */
+            source: "config" | "db" | "default" | "unset";
             /** Stored In Db */
             stored_in_db: boolean | null;
         };
@@ -28286,6 +28298,12 @@ export interface components {
             field_name: string;
             /** Field Type */
             field_type: string;
+            /**
+             * Source
+             * @default unset
+             * @enum {string}
+             */
+            source: "config" | "db" | "default" | "unset";
             /** Stored In Db */
             stored_in_db: boolean | null;
         };
@@ -36439,6 +36457,13 @@ export interface components {
             routing_strategy_descriptions: {
                 [key: string]: string;
             };
+            /**
+             * Source
+             * @description Source of each current router setting
+             */
+            source: {
+                [key: string]: "config" | "db" | "default" | "unset";
+            };
         };
         /**
          * RoutingGroup
@@ -38855,6 +38880,10 @@ export interface components {
             /** Field Schema */
             field_schema: {
                 [key: string]: unknown;
+            };
+            /** Source */
+            source: {
+                [key: string]: "config" | "db" | "default" | "unset";
             };
             /** Values */
             values: {
