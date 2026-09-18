@@ -533,7 +533,7 @@ async def test_process_output_response_masks_text_content():
             TextContent(type="text", text="email jane@example.com"),
             TextContent(type="text", text="call 415-555-0132"),
         ],
-        isError=False,
+        is_error=False,
     )
 
     returned = await handler.process_output_response(
@@ -569,7 +569,7 @@ async def test_process_output_response_propagates_block():
     guardrail = MaskingGuardrail(
         raises=BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="masking-mcp-guardrail")
     )
-    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], is_error=False)
 
     with pytest.raises(BlockedPiiEntityError):
         await handler.process_output_response(response=result, guardrail_to_apply=guardrail)
@@ -582,7 +582,7 @@ async def test_process_output_response_skips_non_text_content():
     guardrail = MaskingGuardrail(masked_texts=["should not be used"])
     result = CallToolResult(
         content=[ImageContent(type="image", data="aGk=", mimeType="image/png")],
-        isError=False,
+        is_error=False,
     )
 
     returned = await handler.process_output_response(response=result, guardrail_to_apply=guardrail)
@@ -613,7 +613,7 @@ async def test_process_output_response_blocks_on_text_count_mismatch():
             TextContent(type="text", text="jane@example.com"),
             TextContent(type="text", text="415-555-0132"),
         ],
-        isError=False,
+        is_error=False,
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -645,14 +645,14 @@ async def test_structured_content_is_masked_alongside_content():
     guardrail = SubstitutingGuardrail("jane@example.com", "<EMAIL_ADDRESS>")
     response = CallToolResult(
         content=[TextContent(type="text", text="email jane@example.com")],
-        structuredContent={"contact": {"email": "jane@example.com"}, "balance": 42.0},
-        isError=False,
+        structured_content={"contact": {"email": "jane@example.com"}, "balance": 42.0},
+        is_error=False,
     )
 
     returned = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
     assert returned.content[0].text == "email <EMAIL_ADDRESS>"
-    assert returned.structuredContent == {"contact": {"email": "<EMAIL_ADDRESS>"}, "balance": 42.0}
+    assert returned.structured_content== {"contact": {"email": "<EMAIL_ADDRESS>"}, "balance": 42.0}
 
 
 @pytest.mark.asyncio
@@ -666,14 +666,14 @@ async def test_value_present_only_in_structured_content_is_masked():
     guardrail = SubstitutingGuardrail("jane@example.com", "<EMAIL_ADDRESS>")
     response = CallToolResult(
         content=[TextContent(type="text", text="lookup complete")],
-        structuredContent={"records": [{"email": "jane@example.com"}]},
-        isError=False,
+        structured_content={"records": [{"email": "jane@example.com"}]},
+        is_error=False,
     )
 
     returned = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
     assert "jane@example.com" in guardrail.seen_texts
-    assert returned.structuredContent == {"records": [{"email": "<EMAIL_ADDRESS>"}]}
+    assert returned.structured_content== {"records": [{"email": "<EMAIL_ADDRESS>"}]}
     assert returned.content[0].text == "lookup complete"
 
 
@@ -684,13 +684,13 @@ async def test_structured_content_without_a_match_is_untouched():
     guardrail = SubstitutingGuardrail("jane@example.com", "<EMAIL_ADDRESS>")
     response = CallToolResult(
         content=[TextContent(type="text", text="lookup complete")],
-        structuredContent={"record_id": "C-1001", "balance": 42.0, "active": True, "note": None},
-        isError=False,
+        structured_content={"record_id": "C-1001", "balance": 42.0, "active": True, "note": None},
+        is_error=False,
     )
 
     returned = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
-    assert returned.structuredContent == {"record_id": "C-1001", "balance": 42.0, "active": True, "note": None}
+    assert returned.structured_content== {"record_id": "C-1001", "balance": 42.0, "active": True, "note": None}
 
 
 @pytest.mark.asyncio
@@ -707,8 +707,8 @@ async def test_structured_content_nested_too_deeply_is_blocked():
         nested = {"next": nested}
     response = CallToolResult(
         content=[TextContent(type="text", text="lookup complete")],
-        structuredContent=nested,
-        isError=False,
+        structured_content=nested,
+        is_error=False,
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -754,8 +754,8 @@ async def test_sensitive_structured_content_key_is_blocked():
     guardrail = SubstitutingGuardrail("jane@example.com", "<EMAIL_ADDRESS>")
     response = CallToolResult(
         content=[TextContent(type="text", text="lookup complete")],
-        structuredContent={"jane@example.com": {"balance": 42.0}},
-        isError=False,
+        structured_content={"jane@example.com": {"balance": 42.0}},
+        is_error=False,
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -774,8 +774,8 @@ async def test_sensitive_structured_content_numeric_value_is_blocked():
     guardrail = SubstitutingGuardrail("4155550199", "<PHONE_NUMBER>")
     response = CallToolResult(
         content=[TextContent(type="text", text="lookup complete")],
-        structuredContent={"phone": 4155550199},
-        isError=False,
+        structured_content={"phone": 4155550199},
+        is_error=False,
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -791,11 +791,11 @@ async def test_clean_structured_content_keys_do_not_block():
     guardrail = SubstitutingGuardrail("jane@example.com", "<EMAIL_ADDRESS>")
     response = CallToolResult(
         content=[TextContent(type="text", text="email jane@example.com")],
-        structuredContent={"record_id": "C-1001", "balance": 42.0, "count": 3},
-        isError=False,
+        structured_content={"record_id": "C-1001", "balance": 42.0, "count": 3},
+        is_error=False,
     )
 
     returned = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
     assert returned.content[0].text == "email <EMAIL_ADDRESS>"
-    assert returned.structuredContent == {"record_id": "C-1001", "balance": 42.0, "count": 3}
+    assert returned.structured_content== {"record_id": "C-1001", "balance": 42.0, "count": 3}

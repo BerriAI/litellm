@@ -42,52 +42,52 @@ async def test_semantic_filter_basic_filtering():
         MCPTool(
             name="gmail_send",
             description="Send an email via Gmail",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
         MCPTool(
             name="outlook_send",
             description="Send an email via Outlook",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
         MCPTool(
             name="calendar_create",
             description="Create a calendar event",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
         MCPTool(
             name="calendar_update",
             description="Update a calendar event",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
         MCPTool(
             name="email_read",
             description="Read emails from inbox",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
         MCPTool(
             name="email_delete",
             description="Delete an email",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
         MCPTool(
             name="calendar_delete",
             description="Delete a calendar event",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
         MCPTool(
             name="email_search",
             description="Search for emails",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
         MCPTool(
             name="calendar_list",
             description="List calendar events",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
         MCPTool(
             name="email_forward",
             description="Forward an email to someone",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
     ]
 
@@ -170,7 +170,7 @@ async def test_semantic_filter_top_k_limiting():
         MCPTool(
             name=f"tool_{i}",
             description=f"Tool number {i} for testing",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         )
         for i in range(20)
     ]
@@ -228,7 +228,7 @@ async def test_semantic_filter_disabled():
 
     tools = [
         MCPTool(
-            name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"}
+            name=f"tool_{i}", description=f"Tool {i}", input_schema={"type": "object"}
         )
         for i in range(10)
     ]
@@ -375,7 +375,7 @@ async def test_semantic_filter_hook_triggers_on_completion():
     # Prepare data - completion request with tools
     tools = [
         MCPTool(
-            name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"}
+            name=f"tool_{i}", description=f"Tool {i}", input_schema={"type": "object"}
         )
         for i in range(10)
     ]
@@ -508,7 +508,7 @@ async def test_semantic_filter_hook_preserves_native_tools():
         MCPTool(
             name=f"mcp_tool_{i}",
             description=f"MCP tool {i}",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         )
         for i in range(5)
     ]
@@ -624,7 +624,7 @@ async def test_semantic_filter_hook_all_native_tools():
         MCPTool(
             name="some_mcp_tool",
             description="An MCP tool",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         )
     ]
 
@@ -741,7 +741,7 @@ async def test_semantic_filter_hook_responses_api_name_collision():
         MCPTool(
             name="github-search",
             description="Search GitHub repos",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         )
     ]
     filter_instance._build_router(mcp_tools)
@@ -836,7 +836,7 @@ async def test_semantic_filter_hook_filters_expanded_litellm_proxy_tools():
         MCPTool(
             name=f"srv-tool_{i}",
             description=f"Registry tool {i}",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         )
         for i in range(5)
     ]
@@ -958,7 +958,7 @@ async def test_semantic_filter_hook_narrows_mcp_reference_for_chat_completions()
         MCPTool(
             name=f"srv-tool_{i}",
             description=f"Registry tool {i}",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         )
         for i in range(5)
     ]
@@ -1065,7 +1065,7 @@ async def test_semantic_filter_hook_zero_matches_exposes_all_tools_on_both_paths
         MCPTool(
             name=f"srv-tool_{i}",
             description=f"Registry tool {i}",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         )
         for i in range(3)
     ]
@@ -1182,7 +1182,7 @@ async def test_semantic_filter_hook_filters_expanded_tools_with_string_input():
         MCPTool(
             name=f"srv-tool_{i}",
             description=f"Registry tool {i}",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         )
         for i in range(5)
     ]
@@ -1326,12 +1326,12 @@ async def test_semantic_filter_hook_preserves_tool_order():
     mcp_tool_a = MCPTool(
         name="github-search",
         description="Search GitHub",
-        inputSchema={"type": "object"},
+        input_schema={"type": "object"},
     )
     mcp_tool_b = MCPTool(
         name="github-issue",
         description="Create GitHub issue",
-        inputSchema={"type": "object"},
+        input_schema={"type": "object"},
     )
     filter_instance._build_router([mcp_tool_a, mcp_tool_b])
 
@@ -1683,7 +1683,7 @@ async def test_semantic_filter_fails_closed_on_query_time_context_window_error()
     filter_instance = _make_context_window_filter(state)
 
     tools = [
-        MCPTool(name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"})
+        MCPTool(name=f"tool_{i}", description=f"Tool {i}", input_schema={"type": "object"})
         for i in range(5)
     ]
     filter_instance._build_router(tools)
@@ -1716,7 +1716,7 @@ async def test_semantic_filter_records_build_time_context_window_error():
     filter_instance = _make_context_window_filter(state)
 
     tools = [
-        MCPTool(name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"})
+        MCPTool(name=f"tool_{i}", description=f"Tool {i}", input_schema={"type": "object"})
         for i in range(5)
     ]
     filter_instance._build_router(tools)
@@ -1750,7 +1750,7 @@ async def test_semantic_filter_hook_fails_closed_on_context_window_error():
     filter_instance = _make_context_window_filter(state)
 
     tools = [
-        MCPTool(name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"})
+        MCPTool(name=f"tool_{i}", description=f"Tool {i}", input_schema={"type": "object"})
         for i in range(5)
     ]
     filter_instance._build_router(tools)
@@ -1798,7 +1798,7 @@ async def test_semantic_filter_hook_fails_closed_on_expanded_tools_context_windo
     filter_instance = _make_context_window_filter(state)
 
     registry_tools = [
-        MCPTool(name=f"srv-tool_{i}", description=f"Registry tool {i}", inputSchema={"type": "object"})
+        MCPTool(name=f"srv-tool_{i}", description=f"Registry tool {i}", input_schema={"type": "object"})
         for i in range(5)
     ]
     filter_instance._build_router(registry_tools)
@@ -1862,7 +1862,7 @@ async def test_semantic_filter_hook_ignores_build_error_for_native_only_tools():
     filter_instance = _make_context_window_filter(state)
 
     mcp_tools = [
-        MCPTool(name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"})
+        MCPTool(name=f"tool_{i}", description=f"Tool {i}", input_schema={"type": "object"})
         for i in range(3)
     ]
     filter_instance._build_router(mcp_tools)
@@ -2019,7 +2019,7 @@ def _linear_issue_tool():
     return MCPTool(
         name="linear_stub-get_issue",
         description="Get a Linear issue (ticket) by its identifier such as LIT-1234",
-        inputSchema={"type": "object"},
+        input_schema={"type": "object"},
     )
 
 
@@ -2027,7 +2027,7 @@ def _linear_list_tool():
     return MCPTool(
         name="linear_stub-list_issues",
         description="List Linear issues (tickets) in the workspace",
-        inputSchema={"type": "object"},
+        input_schema={"type": "object"},
     )
 
 
@@ -2035,7 +2035,7 @@ def _weather_tool():
     return MCPTool(
         name="weather_stub-get_weather",
         description="Get the current weather conditions for a city",
-        inputSchema={"type": "object"},
+        input_schema={"type": "object"},
     )
 
 
@@ -2135,8 +2135,8 @@ async def test_request_time_context_window_error_is_request_scoped():
     state = {"raise_context_error": True}
     filter_instance = _make_context_window_filter(state)
     tools = [
-        MCPTool(name="tool_a", description="Tool A", inputSchema={"type": "object"}),
-        MCPTool(name="tool_b", description="Tool B", inputSchema={"type": "object"}),
+        MCPTool(name="tool_a", description="Tool A", input_schema={"type": "object"}),
+        MCPTool(name="tool_b", description="Tool B", input_schema={"type": "object"}),
     ]
 
     with pytest.raises(SemanticToolFilterContextWindowError):
@@ -2171,7 +2171,7 @@ async def test_foreign_index_routes_cannot_displace_available_tools():
         MCPTool(
             name=f"other_user-linear_tool_{i}",
             description=f"Get a Linear issue variant {i}",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         )
         for i in range(6)
     ]
@@ -2180,7 +2180,7 @@ async def test_foreign_index_routes_cannot_displace_available_tools():
     my_kanban = MCPTool(
         name="mine-kanban_board",
         description="Manage kanban board cards",
-        inputSchema={"type": "object"},
+        input_schema={"type": "object"},
     )
     filtered = await filter_instance.filter_tools(
         query="what is Linear ticket LIT-3794 about",
@@ -2204,7 +2204,7 @@ async def test_top_k_above_router_default_is_respected():
         MCPTool(
             name=f"linear_stub-tool_{i}",
             description=f"Work with Linear issues part {i}",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         )
         for i in range(6)
     ]

@@ -54,13 +54,13 @@ class TestConvertOpenAIResponseToMcpResult:
         assert isinstance(result.content, TextContent)
         assert result.content.text == "hello world"
         assert result.role == "assistant"
-        assert result.stopReason == "endTurn"
+        assert result.stop_reason== "endTurn"
 
     def test_should_map_length_finish_reason_to_max_tokens(self):
         result = _convert_openai_response_to_mcp_result(
             _response(content="truncated", finish_reason="length"), "gpt-4o"
         )
-        assert result.stopReason == "maxTokens"
+        assert result.stop_reason== "maxTokens"
 
     def test_should_prefer_actual_model_from_response(self):
         result = _convert_openai_response_to_mcp_result(
@@ -79,7 +79,7 @@ class TestConvertOpenAIResponseToMcpResult:
             "gpt-4o",
         )
         assert isinstance(result, CreateMessageResultWithTools)
-        assert result.stopReason == "toolUse"
+        assert result.stop_reason== "toolUse"
         tool_uses = [c for c in result.content if isinstance(c, ToolUseContent)]
         assert len(tool_uses) == 1
         assert tool_uses[0].name == "get_weather"
@@ -113,7 +113,7 @@ class TestConvertMcpToolsToOpenAI:
     def test_should_convert_tool_with_schema(self):
         schema = {"type": "object", "properties": {"q": {"type": "string"}}}
         tool = SimpleNamespace(
-            name="search", description="search the web", inputSchema=schema
+            name="search", description="search the web", input_schema=schema
         )
         result = _convert_mcp_tools_to_openai([tool])
         assert result == [
@@ -128,7 +128,7 @@ class TestConvertMcpToolsToOpenAI:
         ]
 
     def test_should_default_description_and_parameters(self):
-        tool = SimpleNamespace(name="noop", description=None, inputSchema=None)
+        tool = SimpleNamespace(name="noop", description=None, input_schema=None)
         result = _convert_mcp_tools_to_openai([tool])
         fn = result[0]["function"]
         assert fn["description"] == ""

@@ -399,8 +399,8 @@ class TestProxyMcpSchemaDiscoveryMode:
                             "arguments": {"a": 5, "b": 6},
                         },
                     )
-                    assert stdio.isError is False and stdio.content[0].text == "7"
-                    assert http.isError is False and http.content[0].text == "111"
+                    assert stdio.is_error is False and stdio.content[0].text == "7"
+                    assert http.is_error is False and http.content[0].text == "111"
 
     @pytest.mark.asyncio
     async def test_server_scope_header_narrows_discovery(self, proxy_server_url: str) -> None:
@@ -417,7 +417,7 @@ class TestProxyMcpSchemaDiscoveryMode:
 
     @pytest.mark.asyncio
     async def test_rejections_never_reach_upstream(self, proxy_server_url: str) -> None:
-        from mcp.shared.exceptions import McpError
+        from mcp.shared.exceptions import MCPError
         from mcp.types import METHOD_NOT_FOUND
 
         async with asyncio.timeout(30):
@@ -430,22 +430,22 @@ class TestProxyMcpSchemaDiscoveryMode:
                     bad_args = await session.call_tool(
                         "call_tool", arguments={"tool_id": tool_id, "arguments": {"a": "three", "b": 4}}
                     )
-                    assert bad_args.isError is True and "Invalid arguments" in bad_args.content[0].text
+                    assert bad_args.is_error is True and "Invalid arguments" in bad_args.content[0].text
 
                     stale = await session.call_tool("get_tool_schema", arguments={"tool_id": "0" * 32})
-                    assert stale.isError is True and "unauthorized tool_id" in stale.content[0].text
+                    assert stale.is_error is True and "unauthorized tool_id" in stale.content[0].text
 
                     for not_an_object in ("wrong", False):
                         refused_args = await session.call_tool(
                             "call_tool", arguments={"tool_id": tool_id, "arguments": not_an_object}
                         )
-                        assert refused_args.isError is True and "object" in refused_args.content[0].text
+                        assert refused_args.is_error is True and "object" in refused_args.content[0].text
 
                     direct = await session.call_tool("math_stdio-add", arguments={"a": 1, "b": 2})
-                    assert direct.isError is True and "unavailable on /mcp/proxy" in direct.content[0].text
+                    assert direct.is_error is True and "unavailable on /mcp/proxy" in direct.content[0].text
 
                     for operation in (session.list_prompts, session.list_resources):
-                        with pytest.raises(McpError) as refused:
+                        with pytest.raises(MCPError) as refused:
                             await operation()
                         assert refused.value.error.code == METHOD_NOT_FOUND
 
@@ -502,7 +502,7 @@ async def _scoped_session(url: str, key: str = "sk-1234", **headers: str) -> typ
 
 async def _search(session: ClientSession, query: str) -> dict[str, str]:
     result = await session.call_tool("search_tools", arguments={"query": query})
-    assert result.isError is False, result
+    assert result.is_error is False, result
     return {hit["name"]: hit["tool_id"] for hit in _payload(result)}
 
 
@@ -542,7 +542,7 @@ def _rpc_result(response: httpx.Response) -> dict[str, typing.Any]:
 
 
 def _assert_unauthorized(result: CallToolResult) -> None:
-    assert result.isError is True
+    assert result.is_error is True
     assert result.content[0].text == "Unknown or unauthorized tool_id"
 
 
@@ -611,7 +611,7 @@ class TestProxyMcpAuthorizationScope:
                 assert schema["name"] == name
                 assert schema["tool_id"] == ids[name]
                 result = await _call(session, ids[name])
-                assert result.isError is False
+                assert result.is_error is False
                 assert result.content[0].text == expected
 
     @pytest.mark.asyncio
@@ -652,7 +652,7 @@ class TestProxyMcpAuthorizationScope:
                     result = await session.call_tool(
                         "call_tool", {"tool_id": ids[f"{name}-request_headers"], "arguments": {}}
                     )
-                    assert result.isError is False
+                    assert result.is_error is False
                     assert _payload(result) == expected
 
     @pytest.mark.asyncio
@@ -660,7 +660,7 @@ class TestProxyMcpAuthorizationScope:
         async with _scoped_session(proxy_server_url, "sk-restricted") as session:
             tool_id = (await _search(session, "add"))["math_restricted-add"]
             result = await _call(session, tool_id, 123, 456)
-            assert result.isError is False and result.content[0].text == "779"
+            assert result.is_error is False and result.content[0].text == "779"
             async with asyncio.timeout(10):
                 while True:
                     payload = json.loads(await asyncio.to_thread(proxy_call_recorder.events.get, True, 5))
@@ -714,7 +714,7 @@ class TestProxyMcpAuthorizationScope:
             hits = _payload(await handle_mcp_proxy_tool("search_tools", {"query": "add"}, auth))
             tool_id = next(hit["tool_id"] for hit in hits if hit["name"] == "math_stdio-add")
             result = await handle_mcp_proxy_tool("call_tool", {"tool_id": tool_id, "arguments": arguments}, auth)
-            assert result.isError is True
+            assert result.is_error is True
             assert result.content[0].text == "arguments must be an object"
 
         asyncio.run_coroutine_threadsafe(check(), _proxy_server.loop).result(timeout=30)

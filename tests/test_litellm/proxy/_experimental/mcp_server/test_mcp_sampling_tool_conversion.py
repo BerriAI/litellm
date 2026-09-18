@@ -35,7 +35,7 @@ def _tool_result(
     if content is None:
         content = []
     return SimpleNamespace(
-        type="tool_result", toolUseId=tool_use_id, content=content, isError=is_error
+        type="tool_result", toolUseId=tool_use_id, content=content, is_error=is_error
     )
 
 

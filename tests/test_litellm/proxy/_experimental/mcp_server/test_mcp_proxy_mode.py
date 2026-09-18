@@ -3,7 +3,7 @@ from datetime import datetime
 
 import pytest
 from fastapi import HTTPException
-from mcp.shared.exceptions import McpError
+from mcp.shared.exceptions import MCPError
 from pydantic import AnyUrl
 
 import litellm
@@ -32,7 +32,7 @@ async def test_proxy_call_rejects_non_proxy_tool_names() -> None:
     )
 
     assert result is not None
-    assert result.isError is True
+    assert result.is_error is True
     assert "unavailable on /mcp/proxy" in result.content[0].text
 
 
@@ -44,15 +44,15 @@ async def test_proxy_rejects_non_tool_protocol_operations() -> None:
     assert options.capabilities.resources is None
     assert options.capabilities.tools is not None
 
-    with pytest.raises(McpError):
+    with pytest.raises(MCPError):
         await server.list_prompts()
-    with pytest.raises(McpError):
+    with pytest.raises(MCPError):
         await server.get_prompt("prompt", {})
-    with pytest.raises(McpError):
+    with pytest.raises(MCPError):
         await server.list_resources()
-    with pytest.raises(McpError):
+    with pytest.raises(MCPError):
         await server.list_resource_templates()
-    with pytest.raises(McpError):
+    with pytest.raises(MCPError):
         await server.read_resource(AnyUrl("https://example.com/resource"))
 
 

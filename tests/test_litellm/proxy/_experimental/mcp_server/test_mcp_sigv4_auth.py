@@ -1,7 +1,7 @@
 """
 Tests for AWS SigV4 authentication in MCP client.
 
-Tests the MCPSigV4Auth httpx.Auth subclass that enables per-request
+Tests the MCPSigV4Auth httpx2.Auth subclass that enables per-request
 SigV4 signing for Bedrock AgentCore MCP servers, plus DB/UI path
 tests for credential encryption, merge-on-update, and build_from_table.
 """
@@ -11,7 +11,7 @@ import json
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
-import httpx
+import httpx2
 
 from litellm.experimental_mcp_client.client import MCPSigV4Auth, MCPClient
 from litellm.types.mcp import MCPAuth, MCPTransport
@@ -103,7 +103,7 @@ class TestMCPSigV4Auth:
             aws_service_name="bedrock-agentcore",
         )
 
-        request = httpx.Request(
+        request = httpx2.Request(
             method="POST",
             url="https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/test/invocations",
             headers={"Content-Type": "application/json"},
@@ -128,13 +128,13 @@ class TestMCPSigV4Auth:
             aws_region_name="us-east-1",
         )
 
-        request1 = httpx.Request(
+        request1 = httpx2.Request(
             method="POST",
             url="https://example.com/mcp",
             headers={"Content-Type": "application/json"},
             content=b'{"jsonrpc":"2.0","method":"tools/list","id":1}',
         )
-        request2 = httpx.Request(
+        request2 = httpx2.Request(
             method="POST",
             url="https://example.com/mcp",
             headers={"Content-Type": "application/json"},
@@ -156,7 +156,7 @@ class TestMCPSigV4Auth:
             aws_region_name="us-east-1",
         )
 
-        request = httpx.Request(
+        request = httpx2.Request(
             method="POST",
             url="https://example.com/mcp",
             headers={"Content-Type": "application/json"},
@@ -265,7 +265,7 @@ class TestMCPSigV4AssumeRole:
                 aws_service_name="bedrock-agentcore",
             )
 
-        request = httpx.Request(
+        request = httpx2.Request(
             method="POST",
             url="https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/test/invocations",
             headers={"Content-Type": "application/json"},
@@ -306,7 +306,7 @@ class TestMCPClientSigV4Integration:
 
     def test_mcp_client_stores_aws_auth(self):
         """MCPClient stores the aws_auth parameter."""
-        mock_auth = MagicMock(spec=httpx.Auth)
+        mock_auth = MagicMock(spec=httpx2.Auth)
         client = MCPClient(
             server_url="https://example.com/mcp",
             transport_type=MCPTransport.http,
@@ -330,7 +330,7 @@ class TestMCPClientSigV4Integration:
         factory = client._create_httpx_client_factory()
         httpx_client = factory(
             headers={"Content-Type": "application/json"},
-            timeout=httpx.Timeout(30.0),
+            timeout=httpx2.Timeout(30.0),
         )
 
         # Verify the auth object was actually wired into the httpx client
@@ -342,7 +342,7 @@ class TestMCPClientSigV4Integration:
             aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
             aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
         )
-        explicit_auth = MagicMock(spec=httpx.Auth)
+        explicit_auth = MagicMock(spec=httpx2.Auth)
 
         client = MCPClient(
             server_url="https://example.com/mcp",
@@ -353,7 +353,7 @@ class TestMCPClientSigV4Integration:
         factory = client._create_httpx_client_factory()
         httpx_client = factory(
             headers={"Content-Type": "application/json"},
-            timeout=httpx.Timeout(30.0),
+            timeout=httpx2.Timeout(30.0),
             auth=explicit_auth,
         )
 
@@ -370,7 +370,7 @@ class TestMCPClientSigV4Integration:
         factory = client._create_httpx_client_factory()
         httpx_client = factory(
             headers={"Content-Type": "application/json"},
-            timeout=httpx.Timeout(30.0),
+            timeout=httpx2.Timeout(30.0),
         )
         # No auth should be set when aws_auth is not configured
         assert httpx_client._auth is None

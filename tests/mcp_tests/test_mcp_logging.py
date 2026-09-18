@@ -62,7 +62,7 @@ async def test_mcp_cost_tracking():
     # Create a mock tool call result
     litellm.logging_callback_manager._reset_all_callbacks()
     mock_result = CallToolResult(
-        content=[TextContent(type="text", text="Test response")], isError=False
+        content=[TextContent(type="text", text="Test response")], is_error=False
     )
 
     # Create a mock MCPClient
@@ -73,7 +73,7 @@ async def test_mcp_cost_tracking():
             MCPTool(
                 name="add_tools",
                 description="Test tool",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {"test": {"type": "string"}},
                 },
@@ -187,7 +187,7 @@ async def test_mcp_cost_tracking_per_tool():
     # Create a mock tool call result
     litellm.logging_callback_manager._reset_all_callbacks()
     mock_result = CallToolResult(
-        content=[TextContent(type="text", text="Test response")], isError=False
+        content=[TextContent(type="text", text="Test response")], is_error=False
     )
 
     # Create a mock MCPClient
@@ -198,7 +198,7 @@ async def test_mcp_cost_tracking_per_tool():
             MCPTool(
                 name="expensive_tool",
                 description="Expensive tool",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {"data": {"type": "string"}},
                 },
@@ -206,7 +206,7 @@ async def test_mcp_cost_tracking_per_tool():
             MCPTool(
                 name="cheap_tool",
                 description="Cheap tool",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {"data": {"type": "string"}},
                 },
@@ -368,7 +368,7 @@ async def test_mcp_tool_call_hook():
     # Create a mock tool call result
     litellm.logging_callback_manager._reset_all_callbacks()
     mock_result = CallToolResult(
-        content=[TextContent(type="text", text="Test response")], isError=False
+        content=[TextContent(type="text", text="Test response")], is_error=False
     )
 
     # Create a mock MCPClient
@@ -379,7 +379,7 @@ async def test_mcp_tool_call_hook():
             MCPTool(
                 name="add_tools",
                 description="Test tool",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {"test": {"type": "string"}},
                 },
