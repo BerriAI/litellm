@@ -57,7 +57,7 @@ def validate_budget_limits(budget_limits: Sequence[object] | None, status_code: 
         for entry in budget_limits
     )
     for window in windows:
-        error: Final = budget_duration_error(window.budget_duration)
+        error = budget_duration_error(window.budget_duration)
         if error is not None:
             raise HTTPException(
                 status_code=status_code,

@@ -5540,7 +5540,7 @@ async def _user_multi_budget_check(
     """
     if valid_token is None or not valid_token.user_budget_limits or valid_token.user_id is None:
         return
-    is_team_key: Final = team_object is not None and team_object.team_id is not None
+    is_team_key: Final = team_object is not None and bool(team_object.team_id)
     if is_team_key and general_settings.get("apply_user_budget_to_team_keys") is not True:
         return
 
