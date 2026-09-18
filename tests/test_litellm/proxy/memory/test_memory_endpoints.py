@@ -199,6 +199,7 @@ def _make_team(team_id: str, *, admin_user_ids: List[str]) -> Any:
         spend=0.0,
         model_spend="{}",
         model_max_budget="{}",
+        budget_fallbacks="{}",
         admins=[],
         members=[],
         team_member_permissions=[],

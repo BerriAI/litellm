@@ -15474,13 +15474,13 @@ async def test_update_team_replaces_budget_fallbacks(disable_audit_logging_for_m
     mock_user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,
-        patch("litellm.proxy.proxy_server.llm_router"),
-        patch("litellm.proxy.proxy_server.user_api_key_cache"),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj"),
-        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
-        patch("litellm.proxy.management_endpoints.team_endpoints._cache_team_object"),
-        patch(
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,  # test-quality-ok: same module-global mocking every test in this file already uses
+        patch("litellm.proxy.proxy_server.llm_router"),  # test-quality-ok: same module-global mocking every test in this file already uses
+        patch("litellm.proxy.proxy_server.user_api_key_cache"),  # test-quality-ok: same module-global mocking every test in this file already uses
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),  # test-quality-ok: same module-global mocking every test in this file already uses
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),  # test-quality-ok: same module-global mocking every test in this file already uses
+        patch("litellm.proxy.management_endpoints.team_endpoints._cache_team_object"),  # test-quality-ok: same module-global mocking every test in this file already uses
+        patch(  # test-quality-ok: same module-global mocking every test in this file already uses
             "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table",
             new=AsyncMock(side_effect=lambda **kwargs: kwargs["updated_kv"]),
         ),

@@ -4531,21 +4531,23 @@ async def test_new_user_forwards_budget_fallbacks_into_user_persistence(mocker):
     async def _noop(*args, **kwargs):
         return None
 
-    mocker.patch(
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
         "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
         _noop,
     )
-    mocker.patch(
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
         "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
         _noop,
     )
-    key_gen = mocker.patch(
+    key_gen = mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
         "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
         new=mocker.AsyncMock(side_effect=RuntimeError("reached key generation")),
     )
     prisma_client = mocker.MagicMock()
     prisma_client.db.litellm_usertable.count = mocker.AsyncMock(return_value=0)
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)
+        mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
+        "litellm.proxy.proxy_server.prisma_client", prisma_client)
+    ),
 
     admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
     request = NewUserRequest(

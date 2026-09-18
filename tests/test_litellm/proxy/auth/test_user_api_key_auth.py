@@ -7384,7 +7384,7 @@ class TestEntityModelBudgetFallbacks:
         request = self._make_request()
         request.scope["path_params"] = {"model": "gpt-4o"}
 
-        with patch(
+        with patch(  # test-quality-ok: the fallback check reads the limiter seam from module scope; no injection point
             "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
             new=AsyncMock(return_value=True),
         ):
@@ -7413,7 +7413,7 @@ class TestEntityModelBudgetFallbacks:
         request_data = {"model": "gpt-4o"}
         request = self._make_request()
 
-        with patch(
+        with patch(  # test-quality-ok: the fallback check reads the limiter seam from module scope; no injection point
             "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
             new=AsyncMock(return_value=True),
         ):
@@ -7451,7 +7451,7 @@ class TestEntityModelBudgetFallbacks:
         request_data = {"model": "gpt-4o"}
         request = self._make_request()
 
-        with patch(
+        with patch(  # test-quality-ok: the fallback check reads the limiter seam from module scope; no injection point
             "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
             new=AsyncMock(return_value=True),
         ):
@@ -7513,7 +7513,7 @@ class TestEntityModelBudgetFallbacks:
         request_data = {"model": "gpt-4o"}
         request = self._make_request()
 
-        with patch(
+        with patch(  # test-quality-ok: the fallback check reads the limiter seam from module scope; no injection point
             "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
             new=AsyncMock(return_value=True),
         ):
