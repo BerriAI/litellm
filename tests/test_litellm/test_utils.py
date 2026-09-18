@@ -40,6 +40,7 @@ from litellm.types.utils import (
     CallTypes,
     Choices,
     Delta,
+    EmbeddingResponse,
     LlmProviders,
     ModelResponse,
     ModelResponseStream,
@@ -4064,18 +4065,20 @@ class _ConvertStreamDeploymentHook(CustomLogger):
 class _SuccessKwargsCapture(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.success_kwargs: list[dict[str, object]] = []
-        self.stream_event_responses: list[object] = []
+        self.success_kwargs: tuple[dict[str, object], ...] = ()
+        self.success_responses: tuple[object, ...] = ()
+        self.stream_event_responses: tuple[object, ...] = ()
 
     async def async_log_success_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        self.success_kwargs.append(kwargs)
+        self.success_kwargs = (*self.success_kwargs, kwargs)
+        self.success_responses = (*self.success_responses, response_obj)
 
     async def async_log_stream_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        self.stream_event_responses.append(response_obj)
+        self.stream_event_responses = (*self.stream_event_responses, response_obj)
 
 
 def _install_converted_stream_callbacks(monkeypatch: pytest.MonkeyPatch) -> _SuccessKwargsCapture:
@@ -4350,6 +4353,51 @@ async def test_wrapper_async_replays_cached_converted_responses_stream_as_stream
     assert route.call_count == 1
 
     _assert_cache_hit_logged_as_stream(capture, await _wait_for_success_kwargs(capture, count=2))
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_wrapper_async_logs_complete_partial_cached_embedding_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capture: Final = _install_converted_stream_callbacks(monkeypatch)
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    route: Final = respx.post("https://api.openai.com/v1/embeddings").respond(
+        json={
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
+            "model": "text-embedding-3-small",
+            "usage": {"prompt_tokens": 1, "total_tokens": 1},
+        }
+    )
+
+    await litellm.aembedding(
+        model="openai/text-embedding-3-small",
+        input=["cached"],
+        api_key="sk-test",
+        num_retries=0,
+    )
+    first_success_kwargs: Final = await _wait_for_success_kwargs(capture)
+    second: Final = await litellm.aembedding(
+        model="openai/text-embedding-3-small",
+        input=["cached", "uncached"],
+        api_key="sk-test",
+        num_retries=0,
+    )
+    second_success_kwargs: Final = await _wait_for_success_kwargs(capture, count=2)
+
+    first_standard_logging: Final = first_success_kwargs["standard_logging_object"]
+    second_standard_logging: Final = second_success_kwargs["standard_logging_object"]
+    observed: Final = capture.success_responses[-1]
+    assert isinstance(first_standard_logging, dict)
+    assert isinstance(second_standard_logging, dict)
+    assert isinstance(observed, EmbeddingResponse)
+    assert observed is second
+    assert tuple(item["index"] for item in observed.data) == (0, 1)
+    assert second_standard_logging["response_cost"] == first_standard_logging["response_cost"]
+    assert route.call_count == 2
 
 
 def test_function_setup_failure_after_logging_construction_restores_context(monkeypatch):

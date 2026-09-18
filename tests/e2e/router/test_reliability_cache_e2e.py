@@ -350,6 +350,7 @@ class TestReliabilityCache:
                 "/chat/completions", headers=client.proxy.transport.bearer(scoped_key), json=body
             )
             _assert_cache_hit(second, "chat")
+            assert second.headers.get("x-litellm-cache-key"), "identical request must hit the response cache"
             assert _CachedAnswer.model_validate_json(second.body) == _CachedAnswer.model_validate_json(first.body), (
                 "cache hit changed the answer, finish reason or usage"
             )
