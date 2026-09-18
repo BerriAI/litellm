@@ -1253,11 +1253,12 @@ def _process_keys_for_user_info(
 def _set_user_budget_fallbacks_update(fields_set: Set[str], value: object, non_default_values: dict) -> None:
     if "budget_fallbacks" not in fields_set:
         return
+    empty_fallbacks: Final = {}  # mutable-ok: empty mapping clears stored fallbacks
     try:
-        _BUDGET_FALLBACKS_ADAPTER.validate_python({} if value is None else value)
+        _BUDGET_FALLBACKS_ADAPTER.validate_python(value if value is not None else empty_fallbacks)
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    non_default_values["budget_fallbacks"] = {} if value is None else value
+    non_default_values["budget_fallbacks"] = value if value is not None else empty_fallbacks
 
 
 def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
@@ -1907,9 +1908,9 @@ async def bulk_user_update(
             await UserRepository(prisma_client).table.update_many(
                 where={},
                 data=(
-                    {
+                    {  # mutable-ok: prisma update payload must be a dict
                         **non_default_values,
-                        **{
+                        **{  # mutable-ok: prisma update payload must be a dict
                             column: json.dumps(non_default_values[column])
                             for column in ("model_max_budget", "budget_fallbacks")
                             if column in non_default_values

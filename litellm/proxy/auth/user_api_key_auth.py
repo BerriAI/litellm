@@ -478,7 +478,7 @@ async def _check_model_budget_with_fallback(
         original_error: Final = e
     if request_data.get("model") != model_name:
         raise original_error
-    for fallback_model in (budget_fallbacks or {}).get(model_name, ()):
+    for fallback_model in budget_fallbacks.get(model_name, ()) if budget_fallbacks is not None else ():
         try:
             await check(model=fallback_model)
         except litellm.BudgetExceededError:
