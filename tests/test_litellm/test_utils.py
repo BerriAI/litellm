@@ -6325,6 +6325,23 @@ def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_with
     }
     assert _credential_warnings(caplog) == []
 
+def test_shorten_message_to_fit_limit_never_grows_content():
+    """A zero half_length must not turn the trim into a two-character prefix.
+
+    `content[-0:]` is `content[0:]`, so with half_length == 0 the "right half" is the
+    whole string and each attempt returns `".." + content`. The loop then runs its full
+    attempt budget growing the message two characters at a time.
+    """
+    from litellm.utils import shorten_message_to_fit_limit
+
+    content = "hello world " * 40
+    message = {"role": "user", "content": content}
+
+    result = shorten_message_to_fit_limit(message, tokens_needed=1, model="claude-3-5-sonnet-20240620")
+
+    assert len(result["content"]) < len(content)
+    assert not result["content"].startswith("....")
+
 
 _MOCK_STREAM_ID: Final = "chatcmpl-mock-stream"
 _ChunkSnapshot = tuple[str, tuple[str | None, ...], Usage | None]
