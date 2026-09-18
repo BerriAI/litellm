@@ -22,6 +22,11 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
+def _frozen_cache() -> UserApiKeyCache:
+    """The org entries carry a 5s TTL; a frozen clock keeps a slow first call from expiring them mid-test."""
+    return UserApiKeyCache(in_memory_cache=InMemoryCache(clock=lambda: 1_000_000.0), redis_cache=None)
+
+
 def _dead_db() -> MagicMock:
     prisma = MagicMock(name="prisma_client")
     prisma.db.query_first = AsyncMock(return_value=None)
@@ -58,9 +63,10 @@ async def test_join_binds_the_membership_to_the_requested_team(prisma):
             data={"user_id": user_id, "team_id": team_b, "litellm_budget_table": {"connect": {"budget_id": f"b-{run}"}}}
         )
 
-        cache = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=None)
+        cache = _frozen_cache()
         refs = AuthObjectRefs(user_id=user_id, team_id=team_a, membership_user_id=user_id, organization_id=org_id)
         await prefetch_auth_objects(refs=refs, user_api_key_cache=cache, prisma_client=prisma)
+        assert cache.in_memory_cache.get_cache(f"org_id:{org_id}") is not None
 
         dead_db = _dead_db()
         membership = await get_team_membership(
@@ -100,7 +106,7 @@ async def test_join_reads_team_model_aliases_from_the_mapped_column(prisma):
             where={"team_id": team_id}, include={"litellm_model_table": True}
         )
 
-        cache = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=None)
+        cache = _frozen_cache()
         refs = AuthObjectRefs(user_id=None, team_id=team_id, membership_user_id=None, organization_id=None)
         await prefetch_auth_objects(refs=refs, user_api_key_cache=cache, prisma_client=prisma)
 
@@ -144,7 +150,7 @@ async def test_join_reads_null_nested_lists_the_way_prisma_does(prisma):
             where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}}, include={"litellm_budget_table": True}
         )
 
-        cache = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=None)
+        cache = _frozen_cache()
         refs = AuthObjectRefs(user_id=user_id, team_id=team_id, membership_user_id=user_id, organization_id=None)
         await prefetch_auth_objects(refs=refs, user_api_key_cache=cache, prisma_client=prisma)
 
@@ -172,3 +178,4 @@ async def test_join_reads_null_nested_lists_the_way_prisma_does(prisma):
         await prisma.db.litellm_usertable.delete_many(where={"user_id": user_id})
         await prisma.db.litellm_objectpermissiontable.delete_many(where={"object_permission_id": permission_id})
         await prisma.db.litellm_budgettable.delete_many(where={"budget_id": budget_id})
+

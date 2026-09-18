@@ -299,6 +299,7 @@ class TestProcessResponse:
             )
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 class TestProcessEmbedContentResponseUsage:
     """Gemini Embedding 2 embedContent usageMetadata must drive spend.
 
@@ -501,3 +502,4 @@ class TestProcessEmbedContentResponseUsage:
         )
         # 1 floor text token at 2e-7 + 2s of video at 7.9e-4 + 2s of audio at 1.6e-4
         assert prompt_cost == pytest.approx(1 * 2e-7 + 2 * 0.00079 + 2 * 0.00016)
+
