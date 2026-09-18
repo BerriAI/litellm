@@ -3,23 +3,33 @@ Unit tests for auto router management endpoints
 """
 
 from collections.abc import Mapping, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Final
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
+from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.management_endpoints import auto_router_endpoints
 from litellm.proxy.management_endpoints.auto_router_endpoints import (
     preview_auto_router_routing,
 )
 from litellm.router import Router
+from litellm.router_strategy.complexity_router import ComplexityRouter
+from litellm.router_strategy.complexity_router.jev_classifier import (
+    JevChoiceAnswer,
+    JevClassifierClient,
+    JevSystemOneResponse,
+)
 from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterBenchmarksResponse,
     AutoRouterRoutingTestRequest,
@@ -422,8 +432,67 @@ async def test_a_key_over_its_budget_cannot_run_a_classifier_config(monkeypatch:
     assert calls == []
 
 
+@pytest.mark.parametrize(
+    "max_budget, spend, denied",
+    (
+        pytest.param(0.0, 0.0, True, id="zero-budget"),
+        pytest.param(1.0, 1.0, True, id="budget-reached"),
+        pytest.param(1.0, 2.0, True, id="budget-exceeded"),
+        pytest.param(1.0, 0.5, False, id="budget-remaining"),
+        pytest.param(None, 2.0, False, id="unlimited"),
+    ),
+)
 @pytest.mark.asyncio
-async def test_a_heuristic_config_does_not_need_a_budget(monkeypatch: pytest.MonkeyPatch):
+async def test_jev_test_routing_enforces_key_budget_before_provider_invocation(
+    monkeypatch: pytest.MonkeyPatch, max_budget: float | None, spend: float, denied: bool
+) -> None:
+    client: Final = AsyncMock(spec=JevClassifierClient)
+    client.evaluate.return_value = JevSystemOneResponse(
+        model="jev-test",
+        answers={
+            "tier": JevChoiceAnswer(type="choice", choice="SIMPLE", probabilities={"SIMPLE": 1.0}, confidence=1.0)
+        },
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", _router())
+    monkeypatch.setattr(auto_router_endpoints, "ComplexityRouter", partial(ComplexityRouter, jev_client=client))
+    actor: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-jev-budget-test",
+        user_id="admin",
+        models=["cheap-model"],
+        max_budget=max_budget,
+        spend=spend,
+    )
+    request: Final = _request(
+        "what is 2+2",
+        classifier_type="jev",
+        jev_classifier_config={"model": "jev-test"},
+    )
+
+    if denied:
+        with pytest.raises(ProxyException) as exc_info:
+            await preview_auto_router_routing(http_request=ROUTING_HTTP_REQUEST, data=request, user_api_key_dict=actor)
+        assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+        assert exc_info.value.code == "400"
+        assert exc_info.value.param is None
+        assert "Budget has been exceeded!" in exc_info.value.message
+        client.evaluate.assert_not_called()
+        return
+
+    response: Final = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST, data=request, user_api_key_dict=actor
+    )
+    assert response.routed_model == "cheap-model"
+    assert response.routing_decision["cause"] == "jev_classifier"
+    assert response.routing_decision["classifier_model"] == "typesafe/jev-test"
+    client.evaluate.assert_awaited_once()
+
+
+@pytest.mark.parametrize("max_budget, spend", ((0.0, 0.0), (1.0, 2.0)))
+@pytest.mark.asyncio
+async def test_a_heuristic_config_does_not_need_a_budget(
+    monkeypatch: pytest.MonkeyPatch, max_budget: float, spend: float
+):
     import litellm.proxy.proxy_server as proxy_server
 
     monkeypatch.setattr(proxy_server, "llm_router", _router())
@@ -435,8 +504,8 @@ async def test_a_heuristic_config_does_not_need_a_budget(monkeypatch: pytest.Mon
             user_role=LitellmUserRoles.PROXY_ADMIN,
             api_key="sk-broke",
             user_id="admin",
-            max_budget=1.0,
-            spend=2.0,
+            max_budget=max_budget,
+            spend=spend,
             models=["cheap-model"],
         ),
     )
@@ -851,7 +920,6 @@ class TestAutoRouterBenchmarks:
 # ---------------------------------------------------------------------------
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
 
 from litellm.proxy.management_endpoints.auto_router_endpoints import (
     get_shadow_eval_job,
