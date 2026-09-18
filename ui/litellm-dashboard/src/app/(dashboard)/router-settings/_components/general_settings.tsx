@@ -249,7 +249,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     const fieldValue = setting?.field_value;
 
     if (fieldValue == null) {
-      if (setting?.field_type === "Select") handleResetField(fieldName);
+      if (setting?.field_type === "Select" || setting?.field_type === "List") handleResetField(fieldName);
       return;
     }
     try {
