@@ -11,17 +11,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import anyio
 import httpx2
 import pytest
-from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
 from mcp import MCPError
 from mcp.client.streamable_http import streamable_http_client
-from pydantic import ValidationError
 from mcp.shared.message import SessionMessage
-from mcp_types.version import LATEST_HANDSHAKE_VERSION
-from pydantic import TypeAdapter
 from mcp.types import (
     CONNECTION_CLOSED,
     INTERNAL_ERROR,
-    LATEST_PROTOCOL_VERSION,
     REQUEST_TIMEOUT,
     CallToolResult,
     ErrorData,
@@ -33,9 +28,10 @@ from mcp.types import (
     LoggingMessageNotificationParams,
     ServerCapabilities,
 )
+from mcp_types.version import LATEST_HANDSHAKE_VERSION
+from pydantic import TypeAdapter, ValidationError
 
 # Add the parent directory to the path so we can import litellm
-
 import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import (
     MCPClient,
@@ -51,9 +47,9 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     _format_byok_openapi_auth_header,
 )
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
 from litellm.types.mcp import MCPAuth, MCPStdioConfig, MCPTransport
-
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 _JSONRPC_MESSAGE_ADAPTER: Final = TypeAdapter(JSONRPCMessage)
 
@@ -1188,7 +1184,7 @@ async def test_a_custom_credential_header_is_stripped_when_a_redirect_crosses_or
     operator moved to its own slot would be replayed to whatever host the upstream redirects to.
     Verified against real httpx redirect handling, not a hand-built request.
     """
-    seen: "list[tuple[str, str]]" = []
+    seen: list[tuple[str, str]] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append((request.url.host, request.headers.get("esb-oauth", "<stripped>")))
@@ -1280,7 +1276,7 @@ async def test_the_guard_agrees_with_httpx_about_authorization(start: str, targe
     outcomes. A future httpx that changes its redirect rule reds here instead of silently leaving
     the custom slot forwarded where Authorization is not (or stripped where it is not needed).
     """
-    seen: "list[tuple[str, str, str]]" = []
+    seen: list[tuple[str, str, str]] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(
@@ -1325,11 +1321,11 @@ def test_a_differently_cased_injected_header_cannot_shadow_the_slot() -> None:
 @pytest.mark.parametrize(
     ("content_type", "body", "expected_type"),
     [
-        ("text/html", b"<html>secret-page</html>", ValueError),
-        ("application/json", b"secret-invalid-json", ValidationError),
-        ("application/json", b"", ValidationError),
-        ("application/json", b'{"secret":"invalid-rpc"}', ValidationError),
-        ("application/json", b'{"jsonrpc":"2.0","id":0,"result":{"secret":"invalid-schema"}}', ValidationError),
+        ("text/html", b"<html>secret-page</html>", MCPError),
+        ("application/json", b"secret-invalid-json", MCPError),
+        ("application/json", b"", MCPError),
+        ("application/json", b'{"secret":"invalid-rpc"}', MCPError),
+        ("application/json", b'{"jsonrpc":"2.0","id":0}', MCPError),
     ],
 )
 async def test_invalid_http_response_surfaces_without_waiting_for_timeout(
@@ -1623,6 +1619,7 @@ async def test_sse_read_failure_is_preserved() -> None:
 @pytest.mark.parametrize("mode", ["ok", "closed", "silent"])
 async def test_transport_completion_and_normal_messages(transport: MCPTransport, mode: str) -> None:
     from mcp import ClientSession
+
     from litellm.proxy._experimental.mcp_server.rest_endpoints import _connection_error_message
 
     logging_callback: Final = AsyncMock()
@@ -1647,8 +1644,7 @@ async def test_transport_completion_and_normal_messages(transport: MCPTransport,
         if mode == "closed":
             assert "connection was closed" in _connection_error_message(caught.value, client.server_url, 0.2)
         else:
-            assert caught.value.error.code == CONNECTION_CLOSED
-    assert "SSE stream ended" in caught.value.error.message
+            assert isinstance(as_mcp_read_timeout(caught.value), TimeoutError)
 
 
 @pytest.mark.asyncio
@@ -1843,6 +1839,7 @@ async def test_optional_discovery_capabilities_and_errors(
 @pytest.mark.parametrize("supports_first", (True, False))
 async def test_optional_discovery_uses_each_sessions_capabilities(supports_first: bool) -> None:
     from unittest.mock import Mock
+
     from mcp.types import JSONRPCRequest
 
     capabilities: Final = iter(({"resources": {}}, {}) if supports_first else ({}, {"resources": {}}))

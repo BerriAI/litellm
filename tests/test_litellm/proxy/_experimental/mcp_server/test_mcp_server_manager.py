@@ -1,5 +1,6 @@
 import importlib
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -83,6 +84,23 @@ def _reload_mcp_manager_module():
         server_module.global_mcp_server_manager = reloaded.global_mcp_server_manager
     return reloaded
 
+
+def _mcp_request_ctx(**overrides):
+    from mcp.server.context import ServerRequestContext
+    from types import SimpleNamespace
+
+    kwargs = {
+        "session": SimpleNamespace(),
+        "lifespan_context": {},
+        "protocol_version": "2025-06-18",
+        "method": "",
+        "params": None,
+        "request_id": 1,
+        "meta": None,
+        "request": None,
+    }
+    kwargs.update(overrides)
+    return ServerRequestContext(**kwargs)
 
 @pytest.fixture(autouse=True)
 def enable_eager_mcp_oauth_discovery(monkeypatch):
@@ -12719,8 +12737,7 @@ async def test_debug_resolution_matches_final_header_conflict_winner(
     expected_source: str,
     expected_authorization: str | None,
 ) -> None:
-    from mcp.server.lowlevel.server import request_ctx
-    from mcp.shared.context import RequestContext
+    from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
     from starlette.requests import Request
     from pydantic import SecretStr
 
@@ -12743,8 +12760,7 @@ async def test_debug_resolution_matches_final_header_conflict_winner(
     store = Store()
     context = MCPAuthenticatedUser(UserAPIKeyAuth(user_id="alice"))
     diagnostics = MCPAuthDiagnostics()
-    token = request_ctx.set(RequestContext(
-        request_id=1, meta=None, session=MagicMock(), lifespan_context=None,
+    token = active_mcp_request_ctx_var.set(_mcp_request_ctx(
         request=Request({"type": "http", MCP_AUTH_DIAGNOSTICS_SCOPE_KEY: diagnostics}),
     ))
     selected = {
@@ -12771,22 +12787,20 @@ async def test_debug_resolution_matches_final_header_conflict_winner(
         assert request.headers.get("Authorization") == expected_authorization
         assert store.calls == (1 if config == "stored" else 0)
     finally:
-        request_ctx.reset(token)
+        active_mcp_request_ctx_var.reset(token)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transport", ["http", "stdio"])
 async def test_debug_reports_legacy_signing_and_non_http_transport(transport: Literal["http", "stdio"]) -> None:
-    from mcp.server.lowlevel.server import request_ctx
-    from mcp.shared.context import RequestContext
+    from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
     from starlette.requests import Request
 
     from litellm.proxy._experimental.mcp_server.mcp_debug import MCP_AUTH_DIAGNOSTICS_SCOPE_KEY, MCPAuthDiagnostics
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     diagnostics = MCPAuthDiagnostics()
-    token = request_ctx.set(RequestContext(
-        request_id=1, meta=None, session=MagicMock(), lifespan_context=None,
+    token = active_mcp_request_ctx_var.set(_mcp_request_ctx(
         request=Request({"type": "http", MCP_AUTH_DIAGNOSTICS_SCOPE_KEY: diagnostics}),
     ))
     try:
@@ -12807,7 +12821,7 @@ async def test_debug_reports_legacy_signing_and_non_http_transport(transport: Li
             assert request.headers["Authorization"].startswith("AWS4-HMAC-SHA256 ")
             assert "Credential=AKIDEXAMPLE/" in request.headers["Authorization"]
     finally:
-        request_ctx.reset(token)
+        active_mcp_request_ctx_var.reset(token)
 
 
 @pytest.mark.asyncio
@@ -13063,10 +13077,14 @@ def _mcp_upstream(respond):
     """Drive the SDK's streamable-HTTP transport off an httpx2 MockTransport; respx only sees httpx."""
     from litellm.experimental_mcp_client.client import MCPClient
 
-    def factory(*args, **kwargs):
-        return httpx2.AsyncClient(transport=httpx2.MockTransport(respond))
+    def make_client(self, *args, **kwargs):
+        return httpx2.AsyncClient(
+            transport=httpx2.MockTransport(respond),
+            headers=kwargs.get("headers"),
+            auth=kwargs.get("auth") or self._resolved_auth or self._aws_auth,
+        )
 
-    with patch.object(MCPClient, "_create_httpx_client_factory", lambda self: factory):
+    with patch.object(MCPClient, "_create_httpx_client_factory", lambda self: functools.partial(make_client, self)):
         yield
 
 

@@ -3921,7 +3921,7 @@ class TestConnectionErrorMessage:
     @pytest.mark.parametrize("read_timeout", [0, 1])
     async def test_timeout_message_uses_the_deadline_that_expired(self, sdk_timeout: bool, read_timeout: int) -> None:
         from mcp import MCPError
-        from mcp.types import ErrorData
+        from mcp.types import REQUEST_TIMEOUT, ErrorData
 
         async def operation(client: rest_endpoints.MCPClient) -> dict[str, object]:
             try:
@@ -3930,7 +3930,7 @@ class TestConnectionErrorMessage:
                 if not sdk_timeout:
                     raise
                 try:
-                    raise MCPError(code=408, message="secret-sdk-timeout") from elapsed
+                    raise MCPError(code=REQUEST_TIMEOUT, message="secret-sdk-timeout") from elapsed
                 except MCPError as sdk_error:
                     raise TimeoutError() from sdk_error
 
