@@ -1,9 +1,20 @@
+import datetime
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 import pytest
 
 import litellm
-from litellm.rust_bridge.legacy_callbacks import check_limits
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.rust_bridge.legacy_callbacks import check_limits, setup
+
+_OCR_KWARGS: Final = MappingProxyType(
+    {
+        "model": "mistral/mistral-ocr-latest",
+        "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
+    }
+)
 
 
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
@@ -31,3 +42,38 @@ def test_check_limits_reads_request_retry_count(
             check_limits(kwargs)
     else:
         check_limits(kwargs)
+
+
+def _supplied_logger() -> Logging:
+    return Logging(
+        model="mistral/mistral-ocr-latest",
+        messages=[],
+        stream=False,
+        call_type="aocr",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="supplied",
+        function_id="supplied",
+    )
+
+
+def test_setup_adopts_a_supplied_logger_as_caller_owned() -> None:
+    supplied: Final = _supplied_logger()
+    result: Final = setup(
+        "aocr", (), {**_OCR_KWARGS, "litellm_logging_obj": supplied}, datetime.datetime.now(), asynchronous=True
+    )
+    assert result.logger is supplied
+    assert result.bridge_owned is False
+
+
+@pytest.mark.parametrize(
+    "call_type, kwargs",
+    [
+        ("aocr", _OCR_KWARGS),
+        ("aembedding", MappingProxyType({"model": "text-embedding-3-large", "input": ["hi"]})),
+    ],
+    ids=["ocr", "embedding"],
+)
+def test_setup_owns_every_logger_it_builds(call_type: str, kwargs: Mapping[str, object]) -> None:
+    result: Final = setup(call_type, (), kwargs, datetime.datetime.now(), asynchronous=True)
+    assert result.bridge_owned is True
+    assert result.logger.litellm_call_id == result.kwargs["litellm_call_id"]

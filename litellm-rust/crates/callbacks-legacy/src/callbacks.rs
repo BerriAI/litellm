@@ -85,11 +85,7 @@ pub trait LegacyCallbacks {
 
 impl LegacyCallbacks for PythonLogger {
     fn callbacks_needed(&self, py: Python<'_>, phase: &str) -> PyResult<bool> {
-        if !self
-            .object(py)
-            .getattr("_native_callback_fast_path")
-            .is_ok_and(|value| value.is_truthy().unwrap_or(false))
-        {
+        if !self.bridge_owned() {
             return Ok(true);
         }
         py.import("litellm.rust_bridge.legacy_callbacks")?
@@ -357,4 +353,53 @@ pub fn is_internal_call(py: Python<'_>) -> PyResult<bool> {
         .getattr("is_internal_call")?
         .call_method0("get")?
         .extract()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::PyDict;
+
+    fn logger_whose_registries_need_no_input(py: Python<'_>, bridge_owned: bool) -> PythonLogger {
+        let locals = PyDict::new(py);
+        py.run(
+            c"
+import sys
+import types
+for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.legacy_callbacks'):
+    sys.modules.setdefault(name, types.ModuleType(name))
+legacy = sys.modules['litellm.rust_bridge.legacy_callbacks']
+legacy.callbacks_needed = lambda logger, phase: logger.needed.get(phase, True)
+class Logger:
+    needed = {'input': False}
+logger = Logger()
+",
+            Some(&locals),
+            Some(&locals),
+        )
+        .unwrap();
+        PythonLogger::new(
+            locals.get_item("logger").unwrap().unwrap().unbind(),
+            bridge_owned,
+        )
+    }
+
+    #[test]
+    fn a_caller_owned_logger_is_observed_in_full() {
+        Python::initialize();
+        Python::attach(|py| {
+            let logger = logger_whose_registries_need_no_input(py, false);
+            assert!(logger.callbacks_needed(py, "input").unwrap());
+        });
+    }
+
+    #[test]
+    fn a_bridge_owned_logger_is_elided_where_no_registry_needs_it() {
+        Python::initialize();
+        Python::attach(|py| {
+            let logger = logger_whose_registries_need_no_input(py, true);
+            assert!(!logger.callbacks_needed(py, "input").unwrap());
+            assert!(logger.callbacks_needed(py, "payload").unwrap());
+        });
+    }
 }

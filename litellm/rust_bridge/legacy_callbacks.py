@@ -38,6 +38,7 @@ class MetadataUpdater(Protocol):
 class CallSetup:
     logger: Logging
     kwargs: dict[str, object]
+    bridge_owned: bool
 
 
 def setup(
@@ -56,14 +57,11 @@ def setup(
     }
     supplied: Final = arguments.get("litellm_logging_obj")
     if isinstance(supplied, Logging):
-        supplied._native_callback_fast_path = False  # pyright: ignore[reportPrivateUsage]  # supplied loggers retain all dispatch contracts
-        return CallSetup(supplied, arguments)
+        return CallSetup(supplied, arguments, bridge_owned=False)
     logger, prepared = utils.function_setup(
         call_type, utils.Rules(), start_time, *args, is_async_call=asynchronous, **arguments
     )
-    if type(logger) is Logging and call_type in ("ocr", "aocr"):
-        logger._native_callback_fast_path = True  # pyright: ignore[reportPrivateUsage]  # only bridge-created OCR loggers opt into callback elision
-    return CallSetup(logger, prepared)
+    return CallSetup(logger, prepared, bridge_owned=True)
 
 
 def check_limits(kwargs: Mapping[str, object]) -> None:

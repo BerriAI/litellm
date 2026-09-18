@@ -2,6 +2,9 @@
 - Keep this crate the legacy `@client` wrapper as the native call sees it, and nothing else: the `Logging` contract (`function_setup`, the deployment hooks, `pre_call`/`post_call`, the sync and async success and failure fan-out, the deferred proxy release, the argument sharing those callbacks rely on) plus the kwargs rewrites the wrapper makes on the way in (credential-name inheritance, the budget and retry-count limits)
   - The driver in `litellm-host-python`, the routes and core see one `CallbackAdapter`; they never learn which Python objects consume a call
   - `PublicCall` is the caller's call as `Logging` sees it: the positional arguments, the keyword view as the legacy path rewrites it (setup, deployment hook, prepare) and the bound request object whose attributes back keywords the caller omitted; routes hand it over through `run_legacy_call` and keep no copy
+- `setup` decides once who owns the `Logging` instance and returns it as `CallSetup.bridge_owned`; `PythonLogger` carries it and nothing on the instance records it
+  - A logger the caller passed as `litellm_logging_obj` is caller-owned and observed in full, because the caller reads it after the call; the proxy is the live case
+  - A logger `function_setup` built for this call is bridge-owned, so each fan-out phase is skipped when `callbacks_needed` finds no registry, dynamic callback, `logger_fn` or debug switch for it; cost, timing and response metadata still run
 - Callbacks receive the caller's own objects and may mutate them; this crate alone carries that obligation
   - Retain complete boundary arguments, opaque unknown values, aliases, omitted/default distinctions and deliberate copies; preserve the established deployment-hook kwargs view
   - Re-alias every `passthrough_fields` body key to the caller's object before `pre_call`; a keyword wins over the request attribute even when it is an explicit `None`
