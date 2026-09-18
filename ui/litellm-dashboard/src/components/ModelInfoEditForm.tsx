@@ -275,7 +275,7 @@ const displayCost = (localModelData: any, field: TouchedPricingField): string =>
 
 interface ModelInfoEditFormProps {
   localModelData: any;
-  modelData: { model_info: { team_id?: string | null } & Record<string, unknown> };
+  modelData: { model_info: { team_id?: string | null } };
   teamAlias: string | null;
   accessToken: string | null;
   isEditing: boolean;
