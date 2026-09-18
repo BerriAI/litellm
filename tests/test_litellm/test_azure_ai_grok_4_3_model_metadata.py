@@ -34,6 +34,4 @@ def test_azure_ai_grok_4_3_backup_matches_main():
     main_cost = _load_model_cost(main_path)
     backup_cost = _load_model_cost(backup_path)
 
-    assert backup_cost.get(AZURE_AI_GROK_4_3_MODEL) == main_cost.get(
-        AZURE_AI_GROK_4_3_MODEL
-    )
+    assert backup_cost.get(AZURE_AI_GROK_4_3_MODEL) == main_cost.get(AZURE_AI_GROK_4_3_MODEL)

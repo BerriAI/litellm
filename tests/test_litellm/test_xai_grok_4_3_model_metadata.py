@@ -14,6 +14,6 @@ def test_xai_grok_4_3_backup_matches_main():
         backup_cost = json.load(f)
 
     for model in ("xai/grok-4.3", "xai/grok-4.3-latest"):
-        assert backup_cost.get(model) == main_cost.get(
-            model
-        ), f"{model} differs between main and backup model cost maps"
+        assert backup_cost.get(model) == main_cost.get(model), (
+            f"{model} differs between main and backup model cost maps"
+        )

@@ -6,6 +6,7 @@ from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -84,3 +85,20 @@ async def test_during_call_hook_guardrail_error_raises(proxy_logging, make_user_
             user_api_key_dict=make_user_api_key_auth(),
             call_type="completion",
         )
+
+
+@pytest.mark.asyncio
+async def test_during_call_block_names_the_blocking_guardrail_in_applied_guardrails(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    g = _make_guardrail("blocker")
+    g.async_moderation_hook = AsyncMock(side_effect=HTTPException(status_code=400, detail="blocked"))
+    monkeypatch.setattr(litellm, "callbacks", [_make_guardrail("passer"), g])
+    data = {"model": "m", "metadata": {}}
+    with pytest.raises(HTTPException):
+        await proxy_logging.during_call_hook(
+            data=data,
+            user_api_key_dict=make_user_api_key_auth(),
+            call_type="completion",
+        )
+    assert "blocker" in data["metadata"]["applied_guardrails"]

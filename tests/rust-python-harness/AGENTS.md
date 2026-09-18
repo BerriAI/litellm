@@ -25,17 +25,6 @@ tests/rust-python-harness/
 │   │       ├── ocr/
 │   │       └── transcription/
 │   │
-│   ├── unit_tests_mapping/
-│   │   ├── __init__.py
-│   │   ├── contracts.py
-│   │   ├── cases/
-│   │   │   └── ocr.py
-│   │   ├── mapping_report.py
-│   │   ├── mappings.py
-│   │   ├── mapping_validator.py
-│   │   ├── reporting.py
-│   │   └── runner.py
-│   │
 │   ├── unit_tests_parity/
 │   │   ├── __init__.py
 │   │   ├── reporting.py
@@ -52,6 +41,7 @@ tests/rust-python-harness/
     ├── reporting/
     │   └── strategy.py
     └── unit_runners/
+        ├── contracts.py
         └── suite_runner.py
 ```
 
@@ -63,10 +53,9 @@ tests/rust-python-harness/
 - Examples: `run e2e_parity --surface sdk --function ocr`, `run unit_tests_parity --function ocr --pytest-arg=-x`, or `run all --function ocr`
 - `cli/catalog.py` discovers strategies, validates their Python definitions, and orders them; `cli/__init__.py` builds the Click command tree; `cli/commands.py` runs selected cases
 - `e2e_parity/` compares SDK objects, exceptions, callbacks, and streams, or gateway HTTP responses
-- `trace_parity/` prints every collected Python call under `litellm/` and every Rust span without comparing them; mappings only filter the separate unit-test mapping strategy. Before running it rebuilds the native bridge with the `trace-parity` feature whenever `litellm-rust` sources are newer than the installed extension (`shared/native_build.py`)
+- `trace_parity/` profiles the Python call stack and prints every collected Python call under `litellm/`; it never collects Rust spans and never rebuilds the native extension
 - E2E and trace strategies load their registered module cases and run surface-specific execution from their folders
-- `unit_tests_mapping/contracts.py` owns typed harness-side mapping contracts, per-function contracts live below `cases/`, and `mappings.py` exports the registry; live test discovery derives unmapped Python and Rust-only tests without an exhaustive manifest
-- `unit_tests_mapping/runner.py` validates confirmed mappings against the live Python and Rust inventories and attaches the derived status report
+- `shared/unit_runners/contracts.py` owns the typed per-function unit contracts consumed by `unit_tests_parity` and `unit_tests_rust`
 - `unit_tests_parity/runner.py` runs each contract's `unit_parity_scope` with `LITELLM_RUST=0` and `LITELLM_RUST=1` in separate processes and requires matching outcomes, including failures; exclusions require a reason in the contract
 - `unit_tests_rust/runner.py` runs each contract's focused Cargo test suite; native Rust unit tests stay beside their implementation
 - `shared/unit_runners/suite_runner.py` runs typed suites registered in code with nodeids of the form `suite:<strategy_id>:<function>:<suite>`
@@ -74,4 +63,4 @@ tests/rust-python-harness/
 - `shared/` contains reusable parity, tracing, reporting primitives, and unit-runner machinery
 - Keep fixtures with their owning API and existing Python tests in their current locations
 - Each strategy folder carries an `AGENTS.md` one-liner stating what it should be doing
-- Run the harness's own checks with `uv run pytest -o consider_namespace_packages=true tests/rust-python-harness/shared tests/rust-python-harness/cli tests/rust-python-harness/strategies/unit_tests_mapping tests/rust-python-harness/strategies/unit_tests_parity tests/rust-python-harness/strategies/unit_tests_rust tests/test_rust_python_harness.py -q`
+- Run the harness's own checks with `uv run pytest -o consider_namespace_packages=true tests/rust-python-harness/shared tests/rust-python-harness/cli tests/rust-python-harness/strategies/trace_parity tests/rust-python-harness/strategies/unit_tests_parity tests/rust-python-harness/strategies/unit_tests_rust tests/test_rust_python_harness.py -q`

@@ -3,7 +3,7 @@ import copy
 import datetime
 import json
 from types import MappingProxyType, SimpleNamespace
-from typing import AsyncGenerator, Callable, Final, Iterator, Optional
+from typing import AsyncGenerator, Callable, Final, Iterator, Optional, Sequence
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -40,13 +40,18 @@ from litellm.proxy.common_request_processing import (
     _parse_event_data_for_error,
     _resolve_per_request_model_group_alias,
     _should_return_raw_model_name,
+    _sse_error_frames,
     _UpstreamClosingStreamingResponse,
     create_response,
+    sse_error_payload,
 )
+from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.dd_span_tagger import DDSpanTagger
-from litellm.proxy._types import ProxyException
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
+from litellm.router import Router
 
 
 class TestProxyBaseLLMRequestProcessing:
@@ -326,6 +331,35 @@ class TestProxyBaseLLMRequestProcessing:
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("requested_model", [{"bad": "value"}, ["gpt-5.2"], 1])
+    async def test_common_processing_pre_call_logic_rejects_a_non_string_model_with_400(
+        self, monkeypatch, requested_model: dict[str, str] | list[str] | int
+    ):
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"model": requested_model, "messages": [{"role": "user", "content": "hi"}]}
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        add_litellm_data_to_request = AsyncMock()
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing, "add_litellm_data_to_request", add_litellm_data_to_request
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await processing_obj.common_processing_pre_call_logic(
+                request=mock_request,
+                general_settings={},
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                proxy_logging_obj=MagicMock(spec=ProxyLogging),
+                proxy_config=MagicMock(spec=ProxyConfig),
+                route_type="acompletion",
+            )
+
+        assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
+        assert exc_info.value.param == "model"
+        add_litellm_data_to_request.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_refreshes_proxy_server_request_body_after_guardrails(
         self, monkeypatch
     ):
@@ -380,6 +414,316 @@ class TestProxyBaseLLMRequestProcessing:
         # audit body, which needs to stay plain-JSON-serializable end to end.
         assert "litellm_logging_obj" not in persisted_body
         json.dumps(persisted_body)
+
+    @staticmethod
+    def _guardrail_tag_budget_harness(
+        monkeypatch,
+        request_body: dict,
+        guardrail_tags: Sequence[str],
+        route: str = "/v1/chat/completions",
+    ) -> tuple[ProxyBaseLLMRequestProcessing, MagicMock, MagicMock, MagicMock, AsyncMock]:
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        mock_request.scope = {"path": route}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return copy.deepcopy(request_body)
+
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+            data.setdefault("metadata", {}).setdefault("tags", []).extend(guardrail_tags)
+            return data
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        tag_budget_check = AsyncMock()
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "tag_max_budget_check_for_tags", tag_budget_check)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+        return processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, tag_budget_check
+
+    @staticmethod
+    def _router_with_free_and_paid_models() -> Router:
+        return Router(
+            model_list=[
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "sk-test"},
+                    "model_info": {"input_cost_per_token": 0, "output_cost_per_token": 0},
+                },
+                {
+                    "model_name": "paid-model",
+                    "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "sk-test"},
+                },
+            ]
+        )
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_enforces_tag_budget_for_guardrail_added_tags(
+        self, monkeypatch
+    ):
+        processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, tag_budget_check = (
+            self._guardrail_tag_budget_harness(
+                monkeypatch,
+                request_body={
+                    "model": "paid-model",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "metadata": {"tags": ["existing-tag"]},
+                },
+                guardrail_tags=["guardrail-tag"],
+            )
+        )
+        tag_budget_check.side_effect = litellm.BudgetExceededError(current_cost=10.0, max_budget=5.0)
+        user_api_key_dict = ProxyUserAPIKeyAuth(api_key="sk-test")
+
+        with pytest.raises(ProxyException) as exc_info:
+            await processing_obj.common_processing_pre_call_logic(
+                request=mock_request,
+                general_settings={},
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=mock_proxy_logging_obj,
+                proxy_config=mock_proxy_config,
+                route_type="acompletion",
+                llm_router=self._router_with_free_and_paid_models(),
+            )
+
+        assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+        assert exc_info.value.code == "429"
+        tag_budget_check.assert_awaited_once()
+        _, call_kwargs = tag_budget_check.call_args
+        assert call_kwargs["tags"] == ("guardrail-tag",)
+        assert call_kwargs["valid_token"] is user_api_key_dict
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_skips_tag_budget_check_when_guardrails_add_no_tags(
+        self, monkeypatch
+    ):
+        processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, tag_budget_check = (
+            self._guardrail_tag_budget_harness(
+                monkeypatch,
+                request_body={
+                    "model": "paid-model",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "metadata": {"tags": ["existing-tag"]},
+                },
+                guardrail_tags=[],
+            )
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="acompletion",
+            llm_router=self._router_with_free_and_paid_models(),
+        )
+
+        assert returned_data["metadata"]["tags"] == ["existing-tag"]
+        tag_budget_check.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_skips_guardrail_tag_budget_check_for_zero_cost_model(
+        self, monkeypatch
+    ):
+        processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, tag_budget_check = (
+            self._guardrail_tag_budget_harness(
+                monkeypatch,
+                request_body={"model": "free-model", "messages": [{"role": "user", "content": "hello"}]},
+                guardrail_tags=["guardrail-tag"],
+            )
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="acompletion",
+            llm_router=self._router_with_free_and_paid_models(),
+        )
+
+        assert returned_data["metadata"]["tags"] == ["guardrail-tag"]
+        tag_budget_check.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_skips_guardrail_tag_budget_check_on_budget_exempt_route(
+        self, monkeypatch
+    ):
+        processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, tag_budget_check = (
+            self._guardrail_tag_budget_harness(
+                monkeypatch,
+                request_body={"model": "paid-model", "text": "hello"},
+                guardrail_tags=["guardrail-tag"],
+                route="/guardrails/apply_guardrail",
+            )
+        )
+
+        await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="acompletion",
+            llm_router=self._router_with_free_and_paid_models(),
+        )
+
+        tag_budget_check.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_rechecks_guardrail_added_tag_on_fallback_retry(
+        self, monkeypatch
+    ):
+        processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, tag_budget_check = (
+            self._guardrail_tag_budget_harness(
+                monkeypatch,
+                request_body={
+                    "model": "paid-model",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "metadata": {"tags": ["existing-tag"]},
+                },
+                guardrail_tags=["guardrail-tag"],
+            )
+        )
+        first_pass_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="acompletion",
+            llm_router=self._router_with_free_and_paid_models(),
+        )
+        assert first_pass_data["metadata"]["tags"] == ["existing-tag", "guardrail-tag"]
+        tag_budget_check.reset_mock()
+
+        async def retry_add_litellm_data_to_request(*args, **kwargs):
+            return first_pass_data
+
+        async def idempotent_pre_call_hook(user_api_key_dict, data, call_type):
+            return data
+
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            retry_add_litellm_data_to_request,
+        )
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=idempotent_pre_call_hook)
+
+        await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="acompletion",
+            llm_router=self._router_with_free_and_paid_models(),
+        )
+
+        tag_budget_check.assert_awaited_once()
+        _, call_kwargs = tag_budget_check.call_args
+        assert call_kwargs["tags"] == ("guardrail-tag",)
+
+    @pytest.mark.asyncio
+    async def test_enforce_guardrail_added_tag_budgets_checks_only_added_tags(self, monkeypatch):
+        from litellm.proxy.common_request_processing import _enforce_guardrail_added_tag_budgets
+
+        tag_budget_check = AsyncMock()
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "tag_max_budget_check_for_tags", tag_budget_check)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+
+        user_api_key_dict = ProxyUserAPIKeyAuth(api_key="sk-test")
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+
+        await _enforce_guardrail_added_tag_budgets(
+            data={"metadata": {"tags": ["existing-tag", "guardrail-tag"]}},
+            tags_before_guardrails=frozenset({"existing-tag"}),
+            route="/v1/chat/completions",
+            llm_router=None,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=mock_proxy_logging_obj,
+        )
+
+        tag_budget_check.assert_awaited_once()
+        _, call_kwargs = tag_budget_check.call_args
+        assert call_kwargs["tags"] == ("guardrail-tag",)
+        assert call_kwargs["valid_token"] is user_api_key_dict
+
+        tag_budget_check.reset_mock()
+        await _enforce_guardrail_added_tag_budgets(
+            data={"metadata": {"tags": ["existing-tag"]}},
+            tags_before_guardrails=frozenset({"existing-tag"}),
+            route="/v1/chat/completions",
+            llm_router=None,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=mock_proxy_logging_obj,
+        )
+        tag_budget_check.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_enforce_guardrail_added_tag_budgets_raises_budget_exceeded_proxy_exception(self, monkeypatch):
+        from litellm.proxy.common_request_processing import _enforce_guardrail_added_tag_budgets
+
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "tag_max_budget_check_for_tags",
+            AsyncMock(
+                side_effect=litellm.BudgetExceededError(
+                    current_cost=2.0,
+                    max_budget=1.0,
+                    message="Budget has been exceeded! Tag=guardrail-tag Current cost: 2.0, Max budget: 1.0",
+                    entity_type="tag",
+                    entity_id="guardrail-tag",
+                )
+            ),
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+
+        with pytest.raises(ProxyException) as exc_info:
+            await _enforce_guardrail_added_tag_budgets(
+                data={"metadata": {"tags": ["guardrail-tag"]}},
+                tags_before_guardrails=frozenset(),
+                route="/v1/chat/completions",
+                llm_router=None,
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=MagicMock(spec=ProxyLogging),
+            )
+
+        assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+        assert exc_info.value.code == "429"
+        assert "guardrail-tag" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_enforce_guardrail_added_tag_budgets_still_checks_when_model_is_unparseable(self, monkeypatch):
+        from litellm.proxy.common_request_processing import _enforce_guardrail_added_tag_budgets
+
+        tag_budget_check = AsyncMock()
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "tag_max_budget_check_for_tags", tag_budget_check)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+
+        await _enforce_guardrail_added_tag_budgets(
+            data={"model": 5, "metadata": {"tags": ["guardrail-tag"]}},
+            tags_before_guardrails=frozenset(),
+            route="/v1/chat/completions",
+            llm_router=None,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=MagicMock(spec=ProxyLogging),
+        )
+
+        tag_budget_check.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_arms_auto_router_compression_before_guardrails(
@@ -6365,6 +6709,290 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     call_type="acompletion",
                 )
 
+    @staticmethod
+    def _v3_limiter_rig(
+        monkeypatch: pytest.MonkeyPatch,
+        user_api_key_dict: ProxyUserAPIKeyAuth,
+        fallbacks: list[dict[str, list[str]]],
+        model_guardrails: dict[str, list[str]] | None = None,
+    ) -> tuple[ProxyLogging, litellm.Router, ProxyConfig, list[str]]:
+        """Real v3 limiter (the default ``parallel_request_limiter``) wired in through the
+        ``proxy_logging_obj`` seam, so ``common_processing_pre_call_logic`` runs for real:
+        ``add_litellm_data_to_request`` with a live OTel span, ``function_setup``, then the limiter."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy import proxy_server
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+        from litellm.proxy.utils import InternalUsageCache
+
+        monkeypatch.setattr(proxy_server, "prisma_client", None)
+        limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+        limiter_models: list[str] = []
+
+        async def run_limiter(
+            user_api_key_dict: ProxyUserAPIKeyAuth, data: dict[str, object], call_type: str
+        ) -> dict[str, object]:
+            limiter_models.append(str(data["model"]))
+            await limiter.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data=data,
+                call_type=call_type,
+            )
+            return data
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=run_limiter)
+        guardrails_by_group = model_guardrails or {}
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": group,
+                    "litellm_params": {
+                        "model": "openai/gpt-4.1-nano",
+                        "api_key": "fake",
+                        **({"guardrails": guardrails_by_group[group]} if group in guardrails_by_group else {}),
+                    },
+                }
+                for chain in fallbacks
+                for group in (*chain.keys(), *(m for models in chain.values() for m in models))
+            ],
+            fallbacks=fallbacks,
+        )
+        return proxy_logging_obj, router, proxy_server.ProxyConfig(), limiter_models
+
+    @staticmethod
+    def _otel_key(
+        rpm_limit: int | None = None,
+        model_rpm_limit: dict[str, int] | None = None,
+        disable_fallbacks: bool | None = None,
+    ) -> ProxyUserAPIKeyAuth:
+        from opentelemetry.sdk.trace import TracerProvider
+
+        span = TracerProvider().get_tracer("test").start_span("proxy-request")
+        return ProxyUserAPIKeyAuth(
+            api_key="hashed-key",
+            parent_otel_span=span,
+            rpm_limit=rpm_limit,
+            metadata={
+                **({"model_rpm_limit": model_rpm_limit} if model_rpm_limit else {}),
+                **({"disable_fallbacks": disable_fallbacks} if disable_fallbacks is not None else {}),
+            },
+        )
+
+    @staticmethod
+    def _chat_request() -> Request:
+        return Request({"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []})
+
+    async def _pre_call(
+        self,
+        data: dict[str, object],
+        user_api_key_dict: ProxyUserAPIKeyAuth,
+        rig: tuple[ProxyLogging, litellm.Router, ProxyConfig, list[str]],
+    ) -> tuple[ProxyBaseLLMRequestProcessing, tuple[dict[str, object], LiteLLMLoggingObj]]:
+        proxy_logging_obj, router, proxy_config, _ = rig
+        processor = ProxyBaseLLMRequestProcessing(data=data)
+        result = await processor._pre_call_with_fallbacks(
+            request=self._chat_request(),
+            general_settings={},
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            version=None,
+            proxy_config=proxy_config,
+            user_model=None,
+            user_temperature=None,
+            user_request_timeout=None,
+            user_max_tokens=None,
+            user_api_base=None,
+            model=None,
+            route_type="acompletion",
+            llm_router=router,
+        )
+        return processor, result
+
+    @pytest.mark.asyncio
+    async def test_v3_limiter_with_otel_span_falls_back_from_client_request(self, monkeypatch: pytest.MonkeyPatch):
+        """Customer path: OTel on, per-key model RPM cap on the primary, a router fallback configured.
+        The first pass enriches ``data["metadata"]`` with the live span, then the limiter raises. The
+        fallback pass must start from the client's request again, so ``add_litellm_data_to_request``
+        never deep-copies the span (the ``cannot pickle '_thread.RLock'`` 500)."""
+        primary_model = "gpt-4.1"
+        fallback_model = "gpt-4.1-mini"
+        key = self._otel_key(model_rpm_limit={primary_model: 1})
+        rig = self._v3_limiter_rig(monkeypatch, key, [{primary_model: [fallback_model]}])
+
+        def client_request() -> dict[str, object]:
+            return {
+                "model": primary_model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata": {"tags": ["client-tag"]},
+            }
+
+        _, (first_data, _) = await self._pre_call(client_request(), key, rig)
+        processor, (data, logging_obj) = await self._pre_call(client_request(), key, rig)
+
+        assert first_data["model"] == primary_model
+        assert data["model"] == fallback_model
+        assert processor.data is data
+        assert data["litellm_logging_obj"] is logging_obj
+        assert logging_obj.model == fallback_model
+        requester_metadata = data["metadata"]["requester_metadata"]
+        assert requester_metadata["tags"] == ["client-tag"]
+        assert "litellm_parent_otel_span" not in requester_metadata
+        assert "user_api_key_auth" not in requester_metadata
+        assert data["metadata"]["litellm_parent_otel_span"] is key.parent_otel_span
+        assert rig[3] == [primary_model, primary_model, fallback_model]
+
+    @pytest.mark.asyncio
+    async def test_v3_limiter_with_otel_span_returns_429_when_fallbacks_exhausted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        primary_model = "gpt-4.1"
+        fallback_model = "gpt-4.1-mini"
+        key = self._otel_key(rpm_limit=1)
+        rig = self._v3_limiter_rig(monkeypatch, key, [{primary_model: [fallback_model]}])
+        request = {"model": primary_model, "messages": [{"role": "user", "content": "hi"}]}
+
+        await self._pre_call(dict(request), key, rig)
+        processor = ProxyBaseLLMRequestProcessing(data=dict(request))
+        with pytest.raises(ProxyRateLimitError) as exc_info:
+            await processor._pre_call_with_fallbacks(
+                request=self._chat_request(),
+                general_settings={},
+                proxy_logging_obj=rig[0],
+                user_api_key_dict=key,
+                version=None,
+                proxy_config=rig[2],
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model=None,
+                route_type="acompletion",
+                llm_router=rig[1],
+            )
+
+        assert rig[3] == [primary_model, primary_model, fallback_model]
+        assert exc_info.value.status_code == 429
+        assert "Rate limit exceeded" in str(exc_info.value.detail)
+        assert exc_info.value.headers["retry-after"]
+        assert processor.data["model"] == primary_model
+        assert processor.data["litellm_logging_obj"].model == primary_model
+        assert processor.data["litellm_call_id"]
+
+    @pytest.mark.asyncio
+    async def test_fallback_lookup_uses_alias_resolved_model_group(self, monkeypatch: pytest.MonkeyPatch):
+        primary_model = "gpt-4.1"
+        fallback_model = "gpt-4.1-mini"
+        monkeypatch.setattr(litellm, "model_alias_map", {"my-alias": primary_model})
+        key = self._otel_key(model_rpm_limit={primary_model: 1})
+        rig = self._v3_limiter_rig(monkeypatch, key, [{primary_model: [fallback_model]}])
+        request = {"model": "my-alias", "messages": [{"role": "user", "content": "hi"}]}
+
+        await self._pre_call(dict(request), key, rig)
+        _, (data, _) = await self._pre_call(dict(request), key, rig)
+
+        assert data["model"] == fallback_model
+        assert rig[3] == [primary_model, primary_model, fallback_model]
+
+    @pytest.mark.asyncio
+    async def test_key_metadata_disable_fallbacks_returns_429_instead_of_retrying(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """``disable_fallbacks`` set in key metadata only lands on ``data`` during the first
+        pre-call pass (``add_key_level_controls``), so it must be honored after that pass."""
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        primary_model = "gpt-4.1"
+        fallback_model = "gpt-4.1-mini"
+        key = self._otel_key(model_rpm_limit={primary_model: 1}, disable_fallbacks=True)
+        rig = self._v3_limiter_rig(monkeypatch, key, [{primary_model: [fallback_model]}])
+        request = {"model": primary_model, "messages": [{"role": "user", "content": "hi"}]}
+
+        await self._pre_call(dict(request), key, rig)
+        with pytest.raises(ProxyRateLimitError) as exc_info:
+            await self._pre_call(dict(request), key, rig)
+
+        assert exc_info.value.status_code == 429
+        assert rig[3] == [primary_model, primary_model]
+
+    @pytest.mark.asyncio
+    async def test_key_metadata_disable_fallbacks_false_overrides_request_body(self, monkeypatch: pytest.MonkeyPatch):
+        primary_model = "gpt-4.1"
+        fallback_model = "gpt-4.1-mini"
+        key = self._otel_key(model_rpm_limit={primary_model: 1}, disable_fallbacks=False)
+        rig = self._v3_limiter_rig(monkeypatch, key, [{primary_model: [fallback_model]}])
+        request = {
+            "model": primary_model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "disable_fallbacks": True,
+        }
+
+        await self._pre_call(dict(request), key, rig)
+        _, (data, _) = await self._pre_call(dict(request), key, rig)
+
+        assert data["model"] == fallback_model
+        assert data["disable_fallbacks"] is False
+        assert rig[3] == [primary_model, primary_model, fallback_model]
+
+    @pytest.mark.asyncio
+    async def test_fallback_keeps_requested_model_guardrails(self, monkeypatch: pytest.MonkeyPatch):
+        primary_model = "gpt-4.1"
+        fallback_model = "gpt-4.1-mini"
+        guardrail = "pii-guard-for-primary"
+        key = self._otel_key(model_rpm_limit={primary_model: 1})
+        rig = self._v3_limiter_rig(
+            monkeypatch, key, [{primary_model: [fallback_model]}], model_guardrails={primary_model: [guardrail]}
+        )
+        run_limiter = rig[0].pre_call_hook
+
+        async def limiter_then_guardrail(
+            user_api_key_dict: ProxyUserAPIKeyAuth, data: dict[str, object], call_type: str
+        ) -> dict[str, object]:
+            limited = await run_limiter(user_api_key_dict=user_api_key_dict, data=data, call_type=call_type)
+            if guardrail not in (limited["metadata"].get("guardrails") or []):
+                return limited
+            return {
+                **limited,
+                "messages": [
+                    {**m, "content": str(m["content"]).replace("123-45-6789", "[REDACTED-SSN]")}
+                    for m in limited["messages"]
+                ],
+            }
+
+        rig[0].pre_call_hook = AsyncMock(side_effect=limiter_then_guardrail)
+        request = {"model": primary_model, "messages": [{"role": "user", "content": "my ssn is 123-45-6789"}]}
+
+        await self._pre_call(dict(request), key, rig)
+        _, (data, _) = await self._pre_call(dict(request), key, rig)
+
+        assert data["model"] == fallback_model
+        assert guardrail in data["metadata"]["guardrails"]
+        assert data["messages"] == [{"role": "user", "content": "my ssn is [REDACTED-SSN]"}]
+        assert rig[3] == [primary_model, primary_model, fallback_model]
+
+    @pytest.mark.asyncio
+    async def test_fallback_keeps_structured_request_guardrails(self, monkeypatch: pytest.MonkeyPatch):
+        primary_model = "gpt-4.1"
+        fallback_model = "gpt-4.1-mini"
+        structured_guardrail = {"pii-guard": {"extra_body": {"threshold": 0.5}}}
+        key = self._otel_key(model_rpm_limit={primary_model: 1})
+        rig = self._v3_limiter_rig(monkeypatch, key, [{primary_model: [fallback_model]}])
+        request = {
+            "model": primary_model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "guardrails": [structured_guardrail],
+        }
+
+        await self._pre_call(dict(request), key, rig)
+        _, (data, _) = await self._pre_call(dict(request), key, rig)
+
+        assert data["model"] == fallback_model
+        assert data["metadata"]["guardrails"] == [structured_guardrail]
+        assert rig[3] == [primary_model, primary_model, fallback_model]
+
 
 class _RecordingSuccessLogger(CustomLogger):
     def __init__(self):
@@ -8212,7 +8840,7 @@ def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_
     """Regression for LIT-6043: expected 4xx errors log without formatting a
     traceback; unexpected errors keep logger.exception behavior."""
     from litellm._logging import verbose_proxy_logger
-    from litellm.proxy.common_request_processing import _log_llm_api_exception
+    from litellm.proxy.common_request_processing import log_llm_api_exception
 
     verbose_proxy_logger.propagate = True
     try:
@@ -8220,7 +8848,7 @@ def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_
             try:
                 raise exc
             except Exception as raised:
-                _log_llm_api_exception(raised, "call-id-for-traceback-test")
+                log_llm_api_exception(raised, "call-id-for-traceback-test")
     finally:
         verbose_proxy_logger.propagate = False
 
@@ -8439,6 +9067,60 @@ class TestStreamingResponseHeadersFollowFallback:
         assert result.headers["llm_provider-x-request-id"] == "req-SERVED"
         assert "llm_provider-stale-marker" not in result.headers
         assert result.headers["x-callback-header"] == "kept"
+
+    @pytest.mark.asyncio
+    async def test_streaming_block_headers_name_the_blocking_guardrail(self, monkeypatch):
+        processor_data: dict[str, object] = {"model": "oa", "stream": True, "metadata": {}}
+
+        def select_data_generator(**kwargs):
+            async def generator():
+                add_guardrail_to_applied_guardrails_header(processor_data, "stream-blocker")
+                _, error_obj = sse_error_payload(HTTPException(status_code=400, detail="blocked"))
+                for frame in _sse_error_frames(error_obj):
+                    yield frame
+
+            return generator()
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "lit-7144-call"
+        logging_obj._defer_async_logging = False
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj.cost_breakdown = None
+        processor_data["litellm_logging_obj"] = logging_obj
+        processor = ProxyBaseLLMRequestProcessing(data=processor_data)
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_success_hook = AsyncMock(
+            side_effect=lambda data, user_api_key_dict, response: response
+        )
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        async def fake_route_request(**kwargs):
+            async def call():
+                return SimpleNamespace(_hidden_params={}, fallback_headers_adopted=False)
+
+            return call()
+
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "route_request", fake_route_request)
+
+        result = await processor.base_process_llm_request(
+            request=Request(scope={"type": "http", "headers": []}),
+            fastapi_response=Response(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            route_type="acompletion",
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=select_data_generator,
+            is_streaming_request=True,
+            skip_pre_call_logic=True,
+        )
+
+        assert isinstance(result, JSONResponse)
+        assert result.status_code == 400
+        assert result.headers["x-litellm-applied-guardrails"] == "stream-blocker"
 
 
 class _MessagesFallbackStream:
@@ -8778,14 +9460,14 @@ class TestErrorLogCarriesCallId:
         from litellm._logging import verbose_proxy_logger
         from litellm.proxy.common_request_processing import (
             _CLIENT_DISCONNECT_DETAIL,
-            _log_llm_api_exception,
+            log_llm_api_exception,
         )
 
         call_id: Final = str(uuid.uuid4())
         verbose_proxy_logger.propagate = True
         try:
             with caplog.at_level("INFO", logger="LiteLLM Proxy"):
-                _log_llm_api_exception(
+                log_llm_api_exception(
                     HTTPException(status_code=499, detail=_CLIENT_DISCONNECT_DETAIL),
                     call_id,
                 )

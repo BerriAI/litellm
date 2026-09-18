@@ -48,6 +48,13 @@ def _attachment_specificity(attachment: PolicyAttachment) -> tuple[int, int]:
     return (max(dims, default=0), len(dims))
 
 
+def _attachment_sort_key(attachment: PolicyAttachment) -> tuple[int, int, int, int]:
+    specificity: Final = _attachment_specificity(attachment)
+    if attachment.priority is not None:
+        return (0, attachment.priority, *specificity)
+    return (1, 0, *specificity)
+
+
 class AttachmentRegistry:
     """
     In-memory registry for storing and managing policy attachments.
@@ -111,6 +118,7 @@ class AttachmentRegistry:
             keys=attachment_data.get("keys"),
             models=attachment_data.get("models"),
             tags=attachment_data.get("tags"),
+            priority=attachment_data.get("priority"),
         )
 
     def get_attached_policies(self, context: PolicyMatchContext) -> list[str]:
@@ -140,7 +148,7 @@ class AttachmentRegistry:
                 for attachment in self._attachments
                 if PolicyMatcher.scope_matches(scope=attachment.to_policy_scope(), context=context)
             ),
-            key=_attachment_specificity,
+            key=_attachment_sort_key,
         )
         broadest_attachment_by_policy: Final = MappingProxyType(
             {attachment.policy: attachment for attachment in reversed(matching_attachments)}
@@ -315,6 +323,7 @@ class AttachmentRegistry:
                     "keys": attachment_request.keys or [],
                     "models": attachment_request.models or [],
                     "tags": attachment_request.tags or [],
+                    "priority": attachment_request.priority,
                     "created_at": datetime.now(timezone.utc),
                     "updated_at": datetime.now(timezone.utc),
                     "created_by": created_by,
@@ -330,6 +339,7 @@ class AttachmentRegistry:
                 keys=attachment_request.keys,
                 models=attachment_request.models,
                 tags=attachment_request.tags,
+                priority=attachment_request.priority,
             )
             self.add_attachment(attachment)
 
@@ -341,6 +351,7 @@ class AttachmentRegistry:
                 keys=created_attachment.keys or [],
                 models=created_attachment.models or [],
                 tags=created_attachment.tags or [],
+                priority=created_attachment.priority,
                 created_at=created_attachment.created_at,
                 updated_at=created_attachment.updated_at,
                 created_by=created_attachment.created_by,
@@ -417,6 +428,7 @@ class AttachmentRegistry:
                 keys=attachment.keys or [],
                 models=attachment.models or [],
                 tags=attachment.tags or [],
+                priority=attachment.priority,
                 created_at=attachment.created_at,
                 updated_at=attachment.updated_at,
                 created_by=attachment.created_by,
@@ -455,6 +467,7 @@ class AttachmentRegistry:
                     keys=a.keys or [],
                     models=a.models or [],
                     tags=a.tags or [],
+                    priority=a.priority,
                     created_at=a.created_at,
                     updated_at=a.updated_at,
                     created_by=a.created_by,
@@ -488,6 +501,7 @@ class AttachmentRegistry:
                     keys=attachment_response.keys if attachment_response.keys else None,
                     models=(attachment_response.models if attachment_response.models else None),
                     tags=attachment_response.tags if attachment_response.tags else None,
+                    priority=attachment_response.priority,
                 )
                 for attachment_response in attachments
             ]

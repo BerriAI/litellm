@@ -8,6 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from typing_extensions import Required, TypedDict
 
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
+from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
+    Agent365GuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
     AktoConfigModel,
 )
@@ -58,6 +61,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.typesafe import (
+    TypeSafeGuardrailConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
     VigilGuardGuardrailConfigModel,
@@ -135,8 +141,10 @@ class SupportedGuardrailIntegrations(Enum):
     SINGULR = "singulr"
     HEADROOM = "headroom"
     COMPRESR = "compresr"
+    TYPESAFE = "typesafe"
     STRAIKER = "straiker"
     ALICE = "alice"
+    AGENT_365 = "agent_365"
     CONDUCT = "conduct"
 
 
@@ -678,6 +686,12 @@ class BedrockGuardrailStreamingParams(BaseModel):
         "and the scan result lands in guardrail_information; a flagged response still ends the "
         "stream with a block message (disable_exception_on_block=true) or an error frame.",
     )
+    streaming_buffer_release_on_scan: bool = Field(
+        default=False,
+        description="When buffering, scan the accumulated response every streaming_sampling_rate chunks "
+        "and release the withheld chunks once the scan passes, instead of holding everything to end of stream. "
+        "Flagged content is never released. Ignored when streaming_end_of_stream_only is true.",
+    )
 
     @classmethod
     def from_extras(cls, extras: Mapping[str, object] | None) -> "BedrockGuardrailStreamingParams":
@@ -1045,7 +1059,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default="fail_closed",
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
-            "Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. "
+            "Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. "
             "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
         ),
     )
@@ -1161,6 +1175,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     LakeraV2GuardrailConfigModel,
     HeadroomGuardrailConfigModel,
     CompresrGuardrailConfigModel,
+    TypeSafeGuardrailConfigModel,
     RepelloAIGuardrailConfigModel,
     LassoGuardrailConfigModel,
     DeepKeepGuardrailConfigModel,
@@ -1183,6 +1198,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
     SingulrGuardrailConfigModel,
+    Agent365GuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: str | list[str] | Mode = Field(
