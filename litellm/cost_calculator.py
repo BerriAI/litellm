@@ -696,7 +696,7 @@ def cost_per_token(
             data_residency=data_residency,
         )
     elif custom_llm_provider == "databricks":
-        return databricks_cost_per_token(model=model, usage=usage_block)
+        return databricks_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
     elif custom_llm_provider == "fireworks_ai":
         return fireworks_ai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "azure":
@@ -1373,23 +1373,25 @@ def completion_cost(
         )
         rerank_billed_units: RerankBilledUnits | None = None
 
+        # The tier the provider reports serving takes precedence over the requested
+        # tier: providers can fall back to a cheaper tier when priority capacity is
+        # unavailable, and the served tier is what is actually billed
+        requested_service_tier: Final = _normalize_service_tier(service_tier)
+        service_tier = None
+
+        if completion_response is not None:
+            service_tier = _normalize_service_tier(_extract_service_tier(completion_response))
+
+        # Usage reported by the provider is response-side evidence too
+        if service_tier is None and cost_per_token_usage_object is not None:
+            service_tier = _normalize_service_tier(_extract_service_tier(cost_per_token_usage_object))
+
+        if service_tier is None:
+            service_tier = requested_service_tier
+
         # Extract service_tier from optional_params if not provided directly
         if service_tier is None and optional_params is not None:
-            service_tier = optional_params.get("service_tier")
-
-        service_tier = _normalize_service_tier(service_tier)
-
-        # Extract service_tier from completion_response if not provided
-        if service_tier is None and completion_response is not None:
-            service_tier = _extract_service_tier(completion_response)
-
-        service_tier = _normalize_service_tier(service_tier)
-
-        # Extract service_tier from usage object if not provided
-        if service_tier is None and cost_per_token_usage_object is not None:
-            service_tier = _extract_service_tier(cost_per_token_usage_object)
-
-        service_tier = _normalize_service_tier(service_tier)
+            service_tier = _normalize_service_tier(optional_params.get("service_tier"))
 
         explicit_pricing: Final = custom_pricing is True or base_model is not None
         selected_model: Final = _select_model_name_for_cost_calc(
