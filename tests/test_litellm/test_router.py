@@ -45,6 +45,7 @@ from litellm.router import (
     _anthropic_stream_should_decline_fallback,
     _anthropic_stream_should_drop_pre_content_ping,
     _is_retriable_anthropic_status,
+    _merged_file_batch_headers,
 )
 from litellm.router_strategy import simple_shuffle
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
@@ -476,6 +477,17 @@ async def test_routed_file_and_batch_keep_deployment_headers(operation: str) -> 
         "X-Deployment": "keep",
         "OpenAI-Project": "proj-request",
     }
+
+
+def test_merged_file_batch_headers_keeps_unrelated_deployment_headers() -> None:
+    deployment: Final = {"extra_headers": {"X-Deployment": "keep"}}
+    request: Final = {"extra_headers": {"OpenAI-Project": "proj-request"}}
+
+    assert _merged_file_batch_headers(deployment, request) == {
+        "extra_headers": {"X-Deployment": "keep", "OpenAI-Project": "proj-request"}
+    }
+    assert _merged_file_batch_headers(deployment, {}) == {}
+    assert deployment["extra_headers"] == {"X-Deployment": "keep"}
 
 
 @pytest.mark.asyncio
