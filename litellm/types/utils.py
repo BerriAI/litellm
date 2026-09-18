@@ -3157,6 +3157,7 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_budget_entity_id: str | None
     error_budget_limit: float | None
     error_budget_spend: float | None
+    normalized_error: ReadOnly[str | None]
 
 
 class GuardrailMode(TypedDict, total=False):
