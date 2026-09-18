@@ -4,7 +4,7 @@
 //! construction; another host language gets its own crate of the same shape.
 
 mod adapter;
-pub mod auth;
+mod callable;
 mod driver;
 mod execution;
 mod gil;
@@ -12,6 +12,7 @@ mod handle;
 mod marshal;
 
 pub use adapter::{AdapterStep, CallbackAdapter, PublicValue, RouteHost, missing_state};
+pub use callable::wrap_failure;
 pub use driver::run_call;
 pub use execution::{poll_async_value, run_async, run_async_value, run_sync, run_sync_value};
 pub use gil::{release_count, release_gil};

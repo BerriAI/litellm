@@ -2078,7 +2078,6 @@ name = "litellm-host-python"
 version = "0.1.0"
 dependencies = [
  "futures-util",
- "litellm-auth",
  "litellm-callbacks",
  "pyo3",
  "pyo3-async-runtimes",

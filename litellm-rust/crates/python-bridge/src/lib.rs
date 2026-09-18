@@ -1,4 +1,5 @@
 mod constants;
+mod credentials;
 mod diagnostics;
 mod errors;
 mod marshal;

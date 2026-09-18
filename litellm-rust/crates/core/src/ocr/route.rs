@@ -19,7 +19,7 @@ pub enum OcrOp {
 pub enum OcrOpResult {
     Request {
         request: Box<LiteLLMOcrRequest<OcrDocumentInput>>,
-        azure_ad_token_provider: bool,
+        caller_token: bool,
     },
     Document(OcrFileContent),
     AzureAdToken(ResolvedCredential),
@@ -69,13 +69,13 @@ pub fn ocr_machine(client: OcrClient) -> OcrMachine {
 async fn execute(client: OcrClient, host: OcrHost) -> Result<LiteLLMOcrResponse, Error> {
     let OcrOpResult::Request {
         request,
-        azure_ad_token_provider,
+        caller_token,
     } = host.route(OcrOp::ProjectRequest).await?
     else {
         return Err(MachineFault::Mismatch.into());
     };
     let request = LiteLLMOcrRequest {
-        azure_ad_token_provider: azure_ad_token_provider
+        azure_ad_token_provider: caller_token
             .then(|| HostTokenProvider::handle(host.clone()))
             .or(request.azure_ad_token_provider),
         ..*request
@@ -172,7 +172,7 @@ impl litellm_callbacks::host::Host<Ocr> for LocalOcrHost {
                 .take()
                 .map(|request| OcrOpResult::Request {
                     request: Box::new(request),
-                    azure_ad_token_provider: false,
+                    caller_token: false,
                 })
                 .ok_or_else(|| Error::InvalidRequest("OCR request was already projected".into())),
             OcrOp::ReadDocument => self

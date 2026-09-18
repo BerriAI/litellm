@@ -2,7 +2,6 @@ use litellm_core::ocr::wire::{
     OcrWireRequest, consumed_optional_params, decode_document, decode_request_input,
 };
 use litellm_core::ocr::{LiteLLMOcrRequest, OcrDocumentInput};
-use litellm_host_python::auth::{AZURE_AD_TOKEN_PROVIDER, PythonTokenProvider};
 use litellm_host_python::from_py;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -10,13 +9,14 @@ use serde_json::{Map, Value};
 
 use super::document::{FileDocumentInput, PythonFileReader};
 use super::errors::to_pyerr as ocr_error_to_pyerr;
+use crate::credentials::{self, CallerTokenProvider};
 use crate::marshal::{project_optional_fields, python_timeout_seconds, request_input_sources};
 use crate::projection::Projection;
 
 /// The Python objects the route keeps for the rest of the call.
 pub(super) struct OcrRetained {
     pub reader: Option<PythonFileReader>,
-    pub azure_ad_token_provider: Option<PythonTokenProvider>,
+    pub azure_ad_token_provider: Option<CallerTokenProvider>,
     pub provider: &'static str,
 }
 
@@ -129,9 +129,7 @@ pub(super) fn project_request(
             .copied()
             .chain(["api_key", "api_base", "extra_headers"]),
     )?;
-    let azure_ad_token_provider = kwargs
-        .get_item("azure_ad_token_provider")?
-        .and_then(|provider| PythonTokenProvider::select(provider, AZURE_AD_TOKEN_PROVIDER));
+    let azure_ad_token_provider = credentials::azure_ad_token_provider(kwargs)?;
     let (document, reader) = document.into_parts()?;
     let wire = OcrWireRequest {
         model,

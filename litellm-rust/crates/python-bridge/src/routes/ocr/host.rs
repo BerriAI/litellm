@@ -69,11 +69,11 @@ impl RouteHost for OcrRouteHost {
                     return Err(missing_state());
                 };
                 let projection = project_request(self.request.bind(py), arguments)?;
-                let azure_ad_token_provider = projection.retained.azure_ad_token_provider.is_some();
+                let caller_token = projection.retained.azure_ad_token_provider.is_some();
                 self.data = OcrHostData::Projected(Box::new(projection.retained));
                 Ok(OcrOpResult::Request {
                     request: Box::new(projection.native),
-                    azure_ad_token_provider,
+                    caller_token,
                 })
             }
             OcrOp::ReadDocument => self.read_document(py).map(OcrOpResult::Document),

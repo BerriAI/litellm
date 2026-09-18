@@ -581,7 +581,7 @@ async fn missing_host_result_preserves_pending_operation() {
         machine
             .resume(Some(HostResult::Route(OcrOpResult::Request {
                 request: Box::new(request),
-                azure_ad_token_provider: false,
+                caller_token: false,
             })))
             .await
             .unwrap(),
