@@ -15,6 +15,7 @@ litellm-auth.workspace = true
 litellm-auth-aws.workspace = true
 litellm-auth-azure.workspace = true
 litellm-auth-gcp.workspace = true
+litellm-providers.workspace = true
 litellm-framing.workspace = true
 moka.workspace = true
 mime_guess = "2.0.5"
