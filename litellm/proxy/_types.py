@@ -265,6 +265,7 @@ def hash_token(token: str):
     import hashlib
 
     # This digest is an opaque lookup identifier, not a password hash.
+    # codeql[py/weak-sensitive-data-hashing]
     hashed_token: Final = hashlib.sha256(token.encode(), usedforsecurity=False).hexdigest()
 
     return hashed_token
