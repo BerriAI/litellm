@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-callbacks.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -13,3 +14,4 @@ thiserror.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true
+tokio = { workspace = true, features = ["macros"] }

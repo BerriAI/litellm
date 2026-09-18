@@ -183,7 +183,9 @@ async fn facade_uses_the_injected_http_client() {
 
 fn event_name(event: &CallEvent) -> &'static str {
     match event {
+        CallEvent::AttemptStarted { .. } => "attempt_started",
         CallEvent::ResponseReceived { .. } => "response",
+        CallEvent::AttemptFailed { .. } => "attempt_failed",
         CallEvent::Succeeded { .. } => "success",
         CallEvent::Failed { .. } => "failure",
     }

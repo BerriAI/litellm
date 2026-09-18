@@ -16,6 +16,32 @@ pub enum HostResult<R: Route> {
     Emitted,
 }
 
+impl<R: Route> HostOp<R> {
+    /// The same op as a route that embeds this route's ops sees it.
+    pub fn map_op<T: Route>(self, embed: impl FnOnce(R::Op) -> T::Op) -> HostOp<T> {
+        match self {
+            Self::Route(op) => HostOp::Route(embed(op)),
+            Self::BeforeSend(wire) => HostOp::BeforeSend(wire),
+            Self::Emit(event) => HostOp::Emit(event),
+        }
+    }
+}
+
+impl<R: Route> HostResult<R> {
+    /// The same answer as the embedded route sees it; `None` when the host answered an op
+    /// that belongs to the embedding route instead.
+    pub fn map_result<T: Route>(
+        self,
+        extract: impl FnOnce(R::OpResult) -> Option<T::OpResult>,
+    ) -> Option<HostResult<T>> {
+        Some(match self {
+            Self::Route(result) => HostResult::Route(extract(result)?),
+            Self::BeforeSend(wire) => HostResult::BeforeSend(wire),
+            Self::Emitted => HostResult::Emitted,
+        })
+    }
+}
+
 /// A host answer that is either available now or arrives once the host's own
 /// suspension (a Python awaitable, for example) resolves.
 pub enum HostStep<V, S> {

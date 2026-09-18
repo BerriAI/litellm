@@ -7,6 +7,8 @@
 
 pub mod event;
 pub mod host;
+pub mod layer;
 pub mod machine;
 pub mod route;
 pub mod run;
+pub mod terminal;

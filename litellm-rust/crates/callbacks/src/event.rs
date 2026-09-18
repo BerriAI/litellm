@@ -1,4 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
@@ -44,10 +44,33 @@ pub enum FailureOrigin {
     Host,
 }
 
+/// One provider attempt of a logical call, as the loop that runs attempts identifies it.
+/// `deployment` is the host's own handle; the event stream never sees model strings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttemptInfo {
+    /// 0-based across the whole logical call.
+    pub index: u32,
+    /// 0 is the primary group; n > 0 is fallback depth.
+    pub group: u32,
+    pub deployment: u64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum CallEvent {
+    AttemptStarted {
+        attempt: AttemptInfo,
+    },
     ResponseReceived {
         raw: RawResponse,
+    },
+    /// Per-attempt failure, the signal cooldown and health tables consume. User-facing
+    /// failure callbacks fire once, on `Failed`, not here.
+    AttemptFailed {
+        attempt: AttemptInfo,
+        /// The same deployment may be tried again after backoff.
+        retryable: bool,
+        /// The deployment should be taken out of rotation for this long.
+        cooldown: Option<Duration>,
     },
     Succeeded {
         timing: Timing,
