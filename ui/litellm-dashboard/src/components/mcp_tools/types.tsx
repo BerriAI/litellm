@@ -517,6 +517,7 @@ export interface MCPServerProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+  isViewOnly?: boolean;
 }
 
 export interface MCPToolsetTool {
