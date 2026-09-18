@@ -221,6 +221,65 @@ async def test_hashicorp_vault_crud_lifecycle(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_hashicorp_vault_login_and_secret_namespaces(client, monkeypatch):
+    """POST maps the two namespace fields to their env vars; test_connection
+    validates the token in the login namespace, not the secret namespace."""
+    from litellm.secret_managers.hashicorp_secret_manager import HashicorpSecretManager
+
+    mock_prisma, mock_db = _make_mock_db()
+    mock_cfg = _make_mock_proxy_config()
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "proxy_config", mock_cfg)
+    old_client, old_kms = litellm.secret_manager_client, litellm._key_management_system
+    _set_admin()
+
+    try:
+        r = client.post(
+            VAULT_URL,
+            json={
+                "vault_addr": "https://vault.example.com",
+                "vault_token": "tok",
+                "vault_login_namespace": "root",
+                "vault_secret_namespace": "teams/team-a",
+            },
+        )
+        assert r.status_code == 200
+        assert os.environ["HCP_VAULT_LOGIN_NAMESPACE"] == "root"
+        assert os.environ["HCP_VAULT_SECRET_NAMESPACE"] == "teams/team-a"
+        assert os.environ.get("HCP_VAULT_NAMESPACE") is None
+        data = _upserted_data(mock_db)
+        assert data["vault_login_namespace"] == "enc_root"
+        assert data["vault_secret_namespace"] == "enc_teams/team-a"
+
+        mock_manager = MagicMock(spec=HashicorpSecretManager)
+        mock_manager.vault_addr = "https://vault.example.com"
+        mock_manager.vault_login_namespace = "root"
+        mock_manager.vault_secret_namespace = "teams/team-a"
+        auth_headers = {"X-Vault-Token": "tok"}
+        mock_manager._get_request_headers = MagicMock(return_value=auth_headers)
+        mock_manager._get_login_headers = MagicMock(return_value={"X-Vault-Namespace": "root"})
+        litellm.secret_manager_client = mock_manager  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_http = MagicMock()
+        mock_http.get = AsyncMock(return_value=mock_response)
+        with patch(  # test-quality-ok: patching proxy-internal collaborator to isolate the endpoint
+            "litellm.proxy.management_endpoints.config_override_endpoints.get_async_httpx_client",
+            return_value=mock_http,
+        ):
+            r = client.post(VAULT_URL + "/test_connection")
+        assert r.status_code == 200
+        assert mock_http.get.call_args.args[0] == "https://vault.example.com/v1/auth/token/lookup-self"
+        assert mock_http.get.call_args.kwargs["headers"] == {"X-Vault-Token": "tok", "X-Vault-Namespace": "root"}
+        assert auth_headers == {"X-Vault-Token": "tok"}
+    finally:
+        litellm.secret_manager_client = old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        litellm._key_management_system = old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        _cleanup()
+
+
+@pytest.mark.asyncio
 async def test_hashicorp_vault_validation_errors_and_access_control(
     client, monkeypatch
 ):

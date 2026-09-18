@@ -3,12 +3,14 @@ mod errors;
 mod host;
 mod project;
 
-use litellm_callbacks_legacy::{LegacySurface, PublicCall, run_legacy_call};
-use litellm_core::ocr::{OcrClient, ocr_machine};
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
-
 use host::OcrRouteHost;
+use litellm_callbacks_legacy::{LegacySurface, PublicCall, run_legacy_call};
+use litellm_core::ocr::route::ocr_machine;
+use litellm_llms::custom_httpx::llm_http_handler::OcrClient;
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PyTuple},
+};
 
 const SURFACE: LegacySurface = LegacySurface {
     call_type: "ocr",

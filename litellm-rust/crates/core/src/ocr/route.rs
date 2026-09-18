@@ -5,13 +5,16 @@ use litellm_callbacks::{
     event::{CallEvent, RequestContext, WireRequest},
     route::Route,
 };
-
-use super::{
-    Error, LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient,
-    handler::perform_ocr_request,
-    types::{OcrDocumentInput, OcrFileContent, ResolvedOcrRequest},
+use litellm_llms::{
+    base_llm::ocr::{error::Error, transformation::LiteLLMOcrResponse},
+    custom_httpx::llm_http_handler::OcrClient,
 };
-use crate::machine::{HostChannel, HostTokenProvider, MachineFault, RouteMachine, TokenRoute};
+
+use super::handler::perform_ocr_request;
+use crate::{
+    machine::{HostChannel, HostTokenProvider, MachineFault, RouteMachine, TokenRoute},
+    ocr::types::{LiteLLMOcrRequest, OcrDocumentInput, OcrFileContent, ResolvedOcrRequest},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OcrOp {

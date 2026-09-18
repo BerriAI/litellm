@@ -30,7 +30,7 @@ import { ActivityMetrics, processActivityData } from "@/components/activity_metr
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
-import { getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
+import { getApiKeyTruncation, getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
@@ -256,6 +256,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     coversRange: activeAggregated !== null || paginatedResult.coversRange,
     cancelled: paginatedResult.cancelled,
     failed: paginatedResult.failed,
+    apiKeyTruncation: getApiKeyTruncation(
+      userSpendData.metadata?.api_key_limit,
+      userSpendData.metadata?.total_api_keys,
+    ),
   };
   const exportBlockedReason = getExportBlockedReason(spendFetchState);
 
@@ -904,7 +908,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <ActivityMetrics modelMetrics={modelMetrics} />
                 </TabsContent>
                 <TabsContent value="keys" keepMounted>
-                  <KeyActivityPanel keyMetrics={keyMetrics} />
+                  <KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={spendFetchState.apiKeyTruncation} />
                 </TabsContent>
                 <TabsContent value="mcp" keepMounted>
                   <ActivityMetrics modelMetrics={mcpServerMetrics} />

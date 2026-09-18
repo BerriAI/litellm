@@ -17,7 +17,9 @@ litellm-auth = { path = "crates/auth" }
 litellm-auth-aws = { path = "crates/auth-aws" }
 litellm-auth-azure = { path = "crates/auth-azure" }
 litellm-auth-gcp = { path = "crates/auth-gcp" }
-litellm-providers = { path = "crates/providers" }
+litellm-llms = { path = "crates/llms" }
+litellm-types = { path = "crates/types" }
+litellm-core-utils = { path = "crates/core-utils" }
 litellm-cache = { path = "crates/cache" }
 litellm-cache-memory = { path = "crates/cache-memory" }
 litellm-token-counter = { path = "crates/token-counter" }
@@ -48,6 +50,7 @@ strum = { version = "0.28.0", features = ["derive"] }
 url = "2.5.8"
 time = { version = "0.3.53", features = ["parsing"] }
 criterion = "0.8.2"
+fancy-regex = "0.19.2"
 veil = "0.3.0"
 
 [profile.release]
