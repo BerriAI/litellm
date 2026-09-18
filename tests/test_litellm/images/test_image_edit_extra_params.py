@@ -5,6 +5,8 @@ Regression tests for https://github.com/BerriAI/litellm/issues/36493
 (e.g. seed) and the extra_body escape hatch, unlike /v1/images/generations.
 """
 
+import io
+
 import httpx
 import pytest
 
@@ -119,6 +121,30 @@ def test_image_edit_forwards_scalar_array_as_repeated_fields():
     body = captured["body"]
     assert body.count(b'name="loras"') == 3
     assert b"style_a" in body and b"style_b" in body and b"style_c" in body
+
+
+def test_image_edit_does_not_flatten_image_or_mask_to_text_fields():
+    """image and mask are already sent as multipart file parts; flattening
+    them through flatten_form_field_values serializes BytesIO/UploadFile
+    objects as bracketed text fields (e.g. image[]=<_io.BytesIO...>) and
+    breaks FastAPI UploadFile validation on the backend."""
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_image_edit_request(captured))))
+
+    litellm.image_edit(
+        model="openai/gpt-image-1",
+        image=[io.BytesIO(PNG_BYTES)],
+        prompt="add a hat",
+        api_key="sk-test",
+        api_base="https://edit.example/v1",
+        client=client,
+    )
+
+    body = captured["body"]
+    text_fields = _multipart_text_fields(captured["content_type"], body)
+    assert "image[]" not in text_fields
+    assert "image" not in text_fields
+    assert b'name="image[]"' in body
 
 
 @pytest.mark.asyncio

@@ -862,9 +862,15 @@ def image_edit(
             or custom_llm_provider == "azure"
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
+            # Exclude image/mask from flattening: they are handled as separate
+            # file parameters and flatten_form_field_values would serialize them
+            # as bracketed string fields (e.g. image[]=<_io.BytesIO...>).
+            non_default_params_without_files = {
+                k: v for k, v in non_default_params.items() if k not in ("image", "mask")
+            }
             image_edit_request_params.update(
                 flatten_form_field_values(
-                    non_default_params,
+                    non_default_params_without_files,
                     extra_body if isinstance(extra_body, dict) else None,
                 )
             )
