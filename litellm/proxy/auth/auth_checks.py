@@ -5395,12 +5395,10 @@ async def _check_team_member_budget(
         # Per-member override wins; otherwise fall back to the team-level
         # default configured via team.metadata["team_member_budget_id"].
         team_member_budget: float | None = None
-        if (
-            loaded_membership is not None
-            and loaded_membership.litellm_budget_table is not None
-            and loaded_membership.litellm_budget_table.max_budget is not None
-        ):
-            team_member_budget = loaded_membership.litellm_budget_table.max_budget
+        member_budget_row: Final = loaded_membership.litellm_budget_table if loaded_membership is not None else None
+        now: Final = get_utc_datetime()
+        if member_budget_row is not None and member_budget_row.max_budget is not None:
+            team_member_budget = member_budget_row.effective_max_budget(now=now)
         else:
             default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
             if isinstance(default_budget_id, str):
@@ -5416,7 +5414,9 @@ async def _check_team_member_budget(
                     and default_budget.max_budget is not None
                     and default_budget.max_budget > 0
                 ):
-                    team_member_budget = default_budget.max_budget
+                    team_member_budget = default_budget.max_budget + (
+                        member_budget_row.active_temp_budget_increase(now=now) if member_budget_row is not None else 0.0
+                    )
 
         if team_member_budget is not None:
             team_member_spend = (loaded_membership.spend if loaded_membership is not None else 0.0) or 0.0

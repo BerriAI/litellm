@@ -15571,3 +15571,37 @@ async def test_team_info_reports_what_the_caller_may_edit(caller, org_admin, ena
         )
 
     assert response["team_info"].caller_edit_access.model_dump(mode="json") == expected
+
+
+def test_member_budget_patch_maps_temp_budget_fields() -> None:
+    from litellm.proxy.management_endpoints.common_utils import member_budget_patch
+
+    expiry: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    request: Final = TeamMemberUpdateRequest(
+        team_id="team-1",
+        user_id="user-1",
+        temp_budget_increase=50.0,
+        temp_budget_expiry=expiry,
+    )
+    assert member_budget_patch(request) == {
+        "temp_budget_increase": 50.0,
+        "temp_budget_expiry": expiry,
+    }
+
+
+def test_team_member_update_request_temp_budget_fields_must_be_set_together() -> None:
+    with pytest.raises(ValidationError, match="temp_budget_increase and temp_budget_expiry must be set together"):
+        TeamMemberUpdateRequest(team_id="team-1", user_id="user-1", temp_budget_increase=50.0)
+    with pytest.raises(ValidationError, match="temp_budget_increase and temp_budget_expiry must be set together"):
+        TeamMemberUpdateRequest(team_id="team-1", user_id="user-1", temp_budget_expiry="2030-01-01T00:00:00Z")
+
+
+@pytest.mark.parametrize(
+    ("increase", "message"),
+    [(-1.0, "greater than or equal to 0"), (float("inf"), "finite number")],
+)
+def test_team_member_update_request_rejects_unusable_temp_budget_increase(increase: float, message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        TeamMemberUpdateRequest(
+            team_id="team-1", user_id="user-1", temp_budget_increase=increase, temp_budget_expiry="2030-01-01T00:00:00Z"
+        )
