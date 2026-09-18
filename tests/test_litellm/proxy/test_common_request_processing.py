@@ -9336,3 +9336,55 @@ class TestErrorLogCarriesCallId:
         record: Final = caplog.records[-1]
         assert record.litellm_call_id == call_id
         assert call_id in record.getMessage()
+
+
+class TestAnthropicMessagesStreamErrorFrame:
+    """A ``/v1/messages`` stream that fails after the headers are out has to say so with an
+    ``event: error`` frame. Anthropic clients pick events by name, so a bare ``data:`` line is
+    skipped and the request looks like it ended with nothing in it"""
+
+    @staticmethod
+    def _sse_generator_failing_with(failure: Exception) -> AsyncGenerator[str, None]:
+        class FailingUpstream:
+            def __aiter__(self) -> "FailingUpstream":
+                return self
+
+            async def __anext__(self) -> object:
+                raise failure
+
+        ProxyLogging._callback_capabilities_cache.clear()
+        return ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+            response=FailingUpstream(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            request_data={"model": "claude-sonnet-4-5"},
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
+        )
+
+    @pytest.mark.parametrize(
+        "status_code, expected_error_type",
+        [
+            (429, "rate_limit_error"),
+            (503, "overloaded_error"),
+            (500, "api_error"),
+            (529, "api_error"),
+            (400, "invalid_request_error"),
+        ],
+    )
+    async def test_mid_stream_failure_arrives_as_an_anthropic_error_event(
+        self, status_code: int, expected_error_type: str
+    ) -> None:
+        class UpstreamFailure(Exception):
+            def __init__(self) -> None:
+                super().__init__("upstream stopped sending")
+                self.status_code: Final = status_code
+
+        frames: Final = [frame async for frame in self._sse_generator_failing_with(UpstreamFailure())]
+
+        assert len(frames) == 1
+        event_line, data_line, first_blank, second_blank = frames[0].split("\n")
+        assert event_line == "event: error"
+        assert (first_blank, second_blank) == ("", "")
+        payload: Final = json.loads(data_line.removeprefix("data: "))
+        assert payload["type"] == "error"
+        assert payload["error"]["type"] == expected_error_type
+        assert "upstream stopped sending" in payload["error"]["message"]

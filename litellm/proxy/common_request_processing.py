@@ -71,6 +71,7 @@ from litellm.proxy.auth.auth_checks import (
     tag_max_budget_check_for_tags,
 )
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe, get_request_route
+from litellm.proxy.common_utils.anthropic_error_payload import anthropic_error_sse_frame
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
@@ -3891,7 +3892,7 @@ class ProxyBaseLLMRequestProcessing:
         restamp_model: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
-        Anthropic /messages and Google /generateContent streaming data generator require SSE events.
+        Anthropic /messages streaming data generator, which requires SSE events.
 
         Returns the underlying ``async_streaming_data_generator`` configured with
         SSE serializers directly (rather than re-wrapping it in another
@@ -3909,8 +3910,9 @@ class ProxyBaseLLMRequestProcessing:
             request_data=request_data,
             proxy_logging_obj=proxy_logging_obj,
             serialize_chunk=ProxyBaseLLMRequestProcessing._sse_chunk_serializer(restamper),
-            serialize_error=lambda proxy_exc: (
-                f"{STREAM_SSE_DATA_PREFIX}{json.dumps({'error': proxy_exc.to_dict()})}\n\n"
+            serialize_error=lambda proxy_exc: anthropic_error_sse_frame(
+                message=proxy_exc.message,
+                status_code=error_status_code(proxy_exc, status.HTTP_500_INTERNAL_SERVER_ERROR),
             ),
             request=request,
             flush_tail=None if restamper is None else restamper.flush,
