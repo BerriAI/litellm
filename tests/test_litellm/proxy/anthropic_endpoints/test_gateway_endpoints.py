@@ -327,18 +327,35 @@ def test_managed_settings_404_when_unset():
     assert resp.status_code == 404
 
 
-def test_managed_settings_returns_json_with_etag_and_304():
+def test_managed_settings_returns_client_envelope_and_304_on_cached_checksum():
     settings = {"permissions": {"defaultMode": "acceptEdits"}, "env": {"FOO": "bar"}}
     with _gateway_env(managed_settings=settings) as (client, _):
         resp = client.get("/claude_code_gateway/managed/settings")
         assert resp.status_code == 200
-        assert resp.json() == settings
-        etag = resp.headers["ETag"]
-        assert etag
+        body = resp.json()
+        assert body["settings"] == settings
+        checksum = body["checksum"]
+        assert checksum.startswith("sha256:")
+        assert body["uuid"] == checksum
+        assert resp.headers["ETag"] == f'"{checksum}"'
 
-        not_modified = client.get("/claude_code_gateway/managed/settings", headers={"If-None-Match": etag})
-    assert not_modified.status_code == 304
-    assert not_modified.headers["ETag"] == etag
+        not_modified = client.get(
+            "/claude_code_gateway/managed/settings", headers={"If-None-Match": f'"{checksum}"'}
+        )
+        assert not_modified.status_code == 304
+        assert not_modified.headers["ETag"] == f'"{checksum}"'
+
+        stale = client.get("/claude_code_gateway/managed/settings", headers={"If-None-Match": '"sha256:stale"'})
+    assert stale.status_code == 200
+    assert stale.json()["checksum"] == checksum
+
+
+def test_managed_settings_checksum_tracks_policy_content():
+    with _gateway_env(managed_settings={"env": {"FOO": "bar"}}) as (client, _):
+        first = client.get("/claude_code_gateway/managed/settings").json()["checksum"]
+    with _gateway_env(managed_settings={"env": {"FOO": "baz"}}) as (client, _):
+        second = client.get("/claude_code_gateway/managed/settings").json()["checksum"]
+    assert first != second
 
 
 def test_managed_settings_404_when_gateway_disabled():
