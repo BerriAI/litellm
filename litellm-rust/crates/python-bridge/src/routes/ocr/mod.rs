@@ -3,7 +3,10 @@ mod errors;
 mod host;
 mod project;
 
+use std::sync::LazyLock;
+
 use host::OcrRouteHost;
+use litellm_auth_gcp::VertexAuth;
 use litellm_callbacks_legacy::{LegacySurface, PublicCall, run_legacy_call};
 use litellm_core::ocr::route::ocr_machine;
 use litellm_llms::custom_httpx::llm_http_handler::OcrClient;
@@ -24,6 +27,8 @@ const ASYNC_SURFACE: LegacySurface = LegacySurface {
     ..SURFACE
 };
 
+static VERTEX_AUTH: LazyLock<VertexAuth> = LazyLock::new(VertexAuth::default);
+
 fn run_ocr(
     py: Python<'_>,
     request: Bound<'_, PyAny>,
@@ -32,7 +37,7 @@ fn run_ocr(
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     let config = http::call_config(py, &kwargs)?;
-    let client = OcrClient::new(http::pool(), &config)
+    let client = OcrClient::new(http::pool(), &config, VERTEX_AUTH.clone())
         .map_err(|error| RustBridgeDeclined::new_err(error.to_string()))?;
     run_legacy_call(
         py,

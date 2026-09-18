@@ -15,6 +15,7 @@ futures-util.workspace = true
 base64.workspace = true
 litellm-auth.workspace = true
 litellm-auth-aws.workspace = true
+litellm-auth-gcp.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
 moka.workspace = true

@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use litellm_auth_gcp::VertexAuth;
 use litellm_callbacks::{
     event::{CallEvent, WireRequest},
     host::{Host, HostOp, HostResult},
@@ -182,6 +183,7 @@ async fn facade_uses_the_injected_http_pool_configuration() {
     crate::ocr::client::ocr(
         &HttpClientPool::new(),
         &config,
+        VertexAuth::default(),
         wire_request("mistral/model", &base, json!({})),
     )
     .await
@@ -200,6 +202,7 @@ async fn unbuildable_http_configuration_fails_before_dispatch() {
     let error = crate::ocr::client::ocr(
         &HttpClientPool::new(),
         &config,
+        VertexAuth::default(),
         wire_request("mistral/model", &base, json!({})),
     )
     .await
