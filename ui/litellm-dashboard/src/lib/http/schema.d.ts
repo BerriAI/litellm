@@ -7715,6 +7715,7 @@ export interface paths {
          *     - organization_id: Optional[str] - The organization id of the key. If not set, and team_id is set, the organization id will be the same as the team id. If conflict, an error will be raised.
          *     - project_id: Optional[str] - The project id of the key. When set, models and max_budget are validated against the project's limits.
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
+         *     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Takes precedence over `litellm_settings.max_end_user_budget_id`.
          *     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
          *     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
          *     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
@@ -8039,6 +8040,7 @@ export interface paths {
          *     - team_id: Optional[str] - The team id of the key
          *     - user_id: Optional[str] - [NON-FUNCTIONAL] THIS WILL BE IGNORED. The user id of the key
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
+         *     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
          *     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
          *     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
          *     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
@@ -8176,6 +8178,7 @@ export interface paths {
          *     - project_id: Optional[str] - Omit to retain the project, or send null to detach. A different project ID is rejected.
          *     - organization_id: Optional[str] - The organization id of the key.
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
+         *     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
          *     - models: Optional[list] - Model_name's a user is allowed to call
          *     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
@@ -10745,6 +10748,8 @@ export interface paths {
          *     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - organization-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
          *     - allowed_models: Optional[List[str]] - List of models the organization is allowed to access. If not set, defaults to the models field.
+         *     - temp_budget_increase: *Optional[float]* - Stored on the org budget row but only enforced for team member budgets today.
+         *     - temp_budget_expiry: *Optional[str]* - Stored on the org budget row but only enforced for team member budgets today.
          *     Case 1: Create new org **without** a budget_id
          *
          *     ```bash
@@ -16485,6 +16490,61 @@ export interface paths {
         patch: operations["toolset_mcp_route_toolset__toolset_name__mcp_patch"];
         trace?: never;
     };
+    "/transcribe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transcribe Sdk Proxy Route
+         * @description AWS-SDK-shaped pass-through for Amazon Transcribe: point the SDK's `endpoint_url`
+         *     at `/transcribe` and the operation is read from the `X-Amz-Target` header, per the
+         *     AWS JSON 1.1 protocol.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/transcribe)
+         */
+        post: operations["transcribe_sdk_proxy_route_transcribe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/transcribe/{operation}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transcribe Proxy Route
+         * @description Pass-through for the Amazon Transcribe API, e.g. `POST /transcribe/StartTranscriptionJob`.
+         *
+         *     The request body is forwarded to the AWS JSON 1.1 API and signed with SigV4 using the
+         *     proxy's AWS credentials. Standard jobs are tagged with the calling key's owner so that
+         *     only that owner (or a proxy admin) can read or delete them, and keys other than proxy
+         *     admins may only read media from and write transcripts to the S3 buckets listed in
+         *     `general_settings.transcribe_media_buckets`; account-wide operations
+         *     such as ListTranscriptionJobs are limited to proxy admins. Streaming transcription
+         *     (`transcribestreaming`) uses a separate HTTP/2 event-stream protocol and is not served
+         *     by this route.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/transcribe)
+         */
+        post: operations["transcribe_proxy_route_transcribe__operation__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/typesafe/{endpoint}": {
         parameters: {
             query?: never;
@@ -19085,6 +19145,26 @@ export interface paths {
          * @description Clear the calling user's per-user MCP env var values for this server.
          */
         delete: operations["clear_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Mcp Gateway Sessions
+         * @description Live stateful MCP gateway sessions on this proxy worker, grouped by AI client and by user.
+         */
+        get: operations["get_mcp_gateway_sessions_v1_mcp_sessions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -26412,10 +26492,21 @@ export interface components {
         };
         /** ConfigFieldInfo */
         ConfigFieldInfo: {
+            /**
+             * Editable
+             * @default true
+             */
+            editable: boolean;
             /** Field Name */
             field_name: string;
             /** Field Value */
             field_value: unknown;
+            /**
+             * Source
+             * @default unset
+             * @enum {string}
+             */
+            source: "config" | "db" | "env" | "default" | "unset";
         };
         /** ConfigFieldUpdate */
         ConfigFieldUpdate: {
@@ -26842,6 +26933,11 @@ export interface components {
              */
             supported_db_objects?: components["schemas"]["SupportedDBObjectType"][] | null;
             /**
+             * Transcribe Media Buckets
+             * @description S3 bucket names that keys other than proxy admins may read media from and write transcripts to through the Amazon Transcribe pass-through. Unset means only proxy admins can start transcription jobs.
+             */
+            transcribe_media_buckets?: string[] | null;
+            /**
              * Trusted Proxy Ranges
              * @description CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler.
              */
@@ -26897,6 +26993,11 @@ export interface components {
         };
         /** ConfigList */
         ConfigList: {
+            /**
+             * Editable
+             * @default true
+             */
+            editable: boolean;
             /** Field Default Value */
             field_default_value: unknown;
             /** Field Description */
@@ -26918,6 +27019,12 @@ export interface components {
              * @default false
              */
             premium_field: boolean;
+            /**
+             * Source
+             * @default unset
+             * @enum {string}
+             */
+            source: "config" | "db" | "env" | "default" | "unset";
             /** Stored In Db */
             stored_in_db: boolean | null;
         };
@@ -28448,6 +28555,8 @@ export interface components {
             duration?: string | null;
             /** Enable Prompt Caching */
             enable_prompt_caching?: boolean | null;
+            /** End User Budget Id */
+            end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Guardrails */
@@ -28612,6 +28721,8 @@ export interface components {
             duration?: string | null;
             /** Enable Prompt Caching */
             enable_prompt_caching?: boolean | null;
+            /** End User Budget Id */
+            end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Expires */
@@ -28914,13 +29025,18 @@ export interface components {
              */
             vault_cert_role?: string | null;
             /**
+             * Vault Login Namespace
+             * @description Namespace for AppRole and TLS cert login (X-Vault-Namespace header); falls back to vault_namespace
+             */
+            vault_login_namespace?: string | null;
+            /**
              * Vault Mount Name
              * @description KV engine mount name (default: secret)
              */
             vault_mount_name?: string | null;
             /**
              * Vault Namespace
-             * @description Vault namespace (for multi-tenant Vault, sent as X-Vault-Namespace header)
+             * @description Vault namespace used for both login and secret operations unless overridden below
              */
             vault_namespace?: string | null;
             /**
@@ -28928,6 +29044,11 @@ export interface components {
              * @description Optional path prefix for secrets (e.g., myapp -> secret/data/myapp/{secret_name})
              */
             vault_path_prefix?: string | null;
+            /**
+             * Vault Secret Namespace
+             * @description Namespace for secret reads and writes (URL path segment); falls back to vault_namespace
+             */
+            vault_secret_namespace?: string | null;
             /**
              * Vault Token
              * @description Token for Vault token-based authentication
@@ -29533,6 +29654,10 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -29570,6 +29695,10 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -32480,6 +32609,54 @@ export interface components {
          */
         MCPEnvVarScope: "global" | "user";
         /**
+         * MCPGatewaySession
+         * @description One live stateful Streamable HTTP session held by this proxy worker.
+         */
+        MCPGatewaySession: {
+            /** Client Ip */
+            client_ip?: string | null;
+            /** Client Name */
+            client_name?: string | null;
+            /** Client Version */
+            client_version?: string | null;
+            /** Idle Seconds */
+            idle_seconds: number;
+            /** In Flight Requests */
+            in_flight_requests: number;
+            /** Key Alias */
+            key_alias?: string | null;
+            /** Session Id Prefix */
+            session_id_prefix: string;
+            /** Team Alias */
+            team_alias?: string | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
+        /** MCPGatewaySessionGroupCount */
+        MCPGatewaySessionGroupCount: {
+            /** Count */
+            count: number;
+            /** Label */
+            label?: string | null;
+        };
+        /** MCPGatewaySessionsResponse */
+        MCPGatewaySessionsResponse: {
+            /** By Client */
+            by_client?: components["schemas"]["MCPGatewaySessionGroupCount"][];
+            /** By User */
+            by_user?: components["schemas"]["MCPGatewaySessionGroupCount"][];
+            /** Sessions */
+            sessions?: components["schemas"]["MCPGatewaySession"][];
+            /** Total Sessions */
+            total_sessions: number;
+            /** Worker Pid */
+            worker_pid: number;
+        };
+        /**
          * MCPOAuthUserCredentialRequest
          * @description Stores a user's OAuth2 token for an OpenAPI MCP server.
          */
@@ -33350,6 +33527,10 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -33475,6 +33656,10 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id: string;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -33879,6 +34064,8 @@ export interface components {
             duration?: string | null;
             /** Enable Prompt Caching */
             enable_prompt_caching?: boolean | null;
+            /** End User Budget Id */
+            end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Expires */
@@ -35766,6 +35953,8 @@ export interface components {
             duration?: string | null;
             /** Enable Prompt Caching */
             enable_prompt_caching?: boolean | null;
+            /** End User Budget Id */
+            end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Grace Period */
@@ -38271,6 +38460,16 @@ export interface components {
             /** Team Id */
             team_id: string;
             /**
+             * Temp Budget Expiry
+             * @description UTC expiry for temp_budget_increase
+             */
+            temp_budget_expiry?: string | null;
+            /**
+             * Temp Budget Increase
+             * @description Temporary additive budget increase for this team member, active until temp_budget_expiry
+             */
+            temp_budget_increase?: number | null;
+            /**
              * Tpm Limit
              * @description Tokens per minute limit for this team member
              */
@@ -38292,6 +38491,10 @@ export interface components {
             rpm_limit?: number | null;
             /** Team Id */
             team_id: string;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** User Email */
@@ -39108,6 +39311,8 @@ export interface components {
             duration?: string | null;
             /** Enable Prompt Caching */
             enable_prompt_caching?: boolean | null;
+            /** End User Budget Id */
+            end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Guardrails */
@@ -39460,6 +39665,10 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -61748,6 +61957,57 @@ export interface operations {
             };
         };
     };
+    transcribe_sdk_proxy_route_transcribe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    transcribe_proxy_route_transcribe__operation__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     typesafe_proxy_route_typesafe__endpoint__get: {
         parameters: {
             query?: never;
@@ -65757,6 +66017,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_mcp_gateway_sessions_v1_mcp_sessions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPGatewaySessionsResponse"];
                 };
             };
         };

@@ -116,6 +116,8 @@ def test_is_pure_asgi_not_base_http_middleware():
         # Bare AWS-SDK-shaped route carries the operation in X-Amz-Target and writes SpendLogs
         ("/comprehendmedical", (BillableCategory.LLM, "/comprehendmedical")),
         ("/comprehendmedical/DetectEntitiesV2", (BillableCategory.LLM, "/comprehendmedical")),
+        ("/transcribe", (BillableCategory.LLM, "/transcribe")),
+        ("/transcribe/StartTranscriptionJob", (BillableCategory.LLM, "/transcribe")),
         ("/mcp", (BillableCategory.MCP, "/mcp")),
         ("/mcp/", (BillableCategory.MCP, "/mcp")),
         ("/mcp/tools/list", (BillableCategory.MCP, "/mcp")),
