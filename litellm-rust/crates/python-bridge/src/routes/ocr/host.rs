@@ -6,8 +6,8 @@ use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use super::errors::to_pyerr as ocr_error_to_pyerr;
 use super::project::{OcrHostHandles, project_request};
+use crate::errors::ocr_error_to_pyerr;
 
 enum OcrHostData {
     Unprojected,

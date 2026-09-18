@@ -9,8 +9,8 @@ use pyo3::types::PyDict;
 use serde_json::{Map, Value};
 
 use super::document::{FileDocumentInput, PythonFileReader};
-use super::errors::to_pyerr as ocr_error_to_pyerr;
 use crate::credentials::{self, CallerTokenProvider};
+use crate::errors::ocr_error_to_pyerr;
 use crate::marshal::{project_optional_fields, python_timeout_seconds, request_input_sources};
 
 /// What the host keeps after projection: the caller's callables that answer the document
@@ -155,7 +155,7 @@ pub(super) fn project_request(
 
 #[cfg(test)]
 mod tests {
-    use pyo3::exceptions::PyValueError;
+    use crate::errors::RustBridgeDeclined;
 
     use super::*;
 
@@ -419,7 +419,7 @@ kwargs = {}
                 .eval(c"{'type': 'mystery', 'mystery': 'x'}", None, None)
                 .unwrap();
             let error = project_document(&document).unwrap_err();
-            assert!(error.is_instance_of::<PyValueError>(py));
+            assert!(error.is_instance_of::<RustBridgeDeclined>(py));
             assert!(error.to_string().contains("document"));
         });
     }
@@ -432,14 +432,14 @@ kwargs = {}
             assert!(
                 project_document(&missing)
                     .unwrap_err()
-                    .is_instance_of::<PyValueError>(py)
+                    .is_instance_of::<RustBridgeDeclined>(py)
             );
 
             let non_string = py.eval(c"{'type': 1}", None, None).unwrap();
             assert!(
                 project_document(&non_string)
                     .unwrap_err()
-                    .is_instance_of::<PyValueError>(py)
+                    .is_instance_of::<RustBridgeDeclined>(py)
             );
 
             let locals = eval(

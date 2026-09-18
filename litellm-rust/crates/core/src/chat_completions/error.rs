@@ -1,3 +1,5 @@
+use crate::failure::{Phase, Rejection};
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("expected {expected}, got {actual}")]
@@ -23,4 +25,20 @@ pub enum Error {
     Headers(#[from] crate::http_utils::HeaderError),
     #[error(transparent)]
     Aws(#[from] litellm_auth_aws::Error),
+}
+
+impl Error {
+    pub fn phase(&self) -> Phase<'_> {
+        match self {
+            Self::InvalidType { .. }
+            | Self::MissingField(_)
+            | Self::InvalidProvider(_)
+            | Self::InvalidRequest(_)
+            | Self::Headers(_) => Phase::BeforeProvider(Rejection::InvalidRequest),
+            Self::Unsupported(_) => Phase::BeforeProvider(Rejection::Unsupported),
+            Self::Auth(_) | Self::Aws(_) => Phase::BeforeProvider(Rejection::Credential),
+            Self::Transport(error) => error.phase(),
+            Self::InvalidResponse(_) => Phase::AfterProvider,
+        }
+    }
 }

@@ -1,5 +1,4 @@
 mod document;
-mod errors;
 mod host;
 mod project;
 
@@ -8,6 +7,7 @@ use litellm_core::ocr::{OcrClient, ocr_machine};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
+use crate::errors::ocr_error_to_pyerr;
 use host::OcrRouteHost;
 
 const SURFACE: LegacySurface = LegacySurface {
@@ -27,7 +27,7 @@ fn run_ocr(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    let client = OcrClient::shared().map_err(errors::to_pyerr)?;
+    let client = OcrClient::shared().map_err(ocr_error_to_pyerr)?;
     run_legacy_call(
         py,
         if asynchronous { ASYNC_SURFACE } else { SURFACE },
