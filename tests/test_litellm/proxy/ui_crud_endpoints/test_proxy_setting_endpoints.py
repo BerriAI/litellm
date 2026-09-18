@@ -2,6 +2,7 @@ import json
 import os
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 
@@ -3467,3 +3468,98 @@ class TestSyncUiSettingsToGeneralSettings:
 
         assert general_settings["forward_client_headers_to_llm_api"] is False
         assert general_settings.source("forward_client_headers_to_llm_api") == "config"
+
+
+class TestDeleteAllowedIpClearsTheKeyWhenTheListEmpties:
+    """Leaving ``allowed_ips: []`` behind after the last entry is removed bricks
+    the proxy: the IP check reads an empty allowlist as "configured and nothing
+    matches" and 403s everyone, including the call that would add an IP back.
+    The delete endpoint has to drop the key, not store an empty list."""
+
+    @staticmethod
+    def _harness(monkeypatch, stored_allowed_ips: list[str]):
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        import litellm.proxy.proxy_server as proxy_server_module
+        from litellm.proxy.config_resolvers import SettingsStore
+
+        saved: dict = {}
+
+        config = {"general_settings": {"allowed_ips": list(stored_allowed_ips)}}
+
+        async def _get_config():
+            return config
+
+        async def _save_config(new_config=None):
+            saved["config"] = new_config
+            return new_config
+
+        general_settings = SettingsStore("general_settings")
+        general_settings.apply_db_row("general_settings", {"allowed_ips": list(stored_allowed_ips)})
+
+        monkeypatch.setattr(proxy_server_module, "prisma_client", MagicMock())
+        monkeypatch.setattr(proxy_server_module, "premium_user", True)
+        monkeypatch.setattr(proxy_server_module, "general_settings", general_settings)
+        monkeypatch.setattr(litellm, "store_audit_logs", False)
+        monkeypatch.setattr(proxy_server_module.proxy_config, "get_config", _get_config)
+        monkeypatch.setattr(proxy_server_module.proxy_config, "save_config", _save_config)
+
+        return general_settings, saved
+
+    @staticmethod
+    def _delete(ip: str):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        async def _admin_auth():
+            return UserAPIKeyAuth(
+                user_id="allowed-ip-admin",
+                api_key="hashed-admin-key",
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+            )
+
+        app.dependency_overrides[user_api_key_auth] = _admin_auth
+        try:
+            return client.post("/delete/allowed_ip", json={"ip": ip})
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+    def test_removing_the_last_ip_persists_no_allowlist_at_all(self, monkeypatch):
+        general_settings, saved = self._harness(monkeypatch, ["203.0.113.77"])
+
+        resp = self._delete("203.0.113.77")
+        assert resp.status_code == 200, resp.text
+
+        assert "allowed_ips" not in saved["config"]["general_settings"]
+        assert general_settings.get("allowed_ips") is None
+
+    def test_removing_the_last_ip_leaves_the_ip_check_open(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import _check_valid_ip
+
+        general_settings, saved = self._harness(monkeypatch, ["203.0.113.77"])
+
+        assert self._delete("203.0.113.77").status_code == 200
+
+        request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "headers": [],
+                "client": ("198.51.100.23", 51234),
+            }
+        )
+        is_valid, _ = _check_valid_ip(
+            allowed_ips=saved["config"]["general_settings"].get("allowed_ips"),
+            request=request,
+        )
+        assert is_valid is True
+
+    def test_removing_one_of_several_ips_keeps_the_allowlist(self, monkeypatch):
+        general_settings, saved = self._harness(monkeypatch, ["203.0.113.77", "198.51.100.1"])
+
+        assert self._delete("203.0.113.77").status_code == 200
+
+        assert saved["config"]["general_settings"]["allowed_ips"] == ["198.51.100.1"]
+        assert general_settings["allowed_ips"] == ["198.51.100.1"]

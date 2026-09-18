@@ -93,9 +93,13 @@ def _check_valid_ip(
     use_x_forwarded_for: bool | None = False,
 ) -> tuple[bool, str | None]:
     """
-    Returns if ip is allowed or not
+    Returns if ip is allowed or not.
+
+    An empty allowlist means "no allowlist configured", the same as an unset
+    one. Treating it as "allow nothing" would lock every caller out of the
+    proxy, including the endpoints needed to add an IP back.
     """
-    if allowed_ips is None:  # if not set, assume true
+    if not allowed_ips:
         return True, None
 
     # if general_settings.get("use_x_forwarded_for") is True then use x-forwarded-for
