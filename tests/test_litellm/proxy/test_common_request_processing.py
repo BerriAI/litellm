@@ -6970,6 +6970,26 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         assert data["messages"] == [{"role": "user", "content": "my ssn is [REDACTED-SSN]"}]
         assert rig[3] == [primary_model, primary_model, fallback_model]
 
+    @pytest.mark.asyncio
+    async def test_fallback_keeps_structured_request_guardrails(self, monkeypatch: pytest.MonkeyPatch):
+        primary_model = "gpt-4.1"
+        fallback_model = "gpt-4.1-mini"
+        structured_guardrail = {"pii-guard": {"extra_body": {"threshold": 0.5}}}
+        key = self._otel_key(model_rpm_limit={primary_model: 1})
+        rig = self._v3_limiter_rig(monkeypatch, key, [{primary_model: [fallback_model]}])
+        request = {
+            "model": primary_model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "guardrails": [structured_guardrail],
+        }
+
+        await self._pre_call(dict(request), key, rig)
+        _, (data, _) = await self._pre_call(dict(request), key, rig)
+
+        assert data["model"] == fallback_model
+        assert data["metadata"]["guardrails"] == [structured_guardrail]
+        assert rig[3] == [primary_model, primary_model, fallback_model]
+
 
 class _RecordingSuccessLogger(CustomLogger):
     def __init__(self):
