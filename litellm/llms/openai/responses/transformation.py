@@ -126,6 +126,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return is_gpt_reasoning_series_name(model)
 
     @staticmethod
+    def _model_map_lookup_name(model: str) -> str:
+        return model
+
+    @staticmethod
     def _supports_reasoning_effort_none(model: str) -> bool:
         """Return True if the model supports reasoning.effort='none'."""
         from litellm.utils import supports_none_reasoning_effort
@@ -235,11 +239,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     status_code=400,
                 )
 
-        if self._is_gpt_5_model(model=model):
+        lookup_name: Final = self._model_map_lookup_name(model)
+        if self._is_gpt_5_model(model=lookup_name):
             reasoning: Final = params.get("reasoning") or {}
             effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
-            supports_none: Final = self._supports_reasoning_effort_none(model=model)
-            effort_is_none: Final = supports_none and self._effort_resolves_to_none(model, effort)
+            supports_none: Final = self._supports_reasoning_effort_none(model=lookup_name)
+            effort_is_none: Final = supports_none and self._effort_resolves_to_none(lookup_name, effort)
 
             temperature: Final = params.get("temperature")
             if temperature is not None and temperature != 1:
