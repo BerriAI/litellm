@@ -99,6 +99,7 @@ from litellm.proxy.auth.auth_checks import (
     can_org_access_model,
     delete_cache_key_objects,
     delete_cache_team_object,
+    get_jwt_key_mapping_cache_keys_for_tokens,
     get_org_object,
     get_team_membership,
     get_team_object,
@@ -110,6 +111,7 @@ from litellm.proxy.auth.auth_utils import (
     enforce_output_token_estimates_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -129,6 +131,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _update_metadata_fields,
     _upsert_budget_and_membership,
     _user_has_admin_view,
+    member_budget_patch,
     validate_budget_duration,
     validate_team_model_max_budget,
 )
@@ -3523,7 +3526,6 @@ async def team_member_delete(
     }'
     ```
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
     if prisma_client is None:
@@ -3625,6 +3627,10 @@ async def team_member_delete(
                 "team_id": data.team_id,
             }
         )
+        jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_tokens(
+            hashed_tokens=tuple(key.token for key in keys_to_delete),
+            prisma_client=prisma_client,
+        )
 
         if removed_team_members:
             await _team_tx_db(tx).update(
@@ -3673,6 +3679,7 @@ async def team_member_delete(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
+    await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
     await evict_and_broadcast(cache_keys=tuple(sorted(user_ids_to_delete)), user_api_key_cache=user_api_key_cache)
     for user_id in sorted(user_ids_to_delete):
         await invalidate_team_member_spend_state(
@@ -3684,27 +3691,6 @@ async def team_member_delete(
     _emit_team_members_metric(existing_team_row)
 
     return existing_team_row
-
-
-_MEMBER_BUDGET_PATCH_FIELDS: Final = {
-    "max_budget_in_team": "max_budget",
-    "tpm_limit": "tpm_limit",
-    "rpm_limit": "rpm_limit",
-    "budget_duration": "budget_duration",
-    "allowed_models": "allowed_models",
-}
-
-
-def _build_member_budget_patch(data: TeamMemberUpdateRequest) -> dict[str, object]:
-    """Map the budget fields the request actually set (merge-patch: a sent
-    value updates, an explicit null clears, an absent field is left untouched)
-    to their budget-table columns."""
-    provided: Final = data.model_dump(exclude_unset=True)
-    return {
-        column: provided[request_field]
-        for request_field, column in _MEMBER_BUDGET_PATCH_FIELDS.items()
-        if request_field in provided
-    }
 
 
 @router.post(
@@ -3812,7 +3798,7 @@ async def team_member_update(
             team_default_budget_id = raw_default_budget_id
 
     ### upsert new budget
-    budget_patch: Final = _build_member_budget_patch(data)
+    budget_patch: Final = member_budget_patch(data)
     async with prisma_client.tx() as tx:
         await _upsert_budget_and_membership(
             tx=tx,
@@ -4284,6 +4270,10 @@ async def delete_team(
     )
 
     keys_to_delete: Final = await _tokens_db(prisma_client).find_many(where={"team_id": {"in": data.team_ids}})
+    jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_tokens(
+        hashed_tokens=tuple(key.token for key in keys_to_delete),
+        prisma_client=prisma_client,
+    )
 
     if keys_to_delete:
         await _persist_deleted_verification_tokens(
@@ -4300,6 +4290,7 @@ async def delete_team(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
+    await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
 
     ## DELETE ASSOCIATED BYOK MODELS
     # Runs before the team rows are deleted so a mid-flight failure never leaves

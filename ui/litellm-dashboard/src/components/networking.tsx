@@ -126,7 +126,6 @@ import { serverRootPath, setServerRootPath } from "@/lib/serverRootPath";
 export { serverRootPath };
 
 export { deriveErrorMessage };
-export { ApiError } from "@/lib/http/client";
 
 const isLocal = process.env.NODE_ENV === "development";
 // In dev, if NEXT_PUBLIC_USE_REWRITES=true the Next.js dev server proxies API calls
@@ -1115,78 +1114,9 @@ export const userGetInfoV2 = async (accessToken: string, userId?: string): Promi
   }
 };
 
-export const userInfoCall = async (
-  accessToken: string,
-  userID: string | null,
-  userRole: string,
-  viewAll: boolean = false,
-  page: number | null,
-  page_size: number | null,
-  lookup_user_id: boolean = false,
-) => {
-  try {
-    if (viewAll) {
-      return await apiClient.get(`/user/list`, {
-        accessToken,
-        query: {
-          page: page != null ? page.toString() : undefined,
-          page_size: page_size != null ? page_size.toString() : undefined,
-        },
-      });
-    }
-
-    const includeUserID = !((userRole === "Admin" || userRole === "Admin Viewer") && !lookup_user_id) && userID;
-    return await apiClient.get(`/user/info`, {
-      accessToken,
-      query: { user_id: includeUserID ? userID : undefined },
-    });
-  } catch (error) {
-    console.error("Failed to fetch user data:", error);
-    throw error;
-  }
-};
-
 export const teamInfoCall = async (accessToken: string, teamID: string | null) => {
   try {
     return await apiClient.get(`/team/info`, { accessToken, query: { team_id: teamID || undefined } });
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-type TeamListResponse = {
-  teams: Team[];
-  total: number;
-  page: number;
-  page_size: number;
-  total_pages: number;
-};
-
-export const v2TeamListCall = async (
-  accessToken: string,
-  organizationID: string | null,
-  userID: string | null = null,
-  teamID: string | null = null,
-  team_alias: string | null = null,
-  page: number = 1,
-  page_size: number = 10,
-  sort_by: string | null = null,
-  sort_order: "asc" | "desc" | null = null,
-): Promise<TeamListResponse> => {
-  /**
-   * Get list of teams with filtering and sorting options
-   */
-  try {
-    return await apiClient.get(`/v2/team/list`, {
-      accessToken,
-      query: {
-        user_id: userID || undefined,
-        organization_id: organizationID || undefined,
-        team_id: teamID || undefined,
-        team_alias: team_alias || undefined,
-      },
-    });
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -1275,25 +1205,6 @@ export const organizationInfoCall = async (accessToken: string, organizationID: 
     }
 
     const data = await response.json();
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const organizationUpdateCall = async (
-  accessToken: string,
-  formValues: Record<string, any>, // Assuming formValues is an object
-) => {
-  try {
-    const data = await apiClient.patch(`/organization/update`, {
-      accessToken,
-      body: {
-        ...formValues, // Include formValues in the request body
-      },
-    });
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -2043,16 +1954,6 @@ export const allTagNamesCall = async (accessToken: string) => {
   }
 };
 
-export const allEndUsersCall = async (accessToken: string) => {
-  try {
-    const data = await apiClient.get(`/customer/list`, { accessToken });
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch end users:", error);
-    throw error;
-  }
-};
-
 export const userFilterUICall = async (accessToken: string, params: URLSearchParams) => {
   try {
     return await apiClient.get(`/user/filter/ui`, {
@@ -2308,38 +2209,6 @@ export const adminTopModelsCall = async (accessToken: string) => {
       const errorMessage = deriveErrorMessage(errorData);
       handleError(errorMessage);
       throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const keyInfoCall = async (accessToken: string, keys: string[]) => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/key/info` : `/v2/key/info`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        keys: keys,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      if (errorData.includes("Invalid proxy server token passed")) {
-        throw new Error("Invalid proxy server token passed");
-      }
-      handleError(errorData);
-      throw new Error("Network response was not ok");
     }
 
     const data = await response.json();
@@ -3320,19 +3189,6 @@ export const serviceHealthCheck = async (accessToken: string, service: string) =
   }
 };
 
-export const getBudgetList = async (accessToken: string) => {
-  /**
-   * Get all configurable params for setting a budget
-   */
-  try {
-    const data = await apiClient.get(`/budget/list`, { accessToken });
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
-  } catch (error) {
-    console.error("Failed to get callbacks:", error);
-    throw error;
-  }
-};
 export const getCallbacksCall = async (accessToken: string, userID: string, userRole: string) => {
   /**
    * Get all the models user has access to
@@ -7347,37 +7203,6 @@ export const updateUserBanner = async (accessToken: string, banner: UserBannerUp
 // Claude Code Marketplace Networking Functions
 
 /**
- * Get public marketplace catalog (no authentication required)
- * Returns marketplace.json for Claude Code CLI discovery
- */
-export const getClaudeCodeMarketplace = async () => {
-  try {
-    const proxyBaseUrl = getProxyBaseUrl();
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/claude-code/marketplace.json` : `/claude-code/marketplace.json`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      const errorMessage = deriveErrorMessage(JSON.parse(errorData));
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch Claude Code marketplace:", error);
-    throw error;
-  }
-};
-
-/**
  * List all Claude Code plugins (admin only)
  * @param accessToken - Admin access token
  * @param enabledOnly - If true, only return enabled plugins (default: false)
@@ -7408,41 +7233,6 @@ export const getClaudeCodePluginsList = async (accessToken: string, enabledOnly:
     return data;
   } catch (error) {
     console.error("Failed to fetch Claude Code plugins list:", error);
-    throw error;
-  }
-};
-
-/**
- * Get details for a specific Claude Code plugin (admin only)
- * @param accessToken - Admin access token
- * @param pluginName - Name of the plugin
- */
-export const getClaudeCodePluginDetails = async (accessToken: string, pluginName: string) => {
-  try {
-    const proxyBaseUrl = getProxyBaseUrl();
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/claude-code/plugins/${pluginName}`
-      : `/claude-code/plugins/${pluginName}`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      const errorMessage = deriveErrorMessage(JSON.parse(errorData));
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error(`Failed to fetch plugin "${pluginName}":`, error);
     throw error;
   }
 };
