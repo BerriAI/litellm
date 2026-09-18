@@ -27,10 +27,47 @@ function ipToSlash24(ip: string): string {
   return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
 }
 
+export interface AllowedClient {
+  readonly alias: string;
+  readonly value: string;
+}
+
+interface AllowedClientRow extends AllowedClient {
+  readonly key: string;
+}
+
+const isAllowedClient = (entry: unknown): entry is AllowedClient => {
+  if (typeof entry !== "object" || entry === null) return false;
+  const { alias, value } = entry as Partial<Record<keyof AllowedClient, unknown>>;
+  return typeof alias === "string" && typeof value === "string";
+};
+
+const parseStoredClients = (fieldValue: unknown): AllowedClient[] | null =>
+  Array.isArray(fieldValue) && fieldValue.every(isAllowedClient)
+    ? fieldValue.map(({ alias, value }) => ({ alias, value }))
+    : null;
+
+let nextRowKey = 0;
+const newRow = (client: AllowedClient = { alias: "", value: "" }): AllowedClientRow => ({
+  ...client,
+  key: `client-${nextRowKey++}`,
+});
+
+const trimClient = ({ alias, value }: AllowedClient): AllowedClient => ({ alias: alias.trim(), value: value.trim() });
+
+const isBlank = ({ alias, value }: AllowedClient) => alias === "" && value === "";
+const isIncomplete = ({ alias, value }: AllowedClient) => alias === "" || value === "";
+
 const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((value, i) => value === b[i]);
+
+const sameClients = (a: AllowedClient[], b: AllowedClient[]) =>
+  a.length === b.length && a.every((client, i) => client.alias === b[i].alias && client.value === b[i].value);
 
 const unchangedSinceLoad = (value: string[], stored: string[] | null) =>
   stored === null ? value.length === 0 : value.length > 0 && sameList(value, stored);
+
+const clientsUnchangedSinceLoad = (value: AllowedClient[], stored: AllowedClient[] | null) =>
+  stored === null ? value.length === 0 : value.length > 0 && sameClients(value, stored);
 
 const headerUnchangedSinceLoad = (value: string, stored: string | null) =>
   stored === null ? value === "" : value !== "" && value === stored;
@@ -39,14 +76,13 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [privateRanges, setPrivateRanges] = useState<string[]>([]);
-  const [allowedClients, setAllowedClients] = useState<string[]>([]);
+  const [allowedClients, setAllowedClients] = useState<AllowedClientRow[]>([]);
   const [clientIdHeader, setClientIdHeader] = useState("");
   const [storedRanges, setStoredRanges] = useState<string[] | null>(null);
-  const [storedClients, setStoredClients] = useState<string[] | null>(null);
+  const [storedClients, setStoredClients] = useState<AllowedClient[] | null>(null);
   const [storedClientIdHeader, setStoredClientIdHeader] = useState<string | null>(null);
   const [currentIp, setCurrentIp] = useState<string | null>(null);
   const [rangeDraft, setRangeDraft] = useState("");
-  const [clientDraft, setClientDraft] = useState("");
 
   useEffect(() => {
     loadSettings();
@@ -63,9 +99,12 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
           setPrivateRanges(field.field_value);
           setStoredRanges(field.field_value);
         }
-        if (field.field_name === "mcp_allowed_clients" && Array.isArray(field.field_value)) {
-          setAllowedClients(field.field_value);
-          setStoredClients(field.field_value);
+        if (field.field_name === "mcp_allowed_clients") {
+          const clients = parseStoredClients(field.field_value);
+          if (clients !== null) {
+            setAllowedClients(clients.map(newRow));
+            setStoredClients(clients);
+          }
         }
         if (field.field_name === "mcp_client_id_header" && typeof field.field_value === "string") {
           setClientIdHeader(field.field_value);
@@ -87,23 +126,30 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
     }
   };
 
-  const persistList = async (
-    token: string,
-    fieldName: "mcp_internal_ip_ranges" | "mcp_allowed_clients",
-    {
-      value,
-      stored,
-      setStored,
-    }: { value: string[]; stored: string[] | null; setStored: (value: string[] | null) => void },
-  ) => {
-    if (unchangedSinceLoad(value, stored)) return;
-    if (value.length > 0) {
-      await updateConfigFieldSetting(token, fieldName, value);
-      setStored(value);
+  const persistRanges = async (token: string) => {
+    if (unchangedSinceLoad(privateRanges, storedRanges)) return;
+    if (privateRanges.length > 0) {
+      await updateConfigFieldSetting(token, "mcp_internal_ip_ranges", privateRanges);
+      setStoredRanges(privateRanges);
       return;
     }
-    await deleteConfigFieldSetting(token, fieldName);
-    setStored(null);
+    await deleteConfigFieldSetting(token, "mcp_internal_ip_ranges");
+    setStoredRanges(null);
+  };
+
+  const persistAllowedClients = async (token: string) => {
+    const clients = allowedClients.map(trimClient).filter((client) => !isBlank(client));
+    if (clients.some(isIncomplete)) {
+      throw new Error("Every allowed client needs both an alias and a value");
+    }
+    if (clientsUnchangedSinceLoad(clients, storedClients)) return;
+    if (clients.length > 0) {
+      await updateConfigFieldSetting(token, "mcp_allowed_clients", clients);
+      setStoredClients(clients);
+      return;
+    }
+    await deleteConfigFieldSetting(token, "mcp_allowed_clients");
+    setStoredClients(null);
   };
 
   const persistClientIdHeader = async (token: string) => {
@@ -121,20 +167,8 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
   const handleSave = async () => {
     if (!accessToken) return;
     setSaving(true);
-    const [rangeResult] = await Promise.allSettled([
-      persistList(accessToken, "mcp_internal_ip_ranges", {
-        value: privateRanges,
-        stored: storedRanges,
-        setStored: setStoredRanges,
-      }),
-    ]);
-    const [clientResult] = await Promise.allSettled([
-      persistList(accessToken, "mcp_allowed_clients", {
-        value: allowedClients,
-        stored: storedClients,
-        setStored: setStoredClients,
-      }),
-    ]);
+    const [rangeResult] = await Promise.allSettled([persistRanges(accessToken)]);
+    const [clientResult] = await Promise.allSettled([persistAllowedClients(accessToken)]);
     const [headerResult] = await Promise.allSettled([persistClientIdHeader(accessToken)]);
     setSaving(false);
     const failures = [rangeResult, clientResult, headerResult].filter(
@@ -168,13 +202,10 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
     setRangeDraft("");
   };
 
-  const commitClientDraft = () => {
-    const added = splitDraft(clientDraft, allowedClients);
-    if (added.length > 0) {
-      setAllowedClients([...allowedClients, ...added]);
-    }
-    setClientDraft("");
-  };
+  const updateClient = (key: string, patch: Partial<AllowedClient>) =>
+    setAllowedClients(allowedClients.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+
+  const removeClient = (key: string) => setAllowedClients(allowedClients.filter((row) => row.key !== key));
 
   if (loading) {
     return (
@@ -270,7 +301,7 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
 
       <Card className="p-6">
         <div className="mb-2 flex items-center">
-          <p className="text-sm font-medium">Allowed Client IDs</p>
+          <p className="text-sm font-medium">Allowed Clients</p>
         </div>
         {storedAllowlistDeniesEveryone && (
           <p className="mb-2 text-sm text-destructive">
@@ -279,38 +310,52 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
           </p>
         )}
         {allowedClients.length > 0 && (
-          <div className="mb-2 flex flex-wrap gap-1.5">
-            {allowedClients.map((client) => (
-              <Badge key={client} variant="secondary" className="font-mono">
-                {client}
-                <button
+          <div className="mb-2 grid grid-cols-[1fr_1fr_auto] items-center gap-2">
+            <p className="text-xs text-muted-foreground">Alias</p>
+            <p className="text-xs text-muted-foreground">Value</p>
+            <span />
+            {allowedClients.map((row, index) => (
+              <React.Fragment key={row.key}>
+                <Input
+                  aria-label={`Client ${index + 1} alias`}
+                  value={row.alias}
+                  placeholder="e.g. Coding CLI"
+                  onChange={(e) => updateClient(row.key, { alias: e.target.value })}
+                />
+                <Input
+                  aria-label={`Client ${index + 1} value`}
+                  value={row.value}
+                  placeholder="e.g. 0oa1b2c3d4e5f6g7h8i9"
+                  className="font-mono"
+                  onChange={(e) => updateClient(row.key, { value: e.target.value })}
+                />
+                <Button
                   type="button"
-                  aria-label={`Remove ${client}`}
-                  onClick={() => setAllowedClients(allowedClients.filter((c) => c !== client))}
-                  className="ml-1 cursor-pointer"
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Remove client ${row.alias.trim() || index + 1}`}
+                  onClick={() => removeClient(row.key)}
                 >
-                  <X className="size-3" />
-                </button>
-              </Badge>
+                  <X className="size-4" />
+                </Button>
+              </React.Fragment>
             ))}
           </div>
         )}
-        <Input
-          aria-label="Allowed client IDs"
-          value={clientDraft}
-          placeholder="Leave empty to allow every client, e.g. mcp-client-prod, claude-code"
-          onChange={(e) => setClientDraft(e.target.value)}
-          onBlur={commitClientDraft}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === ",") {
-              e.preventDefault();
-              commitClientDraft();
-            }
-          }}
-        />
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => setAllowedClients([...allowedClients, newRow()])}
+        >
+          <Plus />
+          Add client
+        </Button>
         <p className="mt-2 text-xs text-muted-foreground">
-          Enter the exact JWT claim or header values to admit. Every MCP request from any other client, or from one with
-          no resolvable identity, gets a 403.
+          The alias is the name shown here and in gateway logs. The value is the exact JWT claim or header value that
+          identifies the client, such as the OAuth client ID your identity provider issues. Leave the list empty to
+          allow every client. Every MCP request from an unlisted client, or from one with no resolvable identity, gets a
+          403.
         </p>
 
         <div className="mt-6 mb-2 flex items-center">

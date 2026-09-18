@@ -1,6 +1,8 @@
 """
 Gateway-level allowlist of MCP client applications (``general_settings.mcp_allowed_clients``).
 
+Each entry pairs an admin-chosen ``alias`` (shown in the dashboard and logs) with the ``value`` that
+identifies the client. Only the value is compared, exactly and case-sensitively.
 A caller that authenticated with a JWT is identified by the claim named in
 ``litellm_jwtauth.mcp_client_id_jwt_field``, a value asserted by the identity provider.
 Every other caller is identified by the header named in ``general_settings.mcp_client_id_header``,
@@ -10,6 +12,7 @@ While the allowlist is set, a caller with no usable identity source is rejected.
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, Literal
 
 from pydantic import TypeAdapter, ValidationError
@@ -17,15 +20,17 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
+from litellm.types.mcp import MCPAllowedClient
 
 MCP_ALLOWED_CLIENTS_SETTING: Final = "mcp_allowed_clients"
 MCP_CLIENT_ID_HEADER_SETTING: Final = "mcp_client_id_header"
 MCP_CLIENT_ID_JWT_FIELD_SETTING: Final = "mcp_client_id_jwt_field"
 _JWT_AUTH_SETTING: Final = "litellm_jwtauth"
 
-_ALLOWED_CLIENTS_ADAPTER: Final[TypeAdapter[list[str]]] = TypeAdapter(list[str])
+_ALLOWED_CLIENTS_ADAPTER: Final[TypeAdapter[list[MCPAllowedClient]]] = TypeAdapter(list[MCPAllowedClient])
 _OPTIONAL_NAME_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 _OPTIONAL_MAPPING_ADAPTER: Final[TypeAdapter[dict[str, object] | None]] = TypeAdapter(dict[str, object] | None)
+_NOBODY: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 class MCPClientForbiddenBody(TypedDict):
@@ -35,7 +40,9 @@ class MCPClientForbiddenBody(TypedDict):
 
 @dataclass(frozen=True, slots=True)
 class MCPClientAllowlist:
-    allowed_clients: frozenset[str]
+    """``aliases_by_value`` maps each admitted identity value to the alias the admin gave it."""
+
+    aliases_by_value: Mapping[str, str]
     jwt_field: str | None
     header: str | None
 
@@ -67,19 +74,20 @@ def _unidentified_rejection(reason: str) -> MCPClientRejection:
     )
 
 
-def parse_allowed_mcp_clients(raw_setting: object) -> frozenset[str] | None:
-    """None when the setting is absent (not enforced). A malformed setting admits nobody."""
+def parse_allowed_mcp_clients(raw_setting: object) -> Mapping[str, str] | None:
+    """Value-to-alias mapping; None when the setting is absent (not enforced). A malformed setting admits nobody."""
     if raw_setting is None:
         return None
     try:
-        return frozenset(_ALLOWED_CLIENTS_ADAPTER.validate_python(raw_setting))
+        clients: Final = _ALLOWED_CLIENTS_ADAPTER.validate_python(raw_setting)
     except ValidationError:
         verbose_logger.warning(
-            "%s is not a list of client names (%r); rejecting every MCP client until it is fixed",
+            "%s is not a list of {alias, value} entries (%r); rejecting every MCP client until it is fixed",
             MCP_ALLOWED_CLIENTS_SETTING,
             raw_setting,
         )
-        return frozenset()
+        return _NOBODY
+    return MappingProxyType({client.value: client.alias for client in clients})
 
 
 def _parse_optional_name(setting_name: str, raw_setting: object) -> str | None:
@@ -112,7 +120,7 @@ def load_mcp_client_allowlist(general_settings: Mapping[str, object]) -> MCPClie
         MCP_CLIENT_ID_HEADER_SETTING, general_settings.get(MCP_CLIENT_ID_HEADER_SETTING)
     )
     return MCPClientAllowlist(
-        allowed_clients=allowed_clients,
+        aliases_by_value=allowed_clients,
         jwt_field=_jwt_field_from_general_settings(general_settings),
         header=header.lower() if header is not None else None,
     )
@@ -154,8 +162,10 @@ def check_mcp_client_allowed(
     identity: Final = resolve_mcp_client_identity(allowlist, jwt_claims, headers)
     if isinstance(identity, MCPClientRejection):
         return identity
-    if identity.client_id in allowlist.allowed_clients:
-        return None
-    return MCPClientRejection(
-        details=f"MCP client {identity.description} is not listed in this gateway's {MCP_ALLOWED_CLIENTS_SETTING}."
-    )
+    alias: Final = allowlist.aliases_by_value.get(identity.client_id)
+    if alias is None:
+        return MCPClientRejection(
+            details=f"MCP client {identity.description} is not listed in this gateway's {MCP_ALLOWED_CLIENTS_SETTING}."
+        )
+    verbose_logger.debug("Admitted MCP client '%s' identified as %s", alias, identity.description)
+    return None

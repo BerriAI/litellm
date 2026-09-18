@@ -2046,7 +2046,7 @@ _INITIALIZE: Final = (
 )
 _TOOLS_LIST: Final = b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
 _ALLOWLIST_SETTINGS: Final[dict[str, object]] = {
-    "mcp_allowed_clients": ["antigravity-cli"],
+    "mcp_allowed_clients": [{"alias": "Antigravity CLI", "value": "antigravity-cli"}],
     "litellm_jwtauth": {"mcp_client_id_jwt_field": "azp"},
     "mcp_client_id_header": "x-mcp-client",
 }
