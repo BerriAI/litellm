@@ -1748,7 +1748,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             )
             if masked_arguments != arguments:
                 self._set_tool_call_arguments(tool_call, masked_arguments)
-        return
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         """
