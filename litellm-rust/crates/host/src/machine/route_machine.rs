@@ -2,18 +2,16 @@
 //! place, and turns the host operations that future requests into [`Machine`] steps. No
 //! task is spawned; dropping the machine drops the in-flight call.
 
-mod auth;
-
 use std::{future::Future, pin::Pin};
 
-pub use auth::{HostTokenProvider, TokenRoute};
-use litellm_host::{
+use tokio::sync::{mpsc, oneshot};
+
+use super::{HostFailure, Interrupted, Machine, MachineStep, Step};
+use crate::{
     event::{MachineEvent, RequestContext, WireRequest},
     host::{Demand, HostOp, HostResult},
-    machine::{HostFailure, Interrupted, Machine, MachineStep, Step},
     route::Route,
 };
-use tokio::sync::{mpsc, oneshot};
 
 /// The machine's own failures, distinct from anything the provider call reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

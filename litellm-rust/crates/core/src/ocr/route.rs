@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use litellm_auth::ResolvedCredential;
 use litellm_host::{
     event::{CallEvent, RequestContext, WireRequest},
+    machine::{HostChannel, HostTokenProvider, MachineFault, RouteMachine, TokenRoute},
     route::Route,
 };
 use litellm_llms::{
@@ -11,10 +12,7 @@ use litellm_llms::{
 };
 
 use super::handler::perform_ocr_request;
-use crate::{
-    machine::{HostChannel, HostTokenProvider, MachineFault, RouteMachine, TokenRoute},
-    ocr::types::{LiteLLMOcrRequest, OcrDocumentInput, OcrFileContent, ResolvedOcrRequest},
-};
+use crate::ocr::types::{LiteLLMOcrRequest, OcrDocumentInput, OcrFileContent, ResolvedOcrRequest};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OcrOp {
@@ -53,16 +51,6 @@ impl TokenRoute for Ocr {
             OcrOpResult::AzureAdToken(credential) => Some(credential),
             _ => None,
         }
-    }
-}
-
-impl From<MachineFault> for Error {
-    fn from(fault: MachineFault) -> Self {
-        Self::InvalidRequest(match fault {
-            MachineFault::Abandoned => "OCR host driver was abandoned".into(),
-            MachineFault::Protocol(message) => format!("OCR {message}"),
-            MachineFault::Mismatch => "invalid OCR host operation result".into(),
-        })
     }
 }
 
