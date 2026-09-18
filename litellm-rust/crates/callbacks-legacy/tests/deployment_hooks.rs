@@ -97,6 +97,43 @@ assert checked is prepared
     });
 }
 
+#[rstest]
+#[case::synchronous(false)]
+#[case::asynchronous(true)]
+fn a_keyword_the_bridge_never_reads_reaches_every_reader_as_the_callers_object(
+    #[case] asynchronous: bool,
+) {
+    Python::initialize();
+    Python::attach(|py| {
+        let locals = namespace(
+            py,
+            c"
+opaque = object()
+hooked = []
+logger.hooks = {'pre': lambda kwargs: hooked.append(kwargs['vendor_extension']) or kwargs}
+kwargs = {'logger': logger, 'vendor_extension': opaque}
+",
+        );
+        let (mut logging, step) = begin(py, &locals, asynchronous);
+        let step = match step {
+            LifecycleStep::Await(hook_result) => logging.resume(py, Ok(hook_result)).unwrap(),
+            step => step,
+        };
+        locals.set_item("prepared", arguments(py, step)).unwrap();
+        locals.set_item("asynchronous", asynchronous).unwrap();
+        run(
+            py,
+            &locals,
+            c"
+assert prepared['vendor_extension'] is opaque
+[checked] = [value for name, value in logger.calls if name == 'check_limits']
+assert checked['vendor_extension'] is opaque
+assert hooked == ([opaque] if asynchronous else []), hooked
+",
+        );
+    });
+}
+
 #[test]
 fn response_returned_by_the_post_call_hook_is_finalized_and_returned() {
     Python::initialize();
