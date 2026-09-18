@@ -186,10 +186,16 @@ def _parse_network(raw_range: str) -> _Network | None:
         return None
 
 
+def _precedence(network: _Network, limit: int) -> tuple[int, bool, int]:
+    """Sort key for competing overrides: the longest prefix wins, then an exemption, then the higher limit."""
+    return (network.prefixlen, limit == EXEMPT, limit)
+
+
 def _source_limit(settings: Mapping[str, object], client_ip: str) -> int:
     """Failure allowance for this address: the most specific configured range containing it, else the default.
 
-    ``EXEMPT`` (0) means the operator opted this address out of both limits.
+    ``EXEMPT`` (0) means the operator opted this address out of both limits. Between equivalent keys such as
+    ``1.2.3.4`` and ``1.2.3.4/32`` an exemption wins, then the higher limit.
     """
     default: Final = _int_setting(settings, SOURCE_LIMIT_KEY, DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS_PER_SOURCE)
     raw_overrides: Final = settings.get(SOURCE_LIMIT_OVERRIDES_KEY)
@@ -206,11 +212,11 @@ def _source_limit(settings: Mapping[str, object], client_ip: str) -> int:
     if address is None:
         return default
     matches: Final = sorted(
-        (network.prefixlen, _override_limit(raw_limit, default))
+        _precedence(network, _override_limit(raw_limit, default))
         for raw_range, raw_limit in overrides.items()
         if (network := _parse_network(raw_range)) is not None and address in network
     )
-    return matches[-1][1] if matches else default
+    return matches[-1][-1] if matches else default
 
 
 def user_limit_for(source_limit: int) -> int:
