@@ -151,7 +151,8 @@ def test_members_cannot_move_the_jev_classifier_off_the_proxys_typesafe_account(
     assert denied.value.detail == f"Invalid member auto-router configuration at {rejected_at}."
 
 
-def test_members_can_still_tune_the_jev_classifier() -> None:
+def test_members_can_still_tune_the_jev_classifier(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-proxy-typesafe")
     validated: Final = validate_member_auto_router_config(
         {
             "tiers": {"SIMPLE": "allowed"},

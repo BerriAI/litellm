@@ -37,9 +37,42 @@ def test_jev_config_is_rejected_for_other_classifier_types() -> None:
     with pytest.raises(ValueError, match="has no effect"):
         ComplexityRouterConfig.model_validate(
             {
-                "jev_classifier_config": {},
+                "jev_classifier_config": {"api_key": "sk-own"},
             }
         )
+
+
+def test_jev_config_requires_api_key_or_environment_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    with pytest.raises(
+        ValueError, match=r"jev_classifier_config\.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'"
+    ):
+        JevClassifierConfig()
+
+    with pytest.raises(
+        ValueError, match=r"jev_classifier_config\.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'"
+    ):
+        ComplexityRouterConfig.model_validate(
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"model": "jev-latest"},
+            }
+        )
+
+    configured = JevClassifierConfig(api_key="sk-direct")
+    assert configured.api_key == "sk-direct"
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-env")
+    from_env = JevClassifierConfig()
+    assert from_env.api_key is None
+
+    router_cfg = ComplexityRouterConfig.model_validate(
+        {
+            "classifier_type": "jev",
+            "jev_classifier_config": {"model": "jev-latest"},
+        }
+    )
+    assert router_cfg.jev_classifier_config is not None
 
 
 def test_jev_instructions_reject_blank_values() -> None:

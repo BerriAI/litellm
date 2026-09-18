@@ -2694,6 +2694,78 @@ async def test_validate_config_returns_the_write_gates_verdict_without_saving():
 
 
 @pytest.mark.asyncio
+async def test_jev_classifier_missing_key_validation_and_test_routing(monkeypatch: pytest.MonkeyPatch):
+    """A Jev complexity router requires TYPESAFE_API_KEY or jev_classifier_config.api_key;
+    without one, validate reports valid=False with the missing key error, and test_routing
+    rejects with 400."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.auto_router_endpoints import (
+        preview_auto_router_routing,
+        validate_complexity_router_config,
+    )
+    from litellm.router_strategy.complexity_router.config import JevClassifierConfig
+    from litellm.types.management_endpoints.auto_router_endpoints import (
+        AutoRouterRoutingTestRequest,
+        ComplexityRouterConfigValidationRequest,
+        RequestComplexityRouterConfig,
+    )
+
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+
+    rejected = await validate_complexity_router_config(
+        ComplexityRouterConfigValidationRequest(
+            complexity_router_config={
+                "tiers": TIERS,
+                "classifier_type": "jev",
+                "jev_classifier_config": {"model": "jev-latest"},
+            }
+        ),
+        ADMIN,
+    )
+    assert rejected.valid is False
+    assert rejected.error is not None
+    assert "jev_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'" in rejected.error
+
+    valid = await validate_complexity_router_config(
+        ComplexityRouterConfigValidationRequest(
+            complexity_router_config={
+                "tiers": TIERS,
+                "classifier_type": "jev",
+                "jev_classifier_config": {"model": "jev-latest", "api_key": "sk-provided"},
+            }
+        ),
+        ADMIN,
+    )
+    assert valid.valid is True
+    assert valid.error is None
+
+    with pytest.raises(ValidationError) as schema_exc:
+        _request(
+            "what is 2+2",
+            classifier_type="jev",
+            jev_classifier_config={"model": "jev-latest"},
+        )
+    assert "jev_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'" in str(schema_exc.value)
+
+    monkeypatch.setattr(proxy_server, "llm_router", _router())
+    bad_config = RequestComplexityRouterConfig.model_construct(
+        tiers=TIERS,
+        classifier_type="jev",
+        jev_classifier_config=JevClassifierConfig.model_construct(model="jev-latest"),
+    )
+    bad_request = AutoRouterRoutingTestRequest.model_construct(
+        prompt="what is 2+2",
+        messages=[{"role": "user", "content": "what is 2+2"}],
+        complexity_router_config=bad_config,
+        router_name="test-router",
+    )
+    with pytest.raises(HTTPException) as http_exc:
+        await preview_auto_router_routing(bad_request, ADMIN, ROUTING_HTTP_REQUEST)
+    assert http_exc.value.status_code == 400
+    assert "jev_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'" in str(http_exc.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_routing_test_never_confirms_models_the_caller_cannot_use(monkeypatch: pytest.MonkeyPatch):
     """routed_model_configured must not be an existence oracle for the whole proxy: a team
     admin probing a guessed global model name reads False unless the named team could
