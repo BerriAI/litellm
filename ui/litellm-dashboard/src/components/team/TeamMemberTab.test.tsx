@@ -1,4 +1,4 @@
-import { fireEvent, screen, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -13,6 +13,9 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(),
 }));
 
+const { POST } = vi.hoisted(() => ({ POST: vi.fn() }));
+vi.mock("@/lib/http/api", () => ({ fetchClient: { POST } }));
+
 vi.mock("@/utils/roles", () => ({
   isUserTeamAdminForSingleTeam: vi.fn(() => false),
   isProxyAdminRole: vi.fn(() => false),
@@ -26,6 +29,7 @@ const mockHandleMemberDelete = vi.fn();
 const mockSetSelectedEditMember = vi.fn();
 const mockSetIsEditMemberModalVisible = vi.fn();
 const mockSetIsAddMemberModalVisible = vi.fn();
+const mockOnMemberSpendReset = vi.fn();
 
 const budgetResetIso = new Date(2026, 6, 15, 12, 0, 0).toISOString();
 
@@ -121,6 +125,7 @@ describe("TeamMembersComponent", () => {
         teamData={createMockTeamData()}
         canEditTeam={false}
         handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -136,6 +141,7 @@ describe("TeamMembersComponent", () => {
         teamData={createMockTeamData()}
         canEditTeam={false}
         handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -154,6 +160,7 @@ describe("TeamMembersComponent", () => {
         teamData={createMockTeamData()}
         canEditTeam={false}
         handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -172,6 +179,7 @@ describe("TeamMembersComponent", () => {
     const props = {
       canEditTeam: false,
       handleMemberDelete: mockHandleMemberDelete,
+      onMemberSpendReset: mockOnMemberSpendReset,
       setSelectedEditMember: mockSetSelectedEditMember,
       setIsEditMemberModalVisible: mockSetIsEditMemberModalVisible,
       setIsAddMemberModalVisible: mockSetIsAddMemberModalVisible,
@@ -195,6 +203,7 @@ describe("TeamMembersComponent", () => {
         teamData={createMockTeamData()}
         canEditTeam={true}
         handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -221,6 +230,7 @@ describe("TeamMembersComponent", () => {
         })}
         canEditTeam={false}
         handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -247,6 +257,7 @@ describe("TeamMembersComponent", () => {
         })}
         canEditTeam={false}
         handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -262,6 +273,7 @@ describe("TeamMembersComponent", () => {
         teamData={createMockTeamData()}
         canEditTeam={false}
         handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -280,6 +292,7 @@ describe("TeamMembersComponent", () => {
         teamData={createMockTeamData()}
         canEditTeam={false}
         handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -295,6 +308,7 @@ describe("TeamMembersComponent", () => {
         teamData={createMockTeamData()}
         canEditTeam={false}
         handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -311,6 +325,7 @@ describe("TeamMembersComponent", () => {
         teamData={createMockTeamData()}
         canEditTeam={false}
         handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -330,6 +345,7 @@ describe("TeamMembersComponent", () => {
         teamData={createMockTeamData()}
         canEditTeam={true}
         handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -364,6 +380,7 @@ describe("TeamMembersComponent", () => {
         teamData={teamData}
         canEditTeam={true}
         handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -417,6 +434,7 @@ describe("TeamMembersComponent", () => {
         teamData={createMockTeamData()}
         canEditTeam={true}
         handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -447,6 +465,7 @@ describe("TeamMembersComponent", () => {
         teamData={createMockTeamData()}
         canEditTeam={true}
         handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -466,6 +485,7 @@ describe("TeamMembersComponent", () => {
         teamData={createMockTeamData()}
         canEditTeam={true}
         handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -482,6 +502,7 @@ describe("TeamMembersComponent", () => {
         teamData={createMockTeamData()}
         canEditTeam={false}
         handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -490,5 +511,96 @@ describe("TeamMembersComponent", () => {
 
     expect(screen.queryByTestId("edit-member")).not.toBeInTheDocument();
     expect(screen.queryByTestId("delete-member")).not.toBeInTheDocument();
+  });
+
+  describe("reset spend", () => {
+    const renderEditableTab = () =>
+      renderWithProviders(
+        <TeamMembersComponent
+          teamData={createMockTeamData()}
+          canEditTeam={true}
+          handleMemberDelete={mockHandleMemberDelete}
+          onMemberSpendReset={mockOnMemberSpendReset}
+          setSelectedEditMember={mockSetSelectedEditMember}
+          setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+          setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+        />,
+      );
+
+    it("resets the member's current cycle spend to $0 after confirming, then refreshes the team", async () => {
+      const user = userEvent.setup();
+      POST.mockResolvedValue({ data: {} });
+      renderEditableTab();
+
+      const memberRow = screen.getByRole("row", { name: /user1@test\.com/ });
+      await user.click(within(memberRow).getByTestId("reset-member-spend"));
+
+      const dialog = await screen.findByRole("dialog", { name: "Reset Team Member Spend" });
+      expect(dialog).toHaveTextContent("user1@test.com");
+      expect(dialog).toHaveTextContent("$100.5000");
+      expect(POST).not.toHaveBeenCalled();
+
+      await user.click(within(dialog).getByRole("button", { name: "Reset" }));
+
+      await waitFor(() => expect(mockOnMemberSpendReset).toHaveBeenCalledTimes(1));
+      expect(POST).toHaveBeenCalledExactlyOnceWith("/team/{team_id}/member/{user_id}/reset_spend", {
+        params: { path: { team_id: "team-123", user_id: "user1@test.com" } },
+        body: { reset_to: 0 },
+      });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("keeps the dialog open and does not refresh the team when the reset fails", async () => {
+      const user = userEvent.setup();
+      POST.mockRejectedValue(new Error("Cannot reset your own spend. Ask a proxy admin."));
+      renderEditableTab();
+
+      await user.click(screen.getByTestId("reset-member-spend"));
+      const dialog = await screen.findByRole("dialog", { name: "Reset Team Member Spend" });
+      await user.click(within(dialog).getByRole("button", { name: "Reset" }));
+
+      await waitFor(() => expect(POST).toHaveBeenCalledTimes(1));
+      expect(mockOnMemberSpendReset).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog", { name: "Reset Team Member Spend" })).toBeInTheDocument();
+    });
+
+    it("does not call the API when the dialog is cancelled", async () => {
+      const user = userEvent.setup();
+      renderEditableTab();
+
+      await user.click(screen.getByTestId("reset-member-spend"));
+      const dialog = await screen.findByRole("dialog", { name: "Reset Team Member Spend" });
+      await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(POST).not.toHaveBeenCalled();
+    });
+
+    it("only offers the reset on members that have current cycle spend", () => {
+      renderEditableTab();
+
+      expect(
+        within(screen.getByRole("row", { name: /user1@test\.com/ })).getByTestId("reset-member-spend"),
+      ).toBeVisible();
+      expect(
+        within(screen.getByRole("row", { name: /user2@test\.com/ })).queryByTestId("reset-member-spend"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("hides the reset on the caller's own row for a team admin, since the backend rejects it", () => {
+      vi.mocked(useAuthorized).mockReturnValue({ userId: "user1@test.com", userRole: "Internal User" } as never);
+      vi.mocked(isProxyAdminRole).mockReturnValue(false);
+      renderEditableTab();
+
+      expect(screen.queryByTestId("reset-member-spend")).not.toBeInTheDocument();
+    });
+
+    it("shows the reset on the caller's own row for a proxy admin", () => {
+      vi.mocked(useAuthorized).mockReturnValue({ userId: "user1@test.com", userRole: "Admin" } as never);
+      vi.mocked(isProxyAdminRole).mockReturnValue(true);
+      renderEditableTab();
+
+      expect(screen.getByTestId("reset-member-spend")).toBeVisible();
+    });
   });
 });
