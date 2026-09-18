@@ -1,8 +1,10 @@
 import asyncio
 import hashlib
 import json
+import math
 import os
 import time
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final
 
@@ -67,10 +69,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
-            # When queue is at maxsize, flush immediately to make room (no blocking, no data dropped)
-            if self.log_queue.full():
-                await self.flush_queue()
-            await self.log_queue.put(GCSLogQueueItem(payload=logging_payload, kwargs=kwargs, response_obj=response_obj))
+            await self._enqueue(GCSLogQueueItem(payload=logging_payload, kwargs=kwargs, response_obj=response_obj))
 
         except Exception as e:
             verbose_logger.exception("GCS Bucket logging error: %s", e)
@@ -86,13 +85,34 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
-            # When queue is at maxsize, flush immediately to make room (no blocking, no data dropped)
-            if self.log_queue.full():
-                await self.flush_queue()
-            await self.log_queue.put(GCSLogQueueItem(payload=logging_payload, kwargs=kwargs, response_obj=response_obj))
+            await self._enqueue(GCSLogQueueItem(payload=logging_payload, kwargs=kwargs, response_obj=response_obj))
 
         except Exception as e:
             verbose_logger.exception("GCS Bucket logging error: %s", e)
+
+    async def _enqueue(self, item: GCSLogQueueItem) -> None:
+        if self.log_queue.full():
+            await self.flush_queue()
+        if self.log_queue.full():
+            self.log_queue.get_nowait()
+            verbose_logger.error("GCS Bucket log queue still full after flush, dropped the oldest queued event")
+        self.log_queue.put_nowait(item)
+
+    def _requeue(self, items: Sequence[GCSLogQueueItem]) -> None:
+        dropped: Final = sum(1 for item in items if not self._put_nowait_or_drop(item))
+        verbose_logger.error(
+            "GCS Bucket upload failed for %s events, %s kept in queue for the next flush, %s dropped (queue full)",
+            len(items),
+            len(items) - dropped,
+            dropped,
+        )
+
+    def _put_nowait_or_drop(self, item: GCSLogQueueItem) -> bool:
+        try:
+            self.log_queue.put_nowait(item)
+        except asyncio.QueueFull:
+            return False
+        return True
 
     def _drain_queue_batch(self) -> list[GCSLogQueueItem]:
         """
@@ -218,17 +238,23 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             verbose_logger.exception("GCS Bucket error logging batch payload to GCS bucket: %s", e)
             return (success_count, error_count)
 
-    async def _send_individual_logs(self, items: list[GCSLogQueueItem]) -> None:
+    async def _send_individual_logs(self, items: list[GCSLogQueueItem]) -> GCSFlushResult:
         """
         Send each log individually as separate GCS objects (legacy behavior).
         This is used when GCS_USE_BATCHED_LOGGING is disabled.
         """
-        for item in items:
-            await self._send_single_log_item(item)
+        outcomes: Final = tuple([(item, await self._send_single_log_item(item)) for item in items])
+        failed_items: Final = tuple(item for item, sent in outcomes if not sent)
+        if failed_items:
+            self._requeue(failed_items)
+        return GCSFlushResult(
+            sent_ids=tuple(item["payload"]["id"] for item, sent in outcomes if sent),
+            failed_ids=tuple(item["payload"]["id"] for item in failed_items),
+        )
 
-    async def _send_single_log_item(self, item: GCSLogQueueItem) -> None:
+    async def _send_single_log_item(self, item: GCSLogQueueItem) -> bool:
         """
-        Send a single log item to GCS as an individual object.
+        Send a single log item to GCS as an individual object. Returns whether the upload succeeded.
         """
         try:
             gcs_logging_config: Final[GCSLoggingConfig] = await self.get_gcs_logging_config(item["kwargs"])
@@ -253,8 +279,29 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             )
         except Exception as e:
             verbose_logger.exception("GCS Bucket error logging individual payload to GCS bucket: %s", e)
+            return False
+        return True
 
-    async def async_send_batch(self):
+    async def _send_grouped_batches(self, items: list[GCSLogQueueItem]) -> GCSFlushResult:
+        results: Final = tuple(
+            [
+                (group_items, await self._send_grouped_batch(group_items, config_key))
+                for config_key, group_items in self._group_items_by_config(items).items()
+            ]
+        )
+        for group_items, (_, group_failed) in results:
+            if group_failed:
+                self._requeue(group_items)
+        return GCSFlushResult(
+            sent_ids=tuple(
+                item["payload"]["id"] for group_items, (_, failed) in results if not failed for item in group_items
+            ),
+            failed_ids=tuple(
+                item["payload"]["id"] for group_items, (_, failed) in results if failed for item in group_items
+            ),
+        )
+
+    async def async_send_batch(self) -> None:
         """
         Process queued logs - sends logs to GCS Bucket.
 
@@ -263,18 +310,18 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
 
         If disabled, sends each log individually as separate GCS objects (legacy behavior).
         """
-        items_to_process: Final = self._drain_queue_batch()
+        await self._send_queued_events()
 
-        if not items_to_process:
-            return
+    async def _send_queued_events(self) -> GCSFlushResult:
+        return await self._send_items(self._drain_queue_batch())
+
+    async def _send_items(self, items: list[GCSLogQueueItem]) -> GCSFlushResult:
+        if not items:
+            return GCSFlushResult(sent_ids=(), failed_ids=())
 
         if self.use_batched_logging:
-            grouped_items: Final = self._group_items_by_config(items_to_process)
-
-            for config_key, group_items in grouped_items.items():
-                await self._send_grouped_batch(group_items, config_key)
-        else:
-            await self._send_individual_logs(items_to_process)
+            return await self._send_grouped_batches(items)
+        return await self._send_individual_logs(items)
 
     def _get_object_name(self, kwargs: dict, logging_payload: StandardLoggingPayload, response_obj: Any) -> str:
         """
@@ -354,12 +401,28 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     def _get_object_date_from_datetime(self, datetime_obj: datetime) -> str:
         return datetime_obj.strftime("%Y-%m-%d")
 
-    async def flush_queue(self):
+    async def flush_queue(self) -> None:
         """
         Override flush_queue to work with asyncio.Queue.
         """
-        await self.async_send_batch()
-        self.last_flush_time = time.time()
+        async with self.flush_lock:
+            await self._send_queued_events()
+            self.last_flush_time = time.time()
+
+    async def flush_queue_and_report(self) -> GCSFlushResult:
+        """
+        Flush everything queued at call time, waiting for any in-flight periodic flush first, and report every event id.
+        Events are drained before any upload starts, so a batch that fails and is requeued is not retried in this call.
+        """
+        async with self.flush_lock:
+            batch_count: Final = math.ceil(self.log_queue.qsize() / self.batch_size)
+            batches: Final = tuple(self._drain_queue_batch() for _ in range(batch_count))
+            results: Final = tuple([await self._send_items(batch) for batch in batches])
+            self.last_flush_time = time.time()
+        return GCSFlushResult(
+            sent_ids=tuple(event_id for result in results for event_id in result.sent_ids),
+            failed_ids=tuple(event_id for result in results for event_id in result.failed_ids),
+        )
 
     async def periodic_flush(self):
         """

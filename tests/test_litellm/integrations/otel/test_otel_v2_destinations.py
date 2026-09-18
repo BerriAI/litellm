@@ -1803,15 +1803,17 @@ class TestTenantConfigAgreement:
             "callback_vars": {"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_host": host, **extra},
         }
 
-    def test_a_key_that_disabled_its_callbacks_does_not_fall_back_to_the_team(self):
-        """Disabling a key's callbacks stores an empty list, which the sibling parser
-        reads as 'the key configured none'."""
+    def test_a_key_with_an_empty_logging_list_falls_back_to_the_team(self):
+        """An empty key-level list is unset, the same way the sibling parser reads it,
+        so the team's destination applies."""
         auth = UserAPIKeyAuth(
             metadata={"logging": []},
             team_metadata={"logging": [self._entry("http://team.local")]},
         )
 
-        assert resolve_tenant_otel_destinations(auth) == ()
+        destinations = resolve_tenant_otel_destinations(auth)
+
+        assert [d.endpoint for d in destinations] == ["http://team.local/api/public/otel"]
 
     def test_two_entries_for_one_backend_merge_their_vars_last_wins(self):
         auth = UserAPIKeyAuth(
