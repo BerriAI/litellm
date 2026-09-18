@@ -1486,7 +1486,9 @@ if MCP_AVAILABLE:
 
         submissions: Final = await get_mcp_submissions(prisma_client)
         submissions.items = _redact_mcp_credentials_list(submissions.items)
-        if not _user_is_full_admin(user_api_key_dict):
+        if _is_restricted_virtual_key_request(user_api_key_dict):
+            submissions.items = _sanitize_mcp_server_list_for_virtual_key(submissions.items)
+        elif not _user_is_full_admin(user_api_key_dict):
             submissions.items = _sanitize_mcp_server_list_for_non_admin(submissions.items)
         return submissions
 

@@ -6,7 +6,7 @@ import logging
 from contextlib import ExitStack
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from typing import List, Optional, cast
+from typing import Final, List, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -4625,18 +4625,17 @@ class TestMCPApprovalWorkflow:
         assert item.static_headers == {"Authorization": "Bearer sk-secret-header"}
 
     @pytest.mark.asyncio
-    async def test_get_submissions_full_admin_still_sees_secrets(self):
-        """The view-only redaction must not over-redact for a full PROXY_ADMIN,
-        who needs url/static_headers/env/env_vars to review the pending
-        submission. Only the explicit credentials field is cleared."""
+    @pytest.mark.parametrize("allowed_routes", [[], ["llm_api_routes"], ["mcp_routes"]])
+    async def test_get_submissions_respects_admin_key_route_restrictions(self, allowed_routes: list[str]) -> None:
         from litellm.proxy._types import MCPSubmissionsSummary
-        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
-            get_mcp_server_submissions,
-        )
 
-        item = _leaky_list_server()
-        item.approval_status = "pending_review"
-        summary = MCPSubmissionsSummary(total=1, pending_review=1, active=0, rejected=0, items=[item])
+        credentials: Final[MCPCredentials] = {"scopes": ["scope:review"], "client_secret": "secret-sentinel"}
+        item: Final = _leaky_list_server().model_copy(
+            update={"approval_status": "pending_review", "credentials": credentials}
+        )
+        original: Final = item.model_dump()
+        summary: Final = MCPSubmissionsSummary(total=1, pending_review=1, active=0, rejected=0, items=[item])
+        admin: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, allowed_routes=allowed_routes)
 
         with (
             patch(
@@ -4648,25 +4647,18 @@ class TestMCPApprovalWorkflow:
                 AsyncMock(return_value=summary),
             ),
         ):
-            result = await get_mcp_server_submissions(
-                user_api_key_dict=generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN),
-            )
+            result: Final = await mgmt_endpoints.get_mcp_server_submissions(user_api_key_dict=admin)
 
+        assert (result.total, result.pending_review, result.active, result.rejected) == (1, 1, 0, 0)
         assert len(result.items) == 1
-        raw = result.items[0]
-        assert raw.url == "https://leaky.example.com/mcp?api_key=sk-embedded-in-url"
-        assert raw.static_headers == {"Authorization": "Bearer sk-secret-header"}
-        assert raw.env == {"UPSTREAM_TOKEN": "sk-secret-env"}
-        assert raw.credentials is None
-        assert raw.env_vars is not None
-        assert len(raw.env_vars) == 1
-        # ``model_construct`` in ``_leaky_list_server`` skips validation, so
-        # env_vars stays as raw dicts; mirror the fixture shape here.
-        entry = raw.env_vars[0]
-        name = entry["name"] if isinstance(entry, dict) else entry.name
-        value = entry["value"] if isinstance(entry, dict) else entry.value
-        assert name == "GLOBAL_KEY"
-        assert value == "super-secret"
+        returned: Final = result.items[0]
+        assert returned.server_id == item.server_id
+        assert returned.credentials == (None if allowed_routes else {"scopes": credentials["scopes"]})
+        assert returned.url == (None if allowed_routes else item.url)
+        assert returned.static_headers == (None if allowed_routes else item.static_headers)
+        assert returned.env == ({} if allowed_routes else item.env)
+        assert returned.env_vars == (None if allowed_routes else item.env_vars)
+        assert item.model_dump() == original
 
     @pytest.mark.asyncio
     async def test_approve_non_pending_server_raises_400(self):
