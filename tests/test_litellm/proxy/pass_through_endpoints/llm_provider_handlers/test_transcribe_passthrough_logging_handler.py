@@ -1,6 +1,8 @@
 import asyncio
 import io
+import wave
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import httpx
@@ -13,10 +15,13 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.transcribe_passt
     TRANSCRIBE_OWNER_TAG,
     TranscribePassthroughLoggingHandler,
     TranscribeRefusal,
+    TranscriptionJobRecord,
+    media_file_seconds,
     media_predates_job,
     price_transcription_job,
     requested_media_format,
     s3_media_url,
+    started_transcription_job,
     transcribe_admin_only_refusal,
     transcribe_cost_per_second,
     transcribe_job_access_refusal,
@@ -89,6 +94,22 @@ def _sequence(*jobs: dict[str, object]):
     async def get_job(job_name: str) -> dict[str, object]:
         seen.append(job_name)
         return remaining.pop(0) if len(remaining) > 1 else remaining[0]
+
+    return get_job, seen
+
+
+def _aws_error(error_type: str) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://transcribe.us-west-2.amazonaws.com/")
+    response = httpx.Response(400, request=request, json={"__type": error_type, "message": "nope"})
+    return httpx.HTTPStatusError("400", request=request, response=response)
+
+
+def _missing_job(error_type: str):
+    seen: list[str] = []
+
+    async def get_job(job_name: str) -> dict[str, object]:
+        seen.append(job_name)
+        raise _aws_error(error_type)
 
     return get_job, seen
 
@@ -220,9 +241,10 @@ class TestS3MediaUrl:
             "https://evil.example.com/a.wav",
             "https://my-bucket.s3.us-west-2.amazonaws.com@evil.example.com/a.wav",
             "https://amazonaws.com/a.wav",
+            "http://my-bucket.s3.us-west-2.amazonaws.com/a.wav",
         ],
     )
-    def test_hosts_outside_the_aws_partition_are_never_signed_for(self, media_uri: str):
+    def test_hosts_outside_the_aws_partition_or_off_https_are_never_signed_for(self, media_uri: str):
         assert s3_media_url(media_uri, "us-west-2") is None
 
     def test_https_uri_is_used_as_given(self):
@@ -303,6 +325,48 @@ class TestPriceTranscriptionJob:
         assert await price_transcription_job("job-1", COST_PER_SECOND, get_job, _no_media, sleep=_no_sleep) == 0.0
 
     @pytest.mark.asyncio
+    async def test_job_deleted_before_it_is_polled_is_charged_for_the_media_it_was_started_with(self):
+        get_job, seen = _missing_job("BadRequestException")
+        media_seconds, measured = _media_probe(17.577)
+        started = started_transcription_job(
+            '{"TranscriptionJob": {"Media": {"MediaFileUri": "s3://b/started.wav"}, "CreationTime": 5.0}}'
+        )
+
+        cost = await price_transcription_job(
+            "job-1", COST_PER_SECOND, get_job, media_seconds, sleep=_no_sleep, started_job=started
+        )
+
+        assert cost == pytest.approx(18 * COST_PER_SECOND)
+        assert seen == ["job-1"]
+        assert measured == [("s3://b/started.wav", 5.0)]
+
+    @pytest.mark.asyncio
+    async def test_job_not_found_by_transcribe_is_charged_the_maximum_without_a_start_record(self):
+        get_job, seen = _missing_job("com.amazonaws.transcribe#NotFoundException")
+
+        cost = await price_transcription_job("job-1", COST_PER_SECOND, get_job, _no_media, sleep=_no_sleep)
+
+        assert cost == pytest.approx(TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS * COST_PER_SECOND)
+        assert seen == ["job-1"]
+
+    @pytest.mark.asyncio
+    async def test_throttled_poll_is_retried_rather_than_treated_as_a_missing_job(self):
+        remaining = ["LimitExceededException", None]
+
+        async def get_job(job_name: str) -> dict[str, object]:
+            error_type = remaining.pop(0)
+            if error_type is not None:
+                raise _aws_error(error_type)
+            return _job("COMPLETED")
+
+        media_seconds, _ = _media_probe(3.0)
+
+        cost = await price_transcription_job("job-1", COST_PER_SECOND, get_job, media_seconds, sleep=_no_sleep)
+
+        assert cost == pytest.approx(3 * COST_PER_SECOND)
+        assert remaining == []
+
+    @pytest.mark.asyncio
     async def test_job_that_never_finishes_is_charged_the_maximum(self):
         get_job, seen = _sequence(_job("IN_PROGRESS"))
 
@@ -360,6 +424,40 @@ class TestPriceTranscriptionJob:
 
         assert cost == pytest.approx(TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS * COST_PER_SECOND)
         assert measured == []
+
+
+class TestMediaFileSeconds:
+    def test_reads_the_duration_from_the_file_on_disk(self, tmp_path: Path):
+        media = tmp_path / "a.wav"
+        with wave.open(str(media), "wb") as out:
+            out.setnchannels(1)
+            out.setsampwidth(2)
+            out.setframerate(8000)
+            out.writeframes(bytes(2 * 12_000))
+
+        assert media_file_seconds(media) == pytest.approx(1.5)
+
+    def test_undecodable_media_yields_no_duration(self, tmp_path: Path):
+        media = tmp_path / "a.wav"
+        _ = media.write_bytes(b"not audio at all")
+
+        assert media_file_seconds(media) is None
+
+
+class TestStartedTranscriptionJob:
+    def test_reads_the_media_and_creation_time_from_the_start_response(self):
+        started = started_transcription_job(
+            '{"TranscriptionJob": {"TranscriptionJobName": "j", "Media": {"MediaFileUri": "s3://b/a.wav"},'
+            ' "CreationTime": 1.5, "TranscriptionJobStatus": "IN_PROGRESS"}}'
+        )
+
+        assert started == TranscriptionJobRecord(
+            TranscriptionJobStatus="IN_PROGRESS", CreationTime=1.5, Media={"MediaFileUri": "s3://b/a.wav"}
+        )
+
+    @pytest.mark.parametrize("body", ["not json", "[]", '{"TranscriptionJob": {"CreationTime": "soon"}}'])
+    def test_unreadable_start_response_yields_no_record(self, body: str):
+        assert started_transcription_job(body) is None
 
 
 class TestMediaPredatesJob:
@@ -548,10 +646,12 @@ class TestTranscribePassthroughHandler:
 class TestStartTranscriptionJobIsLoggedAtJobCost:
     @pytest.mark.asyncio
     async def test_success_handler_defers_logging_until_the_job_is_priced(self):
-        priced: list[tuple[str, str, float]] = []
+        priced: list[tuple[str, str, float, TranscriptionJobRecord | None]] = []
 
-        async def job_pricer(job_name: str, aws_region_name: str, cost_per_second: float) -> float:
-            priced.append((job_name, aws_region_name, cost_per_second))
+        async def job_pricer(
+            job_name: str, aws_region_name: str, cost_per_second: float, started_job: TranscriptionJobRecord | None
+        ) -> float:
+            priced.append((job_name, aws_region_name, cost_per_second, started_job))
             return 0.0018
 
         logged: list[dict[str, object]] = []
@@ -575,7 +675,7 @@ class TestStartTranscriptionJobIsLoggedAtJobCost:
         )
         await task
 
-        assert priced == [("litellm-job-1", "us-west-2", transcribe_cost_per_second())]
+        assert priced == [("litellm-job-1", "us-west-2", transcribe_cost_per_second(), TranscriptionJobRecord())]
         assert len(logged) == 1
         assert logged[0]["response_cost"] == 0.0018
         assert logged[0]["model"] == "transcribe/StartTranscriptionJob"
@@ -584,7 +684,9 @@ class TestStartTranscriptionJobIsLoggedAtJobCost:
 
     @pytest.mark.asyncio
     async def test_job_is_not_logged_for_free_when_the_rate_leaves_the_cost_map(self, monkeypatch: pytest.MonkeyPatch):
-        async def job_pricer(job_name: str, aws_region_name: str, cost_per_second: float) -> float:
+        async def job_pricer(
+            job_name: str, aws_region_name: str, cost_per_second: float, started_job: TranscriptionJobRecord | None
+        ) -> float:
             raise AssertionError("pricer must not run without a rate")
 
         logged: list[dict[str, object]] = []
@@ -611,7 +713,9 @@ class TestStartTranscriptionJobIsLoggedAtJobCost:
     async def test_pass_through_success_handler_routes_job_starts_to_the_pricer(self):
         scheduled: list[str] = []
 
-        async def job_pricer(job_name: str, aws_region_name: str, cost_per_second: float) -> float:
+        async def job_pricer(
+            job_name: str, aws_region_name: str, cost_per_second: float, started_job: TranscriptionJobRecord | None
+        ) -> float:
             scheduled.append(job_name)
             return 0.0
 
