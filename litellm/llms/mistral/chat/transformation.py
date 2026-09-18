@@ -35,14 +35,19 @@ if TYPE_CHECKING:
     import tiktoken
 
 
-def _accepted_reasoning_effort(model: str, requested: str) -> str:
-    declared: Final = declared_reasoning_efforts_for_model(model, "mistral")
+def _accepted_reasoning_effort(model: str, requested: str, custom_llm_provider: str) -> str:
+    declared: Final = declared_reasoning_efforts_for_model(model, custom_llm_provider)
     if declared is None:
         return requested
     accepted: Final = nearest_declared_reasoning_effort(requested, declared)
     if accepted != requested:
         verbose_logger.debug(
-            "mistral: %s takes reasoning_effort %s, sending %s in place of %s", model, declared, accepted, requested
+            "%s: %s takes reasoning_effort %s, sending %s in place of %s",
+            custom_llm_provider,
+            model,
+            declared,
+            accepted,
+            requested,
         )
     return accepted
 
@@ -103,9 +108,15 @@ class MistralConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
+    @property
+    def custom_llm_provider(self) -> str:
+        return "mistral"
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         is_magistral: Final = "magistral" in model.lower()
-        accepts_reasoning_effort: Final = is_magistral or supports_reasoning(model=model, custom_llm_provider="mistral")
+        accepts_reasoning_effort: Final = is_magistral or supports_reasoning(
+            model=model, custom_llm_provider=self.custom_llm_provider
+        )
         return [
             "stream",
             "temperature",
@@ -187,7 +198,7 @@ class MistralConfig(OpenAIGPTConfig):
             if param == "response_format":
                 optional_params["response_format"] = value
             if param == "reasoning_effort" and "magistral" not in model.lower():
-                optional_params["reasoning_effort"] = _accepted_reasoning_effort(model, value)
+                optional_params["reasoning_effort"] = _accepted_reasoning_effort(model, value, self.custom_llm_provider)
             if param in ("reasoning_effort", "thinking") and "magistral" in model.lower():
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
