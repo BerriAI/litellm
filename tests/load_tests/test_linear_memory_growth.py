@@ -21,12 +21,7 @@ pytest tests/load_tests/test_linear_memory_growth.py -v
 
 import pytest
 
-from tests.load_tests.memory_leak_utils import (
-    limit_memory,  # noqa: F401  # pytest fixture used via dependency injection
-    mock_server,  # noqa: F401  # pytest fixture used via dependency injection
-    run_memory_baseline_test,
-    test_router,  # noqa: F401  # pytest fixture used via dependency injection
-)
+from tests.load_tests.memory_leak_utils import run_memory_baseline_test
 
 # Memory limit for all linear memory growth tests
 MEMORY_LIMIT = "40 MB"

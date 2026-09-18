@@ -1,11 +1,9 @@
 import logging
 import os
-import sys
 import pytest
 from typing import List, Any, cast
 from unittest.mock import AsyncMock, patch
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 # Import required modules
 import litellm
@@ -85,6 +83,15 @@ async def test_mcp_helper_methods():
     assert (
         LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_always) == False
     )
+
+    # A single approval-required reference must disable auto-execution for the
+    # whole request; otherwise a "never" reference alongside an "always" one
+    # would let the approval-gated tool run without approval.
+    mcp_tools_mixed = [{"require_approval": "never"}, {"require_approval": "always"}]
+    assert LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_mixed) == False
+    mcp_tools_manual = [{"require_approval": "never"}, {"require_approval": "manual"}]
+    assert LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_manual) == False
+    assert LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools([]) == False
 
     print("✓ MCP helper methods test passed!")
 
@@ -1432,9 +1439,7 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
             print(
                 f"ERROR: Duplicate MCP fetching detected! Called {mock_get_tools.call_count} times"
             )
-            assert (
-                False
-            ), f"MCP tools should be fetched exactly once, but were fetched {mock_get_tools.call_count} times"
+            pytest.fail(f"MCP tools should be fetched exactly once, but were fetched {mock_get_tools.call_count} times")
 
         # Additional validation: ensure no duplicate tools in any LLM call
         total_duplicates_found = 0
@@ -1457,9 +1462,7 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
                     )
 
         if total_duplicates_found > 0:
-            assert (
-                False
-            ), f"Found {total_duplicates_found} duplicate tools across all LLM calls"
+            pytest.fail(f"Found {total_duplicates_found} duplicate tools across all LLM calls")
 
         print("No duplicate MCP tools E2E test passed!")
         print(f"Summary:")

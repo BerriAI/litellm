@@ -7,7 +7,7 @@ Upload -> (OCR) -> Chunk -> Embed -> Vector Store
 
 from litellm.rag.main import aingest, aquery, ingest, query
 
-__all__ = ["ingest", "aingest", "query", "aquery"]
+__all__ = ["aingest", "aquery", "ingest", "query"]
 
 
 # Expose at litellm.rag level for convenience

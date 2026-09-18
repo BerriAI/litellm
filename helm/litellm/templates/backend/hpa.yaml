@@ -30,4 +30,8 @@ spec:
           type: Utilization
           averageUtilization: {{ .Values.backend.hpa.targetMemoryUtilizationPercentage }}
     {{- end }}
+  {{- with .Values.backend.hpa.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 {{- end }}

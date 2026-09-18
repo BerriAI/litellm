@@ -68,17 +68,25 @@ describe("useUpdateProject", () => {
     const { result } = renderHook(() => useUpdateProject(), {
       wrapper: makeWrapper(queryClient),
     });
+    const params = {
+      project_alias: "Updated Name",
+      model_itpm_limit: { "gpt-4": 150 },
+      model_otpm_limit: { "gpt-4": 250 },
+    };
+    const expectedBody = {
+      project_id: "proj-1",
+      project_alias: "Updated Name",
+      model_itpm_limit: { "gpt-4": 150 },
+      model_otpm_limit: { "gpt-4": 250 },
+    };
     const data = await result.current.mutateAsync({
       projectId: "proj-1",
-      params: { project_alias: "Updated Name" },
+      params,
     });
     expect(data).toEqual(updated);
     const [url, init] = (global.fetch as any).mock.calls[0];
     expect(url).toContain("/project/update");
-    expect(JSON.parse(init.body)).toMatchObject({
-      project_id: "proj-1",
-      project_alias: "Updated Name",
-    });
+    expect(JSON.parse(init.body)).toMatchObject(expectedBody);
   });
 
   it("should invalidate project queries on success", async () => {

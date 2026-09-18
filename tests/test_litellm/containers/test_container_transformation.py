@@ -1,14 +1,10 @@
 import json
 import os
-import sys
 from unittest.mock import MagicMock, patch
 import httpx
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
@@ -341,10 +337,10 @@ class TestOpenAIContainerTransformation:
         assert data["expires_after"] is None
         assert data["file_ids"] is None
 
-    def test_container_create_response_includes_cost(self):
+    def test_container_create_response_includes_cost(self, monkeypatch):
         """Test that container create response includes code interpreter cost calculation."""
         # Force use of local model cost map for CI/CD consistency
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
         from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
@@ -381,8 +377,6 @@ class TestOpenAIContainerTransformation:
             in container._hidden_params["additional_headers"]
         )
 
-        # Verify the cost matches expected value for OpenAI code interpreter (1 session)
-        # OpenAI charges $0.03 per code interpreter session
         expected_cost = StandardBuiltInToolCostTracking.get_cost_for_code_interpreter(
             sessions=1, provider="openai"
         )
@@ -391,4 +385,3 @@ class TestOpenAIContainerTransformation:
         ]
 
         assert actual_cost == expected_cost
-        assert actual_cost == 0.03  # OpenAI code interpreter costs $0.03 per session

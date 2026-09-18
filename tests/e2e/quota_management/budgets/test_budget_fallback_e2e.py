@@ -53,7 +53,7 @@ def test_budget_fallback_reroutes_anthropic_messages_to_openai(
 
     # The rerouted call must be recorded under the fallback model, not the
     # exhausted primary - proving spend tracking followed the reroute.
-    rows = client.gateway.poll_logs_for_key(
+    rows = client.proxy.poll_logs_for_key(
         key, predicate=lambda rows: any(FALLBACK_MODEL in (r.model or "") for r in rows)
     )
     assert any(FALLBACK_MODEL in (r.model or "") for r in rows), (

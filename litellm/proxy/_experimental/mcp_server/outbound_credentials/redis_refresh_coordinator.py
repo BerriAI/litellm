@@ -26,7 +26,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import KW_ONLY, dataclass
 from enum import Enum
-from typing import Protocol
+from typing import Final, Protocol
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
@@ -89,8 +89,8 @@ class RedisRefreshCoordinator:
         refresh: Callable[[], Awaitable[OAuthToken | None]],
         reread: Callable[[], Awaitable[OAuthToken | None]],
     ) -> OAuthToken | None:
-        key = self._key(user_id, server_id)
-        token = self.new_token()
+        key: Final = self._key(user_id, server_id)
+        token: Final = self.new_token()
         match await self.lock.acquire(key, token, self.lock_ttl_seconds):
             case LockAcquisition.ACQUIRED:
                 return await self._refresh_with_lease_renewal(key, token, refresh)
@@ -102,7 +102,7 @@ class RedisRefreshCoordinator:
                 # Another worker holds the lock; wait for it to finish (release or PX-expiry), then read
                 # the token it persisted - the winner wrote the fresh token to the store, so a plain
                 # re-read sees it without us refreshing again.
-                deadline = self.clock() + self.wait_timeout_seconds
+                deadline: Final = self.clock() + self.wait_timeout_seconds
                 while self.clock() < deadline and await self.lock.is_held(key):
                     await self.sleep(self.poll_interval_seconds)
                 return await reread()
@@ -113,8 +113,8 @@ class RedisRefreshCoordinator:
         token: str,
         refresh: Callable[[], Awaitable[OAuthToken | None]],
     ) -> OAuthToken | None:
-        refresh_task = asyncio.ensure_future(refresh())
-        renewal_task = asyncio.create_task(self._renew_lease_until_done(key, token, refresh_task))
+        refresh_task: Final = asyncio.ensure_future(refresh())
+        renewal_task: Final = asyncio.create_task(self._renew_lease_until_done(key, token, refresh_task))
         try:
             return await refresh_task
         finally:
@@ -129,7 +129,7 @@ class RedisRefreshCoordinator:
         token: str,
         refresh_task: asyncio.Future[OAuthToken | None],
     ) -> None:
-        budget_deadline = self.clock() + self.refresh_budget_seconds
+        budget_deadline: Final = self.clock() + self.refresh_budget_seconds
         while not refresh_task.done() and self.clock() < budget_deadline:
             await self.sleep(self.lock_ttl_seconds / 2)
             if not refresh_task.done() and not await self.lock.extend(key, token, self.lock_ttl_seconds):

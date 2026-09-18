@@ -5,12 +5,10 @@ Pattern matching router is used to match patterns like openai/*, vertex_ai/*, an
 """
 
 import sys, os, time
+import json
 import traceback, asyncio
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params
@@ -233,11 +231,11 @@ def test_router_pattern_match_e2e():
             api_key="test",
         )
         mock_post.assert_called_once()
-        print(mock_post.call_args.kwargs["data"])
-        mock_post.call_args.kwargs["data"] == {
-            "model": "gpt-4o",
-            "messages": [{"role": "user", "content": "Hello, how are you?"}],
-        }
+        request_body = json.loads(mock_post.call_args.kwargs["data"])
+        assert request_body["model"] == "my-custom-model"
+        assert request_body["messages"] == [
+            {"role": "user", "content": [{"type": "text", "text": "Hello, how are you?"}]}
+        ]
 
 
 def test_pattern_matching_router_with_default_wildcard():

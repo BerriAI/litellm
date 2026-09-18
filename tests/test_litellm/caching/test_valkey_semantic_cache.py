@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.caching.valkey_semantic_cache import ValkeySemanticCache
 
@@ -103,6 +102,17 @@ def test_build_valkey_url_uses_rediss_scheme_when_ssl(monkeypatch):
 def test_init_requires_similarity_threshold():
     with pytest.raises(ValueError, match="similarity_threshold must be provided"):
         ValkeySemanticCache(sync_client=MagicMock(), async_client=AsyncMock())
+
+
+def test_init_stores_embedding_max_input_tokens():
+    cache = ValkeySemanticCache(
+        similarity_threshold=0.8,
+        sync_client=MagicMock(),
+        async_client=AsyncMock(),
+        embedding_max_input_tokens=512,
+    )
+    assert cache.embedding_max_input_tokens == 512
+    assert _make_cache().embedding_max_input_tokens is None
 
 
 def test_init_rejects_cluster_startup_nodes():

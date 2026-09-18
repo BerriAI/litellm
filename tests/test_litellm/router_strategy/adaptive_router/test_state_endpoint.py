@@ -13,6 +13,7 @@ from litellm.types.router import (
     AdaptiveRouterConfig,
     AdaptiveRouterPreferences,
     RequestType,
+    TaggedPreRoutingStrategy,
 )
 
 
@@ -31,6 +32,10 @@ def _make_router(name: str = "r1") -> AdaptiveRouter:
         model_to_prefs=prefs,
         model_to_cost=costs,
     )
+
+
+def _entry(name: str = "r1") -> list:
+    return [TaggedPreRoutingStrategy(tags=(), strategy=_make_router(name))]
 
 
 # ---- snapshot helper ---------------------------------------------------
@@ -127,7 +132,7 @@ async def test_endpoint_rejects_non_admin_role(monkeypatch):
     from litellm.proxy import proxy_server
 
     fake_router = MagicMock()
-    fake_router.adaptive_routers = {"r1": _make_router()}
+    fake_router.adaptive_routers = {"r1": _entry()}
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
 
     non_admin = UserAPIKeyAuth(
@@ -144,7 +149,7 @@ async def test_endpoint_returns_snapshot_list_for_admin(monkeypatch):
     from litellm.proxy import proxy_server
 
     fake_router = MagicMock()
-    fake_router.adaptive_routers = {"r1": _make_router("r1")}
+    fake_router.adaptive_routers = {"r1": _entry("r1")}
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
 
     admin = UserAPIKeyAuth(api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -164,8 +169,8 @@ async def test_endpoint_returns_one_snapshot_per_router(monkeypatch):
 
     fake_router = MagicMock()
     fake_router.adaptive_routers = {
-        "r1": _make_router("r1"),
-        "r2": _make_router("r2"),
+        "r1": _entry("r1"),
+        "r2": _entry("r2"),
     }
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
 

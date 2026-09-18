@@ -2,11 +2,8 @@
 Test guardrail load balancing through the Router and ProxyLogging.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock, patch, AsyncMock
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 import pytest

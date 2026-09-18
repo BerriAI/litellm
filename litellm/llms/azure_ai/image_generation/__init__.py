@@ -10,10 +10,10 @@ from .gpt_transformation import AzureFoundryGPTImageGenerationConfig
 from .mai_transformation import AzureFoundryMAIImageGenerationConfig
 
 __all__ = [
-    "AzureFoundryFluxImageGenerationConfig",
-    "AzureFoundryGPTImageGenerationConfig",
     "AzureFoundryDallE2ImageGenerationConfig",
     "AzureFoundryDallE3ImageGenerationConfig",
+    "AzureFoundryFluxImageGenerationConfig",
+    "AzureFoundryGPTImageGenerationConfig",
     "AzureFoundryMAIImageGenerationConfig",
 ]
 
@@ -32,6 +32,6 @@ def get_azure_ai_image_generation_config(model: str) -> BaseImageGenerationConfi
         return AzureFoundryFluxImageGenerationConfig()
     else:
         verbose_logger.debug(
-            f"Using AzureGPTImageGenerationConfig for model: {model}. This follows the gpt-image-1 model format."
+            "Using AzureGPTImageGenerationConfig for model: %s. This follows the gpt-image-1 model format.", model
         )
         return AzureFoundryGPTImageGenerationConfig()

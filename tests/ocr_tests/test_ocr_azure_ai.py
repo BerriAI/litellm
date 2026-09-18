@@ -23,7 +23,7 @@ class TestAzureAIOCR(BaseOCRTest):
         Return the base OCR call args for Azure AI.
         """
         return {
-            "model": "azure_ai/mistral-document-ai-2505",
+            "model": "azure_ai/mistral-document-ai-2512",
             "api_key": os.getenv("AZURE_API_KEY"),
             "api_base": os.getenv("AZURE_API_BASE"),
         }

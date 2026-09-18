@@ -314,6 +314,7 @@ class TestSharedHealthCheckManager:
             details=True,
             max_concurrency=None,
             health_check_skip_disabled_background_models=False,
+            router=None,
         )
         assert healthy == expected_healthy
         assert unhealthy == expected_unhealthy
@@ -404,6 +405,7 @@ class TestSharedHealthCheckManager:
             details=True,
             max_concurrency=None,
             health_check_skip_disabled_background_models=False,
+            router=None,
         )
         assert healthy == expected_healthy
         assert unhealthy == expected_unhealthy
@@ -447,6 +449,7 @@ class TestSharedHealthCheckManager:
             details=True,
             max_concurrency=None,
             health_check_skip_disabled_background_models=False,
+            router=None,
         )
         assert healthy == expected_healthy
         assert unhealthy == expected_unhealthy
@@ -519,6 +522,7 @@ class TestSharedHealthCheckManager:
             details=True,
             max_concurrency=None,
             health_check_skip_disabled_background_models=False,
+            router=None,
         )
         assert healthy == expected_healthy
         assert unhealthy == expected_unhealthy

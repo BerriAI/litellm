@@ -3,20 +3,18 @@ Tests for applying default team params during team creation
 and loading default_team_params from DB on startup.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
-sys.path.insert(
-    0, os.path.abspath("../../../")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.proxy._types import (
+    LiteLLM_BudgetTable,
+    LiteLLM_OrganizationTable,
     NewTeamRequest,
+    ProxyException,
     UserAPIKeyAuth,
     LitellmUserRoles,
 )
@@ -26,13 +24,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 from litellm.proxy.proxy_server import ProxyConfig
 
 
-# ---------------------------------------------------------------------------
-# _update_config_fields: default_team_params loaded from DB on startup
-# ---------------------------------------------------------------------------
-
-
-class TestConfigFieldsDefaultTeamParams:
-    """Tests that _update_config_fields applies default_team_params from DB."""
+class TestDefaultTeamParamsFromSettingsStore:
 
     def _make_proxy_config(self) -> ProxyConfig:
         return ProxyConfig()
@@ -52,11 +44,8 @@ class TestConfigFieldsDefaultTeamParams:
             }
         }
 
-        pc._update_config_fields(
-            current_config={},
-            param_name="litellm_settings",
-            db_param_value=db_settings,
-        )
+        db_values = pc._prepared_db_settings_values("litellm_settings", db_settings)
+        pc._apply_litellm_settings_db_values(db_values)
 
         assert litellm.default_team_params == db_settings["default_team_params"]
 
@@ -70,15 +59,11 @@ class TestConfigFieldsDefaultTeamParams:
             }
         }
 
-        result = pc._update_config_fields(
-            current_config=config,
-            param_name="litellm_settings",
-            db_param_value=db_settings,
-        )
+        pc.litellm_settings.load_yaml(config["litellm_settings"])
+        pc.litellm_settings.apply_db_row("litellm_settings", db_settings)
+        result = {"litellm_settings": dict(pc.litellm_settings.resolved())}
 
-        assert result["litellm_settings"]["default_team_params"] == {
-            "max_budget": 100.0
-        }
+        assert result["litellm_settings"]["default_team_params"] == {"max_budget": 100.0}
         # Existing keys preserved
         assert result["litellm_settings"]["cache"] is False
 
@@ -87,16 +72,14 @@ class TestConfigFieldsDefaultTeamParams:
         monkeypatch.setattr(litellm, "default_team_params", None)
 
         pc = self._make_proxy_config()
-        pc._update_config_fields(
-            current_config={},
-            param_name="litellm_settings",
-            db_param_value={"cache": True},
-        )
+        db_values = pc._prepared_db_settings_values("litellm_settings", {"cache": True})
+        pc._apply_litellm_settings_db_values(db_values)
 
         assert litellm.default_team_params is None
 
-    def test_default_team_params_overrides_yaml_value(self, monkeypatch):
-        """DB value for default_team_params overrides YAML value via deep merge."""
+    def test_default_team_params_keeps_the_yaml_value(self, monkeypatch):
+        """``default_team_params`` is config-owned once the file declares it, so a stored
+        value no longer merges into or replaces any part of it."""
         monkeypatch.setattr(litellm, "default_team_params", None)
 
         pc = self._make_proxy_config()
@@ -115,22 +98,29 @@ class TestConfigFieldsDefaultTeamParams:
             }
         }
 
-        result = pc._update_config_fields(
-            current_config=config,
-            param_name="litellm_settings",
-            db_param_value=db_settings,
-        )
+        pc.litellm_settings.load_yaml(config["litellm_settings"])
+        db_values = pc._prepared_db_settings_values("litellm_settings", db_settings)
+        pc._apply_litellm_settings_db_values(db_values)
 
-        merged = result["litellm_settings"]["default_team_params"]
-        # DB value wins for max_budget
-        assert merged["max_budget"] == 200.0
-        # DB adds rpm_limit
-        assert merged["rpm_limit"] == 500
-        # YAML tpm_limit preserved (not in DB)
-        assert merged["tpm_limit"] == 100
+        resolved = pc.litellm_settings["default_team_params"]
+        assert resolved == {"max_budget": 50.0, "tpm_limit": 100}
+        assert pc.litellm_settings.source("default_team_params") == "config"
+        assert litellm.default_team_params == resolved
 
-        # setattr should have applied the DB value
-        assert litellm.default_team_params == db_settings["default_team_params"]
+    def test_default_team_params_comes_from_the_database_when_the_yaml_omits_it(self, monkeypatch):
+        monkeypatch.setattr(litellm, "default_team_params", None)
+
+        pc = self._make_proxy_config()
+        db_settings = {"default_team_params": {"max_budget": 200.0, "rpm_limit": 500}}
+
+        pc.litellm_settings.load_yaml({})
+        db_values = pc._prepared_db_settings_values("litellm_settings", db_settings)
+        pc._apply_litellm_settings_db_values(db_values)
+
+        resolved = pc.litellm_settings["default_team_params"]
+        assert resolved == {"max_budget": 200.0, "rpm_limit": 500}
+        assert pc.litellm_settings.source("default_team_params") == "db"
+        assert litellm.default_team_params == resolved
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +161,22 @@ class TestNewTeamDefaultParamsApplied:
             user_id="admin-user",
             user_role=LitellmUserRoles.PROXY_ADMIN,
         )
+
+    def _make_org(self, organization_id: str, max_budget: float | None = None) -> LiteLLM_OrganizationTable:
+        return LiteLLM_OrganizationTable(
+            organization_id=organization_id,
+            budget_id="budget-id",
+            created_by="admin-user",
+            updated_by="admin-user",
+            litellm_budget_table=None if max_budget is None else LiteLLM_BudgetTable(max_budget=max_budget),
+        )
+
+    def _patch_org_lookup(self, monkeypatch, **mock_kwargs) -> AsyncMock:
+        from litellm.proxy.management_endpoints import team_endpoints
+
+        lookup = AsyncMock(**mock_kwargs)
+        monkeypatch.setattr(team_endpoints, "get_org_object", lookup)
+        return lookup
 
     @pytest.mark.asyncio
     async def test_all_defaults_applied_when_not_provided(self, monkeypatch):
@@ -312,6 +318,7 @@ class TestNewTeamDefaultParamsApplied:
         assert data.tpm_limit is None
         assert data.rpm_limit is None
         assert data.team_member_permissions is None
+        assert data.organization_id is None
 
     @pytest.mark.asyncio
     async def test_legacy_default_team_settings_fallback(self, monkeypatch):
@@ -369,6 +376,144 @@ class TestNewTeamDefaultParamsApplied:
 
         # default_team_params wins (100.0), legacy fallback (999.0) not used
         assert data.max_budget == 100.0
+
+    @pytest.mark.asyncio
+    async def test_default_organization_applied_and_validated(self, monkeypatch):
+        """The default org must land before the org-validation block, so a defaulted
+        org goes through the same existence + org-limit checks as an explicit one."""
+        from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+        monkeypatch.setattr(litellm, "default_team_params", {"organization_id": "default-org"})
+        org_lookup = self._patch_org_lookup(monkeypatch, return_value=self._make_org("default-org"))
+
+        data = NewTeamRequest(team_alias="my-team")
+
+        try:
+            await new_team(
+                data=data,
+                user_api_key_dict=self._make_admin_auth(),
+                http_request=MagicMock(),
+            )
+        except Exception:
+            pass
+
+        assert data.organization_id == "default-org"
+        org_lookup.assert_awaited_once()
+        assert org_lookup.await_args.kwargs["org_id"] == "default-org"
+
+    @pytest.mark.asyncio
+    async def test_explicit_organization_wins_over_default(self, monkeypatch):
+        """An organization_id in the request must not be replaced by the default."""
+        from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+        monkeypatch.setattr(litellm, "default_team_params", {"organization_id": "default-org"})
+        org_lookup = self._patch_org_lookup(monkeypatch, return_value=self._make_org("explicit-org"))
+
+        data = NewTeamRequest(team_alias="my-team", organization_id="explicit-org")
+
+        try:
+            await new_team(
+                data=data,
+                user_api_key_dict=self._make_admin_auth(),
+                http_request=MagicMock(),
+            )
+        except Exception:
+            pass
+
+        assert data.organization_id == "explicit-org"
+        assert org_lookup.await_args.kwargs["org_id"] == "explicit-org"
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_default_organization_returns_400(self, monkeypatch):
+        """get_org_object raises instead of returning None, so an org that no longer
+        exists surfaced as a 500; team creation must report a 400 instead."""
+        from litellm.proxy.auth.auth_checks import OrganizationNotFoundError
+        from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+        monkeypatch.setattr(litellm, "default_team_params", {"organization_id": "deleted-org"})
+        self._patch_org_lookup(
+            monkeypatch,
+            side_effect=OrganizationNotFoundError("Organization doesn't exist in db. Organization=deleted-org"),
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await new_team(
+                data=NewTeamRequest(team_alias="my-team"),
+                user_api_key_dict=self._make_admin_auth(),
+                http_request=MagicMock(),
+            )
+
+        assert exc_info.value.code == "400"
+        assert "deleted-org" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_defaulted_max_budget_validated_against_org_budget(self, monkeypatch):
+        """Defaults must be applied BEFORE _check_org_team_limits runs, or a default
+        max_budget above the org's cap is persisted unchecked."""
+        from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+        monkeypatch.setattr(
+            litellm,
+            "default_team_params",
+            {"organization_id": "capped-org", "max_budget": 500.0},
+        )
+        self._patch_org_lookup(monkeypatch, return_value=self._make_org("capped-org", max_budget=100.0))
+
+        with pytest.raises(ProxyException) as exc_info:
+            await new_team(
+                data=NewTeamRequest(team_alias="my-team"),
+                user_api_key_dict=self._make_admin_auth(),
+                http_request=MagicMock(),
+            )
+
+        assert exc_info.value.code == "400"
+        assert "exceeds organization's max_budget" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_explicit_budget_validated_against_default_org_budget(self, monkeypatch):
+        """The org lookup must load the budget table (include_budget_table=True);
+        without it litellm_budget_table is None and every budget comparison is skipped."""
+        from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+        monkeypatch.setattr(litellm, "default_team_params", {"organization_id": "capped-org"})
+        org_lookup = self._patch_org_lookup(monkeypatch, return_value=self._make_org("capped-org", max_budget=100.0))
+
+        with pytest.raises(ProxyException) as exc_info:
+            await new_team(
+                data=NewTeamRequest(team_alias="my-team", max_budget=500.0),
+                user_api_key_dict=self._make_admin_auth(),
+                http_request=MagicMock(),
+            )
+
+        assert exc_info.value.code == "400"
+        assert "exceeds organization's max_budget" in exc_info.value.message
+        assert org_lookup.await_args.kwargs["include_budget_table"] is True
+
+    @pytest.mark.asyncio
+    async def test_defaults_within_org_budget_still_created(self, monkeypatch):
+        """A default budget under the org cap must not be rejected by the reordered check."""
+        from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+        monkeypatch.setattr(
+            litellm,
+            "default_team_params",
+            {"organization_id": "capped-org", "max_budget": 50.0},
+        )
+        self._patch_org_lookup(monkeypatch, return_value=self._make_org("capped-org", max_budget=100.0))
+
+        data = NewTeamRequest(team_alias="my-team")
+
+        try:
+            await new_team(
+                data=data,
+                user_api_key_dict=self._make_admin_auth(),
+                http_request=MagicMock(),
+            )
+        except Exception:
+            pass
+
+        assert data.organization_id == "capped-org"
+        assert data.max_budget == 50.0
 
 
 # ---------------------------------------------------------------------------
@@ -536,18 +681,12 @@ class TestBulkUpdateTeamMemberPermissions:
         mock_batcher.commit = AsyncMock(return_value=None)
 
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(
-            return_value=[team_a, team_b]
-        )
+        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_a, team_b])
         mock_prisma.db.batch_ = MagicMock(return_value=mock_batcher)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
-        data = BulkUpdateTeamMemberPermissionsRequest(
-            permissions=["/team/daily/activity"], apply_to_all_teams=True
-        )
-        result = await bulk_update_team_member_permissions(
-            data=data, user_api_key_dict=self._admin_key_dict()
-        )
+        data = BulkUpdateTeamMemberPermissionsRequest(permissions=["/team/daily/activity"], apply_to_all_teams=True)
+        result = await bulk_update_team_member_permissions(data=data, user_api_key_dict=self._admin_key_dict())
 
         assert result["teams_updated"] == 2
         calls = mock_batcher.litellm_teamtable.update.call_args_list
@@ -555,19 +694,14 @@ class TestBulkUpdateTeamMemberPermissions:
 
         team_a_call = [c for c in calls if c.kwargs["where"]["team_id"] == "team-a"][0]
         assert "/key/generate" in team_a_call.kwargs["data"]["team_member_permissions"]
-        assert (
-            "/team/daily/activity"
-            in team_a_call.kwargs["data"]["team_member_permissions"]
-        )
+        assert "/team/daily/activity" in team_a_call.kwargs["data"]["team_member_permissions"]
 
         team_b_call = [c for c in calls if c.kwargs["where"]["team_id"] == "team-b"][0]
         assert "/key/delete" in team_b_call.kwargs["data"]["team_member_permissions"]
         assert "/key/update" in team_b_call.kwargs["data"]["team_member_permissions"]
 
     @pytest.mark.asyncio
-    async def test_all_teams_skips_teams_that_already_have_permission(
-        self, monkeypatch
-    ):
+    async def test_all_teams_skips_teams_that_already_have_permission(self, monkeypatch):
         """apply_to_all_teams: teams that already have the permission are skipped."""
         from litellm.proxy.management_endpoints.team_endpoints import (
             bulk_update_team_member_permissions,
@@ -583,18 +717,12 @@ class TestBulkUpdateTeamMemberPermissions:
         mock_batcher.commit = AsyncMock(return_value=None)
 
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(
-            return_value=[team_has, team_missing]
-        )
+        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_has, team_missing])
         mock_prisma.db.batch_ = MagicMock(return_value=mock_batcher)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
-        data = BulkUpdateTeamMemberPermissionsRequest(
-            permissions=["/team/daily/activity"], apply_to_all_teams=True
-        )
-        result = await bulk_update_team_member_permissions(
-            data=data, user_api_key_dict=self._admin_key_dict()
-        )
+        data = BulkUpdateTeamMemberPermissionsRequest(permissions=["/team/daily/activity"], apply_to_all_teams=True)
+        result = await bulk_update_team_member_permissions(data=data, user_api_key_dict=self._admin_key_dict())
 
         assert result["teams_updated"] == 1
         calls = mock_batcher.litellm_teamtable.update.call_args_list
@@ -618,18 +746,12 @@ class TestBulkUpdateTeamMemberPermissions:
         mock_batcher.commit = AsyncMock(return_value=None)
 
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(
-            side_effect=[page1, page2]
-        )
+        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(side_effect=[page1, page2])
         mock_prisma.db.batch_ = MagicMock(return_value=mock_batcher)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
-        data = BulkUpdateTeamMemberPermissionsRequest(
-            permissions=["/team/daily/activity"], apply_to_all_teams=True
-        )
-        result = await bulk_update_team_member_permissions(
-            data=data, user_api_key_dict=self._admin_key_dict()
-        )
+        data = BulkUpdateTeamMemberPermissionsRequest(permissions=["/team/daily/activity"], apply_to_all_teams=True)
+        result = await bulk_update_team_member_permissions(data=data, user_api_key_dict=self._admin_key_dict())
 
         assert result["teams_updated"] == 502
         find_calls = mock_prisma.db.litellm_teamtable.find_many.call_args_list
@@ -656,18 +778,14 @@ class TestBulkUpdateTeamMemberPermissions:
         mock_batcher.commit = AsyncMock(return_value=None)
 
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(
-            return_value=[team_a, team_b]
-        )
+        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_a, team_b])
         mock_prisma.db.batch_ = MagicMock(return_value=mock_batcher)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
         data = BulkUpdateTeamMemberPermissionsRequest(
             permissions=["/team/daily/activity"], team_ids=["team-a", "team-b"]
         )
-        result = await bulk_update_team_member_permissions(
-            data=data, user_api_key_dict=self._admin_key_dict()
-        )
+        result = await bulk_update_team_member_permissions(data=data, user_api_key_dict=self._admin_key_dict())
 
         assert result["teams_updated"] == 2
 
@@ -692,18 +810,14 @@ class TestBulkUpdateTeamMemberPermissions:
         mock_batcher.commit = AsyncMock(return_value=None)
 
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(
-            return_value=[team_has, team_missing]
-        )
+        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_has, team_missing])
         mock_prisma.db.batch_ = MagicMock(return_value=mock_batcher)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
         data = BulkUpdateTeamMemberPermissionsRequest(
             permissions=["/team/daily/activity"], team_ids=["team-has", "team-missing"]
         )
-        result = await bulk_update_team_member_permissions(
-            data=data, user_api_key_dict=self._admin_key_dict()
-        )
+        result = await bulk_update_team_member_permissions(data=data, user_api_key_dict=self._admin_key_dict())
 
         assert result["teams_updated"] == 1
         calls = mock_batcher.litellm_teamtable.update.call_args_list
@@ -731,9 +845,7 @@ class TestBulkUpdateTeamMemberPermissions:
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            await bulk_update_team_member_permissions(
-                data=data, user_api_key_dict=self._admin_key_dict()
-            )
+            await bulk_update_team_member_permissions(data=data, user_api_key_dict=self._admin_key_dict())
 
         assert exc_info.value.status_code == 404
         assert "team-b" in str(exc_info.value.detail)
@@ -753,14 +865,10 @@ class TestBulkUpdateTeamMemberPermissions:
         mock_prisma = MagicMock()
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
-        data = BulkUpdateTeamMemberPermissionsRequest(
-            permissions=["/team/daily/activity"]
-        )
+        data = BulkUpdateTeamMemberPermissionsRequest(permissions=["/team/daily/activity"])
 
         with pytest.raises(HTTPException) as exc_info:
-            await bulk_update_team_member_permissions(
-                data=data, user_api_key_dict=self._admin_key_dict()
-            )
+            await bulk_update_team_member_permissions(data=data, user_api_key_dict=self._admin_key_dict())
 
         assert exc_info.value.status_code == 400
 
@@ -784,9 +892,7 @@ class TestBulkUpdateTeamMemberPermissions:
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            await bulk_update_team_member_permissions(
-                data=data, user_api_key_dict=self._admin_key_dict()
-            )
+            await bulk_update_team_member_permissions(data=data, user_api_key_dict=self._admin_key_dict())
 
         assert exc_info.value.status_code == 400
 
@@ -804,9 +910,7 @@ class TestBulkUpdateTeamMemberPermissions:
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
         data = BulkUpdateTeamMemberPermissionsRequest(permissions=[])
-        result = await bulk_update_team_member_permissions(
-            data=data, user_api_key_dict=self._admin_key_dict()
-        )
+        result = await bulk_update_team_member_permissions(data=data, user_api_key_dict=self._admin_key_dict())
 
         assert result["teams_updated"] == 0
         mock_prisma.db.litellm_teamtable.find_many.assert_not_called()
@@ -824,14 +928,10 @@ class TestBulkUpdateTeamMemberPermissions:
         mock_prisma = MagicMock()
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
-        data = BulkUpdateTeamMemberPermissionsRequest(
-            permissions=["/team/daily/activity"], apply_to_all_teams=True
-        )
+        data = BulkUpdateTeamMemberPermissionsRequest(permissions=["/team/daily/activity"], apply_to_all_teams=True)
 
         with pytest.raises(HTTPException) as exc_info:
-            await bulk_update_team_member_permissions(
-                data=data, user_api_key_dict=self._non_admin_key_dict()
-            )
+            await bulk_update_team_member_permissions(data=data, user_api_key_dict=self._non_admin_key_dict())
 
         assert exc_info.value.status_code == 403
 
@@ -844,6 +944,4 @@ class TestBulkUpdateTeamMemberPermissions:
         )
 
         with pytest.raises(ValidationError):
-            BulkUpdateTeamMemberPermissionsRequest(
-                permissions=["/not/a/real/permission"]
-            )
+            BulkUpdateTeamMemberPermissionsRequest(permissions=["/not/a/real/permission"])

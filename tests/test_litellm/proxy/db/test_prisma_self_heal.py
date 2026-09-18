@@ -8,9 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
@@ -290,7 +287,7 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_db_error(
             AsyncMock(side_effect=[None, asyncio.CancelledError()]),
         ),
         patch(
-            "litellm.proxy.db.exception_handler.PrismaDBExceptionHandler.is_database_connection_error",
+            "litellm.proxy.db.exception_handler.PrismaDBExceptionHandler.is_database_infrastructure_error",
             return_value=True,
         ),
     ):
@@ -321,7 +318,7 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_probe_timeout(
             AsyncMock(side_effect=[None, asyncio.CancelledError()]),
         ),
         patch(
-            "litellm.proxy.db.exception_handler.PrismaDBExceptionHandler.is_database_connection_error",
+            "litellm.proxy.db.exception_handler.PrismaDBExceptionHandler.is_database_infrastructure_error",
             return_value=False,
         ),
     ):
@@ -507,7 +504,7 @@ async def test_engine_confirmed_dead_persists_across_failed_heavy_reconnect(
     client._reap_all_zombies = MagicMock()
 
     with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
-        with pytest.raises(Exception):
+        with pytest.raises(RuntimeError):
             await client._run_reconnect_cycle(timeout_seconds=5.0)
 
     # The flag must STILL be True so the next attempt re-enters the heavy
@@ -629,7 +626,7 @@ async def test_direct_reconnect_probe_success_clears_writer_unavailable(
         database_url="mock://test", proxy_logging_obj=mock_proxy_logging
     )
     writer = MagicMock()
-    writer.query_raw = AsyncMock(return_value=[{"result": 1}])
+    writer.query_raw = AsyncMock(return_value=[{"transaction_read_only": "off"}])
     reader = MagicMock()
     routing = RoutingPrismaWrapper(writer=writer, reader=reader)
     routing._writer_unavailable = True
@@ -639,5 +636,5 @@ async def test_direct_reconnect_probe_success_clears_writer_unavailable(
     with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
         await client._run_reconnect_cycle(timeout_seconds=5.0)
 
-    writer.query_raw.assert_awaited_once_with("SELECT 1")
+    writer.query_raw.assert_awaited_once_with("SELECT current_setting('transaction_read_only') AS transaction_read_only")
     assert routing.writer_unavailable is False

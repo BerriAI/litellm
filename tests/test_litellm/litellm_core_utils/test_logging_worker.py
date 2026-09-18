@@ -14,6 +14,18 @@ from litellm.constants import LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS
 from litellm.litellm_core_utils.logging_worker import LoggingWorker
 
 
+class _RecordCollector(logging.Handler):
+    """Captures emitted log records so a test can assert on real logging output
+    (level, message args, traceback) instead of patching the logger object."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
 class TestLoggingWorker:
     """Test cases for LoggingWorker functionality."""
 
@@ -26,9 +38,7 @@ class TestLoggingWorker:
     async def test_graceful_shutdown_with_clear_queue(self, logging_worker):
         """Test that cancellation triggers clear_queue to prevent 'never awaited' warnings."""
         # Mock the clear_queue method to verify it's called during cancellation
-        with patch.object(
-            logging_worker, "clear_queue", new_callable=AsyncMock
-        ) as mock_clear_queue:
+        with patch.object(logging_worker, "clear_queue", new_callable=AsyncMock) as mock_clear_queue:
             # Start the worker
             logging_worker.start()
 
@@ -97,6 +107,32 @@ class TestLoggingWorker:
             logging.raiseExceptions = previous_raise_exceptions
             logger.removeHandler(handler)
 
+    def test_flush_on_exit_rescues_dequeued_coroutine_never_started(self):
+        """
+        Regression test for cache-hit success callbacks lost in short-lived SDK scripts:
+        the worker loop dequeues the task, then ``asyncio.run`` cancels the processing
+        task before it ever runs, so the coroutine leaves the queue without being
+        awaited and the atexit flush used to find an empty queue and rescue nothing.
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        fired = []
+
+        async def marker():
+            fired.append(True)
+
+        async def short_lived_script():
+            worker.ensure_initialized_and_enqueue(marker())
+
+        asyncio.run(short_lived_script())
+
+        assert worker._queue is not None
+        assert worker._queue.qsize() == 0, "precondition: the worker loop dequeued the task before loop close"
+        assert fired == [], "precondition: the callback never ran before loop close"
+
+        worker._flush_on_exit()
+
+        assert fired == [True]
+
     def test_flush_on_exit_swallows_errors_and_drains_remaining(self):
         """A failing queued coroutine must not abort the atexit drain of later events."""
         worker = LoggingWorker(timeout=1.0, max_queue_size=10)
@@ -118,13 +154,58 @@ class TestLoggingWorker:
         assert processed == ["ran"]
         assert worker._queue.empty()
 
+    def test_loop_change_revives_dequeued_coroutine_on_new_loop(self):
+        """
+        A callback dequeued but never started before its loop closed must run on the
+        next event loop's worker instead of staying stranded until process exit.
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        fired = []
+
+        async def marker(name):
+            fired.append(name)
+
+        async def first_script():
+            worker.ensure_initialized_and_enqueue(marker("first"))
+
+        asyncio.run(first_script())
+        assert fired == [], "precondition: the callback was dequeued but never ran before loop close"
+
+        async def second_script():
+            worker.ensure_initialized_and_enqueue(marker("second"))
+            assert worker._queue is not None
+            await asyncio.wait_for(worker._queue.join(), timeout=5)
+
+        asyncio.run(second_script())
+
+        assert sorted(fired) == ["first", "second"]
+
+    def test_flush_on_exit_swallows_cancellation_and_drains_remaining(self):
+        """A callback raising CancelledError must not abort the atexit flush of later events."""
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        worker._queue = asyncio.Queue(maxsize=10)
+
+        processed = []
+
+        async def cancels_during_flush():
+            raise asyncio.CancelledError()
+
+        async def records_during_flush():
+            processed.append("ran")
+
+        worker.enqueue(cancels_during_flush())
+        worker.enqueue(records_during_flush())
+
+        worker._flush_on_exit()
+
+        assert processed == ["ran"]
+        assert worker._queue.empty()
+
     @pytest.mark.asyncio
     async def test_worker_handles_cancellation_gracefully(self, logging_worker):
         """Test that the worker handles cancellation without throwing exceptions."""
         # Mock verbose_logger to capture debug messages
-        with patch(
-            "litellm.litellm_core_utils.logging_worker.verbose_logger"
-        ) as mock_logger:
+        with patch("litellm.litellm_core_utils.logging_worker.verbose_logger") as mock_logger:
             # Start the worker
             logging_worker.start()
 
@@ -191,29 +272,21 @@ class TestLoggingWorker:
         small_worker._ensure_queue()
 
         # Mock verbose_logger to capture exception messages
-        with patch(
-            "litellm.litellm_core_utils.logging_worker.verbose_logger"
-        ) as mock_logger:
+        with patch("litellm.litellm_core_utils.logging_worker.verbose_logger") as mock_logger:
             # Fill the queue beyond capacity
             mock_coro = AsyncMock()
             for _ in range(5):  # More than max_queue_size of 2
                 small_worker.enqueue(mock_coro())
 
             # Should have logged queue full exceptions
-            exception_calls = [
-                call
-                for call in mock_logger.exception.call_args_list
-                if "queue is full" in str(call)
-            ]
+            exception_calls = [call for call in mock_logger.exception.call_args_list if "queue is full" in str(call)]
             assert len(exception_calls) > 0
 
     @pytest.mark.asyncio
     async def test_context_propagation(self, logging_worker):
         """Test that enqueued tasks execute in their original context."""
         # Create a context variable for testing
-        test_context_var: contextvars.ContextVar[str] = contextvars.ContextVar(
-            "test_context_var"
-        )
+        test_context_var: contextvars.ContextVar[str] = contextvars.ContextVar("test_context_var")
 
         # Track results from multiple tasks using asyncio.Event for synchronization
         task_results = []
@@ -291,36 +364,28 @@ class TestLoggingWorker:
         task_results.sort(key=lambda x: x["task_id"])
 
         # Verify that each task saw its own context
-        assert (
-            len(task_results) == 3
-        ), f"Expected 3 results, got {len(task_results)}: {task_results}"
+        assert len(task_results) == 3, f"Expected 3 results, got {len(task_results)}: {task_results}"
 
         # Task 1 should see "context_1"
         task1_result = next((r for r in task_results if r["task_id"] == "task_1"), None)
         assert task1_result is not None, "Task 1 result not found"
-        assert (
-            task1_result["context_accessible"] is True
-        ), "Task 1 should have access to context variable"
-        assert (
-            task1_result["context_value"] == "context_1"
-        ), f"Task 1 should see 'context_1', got: {task1_result['context_value']}"
+        assert task1_result["context_accessible"] is True, "Task 1 should have access to context variable"
+        assert task1_result["context_value"] == "context_1", (
+            f"Task 1 should see 'context_1', got: {task1_result['context_value']}"
+        )
 
         # Task 2 should see "context_2"
         task2_result = next((r for r in task_results if r["task_id"] == "task_2"), None)
         assert task2_result is not None, "Task 2 result not found"
-        assert (
-            task2_result["context_accessible"] is True
-        ), "Task 2 should have access to context variable"
-        assert (
-            task2_result["context_value"] == "context_2"
-        ), f"Task 2 should see 'context_2', got: {task2_result['context_value']}"
+        assert task2_result["context_accessible"] is True, "Task 2 should have access to context variable"
+        assert task2_result["context_value"] == "context_2", (
+            f"Task 2 should see 'context_2', got: {task2_result['context_value']}"
+        )
 
         # Task 3 should not have access to the context variable
         task3_result = next((r for r in task_results if r["task_id"] == "task_3"), None)
         assert task3_result is not None, "Task 3 result not found"
-        assert (
-            task3_result["context_accessible"] is False
-        ), "Task 3 should not have access to context variable"
+        assert task3_result["context_accessible"] is False, "Task 3 should not have access to context variable"
 
     @pytest.mark.asyncio
     async def test_semaphore_concurrency_limit(self):
@@ -413,3 +478,221 @@ class TestLoggingWorker:
         assert worker2._bound_loop is not None
 
         await worker2.stop()
+
+    def test_event_loop_change_carries_pending_tasks_over(self):
+        """Regression (LIT-6028): a loop change must not silently drop queued coroutines.
+
+        Before the fix ``_ensure_queue`` nulled ``self._queue`` on a loop change, discarding
+        every pending ``LoggingTask`` (each an un-awaited spend-logging coroutine). The tasks
+        must instead be moved onto the queue bound to the new loop and still execute there.
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        executed: list[int] = []
+
+        async def spend_log(index: int) -> None:
+            executed.append(index)
+
+        async def enqueue_on_first_loop() -> None:
+            worker._ensure_queue()
+            for i in range(5):
+                worker.enqueue(spend_log(i))
+            assert worker._queue is not None
+            assert worker._queue.qsize() == 5
+
+        asyncio.run(enqueue_on_first_loop())
+
+        stale_queue = worker._queue
+        assert stale_queue is not None
+
+        async def rebind_on_second_loop() -> None:
+            worker._ensure_queue()
+            assert worker._queue is not None
+            # A fresh queue bound to the new loop, holding every carried-over task (not dropped).
+            assert worker._queue is not stale_queue
+            assert worker._queue.qsize() == 5
+            while not worker._queue.empty():
+                task = worker._queue.get_nowait()
+                await task["context"].run(asyncio.create_task, task["coroutine"])
+
+        asyncio.run(rebind_on_second_loop())
+
+        assert sorted(executed) == [0, 1, 2, 3, 4]
+
+    @pytest.mark.asyncio
+    async def test_timeout_burst_logs_one_bounded_summary(self):
+        """Regression (LIT-7519): a burst of callback timeouts must log one bounded summary,
+        not a full ERROR traceback per timed-out callback.
+
+        Before the fix every timed-out callback hit ``verbose_logger.exception`` in
+        ``_process_log_task``, so a slow Redis timing out many spend-tracking callbacks at once
+        produced one stacktrace each, clustered milliseconds apart. They must collapse into a
+        single WARNING that counts them, with no tracebacks.
+        """
+        timeout_count = 25
+        worker = LoggingWorker(
+            timeout=0.05,
+            max_queue_size=100,
+            concurrency=100,
+            timeout_summary_window=1.0,
+        )
+
+        async def slow_callback() -> None:
+            await asyncio.sleep(10)
+
+        logger = logging.getLogger("LiteLLM")
+        collector = _RecordCollector()
+        previous_level = logger.level
+        logger.addHandler(collector)
+        logger.setLevel(logging.DEBUG)
+        try:
+            worker.start()
+            for _ in range(timeout_count):
+                worker.enqueue(slow_callback())
+
+            await worker.flush()
+            assert worker._timeout_summary_task is not None
+            await worker._timeout_summary_task
+            await worker.stop()
+        finally:
+            logger.removeHandler(collector)
+            logger.setLevel(previous_level)
+
+        errors = [r for r in collector.records if r.levelno >= logging.ERROR]
+        warnings = [r for r in collector.records if r.levelno == logging.WARNING]
+        assert errors == [], "a timeout burst must not emit any ERROR tracebacks"
+        assert len(warnings) == 1, "the whole burst must collapse into one summary line"
+        summary = warnings[0].getMessage()
+        assert f"{timeout_count} callback(s) timed out" in summary
+        assert f"{timeout_count} timed out since start" in summary
+        assert "slow_callback" in summary
+
+    @pytest.mark.asyncio
+    async def test_non_timeout_error_keeps_traceback(self):
+        """A real programming error in a callback must still log a full traceback, so the
+        timeout aggregation never hides genuine failures.
+        """
+        worker = LoggingWorker(timeout=5.0, max_queue_size=10)
+
+        async def failing_callback() -> None:
+            raise ValueError("boom")
+
+        logger = logging.getLogger("LiteLLM")
+        collector = _RecordCollector()
+        previous_level = logger.level
+        logger.addHandler(collector)
+        logger.setLevel(logging.DEBUG)
+        try:
+            worker.start()
+            worker.enqueue(failing_callback())
+
+            await worker.flush()
+            await worker.stop()
+        finally:
+            logger.removeHandler(collector)
+            logger.setLevel(previous_level)
+
+        errors = [r for r in collector.records if r.levelno >= logging.ERROR]
+        warnings = [r for r in collector.records if r.levelno == logging.WARNING]
+        assert len(errors) == 1, "a real error must still be logged once"
+        assert errors[0].exc_info is not None, "the traceback must be preserved"
+        assert warnings == [], "a single real error is not a timeout summary"
+        assert worker._timeout_summary_task is None
+
+    @pytest.mark.asyncio
+    async def test_callback_raised_timeout_keeps_traceback(self):
+        """A callback that raises TimeoutError on its own did not hit the worker's deadline,
+        so it is a real failure and must keep its traceback rather than being folded into the
+        bounded burst summary.
+        """
+        worker = LoggingWorker(timeout=5.0, max_queue_size=10, timeout_summary_window=1.0)
+
+        async def raises_own_timeout() -> None:
+            raise asyncio.TimeoutError("callback's own downstream timeout")
+
+        logger = logging.getLogger("LiteLLM")
+        collector = _RecordCollector()
+        previous_level = logger.level
+        logger.addHandler(collector)
+        logger.setLevel(logging.DEBUG)
+        try:
+            worker.start()
+            worker.enqueue(raises_own_timeout())
+
+            await worker.flush()
+            await worker.stop()
+        finally:
+            logger.removeHandler(collector)
+            logger.setLevel(previous_level)
+
+        errors = [r for r in collector.records if r.levelno >= logging.ERROR]
+        warnings = [r for r in collector.records if r.levelno == logging.WARNING]
+        assert len(errors) == 1, "a callback-raised TimeoutError must still be logged once"
+        assert errors[0].exc_info is not None, "the traceback must be preserved"
+        assert warnings == [], "a callback-raised TimeoutError is not a worker-deadline timeout"
+        assert worker._timeout_summary_task is None
+
+    @pytest.mark.asyncio
+    async def test_stop_flushes_pending_timeout_summary(self):
+        """A burst still inside its summary window when the worker stops must still emit its one
+        summary, instead of losing it when the event loop tears down.
+        """
+        worker = LoggingWorker(
+            timeout=0.05,
+            max_queue_size=10,
+            concurrency=10,
+            timeout_summary_window=30.0,
+        )
+
+        async def slow_callback() -> None:
+            await asyncio.sleep(10)
+
+        logger = logging.getLogger("LiteLLM")
+        collector = _RecordCollector()
+        previous_level = logger.level
+        logger.addHandler(collector)
+        logger.setLevel(logging.DEBUG)
+        try:
+            worker.start()
+            for _ in range(3):
+                worker.enqueue(slow_callback())
+
+            await worker.flush()
+            assert worker._timeout_summary_task is not None
+            assert not worker._timeout_summary_task.done(), "precondition: the summary window has not elapsed"
+            await worker.stop()
+        finally:
+            logger.removeHandler(collector)
+            logger.setLevel(previous_level)
+
+        warnings = [r for r in collector.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1, "stop must flush the pending summary exactly once"
+        assert "3 callback(s) timed out" in warnings[0].getMessage()
+        assert worker._timeout_summary_task is None
+
+    def test_loop_change_resets_timeout_summary_state(self):
+        """On an event-loop change the summary task is bound to the dead loop; it and the pending
+        burst count must reset so timeouts on the new loop arm a fresh summary rather than a stale,
+        stuck one that silently drops later summaries.
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10, timeout_summary_window=30.0)
+
+        async def timed_out_callback() -> None:
+            await asyncio.sleep(10)
+
+        async def arm_on_first_loop() -> None:
+            worker._ensure_queue()
+            coro = timed_out_callback()
+            worker._record_callback_timeout(coro)
+            coro.close()
+            assert worker._timeout_summary_task is not None
+            assert worker._timeout_burst_count == 1
+
+        asyncio.run(arm_on_first_loop())
+        assert worker._timeout_summary_task is not None
+
+        async def rebind_on_second_loop() -> None:
+            worker._ensure_queue()
+            assert worker._timeout_summary_task is None, "stale summary task must drop on loop change"
+            assert worker._timeout_burst_count == 0, "stale burst count must reset on loop change"
+
+        asyncio.run(rebind_on_second_loop())

@@ -4,15 +4,11 @@
 import asyncio
 import os
 import random
-import sys
 import time
 import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -536,7 +532,6 @@ async def test_high_traffic_cooldowns_all_healthy_deployments():
 
     all_deployment_ids = router.get_model_ids()
 
-    import random
     from collections import defaultdict
 
     # Create a defaultdict to track successes and failures for each model ID
@@ -629,7 +624,6 @@ async def test_high_traffic_cooldowns_one_bad_deployment():
 
     all_deployment_ids = router.get_model_ids()
 
-    import random
     from collections import defaultdict
 
     # Create a defaultdict to track successes and failures for each model ID
@@ -727,7 +721,6 @@ async def test_high_traffic_cooldowns_one_rate_limited_deployment():
 
     all_deployment_ids = router.get_model_ids()
 
-    import random
     from collections import defaultdict
 
     # Create a defaultdict to track successes and failures for each model ID
@@ -840,45 +833,38 @@ def test_router_fallbacks_with_cooldowns_and_model_id():
 @pytest.mark.asyncio()
 async def test_router_fallbacks_with_cooldowns_and_dynamic_credentials():
     """
-    Ensure cooldown on credential 1 does not affect credential 2
+    A 429 answered to a caller-supplied credential cools down none of the shared deployments,
+    so the next credential still reaches them, while a 429 owned by a shared deployment does
     """
     from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
 
-    litellm._turn_on_debug()
     router = Router(
         model_list=[
             {
                 "model_name": "gpt-3.5-turbo",
-                "litellm_params": {"model": "gpt-3.5-turbo", "rpm": 1},
-                "model_info": {
-                    "id": "123",
-                },
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {"id": deployment_id},
             }
-        ]
+            for deployment_id in ("123", "456")
+        ],
+        num_retries=0,
     )
+    messages = [{"role": "user", "content": "hi"}]
 
-    ## trigger ratelimit
-    try:
+    with pytest.raises(litellm.RateLimitError):
         await router.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "hi"}],
-            api_key="my-bad-key-1",
-            mock_response="litellm.RateLimitError",
+            model="gpt-3.5-turbo", messages=messages, api_key="my-bad-key-1", mock_response="litellm.RateLimitError"
         )
-        pytest.fail("Expected RateLimitError")
-    except litellm.RateLimitError:
-        pass
-
     await asyncio.sleep(1)
+    assert await _async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None) == []
 
-    cooldown_list = await _async_get_cooldown_deployments(
-        litellm_router_instance=router, parent_otel_span=None
+    response = await router.acompletion(
+        model="gpt-3.5-turbo", messages=messages, api_key="my-good-key-2", mock_response="served with credential 2"
     )
-    print("cooldown_list: ", cooldown_list)
-    assert len(cooldown_list) == 1
+    assert response.choices[0].message.content == "served with credential 2"
 
-    await router.acompletion(
-        model="gpt-3.5-turbo",
-        api_key=os.getenv("OPENAI_API_KEY"),
-        messages=[{"role": "user", "content": "hi"}],
-    )
+    with pytest.raises(litellm.RateLimitError):
+        await router.acompletion(model="gpt-3.5-turbo", messages=messages, mock_response="litellm.RateLimitError")
+    await asyncio.sleep(1)
+    cooled_down = await _async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    assert len(cooled_down) == 1 and cooled_down[0] in {"123", "456"}

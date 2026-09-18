@@ -1,10 +1,5 @@
 import asyncio
-import os
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 import pytest
 
@@ -168,7 +163,7 @@ def test_responses_config_raises_when_no_key_is_available(monkeypatch):
     monkeypatch.setattr(litellm, "api_key", None)
     monkeypatch.delenv("XAI_API_KEY", raising=False)
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='XAI API key is required\\. Set api_key, litellm\\.xai_key') as exc_info:
         XAIResponsesAPIConfig().validate_environment({}, "xai/grok-3-mini", None)
 
     error_message = str(exc_info.value)

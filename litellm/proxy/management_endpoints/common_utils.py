@@ -1,5 +1,7 @@
 import math
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel
@@ -22,9 +24,27 @@ def validate_finite_spend(spend: float | None) -> None:
         )
 
 
+def validate_budget_duration(budget_duration: str | None, status_code: int = 400) -> None:
+    """Reject budget durations that can't be parsed, are non-positive, or
+    overflow date math, so a bad value can't be persisted and later crash the
+    budget reset job.
+
+    A non-positive duration also resolves to a reset time of "now", which leaves
+    the row permanently due: the reset job re-reads it every tick and, once
+    enough of them exist, they fill each batch and starve every other tenant's
+    reset.
+    """
+    from litellm.proxy.common_utils.timezone_utils import budget_duration_error
+
+    error: Final = budget_duration_error(budget_duration)
+    if error is not None:
+        raise HTTPException(status_code=status_code, detail={"error": error})
+
+
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.proxy._types import (
+    CommonProxyErrors,
     KeyRequestBase,
     LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
@@ -43,10 +63,60 @@ from litellm.proxy._types import (  # noqa: F401  re-exported
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.utils import _premium_user_check
 from litellm.repositories.team_repository import TeamRepository
+from litellm.types.utils import BudgetConfig
 
 if TYPE_CHECKING:
     from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+
+def validate_team_model_max_budget(
+    model_max_budget: Mapping[str, BudgetConfig] | None,
+    premium_user: bool,
+) -> None:
+    """Reject a team `model_max_budget` the limiter could not enforce (no duration, bad cap, tpm/rpm limits)."""
+    if not model_max_budget:
+        return
+    if premium_user is not True:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"Setting model_max_budget on a team is an enterprise feature. {CommonProxyErrors.not_premium_user.value}"
+            },
+        )
+    for model_name, budget_config in model_max_budget.items():
+        if not model_name.strip():
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "model_max_budget keys must be non-empty model names"},
+            )
+        max_budget = budget_config.max_budget
+        if max_budget is None or not math.isfinite(max_budget) or max_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        f"model_max_budget[{model_name!r}].max_budget must be a non-negative finite number. "
+                        f"Received: {max_budget}"
+                    )
+                },
+            )
+        if budget_config.budget_duration is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"model_max_budget[{model_name!r}] requires a budget_duration, e.g. '1d' or '30d'"},
+            )
+        validate_budget_duration(budget_config.budget_duration)
+        if budget_config.tpm_limit is not None or budget_config.rpm_limit is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        f"model_max_budget[{model_name!r}] tpm_limit/rpm_limit are not enforced on a team; "
+                        "set per-model rate limits on the key instead"
+                    )
+                },
+            )
 
 
 def require_caller_user_id_for_non_admin(
@@ -95,7 +165,7 @@ def _check_passthrough_routes_caller_permission(
             status_code=403,
             detail={"error": f"Only proxy admins can set `allowed_passthrough_routes` on a {entity}."},
         )
-    metadata = getattr(data, "metadata", None)
+    metadata: Final = getattr(data, "metadata", None)
     if isinstance(metadata, dict) and metadata.get("allowed_passthrough_routes"):
         raise HTTPException(
             status_code=403,
@@ -129,7 +199,7 @@ async def _is_user_org_admin_for_team(user_api_key_dict: UserAPIKeyAuth, team_ob
         user_api_key_cache,
     )
 
-    caller_user = await get_user_object(
+    caller_user: Final = await get_user_object(
         user_id=user_api_key_dict.user_id,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
@@ -193,7 +263,7 @@ async def _user_has_admin_privileges(
     from litellm.proxy.auth.auth_checks import get_user_object
 
     try:
-        user_obj = await get_user_object(
+        user_obj: Final = await get_user_object(
             user_id=user_api_key_dict.user_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache or DualCacheImport(),
@@ -216,13 +286,13 @@ async def _user_has_admin_privileges(
             teams = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": user_obj.teams}})
 
             for team in teams:
-                team_obj = LiteLLM_TeamTable(**team.model_dump())
+                team_obj = LiteLLM_TeamTable.model_validate(team.model_dump())
                 if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
                     return True
 
     except Exception as e:
         # If there's an error checking, default to False for security
-        verbose_proxy_logger.debug(f"Error checking admin privileges for user {user_api_key_dict.user_id}: {e}")
+        verbose_proxy_logger.debug("Error checking admin privileges for user %s: %s", user_api_key_dict.user_id, e)
         return False
 
     return False
@@ -245,7 +315,7 @@ def _org_admin_can_invite_user(
     """
     if admin_user_obj.organization_memberships is None:
         return False
-    admin_org_ids = {
+    admin_org_ids: Final = {
         m.organization_id
         for m in admin_user_obj.organization_memberships
         if m.user_role == LitellmUserRoles.ORG_ADMIN.value
@@ -254,7 +324,7 @@ def _org_admin_can_invite_user(
         return False
     if target_user_obj.organization_memberships is None:
         return False
-    target_org_ids = {m.organization_id for m in target_user_obj.organization_memberships}
+    target_org_ids: Final = {m.organization_id for m in target_user_obj.organization_memberships}
     return bool(admin_org_ids & target_org_ids)
 
 
@@ -282,18 +352,18 @@ async def _team_admin_can_invite_user(
     if not target_user_obj.teams or len(target_user_obj.teams) == 0:
         return False
 
-    teams = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": admin_user_obj.teams}})
-    admin_team_ids = [
+    teams: Final = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": admin_user_obj.teams}})
+    admin_team_ids: Final = [
         team.team_id
         for team in teams
         if _is_user_team_admin(
             user_api_key_dict=user_api_key_dict,
-            team_obj=LiteLLM_TeamTable(**team.model_dump()),
+            team_obj=LiteLLM_TeamTable.model_validate(team.model_dump()),
         )
     ]
     if not admin_team_ids:
         return False
-    target_team_ids = set(target_user_obj.teams)
+    target_team_ids: Final = set(target_user_obj.teams)
     return bool(set(admin_team_ids) & target_team_ids)
 
 
@@ -332,8 +402,8 @@ async def admin_can_invite_user(
     from litellm.proxy.auth.auth_checks import get_user_object
 
     try:
-        cache = user_api_key_cache or DualCacheImport()
-        admin_user_obj = await get_user_object(
+        cache: Final = user_api_key_cache or DualCacheImport()
+        admin_user_obj: Final = await get_user_object(
             user_id=user_api_key_dict.user_id,
             prisma_client=prisma_client,
             user_api_key_cache=cache,
@@ -343,7 +413,7 @@ async def admin_can_invite_user(
         if admin_user_obj is None:
             return False
 
-        target_user_obj = await get_user_object(
+        target_user_obj: Final = await get_user_object(
             user_id=target_user_id,
             prisma_client=prisma_client,
             user_api_key_cache=cache,
@@ -366,7 +436,7 @@ async def admin_can_invite_user(
 
         return False
     except Exception as e:
-        verbose_proxy_logger.debug(f"Error checking invite permission for user {user_api_key_dict.user_id}: {e}")
+        verbose_proxy_logger.debug("Error checking invite permission for user %s: %s", user_api_key_dict.user_id, e)
         return False
 
 
@@ -397,7 +467,7 @@ def _set_object_metadata_field(
     object_data.metadata[field_name] = value
 
 
-_TEAM_MEMBER_BUDGET_LIMIT_FIELDS = (
+_TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
     "max_budget",
     "soft_budget",
     "max_parallel_requests",
@@ -406,10 +476,43 @@ _TEAM_MEMBER_BUDGET_LIMIT_FIELDS = (
     "model_max_budget",
     "budget_duration",
     "allowed_models",
+    "temp_budget_increase",
+    "temp_budget_expiry",
+)
+
+_TEMP_BUDGET_FIELDS: Final = frozenset({"temp_budget_increase", "temp_budget_expiry"})
+
+
+MEMBER_BUDGET_PATCH_FIELDS: Final = MappingProxyType(
+    {
+        "max_budget_in_team": "max_budget",
+        "tpm_limit": "tpm_limit",
+        "rpm_limit": "rpm_limit",
+        "budget_duration": "budget_duration",
+        "allowed_models": "allowed_models",
+        "temp_budget_increase": "temp_budget_increase",
+        "temp_budget_expiry": "temp_budget_expiry",
+    }
 )
 
 
-def _is_set_budget_value(value: Any) -> bool:
+def _prisma_value(value: object) -> object:
+    return list(value) if isinstance(value, tuple) else value
+
+
+def member_budget_patch(source: BaseModel) -> dict[str, Any]:
+    """Map the per-member limit fields a request actually set to their budget-table
+    columns (merge-patch: a sent value updates, an explicit null clears, an absent
+    field is left untouched)."""
+    provided: Final = source.model_dump(exclude_unset=True)
+    return {
+        column: _prisma_value(provided[request_field])
+        for request_field, column in MEMBER_BUDGET_PATCH_FIELDS.items()
+        if request_field in provided
+    }
+
+
+def _is_set_budget_value(value: object) -> bool:
     if value is None:
         return False
     if isinstance(value, list) and len(value) == 0:
@@ -417,7 +520,7 @@ def _is_set_budget_value(value: Any) -> bool:
     return True
 
 
-def _has_meaningful_budget_limit(budget_values: Dict[str, Any]) -> bool:
+def _has_meaningful_budget_limit(budget_values: Mapping[str, object]) -> bool:
     """A budget is meaningful if at least one limit is actually set; an empty
     list (no model restriction) and None both count as unset."""
     return any(_is_set_budget_value(budget_values.get(field)) for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS)
@@ -428,10 +531,11 @@ async def _upsert_budget_and_membership(
     *,
     team_id: str,
     user_id: str,
-    existing_budget_id: Optional[str],
+    existing_budget_id: str | None,
     user_api_key_dict: UserAPIKeyAuth,
-    budget_patch: Dict[str, Any],
-    team_default_budget_id: Optional[str] = None,
+    budget_patch: dict[str, Any],
+    team_default_budget_id: str | None = None,
+    shared_budget_ids: frozenset[str] | None = None,
 ):
     """
     Apply a merge-patch of per-member budget fields to a team membership.
@@ -446,22 +550,27 @@ async def _upsert_budget_and_membership(
     (from team metadata.team_member_budget_id). When the membership still
     points at it, we clone-on-write so editing one member's budget does not
     mutate the shared default that every other member points at.
+
+    ``shared_budget_ids`` extends that protection to any other row more than one
+    membership points at, which a caller patching several members at once has
+    already counted; a row listed there is cloned rather than written in place.
+    A patch that only touches the temporary budget pair never copies permanent
+    limits into a new row, so the member keeps inheriting the live team default.
     """
     if not budget_patch:
         return
 
-    write_data = dict(budget_patch)
+    write_data: Final = dict(budget_patch)
     if "budget_duration" in write_data:
-        duration = write_data["budget_duration"]
+        duration: Final = write_data["budget_duration"]
         write_data["budget_reset_at"] = (
             get_budget_reset_time(budget_duration=duration) if duration is not None else None
         )
 
-    is_shared_default = (
-        existing_budget_id is not None
-        and team_default_budget_id is not None
-        and existing_budget_id == team_default_budget_id
+    is_shared_default: Final = existing_budget_id is not None and (
+        existing_budget_id == team_default_budget_id or existing_budget_id in (shared_budget_ids or frozenset())
     )
+    temp_only: Final = frozenset(write_data) <= _TEMP_BUDGET_FIELDS
 
     async def _disconnect():
         await tx.litellm_teammembership.update(
@@ -470,8 +579,8 @@ async def _upsert_budget_and_membership(
         )
 
     if existing_budget_id is not None and not is_shared_default:
-        existing_budget = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
-        merged = existing_budget.model_dump() if existing_budget is not None else {}
+        existing_budget: Final = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
+        merged: Final = existing_budget.model_dump() if existing_budget is not None else {}
         merged.update(write_data)
         if not _has_meaningful_budget_limit(merged):
             await _disconnect()
@@ -482,33 +591,35 @@ async def _upsert_budget_and_membership(
         )
         return
 
-    create_data: Dict[str, Any] = {
+    source_row: Final = (
+        await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
+        if is_shared_default and not temp_only
+        else None
+    )
+    source: Final[Mapping[str, Any]] = source_row.model_dump() if source_row is not None else MappingProxyType({})
+
+    create_data: Final[dict[str, Any]] = {  # mutable-ok: Prisma create payloads are dict-shaped
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
+        **MappingProxyType(
+            {f: source[f] for f in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS if _is_set_budget_value(source.get(f))}
+        ),
+        **write_data,
     }
 
-    if is_shared_default:
-        default_budget_row = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
-        if default_budget_row is not None:
-            default_budget_dict = default_budget_row.model_dump()
-            for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS:
-                value = default_budget_dict.get(field)
-                if _is_set_budget_value(value):
-                    create_data[field] = value
-
-    create_data.update(write_data)
-
-    if create_data.get("budget_duration") is not None:
-        create_data["budget_reset_at"] = get_budget_reset_time(budget_duration=create_data["budget_duration"])
-    else:
+    # Restarting an inherited window on an unrelated edit hands the member a free period.
+    carried: Final = source.get("budget_reset_at") if "budget_duration" not in budget_patch else None
+    if carried is not None:
+        create_data["budget_reset_at"] = carried
+    if create_data.get("budget_reset_at") is None:
         create_data.pop("budget_reset_at", None)
 
     if not _has_meaningful_budget_limit(create_data):
-        if existing_budget_id is not None:
+        if existing_budget_id is not None and not temp_only:
             await _disconnect()
         return
 
-    new_budget = await tx.litellm_budgettable.create(
+    new_budget: Final = await tx.litellm_budgettable.create(
         data=create_data,
         include={"team_membership": True},
     )
@@ -554,14 +665,14 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
 
     if field_name in updated_kv and updated_kv[field_name] is not None:
         # remove field from updated_kv
-        _value = updated_kv.pop(field_name)
+        _value: Final = updated_kv.pop(field_name)
         if "metadata" in updated_kv and updated_kv["metadata"] is not None:
             updated_kv["metadata"][field_name] = _value
         else:
             updated_kv["metadata"] = {field_name: _value}
 
 
-def _has_non_empty_value(value: Any) -> bool:
+def _has_non_empty_value(value: object) -> bool:
     """Check if a value has real content (not None, not empty list, not blank string)."""
     if value is None:
         return False

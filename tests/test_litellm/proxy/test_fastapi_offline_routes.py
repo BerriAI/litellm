@@ -5,12 +5,7 @@ This test verifies that the /routes endpoint works correctly when the proxy
 server is initialized using FastAPIOffline instead of regular FastAPI.
 """
 
-import os
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import pytest
 from fastapi.testclient import TestClient

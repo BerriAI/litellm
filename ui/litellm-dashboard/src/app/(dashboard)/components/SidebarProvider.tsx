@@ -6,22 +6,14 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useEffect, useState } from "react";
 
 interface SidebarProviderProps {
-  setPage: (page: string) => void;
-  defaultSelectedKey: string;
   sidebarCollapsed: boolean;
   onToggleCollapsed?: () => void;
 }
 
-const SidebarProvider = ({
-  setPage,
-  defaultSelectedKey,
-  sidebarCollapsed,
-  onToggleCollapsed,
-}: SidebarProviderProps) => {
+const SidebarProvider = ({ sidebarCollapsed, onToggleCollapsed }: SidebarProviderProps) => {
   const { accessToken } = useAuthorized();
   const [enabledPagesInternalUsers, setEnabledPagesInternalUsers] = useState<string[] | null>(null);
   const [enableProjectsUI, setEnableProjectsUI] = useState<boolean>(false);
-  const [enableChatUI, setEnableChatUI] = useState<boolean>(false);
   const [disableAgentsForInternalUsers, setDisableAgentsForInternalUsers] = useState<boolean>(false);
   const [allowAgentsForTeamAdmins, setAllowAgentsForTeamAdmins] = useState<boolean>(false);
   const [disableVectorStoresForInternalUsers, setDisableVectorStoresForInternalUsers] = useState<boolean>(false);
@@ -44,10 +36,6 @@ const SidebarProvider = ({
 
         if (settings?.values?.enable_projects_ui !== undefined) {
           setEnableProjectsUI(Boolean(settings.values.enable_projects_ui));
-        }
-
-        if (settings?.values?.enable_chat_ui !== undefined) {
-          setEnableChatUI(Boolean(settings.values.enable_chat_ui));
         }
 
         if (settings?.values?.disable_agents_for_internal_users !== undefined) {
@@ -75,13 +63,10 @@ const SidebarProvider = ({
 
   return (
     <Sidebar
-      setPage={setPage}
-      defaultSelectedKey={defaultSelectedKey}
       collapsed={sidebarCollapsed}
       onToggleCollapsed={onToggleCollapsed}
       enabledPagesInternalUsers={enabledPagesInternalUsers}
       enableProjectsUI={enableProjectsUI}
-      enableChatUI={enableChatUI}
       disableAgentsForInternalUsers={disableAgentsForInternalUsers}
       allowAgentsForTeamAdmins={allowAgentsForTeamAdmins}
       disableVectorStoresForInternalUsers={disableVectorStoresForInternalUsers}

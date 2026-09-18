@@ -1,11 +1,11 @@
 import sys
-from typing import Optional
+from typing import Final
 
-DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS = 600.0
+DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS: Final = 600.0
 
 
 def resolve_pass_through_request_timeout(
-    endpoint_timeout: Optional[float] = None,
+    endpoint_timeout: float | None = None,
 ) -> float:
     """
     Resolve the upstream httpx timeout for pass_through_request.
@@ -19,9 +19,9 @@ def resolve_pass_through_request_timeout(
         return float(endpoint_timeout)
 
     try:
-        proxy_server = sys.modules.get("litellm.proxy.proxy_server")
+        proxy_server: Final = sys.modules.get("litellm.proxy.proxy_server")
         if proxy_server is not None:
-            global_timeout = getattr(proxy_server, "general_settings", {}).get("pass_through_request_timeout")
+            global_timeout: Final = getattr(proxy_server, "general_settings", {}).get("pass_through_request_timeout")
             if global_timeout is not None:
                 return float(global_timeout)
     except Exception:
@@ -31,9 +31,9 @@ def resolve_pass_through_request_timeout(
 
 
 def resolve_llm_passthrough_timeout(
-    kwargs: Optional[dict] = None,
-    litellm_params: Optional[dict] = None,
-    router_timeout: Optional[float] = None,
+    kwargs: dict | None = None,
+    litellm_params: dict | None = None,
+    router_timeout: float | None = None,
 ) -> float:
     """
     Resolve upstream httpx timeout for SDK native passthrough (e.g. Bedrock /converse).

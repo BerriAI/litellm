@@ -7,6 +7,7 @@ For Anthropic: structured_messages (OpenAI format) converted back to Anthropic f
               via anthropic_messages_pt before writing to data["messages"].
 """
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -127,3 +128,75 @@ async def test_anthropic_handler_converts_structured_messages_to_anthropic_forma
         llm_provider="anthropic",
     )
     assert result["messages"] == converted_back
+
+
+# ---------------------------------------------------------------------------
+# LIT-5018: the write-back must not restructure the conversation.
+#
+# anthropic_messages_pt merges every run of consecutive user/tool rows into one
+# message, so a tool_result-only turn and the live user turn that follows it
+# came back fused: the current instruction stopped being its own turn purely
+# because a compression guardrail was enabled.
+# ---------------------------------------------------------------------------
+
+AGENTIC_ANTHROPIC_MESSAGES = [
+    {"role": "user", "content": [{"type": "text", "text": "first turn"}]},
+    {"role": "assistant", "content": [{"type": "tool_use", "id": "tu_1", "name": "Read", "input": {}}]},
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "FILE BODY"}]},
+    {"role": "user", "content": [{"type": "text", "text": "can we run /team to fix this"}]},
+]
+
+
+async def _write_back_identity(messages: list) -> list:
+    """Run the request through a guardrail that changes nothing but returns a
+    new list, which is what puts a compression guardrail on the write-back
+    path, and return the resulting Anthropic messages."""
+    from litellm.llms.anthropic.chat.guardrail_translation.handler import (
+        AnthropicMessagesHandler,
+    )
+
+    guardrail = MagicMock()
+    guardrail.should_run_guardrail.return_value = True
+    guardrail.skip_system_message_in_guardrail = None
+    guardrail.skip_tool_message_in_guardrail = None
+    guardrail.experimental_use_latest_role_message_only = False
+
+    async def apply_guardrail(inputs, request_data, input_type, logging_obj=None):
+        return {**inputs, "structured_messages": list(inputs["structured_messages"])}
+
+    guardrail.apply_guardrail = apply_guardrail
+
+    data = {"model": "claude-sonnet-4-5-20250929", "messages": messages, "max_tokens": 1024}
+    result = await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+    return result["messages"]
+
+
+@pytest.mark.asyncio
+async def test_write_back_keeps_the_live_user_turn_separate_from_the_tool_result_turn():
+    written = await _write_back_identity([dict(m) for m in AGENTIC_ANTHROPIC_MESSAGES])
+
+    assert [m["role"] for m in written] == ["user", "assistant", "user", "user"]
+    assert written[2]["content"] == [{"type": "tool_result", "tool_use_id": "tu_1", "content": "FILE BODY"}]
+    assert written[3]["content"] == [{"type": "text", "text": "can we run /team to fix this"}]
+
+
+@pytest.mark.asyncio
+async def test_write_back_keeps_real_tool_results_under_modify_params():
+    """Converting one row at a time would keep the turns apart too, but an
+    assistant row whose results are converted separately reads as an orphaned
+    tool call: with modify_params on, the sanitizer answers it with a synthetic
+    "tool execution skipped" result and drops the real one."""
+    import litellm
+
+    original = litellm.modify_params
+    litellm.modify_params = True
+    try:
+        written = await _write_back_identity([dict(m) for m in AGENTIC_ANTHROPIC_MESSAGES])
+    finally:
+        litellm.modify_params = original
+
+    serialized = json.dumps(written)
+    assert "FILE BODY" in serialized
+    assert "skipped" not in serialized
+    assert "Please continue" not in serialized
+    assert [m["role"] for m in written] == ["user", "assistant", "user", "user"]

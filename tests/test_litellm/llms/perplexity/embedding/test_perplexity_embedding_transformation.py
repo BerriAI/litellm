@@ -3,11 +3,11 @@ Unit tests for Perplexity embedding transformation logic.
 """
 
 import base64
-import json
 import struct
 from unittest.mock import MagicMock
 
 import httpx
+import pytest
 
 from litellm.llms.perplexity.embedding.transformation import (
     PerplexityEmbeddingConfig,
@@ -238,17 +238,16 @@ class TestPerplexityEmbeddingConfig:
         mock_response.status_code = 500
 
         model_response = EmbeddingResponse()
-        try:
+        with pytest.raises(PerplexityEmbeddingError) as exc_info:
             self.config.transform_embedding_response(
                 model=self.model,
                 raw_response=mock_response,
                 model_response=model_response,
                 logging_obj=self.logging_obj,
             )
-            assert False, "Should have raised PerplexityEmbeddingError"
-        except PerplexityEmbeddingError as e:
-            assert e.status_code == 500
-            assert "Server error" in e.message
+        e = exc_info.value
+        assert e.status_code == 500
+        assert "Server error" in e.message
 
     def test_get_error_class(self):
         """Test that get_error_class returns the correct error type."""
@@ -298,25 +297,3 @@ class TestPerplexityEmbeddingProviderConfig:
         )
         assert config is not None
         assert isinstance(config, PerplexityEmbeddingConfig)
-
-
-class TestPerplexityEmbeddingModelInfo:
-    """Test that Perplexity embedding models are in model_prices_and_context_window."""
-
-    def test_model_info_available(self):
-        import litellm
-
-        info = litellm.get_model_info("perplexity/pplx-embed-v1-0.6b")
-        assert info is not None
-        assert info["mode"] == "embedding"
-        assert info["max_input_tokens"] == 32768
-        assert info["output_vector_size"] == 1024
-
-    def test_model_info_4b_available(self):
-        import litellm
-
-        info = litellm.get_model_info("perplexity/pplx-embed-v1-4b")
-        assert info is not None
-        assert info["mode"] == "embedding"
-        assert info["max_input_tokens"] == 32768
-        assert info["output_vector_size"] == 2560

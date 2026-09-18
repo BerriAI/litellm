@@ -8,9 +8,11 @@ then we poll until the result is ready.
 
 import asyncio
 import time
-from typing import Any, Dict, Optional, Union
+from collections.abc import Coroutine, Mapping
+from typing import Final, Protocol, TypedDict
 
 import httpx
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger
@@ -33,6 +35,23 @@ from ..common_utils import (
 from .transformation import BlackForestLabsImageGenerationConfig
 
 
+class _BFLTaskPayload(TypedDict, total=False):
+    """The body BFL returns for a submitted or polled generation task."""
+
+    errors: ReadOnly[object]
+    polling_url: ReadOnly[str]
+    status: ReadOnly[str]
+
+
+class _TaskJsonResponse(Protocol):
+    def json(self) -> _BFLTaskPayload: ...
+
+
+def _task_payload(response: _TaskJsonResponse) -> _BFLTaskPayload:
+    """The JSON body of a BFL task submission or poll response."""
+    return response.json()
+
+
 class BlackForestLabsImageGeneration:
     """
     Black Forest Labs Image Generation handler.
@@ -49,14 +68,14 @@ class BlackForestLabsImageGeneration:
         model: str,
         prompt: str,
         model_response: ImageResponse,
-        optional_params: Dict,
-        litellm_params: Union[GenericLiteLLMParams, Dict],
+        optional_params: dict,
+        litellm_params: GenericLiteLLMParams | dict,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Optional[Union[float, httpx.Timeout]],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: float | httpx.Timeout | None,
+        extra_headers: Mapping[str, str] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         aimg_generation: bool = False,
-    ) -> Union[ImageResponse, Any]:
+    ) -> ImageResponse | Coroutine[object, object, ImageResponse]:
         """
         Main entry point for image generation requests.
 
@@ -105,7 +124,7 @@ class BlackForestLabsImageGeneration:
             sync_client = client
 
         # Validate environment and get headers
-        headers = self.config.validate_environment(
+        headers: Final = self.config.validate_environment(
             api_key=api_key,
             headers={},
             model=model,
@@ -117,7 +136,7 @@ class BlackForestLabsImageGeneration:
             headers.update(extra_headers)
 
         # Get complete URL
-        complete_url = self.config.get_complete_url(
+        complete_url: Final = self.config.get_complete_url(
             api_base=api_base,
             api_key=api_key,
             model=model,
@@ -126,7 +145,7 @@ class BlackForestLabsImageGeneration:
         )
 
         # Transform request
-        data = self.config.transform_image_generation_request(
+        data: Final = self.config.transform_image_generation_request(
             model=model,
             prompt=prompt,
             optional_params=optional_params,
@@ -147,7 +166,7 @@ class BlackForestLabsImageGeneration:
 
         # Make initial request
         try:
-            response = sync_client.post(
+            response: Final = sync_client.post(
                 url=complete_url,
                 headers=headers,
                 json=data,
@@ -156,11 +175,11 @@ class BlackForestLabsImageGeneration:
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=500,
-                message=f"Request failed: {str(e)}",
+                message=f"Request failed: {e}",
             )
 
         # Poll for result
-        final_response = self._poll_for_result_sync(
+        final_response: Final = self._poll_for_result_sync(
             initial_response=response,
             headers=headers,
             sync_client=sync_client,
@@ -183,12 +202,12 @@ class BlackForestLabsImageGeneration:
         model: str,
         prompt: str,
         model_response: ImageResponse,
-        optional_params: Dict,
-        litellm_params: Union[GenericLiteLLMParams, Dict],
+        optional_params: dict,
+        litellm_params: GenericLiteLLMParams | dict,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Optional[Union[float, httpx.Timeout]],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        timeout: float | httpx.Timeout | None,
+        extra_headers: Mapping[str, str] | None = None,
+        client: AsyncHTTPHandler | None = None,
     ) -> ImageResponse:
         """
         Async version of image generation.
@@ -211,7 +230,7 @@ class BlackForestLabsImageGeneration:
             async_client = client
 
         # Validate environment and get headers
-        headers = self.config.validate_environment(
+        headers: Final = self.config.validate_environment(
             api_key=api_key,
             headers={},
             model=model,
@@ -223,7 +242,7 @@ class BlackForestLabsImageGeneration:
             headers.update(extra_headers)
 
         # Get complete URL
-        complete_url = self.config.get_complete_url(
+        complete_url: Final = self.config.get_complete_url(
             api_base=api_base,
             api_key=api_key,
             model=model,
@@ -232,7 +251,7 @@ class BlackForestLabsImageGeneration:
         )
 
         # Transform request
-        data = self.config.transform_image_generation_request(
+        data: Final = self.config.transform_image_generation_request(
             model=model,
             prompt=prompt,
             optional_params=optional_params,
@@ -253,7 +272,7 @@ class BlackForestLabsImageGeneration:
 
         # Make initial request
         try:
-            response = await async_client.post(
+            response: Final = await async_client.post(
                 url=complete_url,
                 headers=headers,
                 json=data,
@@ -262,11 +281,11 @@ class BlackForestLabsImageGeneration:
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=500,
-                message=f"Request failed: {str(e)}",
+                message=f"Request failed: {e}",
             )
 
         # Poll for result
-        final_response = await self._poll_for_result_async(
+        final_response: Final = await self._poll_for_result_async(
             initial_response=response,
             headers=headers,
             async_client=async_client,
@@ -291,7 +310,7 @@ class BlackForestLabsImageGeneration:
         sync_client: HTTPHandler,
         max_wait: float = DEFAULT_MAX_POLLING_TIME,
         interval: float = DEFAULT_POLLING_INTERVAL,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response:
         """
         Poll BFL API until result is ready (sync version).
@@ -305,7 +324,7 @@ class BlackForestLabsImageGeneration:
 
         # Parse initial response to get polling URL
         try:
-            response_data = initial_response.json()
+            response_data: Final = _task_payload(initial_response)
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=initial_response.status_code,
@@ -319,7 +338,7 @@ class BlackForestLabsImageGeneration:
                 message=f"BFL error: {response_data['errors']}",
             )
 
-        polling_url = response_data.get("polling_url")
+        polling_url: Final = response_data.get("polling_url")
         if not polling_url:
             raise BlackForestLabsError(
                 status_code=500,
@@ -333,10 +352,10 @@ class BlackForestLabsImageGeneration:
         assert_bfl_polling_url(polling_url)
 
         # Get just the auth header for polling
-        polling_headers = {"x-key": headers.get("x-key", "")}
+        polling_headers: Final = {"x-key": headers.get("x-key", "")}
 
-        start_time = time.time()
-        verbose_logger.debug(f"BFL starting sync polling at {polling_url}")
+        start_time: Final = time.time()
+        verbose_logger.debug("BFL starting sync polling at %s", polling_url)
 
         while time.time() - start_time < max_wait:
             response = sync_client.get(
@@ -350,10 +369,10 @@ class BlackForestLabsImageGeneration:
                     message=f"Polling failed: {response.text}",
                 )
 
-            data = response.json()
+            data = _task_payload(response)
             status = data.get("status")
 
-            verbose_logger.debug(f"BFL poll status: {status}")
+            verbose_logger.debug("BFL poll status: %s", status)
 
             if status == "Ready":
                 return response
@@ -382,7 +401,7 @@ class BlackForestLabsImageGeneration:
         async_client: AsyncHTTPHandler,
         max_wait: float = DEFAULT_MAX_POLLING_TIME,
         interval: float = DEFAULT_POLLING_INTERVAL,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response:
         """
         Poll BFL API until result is ready (async version).
@@ -396,7 +415,7 @@ class BlackForestLabsImageGeneration:
 
         # Parse initial response to get polling URL
         try:
-            response_data = initial_response.json()
+            response_data: Final = _task_payload(initial_response)
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=initial_response.status_code,
@@ -410,7 +429,7 @@ class BlackForestLabsImageGeneration:
                 message=f"BFL error: {response_data['errors']}",
             )
 
-        polling_url = response_data.get("polling_url")
+        polling_url: Final = response_data.get("polling_url")
         if not polling_url:
             raise BlackForestLabsError(
                 status_code=500,
@@ -424,10 +443,10 @@ class BlackForestLabsImageGeneration:
         assert_bfl_polling_url(polling_url)
 
         # Get just the auth header for polling
-        polling_headers = {"x-key": headers.get("x-key", "")}
+        polling_headers: Final = {"x-key": headers.get("x-key", "")}
 
-        start_time = time.time()
-        verbose_logger.debug(f"BFL starting async polling at {polling_url}")
+        start_time: Final = time.time()
+        verbose_logger.debug("BFL starting async polling at %s", polling_url)
 
         while time.time() - start_time < max_wait:
             response = await async_client.get(
@@ -441,10 +460,10 @@ class BlackForestLabsImageGeneration:
                     message=f"Polling failed: {response.text}",
                 )
 
-            data = response.json()
+            data = _task_payload(response)
             status = data.get("status")
 
-            verbose_logger.debug(f"BFL poll status: {status}")
+            verbose_logger.debug("BFL poll status: %s", status)
 
             if status == "Ready":
                 return response
@@ -468,4 +487,4 @@ class BlackForestLabsImageGeneration:
 
 
 # Singleton instance for use in images/main.py
-bfl_image_generation = BlackForestLabsImageGeneration()
+bfl_image_generation: Final = BlackForestLabsImageGeneration()

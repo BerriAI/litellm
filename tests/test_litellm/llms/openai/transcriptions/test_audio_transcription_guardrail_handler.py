@@ -2,13 +2,10 @@
 Unit tests for OpenAI Audio Transcription Guardrail Translation Handler
 """
 
-import os
-import sys
 from typing import List, Optional, Tuple
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms import get_guardrail_translation_mapping

@@ -7,7 +7,7 @@ VLLM is OpenAI-compatible and supports embeddings via the /v1/embeddings endpoin
 Docs: https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -29,8 +29,6 @@ else:
 class HostedVLLMEmbeddingError(BaseLLMException):
     """Exception class for Hosted VLLM Embedding errors."""
 
-    pass
-
 
 class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
     """
@@ -43,11 +41,11 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment and set up headers for Hosted VLLM API.
@@ -55,7 +53,7 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
         if api_key is None:
             api_key = get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
 
-        default_headers = {
+        default_headers: Final = {
             "Content-Type": "application/json",
         }
 
@@ -68,12 +66,12 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for Hosted VLLM Embedding API endpoint.
@@ -122,7 +120,7 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
+        api_key: str | None,
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
@@ -133,7 +131,7 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         # VLLM returns standard OpenAI-compatible embedding response
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         return convert_to_model_response_object(
             response_object=response_json,
@@ -167,9 +165,7 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
                 optional_params[param] = value
         return optional_params
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         """
         Get the error class for Hosted VLLM errors.
         """
