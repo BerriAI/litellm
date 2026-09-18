@@ -527,7 +527,7 @@ async def mistral_proxy_route(
 
 @router.api_route(
     "/typesafe/{endpoint:path}",
-    methods=["GET", "POST"],  # mutable-ok: FastAPI route metadata requires a list
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: FastAPI route metadata requires a list
     tags=["TypeSafe AI Pass-through", "pass-through"],  # mutable-ok: FastAPI route metadata requires a list
 )
 async def typesafe_proxy_route(
