@@ -13,6 +13,7 @@ test.describe("Prompt upload form", () => {
     page,
   }) => {
     const promptId = `e2e-prompt-${uniqueSuffix()}`;
+    const promptContent = "Hello {{name}}";
     await navigateToPage(page, DashboardPage.Prompts);
     await page.getByRole("button", { name: "Upload .prompt File" }).click();
 
@@ -25,7 +26,7 @@ test.describe("Prompt upload form", () => {
         name: "e2e.prompt",
         mimeType: "text/plain",
         buffer: Buffer.from(
-          'model: fake-openai-gpt-4\ntemplate: "Hello {{name}}"\n',
+          `model: fake-openai-gpt-4\ntemplate: "${promptContent}"\n`,
         ),
       });
       await expect(page.getByText("Selected: e2e.prompt")).toBeVisible();
@@ -39,17 +40,22 @@ test.describe("Prompt upload form", () => {
               headers: { Authorization: `Bearer ${masterKey()}` },
             },
           );
-          return response.ok();
+          if (!response.ok()) return undefined;
+          const promptInfo = (await response.json()) as {
+            raw_prompt_template?: { content?: string };
+          };
+          return promptInfo.raw_prompt_template?.content;
         })
-        .toBe(true);
+        .toContain(promptContent);
       await expect(page.getByText(promptId, { exact: true })).toBeVisible();
     } finally {
-      await page.request.delete(
+      const deleteResponse = await page.request.delete(
         `/prompts/${encodeURIComponent(promptId)}?environment=development`,
         {
           headers: { Authorization: `Bearer ${masterKey()}` },
         },
       );
+      expect(deleteResponse.ok()).toBe(true);
     }
   });
 });
