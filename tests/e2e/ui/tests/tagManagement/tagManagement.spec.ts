@@ -3,7 +3,11 @@ import { test, expect } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { Page as DashboardPage } from "../../fixtures/pages";
 import { navigateToPage } from "../../helpers/navigation";
-import { captureRequestBody, readBack } from "../../helpers/roundTrip";
+import {
+  captureRequestBody,
+  readBack,
+  runWithCleanup,
+} from "../../helpers/roundTrip";
 import { masterKey, uniqueSuffix } from "../../helpers/traffic";
 
 test.use({ storageState: ADMIN_STORAGE_PATH });
@@ -13,22 +17,9 @@ test.describe("Tag management", () => {
     const tagName = `e2e-tag-${uniqueSuffix()}`;
     const description = "synthetic tag description";
     const updatedDescription = `${description} updated`;
-    const cleanup = async (): Promise<boolean> => {
-      try {
-        const response = await page.request.post("/tag/delete", {
-          headers: {
-            Authorization: `Bearer ${masterKey()}`,
-            "Content-Type": "application/json",
-          },
-          data: { name: tagName },
-        });
-        return response.ok();
-      } catch {
-        return false;
-      }
-    };
-    const testOutcome = await (async () => {
-      try {
+
+    await runWithCleanup(
+      async () => {
         await navigateToPage(page, DashboardPage.TagManagement);
         await page.getByRole("button", { name: "+ Create New Tag" }).click();
         await expect(
@@ -76,17 +67,17 @@ test.describe("Tag management", () => {
             return info[tagName]?.description;
           })
           .toBe(updatedDescription);
-        return { passed: true as const };
-      } catch (error) {
-        return { passed: false as const, error };
-      }
-    })();
-
-    try {
-      if (!testOutcome.passed) throw testOutcome.error;
-    } finally {
-      const cleanupSucceeded = await cleanup();
-      if (testOutcome.passed) expect(cleanupSucceeded).toBe(true);
-    }
+      },
+      async () => {
+        const response = await page.request.post("/tag/delete", {
+          headers: {
+            Authorization: `Bearer ${masterKey()}`,
+            "Content-Type": "application/json",
+          },
+          data: { name: tagName },
+        });
+        return response.ok();
+      },
+    );
   });
 });
