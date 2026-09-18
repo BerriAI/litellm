@@ -529,6 +529,8 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp/tools/call",
         "/mcp-rest/tools/list",
         "/mcp-rest/tools/call",
+        "/mcp-rest/prompts/list",
+        "/mcp-rest/resources/list",
         "/v1/mcp/tools",
         "/introspect",
     ]

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
+import { MCPPromptsSection, MCPResourcesSection } from "./MCPCatalogSections";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import {
   isClientForwardedTokenMode,
@@ -11,7 +12,13 @@ import {
   CallMCPToolResponse,
   getMcpOAuthMode,
 } from "@/components/mcp_tools/types";
-import { listMCPTools, callMCPTool, getMCPOAuthUserCredentialStatus } from "@/components/networking";
+import {
+  listMCPTools,
+  listMCPPrompts,
+  listMCPResources,
+  callMCPTool,
+  getMCPOAuthUserCredentialStatus,
+} from "@/components/networking";
 import { isTokenValid, getToken, removeToken } from "@/utils/mcpTokenStore";
 import { sanitizeMcpAliasForHeader, buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import { useToolsOAuthFlow } from "@/hooks/useToolsOAuthFlow";
@@ -148,6 +155,12 @@ const MCPToolsViewer = ({
     return Object.keys(customHeaders).length > 0 ? customHeaders : undefined;
   };
 
+  // Passthrough blocks until a browser session token exists; authorization_code blocks until
+  // the user has a valid DB credential (else the backend returns no tools).
+  const catalogQueriesEnabled =
+    !!accessToken &&
+    (usesBrowserHeldToken ? oauthToken !== null : isAuthorizationCode ? hasAuthorizationCodeCred : true);
+
   // Query to fetch MCP tools
   const {
     data: mcpToolsResponse,
@@ -179,17 +192,27 @@ const MCPToolsViewer = ({
       }
       return result;
     },
-    // Passthrough blocks until a browser session token exists; authorization_code blocks until
-    // the user has a valid DB credential (else the backend returns no tools).
-    enabled:
-      !!accessToken &&
-      (usesBrowserHeldToken ? oauthToken !== null : isAuthorizationCode ? hasAuthorizationCodeCred : true),
+    enabled: catalogQueriesEnabled,
     staleTime: 30000, // Consider data fresh for 30 seconds
     retry: (failureCount, error: any) => {
       // Don't retry on 401 — token is invalid, user must re-authenticate
       if (error?.status === 401 || error?.response?.status === 401) return false;
       return failureCount < 2;
     },
+  });
+
+  const { data: mcpPromptsResponse, isLoading: isLoadingPrompts } = useQuery({
+    queryKey: ["mcpPrompts", serverId, passthroughHeaders, oauthToken],
+    queryFn: () => listMCPPrompts(accessToken ?? "", serverId, buildCustomHeaders()),
+    enabled: catalogQueriesEnabled,
+    staleTime: 30000,
+  });
+
+  const { data: mcpResourcesResponse, isLoading: isLoadingResources } = useQuery({
+    queryKey: ["mcpResources", serverId, passthroughHeaders, oauthToken],
+    queryFn: () => listMCPResources(accessToken ?? "", serverId, buildCustomHeaders()),
+    enabled: catalogQueriesEnabled,
+    staleTime: 30000,
   });
 
   // authorization_code authorize: same redirect+exchange flow as the admin "Authorize & Fetch"
@@ -287,6 +310,12 @@ const MCPToolsViewer = ({
       (tool.mcp_info.server_name && tool.mcp_info.server_name.toLowerCase().includes(searchLower))
     );
   });
+
+  const promptsData = mcpPromptsResponse?.prompts ?? [];
+  const resourcesData = mcpResourcesResponse?.resources ?? [];
+  const resourceTemplatesData = mcpResourcesResponse?.resource_templates ?? [];
+  const catalogErrorMessage = (response: { error?: string | null; message?: string | null } | undefined) =>
+    response?.error ? response.message || response.error : null;
 
   return (
     <div className="w-full p-4">
@@ -539,6 +568,18 @@ const MCPToolsViewer = ({
                         )}
                       </>
                     )}
+
+                    <MCPPromptsSection
+                      prompts={promptsData}
+                      isLoading={isLoadingPrompts || authorizationCodeStatusLoading}
+                      errorMessage={catalogErrorMessage(mcpPromptsResponse)}
+                    />
+                    <MCPResourcesSection
+                      resources={resourcesData}
+                      resourceTemplates={resourceTemplatesData}
+                      isLoading={isLoadingResources || authorizationCodeStatusLoading}
+                      errorMessage={catalogErrorMessage(mcpResourcesResponse)}
+                    />
                   </>
                 ) : null}
               </div>

@@ -913,3 +913,49 @@ describe("fetchMemoryList search serialization", () => {
     expect(lastParams(mockFetch).has("search")).toBe(false);
   });
 });
+
+describe("listMCPPrompts / listMCPResources", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const mockFetch = (status: number, body: unknown) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue({
+      ok: status < 400,
+      status,
+      text: vi.fn().mockResolvedValue(JSON.stringify(body)),
+    } as unknown as Response);
+    global.fetch = fetchMock;
+    return fetchMock;
+  };
+
+  it("passes the server id and custom MCP headers through to the catalog route", async () => {
+    const fetchMock = mockFetch(200, { prompts: [{ name: "summarize" }] });
+
+    const result = await Networking.listMCPPrompts("token", "srv-1", { "x-mcp-demo-authorization": "Bearer t" });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const parsed = new URL(url, "http://example.com");
+    expect(parsed.pathname.endsWith("/mcp-rest/prompts/list")).toBe(true);
+    expect(parsed.searchParams.get("server_id")).toBe("srv-1");
+    expect((init.headers as Record<string, string>)["x-mcp-demo-authorization"]).toBe("Bearer t");
+    expect(result).toEqual({ prompts: [{ name: "summarize" }] });
+  });
+
+  it("returns the proxy's classified fault and message instead of throwing", async () => {
+    mockFetch(502, { detail: { error: "unreachable", message: "Failed to list resources from server demo" } });
+
+    const result = await Networking.listMCPResources("token", "srv-1");
+
+    const expected = {
+      resources: [],
+      resource_templates: [],
+      error: "unreachable",
+      message: "Failed to list resources from server demo",
+      status: 502,
+    };
+    expect(result).toEqual(expected);
+  });
+});

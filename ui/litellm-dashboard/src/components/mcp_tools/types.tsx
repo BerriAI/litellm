@@ -1,3 +1,5 @@
+import type { components } from "@/lib/http/schema";
+
 /** A single MCP tool event emitted by the LiteLLM proxy during a Responses API turn. */
 export interface MCPEvent {
   type: string;
@@ -339,6 +341,20 @@ export interface MCPTool {
 
 // Define the response structure for the listMCPTools endpoint - now a flat array
 export type ListMCPToolsResponse = MCPTool[];
+
+export type MCPPrompt = components["schemas"]["Prompt"];
+export type MCPResource = components["schemas"]["Resource"];
+export type MCPResourceTemplate = components["schemas"]["ResourceTemplate"];
+
+export interface MCPRestListFailure {
+  error?: string | null;
+  message?: string | null;
+  status?: number;
+}
+
+export type ListMCPPromptsResponse = components["schemas"]["ListMCPPromptsRestAPIResponse"] & MCPRestListFailure;
+
+export type ListMCPResourcesResponse = components["schemas"]["ListMCPResourcesRestAPIResponse"] & MCPRestListFailure;
 
 // Define the argument structure for calling an MCP tool
 export interface CallMCPToolArgs {

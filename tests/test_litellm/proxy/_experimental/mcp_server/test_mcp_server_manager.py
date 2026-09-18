@@ -3932,6 +3932,39 @@ class TestMCPServerManager:
         assert result == expected_templates
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("manager_method", "client_method"),
+        [
+            ("get_prompts_from_server", "list_prompts"),
+            ("get_resources_from_server", "list_resources"),
+            ("get_resource_templates_from_server", "list_resource_templates"),
+        ],
+    )
+    async def test_catalog_fetch_failure_is_swallowed_unless_raise_on_error(self, manager_method, client_method):
+        """Catalog fetches stay best-effort for the MCP protocol aggregate (empty list) but a
+        single-server caller that opts in gets the classified fault instead of empty-success."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-1",
+            name="alias-server",
+            alias="alias-server",
+            server_name="alias-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+        )
+        mock_client = AsyncMock()
+        setattr(mock_client, client_method, AsyncMock(side_effect=httpx.ConnectError("connection refused")))
+        mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
+
+        with patch.object(manager, "_create_mcp_client", new_callable=AsyncMock, return_value=mock_client):
+            assert await getattr(manager, manager_method)(server, user_api_key_auth=None) == []
+            with pytest.raises(MCPServerListError) as exc_info:
+                await getattr(manager, manager_method)(server, user_api_key_auth=None, raise_on_error=True)
+
+        assert exc_info.value.fault == ServerListFault(tag="unreachable")
+        assert exc_info.value.server_name == server.name
+
+    @pytest.mark.asyncio
     async def test_read_resource_from_server_success(self):
         manager = MCPServerManager()
 

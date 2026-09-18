@@ -4529,6 +4529,7 @@ class MCPServerManager:
         extra_headers: dict[str, str] | None = None,
         add_prefix: bool = True,
         raw_headers: dict[str, str] | None = None,
+        raise_on_error: bool = False,
     ) -> list[Prompt]:
         try:
             headers: Final = (
@@ -4561,6 +4562,8 @@ class MCPServerManager:
             items: Final = await self._prompt_discovery_cache.get(key, fetch)
             return self._create_prefixed_prompts(items, server, add_prefix=add_prefix)
         except Exception as error:
+            if raise_on_error:
+                raise_classified_list_failure(error, server.name, suppress_challenge=server.is_dcr_bridge)
             verbose_logger.warning("Failed to get prompts from server %s: %s", server.name, error)
             return []
 
@@ -4572,6 +4575,7 @@ class MCPServerManager:
         extra_headers: dict[str, str] | None = None,
         add_prefix: bool = True,
         raw_headers: dict[str, str] | None = None,
+        raise_on_error: bool = False,
     ) -> list[Resource]:
         try:
             headers: Final = (
@@ -4604,6 +4608,8 @@ class MCPServerManager:
             items: Final = await self._resource_discovery_cache.get(key, fetch)
             return self._create_prefixed_resources(items, server, add_prefix=add_prefix)
         except Exception as error:
+            if raise_on_error:
+                raise_classified_list_failure(error, server.name, suppress_challenge=server.is_dcr_bridge)
             verbose_logger.warning("Failed to get resources from server %s: %s", server.name, error)
             return []
 
@@ -4615,6 +4621,7 @@ class MCPServerManager:
         extra_headers: dict[str, str] | None = None,
         add_prefix: bool = True,
         raw_headers: dict[str, str] | None = None,
+        raise_on_error: bool = False,
     ) -> list[ResourceTemplate]:
         try:
             headers: Final = (
@@ -4647,6 +4654,8 @@ class MCPServerManager:
             items: Final = await self._template_discovery_cache.get(key, fetch)
             return self._create_prefixed_resource_templates(items, server, add_prefix=add_prefix)
         except Exception as error:
+            if raise_on_error:
+                raise_classified_list_failure(error, server.name, suppress_challenge=server.is_dcr_bridge)
             verbose_logger.warning("Failed to get resource_templates from server %s: %s", server.name, error)
             return []
 

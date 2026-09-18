@@ -98,9 +98,12 @@ import type { ObjectPermission } from "./object_permission_types";
 import type { components } from "@/lib/http/schema";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import type {
+  ListMCPPromptsResponse,
+  ListMCPResourcesResponse,
   MCPGatewaySessionSelector,
   MCPGatewaySessionsResponse,
   MCPGatewaySessionsTerminateResponse,
+  MCPRestListFailure,
   MCPServerUserCredentialListItem,
   MCPServerUserCredentialType,
   MCPUserEnvVarsStatus,
@@ -116,6 +119,7 @@ import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
 import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
 import {
+  ApiError,
   createApiClient,
   deriveErrorMessage,
   extractProxyErrorMessage,
@@ -5222,6 +5226,58 @@ export const listMCPTools = async (
   // Return the full response object which includes tools, error, message, and stack_trace
   return data;
 };
+
+interface MCPCatalogRequest {
+  accessToken: string;
+  serverId: string;
+  customHeaders?: Record<string, string>;
+}
+
+const listMCPCatalog = async <T extends object>(
+  catalog: "prompts" | "resources",
+  empty: T,
+  { accessToken, serverId, customHeaders }: MCPCatalogRequest,
+): Promise<T & MCPRestListFailure> => {
+  try {
+    const data = await apiClient.get<Partial<T>>(`/mcp-rest/${catalog}/list`, {
+      accessToken,
+      query: { server_id: serverId },
+      headers: customHeaders,
+    });
+    return { ...empty, ...data };
+  } catch (error) {
+    console.error(`Failed to fetch MCP ${catalog}:`, error);
+    if (error instanceof ApiError) {
+      const detail = (error.body as { detail?: { error?: string; message?: string } | string } | null)?.detail;
+      const structured = typeof detail === "object" && detail !== null ? detail : undefined;
+      return {
+        ...empty,
+        error: structured?.error ?? `http_${error.status}`,
+        message: structured?.message ?? error.message,
+        status: error.status,
+      };
+    }
+    return {
+      ...empty,
+      error: "network_error",
+      message: error instanceof Error ? error.message : `Failed to fetch MCP ${catalog}`,
+    };
+  }
+};
+
+export const listMCPPrompts = (
+  accessToken: string,
+  serverId: string,
+  customHeaders?: Record<string, string>,
+): Promise<ListMCPPromptsResponse> =>
+  listMCPCatalog("prompts", { prompts: [] }, { accessToken, serverId, customHeaders });
+
+export const listMCPResources = (
+  accessToken: string,
+  serverId: string,
+  customHeaders?: Record<string, string>,
+): Promise<ListMCPResourcesResponse> =>
+  listMCPCatalog("resources", { resources: [], resource_templates: [] }, { accessToken, serverId, customHeaders });
 
 interface CallMCPToolOptions {
   guardrails?: string[];

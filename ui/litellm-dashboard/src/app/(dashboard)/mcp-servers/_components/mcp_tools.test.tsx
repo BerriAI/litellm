@@ -1,12 +1,19 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import MCPToolsViewer from "./mcp_tools";
-import { listMCPTools, getMCPOAuthUserCredentialStatus } from "@/components/networking";
+import {
+  listMCPTools,
+  listMCPPrompts,
+  listMCPResources,
+  getMCPOAuthUserCredentialStatus,
+} from "@/components/networking";
 import { isTokenValid, getToken } from "@/utils/mcpTokenStore";
 
 vi.mock("@/components/networking", () => ({
   listMCPTools: vi.fn(),
+  listMCPPrompts: vi.fn(),
+  listMCPResources: vi.fn(),
   callMCPTool: vi.fn(),
   getMCPOAuthUserCredentialStatus: vi.fn(),
 }));
@@ -82,6 +89,8 @@ describe("MCPToolsViewer gatewayMintsClient wiring", () => {
 describe("MCPToolsViewer auth gate routing", () => {
   beforeEach(() => {
     vi.mocked(listMCPTools).mockReset().mockResolvedValue({ tools: [], error: null });
+    vi.mocked(listMCPPrompts).mockReset().mockResolvedValue({ prompts: [] });
+    vi.mocked(listMCPResources).mockReset().mockResolvedValue({ resources: [], resource_templates: [] });
     vi.mocked(isTokenValid).mockReset().mockReturnValue(false);
     vi.mocked(getToken)
       .mockReset()
@@ -213,5 +222,97 @@ describe("MCPToolsViewer auth gate routing", () => {
     expect(screen.queryByText(GATE_TEXT)).not.toBeInTheDocument();
     // M2M uses the backend service token, not a per-user DB credential.
     expect(vi.mocked(getMCPOAuthUserCredentialStatus)).not.toHaveBeenCalled();
+  });
+});
+
+describe("MCPToolsViewer prompts and resources catalog", () => {
+  beforeEach(() => {
+    vi.mocked(listMCPTools).mockReset().mockResolvedValue({ tools: [], error: null });
+    vi.mocked(listMCPPrompts)
+      .mockReset()
+      .mockResolvedValue({
+        prompts: [
+          {
+            name: "summarize",
+            description: "Summarize a block of text",
+            arguments: [
+              { name: "text", required: true },
+              { name: "style", required: false },
+            ],
+          },
+        ],
+      });
+    vi.mocked(listMCPResources)
+      .mockReset()
+      .mockResolvedValue({
+        resources: [{ name: "readme", uri: "demo://readme", description: "Project readme", mimeType: "text/markdown" }],
+        resource_templates: [{ name: "profile", uriTemplate: "demo://users/{user_id}/profile" }],
+      });
+    vi.mocked(isTokenValid).mockReset().mockReturnValue(false);
+    vi.mocked(getToken).mockReset().mockReturnValue(null);
+    vi.mocked(getMCPOAuthUserCredentialStatus).mockReset().mockResolvedValue(credStatus());
+  });
+
+  it("lists the server's prompts and resources next to its tools", async () => {
+    renderViewer({ auth_type: "api_key", tokenUrl: null });
+
+    const prompts = await screen.findByRole("region", { name: "Prompts" });
+    expect(await within(prompts).findByText("summarize")).toBeInTheDocument();
+    expect(within(prompts).getByText("Summarize a block of text")).toBeInTheDocument();
+    expect(within(prompts).getByText("text")).toBeInTheDocument();
+    expect(within(prompts).getByText("style")).toBeInTheDocument();
+
+    const resources = screen.getByRole("region", { name: "Resources" });
+    expect(await within(resources).findByText("demo://readme")).toBeInTheDocument();
+    expect(within(resources).getByText("text/markdown")).toBeInTheDocument();
+    expect(within(resources).getByText("demo://users/{user_id}/profile")).toBeInTheDocument();
+    expect(within(resources).getByText("2")).toBeInTheDocument();
+
+    expect(vi.mocked(listMCPPrompts)).toHaveBeenCalledWith("litellm-key", "srv-1", undefined);
+    expect(vi.mocked(listMCPResources)).toHaveBeenCalledWith("litellm-key", "srv-1", undefined);
+  });
+
+  it("forwards the browser session token to the prompt and resource listings like tools", async () => {
+    vi.mocked(isTokenValid).mockReturnValue(true);
+    vi.mocked(getToken).mockReturnValue({
+      access_token: "slack-tok",
+      expires_at: Date.now() + 60_000,
+      token_type: "bearer",
+    });
+
+    renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: true });
+
+    await screen.findByText("summarize");
+    const passthroughHeader = expect.objectContaining({ "x-mcp-slack-authorization": "Bearer slack-tok" });
+    expect(vi.mocked(listMCPPrompts)).toHaveBeenCalledWith("litellm-key", "srv-1", passthroughHeader);
+    expect(vi.mocked(listMCPResources)).toHaveBeenCalledWith("litellm-key", "srv-1", passthroughHeader);
+  });
+
+  it("does not list prompts or resources while the auth gate is shown", async () => {
+    vi.mocked(getMCPOAuthUserCredentialStatus).mockResolvedValue(credStatus({ has_credential: false }));
+
+    renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: false });
+
+    expect(await screen.findByText(GATE_TEXT)).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Prompts" })).not.toBeInTheDocument();
+    expect(vi.mocked(listMCPPrompts)).not.toHaveBeenCalled();
+    expect(vi.mocked(listMCPResources)).not.toHaveBeenCalled();
+  });
+
+  it("shows the upstream error for a catalog that failed to load", async () => {
+    const failedResources = {
+      resources: [],
+      resource_templates: [],
+      error: "http_502",
+      message: "upstream unreachable",
+      status: 502,
+    };
+    vi.mocked(listMCPResources).mockResolvedValue(failedResources);
+
+    renderViewer({ auth_type: "api_key", tokenUrl: null });
+
+    const resources = await screen.findByRole("region", { name: "Resources" });
+    expect(await within(resources).findByText("Error: upstream unreachable")).toBeInTheDocument();
+    expect(await screen.findByText("summarize")).toBeInTheDocument();
   });
 });
