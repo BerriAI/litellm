@@ -55,7 +55,7 @@ class TestBuildCompletionKwargs:
             stopSequences=["STOP"],
             tools=[
                 SimpleNamespace(
-                    name="search", description="d", inputSchema={"type": "object"}
+                    name="search", description="d", input_schema={"type": "object"}
                 )
             ],
             toolChoice=SimpleNamespace(mode="required"),
@@ -179,7 +179,7 @@ class TestHandleSamplingCreateMessagePipeline:
 
         assert isinstance(result, CreateMessageResult)
         assert result.content.text == "the answer is 42"
-        assert result.stopReason == "endTurn"
+        assert result.stop_reason== "endTurn"
 
     async def test_should_reraise_known_proxy_exceptions(self):
         from litellm.exceptions import RateLimitError

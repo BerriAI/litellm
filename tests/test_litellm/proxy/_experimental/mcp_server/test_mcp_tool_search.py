@@ -40,7 +40,7 @@ from litellm.types.mcp import MCPToolSearchSettings
 
 def _make_tools(specs: list[tuple[str, str]]) -> tuple[Tool, ...]:
     return tuple(
-        Tool(name=name, description=desc, inputSchema={"type": "object", "properties": {}}) for name, desc in specs
+        Tool(name=name, description=desc, input_schema={"type": "object", "properties": {}}) for name, desc in specs
     )
 
 
@@ -62,17 +62,17 @@ SAMPLE_TOOLS = _make_tools(
 FX_TOOL = Tool(
     name="treasury-get_rates",
     description="Get foreign exchange rates for a currency pair",
-    inputSchema={"type": "object", "properties": {}},
+    input_schema={"type": "object", "properties": {}},
 )
 WEATHER_TOOL = Tool(
     name="weather-forecast",
     description="Get the weather forecast for a city",
-    inputSchema={"type": "object", "properties": {}},
+    input_schema={"type": "object", "properties": {}},
 )
 CALENDAR_TOOL = Tool(
     name="calendar-create_event",
     description="Create a calendar event",
-    inputSchema={"type": "object", "properties": {}},
+    input_schema={"type": "object", "properties": {}},
 )
 CATALOG = (FX_TOOL, WEATHER_TOOL, CALENDAR_TOOL)
 
@@ -113,7 +113,7 @@ class TestSearchMcpTools:
         assert _names(results) == [FX_TOOL.name, WEATHER_TOOL.name, CALENDAR_TOOL.name]
         assert not isinstance(results, EmbeddingFailed)
         assert results[0]["score"] > results[1]["score"] > results[2]["score"]
-        assert results[0]["inputSchema"] == FX_TOOL.inputSchema
+        assert results[0]["inputSchema"] == FX_TOOL.input_schema
 
     @pytest.mark.asyncio
     async def test_similarity_threshold_drops_weak_matches(self) -> None:
@@ -313,10 +313,10 @@ class TestGetVirtualToolDefinitions:
 
         for definition in get_virtual_tool_definitions():
             tool = Tool.model_validate(definition)
-            required_arguments = {name: "x" for name in tool.inputSchema["required"]}
-            validate(instance=required_arguments, schema=tool.inputSchema)
+            required_arguments = {name: "x" for name in tool.input_schema["required"]}
+            validate(instance=required_arguments, schema=tool.input_schema)
             with pytest.raises(ValidationError):
-                validate(instance={}, schema=tool.inputSchema)
+                validate(instance={}, schema=tool.input_schema)
 
     def test_all_tools_have_description(self) -> None:
         for tool in get_virtual_tool_definitions():
@@ -562,7 +562,7 @@ class TestCallToolRestApiVirtualTools:
         mock_tool = MagicMock()
         mock_tool.name = "github-create_issue"
         mock_tool.description = "Create a GitHub issue"
-        mock_tool.inputSchema = {"type": "object", "properties": {}}
+        mock_tool.input_schema= {"type": "object", "properties": {}}
 
         with patch(
             "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
@@ -604,7 +604,7 @@ class TestCallToolRestApiVirtualTools:
 
         fake_result = CallToolResult(
             content=[TextContent(type="text", text="Issue created")],
-            isError=False,
+            is_error=False,
         )
 
         with (
@@ -633,7 +633,7 @@ class TestCallToolRestApiVirtualTools:
         mock_fire_logging.assert_awaited_once()
         assert mock_execute.await_args.kwargs["name"] == "github-create_issue"
 
-        assert result.isError is False
+        assert result.is_error is False
         assert result.content[0].text == "Issue created"
 
     @pytest.mark.asyncio
@@ -654,7 +654,7 @@ class TestCallToolRestApiVirtualTools:
             }
         )
 
-        fake_result = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+        fake_result = CallToolResult(content=[TextContent(type="text", text="ok")], is_error=False)
 
         with (
             patch(
@@ -730,7 +730,7 @@ class TestCallToolRestApiVirtualTools:
         ):
             result = await self._get_call_fn()(request=request, user_api_key_dict=user_api_key_dict)
 
-        assert result.isError is False
+        assert result.is_error is False
         assert mock_search.await_args.kwargs["user_api_key_dict"] is user_api_key_dict
         assert json.loads(result.content[0].text) == [
             {
@@ -758,7 +758,7 @@ class TestCallToolRestApiVirtualTools:
         request = self._make_request(
             {"name": SKILL_SEARCH_TOOL_NAME, "arguments": {"query": "translate a document", "top_k": "not-a-number"}}
         )
-        fake_result = CallToolResult(content=[TextContent(type="text", text="[]")], isError=False)
+        fake_result = CallToolResult(content=[TextContent(type="text", text="[]")], is_error=False)
         with patch(  # test-quality-ok: the embedding router only resolves via proxy_server globals, no injection seam
             "litellm.proxy._experimental.mcp_server.tool_search.handle_skill_search",
             new_callable=AsyncMock,
@@ -766,7 +766,7 @@ class TestCallToolRestApiVirtualTools:
         ) as mock_search:
             result = await self._get_call_fn()(request=request, user_api_key_dict=user_api_key_dict)
 
-        assert result.isError is False
+        assert result.is_error is False
         assert mock_search.await_args.kwargs["top_k"] == DEFAULT_SKILL_SEARCH_TOP_K
         assert mock_search.await_args.kwargs["query"] == "translate a document"
 
@@ -790,7 +790,7 @@ class TestCallToolRestApiVirtualTools:
         ):
             result = await self._get_call_fn()(request=request, user_api_key_dict=user_api_key_dict)
 
-        assert result.isError is True
+        assert result.is_error is True
         assert result.content[0].text == "set agent_search_embedding_model"
 
     def _semantic_request(self, query: str = "FX") -> MagicMock:
@@ -835,7 +835,7 @@ class TestCallToolRestApiVirtualTools:
         assert mock_list.await_args.kwargs["user_api_key_auth"] is user_api_key_dict
         assert key_limits.pre_call_hook.await_args.kwargs["call_type"] == "aembedding"
         assert key_limits.pre_call_hook.await_args.kwargs["data"]["model"] == "emb"
-        assert result.isError is False
+        assert result.is_error is False
         assert [t["name"] for t in json.loads(result.content[0].text)] == [FX_TOOL.name]
 
     @pytest.mark.asyncio
@@ -846,7 +846,7 @@ class TestCallToolRestApiVirtualTools:
             "litellm.proxy.proxy_server.llm_router", None
         ):
             result = await self._get_call_fn()(request=self._semantic_request(), user_api_key_dict=user_api_key_dict)
-        assert result.isError is True
+        assert result.is_error is True
         assert "mcp_tool_search.embedding_model" in result.content[0].text
 
     @pytest.mark.asyncio
@@ -856,7 +856,7 @@ class TestCallToolRestApiVirtualTools:
         monkeypatch.setattr(litellm, "mcp_tool_search", {"top_k": 0})
         user_api_key_dict = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         result = await self._get_call_fn()(request=self._semantic_request(), user_api_key_dict=user_api_key_dict)
-        assert result.isError is True
+        assert result.is_error is True
         assert "top_k" in result.content[0].text
 
     @pytest.mark.asyncio
@@ -920,7 +920,7 @@ class TestDispatchVirtualMcpTool:
             client_ip=None,
         )
         assert result is not None
-        assert result.isError is True
+        assert result.is_error is True
 
     @pytest.mark.asyncio
     async def test_routes_search_with_client_ip(self) -> None:
@@ -977,7 +977,7 @@ class TestDispatchVirtualMcpTool:
             name=AGENT_SEARCH_TOOL_NAME, arguments={"query": "x"}, user_api_key_auth=uak, client_ip=None
         )
         assert result is not None
-        assert result.isError is True
+        assert result.is_error is True
 
     @pytest.mark.asyncio
     async def test_routes_call_with_client_ip(self) -> None:
@@ -1073,7 +1073,7 @@ class TestDispatchVirtualMcpTool:
         )
 
         uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
-        fake = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+        fake = CallToolResult(content=[TextContent(type="text", text="ok")], is_error=False)
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
@@ -1164,7 +1164,7 @@ class TestCaptureHostProgressCallback:
         )
 
         host = MagicMock()
-        host.request_context.meta.progressToken = None
+        host.request_context.meta.progress_token = None
         assert _capture_host_progress_callback(host) is None
 
     def test_returns_callable_when_token_present(self) -> None:
@@ -1173,7 +1173,7 @@ class TestCaptureHostProgressCallback:
         )
 
         host = MagicMock()
-        host.request_context.meta.progressToken = "tok12345"
+        host.request_context.meta.progress_token = "tok12345"
         host.request_context.session = MagicMock()
         assert callable(_capture_host_progress_callback(host))
 
@@ -1183,7 +1183,7 @@ class TestCaptureHostProgressCallback:
         )
 
         host = MagicMock()
-        host.request_context.meta.progressToken = 12345
+        host.request_context.meta.progress_token = 12345
         host.request_context.session = MagicMock()
         assert callable(_capture_host_progress_callback(host))
 
@@ -1193,7 +1193,7 @@ class TestCaptureHostProgressCallback:
         )
 
         host = MagicMock()
-        host.request_context.meta.progressToken = 0
+        host.request_context.meta.progress_token = 0
         host.request_context.session = MagicMock()
         assert callable(_capture_host_progress_callback(host))
 
@@ -1204,7 +1204,7 @@ class TestCaptureHostProgressCallback:
         )
 
         host = MagicMock()
-        host.request_context.meta.progressToken = 12345
+        host.request_context.meta.progress_token = 12345
         session = AsyncMock()
         host.request_context.session = session
 
@@ -1270,7 +1270,7 @@ class TestMcpServerToolCallErrorHandling:
                 arguments={"tool_name": "other-server-tool", "arguments": {}},
             )
 
-        assert result.isError is True
+        assert result.is_error is True
         assert "User not allowed to call this tool" in result.content[0].text
 
 

@@ -963,7 +963,7 @@ class TestTestToolsList:
 
         class QuickClient:
             async def list_tools(self, raise_on_error=False):
-                return [MCPTool(name="quick_tool", description="q", inputSchema={})]
+                return [MCPTool(name="quick_tool", description="q", input_schema={})]
 
         async def fake_execute(
             request,
@@ -1008,7 +1008,7 @@ class TestTestToolsList:
 
             async def list_tools(self, raise_on_error=False):
                 await asyncio.sleep(0.2)
-                return [MCPTool(name="slow_tool", description="s", inputSchema={})]
+                return [MCPTool(name="slow_tool", description="s", input_schema={})]
 
         async def fake_execute(
             request,
@@ -1512,7 +1512,7 @@ class TestListToolsRestAPI:
                     MCPTool(
                         name="first_page_tool",
                         description="First page tool",
-                        inputSchema={},
+                        input_schema={},
                     )
                 ],
                 nextCursor="page-2",
@@ -1522,7 +1522,7 @@ class TestListToolsRestAPI:
                     MCPTool(
                         name="second_page_tool",
                         description="Second page tool",
-                        inputSchema={},
+                        input_schema={},
                     )
                 ]
             ),
@@ -3177,7 +3177,7 @@ async def test_request_selected_tool_specific_guardrail_applies_to_virtual_execu
         upstream.assert_not_awaited()
     else:
         result: Final = await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=caller)
-        assert result.isError is False
+        assert result.is_error is False
         upstream.assert_awaited_once()
         assert upstream.await_args.kwargs == {"q": "redacted" if selected else "confidential"}
 
@@ -3198,7 +3198,7 @@ class TestGetToolsForSingleServer:
             def __init__(self, name, description):
                 self.name = name
                 self.description = description
-                self.inputSchema = {}
+                self.input_schema= {}
 
         mock_tools = [
             MockTool("tool1", "First tool"),
@@ -3259,7 +3259,7 @@ class TestGetToolsForSingleServer:
             def __init__(self, name, description):
                 self.name = name
                 self.description = description
-                self.inputSchema = {}
+                self.input_schema= {}
 
         mock_tools = [
             MockTool("tool1", "First tool"),
@@ -3307,7 +3307,7 @@ class TestGetToolsForSingleServer:
             def __init__(self, name, description):
                 self.name = name
                 self.description = description
-                self.inputSchema = {}
+                self.input_schema= {}
 
         mock_tools = [
             MockTool("tool1", "First tool"),
@@ -3360,7 +3360,7 @@ class TestGetToolsForSingleServer:
             def __init__(self, name, description):
                 self.name = name
                 self.description = description
-                self.inputSchema = {}
+                self.input_schema= {}
 
         mock_tools = [
             MockTool("tool1", "First tool"),
@@ -3413,7 +3413,7 @@ class TestGetToolsForSingleServer:
             def __init__(self, name, description):
                 self.name = name
                 self.description = description
-                self.inputSchema = {}
+                self.input_schema= {}
 
         mock_tools = [
             MockTool("tool1", "First tool"),
@@ -3475,7 +3475,7 @@ class TestGetToolsForSingleServer:
             def __init__(self, name):
                 self.name = name
                 self.description = name
-                self.inputSchema = {}
+                self.input_schema= {}
 
         mock_tools = [MockTool("tool1"), MockTool("tool2"), MockTool("tool3")]
 
@@ -3903,11 +3903,11 @@ class TestConnectionErrorMessage:
         assert "secret" not in message
 
     def test_closed_connection_explains_incomplete_request(self) -> None:
-        from mcp import McpError
+        from mcp import MCPError
         from mcp.types import ErrorData
 
         message: Final = rest_endpoints._connection_error_message(
-            McpError(ErrorData(code=-32000, message="Connection closed", data="secret-data")), None, 30
+            MCPError(code=-32000, message="Connection closed", data="secret-data"), None, 30
         )
         assert "connection was closed before the request completed" in message
         assert "secret" not in message
@@ -3920,7 +3920,7 @@ class TestConnectionErrorMessage:
     @pytest.mark.parametrize("sdk_timeout", [True, False])
     @pytest.mark.parametrize("read_timeout", [0, 1])
     async def test_timeout_message_uses_the_deadline_that_expired(self, sdk_timeout: bool, read_timeout: int) -> None:
-        from mcp import McpError
+        from mcp import MCPError
         from mcp.types import ErrorData
 
         async def operation(client: rest_endpoints.MCPClient) -> dict[str, object]:
@@ -3930,8 +3930,8 @@ class TestConnectionErrorMessage:
                 if not sdk_timeout:
                     raise
                 try:
-                    raise McpError(ErrorData(code=408, message="secret-sdk-timeout")) from elapsed
-                except McpError as sdk_error:
+                    raise MCPError(code=408, message="secret-sdk-timeout") from elapsed
+                except MCPError as sdk_error:
                     raise TimeoutError() from sdk_error
 
         payload: Final = NewMCPServerRequest(
@@ -3947,11 +3947,11 @@ class TestConnectionErrorMessage:
         assert "reference" in message.lower()
 
     def test_sdk_session_terminated_explains_endpoint_and_retry(self) -> None:
-        from mcp.shared.exceptions import McpError
+        from mcp.shared.exceptions import MCPError
         from mcp.types import ErrorData
 
         message: Final = rest_endpoints._connection_error_message(
-            McpError(ErrorData(code=32600, message="Session terminated")), "https://example.com/mcp", 30.0
+            MCPError(code=32600, message="Session terminated"), "https://example.com/mcp", 30.0
         )
 
         assert "session was terminated" in message
@@ -3962,11 +3962,11 @@ class TestConnectionErrorMessage:
 
     @pytest.mark.parametrize("code", [-32700, -32601, -32602, -32603, -32000, 32600, 408])
     def test_rpc_errors_include_code_without_echoing_upstream_data(self, code: int) -> None:
-        from mcp.shared.exceptions import McpError
+        from mcp.shared.exceptions import MCPError
         from mcp.types import ErrorData
 
         message: Final = rest_endpoints._connection_error_message(
-            McpError(ErrorData(code=code, message="secret-message", data={"token": "secret-data"})),
+            MCPError(code=code, message="secret-message", data={"token": "secret-data"}),
             "https://example.com/secret-path?token=secret-query",
             30.0,
         )
@@ -4138,7 +4138,7 @@ class TestToolResponseMcpInfoEnrichment:
             MCPTool(
                 name="get_issue",
                 description="Fetch a Jira issue",
-                inputSchema={"type": "object"},
+                input_schema={"type": "object"},
             )
         ]
 
@@ -4168,7 +4168,7 @@ class TestToolResponseMcpInfoEnrichment:
             MCPTool(
                 name="ping",
                 description="Ping",
-                inputSchema={"type": "object"},
+                input_schema={"type": "object"},
             )
         ]
 
@@ -4210,8 +4210,8 @@ class TestRestListToolsetFiltering:
         stub_server.mcp_info = {"server_name": "stubtools"}
 
         upstream_tools = [
-            MCPTool(name="lookup_status", inputSchema={"type": "object"}),
-            MCPTool(name="delete_everything", inputSchema={"type": "object"}),
+            MCPTool(name="lookup_status", input_schema={"type": "object"}),
+            MCPTool(name="delete_everything", input_schema={"type": "object"}),
         ]
 
         key_object_permission = MagicMock()

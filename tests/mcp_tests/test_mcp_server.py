@@ -44,7 +44,7 @@ async def test_mcp_server_manager_https_server():
         MCPTool(
             name="gmail_send_email",
             description="Send an email via Gmail",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "body": {"type": "string"},
@@ -58,7 +58,7 @@ async def test_mcp_server_manager_https_server():
 
     mock_result = CallToolResult(
         content=[TextContent(type="text", text="Email sent successfully")],
-        isError=False,
+        is_error=False,
     )
 
     # Create a mock MCPClient
@@ -121,7 +121,7 @@ async def test_mcp_server_manager_https_server():
         print("RESULT FROM CALLING TOOL FROM MCP SERVER MANAGER== ", result)
 
         # Verify result
-        assert result.isError is False
+        assert result.is_error is False
         assert len(result.content) == 1
         assert isinstance(result.content[0], TextContent)
         assert result.content[0].text == "Email sent successfully"
@@ -143,7 +143,7 @@ async def test_mcp_http_transport_list_tools_mock():
         MCPTool(
             name="gmail_send_email",
             description="Send an email via Gmail",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "to": {"type": "string"},
@@ -156,7 +156,7 @@ async def test_mcp_http_transport_list_tools_mock():
         MCPTool(
             name="calendar_create_event",
             description="Create a calendar event",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "title": {"type": "string"},
@@ -242,7 +242,7 @@ async def test_mcp_http_transport_call_tool_mock():
         content=[
             TextContent(type="text", text="Email sent successfully to test@example.com")
         ],
-        isError=False,
+        is_error=False,
     )
 
     # Create a mock MCPClient that returns our test result
@@ -288,7 +288,7 @@ async def test_mcp_http_transport_call_tool_mock():
         )
 
         # Assertions
-        assert result.isError is False
+        assert result.is_error is False
         assert len(result.content) == 1
         # Type check before accessing text attribute
         assert isinstance(result.content[0], TextContent)
@@ -308,7 +308,7 @@ async def test_mcp_http_transport_call_tool_error_mock():
     # Mock tool call error result
     mock_error_result = CallToolResult(
         content=[TextContent(type="text", text="Error: Invalid email address")],
-        isError=True,
+        is_error=True,
     )
 
     # Create a mock MCPClient that returns our test error result
@@ -350,7 +350,7 @@ async def test_mcp_http_transport_call_tool_error_mock():
         )
 
         # Assertions for error case
-        assert result.isError is True
+        assert result.is_error is True
         assert len(result.content) == 1
         # Type check before accessing text attribute
         assert isinstance(result.content[0], TextContent)
@@ -796,7 +796,7 @@ async def test_list_tools_rest_api_success():
         ListMCPToolsRestAPIResponseObject(
             name="test_tool",
             description="A test tool",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
             mcp_info={"server_name": "test_server"},
         )
     ]
@@ -892,8 +892,8 @@ async def test_get_tools_from_mcp_servers():
         transport=MCPTransport.http,
         access_groups=["group-a"],
     )
-    mock_tool_1 = MCPTool(name="tool1", description="test tool 1", inputSchema={})
-    mock_tool_2 = MCPTool(name="tool2", description="test tool 2", inputSchema={})
+    mock_tool_1 = MCPTool(name="tool1", description="test tool 1", input_schema={})
+    mock_tool_2 = MCPTool(name="tool2", description="test tool 2", input_schema={})
 
     # Test Case 1: With specific MCP servers
     try:
@@ -1058,14 +1058,14 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
         MCPTool(
             name="send_email",
             description="Send an email via Server A",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         )
     ]
     mock_tools_b = [
         MCPTool(
             name="create_event",
             description="Create an event via Server B",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         )
     ]
 
@@ -1365,7 +1365,7 @@ async def test_mcp_server_manager_alias_tool_prefixing():
         MCPTool(
             name="send_email",
             description="Send an email",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         )
     ]
 
@@ -1425,7 +1425,7 @@ async def test_mcp_server_manager_server_name_tool_prefixing():
         MCPTool(
             name="send_email",
             description="Send an email",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         )
     ]
 
@@ -1485,7 +1485,7 @@ async def test_mcp_server_manager_server_id_tool_prefixing():
         MCPTool(
             name="send_email",
             description="Send an email",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         )
     ]
 
@@ -1904,12 +1904,12 @@ def test_create_tool_response_objects():
         MCPTool(
             name="send_email",
             description="Send an email",
-            inputSchema={"type": "object", "properties": {"to": {"type": "string"}}},
+            input_schema={"type": "object", "properties": {"to": {"type": "string"}}},
         ),
         MCPTool(
             name="create_event",
             description="Create a calendar event",
-            inputSchema={"type": "object", "properties": {"title": {"type": "string"}}},
+            input_schema={"type": "object", "properties": {"title": {"type": "string"}}},
         ),
     ]
 
@@ -1962,7 +1962,7 @@ async def test_get_tools_for_single_server():
         MCPTool(
             name="send_email",
             description="Send an email",
-            inputSchema={"type": "object", "properties": {"to": {"type": "string"}}},
+            input_schema={"type": "object", "properties": {"to": {"type": "string"}}},
         )
     ]
 
@@ -2016,12 +2016,12 @@ async def test_get_tools_for_single_server_applies_disallowed_tools_without_allo
         MCPTool(
             name="send_email",
             description="Send an email",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
         MCPTool(
             name="read_email",
             description="Read an email",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
     ]
 
@@ -2069,7 +2069,7 @@ async def test_rest_listing_hides_key_grants_dispatch_would_refuse():
         MCPTool(
             name="read_wiki_contents",
             description="Read a wiki",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
     ]
 
@@ -2165,7 +2165,7 @@ async def test_list_tool_rest_api_with_server_specific_auth():
                         ListMCPToolsRestAPIResponseObject(
                             name="send_email",
                             description="Send an email",
-                            inputSchema={"type": "object"},
+                            input_schema={"type": "object"},
                             mcp_info={"server_name": "zapier"},
                         )
                     ]
@@ -2259,7 +2259,7 @@ async def test_list_tool_rest_api_with_default_auth():
                         ListMCPToolsRestAPIResponseObject(
                             name="send_email",
                             description="Send an email",
-                            inputSchema={"type": "object"},
+                            input_schema={"type": "object"},
                             mcp_info={"server_name": "unknown_server"},
                         )
                     ]
@@ -2371,7 +2371,7 @@ async def test_list_tool_rest_api_all_servers_with_auth():
                             ListMCPToolsRestAPIResponseObject(
                                 name="send_email",
                                 description="Send an email",
-                                inputSchema={"type": "object"},
+                                input_schema={"type": "object"},
                                 mcp_info={"server_name": "zapier"},
                             )
                         ],
@@ -2379,7 +2379,7 @@ async def test_list_tool_rest_api_all_servers_with_auth():
                             ListMCPToolsRestAPIResponseObject(
                                 name="send_message",
                                 description="Send a message",
-                                inputSchema={"type": "object"},
+                                input_schema={"type": "object"},
                                 mcp_info={"server_name": "slack"},
                             )
                         ],
@@ -2430,22 +2430,22 @@ async def test_filter_tools_by_allowed_tools_integration():
         MCPTool(
             name="allowed_tool_1",
             description="This tool should be allowed",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
         MCPTool(
             name="allowed_tool_2",
             description="This tool should also be allowed",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
         MCPTool(
             name="blocked_tool_1",
             description="This tool should be blocked",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
         MCPTool(
             name="blocked_tool_2",
             description="This tool should also be blocked",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
     ]
 
@@ -2545,22 +2545,22 @@ async def test_filter_tools_by_disallowed_tools_integration():
         MCPTool(
             name="safe_tool_1",
             description="This tool should be allowed",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
         MCPTool(
             name="safe_tool_2",
             description="This tool should also be allowed",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
         MCPTool(
             name="dangerous_tool_1",
             description="This tool should be blocked",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
         MCPTool(
             name="dangerous_tool_2",
             description="This tool should also be blocked",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
     ]
 
@@ -2659,12 +2659,12 @@ async def test_filter_tools_no_restrictions_integration():
         MCPTool(
             name="tool_1",
             description="Tool 1",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
         MCPTool(
             name="tool_2",
             description="Tool 2",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
         ),
     ]
 

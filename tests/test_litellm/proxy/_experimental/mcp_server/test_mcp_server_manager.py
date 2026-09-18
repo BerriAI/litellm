@@ -22,7 +22,10 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerLi
 # Add the parent directory to the path so we can import litellm
 
 
+import contextlib
+
 import httpx
+import httpx2
 from mcp import ReadResourceResult, Resource
 from mcp.types import (
     CallToolResult,
@@ -1664,7 +1667,7 @@ class TestMCPServerManager:
         )
 
         mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
         captured_extra_headers = None
 
         async def capture_create_mcp_client(
@@ -1868,7 +1871,7 @@ class TestMCPServerManager:
         never wrapped as MCPUpstreamAuthError or replaced by error_tool_result."""
         server = self._passthrough_call_server(MCPAuth.true_passthrough, server_id=f"pt-ok-{is_error}")
         manager = MCPServerManager()
-        expected = CallToolResult(content=[], isError=is_error)
+        expected = CallToolResult(content=[], is_error=is_error)
         mock_client = AsyncMock()
         mock_client.call_tool = AsyncMock(return_value=expected)
         manager._create_mcp_client = AsyncMock(return_value=mock_client)
@@ -1899,7 +1902,7 @@ class TestMCPServerManager:
         with patch.object(_mgr_mod, "verbose_logger") as mock_log:
             result = await self._run_call_regular(manager, server)
 
-        assert result.isError is True
+        assert result.is_error is True
         # A genuine non-auth failure keeps operator visibility at warning level, since call_tool's
         # raise_on_error demoted the client-layer error log to debug.
         assert mock_log.warning.called
@@ -1918,7 +1921,7 @@ class TestMCPServerManager:
         )
         manager = MCPServerManager()
         mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
         manager._create_mcp_client = AsyncMock(return_value=mock_client)
 
         result = await manager._call_regular_mcp_tool(
@@ -1933,7 +1936,7 @@ class TestMCPServerManager:
             proxy_logging_obj=None,
         )
 
-        assert result.isError is False
+        assert result.is_error is False
         assert mock_client.call_tool.call_args.kwargs.get("raise_on_error") is not True
 
     def _token_exchange_server(self, server_id: str) -> "MCPServer":
@@ -3089,7 +3092,7 @@ class TestMCPServerManager:
         )
 
         mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
         captured_extra_headers = None
 
         async def capture_create_mcp_client(
@@ -3148,7 +3151,7 @@ class TestMCPServerManager:
         assert _should_strip_caller_authorization(mcp_server=server, raw_headers=None, user_api_key_auth=None) is True
 
         mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
         captured_extra_headers = "unset"
 
         async def capture_create_mcp_client(
@@ -3216,7 +3219,7 @@ class TestMCPServerManager:
         )
 
         mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
         captured_extra_headers = None
 
         async def capture_create_mcp_client(
@@ -3273,7 +3276,7 @@ class TestMCPServerManager:
         )
 
         mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
         captured_extra_headers = None
 
         async def capture_create_mcp_client(
@@ -3308,7 +3311,7 @@ class TestMCPServerManager:
     async def _capture_call_extra_headers(self, server, oauth2_headers, raw_headers, user_api_key_auth):
         manager = MCPServerManager()
         mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
         captured = {"extra_headers": "unset"}
 
         async def capture_create_mcp_client(
@@ -5488,7 +5491,7 @@ class TestMCPServerManager:
         upstream_tool = MCPTool(
             name="send_email",
             description="Send an email",
-            inputSchema={},
+            input_schema={},
         )
 
         manager._fetch_tools_with_timeout = AsyncMock(return_value=[upstream_tool])
@@ -6020,12 +6023,12 @@ class TestMCPServerManager:
         t1 = MCPTool(
             name="create_issue",
             description="",
-            inputSchema={},
+            input_schema={},
         )
         t2 = MCPTool(
             name="close_issue",
             description="",
-            inputSchema={},
+            input_schema={},
         )
 
         # Do not add prefix in returned objects
@@ -6059,7 +6062,7 @@ class TestMCPServerManager:
         base_tool = MCPTool(
             name="create_zap",
             description="",
-            inputSchema={},
+            input_schema={},
         )
         _ = manager._create_prefixed_tools([base_tool], server, add_prefix=False)
 
@@ -6093,17 +6096,17 @@ class TestMCPServerManager:
         tool1 = MagicMock()
         tool1.name = "allowed_tool_1"
         tool1.description = "This tool is allowed"
-        tool1.inputSchema = {}
+        tool1.input_schema= {}
 
         tool2 = MagicMock()
         tool2.name = "blocked_tool"
         tool2.description = "This tool is not allowed"
-        tool2.inputSchema = {}
+        tool2.input_schema= {}
 
         tool3 = MagicMock()
         tool3.name = "allowed_tool_2"
         tool3.description = "This tool is also allowed"
-        tool3.inputSchema = {}
+        tool3.input_schema= {}
 
         # Mock the global_mcp_server_manager._get_tools_from_server
         from litellm.proxy._experimental.mcp_server import rest_endpoints
@@ -6143,17 +6146,17 @@ class TestMCPServerManager:
         tool1 = MagicMock()
         tool1.name = "tool_1"
         tool1.description = "Tool 1"
-        tool1.inputSchema = {}
+        tool1.input_schema= {}
 
         tool2 = MagicMock()
         tool2.name = "tool_2"
         tool2.description = "Tool 2"
-        tool2.inputSchema = {}
+        tool2.input_schema= {}
 
         tool3 = MagicMock()
         tool3.name = "tool_3"
         tool3.description = "Tool 3"
-        tool3.inputSchema = {}
+        tool3.input_schema= {}
 
         # Mock the global_mcp_server_manager._get_tools_from_server
         from litellm.proxy._experimental.mcp_server import rest_endpoints
@@ -6193,12 +6196,12 @@ class TestMCPServerManager:
         tool1 = MagicMock()
         tool1.name = "tool_1"
         tool1.description = "Tool 1"
-        tool1.inputSchema = {}
+        tool1.input_schema= {}
 
         tool2 = MagicMock()
         tool2.name = "tool_2"
         tool2.description = "Tool 2"
-        tool2.inputSchema = {}
+        tool2.input_schema= {}
 
         # Mock the global_mcp_server_manager._get_tools_from_server
         from litellm.proxy._experimental.mcp_server import rest_endpoints
@@ -6538,7 +6541,7 @@ class TestMCPServerManager:
             # Return a mock CallToolResult
             result = MagicMock(spec=CallToolResult)
             result.content = [{"type": "text", "text": "Tool executed successfully"}]
-            result.isError = False
+            result.is_error= False
             return result
 
         mock_client.call_tool.side_effect = mock_call_tool
@@ -6569,7 +6572,7 @@ class TestMCPServerManager:
 
         # Verify the result
         assert result is not None
-        assert result.isError is False
+        assert result.is_error is False
         assert len(result.content) > 0
 
         # Verify the MCP client call was awaited exactly once
@@ -9754,7 +9757,7 @@ class TestMCPToolsListAuthSurfacing:
         manager.get_mcp_server_by_id = MagicMock(
             side_effect=lambda server_id: {"good": good, "bad": bad}.get(server_id)
         )
-        good_tool = MCPTool(name="good-do_thing", description="do thing", inputSchema={})
+        good_tool = MCPTool(name="good-do_thing", description="do thing", input_schema={})
 
         async def fake_get_tools(server, **kwargs):
             if server.server_id == "bad":
@@ -9869,7 +9872,7 @@ class TestOBOCallToolRetry:
     @pytest.mark.asyncio
     async def test_upstream_401_invalidates_and_retries_once(self):
         manager = self._manager()
-        success = CallToolResult(content=[], isError=False)
+        success = CallToolResult(content=[], is_error=False)
         first = _RetryFakeClient(raises=_UpstreamAuthError(401))
         retry = _RetryFakeClient(result=success)
         manager._create_mcp_client = AsyncMock(return_value=retry)
@@ -9900,7 +9903,7 @@ class TestOBOCallToolRetry:
         )
 
         manager = self._manager()
-        success = CallToolResult(content=[], isError=False)
+        success = CallToolResult(content=[], is_error=False)
         first = _RetryFakeClient(raises=_UpstreamAuthError(401))
         retry = _RetryFakeClient(result=success)
         manager._create_mcp_client = AsyncMock(return_value=retry)
@@ -9939,7 +9942,7 @@ class TestOBOCallToolRetry:
         """An oauth2_id_jag tool call with a subject token must take the invalidate-and-retry branch
         of _call_regular_mcp_tool, not the plain single call, so an upstream 401 re-exchanges."""
         manager = self._manager()
-        success = CallToolResult(content=[], isError=False)
+        success = CallToolResult(content=[], is_error=False)
         first = _RetryFakeClient(raises=_UpstreamAuthError(401))
         retry = _RetryFakeClient(result=success)
         manager._create_mcp_client = AsyncMock(side_effect=[first, retry])
@@ -9989,7 +9992,7 @@ class TestOBOCallToolRetry:
             user_api_key_auth=None,
         )
 
-        assert result.isError is True
+        assert result.is_error is True
         manager._cred_provider.invalidate_credentials.assert_not_awaited()
         manager._create_mcp_client.assert_not_awaited()
         assert first.attempts == 1
@@ -10014,7 +10017,7 @@ class TestOBOCallToolRetry:
             user_api_key_auth=None,
         )
 
-        assert result.isError is True
+        assert result.is_error is True
         manager._create_mcp_client.assert_awaited_once()
         assert first.attempts == 1 and retry.attempts == 1
 
@@ -10054,7 +10057,7 @@ class TestOBOConcurrencyLimit:
                     await release.wait()
                 finally:
                     inflight["current"] -= 1
-                return CallToolResult(content=[], isError=False)
+                return CallToolResult(content=[], is_error=False)
 
         manager = MCPServerManager()
         manager._create_mcp_client = AsyncMock(return_value=_ConcurrencyRecordingClient())
@@ -10093,7 +10096,7 @@ class TestOBOConcurrencyLimit:
 
         assert peak_while_blocked == max_concurrent
         assert inflight["current"] == 0
-        assert all(result.isError is False for result in results)
+        assert all(result.is_error is False for result in results)
 
 
 class TestOBOEndpointDiscovery:
@@ -10268,7 +10271,7 @@ async def test_aggregate_list_still_absorbs_step_up_challenged_server():
     ca = MCPServer(server_id="ca", name="ca", transport=MCPTransport.http)
     manager.get_allowed_mcp_servers = AsyncMock(return_value=["good", "ca"])
     manager.get_mcp_server_by_id = MagicMock(side_effect=lambda server_id: {"good": good, "ca": ca}.get(server_id))
-    good_tool = MCPTool(name="good-do_thing", description="do thing", inputSchema={})
+    good_tool = MCPTool(name="good-do_thing", description="do thing", input_schema={})
 
     async def fake_get_tools(server, **kwargs):
         if server.server_id == "ca":
@@ -11016,7 +11019,7 @@ class TestServerToolListsHonorThePrefixBoundary:
         shape = self._aliased_server(short_prefix="F3X")
 
         manager = MCPServerManager()
-        manager._create_prefixed_tools([MCPTool(name="deletepet", description="", inputSchema={})], shape)
+        manager._create_prefixed_tools([MCPTool(name="deletepet", description="", input_schema={})], shape)
         registered = sorted(manager.tool_name_to_mcp_server_name_mapping)
         assert len(registered) > 1
 
@@ -11219,7 +11222,7 @@ class TestOpenAPIRegistryKeyMatchesRegistration:
 
         result = await self._call(server, registered_key, "list_pets")
 
-        assert result.isError is False
+        assert result.is_error is False
         assert result.content[0].text == "dispatched"
 
     @pytest.mark.asyncio
@@ -11236,7 +11239,7 @@ class TestOpenAPIRegistryKeyMatchesRegistration:
 
         result = await self._call(server, registered_key, "read_wiki_contents")
 
-        assert result.isError is False
+        assert result.is_error is False
         assert result.content[0].text == "dispatched"
 
     @pytest.mark.asyncio
@@ -11259,7 +11262,7 @@ class TestOpenAPIRegistryKeyMatchesRegistration:
 
         result = await self._call(server, registered_key, "petstore-list_pets")
 
-        assert result.isError is False
+        assert result.is_error is False
         assert result.content[0].text == "dispatched"
 
     @pytest.mark.asyncio
@@ -11282,7 +11285,7 @@ class TestOpenAPIRegistryKeyMatchesRegistration:
 
             result = await self._call(server, registered_key, "list_pets")
 
-        assert result.isError is False
+        assert result.is_error is False
         assert result.content[0].text == "dispatched"
 
     @pytest.mark.asyncio
@@ -11299,7 +11302,7 @@ class TestOpenAPIRegistryKeyMatchesRegistration:
 
         result = await self._call(server, "petstore-list_pets", "delete_pet")
 
-        assert result.isError is True
+        assert result.is_error is True
         assert "not found in registry" in result.content[0].text
 
 
@@ -11341,7 +11344,7 @@ class TestToolAuthorizationIsNotConditionalOnLogging:
     @pytest.mark.asyncio
     async def test_unentitled_tool_refused_without_proxy_logging_obj(self):
         manager, user = self._manager_with_scoped_server()
-        upstream = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        upstream = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
 
         with patch.object(manager, "_call_regular_mcp_tool", new=upstream):
             with pytest.raises(HTTPException) as exc:
@@ -11361,7 +11364,7 @@ class TestToolAuthorizationIsNotConditionalOnLogging:
         """The gate must refuse only what the entitlement excludes; an allowed
         tool still reaches the upstream when there is no logging object."""
         manager, user = self._manager_with_scoped_server()
-        upstream = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        upstream = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
 
         with patch.object(manager, "_call_regular_mcp_tool", new=upstream):
             await manager.call_tool(
@@ -11574,7 +11577,7 @@ class TestClientForwardedDiscoveryFailureIsNotFatal:
         server = await self._registered(manager, auth_type, None)
         manager._set_oauth_discovery_deferred(server.server_id, True)
         manager._fetch_tools_with_timeout = AsyncMock(
-            return_value=[MCPTool(name="list_reports", description="d", inputSchema={"type": "object"})]
+            return_value=[MCPTool(name="list_reports", description="d", input_schema={"type": "object"})]
         )
 
         with patch.object(manager, "_discover_oauth_metadata_for_server", new=AsyncMock(return_value=None)):
@@ -11796,7 +11799,7 @@ class TestOpenApiHandlerRelaysUpstreamAuth:
         with patch.object(global_mcp_tool_registry, "get_tool", return_value=tool):
             result = await manager._call_openapi_tool_handler(self._server(), "list_reports", {})
 
-        assert result.isError is True
+        assert result.is_error is True
         assert "upstream returned HTTP 503" in result.content[0].text
 
 
@@ -12420,7 +12423,7 @@ class TestLitellmAdmissionKeyIsNeverTheSubjectToken:
     def _manager_with_recording_client() -> MCPServerManager:
         manager: Final = MCPServerManager()
         client: Final = AsyncMock()
-        client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        client.call_tool = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
         client.list_prompts = AsyncMock(return_value=[])
         client.read_resource = AsyncMock(return_value=ReadResourceResult(contents=[]))
         manager._create_mcp_client = AsyncMock(return_value=client)
@@ -13049,6 +13052,24 @@ class _DiscoveryClock:
         return self.now
 
 
+from pydantic import TypeAdapter
+from mcp.types import JSONRPCMessage
+
+_JSONRPC_ADAPTER = TypeAdapter(JSONRPCMessage)
+
+
+@contextlib.contextmanager
+def _mcp_upstream(respond):
+    """Drive the SDK's streamable-HTTP transport off an httpx2 MockTransport; respx only sees httpx."""
+    from litellm.experimental_mcp_client.client import MCPClient
+
+    def factory(*args, **kwargs):
+        return httpx2.AsyncClient(transport=httpx2.MockTransport(respond))
+
+    with patch.object(MCPClient, "_create_httpx_client_factory", lambda self: factory):
+        yield
+
+
 class _DiscoveryUpstream:
     def __init__(self) -> None:
         self.requests: tuple[tuple[str, str], ...] = ()
@@ -13057,17 +13078,17 @@ class _DiscoveryUpstream:
         self.release = asyncio.Event()
         self.release.set()
 
-    async def respond(self, request: httpx.Request) -> httpx.Response:
-        from mcp.types import JSONRPCMessage, JSONRPCRequest
+    async def respond(self, request: httpx2.Request) -> httpx2.Response:
+        from mcp.types import JSONRPCRequest
 
         if request.method == "DELETE":
-            return httpx.Response(200)
-        payload: Final = JSONRPCMessage.model_validate_json(request.content).root
+            return httpx2.Response(200)
+        payload: Final = _JSONRPC_ADAPTER.validate_json(request.content)
         if not isinstance(payload, JSONRPCRequest):
-            return httpx.Response(202)
+            return httpx2.Response(202)
         self.requests = (*self.requests, (payload.method, request.headers.get("authorization", "")))
         if payload.method == "initialize":
-            return httpx.Response(200, json={
+            return httpx2.Response(200, json={
                 "jsonrpc": "2.0", "id": payload.id,
                 "result": {"protocolVersion": "2025-03-26", "serverInfo": {"name": "discovery", "version": "1"},
                            "capabilities": {} if self.outcome == "unsupported" else {"prompts": {}, "resources": {}}},
@@ -13075,11 +13096,11 @@ class _DiscoveryUpstream:
         self.entered.set()
         await self.release.wait()
         if self.outcome == "failure":
-            return httpx.Response(503)
+            return httpx2.Response(503)
         if self.outcome == "cancelled":
             raise asyncio.CancelledError()
         if self.outcome == "rejected":
-            return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload.id,
+            return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id,
                                            "error": {"code": -32601, "message": "Unsupported"}})
         result: Final = {
             "prompts/list": {"prompts": [{"name": "example", "description": "original"}]},
@@ -13087,7 +13108,7 @@ class _DiscoveryUpstream:
             "resources/templates/list": {"resourceTemplates": [{"name": "example", "uriTemplate": "test://{name}", "description": "original"}]},
             "tools/list": {"tools": []},
         }[payload.method]
-        return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
 
     @property
     def initializes(self) -> int:
@@ -13109,8 +13130,7 @@ async def test_discovery_cache_reuses_raw_results_and_expires(kind: str) -> None
     operation: Final = {"prompts": manager.get_prompts_from_server, "resources": manager.get_resources_from_server,
                        "templates": manager.get_resource_templates_from_server}[kind]
     server: Final = _discovery_server()
-    with respx.mock(base_url="https://discovery.example") as router:
-        router.route().mock(side_effect=upstream.respond)
+    with _mcp_upstream(upstream.respond):
         first: Final = await operation(server, None)
         assert len(first) == 1
         assert first[0].name == "discovery-example"
@@ -13138,8 +13158,7 @@ async def test_discovery_cache_empty_results_and_failures(kind: str, outcome: st
     upstream.outcome = outcome
     operation: Final = {"prompts": manager.get_prompts_from_server, "resources": manager.get_resources_from_server,
                        "templates": manager.get_resource_templates_from_server}[kind]
-    with respx.mock(base_url="https://discovery.example") as router:
-        router.route().mock(side_effect=upstream.respond)
+    with _mcp_upstream(upstream.respond):
         assert await operation(_discovery_server(), None) == []
         assert await operation(_discovery_server(), None) == []
         assert upstream.initializes == (2 if outcome == "failure" else 1)
@@ -13158,8 +13177,7 @@ async def test_discovery_cache_isolates_forwarded_credentials_and_shares_static_
     server: Final = _discovery_server()
     first_user: Final = UserAPIKeyAuth(user_id="first")
     second_user: Final = UserAPIKeyAuth(user_id="second")
-    with respx.mock(base_url="https://discovery.example") as router:
-        router.route().mock(side_effect=upstream.respond)
+    with _mcp_upstream(upstream.respond):
         for user in (first_user, second_user):
             assert len(await manager.get_prompts_from_server(server, user)) == 1
         assert upstream.initializes == 1
@@ -13176,8 +13194,7 @@ async def test_discovery_cache_coalesces_and_survives_waiter_cancellation() -> N
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
     upstream.release.clear()
-    with respx.mock(base_url="https://discovery.example") as router:
-        router.route().mock(side_effect=upstream.respond)
+    with _mcp_upstream(upstream.respond):
         tasks: Final = tuple(asyncio.create_task(manager.get_prompts_from_server(_discovery_server(), None)) for _ in range(10))
         await asyncio.wait_for(upstream.entered.wait(), timeout=5)
         tasks[0].cancel()
@@ -13199,8 +13216,7 @@ async def test_discovery_cache_invalidation_during_fetch_does_not_repopulate_old
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
     upstream.release.clear()
-    with respx.mock(base_url="https://discovery.example") as router:
-        router.route().mock(side_effect=upstream.respond)
+    with _mcp_upstream(upstream.respond):
         task: Final = asyncio.create_task(manager.get_prompts_from_server(_discovery_server(), None))
         await asyncio.wait_for(upstream.entered.wait(), timeout=5)
         manager._invalidate_discovery_lists("discovery")
@@ -13220,8 +13236,7 @@ async def test_discovery_cache_can_be_disabled(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("LITELLM_MCP_DISCOVERY_CACHE_TTL", "0")
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
-    with respx.mock(base_url="https://discovery.example") as router:
-        router.route().mock(side_effect=upstream.respond)
+    with _mcp_upstream(upstream.respond):
         assert len(await manager.get_prompts_from_server(_discovery_server(), None)) == 1
         assert len(await manager.get_prompts_from_server(_discovery_server(), None)) == 1
         assert upstream.initializes == 2
@@ -13352,19 +13367,18 @@ async def test_discovery_cache_tracks_resolved_credentials_across_workers() -> N
     user: Final = UserAPIKeyAuth(user_id="same-user", api_key="same-key")
     upstream: Final = _DiscoveryUpstream()
 
-    async def respond(request: httpx.Request) -> httpx.Response:
+    async def respond(request: httpx2.Request) -> httpx2.Response:
         response: Final = await upstream.respond(request)
         if '"prompts/list"' not in request.content.decode():
             return response
-        from mcp.types import JSONRPCMessage, JSONRPCRequest
+        from mcp.types import JSONRPCRequest
 
-        payload: Final = JSONRPCMessage.model_validate_json(request.content).root
+        payload: Final = _JSONRPC_ADAPTER.validate_json(request.content)
         assert isinstance(payload, JSONRPCRequest)
         name: Final = {"Bearer token-a": "account-a", "Bearer token-b": "account-b"}[request.headers["authorization"]]
-        return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {"prompts": [{"name": name}]}})
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {"prompts": [{"name": name}]}})
 
-    with respx.mock(base_url="https://discovery.example") as router:
-        router.route().mock(side_effect=respond)
+    with _mcp_upstream(respond):
         for manager in managers:
             assert [item.name for item in await manager.get_prompts_from_server(server, user)] == ["discovery-account-a"]
         assert upstream.initializes == 2
@@ -13403,8 +13417,7 @@ async def test_discovery_resolves_stored_oauth_for_the_requesting_user() -> None
     )
     user: Final = UserAPIKeyAuth(user_id="requesting-user")
     upstream: Final = _DiscoveryUpstream()
-    with respx.mock(base_url="https://discovery.example") as router:
-        router.route().mock(side_effect=upstream.respond)
+    with _mcp_upstream(upstream.respond):
         assert len(await manager.get_prompts_from_server(server, user)) == 1
         assert len(await manager.get_prompts_from_server(server, user)) == 1
     assert store.calls == (("requesting-user", "discovery"), ("requesting-user", "discovery"))
@@ -13506,7 +13519,7 @@ class TestProtectedCredentialPreparation:
             if dispatch == "managed"
             else await _handle_local_mcp_tool(add_server_prefix_to_name("echo", get_server_prefix(server)), {})
         )
-        assert result.isError is True
+        assert result.is_error is True
         assert "requires a usable upstream credential" in result.content[0].text
         assert destination.call_count == 0
 
@@ -13937,5 +13950,5 @@ async def test_request_selected_during_guardrail_runs_concurrently_with_tool(mon
     ), timeout=5)
     assert tool_started.is_set()
     assert guardrail_started.is_set() is selected
-    assert result.isError is False
+    assert result.is_error is False
     assert result.content[0].text == "executed"
