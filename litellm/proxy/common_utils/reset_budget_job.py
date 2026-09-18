@@ -694,6 +694,28 @@ class ResetBudgetJob:
             verbose_proxy_logger.warning("Failed to reset spend counter %s: %s", counter_key, e)
 
     @staticmethod
+    async def _reset_spend_counter(counter_key: str, value: float) -> None:
+        if value == 0.0:
+            await ResetBudgetJob._invalidate_spend_counter(counter_key)
+            return
+        try:
+            from litellm.proxy.proxy_server import spend_counter_cache
+
+            spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=value)
+            if spend_counter_cache.redis_cache is not None:
+                try:
+                    await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=value)
+                except Exception as redis_err:  # noqa: BLE001  # cache teardown must never fail the reset job
+                    verbose_proxy_logger.warning(
+                        "Failed to reset spend counter %s in Redis: %s. "
+                        "Budget may be over-enforced until counter expires.",
+                        counter_key,
+                        redis_err,
+                    )
+        except Exception as e:  # noqa: BLE001  # cache teardown must never fail the reset job
+            verbose_proxy_logger.warning("Failed to reset spend counter %s: %s", counter_key, e)
+
+    @staticmethod
     async def _invalidate_global_proxy_spend_cache() -> None:
         """Drop the cached global-proxy spend accumulator after the proxy
         budget aggregate row is reset, so the next auth-time load reads the
@@ -927,9 +949,12 @@ class ResetBudgetJob:
 
     async def _invalidate_budget_cascade_caches(self, cascade: _BudgetCascade) -> None:
         await self._invalidate_caches(
-            counter_keys=tuple(counter_key for counter_key, _ in cascade.counter_resets),
+            counter_keys=tuple(counter_key for counter_key, value in cascade.counter_resets if value == 0.0),
             cache_keys=cascade.cache_keys,
         )
+        for counter_key, value in cascade.counter_resets:
+            if value != 0.0:
+                await self._reset_spend_counter(counter_key, value)
 
     async def _reset_expired_budget_cascade(self) -> _BudgetCascadeCommitted | _BudgetCascadeFailed:
         now: Final = datetime.now(timezone.utc)
@@ -1281,7 +1306,7 @@ class ResetBudgetJob:
                     for u in updated_users:
                         user_id = getattr(u.row, "user_id", None)
                         if user_id:
-                            await self._invalidate_spend_counter(f"spend:user:{user_id}")
+                            await self._reset_spend_counter(f"spend:user:{user_id}", float(u.row.spend or 0.0))
                         if user_id == LITELLM_PROXY_BUDGET_NAME:
                             await self._invalidate_global_proxy_spend_cache()
 
@@ -1396,7 +1421,7 @@ class ResetBudgetJob:
                     for t in updated_teams:
                         team_id = getattr(t.row, "team_id", None)
                         if team_id:
-                            await self._invalidate_spend_counter(f"spend:team:{team_id}")
+                            await self._reset_spend_counter(f"spend:team:{team_id}", float(t.row.spend or 0.0))
 
             end_time = time.time()
             outcome: Final = _ChunkOutcome(

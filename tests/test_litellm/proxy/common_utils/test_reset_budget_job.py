@@ -1879,7 +1879,7 @@ def test_budget_cascade_carries_access_group_overage_when_rollover_enabled(
     } in writes
     assert _replay_spend_writes(writes, 15.0) == 5.0
     assert _replay_spend_writes(writes, 8.0) == 0
-    counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:model_access_group:gpt-4-group")
+    counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:model_access_group:gpt-4-group", value=5.0)
 
 
 # ---------------------------------------------------------------------------
@@ -3201,7 +3201,10 @@ def test_direct_reset_carries_overage_when_rollover_enabled(
     assert writes[0]["data"]["spend"] == {"decrement": 100.0}
     assert writes[0]["data"]["budget_reset_at"] > now
     counter_prefix = {"key": "spend:key", "user": "spend:user", "team": "spend:team"}[table]
-    counter_cache.in_memory_cache.delete_cache.assert_any_call(key=f"{counter_prefix}:{id_value}")
+    if table == "key":
+        counter_cache.in_memory_cache.delete_cache.assert_any_call(key=f"{counter_prefix}:{id_value}")
+    else:
+        counter_cache.in_memory_cache.set_cache.assert_any_call(key=f"{counter_prefix}:{id_value}", value=50.0)
 
 
 def test_direct_reset_zeroes_under_budget_row_even_with_rollover(
@@ -3275,7 +3278,7 @@ def test_budget_cascade_carries_overage_per_tier_when_rollover_enabled(
             "data": {"spend": {"decrement": 10.0}},
         },
     ]
-    counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:team_member:member-1:team-1")
+    counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:team_member:member-1:team-1", value=5.0)
 
 
 def test_budget_cascade_carries_enduser_overage_when_rollover_enabled(
@@ -3683,7 +3686,10 @@ def test_direct_reset_carries_unused_allowance_as_negative_spend(
     assert writes[0]["data"]["spend"] == {"decrement": 100.0}
     assert _replay_spend_writes([{"where": {}, "data": writes[0]["data"]}], 30.0) == -70.0
     assert writes[0]["data"]["budget_reset_at"] > now
-    counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:user:user-credit")
+    counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:user:user-credit", value=-70.0)
+    counter_cache.redis_cache.async_set_cache.assert_any_await(key="spend:user:user-credit", value=-70.0)
+    deleted_keys = {call.kwargs.get("key") for call in counter_cache.in_memory_cache.delete_cache.call_args_list}
+    assert "spend:user:user-credit" not in deleted_keys
 
 
 def test_direct_reset_zeroes_spend_when_cap_does_not_exceed_max_budget(
@@ -3871,7 +3877,34 @@ def test_budget_cascade_invalidates_zero_spend_rows_on_banded_tiers(reset_budget
         ]
     }
     assert mock_prisma_client.db.litellm_tagtable.find_many_calls == [{"where": expected_where}]
-    counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:tag:tenant-42")
+    counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:tag:tenant-42", value=-100.0)
+
+
+def test_budget_cascade_seeds_credit_counters_and_deletes_zeroed_ones(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """Rows a banded tier carries into credit get the counter written to the
+    post-reset value; rows a plain tier zeroes keep the delete-then-reseed path."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    banded = _budget_row(
+        budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0
+    )
+    plain = _budget_row(budget_id="budget-plain", budget_duration="7d", max_budget=10.0)
+    mock_prisma_client.data["budget"] = [banded, plain]
+    mock_prisma_client.db.litellm_teammembership.set_find_many_results(
+        [
+            type("Membership", (), {"user_id": "m-1", "team_id": "t-1", "spend": 0.0, "budget_id": "budget-credit"}),
+            type("Membership", (), {"user_id": "m-2", "team_id": "t-2", "spend": 20.0, "budget_id": "budget-plain"}),
+        ]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:team_member:m-1:t-1", value=-100.0)
+    counter_cache.redis_cache.async_set_cache.assert_any_await(key="spend:team_member:m-1:t-1", value=-100.0)
+    counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:team_member:m-2:t-2")
+    deleted_keys = {call.kwargs.get("key") for call in counter_cache.in_memory_cache.delete_cache.call_args_list}
+    assert "spend:team_member:m-1:t-1" not in deleted_keys
 
 
 def test_band_statements_reproduce_reset_spend_for_every_spend_value(
