@@ -34,6 +34,14 @@ where
                 .then(|| "document".to_string()),
         )
         .collect();
+    let original_document =
+        serde_json::to_value(&request.document).map_err(|_| super::Error::RequestField {
+            path: "document".into(),
+        })?;
+    let prepared_document = composed
+        .get("document")
+        .filter(|prepared| **prepared != original_document)
+        .cloned();
     let (body, headers) = if request.hooks.intercepts_requests() {
         let changed = request
             .hooks
@@ -47,13 +55,19 @@ where
                 retained_fields,
             })
             .await?;
-        if !changed.body.is_object() {
+        let Value::Object(mut fields) = changed.body else {
             return Err(super::Error::RequestField {
                 path: "guardrail.body".into(),
             });
+        };
+        if let Some(prepared) =
+            prepared_document.filter(|_| fields.get("document") == Some(&original_document))
+        {
+            fields.insert("document".into(), prepared);
         }
-        validate(&changed.body)?;
-        (changed.body, changed.headers)
+        let body = Value::Object(fields);
+        validate(&body)?;
+        (body, changed.headers)
     } else {
         (composed, headers.to_vec())
     };
