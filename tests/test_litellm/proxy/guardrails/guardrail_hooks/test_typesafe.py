@@ -36,7 +36,7 @@ FAKE_API_KEY = "ts_test-key"
 
 SYSTEM_TEXT = "You are a research assistant."
 USER_TEXT = "Which 2026 EV has the longest range?"
-TOOL_OUTPUT_LONG = "Result: EV range comparison. " * 40  # > 200 chars
+TOOL_OUTPUT_LONG = "Result: EV range comparison. " * 40
 TOOL_OUTPUT_SHORT = "short"
 
 
@@ -141,8 +141,6 @@ async def test_low_noul_exchange_blanked_high_kept_and_input_not_mutated():
 async def test_last_exchange_and_protected_rows_never_evaluated():
     handler = _make_handler({"e0": 0.05})
     guardrail = _make_guardrail(handler)
-    # Ends on a tool result: the last assistant row is protected, so the whole
-    # last exchange is out of scope even though its text is long.
     messages = _messages(tail=[*_exchange("call_1", TOOL_OUTPUT_LONG), *_exchange("call_2", TOOL_OUTPUT_LONG)])
 
     result = await _apply(guardrail, messages)
@@ -303,9 +301,15 @@ def test_get_config_model_and_ui_name():
 async def test_non_list_and_non_dict_messages_return_identity():
     guardrail = _make_guardrail()
     not_a_list = GenericGuardrailAPIInputs(structured_messages={"role": "user"})
-    assert await guardrail.apply_guardrail(inputs=not_a_list, request_data={}, input_type="request", logging_obj=None) is not_a_list
+    assert (
+        await guardrail.apply_guardrail(inputs=not_a_list, request_data={}, input_type="request", logging_obj=None)
+        is not_a_list
+    )
     with_bad_row = _inputs(_messages(tail=[["not", "a", "dict"]]))
-    assert await guardrail.apply_guardrail(inputs=with_bad_row, request_data={}, input_type="request", logging_obj=None) is with_bad_row
+    assert (
+        await guardrail.apply_guardrail(inputs=with_bad_row, request_data={}, input_type="request", logging_obj=None)
+        is with_bad_row
+    )
 
 
 def test_odd_tool_call_shapes_yield_no_entries():
@@ -322,7 +326,9 @@ def test_odd_tool_call_shapes_yield_no_entries():
 async def test_short_max_chars_uses_prefix_slice():
     handler = _make_handler({"e0": 0.9})
     guardrail = _make_guardrail(handler, max_result_chars_in_state=5)
-    await _apply(guardrail, _messages(tail=[*_exchange("call_1", TOOL_OUTPUT_LONG), {"role": "assistant", "content": "x"}]))
+    await _apply(
+        guardrail, _messages(tail=[*_exchange("call_1", TOOL_OUTPUT_LONG), {"role": "assistant", "content": "x"}])
+    )
     result = handler.post.call_args.kwargs["json"]["state"]["tool_exchanges"]["e0"]["result"]
     assert result == TOOL_OUTPUT_LONG[:5]
 
@@ -363,9 +369,7 @@ async def test_http_status_error_includes_status_and_undecodable_body():
     response.status_code = 503
     type(response).text = PropertyMock(side_effect=httpx.DecodingError("bad codec"))
     handler = MagicMock()
-    handler.post = AsyncMock(
-        side_effect=httpx.HTTPStatusError("unavailable", request=MagicMock(), response=response)
-    )
+    handler.post = AsyncMock(side_effect=httpx.HTTPStatusError("unavailable", request=MagicMock(), response=response))
     guardrail = _make_guardrail(handler)
     inputs = _inputs(_messages(tail=[*_exchange("call_1", TOOL_OUTPUT_LONG), {"role": "assistant", "content": "x"}]))
     result = await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
@@ -396,3 +400,10 @@ def test_optional_params_defaults_and_event_hook_coercion():
     litellm_params = LitellmParams(guardrail="typesafe", mode="pre_call", api_key=FAKE_API_KEY)
     params = _optional_params(litellm_params)
     assert params.relevance_threshold is None
+
+
+def test_typesafe_initializer_discoverable_via_hook_registries():
+    from litellm.proxy.guardrails.guardrail_registry import get_guardrail_initializer_from_hooks
+
+    initializers = get_guardrail_initializer_from_hooks()
+    assert initializers["typesafe"] is initialize_guardrail
