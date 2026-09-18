@@ -18,11 +18,13 @@ from fastapi import HTTPException
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     ParallelSlotAcquisition,
+    RateLimitDescriptor,
     RequestRateLimiterStash,
     _request_stash,
     get_or_create_request_stash,
@@ -5669,6 +5671,86 @@ async def test_tpm_reservation_resets_sibling_tokens_with_request_window(monkeyp
     time_controller.advance(61)
     await request("call-after-window-reset")
     assert await local_cache.async_get_cache(key=tokens_key) == 300
+
+
+@pytest.mark.asyncio
+async def test_atomic_tpm_reservation_rollover_resets_sibling_requests_counter():
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    window_size = 60
+    now_int = int(time.time())
+    window_key = "{api_key:atomic-rollover}:window"
+    requests_key = handler.create_rate_limit_keys("api_key", "atomic-rollover", "requests")
+    tokens_key = handler.create_rate_limit_keys("api_key", "atomic-rollover", "tokens")
+    for key, value in ((window_key, str(now_int - window_size - 1)), (requests_key, 3), (tokens_key, 900)):
+        await local_cache.async_set_cache(key=key, value=value, ttl=window_size)
+
+    tpm_pass = await handler.atomic_check_and_increment_by_n(
+        descriptors=[
+            RateLimitDescriptor(
+                key="api_key",
+                value="atomic-rollover",
+                rate_limit={"tokens_per_unit": 1000, "window_size": window_size},
+            )
+        ],
+        increments=[{"tokens": 200}],
+    )
+    assert tpm_pass["overall_code"] == "OK"
+    assert await local_cache.async_get_cache(key=tokens_key) == 200
+
+    rpm_pass = await handler.should_rate_limit(
+        descriptors=[
+            RateLimitDescriptor(
+                key="api_key",
+                value="atomic-rollover",
+                rate_limit={"requests_per_unit": 5, "window_size": window_size},
+            )
+        ],
+        skip_tpm_check=True,
+    )
+    assert rpm_pass["overall_code"] == "OK"
+    assert [status["limit_remaining"] for status in rpm_pass["statuses"]] == [4]
+    assert await local_cache.async_get_cache(key=requests_key) == 1
+
+
+class _YieldingInMemoryCache(InMemoryCache):
+    async def async_get_cache(self, key: str, **kwargs: object) -> object:
+        value = await super().async_get_cache(key, **kwargs)
+        await asyncio.sleep(0)
+        return value
+
+
+@pytest.mark.asyncio
+async def test_window_rollover_reset_does_not_erase_concurrent_sibling_increment():
+    local_cache = DualCache(in_memory_cache=_YieldingInMemoryCache())
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    window_size = 60
+    now_int = int(time.time())
+    window_key = "{api_key:concurrent-rollover}:window"
+    requests_key = handler.create_rate_limit_keys("api_key", "concurrent-rollover", "requests")
+    tokens_key = handler.create_rate_limit_keys("api_key", "concurrent-rollover", "tokens")
+    for key, value in ((window_key, str(now_int - window_size - 1)), (requests_key, 3), (tokens_key, 900)):
+        await local_cache.async_set_cache(key=key, value=value, ttl=window_size)
+
+    tpm_descriptor = RateLimitDescriptor(
+        key="api_key",
+        value="concurrent-rollover",
+        rate_limit={"tokens_per_unit": 1000, "window_size": window_size},
+    )
+    rpm_pass, tpm_pass = await asyncio.gather(
+        handler.in_memory_cache_sliding_window(
+            keys=[window_key, requests_key], now_int=now_int, window_size=window_size
+        ),
+        handler.atomic_check_and_increment_by_n(
+            descriptors=[tpm_descriptor],
+            increments=[{"requests": 0, "tokens": 200}],
+        ),
+    )
+
+    assert rpm_pass == [str(now_int), 1]
+    assert tpm_pass["overall_code"] == "OK"
+    assert await local_cache.async_get_cache(key=requests_key) == 1
+    assert await local_cache.async_get_cache(key=tokens_key) == 200
 
 
 @pytest.mark.asyncio

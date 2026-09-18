@@ -100,7 +100,6 @@ BATCH_RATE_LIMITER_SCRIPT: Final = """
 local results = {}
 local now = tonumber(ARGV[1])
 local window_size = tonumber(ARGV[2])
-local reset_windows = {}
 
 -- Process each window/counter pair
 for i = 1, #KEYS, 2 do
@@ -112,11 +111,8 @@ for i = 1, #KEYS, 2 do
     local window_start = redis.call('GET', window_key)
     if not window_start or (now - tonumber(window_start)) >= window_size then
         -- Reset window and counter
-        if not reset_windows[window_key] then
-            local prefix = string.sub(window_key, 1, -(#':window') - 1)
-            redis.call('DEL', prefix .. ':requests', prefix .. ':tokens')
-            reset_windows[window_key] = true
-        end
+        local prefix = string.sub(window_key, 1, -(#':window') - 1)
+        redis.call('DEL', prefix .. ':requests', prefix .. ':tokens')
         redis.call('SET', window_key, tostring(now))
         redis.call('SET', counter_key, increment_value)
         redis.call('EXPIRE', window_key, window_size)
@@ -1035,8 +1031,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Implement sliding window rate limiting logic using in-memory cache operations.
         This follows the same logic as the Redis Lua script but uses async cache operations.
         """
+        async with self._check_and_increment_lock:
+            return await self._in_memory_cache_sliding_window(keys=keys, now_int=now_int, window_size=window_size)
+
+    async def _in_memory_cache_sliding_window(
+        self,
+        keys: list[str],
+        now_int: int,
+        window_size: int,
+    ) -> CacheCounterValues:
         results: Final[list[CacheCounterValue | None]] = []
-        reset_windows: Final[set[str]] = set()  # mutable-ok: tracks windows reset during this call
 
         # Process each window/counter pair
         for i in range(0, len(keys), 2):
@@ -1054,16 +1058,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # Check if window exists and is valid
             if window_start is None or (now_int - int(window_start)) >= window_size:
                 # Reset window and counter
-                if window_key not in reset_windows:
-                    for sibling_counter_key in _sibling_counter_keys(window_key):
-                        await self.internal_usage_cache.async_set_cache(
-                            key=sibling_counter_key,
-                            value=0,
-                            ttl=window_size,
-                            litellm_parent_otel_span=None,
-                            local_only=True,
-                        )
-                    reset_windows.add(window_key)
+                for sibling_counter_key in _sibling_counter_keys(window_key):
+                    await self.internal_usage_cache.async_set_cache(
+                        key=sibling_counter_key,
+                        value=0,
+                        ttl=window_size,
+                        litellm_parent_otel_span=None,
+                        local_only=True,
+                    )
                 await self.internal_usage_cache.async_set_cache(
                     key=window_key,
                     value=str(now_int),
@@ -2076,21 +2078,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         # Pass 2: apply increments.
+        expired_windows: Final[Mapping[str, int]] = {
+            meta["window_key"]: meta["window_size"]
+            for meta, state in zip(per_counter_meta, descriptor_state)
+            if state["window_expired"]
+        }
+        for window_key, window_size in expired_windows.items():
+            for sibling_counter_key in _sibling_counter_keys(window_key):
+                await self.internal_usage_cache.async_set_cache(
+                    key=sibling_counter_key,
+                    value=0,
+                    ttl=window_size,
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
+                )
         statuses: Final[list[RateLimitStatus]] = []
-        reset_windows: Final[set[str]] = set()  # mutable-ok: tracks windows reset during this call
         for meta, state in zip(per_counter_meta, descriptor_state):
             new_counter = meta["increment"] if state["window_expired"] else state["current"] + meta["increment"]
             if state["window_expired"]:
-                if meta["window_key"] not in reset_windows:
-                    for sibling_counter_key in _sibling_counter_keys(meta["window_key"]):
-                        await self.internal_usage_cache.async_set_cache(
-                            key=sibling_counter_key,
-                            value=0,
-                            ttl=meta["window_size"],
-                            litellm_parent_otel_span=parent_otel_span,
-                            local_only=True,
-                        )
-                    reset_windows.add(meta["window_key"])
                 await self.internal_usage_cache.async_set_cache(
                     key=meta["window_key"],
                     value=str(now_int),
