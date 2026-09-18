@@ -806,6 +806,8 @@ _EXPECTED_CUSTOMER = {
         "model_max_budget": None,
         "budget_duration": "30d",
         "allowed_models": [],
+        "temp_budget_increase": None,
+        "temp_budget_expiry": None,
         "budget_reset_at": "2024-02-01T00:00:00",
         "created_at": "2024-01-01T00:00:00",
     },
