@@ -291,6 +291,28 @@ describe("capability classifier configuration", () => {
 });
 
 describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
+  it.each(["llm", "jev"] as const)(
+    "drops the stored %s per-turn bound when switching to heuristic",
+    (classifier_type) => {
+      const stored = { ...STORED_LLM, classifier_type };
+      const saved = buildUpdatedComplexityRouterConfig(stored, {
+        ...hydrateComplexityRouterConfig(stored, undefined),
+        classifier_type: "heuristic",
+      });
+
+      expect(saved).not.toHaveProperty("classifier_context_per_turn_chars");
+    },
+  );
+
+  it("does not resurrect an explicitly cleared per-turn bound", () => {
+    const saved = buildUpdatedComplexityRouterConfig(STORED_LLM, {
+      ...hydrateComplexityRouterConfig(STORED_LLM, undefined),
+      classifier_context_per_turn_chars: undefined,
+    });
+
+    expect(saved).not.toHaveProperty("classifier_context_per_turn_chars");
+  });
+
   it.each(["llm", "jev"] as const)("saves the form's per-turn bound over the stored %s bound", (classifier_type) => {
     const formValue = {
       ...hydrateComplexityRouterConfig({ ...STORED_LLM, classifier_type }, undefined),

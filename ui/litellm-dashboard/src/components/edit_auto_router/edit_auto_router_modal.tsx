@@ -1,4 +1,5 @@
 import AutoRouterClassifierTabs from "../add_model/AutoRouterClassifierTabs";
+import { usesClassifierContext } from "../add_model/classifier_types";
 import { defaultJevClassifierConfig, jevClassifierConfigSchema } from "../add_model/jev_classifier_config";
 import type { StoredComplexityRouterConfig } from "../add_model/build_complexity_router_config";
 export type { StoredComplexityRouterConfig } from "../add_model/build_complexity_router_config";
@@ -317,6 +318,9 @@ export const buildUpdatedComplexityRouterConfig = (
   keywordMatching?: KeywordMatchingState,
 ): Record<string, unknown> => {
   const isManaged = (key: string): boolean => {
+    if (key === "classifier_context_per_turn_chars") {
+      return !usesClassifierContext(effectiveClassifierType(value)) || Object.prototype.hasOwnProperty.call(value, key);
+    }
     if (MANAGED_COMPLEXITY_ROUTER_KEYS.has(key)) return true;
     if (key === "escalation_keywords" && isForecastClassifier(effectiveClassifierType(value))) return true;
     if (keywordMatching !== undefined && KEYWORD_MATCHING_KEYS.has(key)) return true;

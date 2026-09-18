@@ -72,6 +72,37 @@ async def test_jev_http_errors_do_not_dispatch_successful_usage(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["input_tokens", "output_tokens"])
+@pytest.mark.parametrize("tokens", [-1, True, 1.5, "3"])
+async def test_jev_invalid_usage_never_reaches_spend_callbacks(
+    monkeypatch: pytest.MonkeyPatch, field: str, tokens: object
+) -> None:
+    recorder: Final = _UsageRecorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    handler: Final = create_autospec(AsyncHTTPHandler, instance=True)
+    handler.post.return_value = httpx.Response(
+        200,
+        request=httpx.Request("POST", "https://typesafe.test/v1/systemone"),
+        json={
+            "model": "jev-accounting",
+            "usage": {"input_tokens": 3, "output_tokens": 2, field: tokens},
+            "answers": {"tier": _answer().model_dump()},
+        },
+    )
+    provider: Final = HttpJevClassifierClient("test", "https://typesafe.test", handler)
+    request: Final = build_jev_request(
+        "choose a tier", None, "jev-accounting", DEFAULT_JEV_INSTRUCTIONS, {"SIMPLE": "cheap"}
+    )
+
+    with pytest.raises(ValueError, match=field):
+        await provider.evaluate(request, timeout_s=3)
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    handler.post.assert_awaited_once()
+    assert recorder.calls == ()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("answer", ["SIMPLE", "UNAVAILABLE", "malformed"])
 @pytest.mark.parametrize("private", [False, True])
 async def test_jev_accounts_once_with_parent_identity_even_when_the_verdict_fails(
