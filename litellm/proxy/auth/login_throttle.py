@@ -120,9 +120,9 @@ def warn_login_counters_are_per_worker(num_workers: str) -> None:
 @cache
 def warn_source_login_limit_is_off() -> None:
     verbose_proxy_logger.warning(
-        "%s is not set, so failed Admin UI sign-in attempts are limited per source address and username "
-        "only. Set it to the address ranges of the proxies in front of LiteLLM, or to an empty list when "
-        "clients connect directly, to also limit each source address across usernames.",
+        "%s is not set or not a valid list of ranges, so failed Admin UI sign-in attempts are limited per "
+        "source address and username only. Set it to the address ranges of the proxies in front of LiteLLM, "
+        "or to an empty list when clients connect directly, to also limit each source address across usernames.",
         TRUSTED_PROXY_RANGES_KEY,
     )
 
@@ -131,13 +131,16 @@ def declared_proxy_ranges(settings: Mapping[str, object]) -> tuple[str, ...] | N
     """What the operator says fronts LiteLLM: the proxy ranges, an empty tuple for none, None when unsaid.
 
     Only a declared topology makes the source address trustworthy enough to limit across usernames.
-    An unset key, or a value that is not a list of ranges, leaves it unknown and the source scope off.
+    An unset key, a value that is not a list of ranges, or a list with an entry that is not an address
+    or range leaves it unknown and the source scope off.
     """
     raw_ranges: Final = settings.get(TRUSTED_PROXY_RANGES_KEY)
     if isinstance(raw_ranges, (list, tuple, set)) and not raw_ranges:
         return ()
     cidrs: Final = tuple(normalize_cidr_ranges(raw_ranges, setting_name=TRUSTED_PROXY_RANGES_KEY))
-    return cidrs or None
+    if not cidrs or any(_parse_network(cidr, TRUSTED_PROXY_RANGES_KEY) is None for cidr in cidrs):
+        return None
+    return cidrs
 
 
 def _positive_int(raw: object, key: str, default: int) -> int:
@@ -176,13 +179,11 @@ def _parse_address(client_ip: str) -> ipaddress.IPv4Address | ipaddress.IPv6Addr
     return address
 
 
-def _parse_network(raw_range: str) -> _Network | None:
+def _parse_network(raw_range: str, setting_name: str = SOURCE_LIMIT_OVERRIDES_KEY) -> _Network | None:
     try:
         return ipaddress.ip_network(raw_range.strip(), strict=False)
     except ValueError:
-        verbose_proxy_logger.warning(
-            "Invalid address or range %r in %s; skipping", raw_range, SOURCE_LIMIT_OVERRIDES_KEY
-        )
+        verbose_proxy_logger.warning("Invalid address or range %r in %s; skipping", raw_range, setting_name)
         return None
 
 
