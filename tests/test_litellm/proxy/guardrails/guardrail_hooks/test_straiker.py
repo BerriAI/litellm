@@ -1398,7 +1398,7 @@ def test_v3_agent_ref_is_read_from_config():
 
 
 def test_v3_session_follows_kong_precedence():
-    from litellm.proxy.guardrails.guardrail_hooks.straiker.straiker import _v3_session_id, _v3_request_body
+    from litellm.proxy.guardrails.guardrail_hooks.straiker.straiker import _v3_request_body, _v3_session_id
     from litellm.types.proxy.guardrails.guardrail_hooks.straiker import StraikerWebhookRequest
 
     def envelope_with(session):
