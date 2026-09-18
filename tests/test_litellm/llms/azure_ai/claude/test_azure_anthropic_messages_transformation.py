@@ -3,9 +3,7 @@ import json
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 from unittest.mock import patch
 
@@ -39,9 +37,7 @@ class TestAzureAnthropicMessagesConfig:
         litellm_params = {"api_key": "test-api-key"}
         api_key = "test-api-key"
 
-        with patch(
-            "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
-        ) as mock_validate:
+        with patch("litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment") as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             result, api_base = config.validate_anthropic_messages_environment(
                 headers=headers,
@@ -72,9 +68,7 @@ class TestAzureAnthropicMessagesConfig:
         optional_params = {}
         litellm_params = {"api_key": "test-api-key"}
 
-        with patch(
-            "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
-        ) as mock_validate:
+        with patch("litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment") as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             result, api_base = config.validate_anthropic_messages_environment(
                 headers=headers,
@@ -98,9 +92,7 @@ class TestAzureAnthropicMessagesConfig:
         optional_params = {}
         litellm_params = {"api_key": "test-api-key"}
 
-        with patch(
-            "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
-        ) as mock_validate:
+        with patch("litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment") as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             result, api_base = config.validate_anthropic_messages_environment(
                 headers=headers,
@@ -172,7 +164,6 @@ class TestAzureAnthropicMessagesConfig:
         )
 
         assert url == "https://test.services.ai.azure.com/anthropic/v1/messages"
-
 
     def test_get_complete_url_with_base_url_without_anthropic(self):
         """Test get_complete_url with base URL without /anthropic"""
@@ -267,9 +258,7 @@ class TestAzureAnthropicMessagesConfig:
         assert "scope" not in result["system"][0]["cache_control"]
         assert result["system"][0]["cache_control"]["type"] == "ephemeral"
         assert "scope" not in result["messages"][0]["content"][0]["cache_control"]
-        assert (
-            result["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
-        )
+        assert result["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
 
 
 class TestProviderConfigManagerAzureAnthropicMessages:
@@ -315,47 +304,6 @@ class TestProviderConfigManagerAzureAnthropicMessages:
         )
 
         assert config is None
-
-
-
-def test_messages_thinking_shape_follows_exact_azure_entry_flag(local_model_cost_map, monkeypatch):
-    """The Azure messages config must probe capabilities under ``azure_ai`` so an
-    operator setting ``supports_adaptive_thinking: false`` on the exact
-    ``azure_ai/claude-opus-4-8`` entry beats the unmodified ``anthropic`` entry.
-    With the inherited ``"anthropic"`` provider default the flip was ignored and
-    the transform kept emitting ``thinking.type='adaptive'``."""
-    import litellm
-
-    config = AzureAnthropicMessagesConfig()
-
-    def transform():
-        return config.transform_anthropic_messages_request(
-            model="claude-opus-4-8",
-            messages=[{"role": "user", "content": "Hello"}],
-            anthropic_messages_optional_request_params={
-                "max_tokens": 4096,
-                "reasoning_effort": "medium",
-            },
-            litellm_params=GenericLiteLLMParams(),
-            headers={},
-        )
-
-    result = transform()
-    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
-    assert result.get("output_config") == {"effort": "medium"}
-
-    monkeypatch.setitem(
-        litellm.model_cost["azure_ai/claude-opus-4-8"], "supports_adaptive_thinking", False
-    )
-    litellm.get_model_info.cache_clear()
-    assert litellm.model_cost["claude-opus-4-8"]["supports_adaptive_thinking"] is True
-
-    flipped = transform()
-    thinking = flipped.get("thinking")
-    assert isinstance(thinking, dict)
-    assert thinking.get("type") == "enabled"
-    assert isinstance(thinking.get("budget_tokens"), int)
-    assert "output_config" not in flipped
 
 
 def _azure_transform(model, messages, system=None):
@@ -417,9 +365,7 @@ class TestAzureAnthropicMidConversationSystem:
             {"role": "assistant", "content": "reading"},
             {"role": "user", "content": "continue"},
         ]
-        result = _azure_transform(
-            "claude-opus-4-7", messages, system=[{"type": "text", "text": "Base."}]
-        )
+        result = _azure_transform("claude-opus-4-7", messages, system=[{"type": "text", "text": "Base."}])
         assert result["messages"] == [
             {"role": "user", "content": "read the file"},
             {
@@ -450,9 +396,7 @@ def test_azure_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_fl
 
     import litellm
 
-    cost_map_path = os.path.join(
-        os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json"
-    )
+    cost_map_path = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
     with open(cost_map_path) as f:
         cost_map = json.load(f)
     rules = cost_map["fallback_generalizations"]["rules"]

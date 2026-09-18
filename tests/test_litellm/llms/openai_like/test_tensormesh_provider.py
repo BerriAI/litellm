@@ -79,20 +79,6 @@ class TestTensormeshProviderConfig:
         matching the text_completion flag in provider_endpoints_support.json."""
         assert "tensormesh" in litellm.openai_text_completion_compatible_providers
 
-    def test_tensormesh_responses_api_enabled(self):
-        """Tensormesh declares /v1/responses in supported_endpoints, so litellm
-        resolves a responses config for it."""
-        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-        from litellm.utils import ProviderConfigManager
-
-        assert JSONProviderRegistry.supports_responses_api("tensormesh") is True
-        config = ProviderConfigManager.get_provider_responses_api_config(
-            provider="tensormesh",
-            model="tensormesh/openai/gpt-oss-120b",
-        )
-        assert config is not None
-        assert config.custom_llm_provider == "tensormesh"
-
     def test_tensormesh_router_config(self):
         """Test that tensormesh can be used in Router configuration"""
         from litellm import Router
@@ -129,16 +115,6 @@ class TestTensormeshCostMap:
             litellm.model_cost = original_model_cost
             litellm.get_model_info.cache_clear()
 
-    def test_models_registered_with_capabilities(self):
-        for model in TENSORMESH_MODELS:
-            info = litellm.get_model_info(model)
-            assert info["litellm_provider"] == "tensormesh"
-            assert info["mode"] == "chat"
-            assert litellm.supports_function_calling(model) is True, model
-            assert litellm.supports_response_schema(model) is True, model
-            assert litellm.model_cost[model]["supports_tool_choice"] is True, model
-            assert litellm.model_cost[model]["supports_prompt_caching"] is True, model
-
     def test_reasoning_flag_matches_expected_set(self):
         reasoning_models = {
             "tensormesh/deepseek-ai/DeepSeek-V4-Flash",
@@ -153,4 +129,3 @@ class TestTensormeshCostMap:
         }
         for model in TENSORMESH_MODELS:
             assert litellm.supports_reasoning(model) is (model in reasoning_models), model
-

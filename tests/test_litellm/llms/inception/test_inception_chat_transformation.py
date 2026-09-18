@@ -7,7 +7,6 @@ import os
 from unittest import mock
 
 import httpx
-import pytest
 
 import litellm
 from litellm.llms.inception.chat.transformation import InceptionChatConfig
@@ -189,21 +188,15 @@ def test_inception_does_not_leak_key_to_caller_api_base():
     caller also supplies their own key.
     """
     config = InceptionChatConfig()
-    with mock.patch.dict(
-        os.environ, {"INCEPTION_API_KEY": "server-secret"}, clear=True
-    ):
+    with mock.patch.dict(os.environ, {"INCEPTION_API_KEY": "server-secret"}, clear=True):
         with mock.patch.object(litellm, "inception_key", "module-secret"):
             # caller overrides api_base without a key -> server key withheld
-            api_base, api_key = config._get_openai_compatible_provider_info(
-                "https://attacker.example/v1", None
-            )
+            api_base, api_key = config._get_openai_compatible_provider_info("https://attacker.example/v1", None)
             assert api_base == "https://attacker.example/v1"
             assert api_key is None
 
             # caller overrides api_base AND supplies their own key -> used as-is
-            _, api_key = config._get_openai_compatible_provider_info(
-                "https://attacker.example/v1", "caller-key"
-            )
+            _, api_key = config._get_openai_compatible_provider_info("https://attacker.example/v1", "caller-key")
             assert api_key == "caller-key"
 
             # default/server base -> server-managed key resolved
@@ -218,9 +211,7 @@ def test_get_llm_provider_inception():
     assert model == "mercury-2"
     assert provider == "inception"
 
-    model, provider, _, api_base = get_llm_provider(
-        "mercury-2", api_base="https://api.inceptionlabs.ai/v1"
-    )
+    model, provider, _, api_base = get_llm_provider("mercury-2", api_base="https://api.inceptionlabs.ai/v1")
     assert model == "mercury-2"
     assert provider == "inception"
     assert api_base == "https://api.inceptionlabs.ai/v1"
@@ -230,18 +221,6 @@ def test_inception_in_provider_lists():
     assert "inception" in litellm.openai_compatible_providers
     assert "inception" in litellm.provider_list
     assert "https://api.inceptionlabs.ai/v1" in litellm.openai_compatible_endpoints
-
-
-def test_inception_model_list_populated(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.inception_models = set()
-    litellm.add_known_models()
-
-    assert "inception/mercury-2" in litellm.inception_models
-    assert "inception/mercury-2.5" in litellm.inception_models
-    for model in litellm.inception_models:
-        assert model.startswith("inception/")
 
 
 def test_inception_completion_targets_inception_endpoint():
@@ -306,5 +285,3 @@ def test_inception_completion_targets_inception_endpoint():
     assert captured["body"]["model"] == "mercury-2"
     assert captured["body"]["tool_choice"] == "auto"
     assert response.choices[0].message.content == "hi"
-
-

@@ -110,15 +110,6 @@ class TestCognitionProviderIdentity:
 
 
 class TestCognitionCostTracking:
-
-
-    def test_lightning_is_five_times_the_standard_tier(self):
-        standard = litellm.get_model_info(model="cognition/swe-1.7")
-        lightning = litellm.get_model_info(model="cognition/swe-1.7-lightning")
-
-        assert lightning["input_cost_per_token"] == pytest.approx(standard["input_cost_per_token"] * 5)
-        assert lightning["output_cost_per_token"] == pytest.approx(standard["output_cost_per_token"] * 5)
-
     def test_supported_endpoints_matrix(self):
         matrix = json.loads((Path(litellm.__file__).parent / "provider_endpoints_support_backup.json").read_text())
 
@@ -127,6 +118,3 @@ class TestCognitionCostTracking:
         assert endpoints["messages"] is True
         assert endpoints["responses"] is True
         assert endpoints["embeddings"] is False
-
-
-

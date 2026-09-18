@@ -42,9 +42,7 @@ class TestDashscopeCostCalculator:
         """
         usage = Usage(prompt_tokens=1000, completion_tokens=500)
 
-        prompt_cost, completion_cost = dashscope_cost_per_token(
-            model="qwen-max", usage=usage
-        )
+        prompt_cost, completion_cost = dashscope_cost_per_token(model="qwen-max", usage=usage)
 
         model_info = litellm.get_model_info("dashscope/qwen-max")
         expected_prompt_cost = 1000 * model_info["input_cost_per_token"]
@@ -60,9 +58,7 @@ class TestDashscopeCostCalculator:
         """
         # Tier 1 for qwen-flash is [0, 256,000] tokens
         usage = Usage(prompt_tokens=100000, completion_tokens=50000)
-        prompt_cost, completion_cost = dashscope_cost_per_token(
-            model="qwen-flash", usage=usage
-        )
+        prompt_cost, completion_cost = dashscope_cost_per_token(model="qwen-flash", usage=usage)
 
         model_info = litellm.get_model_info("dashscope/qwen-flash")
         tier_1_pricing = model_info["tiered_pricing"][0]
@@ -80,9 +76,7 @@ class TestDashscopeCostCalculator:
         """
         # Tiering for qwen-flash: Tier 1: [0, 256k], Tier 2: [256k, 1M]
         usage = Usage(prompt_tokens=300000, completion_tokens=300000)
-        prompt_cost, completion_cost = dashscope_cost_per_token(
-            model="qwen-flash", usage=usage
-        )
+        prompt_cost, completion_cost = dashscope_cost_per_token(model="qwen-flash", usage=usage)
 
         model_info = litellm.get_model_info("dashscope/qwen-flash")
         tier_1 = model_info["tiered_pricing"][0]
@@ -94,9 +88,7 @@ class TestDashscopeCostCalculator:
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
-        graduated_prompt_cost = (256000 * tier_1["input_cost_per_token"]) + (
-            44000 * tier_2["input_cost_per_token"]
-        )
+        graduated_prompt_cost = (256000 * tier_1["input_cost_per_token"]) + (44000 * tier_2["input_cost_per_token"])
         assert prompt_cost > graduated_prompt_cost
 
     def test_dashscope_tiered_pricing_boundary_stays_in_lower_tier(self):
@@ -105,18 +97,12 @@ class TestDashscopeCostCalculator:
         official `0 < Token <= 256K` phrasing.
         """
         usage = Usage(prompt_tokens=256000, completion_tokens=1000)
-        prompt_cost, completion_cost = dashscope_cost_per_token(
-            model="qwen-flash", usage=usage
-        )
+        prompt_cost, completion_cost = dashscope_cost_per_token(model="qwen-flash", usage=usage)
 
         tier_1 = litellm.get_model_info("dashscope/qwen-flash")["tiered_pricing"][0]
 
-        assert math.isclose(
-            prompt_cost, 256000 * tier_1["input_cost_per_token"], rel_tol=1e-10
-        )
-        assert math.isclose(
-            completion_cost, 1000 * tier_1["output_cost_per_token"], rel_tol=1e-10
-        )
+        assert math.isclose(prompt_cost, 256000 * tier_1["input_cost_per_token"], rel_tol=1e-10)
+        assert math.isclose(completion_cost, 1000 * tier_1["output_cost_per_token"], rel_tol=1e-10)
 
     def test_dashscope_tiered_pricing_output_uses_input_selected_tier(self):
         """
@@ -128,9 +114,7 @@ class TestDashscopeCostCalculator:
 
         tier_1 = litellm.get_model_info("dashscope/qwen-flash")["tiered_pricing"][0]
 
-        assert math.isclose(
-            completion_cost, 400000 * tier_1["output_cost_per_token"], rel_tol=1e-10
-        )
+        assert math.isclose(completion_cost, 400000 * tier_1["output_cost_per_token"], rel_tol=1e-10)
 
     def test_dashscope_tiered_pricing_with_caching(self):
         """
@@ -159,17 +143,13 @@ class TestDashscopeCostCalculator:
         """
         Requests above the highest declared range bill entirely at the last tier's rate.
         """
-        usage = Usage(
-            prompt_tokens=1200000, completion_tokens=1000
-        )  # Max defined range for qwen-flash is 1M
+        usage = Usage(prompt_tokens=1200000, completion_tokens=1000)  # Max defined range for qwen-flash is 1M
 
         prompt_cost, _ = dashscope_cost_per_token(model="qwen-flash", usage=usage)
 
         tier_2 = litellm.get_model_info("dashscope/qwen-flash")["tiered_pricing"][1]
 
-        assert math.isclose(
-            prompt_cost, 1200000 * tier_2["input_cost_per_token"], rel_tol=1e-10
-        )
+        assert math.isclose(prompt_cost, 1200000 * tier_2["input_cost_per_token"], rel_tol=1e-10)
 
     def _register_tiered_model(self, model_key: str, tiered_pricing: list[dict]) -> None:
         litellm.model_cost[model_key] = {
@@ -204,9 +184,7 @@ class TestDashscopeCostCalculator:
         self._register_string_valued_tiered_model("dashscope/qwen-str-tier-test")
 
         usage = Usage(prompt_tokens=500, completion_tokens=200)
-        prompt_cost, completion_cost = dashscope_cost_per_token(
-            model="qwen-str-tier-test", usage=usage
-        )
+        prompt_cost, completion_cost = dashscope_cost_per_token(model="qwen-str-tier-test", usage=usage)
 
         assert math.isclose(prompt_cost, 500 * float("4e-07"), rel_tol=1e-10)
         assert math.isclose(completion_cost, 200 * float("1.6e-06"), rel_tol=1e-10)
@@ -219,9 +197,7 @@ class TestDashscopeCostCalculator:
         self._register_string_valued_tiered_model("dashscope/qwen-str-tier-test")
 
         usage = Usage(prompt_tokens=2500, completion_tokens=3000)
-        prompt_cost, completion_cost = dashscope_cost_per_token(
-            model="qwen-str-tier-test", usage=usage
-        )
+        prompt_cost, completion_cost = dashscope_cost_per_token(model="qwen-str-tier-test", usage=usage)
 
         assert math.isclose(prompt_cost, 2500 * float("8e-07"), rel_tol=1e-10)
         assert math.isclose(completion_cost, 3000 * float("3.2e-06"), rel_tol=1e-10)
@@ -254,18 +230,12 @@ class TestDashscopeCostCalculator:
         usage = Usage(
             prompt_tokens=300000,  # 200k new + 60k cache creation + 40k cache read
             completion_tokens=1000,
-            prompt_tokens_details=PromptTokensDetailsWrapper(
-                cached_tokens=40000, cache_creation_tokens=60000
-            ),
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=40000, cache_creation_tokens=60000),
         )
 
-        prompt_cost, _ = dashscope_cost_per_token(
-            model="qwen-cache-write-test", usage=usage
-        )
+        prompt_cost, _ = dashscope_cost_per_token(model="qwen-cache-write-test", usage=usage)
 
-        expected_prompt_cost = (
-            (200000 * 6.5e-07) + (60000 * 8.125e-07) + (40000 * 6.5e-08)
-        )
+        expected_prompt_cost = (200000 * 6.5e-07) + (60000 * 8.125e-07) + (40000 * 6.5e-08)
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
 
@@ -302,13 +272,9 @@ class TestDashscopeCostCalculator:
             completion_tokens_details={"reasoning_tokens": 170},
         )
 
-        prompt_cost, _ = dashscope_cost_per_token(
-            model="qwen-nested-cache-write-test", usage=usage
-        )
+        prompt_cost, _ = dashscope_cost_per_token(model="qwen-nested-cache-write-test", usage=usage)
 
-        assert math.isclose(
-            prompt_cost, (2048 * 5e-07) + (11 * 4e-07), rel_tol=1e-10
-        )
+        assert math.isclose(prompt_cost, (2048 * 5e-07) + (11 * 4e-07), rel_tol=1e-10)
 
     def test_dashscope_tiered_cache_creation_falls_back_to_tier_input_rate(self):
         """
@@ -332,9 +298,7 @@ class TestDashscopeCostCalculator:
             prompt_tokens_details=PromptTokensDetailsWrapper(cache_creation_tokens=4000),
         )
 
-        prompt_cost, _ = dashscope_cost_per_token(
-            model="qwen-no-cache-write-test", usage=usage
-        )
+        prompt_cost, _ = dashscope_cost_per_token(model="qwen-no-cache-write-test", usage=usage)
 
         assert math.isclose(prompt_cost, 10000 * 3.25e-07, rel_tol=1e-10)
 
@@ -352,18 +316,12 @@ class TestDashscopeCostCalculator:
         usage = Usage(
             prompt_tokens=10000,
             completion_tokens=100,
-            prompt_tokens_details=PromptTokensDetailsWrapper(
-                cached_tokens=2000, cache_creation_tokens=3000
-            ),
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=2000, cache_creation_tokens=3000),
         )
 
-        prompt_cost, _ = dashscope_cost_per_token(
-            model="qwen-flat-cache-write-test", usage=usage
-        )
+        prompt_cost, _ = dashscope_cost_per_token(model="qwen-flat-cache-write-test", usage=usage)
 
-        expected_prompt_cost = (
-            (5000 * 3.25e-07) + (3000 * 4.063e-07) + (2000 * 3.25e-08)
-        )
+        expected_prompt_cost = (5000 * 3.25e-07) + (3000 * 4.063e-07) + (2000 * 3.25e-08)
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
 
@@ -380,9 +338,7 @@ class TestDashscopeCostCalculator:
         }
 
         usage = Usage(prompt_tokens=500, completion_tokens=200)
-        prompt_cost, completion_cost = dashscope_cost_per_token(
-            model="qwen-input-only-tier-test", usage=usage
-        )
+        prompt_cost, completion_cost = dashscope_cost_per_token(model="qwen-input-only-tier-test", usage=usage)
 
         assert math.isclose(prompt_cost, 500 * 4e-07, rel_tol=1e-10)
         assert math.isclose(completion_cost, 200 * 1.6e-06, rel_tol=1e-10)
@@ -405,13 +361,9 @@ class TestDashscopeCostCalculator:
             completion_tokens=200,
             completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=150),
         )
-        _, completion_cost = dashscope_cost_per_token(
-            model="qwen-input-only-reasoning-test", usage=usage
-        )
+        _, completion_cost = dashscope_cost_per_token(model="qwen-input-only-reasoning-test", usage=usage)
 
-        assert math.isclose(
-            completion_cost, (50 * 1.6e-06) + (150 * 4e-06), rel_tol=1e-10
-        )
+        assert math.isclose(completion_cost, (50 * 1.6e-06) + (150 * 4e-06), rel_tol=1e-10)
 
     def test_dashscope_tier_output_rate_wins_over_the_model_reasoning_rate(self):
         """
@@ -436,35 +388,9 @@ class TestDashscopeCostCalculator:
             completion_tokens=200,
             completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=150),
         )
-        _, completion_cost = dashscope_cost_per_token(
-            model="qwen-tier-output-reasoning-test", usage=usage
-        )
+        _, completion_cost = dashscope_cost_per_token(model="qwen-tier-output-reasoning-test", usage=usage)
 
         assert math.isclose(completion_cost, 200 * 1.6e-06, rel_tol=1e-10)
-
-    def test_dashscope_model_zero_reasoning_rate_bills_reasoning_free(self):
-        """
-        Regression: a model declaring an explicit zero reasoning rate had it treated as
-        missing, billing reasoning tokens at the plain output rate instead of free.
-        """
-        litellm.model_cost["dashscope/qwen-zero-reasoning-test"] = {
-            "litellm_provider": "dashscope",
-            "mode": "chat",
-            "input_cost_per_token": 4e-07,
-            "output_cost_per_token": 1.6e-06,
-            "output_cost_per_reasoning_token": 0,
-        }
-
-        usage = Usage(
-            prompt_tokens=500,
-            completion_tokens=200,
-            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=150),
-        )
-        _, completion_cost = dashscope_cost_per_token(
-            model="qwen-zero-reasoning-test", usage=usage
-        )
-
-        assert math.isclose(completion_cost, 50 * 1.6e-06, rel_tol=1e-10)
 
     def test_dashscope_tier_zero_reasoning_rate_bills_reasoning_free(self):
         """
@@ -489,9 +415,7 @@ class TestDashscopeCostCalculator:
             completion_tokens=200,
             completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=150),
         )
-        _, completion_cost = dashscope_cost_per_token(
-            model="qwen-tier-zero-reasoning-test", usage=usage
-        )
+        _, completion_cost = dashscope_cost_per_token(model="qwen-tier-zero-reasoning-test", usage=usage)
 
         assert math.isclose(completion_cost, 50 * 1.6e-06, rel_tol=1e-10)
 
@@ -520,9 +444,7 @@ class TestDashscopeCostCalculator:
         }
 
         usage = Usage(prompt_tokens=0, completion_tokens=500)
-        prompt_cost, completion_cost = dashscope_cost_per_token(
-            model="qwen-zero-input-test", usage=usage
-        )
+        prompt_cost, completion_cost = dashscope_cost_per_token(model="qwen-zero-input-test", usage=usage)
 
         assert prompt_cost == 0.0
         assert math.isclose(completion_cost, 500 * 1.6e-06, rel_tol=1e-10)

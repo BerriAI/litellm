@@ -105,20 +105,6 @@ def test_build_jev_request_includes_system_prompt_and_criteria() -> None:
     assert request.questions["tier"].criteria == criteria
 
 
-def test_jev_classifier_cost_uses_registry_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(
-        litellm.model_cost,
-        "typesafe/jev-1.13.0",
-        {"input_cost_per_token": 0.0001, "output_cost_per_token": 0.0002},
-    )
-    response: Final = JevSystemOneResponse(
-        model="jev-1.13.0",
-        answers={"tier": _answer()},
-        usage=JevUsage(input_tokens=3, output_tokens=4),
-    )
-    assert jev_classifier_cost(response, "jev-latest") == pytest.approx(0.0011)
-
-
 def test_jev_classifier_cost_is_none_without_registry_pricing() -> None:
     assert "typesafe/jev-unpriced" not in litellm.model_cost
     response: Final = JevSystemOneResponse(

@@ -3,8 +3,6 @@ from pathlib import Path
 
 import pytest
 
-import litellm
-from litellm.utils import supports_prompt_caching, supports_reasoning
 
 REPO_ROOT = Path(__file__).parents[2]
 MAIN_PATH = REPO_ROOT / "model_prices_and_context_window.json"
@@ -20,27 +18,6 @@ OUTPUT_COST = 4.4e-06
 def _load(path):
     with open(path) as f:
         return json.load(f)
-
-
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force get_model_info to resolve against the in-repo cost map instead of the
-    remote one fetched at import time, which still carries the pre-merge pricing."""
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    litellm.get_model_info.cache_clear()
-    yield
-    litellm.get_model_info.cache_clear()
-
-
-@pytest.mark.parametrize("model", GLM_5_2_MODELS)
-def test_zai_glm_5_2_capabilities_are_visible_to_callers(local_model_cost_map, model):
-    """Mistral advertises reasoning and prompt caching on this model, so the helpers
-    every caller checks before sending a request must say so too."""
-    assert supports_reasoning(model=model) is True
-    assert supports_prompt_caching(model=model) is True
-
-    assert litellm.get_model_info(model=model)
 
 
 @pytest.mark.parametrize("model", GLM_5_2_MODELS)

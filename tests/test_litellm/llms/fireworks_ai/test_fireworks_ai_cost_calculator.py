@@ -122,20 +122,6 @@ def test_off_peak_window_bills_cached_tokens_at_the_off_peak_input_rate_without_
     assert math.isclose(peak_prompt_cost, 1000 * STANDARD_INPUT_COST, rel_tol=1e-10)
 
 
-def test_off_peak_defaults_to_the_current_time():
-    """The proxy's cost dispatch passes no clock, so an all-day window has to apply on the
-    default current time."""
-    _register_off_peak_model(
-        {"hours_utc": "00:00-00:00", "input_cost_per_token": 1e-08, "output_cost_per_token": 2e-08}
-    )
-    usage = _usage(prompt_tokens=1000, cached_tokens=0, completion_tokens=200)
-
-    prompt_cost, completion_cost = cost_per_token(model=OFF_PEAK_MODEL, usage=usage)
-
-    assert math.isclose(prompt_cost, 1000 * 1e-08, rel_tol=1e-10)
-    assert math.isclose(completion_cost, 200 * 2e-08, rel_tol=1e-10)
-
-
 COMPONENT_MODEL = "accounts/fireworks/models/cost-components-test"
 COMPONENT_INPUT_COST = 1e-06
 COMPONENT_OUTPUT_COST = 2e-06

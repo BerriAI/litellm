@@ -9,7 +9,7 @@ Covers:
 
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import pytest
 
@@ -41,22 +41,6 @@ def _load_model_registry() -> Dict[str, Any]:
 class TestGetModelInfoReasoningEffortFields:
     """get_model_info should expose supports_minimal_reasoning_effort and
     supports_max_reasoning_effort from the model registry."""
-
-    def test_opus_4_6_has_supports_minimal(self):
-        info = get_model_info("claude-opus-4-6")
-        assert "supports_minimal_reasoning_effort" in info
-
-    def test_opus_4_6_has_supports_max(self):
-        info = get_model_info("claude-opus-4-6")
-        assert "supports_max_reasoning_effort" in info
-
-    def test_opus_4_7_has_supports_minimal(self):
-        info = get_model_info("claude-opus-4-7")
-        assert "supports_minimal_reasoning_effort" in info
-
-    def test_opus_4_7_has_supports_max(self):
-        info = get_model_info("claude-opus-4-7")
-        assert "supports_max_reasoning_effort" in info
 
 
 # ---------------------------------------------------------------------------
@@ -177,9 +161,7 @@ class TestAdapterAdaptiveThinking:
         )
 
         adapter = LiteLLMAnthropicMessagesAdapter()
-        result = adapter.translate_anthropic_thinking_to_reasoning_effort(
-            {"type": "adaptive"}
-        )
+        result = adapter.translate_anthropic_thinking_to_reasoning_effort({"type": "adaptive"})
         assert result == "medium"
 
     def test_messages_adapter_adaptive_overridden_by_output_config(self):

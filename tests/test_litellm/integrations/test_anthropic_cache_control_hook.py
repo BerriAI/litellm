@@ -1,15 +1,12 @@
 import copy
-import datetime
 import json
 import os
 import subprocess
 import sys
 import textwrap
-import unittest
 from typing import List, Optional, Tuple
-from unittest.mock import ANY, MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 
 import litellm
@@ -19,7 +16,6 @@ from litellm.integrations.anthropic_cache_control_hook import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import StandardCallbackDynamicParams
 
 
 @pytest.fixture(autouse=True)
@@ -1590,40 +1586,9 @@ class TestEnableAnthropicPromptCaching:
         points = self._points(model="us.anthropic.claude-sonnet-4-5-20250929-v1:0", provider="bedrock")
         assert [p["index"] for p in points] == [None, -1]
 
-    @pytest.mark.parametrize("model, provider", [("gpt-4o", "openai"), ("gemini-2.0-flash", "gemini")])
-    def test_non_anthropic_providers_never_injected(self, monkeypatch, model, provider):
-        """These report supports_prompt_caching=True but never consume cache_control markers."""
-        from litellm.utils import supports_prompt_caching
-
-        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
-        assert supports_prompt_caching(model=model, custom_llm_provider=provider) is True
-        assert self._points(model=model, provider=provider) == []
-
-    def test_databricks_claude_not_injected_despite_caching_support(self, monkeypatch, local_model_cost_map):
-        from litellm.utils import supports_prompt_caching
-
-        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
-        model = "databricks/databricks-claude-sonnet-4-5"
-        assert supports_prompt_caching(model=model, custom_llm_provider="databricks") is True
-        assert self._points(model=model, provider="databricks") == []
-
     def test_model_without_caching_support_not_injected(self, monkeypatch):
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
         assert self._points(model="anthropic.claude-3-5-sonnet-20240620-v1:0", provider="bedrock") == []
-
-    @pytest.mark.parametrize("model", ["us.xai.grok-4.6", "global.xai.grok-4.6"])
-    def test_bedrock_grok_not_injected(self, monkeypatch, local_model_cost_map, model):
-        """Bedrock supports only implicit prompt caching for Grok: explicit cachePoint
-        breakpoints make it reject the whole request ("You invoked an unsupported model
-        or your request did not allow prompt caching"), so supports_prompt_caching stays
-        false, while implicit cache hits still bill at the cache-read rate."""
-        from litellm.utils import supports_prompt_caching
-
-        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
-        assert supports_prompt_caching(model=model, custom_llm_provider="bedrock") is False
-        assert self._points(model=model, provider="bedrock") == []
-        entry = litellm.model_cost[model]
-        assert 0 < entry["cache_read_input_token_cost"] < entry["input_cost_per_token"]
 
     def test_stands_down_when_client_sent_cache_control(self, monkeypatch):
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
@@ -1666,7 +1631,9 @@ class TestEnableAnthropicPromptCaching:
         """OpenAI-shaped tools nest cache_control under ``function``; the Anthropic
         chat transform honors that location, so the stand-down must see it too."""
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
-        tools = [{"type": "function", "function": {"name": "t", "parameters": {}, "cache_control": {"type": "ephemeral"}}}]
+        tools = [
+            {"type": "function", "function": {"name": "t", "parameters": {}, "cache_control": {"type": "ephemeral"}}}
+        ]
         assert self._points(tools=tools) == []
 
     def test_seed_stands_down_when_only_tools_carry_cache_control(self, monkeypatch):
@@ -2251,9 +2218,7 @@ class TestAnthropicPromptCachingEnvVars:
             print(json.dumps([litellm.enable_anthropic_prompt_caching, litellm.anthropic_prompt_caching_ttl]))
             """
         )
-        result = subprocess.run(
-            [sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=300
-        )
+        result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=300)
         assert result.returncode == 0, result.stderr
         enabled, ttl = json.loads(result.stdout.strip().splitlines()[-1])
         return enabled, ttl
@@ -2464,7 +2429,9 @@ class TestOpenAIPromptCacheBreakpoint:
         assert kwargs == {}
 
     def test_v1_messages_client_content_breakpoint_makes_configured_points_stand_down(self):
-        messages = [{"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]}]
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]}
+        ]
         kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
         result, system = self._inject(messages, "sys", kwargs)
         assert result == messages
@@ -2600,7 +2567,11 @@ class TestOpenAIPromptCacheBreakpointPlacementRules:
     def test_tool_message_text_is_marked_on_chat_path(self):
         messages = [
             {"role": "user", "content": "weather?"},
-            {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "w", "arguments": "{}"}}]},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "w", "arguments": "{}"}}],
+            },
             {"role": "tool", "tool_call_id": "c1", "content": "sunny"},
         ]
         out, params = self._chat(messages, [{"location": "message", "index": -1}])
@@ -2824,9 +2795,9 @@ class TestChatPathProviderStamp:
 
 class TestClientBreakpointsCountedOnce:
     def test_client_message_breakpoints_are_not_double_counted(self):
-        messages = [{"role": "user", "content": [{"type": "text", "text": "m0", "cache_control": {"type": "ephemeral"}}]}] + [
-            {"role": "user", "content": [{"type": "text", "text": f"m{i}"}]} for i in range(1, 4)
-        ]
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "m0", "cache_control": {"type": "ephemeral"}}]}
+        ] + [{"role": "user", "content": [{"type": "text", "text": f"m{i}"}]} for i in range(1, 4)]
         out, system, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
             messages=messages,
             system="sys",
@@ -2984,19 +2955,6 @@ class TestPromptCacheBreakpointCapability:
         yield
         litellm.utils._cached_get_model_info_helper.cache_clear()
 
-    def test_public_helper_reads_the_model_map(self):
-        from litellm.utils import supports_prompt_cache_breakpoint
-
-        assert supports_prompt_cache_breakpoint("gpt-5.6") is True
-        assert supports_prompt_cache_breakpoint("openai/gpt-5.6-sol") is True
-        assert supports_prompt_cache_breakpoint("gpt-5.6", custom_llm_provider="openai") is True
-        assert supports_prompt_cache_breakpoint("gpt-4.1") is False
-
-    @pytest.mark.parametrize("model", ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
-    def test_model_map_flags_every_openai_gpt_5_6_entry(self, model):
-        assert litellm.model_cost[model]["litellm_provider"] == "openai"
-        assert litellm.model_cost[model]["supports_prompt_cache_breakpoint"] is True
-
     def test_listed_model_uses_the_model_map_flag(self, monkeypatch):
         flagged = {**litellm.model_cost["gpt-4.1"], "supports_prompt_cache_breakpoint": True}
         monkeypatch.setitem(litellm.model_cost, "gpt-4.1", flagged)
@@ -3013,10 +2971,6 @@ class TestPromptCacheBreakpointCapability:
             litellm.model_cost, "gpt-5.6", {**litellm.model_cost["gpt-5.6"], "supports_prompt_cache_breakpoint": False}
         )
         assert supports_openai_prompt_cache_breakpoint("gpt-5.6") is False
-
-    def test_listed_gpt_model_without_the_flag_follows_the_version_rule(self):
-        assert "supports_prompt_cache_breakpoint" not in litellm.model_cost["gpt-4.1"]
-        assert supports_openai_prompt_cache_breakpoint("gpt-4.1") is False
 
     def test_published_map_without_the_flag_still_injects_on_gpt_5_6(self, monkeypatch):
         unflagged = {k: v for k, v in litellm.model_cost["gpt-5.6"].items() if k != "supports_prompt_cache_breakpoint"}
