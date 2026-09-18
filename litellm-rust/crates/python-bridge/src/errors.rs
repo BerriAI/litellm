@@ -114,12 +114,6 @@ pub(crate) fn chat_completions_error_to_pyerr(error: chat_completions::Error) ->
     }
 }
 
-pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    let py = module.py();
-    module.add("RustBridgeDeclined", py.get_type::<RustBridgeDeclined>())?;
-    module.add("RustUpstreamError", py.get_type::<RustUpstreamError>())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
