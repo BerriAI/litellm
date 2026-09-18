@@ -1,5 +1,4 @@
 import base64
-import json
 import logging
 import os
 import re
@@ -10,7 +9,6 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    BAD_MESSAGE_ERROR_STR,
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
@@ -297,6 +295,35 @@ def test_convert_to_azure_openai_messages():
 
     content = output[0].get("content")
     assert content == expected_content
+
+
+def test_convert_to_azure_openai_messages_strips_litellm_format_from_file_and_image():
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_azure_openai_messages,
+    )
+    from litellm.types.llms.openai import AllMessageValues
+
+    input: list[AllMessageValues] = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {"file_id": "assistant-xyz", "format": "application/pdf"},
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://x/y.png", "format": "image/png"},
+                },
+            ],
+        }
+    ]
+
+    output = convert_to_azure_openai_messages(input)
+
+    content = output[0].get("content")
+    assert content[0]["file"] == {"file_id": "assistant-xyz"}
+    assert content[1]["image_url"] == {"url": "https://x/y.png"}
 
 
 def test_bedrock_validate_format_image_or_video():
@@ -1243,7 +1270,6 @@ def test_bedrock_image_processor_content_type_document_formats():
     """
     Test that _post_call_image_processing handles various document formats
     """
-    import base64
 
     # Create mock response
     mock_response = MagicMock()

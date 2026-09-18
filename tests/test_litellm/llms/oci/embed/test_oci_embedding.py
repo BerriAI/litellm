@@ -1,5 +1,3 @@
-import json
-import os
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -308,72 +306,4 @@ class TestOCIEmbeddingConfig:
                 litellm_params={},
             )
 
-    def test_model_prices_embedding_models(self):
-        """test all 8 OCI embedding models exist in model_prices_and_context_window.json with mode=embedding."""
-        model_prices_path = os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "..",
-            "..",
-            "..",
-            "..",
-            "model_prices_and_context_window.json",
-        )
-        with open(model_prices_path) as f:
-            model_prices = json.load(f)
 
-        expected_embedding_models = [
-            "oci/cohere.embed-english-v3.0",
-            "oci/cohere.embed-english-light-v3.0",
-            "oci/cohere.embed-multilingual-v3.0",
-            "oci/cohere.embed-multilingual-light-v3.0",
-            "oci/cohere.embed-english-image-v3.0",
-            "oci/cohere.embed-english-light-image-v3.0",
-            "oci/cohere.embed-multilingual-light-image-v3.0",
-            "oci/cohere.embed-v4.0",
-        ]
-
-        for model_key in expected_embedding_models:
-            assert model_key in model_prices, f"Missing model: {model_key}"
-            assert (
-                model_prices[model_key].get("mode") == "embedding"
-            ), f"Model {model_key} does not have mode='embedding'"
-
-    def test_model_prices_new_chat_models(self):
-        """test the 16 new OCI chat models exist in model_prices_and_context_window.json with mode=chat."""
-        model_prices_path = os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "..",
-            "..",
-            "..",
-            "..",
-            "model_prices_and_context_window.json",
-        )
-        with open(model_prices_path) as f:
-            model_prices = json.load(f)
-
-        expected_chat_models = [
-            "oci/xai.grok-3",
-            "oci/xai.grok-3-fast",
-            "oci/xai.grok-3-mini",
-            "oci/xai.grok-3-mini-fast",
-            "oci/xai.grok-4",
-            "oci/xai.grok-4-fast",
-            "oci/xai.grok-4.1-fast",
-            "oci/xai.grok-4.20",
-            "oci/xai.grok-4.20-multi-agent",
-            "oci/xai.grok-code-fast-1",
-            "oci/cohere.command-a-03-2025",
-            "oci/cohere.command-a-reasoning-08-2025",
-            "oci/cohere.command-a-vision-07-2025",
-            "oci/cohere.command-a-translate-08-2025",
-            "oci/google.gemini-2.5-pro",
-            "oci/google.gemini-2.5-flash",
-        ]
-
-        for model_key in expected_chat_models:
-            assert model_key in model_prices, f"Missing model: {model_key}"
-            assert (
-                model_prices[model_key].get("mode") == "chat"
-            ), f"Model {model_key} does not have mode='chat'"

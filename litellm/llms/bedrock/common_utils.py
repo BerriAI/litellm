@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 
 _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
+_OPENAI_FAMILY_MODEL_RE: Final = re.compile(r"(^|[./])openai\.")
 
 
 def error_response_text(response: httpx.Response) -> str:
@@ -878,9 +879,10 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     """
     Whether Converse ``cachePoint`` blocks may be sent to this model.
 
-    Bedrock rejects requests carrying cachePoint blocks for models without prompt
-    caching support ("You invoked an unsupported model or your request did not allow
-    prompt caching"), so a model whose cost-map entry does not declare
+    OpenAI-family models only support implicit caching and never accept explicit
+    ``cachePoint`` blocks. Bedrock rejects requests carrying cachePoint blocks for
+    models without prompt caching support ("You invoked an unsupported model or your
+    request did not allow prompt caching"), so a model whose cost-map entry does not declare
     ``supports_prompt_caching`` must not receive them. A model absent from the map
     (an application inference profile ARN, a model newer than the map) keeps emitting
     so existing caching setups never silently degrade. ``litellm.utils.supports_prompt_caching``
@@ -888,6 +890,8 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     """
     if model is None:
         return True
+    if _OPENAI_FAMILY_MODEL_RE.search(model):
+        return False
     entries: Final = tuple(
         entry
         for candidate in (model, get_bedrock_base_model(model))
@@ -896,6 +900,20 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     if not entries:
         return True
     return any(entry.get("supports_prompt_caching") is True for entry in entries)
+
+
+def bedrock_supports_tool_search(model: str) -> bool:
+    """
+    Whether Bedrock InvokeModel admits the ``tool_search_tool_*`` tool types on ``model``.
+
+    Backed by the ``supports_tool_search`` flag in ``model_prices_and_context_window.json``,
+    an exact entry or the ``claude-tool-search`` fallback rule for Claude 4.5 and newer, so a
+    newly released Claude carries the flag with no code change. An explicit ``false`` on the
+    resolved entry wins over the rule.
+    """
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    return AnthropicModelInfo._supports_model_capability(model, "supports_tool_search", "bedrock")
 
 
 def is_claude_4_5_on_bedrock(model: str) -> bool:

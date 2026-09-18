@@ -9,10 +9,12 @@ import contextlib
 import contextvars
 import hashlib
 import json
+import os
 import time
 import traceback
 import types
 import uuid
+from collections import Counter
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol
@@ -26,7 +28,7 @@ from starlette.types import Message, Receive, Scope, Send
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG, MCP_ALLOWLIST_PEEK_MAX_BYTES
+from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -84,7 +86,13 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     get_chain_id_from_headers,
 )
-from litellm.types.mcp import MCPAuth, MCPSpecVersion
+from litellm.types.mcp import (
+    MCPAuth,
+    MCPGatewaySession,
+    MCPGatewaySessionGroupCount,
+    MCPGatewaySessionsResponse,
+    MCPSpecVersion,
+)
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
@@ -454,6 +462,8 @@ if MCP_AVAILABLE:
         StreamableHTTPSessionManager = None
     from mcp.types import (
         CallToolResult,
+        Implementation,
+        InitializeRequest,
         ListToolsResult,
         Prompt,
         TextContent,
@@ -462,14 +472,6 @@ if MCP_AVAILABLE:
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
         MCPAuthenticatedUser,
-    )
-    from litellm.proxy._experimental.mcp_server.client_allowlist import (
-        MCP_ALLOWED_CLIENTS_SETTING,
-        allowed_mcp_clients_from_general_settings,
-        check_mcp_client_allowed,
-        oversized_unidentified_request_body,
-        unidentified_sessionless_request_body,
-        unknown_session_request_body,
     )
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
         SERVER_OUTCOMES_META_KEY,
@@ -615,6 +617,7 @@ if MCP_AVAILABLE:
     # still reading the shared object.
     _stateful_session_locks: Final[dict[str, asyncio.Lock]] = {}
     _stateful_session_active_request_counts: Final[dict[str, int]] = {}
+    _stateful_session_client_info: Final[dict[str, Implementation]] = {}  # mutable-ok: cleared on session teardown
 
     class _TerminableTransport(Protocol):
         async def terminate(self) -> None: ...
@@ -633,6 +636,7 @@ if MCP_AVAILABLE:
         _stateful_session_owners.pop(session_id, None)
         _stateful_session_locks.pop(session_id, None)
         _stateful_session_active_request_counts.pop(session_id, None)
+        _stateful_session_client_info.pop(session_id, None)
 
     # Keep this alias so existing references to session_manager still work
     session_manager: Final = session_manager_stateless
@@ -3824,104 +3828,74 @@ if MCP_AVAILABLE:
         except (json.JSONDecodeError, TypeError):
             return False
 
-    def _load_allowed_mcp_clients() -> frozenset[str] | None:
-        from litellm.proxy.proxy_server import general_settings
+    def _extract_initialize_client_info(body: bytes) -> Implementation | None:
+        try:
+            return InitializeRequest.model_validate_json(body).params.clientInfo
+        except ValidationError:
+            return None
 
-        return allowed_mcp_clients_from_general_settings(general_settings)
-
-    def _routing_peek_limit(allowed_clients: frozenset[str] | None) -> int:
-        return _MCP_ROUTING_PEEK_MAX_BYTES if allowed_clients is None else MCP_ALLOWLIST_PEEK_MAX_BYTES
-
-    async def _reject_oversized_unidentified_request(
-        scope: Scope,
-        receive: Receive,
-        send: Send,
-        client_ip: str | None,
-    ) -> None:
-        verbose_logger.warning(
-            "Rejecting MCP POST (ip=%s): body exceeds %d bytes so %s cannot be checked",
-            client_ip,
-            MCP_ALLOWLIST_PEEK_MAX_BYTES,
-            MCP_ALLOWED_CLIENTS_SETTING,
-        )
-        forbidden: Final = JSONResponse(status_code=403, content=oversized_unidentified_request_body())
-        await forbidden(scope, receive, send)
-
-    async def _reject_unidentified_sessionless_request(
-        scope: Scope,
-        receive: Receive,
-        send: Send,
-        client_ip: str | None,
-        stale_session_id: str | None,
-    ) -> None:
-        if stale_session_id is not None:
-            verbose_logger.warning(
-                "Rejecting MCP POST for unknown session '%s' (ip=%s): no stateless fallback while %s is set",
-                stale_session_id,
-                client_ip,
-                MCP_ALLOWED_CLIENTS_SETTING,
+    def _group_session_counts(
+        sessions: Sequence[MCPGatewaySession],
+        label_for: Callable[[MCPGatewaySession], str | None],
+    ) -> tuple[MCPGatewaySessionGroupCount, ...]:
+        counts: Final = types.MappingProxyType(Counter(label_for(session) for session in sessions))
+        return tuple(
+            sorted(
+                (MCPGatewaySessionGroupCount(label=label, count=count) for label, count in counts.items()),
+                key=lambda group: (-group.count, group.label is None, group.label or ""),
             )
-            not_found: Final = JSONResponse(status_code=404, content=unknown_session_request_body(stale_session_id))
-            await not_found(scope, receive, send)
-            return
-        verbose_logger.warning(
-            "Rejecting sessionless MCP POST (ip=%s): only initialize is accepted without a session while %s is set",
-            client_ip,
-            MCP_ALLOWED_CLIENTS_SETTING,
         )
-        forbidden: Final = JSONResponse(status_code=403, content=unidentified_sessionless_request_body())
-        await forbidden(scope, receive, send)
 
-    async def _reject_initialize_from_disallowed_client(
-        scope: Scope,
-        receive: Receive,
-        send: Send,
-        body: bytes,
-        client_ip: str | None,
-        allowed_clients: frozenset[str] | None,
-    ) -> bool:
-        rejection: Final = check_mcp_client_allowed(body, allowed_clients)
-        if rejection is None:
-            return False
-        verbose_logger.warning(
-            "Rejecting MCP initialize from client %r (ip=%s): not listed in %s",
-            rejection.client_name,
-            client_ip,
-            MCP_ALLOWED_CLIENTS_SETTING,
+    def _gateway_session_for(session_id: str, auth_user: MCPAuthenticatedUser, now: float) -> MCPGatewaySession:
+        client_info: Final = _stateful_session_client_info.get(session_id)
+        key_auth: Final = auth_user.user_api_key_auth
+        return MCPGatewaySession(
+            session_id_prefix=session_id[:8],
+            client_name=client_info.name if client_info is not None else None,
+            client_version=client_info.version if client_info is not None else None,
+            user_id=key_auth.user_id if key_auth is not None else None,
+            user_email=key_auth.user_email if key_auth is not None else None,
+            key_alias=key_auth.key_alias if key_auth is not None else None,
+            team_id=key_auth.team_id if key_auth is not None else None,
+            team_alias=key_auth.team_alias if key_auth is not None else None,
+            client_ip=auth_user.client_ip,
+            idle_seconds=max(0.0, now - _stateful_session_auth_context_last_seen.get(session_id, now)),
+            in_flight_requests=_stateful_session_active_request_counts.get(session_id, 0),
         )
-        forbidden: Final = JSONResponse(
-            status_code=403,
-            content=rejection.response_body,
+
+    def get_mcp_gateway_sessions_report(now: float | None = None) -> MCPGatewaySessionsResponse:
+        """Live stateful Streamable HTTP sessions held by this worker process.
+
+        Only sessions whose transport is still registered with the stateful
+        session manager are reported; SSE and stateless requests hold no
+        session and are never counted.
+        """
+        report_time: Final = time.monotonic() if now is None else now
+        live_session_ids: Final = frozenset(_stateful_server_instances())
+        sessions: Final = tuple(
+            _gateway_session_for(session_id, auth_user, report_time)
+            for session_id, auth_user in tuple(_stateful_session_auth_contexts.items())
+            if session_id in live_session_ids
         )
-        await forbidden(scope, receive, send)
-        return True
-
-    def _replay_consumed_messages(consumed_messages: Sequence[Message], receive: Receive) -> Receive:
-        pending: Final = iter(consumed_messages)
-
-        async def wrapped_receive() -> Message:
-            replayed: Final = next(pending, None)
-            return replayed if replayed is not None else await receive()
-
-        return wrapped_receive
+        return MCPGatewaySessionsResponse(
+            worker_pid=os.getpid(),
+            total_sessions=len(sessions),
+            by_client=_group_session_counts(sessions, lambda session: session.client_name),
+            by_user=_group_session_counts(sessions, lambda session: session.user_id),
+            sessions=sessions,
+        )
 
     async def _read_request_body_for_routing(
         receive: Receive,
-        peek_max_bytes: int = _MCP_ROUTING_PEEK_MAX_BYTES,
-        settle_truncation: bool = False,
-    ) -> tuple[list[Message], bytes, bool]:
+    ) -> tuple[list[Message], bytes]:
         """
         Read just enough of the request body to decide whether this is a
         JSON-RPC ``initialize`` call. Returns the consumed ASGI messages so
         the caller can replay them faithfully to the downstream handler, and
-        the peeked body bytes (capped at ``peek_max_bytes``), plus whether
-        the body was cut off at that cap.
+        the peeked body bytes (capped at ``_MCP_ROUTING_PEEK_MAX_BYTES``).
 
-        Stops reading from the wire as soon as either (a) the peek budget is
-        spent, or (b) the body is complete. A body that fills the budget
-        exactly in a frame with ``more_body`` is reported as cut off unless
-        ``settle_truncation`` is set, in which case one more frame is read to
-        find out whether anything actually follows.
+        Stops reading from the wire as soon as either (a) we have peeked
+        ``_MCP_ROUTING_PEEK_MAX_BYTES`` of body, or (b) the body is complete.
         The remainder of an oversized body is streamed lazily through
         ``wrapped_receive`` in the caller — so an authenticated client cannot
         force the proxy to buffer an arbitrarily large payload just to make a
@@ -3930,7 +3904,6 @@ if MCP_AVAILABLE:
         consumed_messages: Final[list[Message]] = []
         body_chunks: Final[list[bytes]] = []
         peeked_bytes = 0
-        truncated = False
 
         while True:
             message = await receive()
@@ -3947,19 +3920,20 @@ if MCP_AVAILABLE:
                 # handler via ``consumed_messages``, but ``body_chunks`` is
                 # purely for the JSON-RPC method check — there is no reason
                 # to copy a large body frame into a second buffer.
-                remaining = peek_max_bytes - peeked_bytes
+                remaining = _MCP_ROUTING_PEEK_MAX_BYTES - peeked_bytes
                 if remaining > 0:
                     body_chunks.append(body[:remaining])
                     peeked_bytes += min(len(body), remaining)
-                truncated = truncated or len(body) > remaining
 
-            if truncated or not message.get("more_body", False):
-                break
-            if not settle_truncation and peeked_bytes >= peek_max_bytes:
-                truncated = True
+            if not message.get("more_body", False):
                 break
 
-        return consumed_messages, b"".join(body_chunks), truncated
+            if peeked_bytes >= _MCP_ROUTING_PEEK_MAX_BYTES:
+                # Stop draining; downstream replay will pull remaining chunks
+                # directly from the original `receive` via wrapped_receive.
+                break
+
+        return consumed_messages, b"".join(body_chunks)
 
     async def _handle_stale_mcp_session(
         scope: Scope,
@@ -4568,7 +4542,6 @@ if MCP_AVAILABLE:
             # - No session ID + initialize → stateful (so client gets mcp-session-id)
             # - No session ID + other → stateless (curl, Inspector, Notion)
             session_id = _get_session_id_from_scope(scope)
-            presented_session_id: Final = session_id
             is_initialize = False
             consumed_messages: list[Message] = []
 
@@ -4610,23 +4583,8 @@ if MCP_AVAILABLE:
 
             body = b""
             if scope.get("method") == "POST":
-                allowed_clients: Final = _load_allowed_mcp_clients()
-                consumed_messages, body, body_truncated = await _read_request_body_for_routing(
-                    receive, _routing_peek_limit(allowed_clients), settle_truncation=allowed_clients is not None
-                )
-                if allowed_clients is not None and body_truncated and not session_id:
-                    await _reject_oversized_unidentified_request(scope, receive, send, _client_ip)
-                    return
+                consumed_messages, body = await _read_request_body_for_routing(receive)
                 is_initialize = _is_initialize_request(body)
-                if is_initialize and await _reject_initialize_from_disallowed_client(
-                    scope, receive, send, body, _client_ip, allowed_clients
-                ):
-                    return
-                if allowed_clients is not None and not is_initialize and not session_id:
-                    await _reject_unidentified_sessionless_request(
-                        scope, receive, send, _client_ip, presented_session_id
-                    )
-                    return
 
             use_stateful: Final = bool(session_id or is_initialize)
             target_manager: Final = session_manager_stateful if use_stateful else session_manager_stateless
@@ -4657,8 +4615,15 @@ if MCP_AVAILABLE:
                     return
 
             # Replay body messages if we consumed them for peeking
+            original_receive: Final = receive
             if consumed_messages:
-                receive = _replay_consumed_messages(consumed_messages, receive)
+
+                async def wrapped_receive():
+                    if consumed_messages:
+                        return consumed_messages.pop(0)
+                    return await original_receive()
+
+                receive = wrapped_receive
 
             # Serialize requests on the same stateful session so concurrent
             # callers don't clobber each other's auth context mid-flight.
@@ -4756,6 +4721,7 @@ if MCP_AVAILABLE:
                         auth_user,
                         _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip),
                         _track_initialized_stateful_session,
+                        client_info=_extract_initialize_client_info(body),
                     )
 
                 async with _gateway_initialize_instructions_request_scope(
@@ -4895,23 +4861,6 @@ if MCP_AVAILABLE:
                 await initialize_session_managers()
                 await asyncio.sleep(0.1)
 
-            sse_allowed_clients: Final = _load_allowed_mcp_clients()
-            sse_consumed_messages, sse_body, sse_truncated = (
-                await _read_request_body_for_routing(receive, MCP_ALLOWLIST_PEEK_MAX_BYTES, settle_truncation=True)
-                if sse_allowed_clients is not None and scope.get("method") == "POST"
-                else ((), b"", False)
-            )
-            if sse_truncated:
-                await _reject_oversized_unidentified_request(scope, receive, send, _sse_client_ip)
-                return
-            if _is_initialize_request(sse_body) and await _reject_initialize_from_disallowed_client(
-                scope, receive, send, sse_body, _sse_client_ip, sse_allowed_clients
-            ):
-                return
-            sse_receive: Final = (
-                _replay_consumed_messages(sse_consumed_messages, receive) if sse_consumed_messages else receive
-            )
-
             async with _gateway_initialize_instructions_request_scope(
                 user_api_key_auth,
                 mcp_servers,
@@ -4919,7 +4868,7 @@ if MCP_AVAILABLE:
                 scoped_server_endpoint=scoped_server_endpoint,
                 is_initialize=scope.get("method") == "GET",
             ):
-                await sse_session_manager.handle_request(scope, sse_receive, send)
+                await sse_session_manager.handle_request(scope, receive, send)
         except MCPUpstreamAuthError as e:
             # Upstream delegated auth returned 401; surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
@@ -5086,6 +5035,7 @@ if MCP_AVAILABLE:
         auth_user: MCPAuthenticatedUser,
         owner_fingerprint: str,
         on_session_registered: Callable[[str], None] | None = None,
+        client_info: Implementation | None = None,
     ) -> Send:
         async def wrapped_send(message: Message) -> None:
             if message.get("type") == "http.response.start":
@@ -5100,6 +5050,8 @@ if MCP_AVAILABLE:
                         _stateful_session_auth_contexts[session_id] = auth_user
                         _stateful_session_auth_context_last_seen[session_id] = time.monotonic()
                         _stateful_session_owners[session_id] = owner_fingerprint
+                        if client_info is not None:
+                            _stateful_session_client_info[session_id] = client_info
                         break
             await send(message)
 
