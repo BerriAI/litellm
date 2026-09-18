@@ -67,6 +67,8 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
 from litellm.responses.litellm_completion_transformation.transformation import (
+    RESPONSES_TOOL_CALL_ITEM_TYPES,
+    RESPONSES_TOOL_CALL_OUTPUT_ITEM_TYPES,
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.types.llms.openai import (
@@ -201,7 +203,7 @@ _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
 )
 
 
-_TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
+_TOOL_CALL_ITEM_TYPES: Final = RESPONSES_TOOL_CALL_ITEM_TYPES
 _TOOL_CALL_PAYLOAD_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call": "arguments", "custom_tool_call": "input"}
 )
@@ -216,10 +218,13 @@ _TOOL_CALL_PAYLOAD_EVENT_TYPES: Final = _TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES | f
 )
 _OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
-    {"function_call_output": "output", "message": "content"}
+    {"function_call_output": "output", "custom_tool_call_output": "output", "message": "content"}
 )
 _ITEM_TYPE_ROLES: Final[Mapping[str, str]] = MappingProxyType(
-    {"function_call_output": "tool", "function_call": "assistant"}
+    {
+        **{item_type: "tool" for item_type in RESPONSES_TOOL_CALL_OUTPUT_ITEM_TYPES},
+        **{item_type: "assistant" for item_type in RESPONSES_TOOL_CALL_ITEM_TYPES},
+    }
 )
 
 _EMPTY_RESPONSES_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {}

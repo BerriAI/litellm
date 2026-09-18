@@ -111,6 +111,10 @@ ResponseTools: TypeAlias = Sequence[Mapping[str, object]] | None
 ChatToolParam: TypeAlias = ChatCompletionToolParam | OpenAIMcpServerTool
 NAMESPACE_DESCRIPTION_SEPARATOR: Final = "\n\n"
 NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS: Final = frozenset({"function", "custom"})
+RESPONSES_TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
+RESPONSES_TOOL_CALL_OUTPUT_ITEM_TYPES: Final = frozenset(
+    {"function_call_output", "custom_tool_call_output", "computer_call_output", "tool_result"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1535,12 +1539,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         Check if the input item is a tool call output
         """
-        return input_item.get("type") in [
-            "function_call_output",
-            "custom_tool_call_output",
-            "computer_call_output",
-            "tool_result",  # Anthropic/MCP format
-        ]
+        return input_item.get("type") in RESPONSES_TOOL_CALL_OUTPUT_ITEM_TYPES
 
     @staticmethod
     def _is_input_item_function_call(input_item: Mapping[str, object]) -> bool:
@@ -1549,7 +1548,7 @@ class LiteLLMCompletionResponsesConfig:
         Both need to be reconstructed as assistant tool_calls for Chat
         Completions providers.
         """
-        return input_item.get("type") in ("function_call", "custom_tool_call")
+        return input_item.get("type") in RESPONSES_TOOL_CALL_ITEM_TYPES
 
     @staticmethod
     def _transform_responses_api_tool_call_output_to_chat_completion_message(

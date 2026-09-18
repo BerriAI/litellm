@@ -3595,6 +3595,51 @@ class TestResponsesScopingFlags:
         assert result["input"][1] == {"role": "user", "content": "What is the capital of France?"}
         assert result["input"][3] == {"type": "function_call_output", "call_id": "call_1", "output": "TOOL SECRET [GUARDRAILED]"}
 
+    @pytest.mark.parametrize("scan_only_tool_results", [None, True])
+    @pytest.mark.asyncio
+    async def test_custom_tool_output_is_scanned_and_rewritten_like_a_function_output(self, scan_only_tool_results):
+        handler = OpenAIResponsesHandler()
+        guardrail = MockGuardrail()
+        guardrail.scan_only_tool_results = scan_only_tool_results
+        request = {
+            "model": "gpt-5.4",
+            "input": [
+                {"role": "user", "content": "Run the shell tool"},
+                {"type": "custom_tool_call", "call_id": "call_c1", "name": "shell", "input": "ls"},
+                {"type": "custom_tool_call_output", "call_id": "call_c1", "output": "CUSTOM TOOL SECRET"},
+            ],
+        }
+
+        result = await handler.process_input_messages(data=request, guardrail_to_apply=guardrail)
+
+        assert result["input"][2] == {
+            "type": "custom_tool_call_output",
+            "call_id": "call_c1",
+            "output": "CUSTOM TOOL SECRET [GUARDRAILED]",
+        }
+        assert result["input"][1] == {"type": "custom_tool_call", "call_id": "call_c1", "name": "shell", "input": "ls"}
+        assert (result["input"][0]["content"] == "Run the shell tool") is bool(scan_only_tool_results)
+
+    @pytest.mark.asyncio
+    async def test_skip_tool_hides_custom_tool_output_items(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = self._scoped_guardrail(skip_tool_message_in_guardrail=True)
+        request = {
+            "model": "gpt-5.4",
+            "input": [
+                {"role": "user", "content": "Run the tools"},
+                {"type": "custom_tool_call", "call_id": "call_c1", "name": "shell", "input": "ls"},
+                {"type": "custom_tool_call_output", "call_id": "call_c1", "output": "CUSTOM TOOL SECRET"},
+            ],
+        }
+
+        await handler.process_input_messages(data=request, guardrail_to_apply=guardrail)
+
+        ((_, request_inputs),) = guardrail.seen
+        assert request_inputs["texts"] == ["Run the tools"]
+        assert [m["role"] for m in request_inputs["structured_messages"]] == ["user", "assistant"]
+        assert "TOOL SECRET" not in repr(guardrail.seen)
+
     @pytest.mark.asyncio
     async def test_scoped_rewrite_lands_without_dropping_the_hidden_turns(self):
         handler = OpenAIResponsesHandler()
