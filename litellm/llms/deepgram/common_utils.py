@@ -26,6 +26,7 @@ DEEPGRAM_LISTEN_ADDON_PRICING_PARAMS: Final = MappingProxyType(
     }
 )
 _DISABLED_PARAM_VALUES: Final = frozenset({"", "false"})
+_SINGLE_VALUED_PARAMS: Final = frozenset({"model", "language"})
 
 
 class DeepgramException(BaseLLMException):
@@ -36,13 +37,23 @@ def deepgram_listen_requested_model(query_string: str) -> str:
     return httpx.QueryParams(query_string).get("model") or DEEPGRAM_LISTEN_DEFAULT_MODEL
 
 
+def _first_occurrences(query_string: str) -> httpx.QueryParams:
+    """Authorization and pricing read the first ``model`` and ``language`` value; Deepgram must not see a second one."""
+    items: Final = httpx.QueryParams(query_string).multi_items()
+    return httpx.QueryParams(
+        tuple(
+            (key, value)
+            for index, (key, value) in enumerate(items)
+            if key not in _SINGLE_VALUED_PARAMS or all(earlier != key for earlier, _ in items[:index])
+        )
+    )
+
+
 def deepgram_listen_websocket_target(api_base: str | None, query_string: str) -> str:
     listen_url: Final = httpx.URL(f"{(api_base or DEEPGRAM_DEFAULT_API_BASE).rstrip('/')}/listen")
     websocket_url: Final = listen_url.copy_with(scheme=_WEBSOCKET_SCHEMES.get(listen_url.scheme, listen_url.scheme))
-    params: Final = httpx.QueryParams(query_string)
-    query: Final = (
-        query_string if params.get("model") else str(params.remove("model").add("model", DEEPGRAM_LISTEN_DEFAULT_MODEL))
-    )
+    params: Final = _first_occurrences(query_string)
+    query: Final = params if params.get("model") else params.remove("model").add("model", DEEPGRAM_LISTEN_DEFAULT_MODEL)
     return f"{websocket_url}?{query}"
 
 
@@ -64,7 +75,7 @@ def deepgram_listen_pricing_model(upstream_url: str) -> str:
     the multilingual streaming entry when ``language=multi``, otherwise the model's own streaming entry. Pre-recorded
     entries are never a substitute: Deepgram prices the two products differently."""
     streaming: Final = f"{DEEPGRAM_LISTEN_STREAMING_PRICING_PREFIX}{deepgram_listen_model(upstream_url)}"
-    language: Final = parse_qs(urlparse(upstream_url).query).get("language", ("",))[-1]
+    language: Final = parse_qs(urlparse(upstream_url).query).get("language", ("",))[0]
     if language.strip().lower() == DEEPGRAM_LISTEN_MULTILINGUAL_LANGUAGE:
         return f"{streaming}{DEEPGRAM_LISTEN_MULTILINGUAL_PRICING_SUFFIX}"
     return streaming

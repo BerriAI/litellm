@@ -1,6 +1,7 @@
 import math
 from collections.abc import Mapping, Sequence
 from typing import Final
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -75,6 +76,24 @@ def _metadata(duration: object, channels: object = 1) -> dict[str, object]:
             "model=nova-3&keywords=a&keywords=b",
             "wss://dg.internal/v1/listen?model=nova-3&keywords=a&keywords=b",
             id="repeated keys preserved",
+        ),
+        pytest.param(
+            None,
+            "model=nova-2&encoding=linear16&model=nova-3",
+            "wss://api.deepgram.com/v1/listen?model=nova-2&encoding=linear16",
+            id="only the authorized first model reaches deepgram",
+        ),
+        pytest.param(
+            None,
+            "language=en&model=nova-3&language=multi",
+            "wss://api.deepgram.com/v1/listen?language=en&model=nova-3",
+            id="only the priced first language reaches deepgram",
+        ),
+        pytest.param(
+            None,
+            "model=&model=nova-2",
+            "wss://api.deepgram.com/v1/listen?model=nova-3",
+            id="blank first model is the default, later models dropped",
         ),
     ],
 )
@@ -210,12 +229,22 @@ def test_deepgram_listen_model_comes_from_the_upstream_query(upstream_url: str, 
 
 @pytest.mark.parametrize(
     "query_string",
-    ["model=nova-2&language=en", "language=en", "model=&language=en", "", "model=nova-3-medical"],
+    [
+        "model=nova-2&language=en",
+        "language=en",
+        "model=&language=en",
+        "",
+        "model=nova-3-medical",
+        "model=nova-2&model=nova-3",
+        "model=&model=nova-3-medical",
+    ],
 )
-def test_requested_model_is_the_model_the_upstream_target_will_carry(query_string: str):
+def test_requested_model_is_the_only_model_the_upstream_target_carries(query_string: str):
     """Authorization runs against ``deepgram_listen_requested_model``; the upstream URL is built separately, so the
-    two must always agree or a key could be authorized for one model and reach another."""
+    two must always agree or a key could be authorized for one model and reach another. Deepgram reads the last
+    repeated ``model``, so the target must carry exactly one."""
     target: Final = deepgram_listen_websocket_target(None, query_string)
+    assert parse_qs(urlparse(target).query)["model"] == [deepgram_listen_requested_model(query_string)]
     assert deepgram_listen_requested_model(query_string) == deepgram_listen_model(target)
 
 
