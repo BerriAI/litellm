@@ -331,6 +331,8 @@ def stream_opened(logger: Logging) -> None:
 
 def stream_success(
     logger: Logging,
+    url_route: str,
+    endpoint_type: str,
     request_body: dict[str, object],
     chunks: list[bytes],
     start: datetime.datetime,
@@ -353,9 +355,9 @@ def stream_success(
     coroutine: Final = build(
         litellm_logging_obj=logger,
         passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
-        url_route="/v1/messages",
+        url_route=url_route,
         request_body=request_body,
-        endpoint_type=EndpointType.ANTHROPIC,
+        endpoint_type=EndpointType(endpoint_type),
         start_time=start,
         raw_bytes=chunks,
         end_time=end,
@@ -374,14 +376,18 @@ def stream_success(
 
 
 def stream_failure(
-    logger: Logging, request_body: dict[str, object], chunks: list[bytes], error: Exception
+    logger: Logging,
+    endpoint_type: str,
+    request_body: dict[str, object],
+    chunks: list[bytes],
+    error: Exception,
 ) -> Coroutine[object, object, None]:
     from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
     return PassThroughStreamingHandler.schedule_stream_failure_logging(
         litellm_logging_obj=logger,
-        endpoint_type=EndpointType.ANTHROPIC,
+        endpoint_type=EndpointType(endpoint_type),
         request_body=request_body,
         raw_bytes=chunks,
         exception=error,

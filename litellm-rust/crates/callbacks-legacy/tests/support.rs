@@ -197,6 +197,7 @@ pub(crate) fn legacy_call(
         LegacySurface {
             call_type: "test",
             input_description: "test input",
+            stream: None,
         },
         call,
         asynchronous,

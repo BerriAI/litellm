@@ -1,7 +1,7 @@
 mod host;
 
 use host::MessagesRouteHost;
-use litellm_callbacks_legacy::{LegacySurface, PublicCall, run_legacy_call};
+use litellm_callbacks_legacy::{LegacySurface, PassThroughStream, PublicCall, run_legacy_call};
 use litellm_core::messages::route::{messages_machine, supports};
 use pyo3::{
     prelude::*,
@@ -13,6 +13,10 @@ use crate::errors::RustBridgeDeclined;
 const SURFACE: LegacySurface = LegacySurface {
     call_type: "anthropic_messages",
     input_description: "Messages",
+    stream: Some(PassThroughStream {
+        url_route: "/v1/messages",
+        endpoint_type: "anthropic",
+    }),
 };
 
 fn run_messages(
