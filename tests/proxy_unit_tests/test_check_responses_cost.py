@@ -384,17 +384,18 @@ class TestCheckResponsesCost:
             return_value=1
         )
 
-        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
-            mock_aget.side_effect = litellm.NotFoundError(
+        check_responses_cost_instance._get_response = AsyncMock(
+            side_effect=litellm.NotFoundError(
                 message="Response not found", model="gpt-5", llm_provider="openai"
             )
-
-            await check_responses_cost_instance.check_responses_cost()
-
-        mock_prisma_client.db.litellm_managedobjecttable.update_many.assert_awaited_once_with(
-            where={"id": {"in": ["job-404"]}},
-            data={"status": "stale_expired"},
         )
+
+        await check_responses_cost_instance.check_responses_cost()
+
+        update_many = mock_prisma_client.db.litellm_managedobjecttable.update_many
+        update_many.assert_awaited_once()
+        assert update_many.call_args.kwargs["where"] == {"id": {"in": ["job-404"]}}
+        assert update_many.call_args.kwargs["data"] == {"status": "stale_expired"}
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_non_404_error_keeps_row_for_retry(
@@ -416,14 +417,16 @@ class TestCheckResponsesCost:
             return_value=0
         )
 
-        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
-            mock_aget.side_effect = litellm.InternalServerError(
+        check_responses_cost_instance._get_response = AsyncMock(
+            side_effect=litellm.InternalServerError(
                 message="boom", model="gpt-5", llm_provider="openai"
             )
+        )
 
-            await check_responses_cost_instance.check_responses_cost()
+        await check_responses_cost_instance.check_responses_cost()
 
-        mock_prisma_client.db.litellm_managedobjecttable.update_many.assert_not_called()
+        update_many = mock_prisma_client.db.litellm_managedobjecttable.update_many
+        assert update_many.call_args_list == []
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_multiple_jobs(
