@@ -183,7 +183,7 @@ mod tests {
     }
 
     #[test]
-    fn a_standalone_429_counts_only_with_a_429_status() {
+    fn a_standalone_429_counts_with_a_429_status() {
         assert_eq!(
             classified(Some(429), "got 429 back"),
             Some(PublicError::RateLimit)
