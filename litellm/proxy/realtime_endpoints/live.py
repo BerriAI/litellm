@@ -344,6 +344,48 @@ def _pinned(handle: LiveHandle) -> LiveDeployment:
     return _DEPLOYMENT.validate_python(_mutable(handle.deployment))
 
 
+def _validate_pinned_deployment(handle: LiveHandle) -> LiveDeployment:
+    """Reject handles whose deployment was removed, blocked, or replaced."""
+    from litellm.proxy import proxy_server as server
+
+    deployment: Final = _pinned(handle)
+    router = server.llm_router
+    if router is None or deployment.model_id is None:
+        raise HTTPException(410, "Live session deployment is no longer available")
+    configured_raw = router.get_deployment(model_id=deployment.model_id)
+    if configured_raw is None:
+        raise HTTPException(410, "Live session deployment is no longer available")
+    configured_data: Final = (
+        configured_raw.model_dump()
+        if hasattr(configured_raw, "model_dump")
+        else vars(configured_raw)
+        if not isinstance(configured_raw, Mapping)
+        else configured_raw
+    )
+    configured: Final = _MAPPING.validate_python(configured_data)
+    model_info: Final = _MAPPING.validate_python(configured.get("model_info", _EMPTY))
+    if model_info.get("blocked") is True:
+        raise HTTPException(410, "Live session deployment is no longer available")
+    params: Final = _object(configured["litellm_params"])
+    qualified: Final = str(params.get("model", ""))
+    prefix, _, suffix = qualified.partition("/")
+    provider: Final = prefix if prefix in ("openai", "chatgpt") else "openai"
+    upstream: Final = suffix if prefix in ("openai", "chatgpt") else qualified
+    if any(
+        (
+            deployment.model != upstream,
+            deployment.provider != provider,
+            str(model_info.get("id")) != deployment.model_id,
+            params.get("api_base") != deployment.api_base,
+            params.get("api_key") != deployment.api_key,
+            (params.get("extra_headers") or _EMPTY) != deployment.extra_headers,
+            (params.get("extra_query") or _EMPTY) != deployment.extra_query,
+        )
+    ):
+        raise HTTPException(410, "Live session deployment is no longer available")
+    return deployment
+
+
 def _new_handle(
     session_id: str,
     alias: str,
@@ -1170,7 +1212,9 @@ async def _create(request: Request, token: str | None = None) -> Response:
             _request(request, MappingProxyType({**body, "model": model})), ownership.auth, model, ownership=ownership
         ) as prepared:
             await _authorize_fork_policy(_processed_body(body, prepared.processed), source, ownership.auth)
-            deployment: Final = _pinned(source) if source else await _deployment(model, prepared.processed)
+            deployment: Final = (
+                _validate_pinned_deployment(source) if source else await _deployment(model, prepared.processed)
+            )
             transport: Final = LiveTransport(deployment, request.headers)
             path: Final = live_session_path(source.session_id, "fork") if source else "live/sessions"
             response: Final = await transport.request(
@@ -1412,7 +1456,9 @@ async def websocket_live_session(websocket: WebSocket, session_id: str | None = 
                     )
                 else:
                     await _authorize_fork_policy(_processed_body(first, prepared.processed), source, ownership.auth)
-                deployment: Final = _pinned(source) if source else await _deployment(model, prepared.processed)
+                deployment: Final = (
+                    _validate_pinned_deployment(source) if source else await _deployment(model, prepared.processed)
+                )
                 path: Final = (
                     live_session_path(source.session_id, "attach" if attached else "fork")
                     if source

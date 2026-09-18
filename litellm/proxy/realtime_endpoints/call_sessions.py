@@ -400,9 +400,7 @@ async def _create_codex_realtime_call(request: Request) -> Response:
             call: Final = parse_call_response(
                 response,
                 alias=model,
-                owner=hashlib.sha256(
-                    f"Bearer {owner_key}".encode(), usedforsecurity=False
-                ).hexdigest(),
+                owner=hashlib.sha256(f"Bearer {owner_key}".encode(), usedforsecurity=False).hexdigest(),
                 expires_at=time.time() + 3600,
             )
         except ValueError as exc:

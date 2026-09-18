@@ -26,11 +26,14 @@ def encryption_key(monkeypatch):
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-live-encryption-key")
 
 
-def handle(owner="owner"):
+def handle(owner="owner", model_id=None):
+    deployment = {"model": "gpt-live", "provider": "openai"}
+    if model_id is not None:
+        deployment["model_id"] = model_id
     return live._new_handle(
         "sess_upstream",
         "voice",
-        LiveDeployment(model="gpt-live"),
+        LiveDeployment(**deployment),
         UserAPIKeyAuth(api_key=owner),
         None,
     )
@@ -128,6 +131,8 @@ def test_only_protocol_session_ids_are_rewritten_and_application_values_survive(
 
 @pytest.fixture
 def route_client(monkeypatch):
+    from litellm.proxy import proxy_server
+
     auth = UserAPIKeyAuth(api_key="owner")
     deployment = LiveDeployment(model="gpt-live", provider="openai", api_key="upstream-key", model_id="deployment-a")
     transport = SimpleNamespace(
@@ -153,6 +158,21 @@ def route_client(monkeypatch):
     monkeypatch.setattr(live, "_precall", precall)
     monkeypatch.setattr(live, "_deployment", selected)
     monkeypatch.setattr(live, "_supervise", supervised)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        SimpleNamespace(
+            get_deployment=lambda model_id: (
+                {
+                    "model_name": "voice",
+                    "litellm_params": {"model": "openai/gpt-live"},
+                    "model_info": {"id": model_id},
+                }
+                if model_id == "deployment-a"
+                else None
+            )
+        ),
+    )
     factory = Mock(return_value=transport)
     monkeypatch.setattr(live, "LiveTransport", factory)
     app = FastAPI()
@@ -198,8 +218,7 @@ def test_create_preserves_configuration_and_returns_owned_json_session(route_cli
 
 
 def test_fork_preserves_empty_overrides_and_pins_source_deployment(route_client):
-    source = handle()
-    source = source.model_copy(update={"deployment": {**source.deployment, "model_id": "deployment-a"}})
+    source = handle(model_id="deployment-a")
     token = live.encode_session(source)
     body = {"session": {}, "transport": {"type": "webrtc", "sdp": "offer"}}
     result = route_client.client.post(f"/v1/live/sessions/{token}/fork", json=body)
@@ -208,6 +227,39 @@ def test_fork_preserves_empty_overrides_and_pins_source_deployment(route_client)
     assert route_client.transport.request.await_args.kwargs["body"] == body
     assert route_client.factory.call_args.args[0].model_id == "deployment-a"
     route_client.selected.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "configured",
+    [
+        None,
+        {
+            "model_name": "voice",
+            "litellm_params": {"model": "openai/gpt-replaced"},
+            "model_info": {"id": "deployment-a"},
+        },
+        {
+            "model_name": "voice",
+            "litellm_params": {"model": "openai/gpt-live"},
+            "model_info": {"id": "deployment-a", "blocked": True},
+        },
+    ],
+    ids=["removed", "replaced", "blocked"],
+)
+def test_fork_rejects_removed_or_replaced_source_deployment(route_client, monkeypatch, configured):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server.llm_router, "get_deployment", lambda model_id: configured)
+    token = live.encode_session(handle(model_id="deployment-a"))
+
+    result = route_client.client.post(
+        f"/v1/live/sessions/{token}/fork",
+        json={"session": {}, "transport": {"type": "webrtc", "sdp": "offer"}},
+    )
+
+    assert result.status_code == 410
+    assert "no longer available" in result.json()["detail"]
+    route_client.transport.request.assert_not_awaited()
 
 
 def test_fork_cannot_change_model_even_to_same_alias(route_client):
@@ -706,7 +758,7 @@ async def test_explicit_fork_backend_is_authorized_even_when_startup_policy_diff
 def test_restricted_client_fork_can_inherit_delegation(route_client):
     route_client.auth.models = ["voice"]
     body = {"session": {}}
-    token = live.encode_session(handle())
+    token = live.encode_session(handle(model_id="deployment-a"))
     route_client.transport.request.return_value = httpx.Response(
         200, json={"session": {"id": "sess_fork"}, "transport": {"type": "webrtc", "sdp": "answer"}}
     )
@@ -1942,9 +1994,7 @@ def test_websocket_requires_api_key_then_session_start(route_client):
             ws.receive_json()
     assert anonymous.value.code == 1008
 
-    with route_client.client.websocket_connect(
-        "/v1/live/sessions", headers={"Authorization": "Bearer owner"}
-    ) as ws:
+    with route_client.client.websocket_connect("/v1/live/sessions", headers={"Authorization": "Bearer owner"}) as ws:
         ws.send_json({"type": "ping"})
         with pytest.raises(WebSocketDisconnect) as wrong_first:
             ws.receive_json()
@@ -1969,7 +2019,7 @@ async def test_attached_socket_authorizes_policy_and_reuses_source_without_start
     monkeypatch.setattr(live, "RealTimeStreaming", AttachedStream)
     authorize = AsyncMock()
     monkeypatch.setattr(live, "_authorize_delegation", authorize)
-    token = live.encode_session(handle())
+    token = live.encode_session(handle(model_id="deployment-a"))
     inbound = iter([{"type": "websocket.connect"}, {"type": "websocket.disconnect", "code": 1000}])
     sent: list = []
 
@@ -2012,9 +2062,7 @@ def test_websocket_connection_failure_closes_with_internal_error(route_client):
     from starlette.websockets import WebSocketDisconnect
 
     route_client.transport.connect = AsyncMock(return_value=None)
-    with route_client.client.websocket_connect(
-        "/v1/live/sessions", headers={"Authorization": "Bearer owner"}
-    ) as ws:
+    with route_client.client.websocket_connect("/v1/live/sessions", headers={"Authorization": "Bearer owner"}) as ws:
         ws.send_json({"type": "session.start", "session": {"model": "voice"}})
         with pytest.raises(WebSocketDisconnect) as internal:
             ws.receive_json()
