@@ -709,6 +709,21 @@ def as_output_cap(value: object) -> int | None:
     return cap if cap >= 0 else None
 
 
+def _merged_file_batch_headers(
+    deployment_params: Mapping[str, object], request_kwargs: Mapping[str, object]
+) -> Mapping[str, object]:
+    deployment_headers: Final = deployment_params.get("extra_headers")
+    request_headers: Final = request_kwargs.get("extra_headers")
+    if not isinstance(deployment_headers, Mapping) or not isinstance(request_headers, Mapping):
+        return {}
+    return {
+        "extra_headers": {
+            **cast(Mapping[str, object], deployment_headers),  # cast-ok: validated header mapping
+            **cast(Mapping[str, object], request_headers),  # cast-ok: validated header mapping
+        }
+    }
+
+
 class Router:
     model_names: set = set()
     cache_responses: bool | None = False
@@ -5977,6 +5992,7 @@ class Router:
                             "caching": self.cache_responses,
                             "client": model_client,
                             **kwargs_copy,
+                            **_merged_file_batch_headers(data, kwargs_copy),
                         }
                     )
 
@@ -6171,6 +6187,7 @@ class Router:
                         "caching": self.cache_responses,
                         "client": model_client,
                         **kwargs,
+                        **_merged_file_batch_headers(data, kwargs),
                     }
                 )
 

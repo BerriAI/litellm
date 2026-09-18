@@ -440,6 +440,45 @@ async def test_async_router_acreate_file():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["file", "batch"])
+async def test_routed_file_and_batch_keep_deployment_headers(operation: str) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai-batch",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-test",
+                    "extra_headers": {"X-Deployment": "keep"},
+                },
+            }
+        ]
+    )
+    provider_call: Final = AsyncMock(return_value=MagicMock())
+    with patch(f"litellm.acreate_{operation}", provider_call):
+        if operation == "file":
+            await router.acreate_file(
+                model="openai-batch",
+                purpose="batch",
+                file=MagicMock(),
+                extra_headers={"OpenAI-Project": "proj-request"},
+            )
+        else:
+            await router.acreate_batch(
+                model="openai-batch",
+                input_file_id="file-123",
+                endpoint="/v1/chat/completions",
+                completion_window="24h",
+                extra_headers={"OpenAI-Project": "proj-request"},
+            )
+
+    assert provider_call.call_args.kwargs["extra_headers"] == {
+        "X-Deployment": "keep",
+        "OpenAI-Project": "proj-request",
+    }
+
+
+@pytest.mark.asyncio
 async def test_async_router_acreate_file_with_jsonl():
     """
     Test router.acreate_file with both JSONL and non-JSONL files
