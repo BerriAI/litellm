@@ -10,6 +10,7 @@ Covers:
 
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     _build_part_for_input,
@@ -21,6 +22,7 @@ from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation
 )
 from litellm.types.llms.vertex_ai import VertexAIBatchEmbeddingsResponseObject
 from litellm.types.utils import EmbeddingResponse
+from litellm.utils import _invalidate_model_cost_lowercase_map
 
 
 IMAGE_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII"
@@ -299,13 +301,49 @@ class TestProcessResponse:
             )
 
 
+_TEXT_TOKEN_RATE = 2e-07
+_IMAGE_UNIT_RATE = 0.00012
+_AUDIO_PER_SECOND_RATE = 0.00016
+_VIDEO_PER_SECOND_RATE = 0.00079
+_TEST_MODEL_PRICING = {
+    "input_cost_per_audio_per_second": _AUDIO_PER_SECOND_RATE,
+    "input_cost_per_image": _IMAGE_UNIT_RATE,
+    "input_cost_per_token": _TEXT_TOKEN_RATE,
+    "input_cost_per_video_per_second": _VIDEO_PER_SECOND_RATE,
+    "litellm_provider": "vertex_ai-embedding-models",
+    "max_input_tokens": 8192,
+    "max_tokens": 8192,
+    "mode": "embedding",
+    "output_cost_per_token": 0,
+    "output_vector_size": 3072,
+    "supports_multimodal": True,
+    "uses_embed_content": True,
+}
+
+
 class TestProcessEmbedContentResponseUsage:
     """Gemini Embedding 2 embedContent usageMetadata must drive spend.
 
     Regression for multimodal calls recording prompt_tokens=0 / spend=$0.
+
+    The tests pin a local pricing schema for MODEL so the assertions verify the
+    cost calculator's own mapping from usage details to billable dimensions,
+    without depending on whatever pricing keys are currently published in
+    main's model_prices_and_context_window.json (which is refetched at import
+    time and can drop the per-image / per-second keys these code paths read).
     """
 
     MODEL = "gemini-embedding-2"
+
+    @pytest.fixture(autouse=True)
+    def _pin_model_pricing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(litellm.model_cost, self.MODEL, dict(_TEST_MODEL_PRICING))
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"vertex_ai/{self.MODEL}",
+            dict(_TEST_MODEL_PRICING),
+        )
+        _invalidate_model_cost_lowercase_map()
 
     def test_multimodal_image_preserves_usage_metadata(self):
         response_json = {
@@ -430,7 +468,7 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        assert prompt_cost == pytest.approx(0.00012)
+        assert prompt_cost == pytest.approx(_IMAGE_UNIT_RATE)
 
     def test_file_reference_non_image_not_counted_as_image(self):
         """A files/... ref resolving to a non-image mime must not be image-counted."""
@@ -465,7 +503,7 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        assert prompt_cost == pytest.approx(2.0 * 0.00016)
+        assert prompt_cost == pytest.approx(2.0 * _AUDIO_PER_SECOND_RATE)
 
     def test_video_plus_audio_does_not_double_bill_text(self):
         """Video+audio responses must not get video tokens reassigned to text."""
@@ -499,5 +537,8 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        # 1 floor text token at 2e-7 + 2s of video at 7.9e-4 + 2s of audio at 1.6e-4
-        assert prompt_cost == pytest.approx(1 * 2e-7 + 2 * 0.00079 + 2 * 0.00016)
+        assert prompt_cost == pytest.approx(
+            1 * _TEXT_TOKEN_RATE
+            + 2 * _VIDEO_PER_SECOND_RATE
+            + 2 * _AUDIO_PER_SECOND_RATE
+        )
