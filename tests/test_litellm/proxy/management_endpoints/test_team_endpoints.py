@@ -13322,8 +13322,6 @@ async def test_team_member_add_audits_a_user_created_from_a_list_payload(monkeyp
 
 
 class _RecordingAuditLogger(CustomLogger):
-    """An audit_log_callbacks sink that keeps every payload it is handed."""
-
     def __init__(self) -> None:
         super().__init__()
         self.payloads: list[StandardAuditLogPayload] = []
@@ -13333,8 +13331,6 @@ class _RecordingAuditLogger(CustomLogger):
 
 
 def _wire_audit_log_callback(monkeypatch: pytest.MonkeyPatch) -> _RecordingAuditLogger:
-    """Turn audit logging on and register one recording callback, the way an operator's
-    `litellm_settings.audit_log_callbacks` entry would be."""
     audit_logger = _RecordingAuditLogger()
     monkeypatch.setattr("litellm.store_audit_logs", True)
     monkeypatch.setattr("litellm.audit_log_callbacks", [audit_logger])
@@ -13343,7 +13339,6 @@ def _wire_audit_log_callback(monkeypatch: pytest.MonkeyPatch) -> _RecordingAudit
 
 
 async def _settle_audit_log_tasks() -> None:
-    """Audit callbacks run on `asyncio.create_task`, so give the loop a few turns."""
     for _ in range(5):
         await asyncio.sleep(0)
 
@@ -13361,10 +13356,6 @@ def _roster_user_roles(members_json: str | None) -> dict[str, str]:
 
 @pytest.mark.asyncio
 async def test_new_team_created_audit_event_carries_the_final_roster(monkeypatch):
-    """The `created` event a `/team/new` hands to audit_log_callbacks must list the members
-    the team was created with. The team row is inserted empty and the members attached
-    afterwards, so a snapshot taken from the pre-insert object reports no members and a
-    downstream consumer syncing membership from the event has nothing to sync."""
     from fastapi import Request
 
     from litellm.proxy._types import NewTeamRequest
@@ -13428,9 +13419,6 @@ async def test_new_team_created_audit_event_carries_the_final_roster(monkeypatch
 
 @pytest.mark.asyncio
 async def test_team_member_delete_emits_a_roster_audit_event(monkeypatch, mock_db_client, mock_admin_auth):
-    """Removing a member must reach audit_log_callbacks as a TEAM_TABLE `updated` event whose
-    before and after rosters differ by exactly the removed user, the same shape
-    `/team/member_add` already emits, so one consumer can diff both directions."""
     from litellm.proxy._types import TeamMemberDeleteRequest
 
     audit_logger = _wire_audit_log_callback(monkeypatch)
@@ -13490,8 +13478,6 @@ async def test_team_member_delete_emits_a_roster_audit_event(monkeypatch, mock_d
 
 @pytest.mark.asyncio
 async def test_team_member_update_role_change_emits_a_roster_audit_event(monkeypatch):
-    """Changing a member's role must reach audit_log_callbacks as a TEAM_TABLE `updated`
-    event whose before roster carries the old role and whose after roster carries the new one."""
     audit_logger = _wire_audit_log_callback(monkeypatch)
 
     mock_prisma_client = MagicMock()
@@ -13562,10 +13548,6 @@ async def test_team_member_update_role_change_emits_a_roster_audit_event(monkeyp
 
 @pytest.mark.asyncio
 async def test_delete_team_emits_only_the_deleted_audit_event(monkeypatch):
-    """`/team/delete` removes every member on its way out through the same code path
-    `/team/member_delete` uses. Those removals must not surface as TEAM_TABLE `updated`
-    roster events trailing the `deleted` one: the team is gone, and the `deleted` event
-    already carries the roster it went out with."""
     from litellm.proxy._types import DeleteTeamRequest
 
     audit_logger = _wire_audit_log_callback(monkeypatch)
