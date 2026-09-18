@@ -7,7 +7,7 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
@@ -160,7 +160,7 @@ interface CreateKeyProps {
 
 interface User {
   user_id: string;
-  user_email: string;
+  user_email: string | null;
   role?: string;
 }
 
@@ -259,9 +259,23 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
   const [possibleUIRoles, setPossibleUIRoles] = useState<Record<string, Record<string, string>>>({});
-  const [userOptions, setUserOptions] = useState<SearchSelectOption[]>([]);
-  const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
-  const latestUserSearchRef = useRef(0);
+  const [userSearch, setUserSearch] = useState("");
+  const userQueryOptions = {
+    queryKey: ["create-key-users", accessToken, userSearch],
+    queryFn: () => userFilterUICall(accessToken!, new URLSearchParams(userSearch ? { user_email: userSearch } : {})),
+    enabled: accessToken != null && isModalVisible && keyOwner === "another_user",
+    retry: false,
+    staleTime: 0,
+  };
+  const {
+    data: users = [],
+    isFetching: userSearchLoading,
+    error: userSearchError,
+  } = useQuery<User[]>(userQueryOptions);
+  const userOptions: SearchSelectOption[] = users.map((user) => ({
+    label: user.user_email ? `${user.user_email} (${user.user_id})` : user.user_id,
+    value: user.user_id,
+  }));
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
   const [keyType, setKeyType] = useState<string>("llm_api");
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
@@ -280,6 +294,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const selectedModels: string[] = (useWatch({ control: form.control, name: "models" }) as string[] | undefined) ?? [];
   const handleCancel = () => {
     setIsModalVisible(false);
+    setUserSearch("");
     setApiKey(null);
     setSelectedCreateKeyTeam(null);
     form.reset(formDefaults);
@@ -555,41 +570,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setIsCreateUserModalVisible(false);
   };
 
-  const fetchUsers = async (searchText: string): Promise<void> => {
-    const searchId = latestUserSearchRef.current + 1;
-    latestUserSearchRef.current = searchId;
-    const isLatestSearch = (): boolean => searchId === latestUserSearchRef.current;
-
-    if (!searchText) {
-      setUserOptions([]);
-      setUserSearchLoading(false);
-      return;
-    }
-
-    setUserSearchLoading(true);
-    try {
-      const params = new URLSearchParams();
-      params.append("user_email", searchText); // Always search by email
-      if (accessToken == null) {
-        return;
-      }
-      const response = await userFilterUICall(accessToken, params);
-      if (!isLatestSearch()) return;
-
-      const data: User[] = response;
-      const options: SearchSelectOption[] = data.map((user) => ({
-        label: `${user.user_email} (${user.user_id})`,
-        value: user.user_id,
-      }));
-
-      setUserOptions(options);
-    } catch (error) {
-      console.error("Error fetching users:", error);
-      if (isLatestSearch()) toast.fromError("Failed to search for users");
-    } finally {
-      if (isLatestSearch()) setUserSearchLoading(false);
-    }
-  };
+  useEffect(() => {
+    if (userSearchError) toast.fromError("Failed to search for users");
+  }, [userSearchError]);
 
   const changeOrganization = (write: FieldWrite) => (orgId: string | null) => {
     write(orgId);
@@ -678,7 +661,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   <RadioGroup
                     className="flex flex-wrap items-center gap-4"
                     value={keyOwner}
-                    onValueChange={(value: unknown) => setKeyOwner(String(value))}
+                    onValueChange={(value: unknown) => {
+                      setKeyOwner(String(value));
+                      setUserSearch("");
+                    }}
                   >
                     <label className={KEY_OWNER_LABEL_CLASS}>
                       <RadioGroupItem value="you" />
@@ -726,7 +712,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             options={userOptions}
                             value={typeof control.value === "string" ? control.value : undefined}
                             onValueChange={control.onChange}
-                            onSearchChange={fetchUsers}
+                            onSearchChange={setUserSearch}
                             isLoading={userSearchLoading}
                             placeholder="Type email to search for users"
                             emptyText="No users found"
