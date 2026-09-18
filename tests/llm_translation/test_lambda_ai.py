@@ -44,7 +44,9 @@ def test_lambda_ai_get_openai_compatible_provider_info():
         os.environ,
         {"LAMBDA_API_KEY": "env-key", "LAMBDA_API_BASE": "https://env.lambda.ai/v1"},
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info("https://param.lambda.ai/v1", "param-key")
+        api_base, api_key = config._get_openai_compatible_provider_info(
+            "https://param.lambda.ai/v1", "param-key"
+        )
         assert api_base == "https://param.lambda.ai/v1"
         assert api_key == "param-key"
 
@@ -54,12 +56,16 @@ def test_get_llm_provider_lambda_ai():
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
     # Test with lambda_ai/model-name format
-    model, provider, api_key, api_base = get_llm_provider("lambda_ai/llama3.1-8b-instruct")
+    model, provider, api_key, api_base = get_llm_provider(
+        "lambda_ai/llama3.1-8b-instruct"
+    )
     assert model == "llama3.1-8b-instruct"
     assert provider == "lambda_ai"
 
     # Test with api_base containing Lambda AI endpoint
-    model, provider, api_key, api_base = get_llm_provider("llama3.1-8b-instruct", api_base="https://api.lambda.ai/v1")
+    model, provider, api_key, api_base = get_llm_provider(
+        "llama3.1-8b-instruct", api_base="https://api.lambda.ai/v1"
+    )
     assert model == "llama3.1-8b-instruct"
     assert provider == "lambda_ai"
     assert api_base == "https://api.lambda.ai/v1"
@@ -94,3 +100,5 @@ async def test_lambda_ai_completion_call():
         if "lambda_ai" not in str(e) and "provider" not in str(e).lower():
             # Re-raise if it's not a provider-related error
             raise
+
+

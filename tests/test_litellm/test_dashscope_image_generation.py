@@ -70,7 +70,9 @@ class TestDashScopeImageGenerationConfig:
             "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/",
         ],
     )
-    def test_get_complete_url_ignores_chat_compatible_mode_base(self, chat_api_base: str):
+    def test_get_complete_url_ignores_chat_compatible_mode_base(
+        self, chat_api_base: str
+    ):
         url = self.cfg.get_complete_url(chat_api_base, None, "qwen-image-3.0", {}, {})
         assert url == DEFAULT_API_BASE
 
@@ -131,7 +133,9 @@ class TestDashScopeImageGenerationConfig:
             headers={},
         )
         assert req["model"] == model
-        assert req["input"]["messages"][0]["content"][0]["text"] == ("a poster with small multilingual text")
+        assert req["input"]["messages"][0]["content"][0]["text"] == (
+            "a poster with small multilingual text"
+        )
         assert req["parameters"]["size"] == "2048*2048"
         assert req["parameters"]["n"] == 6
 
@@ -396,7 +400,11 @@ def test_litellm_image_generation_dashscope_end_to_end(model: str):
                     "finish_reason": "stop",
                     "message": {
                         "role": "assistant",
-                        "content": [{"image": "https://dashscope-result.oss.aliyuncs.com/test.png"}],
+                        "content": [
+                            {
+                                "image": "https://dashscope-result.oss.aliyuncs.com/test.png"
+                            }
+                        ],
                     },
                 }
             ]
@@ -410,7 +418,9 @@ def test_litellm_image_generation_dashscope_end_to_end(model: str):
         },
     }
 
-    with patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post") as mock_post:
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
+    ) as mock_post:
         mock_http_response = MagicMock()
         mock_http_response.json.return_value = mock_response_body
         mock_http_response.status_code = 200
@@ -427,11 +437,15 @@ def test_litellm_image_generation_dashscope_end_to_end(model: str):
         assert response is not None
         assert response.data is not None
         assert len(response.data) == 1
-        assert response.data[0].url == "https://dashscope-result.oss.aliyuncs.com/test.png"
+        assert (
+            response.data[0].url == "https://dashscope-result.oss.aliyuncs.com/test.png"
+        )
 
         # Verify the HTTP call was made to the DashScope endpoint
         call_args = mock_post.call_args
-        called_url = call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
+        called_url = (
+            call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
+        )
         assert called_url == DEFAULT_API_BASE
 
         # Verify request body contains DashScope format

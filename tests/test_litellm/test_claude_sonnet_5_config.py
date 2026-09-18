@@ -33,3 +33,5 @@ ALL_SONNET_5_VARIANTS = (
 
 def test_sonnet_5_registered_for_bedrock_converse():
     assert "anthropic.claude-sonnet-5" in BEDROCK_CONVERSE_MODELS
+
+

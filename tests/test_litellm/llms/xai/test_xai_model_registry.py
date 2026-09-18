@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).parents[4]
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
 BACKUP_PRICES_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"

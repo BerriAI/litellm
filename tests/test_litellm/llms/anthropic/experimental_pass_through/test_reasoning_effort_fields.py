@@ -161,7 +161,9 @@ class TestAdapterAdaptiveThinking:
         )
 
         adapter = LiteLLMAnthropicMessagesAdapter()
-        result = adapter.translate_anthropic_thinking_to_reasoning_effort({"type": "adaptive"})
+        result = adapter.translate_anthropic_thinking_to_reasoning_effort(
+            {"type": "adaptive"}
+        )
         assert result == "medium"
 
     def test_messages_adapter_adaptive_overridden_by_output_config(self):

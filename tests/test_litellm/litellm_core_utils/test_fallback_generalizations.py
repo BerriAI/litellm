@@ -922,3 +922,5 @@ def test_shipped_tool_search_rule_version_boundaries(shipped_cost_map, model, pr
     assert model not in litellm.model_cost
     info = litellm.get_model_info(model, custom_llm_provider=provider)
     assert info.get("supports_tool_search") is tool_search, model
+
+

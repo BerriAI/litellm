@@ -110,6 +110,8 @@ class TestCognitionProviderIdentity:
 
 
 class TestCognitionCostTracking:
+
+
     def test_supported_endpoints_matrix(self):
         matrix = json.loads((Path(litellm.__file__).parent / "provider_endpoints_support_backup.json").read_text())
 
@@ -118,3 +120,5 @@ class TestCognitionCostTracking:
         assert endpoints["messages"] is True
         assert endpoints["responses"] is True
         assert endpoints["embeddings"] is False
+
+

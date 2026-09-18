@@ -154,6 +154,7 @@ class TestSCXAIModelMetadata:
         with open(json_path) as f:
             return json.load(f)
 
+
     def test_scx_ai_models_synced_to_backup(self):
         model_cost = self._load(("model_prices_and_context_window.json",))
         backup = self._load(("litellm", "model_prices_and_context_window_backup.json"))

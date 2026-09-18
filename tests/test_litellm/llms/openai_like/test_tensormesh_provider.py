@@ -79,6 +79,7 @@ class TestTensormeshProviderConfig:
         matching the text_completion flag in provider_endpoints_support.json."""
         assert "tensormesh" in litellm.openai_text_completion_compatible_providers
 
+
     def test_tensormesh_router_config(self):
         """Test that tensormesh can be used in Router configuration"""
         from litellm import Router
@@ -115,6 +116,7 @@ class TestTensormeshCostMap:
             litellm.model_cost = original_model_cost
             litellm.get_model_info.cache_clear()
 
+
     def test_reasoning_flag_matches_expected_set(self):
         reasoning_models = {
             "tensormesh/deepseek-ai/DeepSeek-V4-Flash",
@@ -129,3 +131,4 @@ class TestTensormeshCostMap:
         }
         for model in TENSORMESH_MODELS:
             assert litellm.supports_reasoning(model) is (model in reasoning_models), model
+

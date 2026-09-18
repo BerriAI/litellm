@@ -325,6 +325,8 @@ KIMI_K3_PERPLEXITY_KEY = "perplexity/perplexity/kimi-k3"
 
 
 class TestKimiK3AdvertisesItsDocumentedLevels:
+
+
     @pytest.mark.parametrize("model, provider", [("kimi-k3", "moonshot"), ("kimi-k3", "fireworks_ai")])
     def test_the_declaration_survives_model_info_hydration(self, local_model_cost_map, model, provider):
         """The hydration line is the load-bearing seam: without it the key the map carries never

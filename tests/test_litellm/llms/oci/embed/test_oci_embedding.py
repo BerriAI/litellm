@@ -305,3 +305,5 @@ class TestOCIEmbeddingConfig:
                 optional_params={},
                 litellm_params={},
             )
+
+

@@ -204,6 +204,7 @@ class TestPerplexityCostCalculator:
         assert math.isclose(prompt_cost, (1000 * 1e-07) + (100 * 2e-06), rel_tol=1e-10)
         assert math.isclose(completion_cost, (150 * 2e-07) + (50 * 3e-06) + 0.005, rel_tol=1e-10)
 
+
     def test_provider_stated_cost_still_wins_inside_an_off_peak_window(self):
         """A response that carries Perplexity's own metered cost bills that cost whatever the
         window says; the caller strips it when the deployment carries custom pricing."""

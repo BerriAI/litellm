@@ -28,11 +28,7 @@ def test_baseline_preserves_anthropic_pricing_fields(modifier: dict[str, str], c
     assert usage.prompt_tokens_details.cached_tokens == 0
     selected_cost: Final = 0.013
     assert compute_autorouter_savings(
-        "claude-opus-5",
-        "claude-sonnet-5",
-        "anthropic",
-        usage,
-        conversation_continuing=continuing,
+        "claude-opus-5", "claude-sonnet-5", "anthropic", usage, conversation_continuing=continuing,
         cost_breakdown={"input_cost": 0.01, "output_cost": 0.003},
     ) == pytest.approx(sum(anthropic_cost_per_token("claude-opus-5", expected)) - selected_cost)
 
@@ -40,17 +36,11 @@ def test_baseline_preserves_anthropic_pricing_fields(modifier: dict[str, str], c
 def test_anthropic_baseline_keeps_negotiated_prices_with_provider_multiplier() -> None:
     info: Final = {
         **litellm.get_model_info("claude-opus-5", "anthropic"),
-        "input_cost_per_token": 1e-6,
-        "output_cost_per_token": 2e-6,
-        "cache_read_input_token_cost": 3e-7,
+        "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6, "cache_read_input_token_cost": 3e-7,
     }
     usage: Final = _usage(1000, 1000, 0, 100).model_copy(update={"speed": "fast"})
     assert compute_autorouter_savings(
-        "claude-opus-5",
-        "claude-sonnet-5",
-        "anthropic",
-        usage,
-        baseline_info=info,
+        "claude-opus-5", "claude-sonnet-5", "anthropic", usage, baseline_info=info,
         cost_breakdown={"input_cost": 0.01, "output_cost": 0.003},
     ) == pytest.approx(0.0015 * 2 - 0.013)
 

@@ -103,3 +103,5 @@ def test_crusoe_provider_detection_by_prefix():
     model, provider, _, _ = get_llm_provider("crusoe/meta-llama/Llama-3.3-70B-Instruct")
     assert provider == "crusoe"
     assert model == "meta-llama/Llama-3.3-70B-Instruct"
+
+

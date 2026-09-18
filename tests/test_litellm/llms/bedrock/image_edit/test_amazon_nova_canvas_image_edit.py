@@ -203,7 +203,9 @@ def test_transform_request_image_pathlike_input(tmp_path):
     )
 
     assert body["taskType"] == "IMAGE_VARIATION"
-    assert body["imageVariationParams"]["images"][0] == base64.b64encode(image_bytes).decode("utf-8")
+    assert body["imageVariationParams"]["images"][0] == base64.b64encode(
+        image_bytes
+    ).decode("utf-8")
 
 
 def test_transform_request_inpainting_with_mask():
@@ -364,7 +366,9 @@ def test_transform_request_inpainting_explicit_task_without_mask_raises():
     """INPAINTING taskType without mask or maskPrompt must fail fast."""
     config = BedrockAmazonNovaCanvasImageEditConfig()
     img = io.BytesIO(b"img")
-    with pytest.raises(ValueError, match="INPAINTING requires either maskPrompt or maskImage"):
+    with pytest.raises(
+        ValueError, match="INPAINTING requires either maskPrompt or maskImage"
+    ):
         config.transform_image_edit_request(
             model="amazon.nova-canvas-v1:0",
             prompt="fix it",
