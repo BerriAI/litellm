@@ -18,17 +18,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
       - run: rustup toolchain install --no-self-update
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: litellm-rust
           cache-on-failure: true
@@ -36,7 +36,7 @@ jobs:
           uv build --wheel --out-dir dist
           uv build --wheel --package litellm-enterprise --out-dir dist
           uv build --wheel --package litellm-proxy-extras --out-dir dist
-      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: dependency-wheels
           path: dist/*.whl
@@ -55,13 +55,13 @@ jobs:
           - python: "3.12"
             resolution: highest
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
-      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
           name: dependency-wheels
           path: dist
@@ -89,13 +89,13 @@ jobs:
         - '3.13'
         - '3.14'
     steps:
-    - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+    - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
       with:
         persist-credentials: false
     - uses: ./.github/actions/setup-uv-with-retries
       with:
         version: 0.10.9
-    - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+    - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
       with:
         name: dependency-wheels
         path: dist
@@ -141,12 +141,12 @@ jobs:
           --cov=tests/mcp_dependency_tests \
           --cov=tests/base_sdk_tests --cov-append --cov-branch \
           --cov-report=xml:mcp-dependency-coverage.xml
-    - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+    - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
       with:
         name: mcp-dependency-reports-${{ matrix.python }}
         path: /tmp/mcp-gate-reports/*.json
         if-no-files-found: error
-    - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+    - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
       if: matrix.python == '3.12'
       with:
         name: mcp-dependency-coverage
@@ -160,14 +160,14 @@ jobs:
       contents: read
       id-token: write
     steps:
-    - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+    - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
       with:
         persist-credentials: false
-    - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+    - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
       with:
         name: mcp-dependency-coverage
         path: coverage-reports
-    - uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe
+    - uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
       with:
         use_oidc: true
         directory: coverage-reports
