@@ -1331,7 +1331,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             method="GET",
             optional_params=optional_params,
             litellm_params=litellm_params,
-            extra_headers={"Range": "bytes=0-0"},
+            extra_headers=MappingProxyType({"Range": "bytes=0-0"}),
         )
 
     def transform_retrieve_file_response(
@@ -1582,10 +1582,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         )
 
         empty_body_hash: Final = hashlib.sha256(b"").hexdigest()
+        signed_headers: Final = MappingProxyType({"x-amz-content-sha256": empty_body_hash, **extra_headers})
         aws_request: Final = AWSRequest(  # any-ok: botocore AWSRequest is untyped
             method=method,
             url=api_base,
-            headers={"x-amz-content-sha256": empty_body_hash, **extra_headers},
+            headers=signed_headers,
         )
         auth: Final = S3SigV4Auth(credentials, "s3", aws_region_name)  # any-ok: botocore untyped
         auth.add_auth(aws_request)  # any-ok: botocore request mutation is untyped
