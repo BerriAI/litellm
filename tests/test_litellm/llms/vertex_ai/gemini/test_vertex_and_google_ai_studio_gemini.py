@@ -6074,3 +6074,26 @@ def test_prompt_blocked_chunk_keeps_served_model_version():
 
     assert streaming_chunk.model == "gemini-3.8-flash-001"
     assert streaming_chunk.choices[0].finish_reason == "content_filter"
+
+
+def test_vertex_ai_map_tool_adds_object_type():
+    v = VertexGeminiConfig()
+    optional_params = {}
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "my_func",
+            "description": "A func",
+            "parameters": {
+                "properties": {
+                    "foo": {"type": "string"}
+                }
+            }
+        }
+    }
+    tools = v._map_function(
+        value=[tool], optional_params=optional_params
+    )
+    assert len(tools) == 1
+    assert tools[0]["function_declarations"][0]["parameters"]["type"] == "object"
+

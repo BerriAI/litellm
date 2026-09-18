@@ -693,6 +693,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if _description is not None:
                     gtool_func_declaration["description"] = _description
                 if _parameters is not None:
+                    if isinstance(_parameters, dict) and _parameters.get("type") != "object":
+                        _parameters["type"] = "object"
                     gtool_func_declaration["parameters"] = _parameters
                 gtool_func_declarations.append(gtool_func_declaration)
             else:
