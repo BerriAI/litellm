@@ -1,17 +1,21 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::call_arguments::CallArguments;
-use crate::constants::MISTRAL_OCR_API_BASE;
-use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, decode_and_normalize_response};
-use crate::ocr::OcrClient;
-use crate::ocr::prepare::credential_env;
-use crate::ocr::types::{
-    LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrResponseFormat, OcrUsageInfo,
-    PreparedOcrRequest,
+use crate::{
+    call_arguments::CallArguments,
+    constants::MISTRAL_OCR_API_BASE,
+    llms::base_llm::ocr::transformation::{BaseOcrConfig, decode_and_normalize_response},
+    ocr::{
+        OcrClient,
+        prepare::credential_env,
+        types::{
+            LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrResponseFormat,
+            OcrUsageInfo, PreparedOcrRequest,
+        },
+    },
+    params::OpaqueParams,
+    url_utils::ApiUrl,
 };
-use crate::params::OpaqueParams;
-use crate::url_utils::ApiUrl;
 
 const MISTRAL_OCR_API_KEY_ENV_VAR: &str = "MISTRAL_API_KEY";
 
@@ -615,6 +619,22 @@ mod tests {
                 .resolve_headers(&connection, &|_| None)
                 .unwrap(),
             connection.extra_headers
+        );
+    }
+
+    #[rstest]
+    fn environment_keeps_extra_headers_after_the_bearer_key(
+        #[with(Some("explicit"), vec![("X-Trace".into(), "trace-1".into())])]
+        connection: OcrConnection,
+    ) {
+        assert_eq!(
+            MistralOcrConfig
+                .resolve_headers(&connection, &|_| None)
+                .unwrap(),
+            [
+                ("Authorization".to_string(), "Bearer explicit".to_string()),
+                ("X-Trace".to_string(), "trace-1".to_string()),
+            ]
         );
     }
 

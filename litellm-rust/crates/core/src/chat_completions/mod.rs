@@ -14,9 +14,8 @@ pub use litellm_providers::chat::{conversation, response_utils};
 pub(crate) mod handler;
 mod prepare;
 pub mod streaming;
-pub use litellm_providers::chat::types;
-
 use handler::execute_chat_completions_provider_call;
+pub use litellm_providers::chat::types;
 use prepare::{parse_messages, resolve_provider_config, resolve_request};
 use serde_json::{Map, Value};
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};

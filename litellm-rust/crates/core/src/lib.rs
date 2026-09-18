@@ -1,12 +1,12 @@
 pub mod audio_transcription;
 pub mod call_arguments;
-pub mod call_lifecycle;
 pub mod chat_completions;
 pub mod constants;
 pub mod error;
 pub mod http_utils;
 pub mod litellm_core_utils;
 pub mod llms;
+pub mod machine;
 mod media;
 pub mod messages;
 pub mod ocr;

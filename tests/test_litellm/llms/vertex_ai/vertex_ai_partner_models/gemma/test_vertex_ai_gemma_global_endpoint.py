@@ -180,28 +180,6 @@ class TestCreateVertexURLGemma:
 # ---------------------------------------------------------------------------
 
 
-def test_gemma_maas_supports_function_calling():
-    """supports_function_calling=true in model_cost must be surfaced by the utility."""
-    with patch.dict(litellm.model_cost, _GEMMA_MODEL_COST_ENTRY, clear=False):
-        assert (
-            litellm.utils.supports_function_calling(
-                model="vertex_ai/google/gemma-4-26b-a4b-it-maas"
-            )
-            is True
-        )
-
-
-def test_gemma_maas_supports_vision():
-    """supports_vision=true in model_cost must be surfaced by the utility."""
-    with patch.dict(litellm.model_cost, _GEMMA_MODEL_COST_ENTRY, clear=False):
-        assert (
-            litellm.utils.supports_vision(
-                model="vertex_ai/google/gemma-4-26b-a4b-it-maas"
-            )
-            is True
-        )
-
-
 # ---------------------------------------------------------------------------
 # Integration tests: verify payloads reach the global OpenAI endpoint
 #

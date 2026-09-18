@@ -102,10 +102,14 @@ async fn request_controlled_api_base_is_rejected_before_vertex_auth() {
 async fn adapters_build_complete_requests_and_share_mistral_normalization() {
     use std::time::Duration;
 
-    use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
-    use crate::llms::mistral::ocr::transformation::MistralOcrConfig;
-    use crate::llms::vertex_ai::ocr::transformation::VertexAiOcrConfig;
-    use crate::ocr::test_support::ocr_client;
+    use crate::{
+        llms::{
+            base_llm::ocr::transformation::BaseOcrConfig,
+            mistral::ocr::transformation::MistralOcrConfig,
+            vertex_ai::ocr::transformation::VertexAiOcrConfig,
+        },
+        ocr::test_support::ocr_client,
+    };
 
     let client = ocr_client();
     let options = json!({
@@ -121,10 +125,12 @@ async fn adapters_build_complete_requests_and_share_mistral_normalization() {
         options.clone(),
     );
     let vertex = wire_request("vertex_ai/mistral-ocr-maas", "https://vertex.test", options);
-    let direct =
-        crate::ocr::prepare::prepare_request(super::test_support::resolved_request(direct));
-    let vertex =
-        crate::ocr::prepare::prepare_request(super::test_support::resolved_request(vertex));
+    let direct = crate::ocr::prepare::prepare_request_for_test(
+        super::test_support::resolved_request(direct),
+    );
+    let vertex = crate::ocr::prepare::prepare_request_for_test(
+        super::test_support::resolved_request(vertex),
+    );
     let direct_http = MistralOcrConfig
         .prepare_request(&direct, &client)
         .await
