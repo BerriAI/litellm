@@ -519,7 +519,6 @@ def _get_token_base_cost(
     current_time: datetime | None = None,
     *,
     threshold_is_inclusive: bool = False,
-    missing_cache_read_uses_input: bool = False,
 ) -> tuple[float, float, float, float, float]:
     """
     Return prompt cost, completion cost, and cache costs for a given model and usage.
@@ -530,13 +529,11 @@ def _get_token_base_cost(
     `threshold_is_inclusive` switches that comparison to >=, for providers such as xAI
     that bill the higher tier once the prompt reaches the threshold.
 
-    `missing_cache_read_uses_input` resolves an absent cache-read rate to the resolved
-    input rate instead of 0.0; an explicit 0.0 rate stays a real price either way.
-
-    An absent cache-creation rate always resolves to the resolved input rate, the way the
-    tiered table and custom deployment pricing already do, since a provider that publishes
-    no write price bills cache writes as ordinary input. An absent 1h write rate resolves
-    to the cache-creation rate, off-peak included. An explicit 0.0 stays a real price for both.
+    An absent cache-creation or cache-read rate always resolves to the resolved input
+    rate, the way the tiered table and custom deployment pricing already do, since a
+    provider that publishes no cache price bills cached tokens as ordinary input. An
+    absent 1h write rate resolves to the cache-creation rate, off-peak included. An
+    explicit 0.0 stays a real price for all of them.
 
     Returns:
         Tuple[float, float, float, float] - (prompt_cost, completion_cost, cache_creation_cost, cache_read_cost)
@@ -663,8 +660,7 @@ def _get_token_base_cost(
         "input_cost_per_token",
         prompt_base_cost,
     )
-    if cache_read_cost is None:
-        cache_read_cost = input_rate_for_missing_cache_rates if missing_cache_read_uses_input else 0.0
+    resolved_cache_read_cost: Final = input_rate_for_missing_cache_rates if cache_read_cost is None else cache_read_cost
     resolved_cache_creation_cost: Final = (
         input_rate_for_missing_cache_rates if cache_creation_cost is None else cache_creation_cost
     )
@@ -677,7 +673,7 @@ def _get_token_base_cost(
             completion_base_cost,
             resolved_cache_creation_cost,
             cache_creation_cost_above_1hr,
-            cache_read_cost,
+            resolved_cache_read_cost,
         ),
     )
 
@@ -1588,7 +1584,6 @@ def calculate_prompt_caching_savings(
         service_tier=service_tier,
         current_time=billed_at,
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
-        missing_cache_read_uses_input=True,
     )
     write_rate: Final = cache_creation_cost or prompt_base_cost
     write_rate_1h: Final = cache_creation_cost_above_1hr or write_rate
