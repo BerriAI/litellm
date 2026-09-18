@@ -13050,6 +13050,31 @@ async def test_user_window_spend_row_is_enqueued():
 
 
 @pytest.mark.asyncio
+async def test_user_window_spend_row_is_enqueued_on_user_cache_miss(monkeypatch):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    reset_at = datetime.now(timezone.utc) + timedelta(days=3)
+    db_user = MagicMock()
+    db_user.budget_limits = [{"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}]
+    fake_get_user_object = AsyncMock(return_value=db_user)
+    monkeypatch.setattr(ps, "get_user_object", fake_get_user_object)
+
+    with _window_spend_enqueue_env({}) as queue:
+        ps.prisma_client = MagicMock()
+        await increment_spend_counters(token=None, team_id=None, user_id="user-1", response_cost=1.5)
+        enqueued = await _drain(queue)
+
+    assert fake_get_user_object.await_args.kwargs["user_id"] == "user-1"
+    assert fake_get_user_object.await_args.kwargs["user_id_upsert"] is False
+    assert len(enqueued) == 1
+    assert enqueued[0]["entity_type"] == "user"
+    assert enqueued[0]["entity_id"] == "user-1"
+    assert enqueued[0]["window_duration"] == "7d"
+    assert enqueued[0]["spend"] == pytest.approx(1.5)
+
+
+@pytest.mark.asyncio
 async def test_window_spend_row_is_enqueued_even_when_the_counter_was_reserved():
     """A reservation only pre-charged the cache counter with an estimate; the
     row still owes the actual cost, so the enqueue must not be skipped."""

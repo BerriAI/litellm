@@ -319,6 +319,7 @@ from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     can_key_call_resolved_model,
     get_team_object,
+    get_user_object,
     log_db_metrics,
 )
 from litellm.proxy.auth.auth_utils import (
@@ -3085,7 +3086,7 @@ async def _increment_spend_counters_batched(
             )
             return pending_window
 
-        user_obj: Final[object] = await user_api_key_cache.async_get_cache(key=scope_user_id)
+        user_obj: Final[object] = await _load_user_for_window_spend(scope_user_id)
         if user_obj is None:
             return user_pending
         user_budget_limits = getattr(user_obj, "budget_limits", None) or (
@@ -3373,6 +3374,22 @@ async def _enqueue_window_spend_row_update(
             window_duration,
             e,
         )
+
+
+async def _load_user_for_window_spend(user_id: str) -> object:
+    cached: Final[object] = await user_api_key_cache.async_get_cache(key=user_id)
+    if cached is not None or prisma_client is None:
+        return cached
+    try:
+        return await get_user_object(
+            user_id=user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+        )
+    except Exception as exc:
+        verbose_proxy_logger.debug("user window spend: could not load user %s from db: %s", user_id, exc)
+        return None
 
 
 async def _prepare_window_spend_counter_increment(
