@@ -176,6 +176,48 @@ def test_config_update_rejects_config_owned_keys_and_accepts_the_same_value(
     assert persisted[next(iter(yaml_values))] == yaml_values[next(iter(yaml_values))]
 
 
+def test_config_update_persists_only_the_general_settings_keys_the_request_set(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps.proxy_config, "add_deployment", AsyncMock())
+    ps.proxy_config.settings.load_yaml({"health_check_interval": 60})
+    try:
+        with auth_as(LitellmUserRoles.PROXY_ADMIN):
+            response = client.post("/config/update", json={"general_settings": {"alerting_threshold": 600}})
+    finally:
+        ps.proxy_config.settings.load_yaml({})
+
+    assert response.status_code == 200
+    persisted = json.loads(table.upsert.call_args.kwargs["data"]["create"]["param_value"])
+    assert persisted == {"alerting_threshold": 600}
+
+
+def test_config_update_accepts_a_config_owned_success_callback_the_file_spells_in_mixed_case(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps.proxy_config, "add_deployment", AsyncMock())
+    ps.proxy_config.litellm_settings.load_yaml({"success_callback": ["Langfuse"]})
+    try:
+        with auth_as(LitellmUserRoles.PROXY_ADMIN):
+            response = client.post("/config/update", json={"litellm_settings": {"success_callback": ["Langfuse"]}})
+    finally:
+        ps.proxy_config.litellm_settings.load_yaml({})
+
+    assert response.status_code == 200
+    persisted = json.loads(table.upsert.call_args.kwargs["data"]["create"]["param_value"])
+    assert persisted["success_callback"] == ["langfuse"]
+
+
 def test_config_update_rejects_assistants_config(client, auth_as, mock_prisma, monkeypatch):
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
