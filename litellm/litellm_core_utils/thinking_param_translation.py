@@ -52,9 +52,9 @@ def _thinking_enabled(thinking: object) -> bool:
 
 def _thinking_type_value(thinking: object, allowed: Sequence[str]) -> str | None:
     if isinstance(thinking, str):
-        candidate: Final = thinking
+        candidate = thinking
     elif isinstance(thinking, Mapping):
-        raw: Final = thinking.get("type")
+        raw = thinking.get("type")
         candidate = raw if isinstance(raw, str) else None
     elif isinstance(thinking, bool):
         candidate = "enabled" if thinking else "disabled"
