@@ -1426,6 +1426,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 },
             )
 
+            if "extra_body" in data and isinstance(data["extra_body"], dict):
+                data["extra_body"].pop("extra_headers", None)
+                data["extra_body"].pop("headers", None)
+                if not data["extra_body"]:
+                    data.pop("extra_body", None)
+
             request_data: Final = (  # mutable-ok: the OpenAI SDK takes the request body as a dict
                 {**data, "extra_headers": headers} if headers else data
             )
@@ -1510,6 +1516,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     "complete_input_dict": data,
                 },
             )
+
+            if "extra_body" in data and isinstance(data["extra_body"], dict):
+                data["extra_body"].pop("extra_headers", None)
+                data["extra_body"].pop("headers", None)
+                if not data["extra_body"]:
+                    data.pop("extra_body", None)
 
             ## COMPLETION CALL
             request_data: Final = (  # mutable-ok: the OpenAI SDK takes the request body as a dict

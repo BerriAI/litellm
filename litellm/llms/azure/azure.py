@@ -1256,6 +1256,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             # Azure image generation API doesn't support extra_body parameter
             extra_body: Final = optional_params.pop("extra_body", {})
             flattened_params: Final = {**optional_params, **extra_body}
+            flattened_params.pop("extra_headers", None)
+            flattened_params.pop("headers", None)
 
             base_model: Final = litellm_params.get("base_model", None) if litellm_params else None
             data: Final = {"model": base_model or model, "prompt": prompt, **flattened_params}
