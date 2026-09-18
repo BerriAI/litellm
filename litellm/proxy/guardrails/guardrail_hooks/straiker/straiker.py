@@ -4,8 +4,9 @@ import asyncio
 import hashlib
 import json
 import random
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 from urllib.parse import urlsplit
 
@@ -196,7 +197,7 @@ def _as_dict(value: object) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _merged_metadata(request_data: dict) -> dict:
+def _merged_metadata(request_data: Mapping[str, object]) -> dict:
     return {
         **_as_dict(request_data.get("metadata")),
         **_as_dict(request_data.get("litellm_metadata")),
@@ -400,7 +401,7 @@ _PLACEHOLDER_IDENTITIES: Final = frozenset({SpecialProxyStrings.default_user_id.
 
 def _real_identity(value: object) -> str | None:
     """LiteLLM's proxy-admin placeholders are not a person."""
-    identity = _as_optional_str(value)
+    identity: Final = _as_optional_str(value)
     return None if identity in _PLACEHOLDER_IDENTITIES else identity
 
 
@@ -419,18 +420,25 @@ def _request_header(request_data: Mapping[str, object], name: str | None) -> str
     return None
 
 
-def _v3_identity_metadata(request_data: Mapping[str, object]) -> dict[str, str]:
+def _frozen(pairs: Iterable[tuple[str, object]]) -> Mapping[str, object]:
+    return MappingProxyType(dict(pairs))
+
+
+def _json_default(value: object) -> object:
+    if isinstance(value, Mapping):
+        return dict(value)  # mutable-ok: the JSON encoder needs a dict view of a frozen mapping
+    return str(value)
+
+
+def _v3_identity_metadata(request_data: Mapping[str, object]) -> Mapping[str, str]:
     """The proxy-resolved identity fields, and only those, for the relayed body."""
-    merged: Final = _merged_metadata(dict(request_data))
-    identity: dict[str, str] = {}
-    for key in _V3_IDENTITY_METADATA_KEYS:
-        value = _real_identity(merged.get(key))
-        if value:
-            identity[key] = value
-    return identity
+    merged: Final = _merged_metadata(request_data)
+    return MappingProxyType(
+        {key: value for key in _V3_IDENTITY_METADATA_KEYS if (value := _real_identity(merged.get(key)))}
+    )
 
 
-def _v3_request_body(request_data: Mapping[str, object]) -> dict[str, object]:
+def _v3_request_body(request_data: Mapping[str, object]) -> Mapping[str, object]:
     """The provider body LiteLLM received, stripped of everything the proxy added.
 
     The hook sees the client's request merged with proxy bookkeeping: logging objects,
@@ -438,23 +446,21 @@ def _v3_request_body(request_data: Mapping[str, object]) -> dict[str, object]:
     and the client's Authorization header must not travel. Identity survives as the
     metadata subset the Straiker LiteLLM adapter reads.
     """
-    body: dict[str, object] = {key: value for key, value in request_data.items() if key in _V3_PROVIDER_BODY_KEYS}
     identity: Final = _v3_identity_metadata(request_data)
-    if identity:
-        body["metadata"] = identity
-    return body
+    provider: Final = ((key, value) for key, value in request_data.items() if key in _V3_PROVIDER_BODY_KEYS)
+    return _frozen((*provider, *((("metadata", identity),) if identity else ())))
 
 
 def _v3_anthropic_messages_route(request_data: Mapping[str, object]) -> bool:
     from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 
-    route: Final = _merged_metadata(dict(request_data)).get("user_api_key_request_route")
+    route: Final = _merged_metadata(request_data).get("user_api_key_request_route")
     if not isinstance(route, str) or not route:
         return False
     return CallTypes.anthropic_messages in (get_call_types_for_route(route) or ())
 
 
-def _v3_answer(request_data: Mapping[str, object], model: str | None) -> dict[str, object] | None:
+def _v3_answer(request_data: Mapping[str, object], model: str | None) -> Mapping[str, object] | None:
     """The answer in the API shape the client spoke, which is what a relay forwards.
 
     On a streamed Messages call the proxy rebuilds the answer as a chat completion before
@@ -469,7 +475,8 @@ def _v3_answer(request_data: Mapping[str, object], model: str | None) -> dict[st
     )
 
     translated: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response=response)
-    return _jsonable_dict({**translated, "model": response.model or model})
+    re_keyed: Final = dict(translated, model=response.model or model)  # mutable-ok: adapter TypedDict re-keyed
+    return _jsonable_dict(re_keyed)
 
 
 def _v3_answer_json(
@@ -484,16 +491,12 @@ def _v3_answer_json(
     response: Final = _v3_answer(request_data, model)
     if response:
         return json.dumps(response, default=str)
-    texts: Final = [t for t in (inputs.get("texts") or []) if isinstance(t, str) and t]
+    texts: Final = tuple(t for t in (inputs.get("texts") or []) if isinstance(t, str) and t)
     if not texts:
         return None
-    assembled: Final = {
-        "object": "chat.completion",
-        "choices": [
-            {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "\n".join(texts)}}
-        ],
-    }
-    return json.dumps(assembled)
+    message: Final = _frozen((("role", "assistant"), ("content", "\n".join(texts))))
+    choice: Final = _frozen((("index", 0), ("finish_reason", "stop"), ("message", message)))
+    return json.dumps(_frozen((("object", "chat.completion"), ("choices", (choice,)))), default=_json_default)
 
 
 def _v3_payload(
@@ -501,7 +504,7 @@ def _v3_payload(
     inputs: GenericGuardrailAPIInputs,
     request_data: Mapping[str, object],
     input_type: Literal["request", "response"],
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     """The /api/v3/detect body for one phase of a turn, the unified Kong plugin's contract.
 
     Request phase: the provider body itself. Response phase: the answer beside the request
@@ -512,26 +515,30 @@ def _v3_payload(
     """
     context: Final = envelope.context
     request_body: Final = _v3_request_body(request_data)
-
-    if input_type == "request":
-        payload: dict[str, object] = dict(request_body)
-    else:
-        payload = {
-            "straiker_phase": V3_RESPONSE_PHASE,
-            "model": context.model,
-            "request": request_body,
-        }
-        answer_json: Final = _v3_answer_json(inputs, request_data, context.model)
-        if answer_json is not None:
-            payload["sse"] = answer_json
-
+    answer_json: Final = _v3_answer_json(inputs, request_data, context.model) if input_type == "response" else None
+    phase: Final = (
+        tuple(request_body.items())
+        if input_type == "request"
+        else (
+            ("straiker_phase", V3_RESPONSE_PHASE),
+            ("model", context.model),
+            ("request", request_body),
+            *((("sse", answer_json),) if answer_json is not None else ()),
+        )
+    )
     session: Final = _v3_session_id(envelope, request_data, request_body)
-    if session:
-        payload["session_id"] = session
     user: Final = _v3_user(envelope)
-    if user:
-        payload["original"] = {"processed": {"Meta": {"user": user}}}
-    return payload
+    return _frozen(
+        (
+            *phase,
+            *((("session_id", session),) if session else ()),
+            *(
+                (("original", _frozen((("processed", _frozen((("Meta", _frozen((("user", user),))),))),))),)
+                if user
+                else ()
+            ),
+        )
+    )
 
 
 def _v3_session_id(
@@ -552,25 +559,33 @@ def _v3_session_id(
         return supplied
     if envelope.context.session_id:
         return envelope.context.session_id
-    system = request_body.get("system")
-    if not isinstance(system, str):
-        system = json.dumps(system, default=str) if system is not None else None
-    if system is None and isinstance(request_body.get("instructions"), str):
-        system = request_body["instructions"]
-    first = ""
-    messages: Final = request_body.get("messages") or request_body.get("input")
-    if isinstance(messages, list) and messages and isinstance(messages[0], Mapping):
-        content = messages[0].get("content")
-        if isinstance(content, str):
-            first = content
-        elif isinstance(content, list) and content and isinstance(content[0], Mapping):
-            first = str(content[0].get("text") or "")
-    elif isinstance(request_body.get("prompt"), str):
-        first = str(request_body["prompt"])
-    seed: Final = f"{system or ''}\0{first}"
+    seed: Final = f"{_v3_system_text(request_body) or ''}\0{_v3_first_message_text(request_body)}"
     if seed == "\0":
         return None
     return V3_DERIVED_SESSION_PREFIX + hashlib.md5(seed.encode("utf-8"), usedforsecurity=False).hexdigest()
+
+
+def _v3_system_text(request_body: Mapping[str, object]) -> str | None:
+    system: Final = request_body.get("system")
+    if isinstance(system, str):
+        return system
+    if system is not None:
+        return json.dumps(system, default=str)
+    instructions: Final = request_body.get("instructions")
+    return instructions if isinstance(instructions, str) else None
+
+
+def _v3_first_message_text(request_body: Mapping[str, object]) -> str:
+    messages: Final = request_body.get("messages") or request_body.get("input")
+    if isinstance(messages, list) and messages and isinstance(messages[0], Mapping):
+        content: Final = messages[0].get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list) and content and isinstance(content[0], Mapping):
+            return str(content[0].get("text") or "")
+        return ""
+    prompt: Final = request_body.get("prompt")
+    return prompt if isinstance(prompt, str) else ""
 
 
 def _v3_user(envelope: StraikerWebhookRequest) -> str | None:
@@ -609,7 +624,7 @@ def _v3_headers(
     agent_ref: str | None = None,
     client: str | None = None,
     format_hint: str | None = None,
-) -> dict[str, str]:
+) -> Mapping[str, str]:
     """Per-call routing hints, the unified Kong plugin's set. All optional.
 
     `x-s6r-agent` names ONE application when a gateway fronts several: a client-supplied
@@ -619,22 +634,19 @@ def _v3_headers(
     forwarded when the client sent it, which is how a coding session groups the way the
     native hook would.
     """
-    headers: dict[str, str] = {}
     session: Final = _request_header(request_data, V3_SESSION_HEADER)
-    if session:
-        headers[V3_SESSION_HEADER] = session
     recognised: Final = _v3_client_from_user_agent(request_data)
     agent: Final = (
         _request_header(request_data, V3_AGENT_HEADER) or agent_ref or (recognised[1] if recognised else None)
     )
-    if agent:
-        headers[V3_AGENT_HEADER] = agent
     named_client: Final = client or (recognised[0] if recognised else None)
-    if named_client:
-        headers[V3_CLIENT_HEADER] = named_client
-    if format_hint:
-        headers[V3_FORMAT_HEADER] = format_hint
-    return headers
+    candidates: Final = (
+        (V3_SESSION_HEADER, session),
+        (V3_AGENT_HEADER, agent),
+        (V3_CLIENT_HEADER, named_client),
+        (V3_FORMAT_HEADER, format_hint),
+    )
+    return MappingProxyType({name: value for name, value in candidates if value})
 
 
 def _v3_decision(body: Mapping[str, object]) -> tuple[str | None, Mapping[str, object]]:
@@ -648,10 +660,9 @@ def _v3_decision(body: Mapping[str, object]) -> tuple[str | None, Mapping[str, o
     nested: Final = body.get("straiker")
     verdict: Final = nested if isinstance(nested, Mapping) else body
     hook: Final = body.get("hookSpecificOutput")
-    if isinstance(hook, Mapping):
-        decision = hook.get("permissionDecision")
-        if isinstance(decision, str) and decision:
-            return decision.lower(), verdict
+    decision: Final = hook.get("permissionDecision") if isinstance(hook, Mapping) else None
+    if isinstance(decision, str) and decision:
+        return decision.lower(), verdict
     action: Final = verdict.get("action")
     return (action.lower() if isinstance(action, str) and action else None), verdict
 
@@ -667,21 +678,19 @@ def _v3_response(body: Mapping[str, object]) -> StraikerWebhookResponse:
     raw_blocked_by: Final = verdict.get("blocked_by")
     blocked_by: Final = tuple(sorted(str(c) for c in raw_blocked_by)) if isinstance(raw_blocked_by, list) else ()
     blocked: Final = decision in V3_BLOCK_DECISIONS or bool(blocked_by)
-    reason: str | None = None
-    if blocked:
-        for key in ("block_message", "deny_reason", "stopReason"):
-            value = verdict.get(key) if key != "stopReason" else body.get(key)
-            if isinstance(value, str) and value.strip():
-                reason = value.strip()
-                break
-        if reason is None:
-            reason = f"Straiker blocked this turn: {', '.join(blocked_by) or 'policy'}"
-    return StraikerWebhookResponse.model_validate(
-        {
-            "action": "BLOCKED" if blocked else "NONE",
-            "blocked_reason": reason,
-            "turnId": verdict.get("turn_id") or body.get("turn_id"),
-        }
+    stated: Final = (verdict.get("block_message"), verdict.get("deny_reason"), body.get("stopReason"))
+    reason: Final = (
+        next(
+            (text.strip() for text in stated if isinstance(text, str) and text.strip()),
+            f"Straiker blocked this turn: {', '.join(blocked_by) or 'policy'}",
+        )
+        if blocked
+        else None
+    )
+    return StraikerWebhookResponse(
+        action="BLOCKED" if blocked else "NONE",
+        blocked_reason=reason,
+        turnId=verdict.get("turn_id") or body.get("turn_id"),
     )
 
 
@@ -854,10 +863,10 @@ class StraikerGuardrail(CustomGuardrail):
         )
 
     async def _post_webhook(
-        self, payload: dict, headers: Mapping[str, str] | None = None
+        self, payload: Mapping[str, object], headers: Mapping[str, str] | None = None
     ) -> tuple[StraikerWebhookResponse | None, _WebhookFailure | None]:
         try:
-            body = json.dumps(payload).encode("utf-8")
+            body: Final = json.dumps(payload, default=_json_default).encode("utf-8")
         except (TypeError, ValueError, OverflowError) as error:
             return None, _WebhookFailure(f"request serialization failed: {error}", is_unreachable=False)
         body_bytes: Final = len(body)
@@ -899,7 +908,7 @@ class StraikerGuardrail(CustomGuardrail):
         self, url: str, body: bytes, headers: Mapping[str, str]
     ) -> tuple[StraikerWebhookResponse | None, _WebhookFailure | None]:
         try:
-            resp = await self.async_handler.post(url, content=body, headers=headers, timeout=self.timeout)
+            resp: Final = await self.async_handler.post(url, content=body, headers=headers, timeout=self.timeout)
         except httpx.HTTPStatusError as status_error:
             return None, _status_failure(status_error.response.status_code, _error_response_text(status_error.response))
         except (httpx.RequestError, asyncio.TimeoutError, Timeout) as e:
@@ -912,8 +921,10 @@ class StraikerGuardrail(CustomGuardrail):
 
     def _parse_verdict(self, resp: httpx.Response) -> tuple[StraikerWebhookResponse | None, _WebhookFailure | None]:
         try:
-            body = resp.json()
-            parsed = _v3_response(body) if self.api_version == "v3" else StraikerWebhookResponse.model_validate(body)
+            body: Final = resp.json()
+            parsed: Final = (
+                _v3_response(body) if self.api_version == "v3" else StraikerWebhookResponse.model_validate(body)
+            )
         except (ValidationError, json.JSONDecodeError) as ve:
             return None, _WebhookFailure(f"invalid response schema: {ve}", is_unreachable=False)
         if self.verbose:
