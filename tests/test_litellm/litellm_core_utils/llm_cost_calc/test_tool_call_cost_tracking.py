@@ -695,3 +695,176 @@ _BEDROCK_MANTLE_WEB_SEARCH_MODELS = (
 _BEDROCK_MANTLE_WEB_SEARCH_RATE = 0.012
 
 
+
+
+def _openai_responses_response(model, output):
+    return ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_1",
+            "created_at": 1754900000,
+            "model": model,
+            "object": "response",
+            "status": "completed",
+            "output": output,
+            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        }
+    )
+
+
+_ASSISTANT_MESSAGE_OUTPUT_ITEM = {
+    "type": "message",
+    "id": "msg_1",
+    "role": "assistant",
+    "status": "completed",
+    "content": [{"type": "output_text", "text": "done", "annotations": []}],
+}
+
+_GPT_IMAGE_1_HIGH_1024_COST_KEY = "high/1024-x-1024/gpt-image-1"
+
+
+def test_responses_image_generation_call_billed_as_tool_usage_cost(local_model_cost_map):
+    """
+    Regression: a Responses API output carrying an image_generation_call item was
+    charged $0 of tool usage because get_cost_for_built_in_tools only looked for
+    web/file search calls. A completed image_generation_call must be billed at the
+    gpt-image-1 rate for its reported quality and size.
+    """
+    expected_image_cost = litellm.model_cost[_GPT_IMAGE_1_HIGH_1024_COST_KEY]["input_cost_per_image"]
+    response = _openai_responses_response(
+        "gpt-5",
+        [
+            {
+                "type": "image_generation_call",
+                "id": "ig_1",
+                "status": "completed",
+                "quality": "high",
+                "size": "1024x1024",
+                "result": "AAAA",
+            },
+            dict(_ASSISTANT_MESSAGE_OUTPUT_ITEM),
+        ],
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=response,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost > 0
+    assert cost == pytest.approx(expected_image_cost)
+
+
+def test_responses_web_search_and_image_generation_costs_are_additive(local_model_cost_map):
+    """
+    Regression: get_cost_for_built_in_tools returned early after the web search
+    branch, so a response billed for web search never reached image generation
+    pricing. A response with both must bill both.
+    """
+    model = "gpt-4o-search-preview"
+    image_cost = litellm.model_cost[_GPT_IMAGE_1_HIGH_1024_COST_KEY]["input_cost_per_image"]
+    image_item = {
+        "type": "image_generation_call",
+        "id": "ig_1",
+        "status": "completed",
+        "quality": "high",
+        "size": "1024x1024",
+        "result": "AAAA",
+    }
+    web_search_item = {"type": "web_search_call", "id": "ws_1", "status": "completed"}
+
+    combined = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=_openai_responses_response(model, [web_search_item, image_item]),
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+    web_search_only = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=_openai_responses_response(model, [web_search_item]),
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+    image_only = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=_openai_responses_response(model, [image_item]),
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert image_only == pytest.approx(image_cost)
+    assert web_search_only > 0
+    assert combined == pytest.approx(web_search_only + image_only)
+
+
+def test_responses_incomplete_image_generation_call_not_billed(local_model_cost_map):
+    """A failed image_generation_call produced no billable image, so it must cost $0."""
+    response = _openai_responses_response(
+        "gpt-5",
+        [
+            {
+                "type": "image_generation_call",
+                "id": "ig_1",
+                "status": "failed",
+                "quality": "high",
+                "size": "1024x1024",
+                "result": None,
+            },
+            dict(_ASSISTANT_MESSAGE_OUTPUT_ITEM),
+        ],
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=response,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == 0.0
+
+
+def test_completion_cost_includes_responses_image_generation_tool_cost(local_model_cost_map):
+    """
+    An image_generation_call in the Responses output must flow through
+    completion_cost: the billed total for the same response without the image
+    item is the token-only baseline the image item must exceed by its tool cost.
+    """
+    image_item = {
+        "type": "image_generation_call",
+        "id": "ig_1",
+        "status": "completed",
+        "quality": "high",
+        "size": "1024x1024",
+        "result": "AAAA",
+    }
+    response_with_image = _openai_responses_response(
+        "gpt-5", [image_item, dict(_ASSISTANT_MESSAGE_OUTPUT_ITEM)]
+    )
+    response_without_image = _openai_responses_response(
+        "gpt-5", [dict(_ASSISTANT_MESSAGE_OUTPUT_ITEM)]
+    )
+
+    cost_with_image = litellm.completion_cost(
+        completion_response=response_with_image,
+        model="gpt-5",
+        custom_llm_provider="openai",
+        call_type="aresponses",
+    )
+    cost_without_image = litellm.completion_cost(
+        completion_response=response_without_image,
+        model="gpt-5",
+        custom_llm_provider="openai",
+        call_type="aresponses",
+    )
+
+    assert cost_with_image > cost_without_image
+    assert cost_with_image - cost_without_image == pytest.approx(
+        litellm.model_cost[_GPT_IMAGE_1_HIGH_1024_COST_KEY]["input_cost_per_image"]
+    )
