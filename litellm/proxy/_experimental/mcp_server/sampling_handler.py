@@ -18,8 +18,7 @@ if typing.TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from fastapi import Request
-    from mcp.client.session import ClientSession
-    from mcp.shared.context import RequestContext
+    from mcp.client.session import ClientRequestContext
     from mcp.types import (
         ContentBlock,
         CreateMessageResult,
@@ -333,14 +332,14 @@ def _convert_single_content(
         return {"type": "text", "text": content.text}
     elif content_type == "image":
         image_data: Final[str] = getattr(content, "data", "")
-        image_mime_type: Final[str] = getattr(content, "mimeType", "image/png")
+        image_mime_type: Final[str] = getattr(content, "mime_type", "image/png")
         return {
             "type": "image_url",
             "image_url": {"url": f"data:{image_mime_type};base64,{image_data}"},
         }
     elif content_type == "audio":
         audio_data: Final[str] = getattr(content, "data", "")
-        audio_mime_type: Final[str] = getattr(content, "mimeType", "audio/wav")
+        audio_mime_type: Final[str] = getattr(content, "mime_type", "audio/wav")
         # Map MIME type to OpenAI audio format
         format_map: Final = {
             "audio/wav": "wav",
@@ -573,7 +572,7 @@ def _convert_mcp_tools_to_openai(
             "function": {
                 "name": tool.name,
                 "description": tool.description or "",
-                "parameters": tool.inputSchema
+                "parameters": tool.input_schema
                 or {
                     "type": "object",
                     "properties": {},
@@ -718,7 +717,7 @@ def _convert_openai_response_to_mcp_result(
             role="assistant",
             content=content_parts,
             model=actual_model,
-            stopReason=stop_reason,
+            stop_reason=stop_reason,
         )
     # Simple text response
     text: Final = message.content or ""
@@ -726,7 +725,7 @@ def _convert_openai_response_to_mcp_result(
         role="assistant",
         content=TextContent(type="text", text=text),
         model=actual_model,
-        stopReason=stop_reason,
+        stop_reason=stop_reason,
     )
 
 
@@ -1075,8 +1074,8 @@ async def _build_completion_kwargs(
     }
     if params.temperature is not None:
         completion_kwargs["temperature"] = params.temperature
-    if params.stopSequences:
-        completion_kwargs["stop"] = params.stopSequences
+    if params.stop_sequences:
+        completion_kwargs["stop"] = params.stop_sequences
     openai_tools: Final = _convert_mcp_tools_to_openai(params.tools)
     if openai_tools:
         completion_kwargs["tools"] = openai_tools
@@ -1137,7 +1136,7 @@ async def _run_guardrails_and_call_llm(
 
 
 async def handle_sampling_create_message(
-    context: "RequestContext[ClientSession, object]",
+    context: "ClientRequestContext",
     params: "CreateMessageRequestParams",
     default_model: str | None = None,
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
@@ -1180,13 +1179,13 @@ async def handle_sampling_create_message(
 
     try:
         model: Final = _resolve_model_from_preferences(
-            model_preferences=params.modelPreferences,
+            model_preferences=params.model_preferences,
             default_model=default_model,
         )
         verbose_logger.info(
             "MCP sampling: resolved model=%s from preferences=%s",
             model,
-            params.modelPreferences,
+            params.model_preferences,
         )
 
         access_denial: Final = await _check_model_access(model, user_api_key_auth)
@@ -1228,7 +1227,7 @@ async def handle_sampling_create_message(
         verbose_logger.info(
             "MCP sampling: completed successfully, model=%s, stopReason=%s",
             getattr(result, "model", "unknown"),
-            getattr(result, "stopReason", "unknown"),
+            getattr(result, "stop_reason", "unknown"),
         )
         return result
     except Exception as e:

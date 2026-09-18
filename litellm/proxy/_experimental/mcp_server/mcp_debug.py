@@ -113,6 +113,7 @@ from typing import Final
 from urllib.parse import parse_qsl, quote, quote_plus, unquote_plus, urlencode
 
 import httpx
+import httpx2
 from pydantic import JsonValue, TypeAdapter
 from starlette.requests import HTTPConnection
 from starlette.types import Message, Send
@@ -409,7 +410,7 @@ def _safe_text(value: str, limit: int = _BODY_PREVIEW_CHARS) -> str:
     return escaped if len(escaped) <= limit else f"{escaped[:limit]}...(truncated)"
 
 
-def safe_upstream_url(url: httpx.URL) -> str:
+def safe_upstream_url(url: httpx.URL | httpx2.URL) -> str:
     return _safe_text(str(url.copy_with(username="", password="", path="/", query=None, fragment=None)))
 
 
@@ -449,10 +450,10 @@ def _header_secret_values(name: str, value: str) -> tuple[str, ...]:
     return (value, credential, decoded, password, unquote_plus(password))
 
 
-def _body_secret_values(request: httpx.Request) -> tuple[str, ...] | None:
+def _body_secret_values(request: httpx.Request | httpx2.Request) -> tuple[str, ...] | None:
     try:
         raw: Final = request.content
-    except httpx.RequestNotRead:
+    except (httpx.RequestNotRead, httpx2.RequestNotRead):
         return None
     if not raw:
         return ()
@@ -478,7 +479,7 @@ def _body_secret_values(request: httpx.Request) -> tuple[str, ...] | None:
     )
 
 
-def _request_secret_values(request: httpx.Request) -> tuple[str, ...] | None:
+def _request_secret_values(request: httpx.Request | httpx2.Request) -> tuple[str, ...] | None:
     body_values: Final = _body_secret_values(request)
     if body_values is None:
         return None
@@ -537,18 +538,18 @@ def _preview(raw: bytes, content_type: str = "", secrets: tuple[str, ...] = ()) 
     return _safe_text(redact_string(_mask_known_values(json.dumps(parsed, separators=(",", ":")), secrets)))
 
 
-def _masked_headers(headers: httpx.Headers) -> str:
+def _masked_headers(headers: httpx.Headers | httpx2.Headers) -> str:
     return _safe_text(", ".join(f"{name}={value}" for name, value in headers.items() if name in _SAFE_HEADER_NAMES))
 
 
-def _request_body_preview(request: httpx.Request, secrets: tuple[str, ...] | None) -> str:
+def _request_body_preview(request: httpx.Request | httpx2.Request, secrets: tuple[str, ...] | None) -> str:
     try:
         return _preview(request.content, request.headers.get("content-type", ""), secrets or ())
-    except httpx.RequestNotRead:
+    except (httpx.RequestNotRead, httpx2.RequestNotRead):
         return "(streamed, not captured)"
 
 
-def _response_body_preview(response: httpx.Response, secrets: tuple[str, ...] | None) -> str:
+def _response_body_preview(response: httpx.Response | httpx2.Response, secrets: tuple[str, ...] | None) -> str:
     if secrets is None:
         return "(omitted: request credentials unavailable)"
     captured: Final = response.extensions.get(_CAPTURE_EXTENSION)
@@ -556,7 +557,7 @@ def _response_body_preview(response: httpx.Response, secrets: tuple[str, ...] | 
         return captured
     try:
         return _preview(response.content, response.headers.get("content-type", ""), secrets)
-    except httpx.ResponseNotRead:
+    except (httpx.ResponseNotRead, httpx2.ResponseNotRead):
         return "(not read)"
 
 
@@ -569,7 +570,7 @@ async def _read_error_prefix(chunks: AsyncIterator[bytes], limit: int) -> bytes:
     return buffer.getvalue()
 
 
-async def capture_upstream_error_response(response: httpx.Response) -> None:
+async def capture_upstream_error_response(response: httpx.Response | httpx2.Response) -> None:
     if not response.is_error:
         return
     try:
@@ -584,7 +585,7 @@ async def capture_upstream_error_response(response: httpx.Response) -> None:
             if secrets is not None
             else "(omitted: request credentials unavailable)"
         )
-    except (asyncio.TimeoutError, httpx.HTTPError, httpx.StreamError):
+    except (asyncio.TimeoutError, httpx.HTTPError, httpx.StreamError, httpx2.HTTPError, httpx2.StreamError):
         response._content = b""  # pyright: ignore[reportPrivateUsage]  # rebind-ok: httpx auth retries must survive diagnostic read failures
         response.extensions[_CAPTURE_EXTENSION] = (
             "(unavailable: error body read failed)"  # rebind-ok: httpx response hooks communicate through extensions
@@ -593,7 +594,7 @@ async def capture_upstream_error_response(response: httpx.Response) -> None:
     response.extensions[_CAPTURE_EXTENSION] = preview  # rebind-ok: httpx response hooks communicate through extensions
 
 
-def describe_upstream_response(response: httpx.Response) -> str:
+def describe_upstream_response(response: httpx.Response | httpx2.Response) -> str:
     try:
         request: Final = response.request
     except RuntimeError:
@@ -616,6 +617,6 @@ def describe_upstream_http_failure(exc: BaseException) -> str | None:
         describe_upstream_response(response)
         for current in islice(iter_exception_tree(exc), 16)
         for response in (getattr(current, "response", None),)
-        if isinstance(response, httpx.Response)
+        if isinstance(response, (httpx.Response, httpx2.Response))
     )
     return " | ".join(lines) or None

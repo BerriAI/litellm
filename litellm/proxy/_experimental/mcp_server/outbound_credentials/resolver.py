@@ -1,7 +1,7 @@
 """The one credential resolver: dispatch on the declared mode, fail closed.
 
 `resolve_credentials` selects exactly one arm off the server's typed `config` and either
-produces an `httpx.Auth` or returns a typed `CredError`. The `match` is over the `AuthConfig`
+produces an `httpx2.Auth` or returns a typed `CredError`. The `match` is over the `AuthConfig`
 variant, so each arm receives its own fully-typed config with no field-presence inference and
 no precedence cascade. It is wildcard-free with an `assert_never` tail, so adding a mode without
 an arm fails the type gate (basedpyright `reportMatchNotExhaustive`); a bypassed gate fails loudly
@@ -25,6 +25,7 @@ from functools import partial
 from typing import Final
 
 import httpx
+import httpx2
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
@@ -135,7 +136,7 @@ class UpstreamCredentialProvider:
         self._client_credentials_source = client_credentials_source or ClientCredentialsTokenSource()
         self._sso_assertion_store: SSOAssertionStore = sso_assertion_store or default_sso_assertion_store()
 
-    async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Result[httpx.Auth, CredError]:
+    async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Result[httpx2.Auth, CredError]:
         match server.config:
             case NoneConfig():
                 return self._none(server)
@@ -155,7 +156,7 @@ class UpstreamCredentialProvider:
                 return _not_implemented(AuthSpecKind.aws_sigv4)
         assert_never(server.config)
 
-    def _none(self, server: ServerSpec) -> Result[httpx.Auth, CredError]:
+    def _none(self, server: ServerSpec) -> Result[httpx2.Auth, CredError]:
         try:
             resource: Final = httpx.URL(server.resource)
         except httpx.InvalidURL:
@@ -169,12 +170,12 @@ class UpstreamCredentialProvider:
 
         Reads from the same per-user store as the ``authorization_code`` arm, so the discovery
         challenge and the egress agree on whether the user is authorized. Returns a typed ``bool``
-        (no ``httpx.Auth``), unlike ``resolve_credentials``. A non-per-user mode has no token in the
+        (no ``httpx2.Auth``), unlike ``resolve_credentials``. A non-per-user mode has no token in the
         store, so it reads as False without a per-mode branch here.
         """
         return await self._authz_token(subject, server) is not None
 
-    def _passthrough(self, subject: Subject) -> Result[httpx.Auth, CredError]:
+    def _passthrough(self, subject: Subject) -> Result[httpx2.Auth, CredError]:
         """Forward the caller's own upstream credential verbatim; the gateway mints nothing.
 
         The inbound token is the caller's already-disambiguated ``Authorization`` (never the LiteLLM
@@ -186,7 +187,7 @@ class UpstreamCredentialProvider:
             return Ok(NoOpAuth())
         return Ok(StaticHeaderAuth(subject.inbound_token.get_secret_value(), header_name="Authorization"))
 
-    def _api_key(self, config: ApiKeyConfig) -> Result[httpx.Auth, CredError]:
+    def _api_key(self, config: ApiKeyConfig) -> Result[httpx2.Auth, CredError]:
         match config.key_source:
             case SharedKey() as source:
                 header_name, header_value = config.header(source.value.get_secret_value())
@@ -196,7 +197,7 @@ class UpstreamCredentialProvider:
                 return Error(CredError.of_not_implemented("api_key BYOK source not implemented yet"))
         assert_never(config.key_source)
 
-    async def _id_jag(self, subject: Subject, server: ServerSpec, config: IdJagConfig) -> Result[httpx.Auth, CredError]:
+    async def _id_jag(self, subject: Subject, server: ServerSpec, config: IdJagConfig) -> Result[httpx2.Auth, CredError]:
         match await self._id_jag_subject_token(subject):
             case Error(err):
                 return Error(err)
@@ -261,7 +262,7 @@ class UpstreamCredentialProvider:
 
     async def _id_jag_exchange(
         self, subject: Subject, token: str, server: ServerSpec, config: IdJagConfig
-    ) -> Result[httpx.Auth, CredError]:
+    ) -> Result[httpx2.Auth, CredError]:
         slot: Final = _id_jag_slot_key(subject, server)
         fingerprint: Final = _id_jag_fingerprint(token, server.server_id, config)
 
@@ -313,7 +314,7 @@ class UpstreamCredentialProvider:
 
     async def _client_credentials(
         self, server_id: str, config: ClientCredentialsConfig
-    ) -> Result[httpx.Auth, CredError]:
+    ) -> Result[httpx2.Auth, CredError]:
         """The M2M arm: resolve a cached (or freshly minted) gateway token; no user context.
 
         The token is resolved here, before any upstream request, so a misconfigured grant or an
@@ -448,7 +449,7 @@ def _client_auth_fingerprint(client_auth: ClientAuth) -> str:
     assert_never(client_auth)
 
 
-def _not_implemented(kind: AuthSpecKind) -> Result[httpx.Auth, CredError]:
+def _not_implemented(kind: AuthSpecKind) -> Result[httpx2.Auth, CredError]:
     return Error(CredError.of_not_implemented(f"{kind.value}: resolver arm not implemented yet"))
 
 
