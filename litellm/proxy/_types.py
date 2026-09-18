@@ -662,6 +662,11 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.AUTO_ROUTER_MANAGE.value,
     ]
 
+    team_service_account_key_routes = (
+        KeyManagementRoutes.KEY_GENERATE.value,
+        KeyManagementRoutes.KEY_UPDATE.value,
+    )
+
     management_routes = (
         [
             # user
@@ -3287,6 +3292,15 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             team_alias="system",
             user_id="system",
             user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    @property
+    def is_team_service_account(self) -> bool:
+        return (
+            self.user_id is None
+            and self.team_id is not None
+            and bool(self.metadata)
+            and self.metadata.get("service_account_id") is not None
         )
 
 
