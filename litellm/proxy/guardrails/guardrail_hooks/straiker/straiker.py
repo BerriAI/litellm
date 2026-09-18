@@ -58,41 +58,19 @@ DEFAULT_BLOCK_MESSAGE: Final = "Content violates policy"
 DEFAULT_API_BASE: Final = "https://api.prod.straiker.ai"
 DEFAULT_MAX_PAYLOAD_BYTES: Final = 524288
 WEBHOOK_PATH: Final = "/api/v1/detect/webhook"
-# The v3 platform exposes one detect route and it parses the gateway's own traffic:
-# the request phase relays the provider body LiteLLM received, the response phase wraps
-# the model's answer beside that request, and Straiker derives prompt, answer, agent and
-# archetype server-side (the same contract the unified Kong plugin speaks). There is no
-# v3 webhook envelope (/api/v3/detect/webhook is a 404).
 V3_DETECT_PATH: Final = "/api/v3/detect"
-# Integration keys minted by the v3 platform. A v1 collection key is a UUID; the prefix
-# never collides, so it can select the API when the config does not say.
 V3_KEY_PREFIX: Final = "sk_agt_"
-# No ingress header on v3: the platform parses the relayed body itself and reads the agent
-# out of it (cc_entrypoint), the same as the unified Kong plugin. `x-tool` is the v1
-# native-hook selector and is not sent.
 V3_SESSION_HEADER: Final = "x-claude-code-session-id"
-# Routing hints, each optional. The same headers the unified Kong plugin sends, so a
-# tenant's agents enumerate identically whichever gateway the traffic came through.
 V3_CLIENT_HEADER: Final = "x-s6r-client"
 V3_FORMAT_HEADER: Final = "x-s6r-format"
-# Clients the gateway can name from the User-Agent it relayed, captured 2026-09-18, as
-# (User-Agent prefix, Straiker client value, display name). Straiker identifies a coding agent
-# from its system-prompt preamble, which only the main turn carries: the title and topic
-# sidecars resolve by shape as autonomous, and the session splits across two agents. The
-# User-Agent is on every call, and `x-s6r-client` outranks the preamble. The agent is named
-# for this gateway, "Claude (LiteLLM)", the way the platform names agents it derives itself.
+# (User-Agent prefix, Straiker client value, display name). Straiker recognises a coding agent
+# from the system prompt of its main turns only; Claude Code's title and topic sidecars carry
+# other prompts and would split the session across two agents. The User-Agent is on every call.
 _V3_CLIENT_BY_USER_AGENT: Final = (("claude-cli/", "claude", "Claude"),)
 V3_GATEWAY_NAME: Final = "LiteLLM"
-# Prefix for a session id derived from the conversation itself, when the client states none.
 V3_DERIVED_SESSION_PREFIX: Final = "litellm-"
-# Which agent this turn belongs to, when one gateway fronts several applications. A name for
-# ONE agent, never a kind of agent: Straiker keys per-agent state on it, so a value shared by
-# several applications merges them into one. Forwarded from the client when it sends one, else
-# the `agent_ref` config value. The same header the Kong plugin sends, so a tenant's agents
-# enumerate identically whichever gateway the traffic came through.
 V3_AGENT_HEADER: Final = "x-s6r-agent"
 V3_RESPONSE_PHASE: Final = "response-sync"
-# A v3 verdict blocks on `permissionDecision` (gateway envelope) or `action` (flat body).
 V3_BLOCK_DECISIONS: Final = frozenset({"block", "deny"})
 # Provider body fields, for every surface the proxy fronts. An allowlist rather than a
 # denylist: the hook sees the client body merged with proxy state (`deployment` carries
@@ -132,6 +110,11 @@ _V3_PROVIDER_BODY_KEYS: Final = frozenset(
         "store",
         "service_tier",
         "web_search_options",
+        # OpenAI text completions
+        "prompt",
+        "suffix",
+        "echo",
+        "best_of",
         # Anthropic messages
         "system",
         "stop_sequences",
@@ -156,6 +139,14 @@ _V3_PROVIDER_BODY_KEYS: Final = frozenset(
         "session_id",
     }
 )
+# Fields inside `tools` and `mcp_servers` that carry a credential for the model's own remote
+# calls (an OpenAI `mcp` tool's `headers`, Anthropic's `authorization_token`). Detection reads
+# tool names, descriptions and schemas, never these.
+_V3_CREDENTIAL_FIELDS: Final = frozenset(
+    {"authorization_token", "authorization", "headers", "api_key", "x-api-key", "token"}
+)
+_V3_REDACTED_VALUE: Final = "[redacted]"
+_V3_REDACTED_KEYS: Final = frozenset({"tools", "mcp_servers"})
 # The identity fields Straiker's LiteLLM adapter reads from `metadata`, most specific first.
 _V3_IDENTITY_METADATA_KEYS: Final = (
     "user_api_key_end_user_id",
@@ -447,8 +438,26 @@ def _v3_request_body(request_data: Mapping[str, object]) -> Mapping[str, object]
     metadata subset the Straiker LiteLLM adapter reads.
     """
     identity: Final = _v3_identity_metadata(request_data)
-    provider: Final = ((key, value) for key, value in request_data.items() if key in _V3_PROVIDER_BODY_KEYS)
+    provider: Final = (
+        (key, _v3_without_credentials(value) if key in _V3_REDACTED_KEYS else value)
+        for key, value in request_data.items()
+        if key in _V3_PROVIDER_BODY_KEYS
+    )
     return _frozen((*provider, *((("metadata", identity),) if identity else ())))
+
+
+def _v3_without_credentials(value: object) -> object:
+    if isinstance(value, Mapping):
+        return _frozen(
+            (
+                str(key),
+                _V3_REDACTED_VALUE if str(key).lower() in _V3_CREDENTIAL_FIELDS else _v3_without_credentials(item),
+            )
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_v3_without_credentials(item) for item in value)
+    return value
 
 
 def _v3_anthropic_messages_route(request_data: Mapping[str, object]) -> bool:
@@ -627,17 +636,19 @@ def _v3_headers(
 ) -> Mapping[str, str]:
     """Per-call routing hints, the unified Kong plugin's set. All optional.
 
-    `x-s6r-agent` names ONE application when a gateway fronts several: a client-supplied
-    value, else the route's `agent_ref`, else the agent this gateway names from the
-    User-Agent. `x-s6r-client` is the route's `client` config, else the client the User-Agent
-    names. `x-s6r-format` comes from config alone. Claude Code's own session header is
+    `x-s6r-agent` names ONE application when a gateway fronts several: the route's
+    `agent_ref`, else the caller's own header, else the agent this gateway names from the
+    User-Agent. The operator's value comes first because the header is caller-supplied, and
+    honouring it over a pinned route would let any key file its traffic under another
+    application's agent and controls. `x-s6r-client` is the route's `client` config, else
+    the client the User-Agent names. `x-s6r-format` comes from config alone. Claude Code's own session header is
     forwarded when the client sent it, which is how a coding session groups the way the
     native hook would.
     """
     session: Final = _request_header(request_data, V3_SESSION_HEADER)
     recognised: Final = _v3_client_from_user_agent(request_data)
     agent: Final = (
-        _request_header(request_data, V3_AGENT_HEADER) or agent_ref or (recognised[1] if recognised else None)
+        agent_ref or _request_header(request_data, V3_AGENT_HEADER) or (recognised[1] if recognised else None)
     )
     named_client: Final = client or (recognised[0] if recognised else None)
     candidates: Final = (
@@ -924,6 +935,10 @@ class StraikerGuardrail(CustomGuardrail):
     def _parse_verdict(self, resp: httpx.Response) -> tuple[StraikerWebhookResponse | None, _WebhookFailure | None]:
         try:
             body: Final = resp.json()
+            if not isinstance(body, Mapping):
+                return None, _WebhookFailure(
+                    f"invalid response schema: expected an object, got {type(body).__name__}", is_unreachable=False
+                )
             parsed: Final = (
                 _v3_response(body) if self.api_version == "v3" else StraikerWebhookResponse.model_validate(body)
             )
