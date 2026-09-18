@@ -73,9 +73,60 @@ def test_explicit_api_base_overrides_key_routing(config, endpoint):
 
 
 @pytest.mark.parametrize("api_key, expected_host", [("al-key", MONGODB_API_BASE), ("pa-key", VOYAGE_API_BASE)])
+def test_rerank_routes_by_request_key_prefix(api_key, expected_host):
+    config = VoyageRerankConfig()
+    config.validate_environment({}, "rerank-2.5", api_key=api_key)
+
+    assert config.get_complete_url(None, "rerank-2.5") == f"{expected_host}/rerank"
+
+
+@pytest.mark.parametrize("api_key, expected_host", [("al-key", MONGODB_API_BASE), ("pa-key", VOYAGE_API_BASE)])
 def test_rerank_routes_by_env_key_prefix(monkeypatch, api_key, expected_host):
     monkeypatch.setenv("VOYAGE_API_KEY", api_key)
-    assert VoyageRerankConfig().get_complete_url(None, "rerank-2.5") == f"{expected_host}/rerank"
+    config = VoyageRerankConfig()
+    config.validate_environment({}, "rerank-2.5")
+
+    assert config.get_complete_url(None, "rerank-2.5") == f"{expected_host}/rerank"
+
+
+def test_rerank_request_key_beats_env_key_for_routing(monkeypatch):
+    """A MongoDB key on the request must not be posted to the Voyage host the env key names"""
+    monkeypatch.setenv("VOYAGE_API_KEY", "pa-from-env")
+    config = VoyageRerankConfig()
+
+    headers = config.validate_environment({}, "rerank-2.5", api_key="al-on-request")
+
+    assert headers["Authorization"] == "Bearer al-on-request"
+    assert config.get_complete_url(None, "rerank-2.5") == f"{MONGODB_API_BASE}/rerank"
+
+
+def test_rerank_config_is_built_per_request_so_keys_cannot_leak(monkeypatch):
+    """get_complete_url reads a key off the instance, so each request must get its own instance"""
+    import litellm
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
+    first = ProviderConfigManager.get_provider_rerank_config(
+        model="rerank-2.5", provider=LlmProviders.VOYAGE, api_base=None, present_version_params=[]
+    )
+    second = ProviderConfigManager.get_provider_rerank_config(
+        model="rerank-2.5", provider=LlmProviders.VOYAGE, api_base=None, present_version_params=[]
+    )
+    assert isinstance(first, litellm.VoyageRerankConfig) and first is not second
+
+    first.validate_environment({}, "rerank-2.5", api_key="al-first-request")
+    second.validate_environment({}, "rerank-2.5", api_key="pa-second-request")
+
+    assert first.get_complete_url(None, "rerank-2.5") == f"{MONGODB_API_BASE}/rerank"
+    assert second.get_complete_url(None, "rerank-2.5") == f"{VOYAGE_API_BASE}/rerank"
+
+
+def test_rerank_falls_back_to_env_when_validate_environment_did_not_run(monkeypatch):
+    """A caller that skips validate_environment keeps the pre-existing env-only behaviour"""
+    monkeypatch.setenv("VOYAGE_API_KEY", "al-from-env")
+
+    assert VoyageRerankConfig().get_complete_url(None, "rerank-2.5") == f"{MONGODB_API_BASE}/rerank"
 
 
 @pytest.mark.parametrize(
@@ -95,11 +146,12 @@ def test_auth_header_uses_the_key_the_url_was_routed_on(monkeypatch, config):
 
 def test_rerank_auth_header_uses_the_key_the_url_was_routed_on(monkeypatch):
     monkeypatch.setenv("VOYAGE_AI_TOKEN", "al-from-env")
+    config = VoyageRerankConfig()
 
-    headers = VoyageRerankConfig().validate_environment({}, "rerank-2.5")
+    headers = config.validate_environment({}, "rerank-2.5")
 
     assert headers["Authorization"] == "Bearer al-from-env"
-    assert VoyageRerankConfig().get_complete_url(None, "rerank-2.5").startswith(MONGODB_API_BASE)
+    assert config.get_complete_url(None, "rerank-2.5").startswith(MONGODB_API_BASE)
 
 
 def test_get_voyage_api_key_prefers_env_vars_in_documented_order(monkeypatch):
