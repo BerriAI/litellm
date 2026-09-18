@@ -139,6 +139,43 @@ def test_config_update_persists_disable_cooldowns(client, auth_as, mock_prisma, 
     assert persisted["disable_cooldowns"] is True
 
 
+@pytest.mark.parametrize(
+    ("section", "store_attr", "yaml_values", "changed_values"),
+    [
+        ("general_settings", "settings", {"alerting": ["slack"]}, {"alerting": ["email"]}),
+        ("litellm_settings", "litellm_settings", {"success_callback": ["langfuse"]}, {"success_callback": ["otel"]}),
+        ("router_settings", "router_settings", {"num_retries": 0}, {"num_retries": 2}),
+    ],
+)
+def test_config_update_rejects_config_owned_keys_and_accepts_the_same_value(
+    client, auth_as, mock_prisma, monkeypatch, section, store_attr, yaml_values, changed_values
+):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps.proxy_config, "add_deployment", AsyncMock())
+    store = getattr(ps.proxy_config, store_attr)
+    store.load_yaml(yaml_values)
+    try:
+        with auth_as(LitellmUserRoles.PROXY_ADMIN):
+            rejected = client.post("/config/update", json={section: changed_values})
+            rejected_message = rejected.json()["error"]["message"]
+            table.upsert.assert_not_called()
+            accepted = client.post("/config/update", json={section: yaml_values})
+    finally:
+        store.load_yaml({})
+
+    assert rejected.status_code == 400
+    assert f"{section} key '{next(iter(yaml_values))}' is set in the config file and cannot be changed here" in (
+        rejected_message
+    )
+    assert accepted.status_code == 200
+    persisted = json.loads(table.upsert.call_args.kwargs["data"]["create"]["param_value"])
+    assert persisted[next(iter(yaml_values))] == yaml_values[next(iter(yaml_values))]
+
+
 def test_config_update_rejects_assistants_config(client, auth_as, mock_prisma, monkeypatch):
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles

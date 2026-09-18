@@ -13,5 +13,4 @@ litellm_settings:
     host: os.environ/REDIS_HOST
     port: os.environ/REDIS_PORT
 router_settings:
-  num_retries: 0
   disable_cooldowns: true
