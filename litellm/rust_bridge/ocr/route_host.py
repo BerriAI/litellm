@@ -27,13 +27,17 @@ class UpstreamFailure(Exception):
         self.__cause__ = cause
 
 
-def _upstream_failure(error: Exception) -> Exception:
+def _upstream_failure(error: Exception, request: LiteLLMOcrRequest) -> Exception:
     try:
         status, body = _UPSTREAM_ARGS.validate_python(error.args)
         headers: Final = _UPSTREAM_HEADERS.validate_python(getattr(error, "headers", None))
     except ValidationError:
         return error
-    return UpstreamFailure(httpx.Response(status, content=body.encode(), headers=headers), error)
+    http_request: Final = httpx.Request("POST", request.api_base or "https://docs.litellm.ai/docs")
+    return UpstreamFailure(
+        httpx.Response(status, content=body.encode(), headers=headers, request=http_request),
+        error,
+    )
 
 
 def response(value: Mapping[str, object]) -> OCRResponse:
@@ -57,7 +61,7 @@ def map_failure(error: Exception, request: LiteLLMOcrRequest, request_provider: 
             model=request.model.removeprefix(f"{request_provider}/"),
             llm_provider=request_provider,
         )
-    original: Final = _upstream_failure(error)
+    original: Final = _upstream_failure(error, request)
     public_error: Final = failures.map_failure(original, request.model, request_provider, arguments(request))
     if isinstance(original, UpstreamFailure) and public_error.__context__ is original:
         public_error.__context__ = error

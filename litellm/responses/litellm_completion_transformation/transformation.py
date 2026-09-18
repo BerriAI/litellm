@@ -2019,6 +2019,8 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")
             if tool.get("input_examples"):
                 chat_completion_tool["input_examples"] = tool.get("input_examples")
+            if tool.get("eager_input_streaming") is not None:
+                chat_completion_tool["eager_input_streaming"] = tool.get("eager_input_streaming")
             return ResponsesToolChatForm(
                 chat_tools=(cast(ChatCompletionToolParam, chat_completion_tool),), web_search_options=None
             )
@@ -2098,6 +2100,8 @@ class LiteLLMCompletionResponsesConfig:
                     responses_tool["allowed_callers"] = tool.get("allowed_callers")
                 if tool.get("input_examples") is not None:
                     responses_tool["input_examples"] = tool.get("input_examples")
+                if tool.get("eager_input_streaming") is not None:
+                    responses_tool["eager_input_streaming"] = tool.get("eager_input_streaming")
                 result.append(responses_tool)
             else:
                 # mcp or other: pass through unchanged

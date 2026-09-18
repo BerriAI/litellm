@@ -2904,10 +2904,15 @@ async def _process_team_members(
     if member_allowed_models is None and team_default_member_models:
         member_allowed_models = team_default_member_models
 
-    if isinstance(data.member, Member):
+    requested_members: Final[Sequence[Member]] = (
+        (data.member,) if isinstance(data.member, Member) else tuple(data.member)
+    )
+    for m in requested_members:
+        if _member_already_in_team(m, complete_team_data):
+            continue
         try:
             updated_user, updated_tm = await add_new_member(
-                new_member=data.member,
+                new_member=m,
                 max_budget_in_team=data.max_budget_in_team,
                 prisma_client=prisma_client,
                 user_api_key_dict=user_api_key_dict,
@@ -2921,34 +2926,11 @@ async def _process_team_members(
         except Exception as e:
             raise HTTPException(
                 status_code=500,
-                detail={"error": f"Unable to add user - {data.member}, to team - {data.team_id}, for reason - {e}"},
+                detail={"error": f"Unable to add user - {m}, to team - {data.team_id}, for reason - {e}"},
             )
         updated_users.append(updated_user)
         if updated_tm is not None:
             updated_team_memberships.append(updated_tm)
-    elif isinstance(data.member, list):
-        for m in data.member:
-            try:
-                updated_user, updated_tm = await add_new_member(
-                    new_member=m,
-                    max_budget_in_team=data.max_budget_in_team,
-                    prisma_client=prisma_client,
-                    user_api_key_dict=user_api_key_dict,
-                    litellm_proxy_admin_name=litellm_proxy_admin_name,
-                    team_id=data.team_id,
-                    default_team_budget_id=default_team_budget_id,
-                    allowed_models=member_allowed_models,
-                    budget_duration=data.budget_duration,
-                    tx=tx,
-                )
-            except Exception as e:
-                raise HTTPException(
-                    status_code=500,
-                    detail={"error": f"Unable to add user - {m}, to team - {data.team_id}, for reason - {e}"},
-                )
-            updated_users.append(updated_user)
-            if updated_tm is not None:
-                updated_team_memberships.append(updated_tm)
 
     return updated_users, updated_team_memberships
 

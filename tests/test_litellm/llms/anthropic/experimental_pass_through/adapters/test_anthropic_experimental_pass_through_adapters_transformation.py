@@ -5047,3 +5047,45 @@ def test_redacted_thinking_blocks_never_carry_cache_control():
     replayed: Final = outbound["messages"][1]["content"][0]
     assert replayed["type"] == "redacted_thinking"
     assert "cache_control" not in replayed
+
+
+EAGER_INPUT_SCHEMA: Final = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_translate_anthropic_tools_to_openai_carries_eager_input_streaming_onto_tool(flag):
+    """The per-tool flag lands on the OpenAI tool object, never inside the JSON schema Bedrock sends as inputSchema."""
+    tools: Final = [{"name": "write_file", "input_schema": EAGER_INPUT_SCHEMA, "eager_input_streaming": flag}]
+
+    new_tools, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai(tools=tools)
+
+    assert new_tools[0]["eager_input_streaming"] is flag
+    assert new_tools[0]["function"]["parameters"] == EAGER_INPUT_SCHEMA
+    assert "eager_input_streaming" not in new_tools[0]["function"]
+
+
+def test_translate_anthropic_tools_to_openai_omits_unset_eager_input_streaming():
+    tools: Final = [{"name": "write_file", "input_schema": EAGER_INPUT_SCHEMA}]
+
+    new_tools, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai(tools=tools)
+
+    assert "eager_input_streaming" not in new_tools[0]
+    assert "eager_input_streaming" not in new_tools[0]["function"]["parameters"]
+
+
+def test_eager_input_streaming_tool_reaches_bedrock_converse_as_beta():
+    """An Anthropic Messages request routed to bedrock/converse/ turns the flag into the fine-grained streaming beta."""
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    tools: Final = [{"name": "write_file", "input_schema": EAGER_INPUT_SCHEMA, "eager_input_streaming": True}]
+    new_tools, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai(tools=tools)
+
+    data: Final = AmazonConverseConfig()._transform_request_helper(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        system_content_blocks=[],
+        optional_params={"tools": new_tools},
+        messages=[{"role": "user", "content": "write a big file"}],
+    )
+
+    assert data["additionalModelRequestFields"]["anthropic_beta"] == ["fine-grained-tool-streaming-2025-05-14"]
+    assert data["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"] == EAGER_INPUT_SCHEMA

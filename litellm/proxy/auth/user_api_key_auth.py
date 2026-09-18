@@ -107,6 +107,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     _safe_get_request_query_params,
     _safe_set_request_parsed_body,
+    is_opaque_audio_pass_through_request,
     populate_request_with_path_params,
     read_raw_json_body,
     rewrite_request_model,
@@ -631,9 +632,11 @@ def _apply_budget_limits_to_end_user_params(
     verbose_proxy_logger.debug("Applied budget limits to end user %s", end_user_id)
 
 
-async def user_api_key_auth_websocket(websocket: WebSocket):
-    # Accept the WebSocket connection
+async def user_api_key_auth_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
+    return await user_api_key_auth_websocket_for_model(websocket, model=websocket.query_params.get("model"))
 
+
+async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str | None) -> UserAPIKeyAuth:
     ws_scope: Final = websocket.scope or {}
     scope_headers: Final = list(ws_scope.get("headers") or [])
     # ``get_request_route`` falls back to ``request.url.path`` when
@@ -652,10 +655,6 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
     request: Final = Request(scope=synthetic_scope)
 
     request._url = websocket.url
-
-    query_params: Final = websocket.query_params
-
-    model: Final = query_params.get("model")
 
     async def return_body():
         return _realtime_request_body(model)
@@ -1356,6 +1355,12 @@ async def _read_request_body_deferring_parse_failure(
     must run (resolving identity onto the request's trace) before the 400 goes
     out; the caller re-raises the returned exception once identity is seeded.
     """
+    if is_opaque_audio_pass_through_request(
+        route=get_request_route(request=request),
+        content_type=_safe_get_request_headers(request=request).get("content-type", ""),
+    ):
+        _safe_set_request_parsed_body(request=request, parsed_body={})  # mutable-ok: the body cache stores a plain dict
+        return {}, None  # mutable-ok: request_data is a plain dict across the whole auth path
     try:
         parsed_body: Final = await _read_request_body(request=request)
     except ProxyException as parse_exception:
