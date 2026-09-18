@@ -1,4 +1,4 @@
-use litellm_callbacks::event::{CallEvent, MachineEvent, WireRequest};
+use litellm_host::event::{CallEvent, MachineEvent, WireRequest};
 use litellm_llms::base_llm::ocr::{error::Error, transformation::OcrDocument};
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -351,7 +351,7 @@ async fn guardrail_rewrites_document_before_upload() {
 }
 
 mod transformation {
-    use litellm_callbacks::event::{CallEvent, MachineEvent, WireRequest};
+    use litellm_host::event::{CallEvent, MachineEvent, WireRequest};
     use litellm_llms::{
         base_llm::ocr::transformation::{BaseOcrConfig, OcrConnection, OcrRequestContext},
         reducto::ocr::transformation::*,

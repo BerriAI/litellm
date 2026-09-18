@@ -1,4 +1,4 @@
-use litellm_callbacks::event::{CallEvent, MachineEvent};
+use litellm_host::event::{CallEvent, MachineEvent};
 use litellm_llms::base_llm::ocr::error::Error;
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -466,7 +466,7 @@ async fn model_id_is_encoded_and_dot_segments_are_rejected() {
 mod transformation {
     use std::sync::{Arc, Mutex};
 
-    use litellm_callbacks::event::{CallEvent, MachineEvent};
+    use litellm_host::event::{CallEvent, MachineEvent};
     use litellm_llms::base_llm::ocr::transformation::OcrDocument;
     use serde_json::{Value, json};
 

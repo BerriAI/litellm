@@ -3,7 +3,7 @@ use std::{sync::OnceLock, time::Duration};
 use bytes::{Bytes, BytesMut};
 use futures_util::future::BoxFuture;
 use litellm_auth_gcp::VertexAuth;
-use litellm_callbacks::event::WireRequest;
+use litellm_host::event::WireRequest;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 

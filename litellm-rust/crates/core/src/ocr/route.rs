@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use litellm_auth::ResolvedCredential;
-use litellm_callbacks::{
+use litellm_host::{
     event::{CallEvent, RequestContext, WireRequest},
     route::Route,
 };
@@ -175,7 +175,7 @@ impl LocalOcrHost {
     }
 }
 
-impl litellm_callbacks::host::Host<Ocr> for LocalOcrHost {
+impl litellm_host::host::Host<Ocr> for LocalOcrHost {
     async fn route(&self, op: OcrOp) -> Result<OcrOpResult, Error> {
         match op {
             OcrOp::ProjectRequest => self

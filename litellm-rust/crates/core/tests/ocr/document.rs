@@ -1,4 +1,4 @@
-use litellm_callbacks::event::WireRequest;
+use litellm_host::event::WireRequest;
 use litellm_llms::base_llm::ocr::error::Error;
 use rstest::rstest;
 use serde_json::{Value, json};

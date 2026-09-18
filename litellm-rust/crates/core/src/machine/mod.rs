@@ -7,7 +7,7 @@ mod auth;
 use std::{future::Future, pin::Pin};
 
 pub use auth::{HostTokenProvider, TokenRoute};
-use litellm_callbacks::{
+use litellm_host::{
     event::{MachineEvent, RequestContext, WireRequest},
     host::{Demand, HostOp, HostResult},
     machine::{HostFailure, Interrupted, Machine, MachineStep, Step},

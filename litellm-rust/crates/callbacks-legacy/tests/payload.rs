@@ -1,7 +1,7 @@
 use std::ffi::CStr;
 
 use litellm_auth::SecretValue;
-use litellm_callbacks::event::{MachineEvent, RawResponse, RequestContext, WireRequest};
+use litellm_host::event::{MachineEvent, RawResponse, RequestContext, WireRequest};
 use litellm_host_python::{LifecycleEvent, LifecycleStep, PythonLifecycle, to_py};
 use proptest::prelude::*;
 use pyo3::prelude::*;

@@ -10,7 +10,7 @@ repository = "https://github.com/BerriAI/litellm"
 
 [workspace.dependencies]
 litellm-core = { path = "crates/core" }
-litellm-callbacks = { path = "crates/callbacks" }
+litellm-host = { path = "crates/host" }
 litellm-callbacks-legacy = { path = "crates/callbacks-legacy" }
 litellm-framing = { path = "crates/framer" }
 litellm-auth = { path = "crates/auth" }

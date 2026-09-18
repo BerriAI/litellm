@@ -1,5 +1,5 @@
 //! The CPython runtime adapter: value marshalling, interpreter detachment, the tokio and
-//! asyncio glue, and the driver that runs a native [`Machine`](litellm_callbacks::machine::Machine)
+//! asyncio glue, and the driver that runs a native [`Machine`](litellm_host::machine::Machine)
 //! against a Python route host and a Python lifecycle. Everything here is Python-specific by
 //! construction; another host language gets its own crate of the same shape.
 
@@ -13,7 +13,7 @@ mod handle;
 mod marshal;
 
 pub use adapter::{
-    HostOpError, LifecycleEvent, LifecycleStep, PythonLifecycle, RouteHost, missing_state,
+    InvokeError, LifecycleEvent, LifecycleStep, PythonLifecycle, RouteHost, missing_state,
 };
 pub use argument::lookup;
 pub use callable::wrap_failure;

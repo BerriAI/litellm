@@ -2,10 +2,10 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use futures_util::future::{AbortHandle, Abortable};
-use litellm_callbacks::event::{FailureOrigin, Timing, epoch_seconds};
-use litellm_callbacks::host::{Demand, HostOp, HostResult, HostStep};
-use litellm_callbacks::machine::{HostFailure, Machine, MachineStep};
-use litellm_callbacks::route::Route;
+use litellm_host::event::{FailureOrigin, Timing, epoch_seconds};
+use litellm_host::host::{Demand, HostOp, HostResult, HostStep};
+use litellm_host::machine::{HostFailure, Machine, MachineStep};
+use litellm_host::route::Route;
 use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
@@ -13,7 +13,7 @@ use pyo3::types::PyDict;
 use tokio::sync::Mutex;
 
 use crate::adapter::{
-    HostOpError, LifecycleEvent, LifecycleStep, PythonLifecycle, RouteHost, missing_state,
+    InvokeError, LifecycleEvent, LifecycleStep, PythonLifecycle, RouteHost, missing_state,
 };
 use crate::execution::{poll_async_value, run_async_value, run_sync_value};
 use crate::handle::{Execution, ExecutionBody, ExecutionStep};
@@ -282,12 +282,12 @@ where
                 let arguments = self.arguments.as_ref().ok_or_else(missing_state)?;
                 match self.route.invoke(py, arguments.bind(py), op) {
                     Ok(result) => Ok(HostResult::Route(result)),
-                    Err(HostOpError::Native(error)) => {
+                    Err(InvokeError::Native(error)) => {
                         return self
                             .resume_core(py, Some(Err(HostFailure::Error(error))))
                             .map(Next::Continue);
                     }
-                    Err(HostOpError::Python(error)) => Err(error),
+                    Err(InvokeError::Python(error)) => Err(error),
                 }
             }
             HostOp::BeforeSend { wire, context } => {
@@ -534,8 +534,8 @@ where
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use litellm_callbacks::event::{MachineEvent, RequestContext, WireRequest};
-    use litellm_callbacks::machine::{Interrupted, Step};
+    use litellm_host::event::{MachineEvent, RequestContext, WireRequest};
+    use litellm_host::machine::{Interrupted, Step};
     use pyo3::exceptions::{PyBaseException, PyValueError};
     use pyo3::types::PyDict;
 
@@ -692,12 +692,12 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             _: Python<'_>,
             arguments: &Bound<'_, PyDict>,
             op: &'static str,
-        ) -> Result<String, HostOpError<Error>> {
+        ) -> Result<String, InvokeError<Error>> {
             self.log.push(format!("route:{op}"));
             match self.op {
                 OpScript::Answer => Ok(format!("{op}:{}", arguments.len())),
                 OpScript::RaisePython => Err(PyValueError::new_err("op failed").into()),
-                OpScript::RejectNatively => Err(HostOpError::Native(Error("op rejected".into()))),
+                OpScript::RejectNatively => Err(InvokeError::Native(Error("op rejected".into()))),
             }
         }
 
@@ -899,7 +899,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                     context: Box::new(context()),
                 },
                 HostOp::Emit(MachineEvent::ResponseReceived {
-                    raw: litellm_callbacks::event::RawResponse { body: "raw".into() },
+                    raw: litellm_host::event::RawResponse { body: "raw".into() },
                 }),
             ],
             outcome: Some(Ok("done".into())),
@@ -1189,7 +1189,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                     py: Python<'_>,
                     _: &Bound<'_, PyDict>,
                     _: &'static str,
-                ) -> Result<String, HostOpError<Error>> {
+                ) -> Result<String, InvokeError<Error>> {
                     self.0.push("route");
                     Err(PyErr::from_value(
                         py.import("asyncio")

@@ -2,7 +2,7 @@
 //! the deferred and worker-submitted success paths, and the sync-callbacks-for-async-calls
 //! duplication. All of it expires with the legacy callback contract.
 
-use litellm_callbacks::event::{RequestContext, WireRequest};
+use litellm_host::event::{RequestContext, WireRequest};
 use litellm_host_python::to_py;
 use pyo3::{exceptions::PyBaseException, prelude::*, types::PyDict};
 

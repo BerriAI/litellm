@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use litellm_auth::{Error, ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
-use litellm_callbacks::route::Route;
+use litellm_host::route::Route;
 
 use super::{HostChannel, MachineFault};
 

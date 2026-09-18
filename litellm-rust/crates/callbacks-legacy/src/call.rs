@@ -3,7 +3,7 @@
 //! lifetime. No other callback host has that obligation, which is why nothing outside
 //! this crate holds them.
 
-use litellm_callbacks::{machine::Machine, route::Route};
+use litellm_host::{machine::Machine, route::Route};
 use litellm_host_python::{RouteHost, lookup, run_call};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},

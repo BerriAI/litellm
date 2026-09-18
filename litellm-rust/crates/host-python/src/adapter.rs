@@ -1,5 +1,5 @@
-use litellm_callbacks::event::{FailureOrigin, MachineEvent, RequestContext, Timing, WireRequest};
-use litellm_callbacks::route::Route;
+use litellm_host::event::{FailureOrigin, MachineEvent, RequestContext, Timing, WireRequest};
+use litellm_host::route::Route;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
@@ -89,12 +89,12 @@ pub trait PythonLifecycle: Send + Sync {
 /// rejected it, which the route classifies like any other native failure, or Python code
 /// raised, which reaches the caller as it was raised.
 #[derive(Debug)]
-pub enum HostOpError<E> {
+pub enum InvokeError<E> {
     Native(E),
     Python(PyErr),
 }
 
-impl<E> From<PyErr> for HostOpError<E> {
+impl<E> From<PyErr> for InvokeError<E> {
     fn from(error: PyErr) -> Self {
         Self::Python(error)
     }
@@ -117,7 +117,7 @@ pub trait RouteHost: Send + Sync {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
         op: <Self::Route as Route>::Op,
-    ) -> Result<<Self::Route as Route>::OpResult, HostOpError<<Self::Route as Route>::Error>>;
+    ) -> Result<<Self::Route as Route>::OpResult, InvokeError<<Self::Route as Route>::Error>>;
 
     fn complete(
         &mut self,
