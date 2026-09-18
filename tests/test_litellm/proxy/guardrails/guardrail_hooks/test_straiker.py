@@ -1662,3 +1662,111 @@ async def test_v3_buffered_messages_answer_is_relayed_untouched():
     )
 
     assert json.loads(_posted_payload(g)["sse"]) == native
+
+
+# Captured 2026-09-18: the headers interactive Claude Code 2.0.21 sends on every call,
+# its title and topic sidecars included.
+CLAUDE_CODE_HEADERS = {
+    "user-agent": "claude-cli/2.0.21 (external, claude-vscode, agent-sdk/0.3.27)",
+    "x-app": "cli",
+    "anthropic-beta": "interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
+    "authorization": "Bearer sk-1234",
+}
+
+
+@pytest.mark.asyncio
+async def test_v3_claude_code_is_named_as_the_client_on_every_call():
+    g = _make_guardrail(api_key=V3_KEY)
+    g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+    sidecar = _v3_request_data(
+        system="Analyze if this message indicates a new conversation topic.",
+        messages=[{"role": "user", "content": "Use the Bash tool to run exactly: echo hi"}],
+        proxy_server_request={"url": "http://localhost:4141/v1/messages", "headers": CLAUDE_CODE_HEADERS},
+    )
+    del sidecar["tools"]
+    await g.apply_guardrail(
+        inputs={"texts": ["hi"]}, request_data=sidecar, input_type="request", logging_obj=_logging_obj()
+    )
+
+    assert _posted_headers(g)["x-s6r-client"] == "claude"
+    assert _posted_headers(g)["x-s6r-agent"] == "Claude (LiteLLM)"
+    assert "x-claude-code-session-id" not in _posted_headers(g)
+
+
+@pytest.mark.asyncio
+async def test_v3_a_named_agent_wins_over_the_gateway_derived_claude_code_name():
+    g = _make_guardrail(api_key=V3_KEY, agent_ref="platform-team-cli")
+    g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+    data = _v3_request_data(
+        proxy_server_request={"url": "http://localhost:4141/v1/messages", "headers": CLAUDE_CODE_HEADERS}
+    )
+    await g.apply_guardrail(
+        inputs={"texts": ["hi"]}, request_data=data, input_type="request", logging_obj=_logging_obj()
+    )
+    assert _posted_headers(g)["x-s6r-agent"] == "platform-team-cli"
+    assert _posted_headers(g)["x-s6r-client"] == "claude"
+
+    g2 = _make_guardrail(api_key=V3_KEY)
+    g2.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+    data2 = _v3_request_data(
+        proxy_server_request={
+            "url": "http://localhost:4141/v1/messages",
+            "headers": {**CLAUDE_CODE_HEADERS, "x-s6r-agent": "alice-laptop"},
+        }
+    )
+    await g2.apply_guardrail(
+        inputs={"texts": ["hi"]}, request_data=data2, input_type="request", logging_obj=_logging_obj()
+    )
+    assert _posted_headers(g2)["x-s6r-agent"] == "alice-laptop"
+
+
+@pytest.mark.asyncio
+async def test_v3_client_config_wins_over_the_user_agent_and_unknown_agents_send_none():
+    g = _make_guardrail(api_key=V3_KEY, client="openai")
+    g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+    data = _v3_request_data(
+        proxy_server_request={"url": "http://localhost:4141/v1/messages", "headers": CLAUDE_CODE_HEADERS}
+    )
+    await g.apply_guardrail(
+        inputs={"texts": ["hi"]}, request_data=data, input_type="request", logging_obj=_logging_obj()
+    )
+    assert _posted_headers(g)["x-s6r-client"] == "openai"
+
+    g2 = _make_guardrail(api_key=V3_KEY)
+    g2.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+    curl = _v3_request_data(
+        proxy_server_request={
+            "url": "http://localhost:4141/v1/chat/completions",
+            "headers": {"user-agent": "curl/8.7.1", "authorization": "Bearer sk-1234"},
+        }
+    )
+    await g2.apply_guardrail(
+        inputs={"texts": ["hi"]}, request_data=curl, input_type="request", logging_obj=_logging_obj()
+    )
+    assert "x-s6r-client" not in _posted_headers(g2) and "x-s6r-agent" not in _posted_headers(g2)
+
+
+@pytest.mark.asyncio
+async def test_v3_the_keys_user_outranks_the_end_user_the_request_named():
+    g = _make_guardrail(api_key=V3_KEY)
+    g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+    per_user_key = _v3_request_data(
+        metadata={
+            "user_api_key_user_id": "raj.patel",
+            "user_api_key_end_user_id": "user_d7052d57abdaf880ccbf08aefc2a08a0b96a07bd32becee006fc48c75c3a8bc6_account__session_1c40865d-4b80-4d5a-bcdb-a8dd71d8b1a7",
+        }
+    )
+    await g.apply_guardrail(
+        inputs={"texts": ["hi"]}, request_data=per_user_key, input_type="request", logging_obj=_logging_obj()
+    )
+    assert _posted_payload(g)["original"] == {"processed": {"Meta": {"user": "raj.patel"}}}
+
+    g2 = _make_guardrail(api_key=V3_KEY)
+    g2.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+    master_key = _v3_request_data(
+        metadata={"user_api_key_user_id": "default_user_id", "user_api_key_end_user_id": "alice.chen@acme-demo.com"}
+    )
+    await g2.apply_guardrail(
+        inputs={"texts": ["hi"]}, request_data=master_key, input_type="request", logging_obj=_logging_obj()
+    )
+    assert _posted_payload(g2)["original"] == {"processed": {"Meta": {"user": "alice.chen@acme-demo.com"}}}

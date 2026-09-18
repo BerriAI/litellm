@@ -74,6 +74,14 @@ V3_SESSION_HEADER: Final = "x-claude-code-session-id"
 # tenant's agents enumerate identically whichever gateway the traffic came through.
 V3_CLIENT_HEADER: Final = "x-s6r-client"
 V3_FORMAT_HEADER: Final = "x-s6r-format"
+# Clients the gateway can name from the User-Agent it relayed, captured 2026-09-18, as
+# (User-Agent prefix, Straiker client value, display name). Straiker identifies a coding agent
+# from its system-prompt preamble, which only the main turn carries: the title and topic
+# sidecars resolve by shape as autonomous, and the session splits across two agents. The
+# User-Agent is on every call, and `x-s6r-client` outranks the preamble. The agent is named
+# for this gateway, "Claude (LiteLLM)", the way the platform names agents it derives itself.
+_V3_CLIENT_BY_USER_AGENT: Final = (("claude-cli/", "claude", "Claude"),)
+V3_GATEWAY_NAME: Final = "LiteLLM"
 # Prefix for a session id derived from the conversation itself, when the client states none.
 V3_DERIVED_SESSION_PREFIX: Final = "litellm-"
 # Which agent this turn belongs to, when one gateway fronts several applications. A name for
@@ -566,18 +574,34 @@ def _v3_session_id(
 
 
 def _v3_user(envelope: StraikerWebhookRequest) -> str | None:
-    """Who is asking, most specific first, never a proxy placeholder.
+    """Who is asking: the key's own user first, then the end user the request named.
 
-    A master-key call resolves to LiteLLM's `default_user_id`; sent as an identity it
-    would become one, and a session with a real end user on other turns would be filed
-    under the placeholder.
+    The key is the authenticated principal, the way a Kong consumer is, so a per-user key
+    names the person even when the client packs something else into the body. Claude Code
+    packs a hashed account-and-session token into `metadata.user_id`, which is what the end
+    user resolves to when nothing better is set; it is a session, not a person, and only
+    surfaces when the key names nobody. A master-key call resolves to LiteLLM's
+    `default_user_id`; sent as an identity it would become one.
     """
     identity: Final = envelope.identity
-    for candidate in (identity.litellm_user_email, identity.end_user_id, identity.litellm_user_id):
+    for candidate in (identity.litellm_user_email, identity.litellm_user_id, identity.end_user_id):
         real = _real_identity(candidate)
         if real:
             return real
     return None
+
+
+def _v3_client_from_user_agent(request_data: Mapping[str, object]) -> tuple[str, str] | None:
+    """`(client, agent name)` for a User-Agent this gateway recognises, else None."""
+    user_agent: Final = (_request_header(request_data, "user-agent") or "").lower()
+    return next(
+        (
+            (client, f"{display} ({V3_GATEWAY_NAME})")
+            for prefix, client, display in _V3_CLIENT_BY_USER_AGENT
+            if user_agent.startswith(prefix)
+        ),
+        None,
+    )
 
 
 def _v3_headers(
@@ -588,20 +612,26 @@ def _v3_headers(
 ) -> dict[str, str]:
     """Per-call routing hints, the unified Kong plugin's set. All optional.
 
-    `x-s6r-agent` names ONE application when a gateway fronts several; a client-supplied
-    value wins over the route's `agent_ref`. `x-s6r-client` and `x-s6r-format` come from
-    config alone. Claude Code's own session header is forwarded when the client sent it,
-    which is how a coding session groups the way the native hook would.
+    `x-s6r-agent` names ONE application when a gateway fronts several: a client-supplied
+    value, else the route's `agent_ref`, else the agent this gateway names from the
+    User-Agent. `x-s6r-client` is the route's `client` config, else the client the User-Agent
+    names. `x-s6r-format` comes from config alone. Claude Code's own session header is
+    forwarded when the client sent it, which is how a coding session groups the way the
+    native hook would.
     """
     headers: dict[str, str] = {}
     session: Final = _request_header(request_data, V3_SESSION_HEADER)
     if session:
         headers[V3_SESSION_HEADER] = session
-    agent: Final = _request_header(request_data, V3_AGENT_HEADER) or agent_ref
+    recognised: Final = _v3_client_from_user_agent(request_data)
+    agent: Final = (
+        _request_header(request_data, V3_AGENT_HEADER) or agent_ref or (recognised[1] if recognised else None)
+    )
     if agent:
         headers[V3_AGENT_HEADER] = agent
-    if client:
-        headers[V3_CLIENT_HEADER] = client
+    named_client: Final = client or (recognised[0] if recognised else None)
+    if named_client:
+        headers[V3_CLIENT_HEADER] = named_client
     if format_hint:
         headers[V3_FORMAT_HEADER] = format_hint
     return headers
