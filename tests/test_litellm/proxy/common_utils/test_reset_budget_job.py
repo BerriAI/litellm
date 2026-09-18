@@ -1677,7 +1677,9 @@ def test_budget_table_reset_invalidates_enduser_counter_and_cache(reset_budget_j
 
     counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:end_user:customer-42")
     counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:end_user:customer-42")
-    deleted: Final = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
+    deleted: Final = {
+        call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list
+    }
     assert "end_user_id:customer-42" in deleted
 
 
@@ -1715,9 +1717,7 @@ def test_enduser_invalidation_is_paged_and_batched(reset_budget_job, mock_prisma
     assert counter_cache.user_api_key_cache.async_delete_cache_keys.await_count == 3
     counter_cache.async_delete_cache.assert_not_called()
 
-    invalidated: Final = {
-        key for call in counter_cache.async_delete_cache_keys.await_args_list for key in call.args[0]
-    }
+    invalidated: Final = {key for call in counter_cache.async_delete_cache_keys.await_args_list for key in call.args[0]}
     assert invalidated == {f"spend:end_user:cust-{i:06d}" for i in range(population)}
     evicted: Final = {
         key for call in counter_cache.user_api_key_cache.async_delete_cache_keys.await_args_list for key in call.args[0]
@@ -1725,10 +1725,7 @@ def test_enduser_invalidation_is_paged_and_batched(reset_budget_job, mock_prisma
     assert evicted == {f"end_user_id:cust-{i:06d}" for i in range(population)}
 
 
-
-def test_enduser_invalidation_reports_a_page_read_failure_instead_of_a_clean_finish(
-    mock_prisma_client, monkeypatch
-):
+def test_enduser_invalidation_reports_a_page_read_failure_instead_of_a_clean_finish(mock_prisma_client, monkeypatch):
     """A page that fails to read is not the end of the customer list.
 
     The tier's window is already advanced by the time this walk runs, so no later
@@ -1756,9 +1753,7 @@ def test_enduser_invalidation_reports_a_page_read_failure_instead_of_a_clean_fin
     assert metadata["num_endusers_updated"] == RESET_BUDGET_JOB_BATCH_SIZE
 
 
-def test_a_failed_counter_batch_still_evicts_the_management_cache(
-    reset_budget_job, mock_prisma_client, monkeypatch
-):
+def test_a_failed_counter_batch_still_evicts_the_management_cache(reset_budget_job, mock_prisma_client, monkeypatch):
     """The spend counters and the management cache are invalidated independently.
 
     Sharing one handler meant a Redis failure on the counters returned before the
@@ -1776,9 +1771,7 @@ def test_a_failed_counter_batch_still_evicts_the_management_cache(
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
     evicted: Final = {
-        key
-        for call in counter_cache.user_api_key_cache.async_delete_cache_keys.await_args_list
-        for key in call.args[0]
+        key for call in counter_cache.user_api_key_cache.async_delete_cache_keys.await_args_list for key in call.args[0]
     }
     assert "end_user_id:customer-42" in evicted
 
@@ -1865,7 +1858,8 @@ def test_budget_cascade_carries_access_group_overage_when_rollover_enabled(
 ):
     """A group 5 over the tier cap keeps a spend of 5 in the next window, the
     same way a tag or a team member does: over-cap rows are decremented by the
-    cap, the rest are zeroed, and a live counter is decremented by the cap."""
+    cap, the rest are zeroed, and the live counter is dropped so it reseeds
+    from the committed row."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
     counter_cache.counters["spend:model_access_group:gpt-4-group"] = 15.0
     mock_prisma_client.data["budget"] = [_budget_row(budget_id="budget-roll", budget_duration="7d", max_budget=10.0)]
@@ -1890,7 +1884,8 @@ def test_budget_cascade_carries_access_group_overage_when_rollover_enabled(
     } in writes
     assert _replay_spend_writes(writes, 15.0) == 5.0
     assert _replay_spend_writes(writes, 8.0) == 0
-    assert counter_cache.counters["spend:model_access_group:gpt-4-group"] == 5.0
+    assert "spend:model_access_group:gpt-4-group" not in counter_cache.counters
+    counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:model_access_group:gpt-4-group")
 
 
 # ---------------------------------------------------------------------------
@@ -1992,7 +1987,11 @@ def test_budget_cascade_writes_land_in_a_single_transaction(reset_budget_job, mo
     budget = _budget_row(budget_id="budget-1", budget_duration="7d")
     mock_prisma_client.data["budget"] = [budget]
     mock_prisma_client.data["enduser"] = [
-        type("EndUser", (), {"spend": 5.0, "litellm_budget_table": budget, "user_id": "enduser-1", "budget_id": "budget-1"})
+        type(
+            "EndUser",
+            (),
+            {"spend": 5.0, "litellm_budget_table": budget, "user_id": "enduser-1", "budget_id": "budget-1"},
+        )
     ]
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
@@ -3196,7 +3195,15 @@ def rollover_enabled(monkeypatch):
     ],
 )
 def test_direct_reset_carries_overage_when_rollover_enabled(
-    rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch, run_phase, table, id_field, id_value, row_factory
+    rollover_enabled,
+    reset_budget_job,
+    mock_prisma_client,
+    monkeypatch,
+    run_phase,
+    table,
+    id_field,
+    id_value,
+    row_factory,
 ):
     """spend=150 against max_budget=100 must decrement by the cap (leaving 50)
     rather than zero the row, and a live spend counter must drop by 100."""
@@ -3261,8 +3268,8 @@ def test_budget_cascade_carries_overage_per_tier_when_rollover_enabled(
     rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch
 ):
     """A team member 5 over the tier cap keeps a spend of 5 in the next window:
-    the cascade decrements over-cap rows by the cap, zeroes the rest, and takes
-    the cap off a live spend counter."""
+    the cascade decrements over-cap rows by the cap, zeroes the rest, and drops
+    the live spend counter so it reseeds from the committed row."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
     counter_cache.counters["spend:team_member:member-1:team-1"] = 15.0
     budget = _budget_row(budget_id="budget-roll", budget_duration="7d", max_budget=10.0)
@@ -3291,7 +3298,8 @@ def test_budget_cascade_carries_overage_per_tier_when_rollover_enabled(
             "data": {"spend": {"decrement": 10.0}},
         },
     ]
-    assert counter_cache.counters["spend:team_member:member-1:team-1"] == 5.0
+    assert "spend:team_member:member-1:team-1" not in counter_cache.counters
+    counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:team_member:member-1:team-1")
 
 
 def test_budget_cascade_carries_enduser_overage_when_rollover_enabled(
@@ -3346,7 +3354,12 @@ def test_budget_cascade_carries_default_tier_enduser_counter_when_rollover_enabl
             "spend": 15.0,
             "user_id": "enduser-implicit",
             "budget_id": None,
-            "model_dump": lambda self=None: {"spend": 15.0, "user_id": "enduser-implicit", "budget_id": None, "blocked": False},
+            "model_dump": lambda self=None: {
+                "spend": 15.0,
+                "user_id": "enduser-implicit",
+                "budget_id": None,
+                "blocked": False,
+            },
         },
     )
     mock_prisma_client.db.litellm_endusertable.set_find_many_results([implicit_enduser])
@@ -3355,7 +3368,9 @@ def test_budget_cascade_carries_default_tier_enduser_counter_when_rollover_enabl
 
     counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:end_user:enduser-implicit")
     counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:end_user:enduser-implicit")
-    deleted: Final = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
+    deleted: Final = {
+        call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list
+    }
     assert "end_user_id:enduser-implicit" in deleted
 
 
@@ -3704,9 +3719,7 @@ def test_reset_band_negative_max_budget_never_opens_a_band(rollover_enabled):
     assert _reset_spend(30.0, _reset_band(-50.0, 600.0)) == 0.0
 
 
-def test_direct_reset_carries_unused_allowance_as_negative_spend(
-    reset_budget_job, mock_prisma_client, monkeypatch
-):
+def test_direct_reset_carries_unused_allowance_as_negative_spend(reset_budget_job, mock_prisma_client, monkeypatch):
     """max_budget 100, rollover_max_budget 600, spend 30: the write decrements
     by the 100 allowance so the row lands at -70. A charge of 1 that landed
     after the reset read the row must survive in the counter, which lands at
@@ -3848,9 +3861,7 @@ def test_budget_cascade_queues_ordered_band_statements_for_capped_tier(
     """A capped tier emits floor -> decrement -> forgive-overage in that order,
     and the caller's spend filter is stripped so zero-spend rows are swept."""
     _make_counter_invalidation_job(monkeypatch)
-    budget = _budget_row(
-        budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0
-    )
+    budget = _budget_row(budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0)
     mock_prisma_client.data["budget"] = [budget]
     member = type(
         "Membership",
@@ -3891,9 +3902,7 @@ def test_budget_cascade_keeps_spend_filter_for_plain_tier_but_strips_for_banded(
     still only touch rows that spent) and is stripped for banded budgets (a
     member who spent nothing still banks the period's allowance)."""
     _make_counter_invalidation_job(monkeypatch)
-    banded = _budget_row(
-        budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0
-    )
+    banded = _budget_row(budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0)
     plain = _budget_row(budget_id="budget-plain", budget_duration="7d", max_budget=10.0)
     mock_prisma_client.data["budget"] = [banded, plain]
 
@@ -3913,15 +3922,11 @@ def test_budget_cascade_keeps_spend_filter_for_plain_tier_but_strips_for_banded(
     } in enduser_writes
 
 
-def test_budget_cascade_credit_reaches_idle_and_spending_members(
-    reset_budget_job, mock_prisma_client, monkeypatch
-):
+def test_budget_cascade_credit_reaches_idle_and_spending_members(reset_budget_job, mock_prisma_client, monkeypatch):
     """Replay the committed statements over member rows: a member at spend 30
     lands at -70 and a mid-cycle joiner at spend 0 banks the full -100."""
     _make_counter_invalidation_job(monkeypatch)
-    budget = _budget_row(
-        budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=600.0
-    )
+    budget = _budget_row(budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=600.0)
     mock_prisma_client.data["budget"] = [budget]
     mock_prisma_client.db.litellm_teammembership.set_find_many_results(
         [
@@ -3943,9 +3948,7 @@ def test_budget_cascade_invalidates_zero_spend_rows_on_banded_tiers(reset_budget
     fetched despite the spend > 0 filter or its Redis counter stays stale."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
     counter_cache.counters["spend:tag:tenant-42"] = 0.0
-    banded = _budget_row(
-        budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0
-    )
+    banded = _budget_row(budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0)
     plain = _budget_row(budget_id="budget-plain", budget_duration="7d", max_budget=10.0)
     mock_prisma_client.data["budget"] = [banded, plain]
     mock_prisma_client.db.litellm_tagtable.set_find_many_results(
@@ -3961,20 +3964,16 @@ def test_budget_cascade_invalidates_zero_spend_rows_on_banded_tiers(reset_budget
         ]
     }
     assert mock_prisma_client.db.litellm_tagtable.find_many_calls == [{"where": expected_where}]
-    assert counter_cache.counters["spend:tag:tenant-42"] == -100.0
-    counter_cache.redis_cache.async_increment_if_exists.assert_any_await(key="spend:tag:tenant-42", value=-100.0)
+    assert "spend:tag:tenant-42" not in counter_cache.counters
+    counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:tag:tenant-42")
 
 
-def test_budget_cascade_seeds_credit_counters_and_deletes_zeroed_ones(
-    reset_budget_job, mock_prisma_client, monkeypatch
-):
-    """Rows a banded tier carries into credit get the allowance taken off their
-    live counter; rows a plain tier zeroes keep the delete-then-reseed path."""
+def test_budget_cascade_drops_counters_on_banded_and_plain_tiers(reset_budget_job, mock_prisma_client, monkeypatch):
+    """Banded and plain tiers both leave the counter absent so the next read
+    reseeds from the committed row; nothing is seeded from the snapshot."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
     counter_cache.counters["spend:team_member:m-1:t-1"] = 0.5
-    banded = _budget_row(
-        budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0
-    )
+    banded = _budget_row(budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0)
     plain = _budget_row(budget_id="budget-plain", budget_duration="7d", max_budget=10.0)
     mock_prisma_client.data["budget"] = [banded, plain]
     mock_prisma_client.db.litellm_teammembership.set_find_many_results(
@@ -3986,26 +3985,45 @@ def test_budget_cascade_seeds_credit_counters_and_deletes_zeroed_ones(
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
-    assert counter_cache.counters["spend:team_member:m-1:t-1"] == -99.5
-    counter_cache.redis_cache.async_increment_if_exists.assert_awaited_once_with(
-        key="spend:team_member:m-1:t-1", value=-100.0
-    )
-    counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:team_member:m-2:t-2")
-    deleted_keys = {call.kwargs.get("key") for call in counter_cache.in_memory_cache.delete_cache.call_args_list}
-    assert "spend:team_member:m-1:t-1" not in deleted_keys
+    assert counter_cache.counters == {}
+    counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:team_member:m-1:t-1")
+    counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:team_member:m-2:t-2")
+    counter_cache.redis_cache.async_increment_if_exists.assert_not_awaited()
+    counter_cache.redis_cache.async_set_cache.assert_not_awaited()
 
 
-def test_band_statements_reproduce_reset_spend_for_every_spend_value(
+def test_budget_cascade_never_applies_snapshot_delta_to_a_counter_that_moved(
     reset_budget_job, mock_prisma_client, monkeypatch
 ):
+    """Regression: a flush that lands between the cascade's read and its commit
+    can move a row into a different band than the snapshot planned (30 read,
+    130 at commit: the DB zeroes it instead of carrying -70). Replaying the
+    snapshot's delta would leave the counter at 30 against a DB row of 0, so the
+    counter must be dropped and reseeded, whatever value it holds at commit."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_cache.counters["spend:team_member:m-1:t-1"] = 130.0
+    banded = _budget_row(budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0)
+    mock_prisma_client.data["budget"] = [banded]
+    mock_prisma_client.db.litellm_teammembership.set_find_many_results(
+        [type("Membership", (), {"user_id": "m-1", "team_id": "t-1", "spend": 30.0, "budget_id": "budget-credit"})]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    membership_writes = _batch_writes(mock_prisma_client, "team_membership")
+    assert _replay_spend_writes(membership_writes, 130.0) == 0.0
+    assert "spend:team_member:m-1:t-1" not in counter_cache.counters
+    counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:team_member:m-1:t-1")
+    counter_cache.redis_cache.async_increment_if_exists.assert_not_awaited()
+
+
+def test_band_statements_reproduce_reset_spend_for_every_spend_value(reset_budget_job, mock_prisma_client, monkeypatch):
     """Ordering proof: replaying the queued statements in order over rows at
     -400, -200, 0, 30, 100, 150 (base 100, cap 250, overage forgiven) must land
     each row exactly on _reset_spend. Any statement reordering or filter gap
     leaves at least one row wrong."""
     _make_counter_invalidation_job(monkeypatch)
-    budget = _budget_row(
-        budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0
-    )
+    budget = _budget_row(budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0)
     mock_prisma_client.data["budget"] = [budget]
     mock_prisma_client.db.litellm_teammembership.set_find_many_results(
         [

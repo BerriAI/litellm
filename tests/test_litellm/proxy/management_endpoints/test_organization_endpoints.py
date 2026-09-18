@@ -10,7 +10,6 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 
-
 @pytest.mark.asyncio
 async def test_organization_update_object_permissions_existing_permission(monkeypatch):
     """
@@ -641,6 +640,7 @@ async def test_organization_member_add_budget_omission_and_null_leave_budget_uns
     from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
 
     user = LiteLLM_UserTable(user_id="user-1", user_role="internal_user")
+
     async def create_membership(data):
         return LiteLLM_OrganizationMembershipTable(
             user_id="user-1",
@@ -954,6 +954,31 @@ async def test_v2_rejects_negative_max_budget(monkeypatch):
         )
     assert exc.value.status_code == 422
     assert "max_budget" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rollover_max_budget", [-5, 0, float("inf")])
+async def test_new_organization_rejects_invalid_rollover_max_budget(monkeypatch, rollover_max_budget):
+    """/organization/new applies the same rollover cap validation as /budget/new, /user/new and /team/new
+    instead of persisting a cap the reset job would silently ignore."""
+    from litellm.proxy._types import LitellmUserRoles, NewOrganizationRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import new_organization
+
+    prisma = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", MagicMock())
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
+    with pytest.raises(HTTPException) as exc:
+        await new_organization(
+            data=NewOrganizationRequest(
+                organization_alias="org-1", max_budget=100, rollover_max_budget=rollover_max_budget
+            ),
+            user_api_key_dict=auth,
+        )
+    assert exc.value.status_code == 400
+    assert "rollover_max_budget" in str(exc.value.detail)
+    prisma.db.litellm_budgettable.create.assert_not_called()
 
 
 @pytest.mark.asyncio

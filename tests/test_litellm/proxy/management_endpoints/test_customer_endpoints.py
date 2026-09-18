@@ -10,10 +10,11 @@ from fastapi.testclient import TestClient
 from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LitellmUserRoles,
+    NewCustomerRequest,
     ProxyException,
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
-from litellm.proxy.management_endpoints.customer_endpoints import router
+from litellm.proxy.management_endpoints.customer_endpoints import new_budget_request, router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
@@ -375,6 +376,24 @@ def test_customer_new_documented_in_openapi_schema():
     schema = app.openapi()["paths"]["/customer/new"]["post"]
     json_schema = schema["responses"]["200"]["content"]["application/json"]["schema"]
     assert json_schema["$ref"].endswith("/CustomerResponse")
+
+
+@pytest.mark.parametrize("rollover_max_budget", [-5, 0, float("inf")])
+def test_new_customer_budget_rejects_invalid_rollover_max_budget(rollover_max_budget):
+    """The inline budget a /customer/new request carries gets the same rollover cap validation as
+    /budget/new instead of persisting a cap the reset job would silently ignore."""
+    with pytest.raises(HTTPException) as exc:
+        new_budget_request(
+            NewCustomerRequest(user_id="cust-1", max_budget=100, rollover_max_budget=rollover_max_budget)
+        )
+    assert exc.value.status_code == 400
+    assert "rollover_max_budget" in str(exc.value.detail)
+
+
+def test_new_customer_budget_keeps_valid_rollover_max_budget():
+    budget = new_budget_request(NewCustomerRequest(user_id="cust-1", max_budget=100, rollover_max_budget=250))
+    assert budget is not None
+    assert budget.rollover_max_budget == 250
 
 
 def test_update_customer_response_preserves_budget_id(mock_prisma_client, mock_user_api_key_auth):
@@ -857,9 +876,7 @@ def test_char_new_body(mock_prisma_client, mock_user_api_key_auth):
 
 
 @pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
-def test_customer_new_rejects_a_duration_that_never_advances(
-    mock_prisma_client, mock_user_api_key_auth, bad_duration
-):
+def test_customer_new_rejects_a_duration_that_never_advances(mock_prisma_client, mock_user_api_key_auth, bad_duration):
     """A zero-length window resets to "now", leaving the customer's budget row
     permanently due for the reset job to re-read every tick."""
     mock_prisma_client.db.litellm_endusertable.create = AsyncMock(return_value=_row(_FULL_DB_ROW))

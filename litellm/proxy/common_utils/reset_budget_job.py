@@ -181,21 +181,6 @@ def _item_rollover_max_budget(
             assert_never(item_type)
 
 
-@dataclass(frozen=True, slots=True)
-class _CounterReset:
-    key: str
-    spend: float
-    decrement: float
-
-
-def _row_counter_reset(key: str, row: _BudgetLinkedRow, bands: Mapping[str, _ResetBand]) -> _CounterReset:
-    band: Final = bands.get(row.budget_id) if bands and row.budget_id is not None else None
-    if band is None:
-        return _CounterReset(key=key, spend=0.0, decrement=0.0)
-    spend: Final = _reset_spend(row.spend, band)
-    return _CounterReset(key=key, spend=spend, decrement=float(row.spend or 0.0) - spend)
-
-
 def _team_membership_counter_key(row: _TeamMembershipRow) -> str:
     return f"spend:team_member:{row.user_id}:{row.team_id}"
 
@@ -388,7 +373,7 @@ class _BudgetCascade:
     budgets: tuple[LiteLLM_BudgetTableFull, ...] = ()
     budget_ids: tuple[str, ...] = ()
     budget_resets: tuple[tuple[str, datetime], ...] = ()
-    counter_resets: tuple[_CounterReset, ...] = ()
+    counter_keys: tuple[str, ...] = ()
     cache_keys: tuple[str, ...] = ()
     bands: Mapping[str, _ResetBand] = field(default_factory=lambda: MappingProxyType({}))
 
@@ -920,12 +905,12 @@ class ResetBudgetJob:
                 for b in budgets_to_reset
                 if b.budget_id is not None and b.budget_duration is not None
             ),
-            counter_resets=(
-                *(_row_counter_reset(_team_membership_counter_key(row), row, bands) for row in team_memberships),
-                *(_row_counter_reset(_key_counter_key(row), row, bands) for row in keys),
-                *(_row_counter_reset(_org_counter_key(row), row, bands) for row in orgs),
-                *(_row_counter_reset(_tag_counter_key(row), row, bands) for row in tags),
-                *(_row_counter_reset(_model_access_group_counter_key(row), row, bands) for row in model_access_groups),
+            counter_keys=(
+                *(_team_membership_counter_key(row) for row in team_memberships),
+                *(_key_counter_key(row) for row in keys),
+                *(_org_counter_key(row) for row in orgs),
+                *(_tag_counter_key(row) for row in tags),
+                *(_model_access_group_counter_key(row) for row in model_access_groups),
             ),
             bands=bands,
             cache_keys=(
@@ -965,13 +950,10 @@ class ResetBudgetJob:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
 
     async def _invalidate_budget_cascade_caches(self, cascade: _BudgetCascade) -> None:
-        await self._invalidate_caches(
-            counter_keys=tuple(reset.key for reset in cascade.counter_resets if reset.spend == 0.0),
-            cache_keys=cascade.cache_keys,
-        )
-        for reset in cascade.counter_resets:
-            if reset.spend != 0.0:
-                await self._decrement_spend_counter(reset.key, reset.decrement)
+        """The band statements rewrite each row from the spend it holds at
+        commit, not the snapshot's, so only a reseed from the committed row
+        can follow a flush that moved the row across a band in between."""
+        await self._invalidate_caches(counter_keys=cascade.counter_keys, cache_keys=cascade.cache_keys)
 
     async def _reset_expired_budget_cascade(self) -> _BudgetCascadeCommitted | _BudgetCascadeFailed:
         now: Final = datetime.now(timezone.utc)

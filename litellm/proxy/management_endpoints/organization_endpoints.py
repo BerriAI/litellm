@@ -42,6 +42,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _set_object_metadata_field,
     _user_has_admin_view,
     validate_budget_duration,
+    validate_rollover_max_budget,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
@@ -444,6 +445,7 @@ async def new_organization(
             status_code=400,
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
         )
+    validate_rollover_max_budget(data.rollover_max_budget)
 
     user_object_correct_type: LiteLLM_UserTable | None = None
 

@@ -34,7 +34,10 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     end_user_restricted_registry_cache_key,
 )
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
-from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
+from litellm.proxy.management_endpoints.common_utils import (
+    validate_budget_duration,
+    validate_rollover_max_budget,
+)
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     handle_update_object_permission_common,
@@ -265,6 +268,7 @@ def new_budget_request(data: NewCustomerRequest) -> BudgetNewRequest | None:
     if budget_kv_pairs:
         budget_request: Final = BudgetNewRequest.model_validate(budget_kv_pairs)
         validate_budget_duration(budget_request.budget_duration)
+        validate_rollover_max_budget(budget_request.rollover_max_budget)
         if budget_request.budget_reset_at is None and budget_request.budget_duration is not None:
             budget_request.budget_reset_at = datetime.utcnow() + timedelta(
                 seconds=duration_in_seconds(duration=budget_request.budget_duration)
