@@ -516,6 +516,7 @@ async def _arealtime(
         aws_sts_endpoint: Final = kwargs.get("aws_sts_endpoint")
         aws_bedrock_runtime_endpoint: Final = kwargs.get("aws_bedrock_runtime_endpoint")
         aws_external_id: Final = kwargs.get("aws_external_id")
+        aws_session_tags: Final = kwargs.get("aws_session_tags")
 
         await bedrock_realtime.async_realtime(
             model=model,
@@ -535,6 +536,7 @@ async def _arealtime(
             aws_sts_endpoint=aws_sts_endpoint,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_external_id=aws_external_id,
+            aws_session_tags=aws_session_tags,
         )
     elif _custom_llm_provider == "xai":
         api_base = (

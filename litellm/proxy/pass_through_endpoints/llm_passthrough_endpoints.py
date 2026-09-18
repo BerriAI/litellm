@@ -12,6 +12,7 @@ import hmac
 import inspect
 import json
 import os
+import posixpath
 import re
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -30,6 +31,14 @@ from litellm import get_llm_provider
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
+    AZURE_SPEECH_BATCH_PATH_PREFIX,
+    AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN,
+    AZURE_SPEECH_CUSTOM_LLM_PROVIDER,
+    AZURE_SPEECH_FAST_TRANSCRIPTION_PATH,
+    AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
+    AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX,
+    AZURE_SPEECH_STT_DOMAIN,
+    AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
@@ -58,6 +67,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     get_request_body,
     is_json_content_type,
 )
+from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
@@ -1235,7 +1245,13 @@ async def bedrock_proxy_route(
 COMPREHEND_MEDICAL_TARGET_PREFIX: Final = "ComprehendMedical_20181030"
 
 
-def _resolve_comprehend_medical_region() -> str | None:
+def _proxy_general_settings() -> Mapping[str, object]:
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings
+
+
+def _resolve_aws_passthrough_region() -> str | None:
     region_candidates: Final = (
         get_secret_str(secret_name="AWS_REGION_NAME"),
         get_secret_str(secret_name="AWS_REGION"),
@@ -1275,7 +1291,7 @@ async def comprehend_medical_proxy_route(
             ),
         )
 
-    aws_region_name: Final = _resolve_comprehend_medical_region()
+    aws_region_name: Final = _resolve_aws_passthrough_region()
     if aws_region_name is None:
         raise HTTPException(
             status_code=400,
@@ -1349,6 +1365,306 @@ async def comprehend_medical_sdk_proxy_route(
         request=request,
         fastapi_response=fastapi_response,
         user_api_key_dict=user_api_key_dict,
+    )
+
+
+AZURE_SPEECH_FORWARDED_REQUEST_HEADERS: Final = ("content-type", "accept")
+AZURE_SPEECH_ENDPOINT_FAMILY_DOMAINS: Final = MappingProxyType(
+    {
+        AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX: AZURE_SPEECH_STT_DOMAIN,
+        AZURE_SPEECH_BATCH_PATH_PREFIX: AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN,
+    }
+)
+
+
+def resolve_azure_speech_base_url(endpoint_path: str, api_base: str | None, region: str | None) -> httpx.URL | None:
+    """
+    Azure AI Speech serves the two REST families from different regional hosts: short-audio
+    recognition under ``{region}.stt.speech.microsoft.com`` and batch transcription under
+    ``{region}.api.cognitive.microsoft.com``. An operator-configured ``api_base`` (custom
+    domain or private endpoint) serves both and wins over the region. Returns ``None`` when
+    the path is outside both families so the operator key is never sent for an unknown API.
+    """
+    domain: Final = next(
+        (
+            family_domain
+            for family_prefix, family_domain in AZURE_SPEECH_ENDPOINT_FAMILY_DOMAINS.items()
+            if endpoint_path.startswith(family_prefix)
+        ),
+        None,
+    )
+    if domain is None:
+        return None
+    if api_base:
+        return httpx.URL(api_base)
+    if not region:
+        return None
+    return httpx.URL(f"https://{region}.{domain}")
+
+
+def azure_speech_path_manages_shared_resources(endpoint_path: str) -> bool:
+    return (
+        endpoint_path.startswith(AZURE_SPEECH_BATCH_PATH_PREFIX)
+        and endpoint_path != AZURE_SPEECH_FAST_TRANSCRIPTION_PATH
+    )
+
+
+def canonical_azure_speech_endpoint_path(endpoint: str) -> str:
+    """
+    The path Azure will actually serve, with ``.`` and ``..`` segments resolved, so the
+    endpoint family and the admin guard are decided on the same path the upstream request uses.
+    """
+    raw_path: Final = httpx.URL(endpoint).path
+    resolved_path: Final = posixpath.normpath(f"/{raw_path.lstrip('/')}")
+    if raw_path.endswith("/") and resolved_path != "/":
+        return f"{resolved_path}/"
+    return resolved_path
+
+
+@router.api_route(
+    f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/{{endpoint:path}}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: fastapi route methods must be a list
+    tags=["Azure AI Speech Pass-through", "pass-through"],  # mutable-ok: fastapi route tags must be a list
+)
+async def azure_speech_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.
+    `POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`
+    with the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.
+
+    The body is forwarded byte for byte and the proxy injects its own
+    `Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key
+    and is never forwarded.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
+    """
+    normalized_endpoint_path: Final = canonical_azure_speech_endpoint_path(endpoint)
+    base_url: Final = resolve_azure_speech_base_url(
+        endpoint_path=normalized_endpoint_path,
+        api_base=get_secret_str(secret_name="AZURE_SPEECH_API_BASE"),
+        region=get_secret_str(secret_name="AZURE_SPEECH_REGION"),
+    )
+    if base_url is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported Azure Speech path: {normalized_endpoint_path}. Supported prefixes are "
+                f"{AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX} and {AZURE_SPEECH_BATCH_PATH_PREFIX}; set "
+                "AZURE_SPEECH_REGION or AZURE_SPEECH_API_BASE in the proxy environment."
+            ),
+        )
+    if azure_speech_path_manages_shared_resources(normalized_endpoint_path) and not is_proxy_admin(user_api_key_dict):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"{request.method} {normalized_endpoint_path} manages batch transcription resources that belong to "
+                "the proxy's Azure Speech subscription and whose cost is unknown at request time, so it is limited "
+                f"to proxy admin keys. Use {AZURE_SPEECH_FAST_TRANSCRIPTION_PATH} for transcription that is priced "
+                "per request."
+            ),
+        )
+    azure_speech_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider=AZURE_SPEECH_CUSTOM_LLM_PROVIDER,
+        region_name=None,
+    )
+    if azure_speech_api_key is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Azure Speech credentials not found. Set AZURE_SPEECH_API_KEY in the proxy environment.",
+        )
+
+    target_url: Final = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, normalized_endpoint_path)
+    )
+    request_headers: Final = _safe_get_request_headers(request)
+    upstream_headers: Final = MappingProxyType(
+        {
+            header_name: header_value
+            for header_name, header_value in (
+                *(
+                    (header_name, request_headers[header_name])
+                    for header_name in AZURE_SPEECH_FORWARDED_REQUEST_HEADERS
+                    if header_name in request_headers
+                ),
+                (AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER, azure_speech_api_key),
+            )
+        }
+    )
+    raw_body: Final = await request.body()
+
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(target_url),
+        custom_headers=upstream_headers,
+        custom_llm_provider=AZURE_SPEECH_CUSTOM_LLM_PROVIDER,
+    )
+    setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, raw_body)
+    return await endpoint_func(request, fastapi_response, user_api_key_dict)
+
+
+@router.post(
+    "/transcribe/{operation}",
+    tags=["Amazon Transcribe Pass-through", "pass-through"],  # mutable-ok: fastapi route tags must be a list
+)
+async def transcribe_proxy_route(
+    operation: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    general_settings: Annotated[Mapping[str, object], Depends(_proxy_general_settings)],
+):
+    """
+    Pass-through for the Amazon Transcribe API, e.g. `POST /transcribe/StartTranscriptionJob`.
+
+    The request body is forwarded to the AWS JSON 1.1 API and signed with SigV4 using the
+    proxy's AWS credentials. Standard jobs are tagged with the calling key's owner so that
+    only that owner (or a proxy admin) can read or delete them, and keys other than proxy
+    admins may only read media from and write transcripts to the S3 buckets listed in
+    `general_settings.transcribe_media_buckets`; account-wide operations
+    such as ListTranscriptionJobs are limited to proxy admins. Streaming transcription
+    (`transcribestreaming`) uses a separate HTTP/2 event-stream protocol and is not served
+    by this route.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/transcribe)
+    """
+    from .llm_provider_handlers.transcribe_passthrough_logging_handler import (
+        TRANSCRIBE_CUSTOM_LLM_PROVIDER,
+        TRANSCRIBE_OWNED_JOB_OPERATIONS,
+        TRANSCRIBE_PRICED_OPERATION,
+        TRANSCRIBE_TARGET_PREFIX,
+        TranscribeRefusal,
+        transcribe_admin_only_refusal,
+        transcribe_cost_per_second,
+        transcribe_job_access_refusal,
+        transcribe_job_lookup,
+        transcribe_media_buckets,
+        transcribe_owned_start_request,
+        transcribe_storage_refusal,
+        transcribe_supported_operations,
+        transcribe_unpriceable_request_reason,
+    )
+
+    if operation not in transcribe_supported_operations():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported Amazon Transcribe operation: {operation}. "
+                f"Supported operations: {', '.join(sorted(transcribe_supported_operations()))}"
+            ),
+        )
+
+    aws_region_name: Final = _resolve_aws_passthrough_region()
+    if aws_region_name is None:
+        raise HTTPException(
+            status_code=400,
+            detail="AWS region not found. Set AWS_REGION_NAME in the proxy environment.",
+        )
+
+    try:
+        data: Final = await _json_request_body(request)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Request body must be valid JSON: {e}")
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+    if "stream" in data:
+        raise HTTPException(status_code=400, detail="'stream' is not an Amazon Transcribe request member")
+    unpriceable_reason: Final = transcribe_unpriceable_request_reason(operation, data, transcribe_cost_per_second())
+    if unpriceable_reason is not None:
+        raise HTTPException(status_code=400, detail=unpriceable_reason)
+    admin_only_refusal: Final = transcribe_admin_only_refusal(operation, user_api_key_dict)
+    if admin_only_refusal is not None:
+        raise HTTPException(status_code=admin_only_refusal.status_code, detail=admin_only_refusal.detail)
+    storage_refusal: Final = (
+        transcribe_storage_refusal(data, transcribe_media_buckets(general_settings), user_api_key_dict)
+        if operation == TRANSCRIBE_PRICED_OPERATION
+        else None
+    )
+    if storage_refusal is not None:
+        raise HTTPException(status_code=storage_refusal.status_code, detail=storage_refusal.detail)
+    request_body: Final = (
+        transcribe_owned_start_request(data, user_api_key_dict) if operation == TRANSCRIBE_PRICED_OPERATION else data
+    )
+    if isinstance(request_body, TranscribeRefusal):
+        raise HTTPException(status_code=request_body.status_code, detail=request_body.detail)
+    access_refusal: Final = (
+        await transcribe_job_access_refusal(
+            data.get("TranscriptionJobName"), user_api_key_dict, transcribe_job_lookup(aws_region_name)
+        )
+        if operation in TRANSCRIBE_OWNED_JOB_OPERATIONS
+        else None
+    )
+    if access_refusal is not None:
+        raise HTTPException(status_code=access_refusal.status_code, detail=access_refusal.detail)
+
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing, sign_aws_json_post
+
+    target_url: Final = f"https://transcribe.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/"
+    prepped: Final = await run_aws_signing(
+        sign_aws_json_post,
+        get_credentials=partial(BaseAWSLLM().get_credentials, aws_region_name=aws_region_name),
+        service_name="transcribe",
+        aws_region_name=aws_region_name,
+        url=target_url,
+        body=json.dumps(request_body),
+        headers=MappingProxyType(
+            {
+                "Content-Type": "application/x-amz-json-1.1",
+                "X-Amz-Target": f"{TRANSCRIBE_TARGET_PREFIX}.{operation}",
+            }
+        ),
+    )
+
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=operation,
+        target=str(prepped.url),
+        custom_headers=prepped.headers,
+        custom_llm_provider=TRANSCRIBE_CUSTOM_LLM_PROVIDER,
+    )
+    setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, request_body)
+    setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, prepped.body)
+    return await endpoint_func(request, fastapi_response, user_api_key_dict)
+
+
+@router.post(
+    "/transcribe",
+    tags=["Amazon Transcribe Pass-through", "pass-through"],  # mutable-ok: fastapi route tags must be a list
+)
+async def transcribe_sdk_proxy_route(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    general_settings: Annotated[Mapping[str, object], Depends(_proxy_general_settings)],
+):
+    """
+    AWS-SDK-shaped pass-through for Amazon Transcribe: point the SDK's `endpoint_url`
+    at `/transcribe` and the operation is read from the `X-Amz-Target` header, per the
+    AWS JSON 1.1 protocol.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/transcribe)
+    """
+    from .llm_provider_handlers.transcribe_passthrough_logging_handler import (
+        TRANSCRIBE_TARGET_PREFIX,
+    )
+
+    target_header: Final = request.headers.get("x-amz-target", "")
+    target_prefix, _, operation = target_header.partition(".")
+    if target_prefix != TRANSCRIBE_TARGET_PREFIX or not operation:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Expected an X-Amz-Target header of the form {TRANSCRIBE_TARGET_PREFIX}.<Operation>",
+        )
+    return await transcribe_proxy_route(
+        operation=operation,
+        request=request,
+        fastapi_response=fastapi_response,
+        user_api_key_dict=user_api_key_dict,
+        general_settings=general_settings,
     )
 
 
@@ -2621,12 +2937,6 @@ class _OpenAIWebsocketRelay(Protocol):
         endpoint: str,
         accept_websocket: bool,
     ) -> None: ...
-
-
-def _proxy_general_settings() -> Mapping[str, object]:
-    from litellm.proxy.proxy_server import general_settings
-
-    return general_settings
 
 
 def _openai_websocket_relay() -> _OpenAIWebsocketRelay:
