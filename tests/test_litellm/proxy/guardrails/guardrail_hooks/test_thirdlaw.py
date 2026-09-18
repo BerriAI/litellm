@@ -17,6 +17,7 @@ from litellm.proxy.guardrails.guardrail_hooks.thirdlaw import (
     initialize_guardrail,
 )
 from litellm.proxy.guardrails.guardrail_hooks.thirdlaw.thirdlaw import (
+    _BODY_STRIP_KEYS,
     ThirdlawGuardrailMissingConfig,
 )
 from litellm.types.guardrails import (
@@ -311,6 +312,73 @@ async def test_pre_call_payload_shape():
         assert stripped_key not in payload["request_body"]
     assert "response_body" not in payload
     assert "sk-forwarded-provider-key" not in json.dumps(payload)
+
+
+_PROVIDER_CREDENTIALS: JsonDict = {
+    "api_key": "sk-forwarded-provider-key",
+    "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+    "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "aws_session_token": "FwoGZXIvYXdzEJr//////////wEaDEXAMPLE",
+    "azure_ad_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.azure-ad",
+    "azure_password": "hunter2-azure",
+    "client_secret": "oauth-client-secret-value",
+    "vertex_credentials": {"type": "service_account", "private_key": "-----BEGIN PRIVATE KEY-----"},
+    "watsonx_region_name": "eu-de",
+    "extra_headers": {"authorization": "Bearer sk-provider-side"},
+}
+
+
+async def test_no_provider_credential_reaches_thirdlaw():
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    data = {**_request_data(), **_PROVIDER_CREDENTIALS}
+    await _run_pre_call(g, data)
+    payload = _sent_payload(g)
+    for key in _PROVIDER_CREDENTIALS:
+        assert key not in payload["request_body"], key
+    serialized = json.dumps(payload)
+    for secret in (
+        "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "FwoGZXIvYXdzEJr//////////wEaDEXAMPLE",
+        "azure-ad",
+        "hunter2-azure",
+        "oauth-client-secret-value",
+        "BEGIN PRIVATE KEY",
+        "sk-provider-side",
+        "sk-forwarded-provider-key",
+    ):
+        assert secret not in serialized, secret
+    assert payload["request_body"]["messages"] == data["messages"]
+
+
+def test_every_credential_param_litellm_declares_is_withheld():
+    """The strip set is derived from CredentialLiteLLMParams, so a provider credential
+    added upstream is withheld without an edit here. Guards against it being re-frozen
+    into a hand-maintained literal that silently falls behind."""
+    from litellm.types.router import CredentialLiteLLMParams
+
+    assert set(CredentialLiteLLMParams.model_fields) <= set(_BODY_STRIP_KEYS)
+
+
+async def test_modify_request_cannot_inject_a_provider_credential():
+    g = _make_guardrail(
+        decisions=[
+            _decision_response(
+                {
+                    "action": "modify_request",
+                    "request_body": {
+                        "messages": [{"role": "user", "content": "scrubbed"}],
+                        "aws_secret_access_key": "attacker-supplied",
+                        "azure_ad_token": "attacker-supplied",
+                        "vertex_credentials": {"private_key": "attacker-supplied"},
+                    },
+                }
+            )
+        ]
+    )
+    out = await _run_pre_call(g, _request_data())
+    assert out["messages"] == [{"role": "user", "content": "scrubbed"}]
+    for key in ("aws_secret_access_key", "azure_ad_token", "vertex_credentials"):
+        assert key not in out, key
 
 
 async def test_pre_call_sends_live_body_not_snapshot():

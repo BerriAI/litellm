@@ -75,11 +75,44 @@ _ENDPOINT_PATH: Final = "/guardrails/litellm/v2"
 
 _UNREACHABLE_STATUS_CODES: Final = frozenset({502, 503, 504})
 
-# Not part of the provider request body. ``secret_fields`` holds plaintext Authorization
-# values and ``api_key`` can carry a client-forwarded provider key, so neither may leave the proxy.
-_BODY_STRIP_KEYS: Final = frozenset(
+# Credential-bearing LiteLLM parameters that are not declared on ``CredentialLiteLLMParams``
+# because callers supply them through **kwargs. ``extra_headers`` / ``default_headers`` are
+# here because either can carry a provider Authorization header.
+_KWARGS_ONLY_CREDENTIAL_KEYS: Final = frozenset(
     {
-        "api_key",
+        "azure_ad_token_provider",
+        "default_headers",
+        "extra_headers",
+        "oci_fingerprint",
+        "oci_key",
+        "oci_key_file",
+        "oci_signer",
+        "oci_tenancy",
+        "oci_user",
+    }
+)
+
+
+def _credential_keys() -> frozenset[str]:
+    """Every LiteLLM parameter that can carry a provider credential.
+
+    Derived from ``CredentialLiteLLMParams`` rather than enumerated here, so a provider
+    credential field added upstream is withheld from ThirdLaw without a matching edit in
+    this module. The model also carries non-secret routing fields (``api_base``,
+    ``vertex_location``, ``aws_region_name``); those are not provider body content either,
+    so stripping the whole model costs nothing.
+    """
+    from litellm.types.router import CredentialLiteLLMParams
+
+    return frozenset(CredentialLiteLLMParams.model_fields) | _KWARGS_ONLY_CREDENTIAL_KEYS
+
+
+# Not part of the provider request body. ``secret_fields`` holds plaintext Authorization
+# values, and every credential-bearing litellm parameter is withheld alongside it: a caller
+# authenticating with aws_secret_access_key, azure_ad_token, client_secret or
+# vertex_credentials must not have that value serialized out to the guardrail service.
+_BODY_STRIP_KEYS: Final = _credential_keys() | frozenset(
+    {
         "guardrail_config",
         "guardrails",
         "headers",

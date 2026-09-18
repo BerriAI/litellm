@@ -252,7 +252,9 @@ class _ContentBlock:
         return _EMPTY_MAP
 
     def rendered(self) -> dict[str, object]:
-        cited: Final[Mapping[str, object]] = {"citations": list(self.citations)} if self.citations else _EMPTY_MAP
+        cited: Final[Mapping[str, object]] = (
+            MappingProxyType({"citations": tuple(self.citations)}) if self.citations else _EMPTY_MAP
+        )
         return {**self.start, **self._accumulated_fields(), **cited}
 
 
@@ -328,7 +330,7 @@ def assemble_anthropic_sse_body(all_chunks: Sequence[object]) -> Mapping[str, ob
     started_usage: Final = envelope.get("usage")
     return {
         **envelope,
-        "content": [block.rendered() for _, block in sorted(state.blocks.items())],
+        "content": tuple(block.rendered() for _, block in sorted(state.blocks.items())),
         "stop_reason": state.stop_reason if state.stop_reason is not None else envelope.get("stop_reason"),
         "stop_sequence": state.stop_sequence if state.stop_sequence is not None else envelope.get("stop_sequence"),
         "usage": {
