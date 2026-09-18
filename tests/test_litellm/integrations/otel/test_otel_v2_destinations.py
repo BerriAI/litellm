@@ -382,6 +382,26 @@ class TestRoutingMode:
             _sink_key("https://otlp.arize.com/v1/traces", {"space_id": "s", "api_key": "k"}): "full",
         }
 
+    @pytest.mark.parametrize("langfuse_first", [False, True])
+    def test_two_operator_exporters_on_one_account_record_the_wider_scope(self, langfuse_first):
+        """A plain collector pointed at the Langfuse ingest with the same credentials as
+        the narrowed Langfuse exporter still sends the whole tree there. Recording
+        ``llm_only`` for that account would make additive hand a same-account team the
+        non-model spans a second time."""
+        langfuse = ExporterSpec(
+            kind="otlp_http",
+            endpoint=self.OPERATOR_SINK[0],
+            headers="authorization=Basic op",
+            owner=ExporterOwner.LANGFUSE_OTEL,
+        )
+        collector = ExporterSpec(kind="otlp_http", endpoint=self.OPERATOR_SINK[0], headers="authorization=Basic op")
+        config = OpenTelemetryV2Config(
+            langfuse_span_scope="llm_only",
+            exporters=(langfuse, collector) if langfuse_first else (collector, langfuse),
+        )
+
+        assert dict(operator_sink_scopes(config)) == {self.OPERATOR_SINK: "full"}
+
     def test_a_team_pointing_at_a_credential_less_operator_exporter_still_gets_its_spans(self, monkeypatch):
         """Under additive the fan-out skips a destination the operator already writes
         to. An exporter the provider never built writes nothing, so skipping it would
