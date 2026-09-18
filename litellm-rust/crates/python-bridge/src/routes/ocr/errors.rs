@@ -1,6 +1,8 @@
 use litellm_core::ocr::Error;
-use pyo3::exceptions::{PyFileNotFoundError, PyOSError};
-use pyo3::prelude::*;
+use pyo3::{
+    exceptions::{PyFileNotFoundError, PyOSError},
+    prelude::*,
+};
 
 use crate::errors::{RustUpstreamError, core_error_to_pyerr};
 
@@ -59,8 +61,9 @@ fn attach_status(error: PyErr, status: Option<u16>) -> PyErr {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pyo3::exceptions::PyValueError;
+
+    use super::*;
 
     #[test]
     fn preserves_python_validation_and_provider_details() {

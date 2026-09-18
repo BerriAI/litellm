@@ -7,6 +7,8 @@ repository.workspace = true
 autotests = false
 
 [dependencies]
+litellm-types.workspace = true
+litellm-core-utils.workspace = true
 litellm-callbacks.workspace = true
 bytes.workspace = true
 futures-util.workspace = true

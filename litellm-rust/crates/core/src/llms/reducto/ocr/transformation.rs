@@ -1,10 +1,14 @@
 use std::collections::BTreeMap;
 
+use litellm_core_utils::{
+    call_arguments::{CallArguments, compose_body},
+    params::OpaqueParams,
+    url_utils::ApiUrl,
+};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    call_arguments::{CallArguments, compose_body},
     constants::{REDUCTO_API_BASE, REDUCTO_API_KEY_ENV, REDUCTO_ID_PREFIX},
     llms::base_llm::ocr::transformation::{
         BaseOcrConfig, OcrRequestContext, decode_and_normalize_response,
@@ -18,8 +22,6 @@ use crate::{
             OcrUsageInfo, PreparedOcrRequest,
         },
     },
-    params::OpaqueParams,
-    url_utils::ApiUrl,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -70,9 +72,9 @@ struct ReductoResult {
 #[serde_with::serde_as]
 #[derive(Clone, Debug, Default, Deserialize)]
 struct ReductoUsage {
-    #[serde_as(deserialize_as = "Option<crate::serde_compat::LaxI64>")]
+    #[serde_as(deserialize_as = "Option<litellm_core_utils::serde_compat::LaxI64>")]
     pub num_pages: Option<i64>,
-    #[serde_as(deserialize_as = "Option<crate::serde_compat::FiniteF64>")]
+    #[serde_as(deserialize_as = "Option<litellm_core_utils::serde_compat::FiniteF64>")]
     pub credits: Option<f64>,
 }
 
@@ -624,7 +626,10 @@ mod tests {
             })
         );
         let absent = ReductoParseV3Config
-            .map_ocr_params(&crate::call_arguments::CallArguments::default(), "parse-v3")
+            .map_ocr_params(
+                &litellm_core_utils::call_arguments::CallArguments::default(),
+                "parse-v3",
+            )
             .unwrap();
         assert_eq!(serde_json::to_value(absent).unwrap(), json!({}));
     }

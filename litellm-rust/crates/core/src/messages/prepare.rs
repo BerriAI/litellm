@@ -1,3 +1,4 @@
+use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
 use litellm_providers::base_llm::anthropic_messages::transformation::{
     BaseAnthropicMessagesConfig, MessagesAuthStrategy,
 };
@@ -6,11 +7,8 @@ use serde_json::{Map, Value};
 use super::{
     Error,
     common_utils::{has_bearer_auth, has_header, messages_provider_config, string_headers},
-    types::{MessagesRequest, ProviderMessagesRequest},
 };
-use crate::litellm_core_utils::get_llm_provider_logic::{
-    CustomLlmProvider, get_custom_llm_provider,
-};
+use crate::messages::types::{MessagesRequest, ProviderMessagesRequest};
 
 pub(super) fn prepare_provider_request(
     request: MessagesRequest<'_>,

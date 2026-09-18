@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 pub struct CallArguments(Map<String, Value>);
 
 impl CallArguments {
-    pub(crate) fn select(&self, names: &[&str]) -> Map<String, Value> {
+    pub fn select(&self, names: &[&str]) -> Map<String, Value> {
         self.iter()
             .filter(|(name, _)| names.contains(&name.as_str()))
             .map(|(name, value)| (name.clone(), value.clone()))

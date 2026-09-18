@@ -1,10 +1,11 @@
 use litellm_providers::anthropic::experimental_pass_through::messages::transformation::resolve_anthropic_api_base;
+use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
 use url::Url;
 
-use crate::messages::{Error, types::AnthropicMessagesResponse};
+use crate::messages::Error;
 
 const BATCHES_PATH_SUFFIX: &str = "/v1/messages/batches";
 

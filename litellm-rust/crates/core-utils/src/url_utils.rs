@@ -3,33 +3,30 @@ use std::marker::PhantomData;
 use url::Url;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ApiUrlError {
+pub enum ApiUrlError {
     #[error("invalid URL: {0}")]
     Parse(#[from] url::ParseError),
     #[error("URL cannot be used as a base")]
     CannotBeBase,
 }
 
-pub(crate) struct Base;
-pub(crate) struct Complete;
+pub struct Base;
+pub struct Complete;
 
-pub(crate) struct ApiUrl<State> {
+pub struct ApiUrl<State> {
     url: Url,
     state: PhantomData<State>,
 }
 
 impl ApiUrl<Base> {
-    pub(crate) fn parse(value: &str) -> Result<Self, ApiUrlError> {
+    pub fn parse(value: &str) -> Result<Self, ApiUrlError> {
         Ok(Self {
             url: Url::parse(value.trim())?,
             state: PhantomData,
         })
     }
 
-    pub(crate) fn complete_path(
-        mut self,
-        target: &[&str],
-    ) -> Result<ApiUrl<Complete>, ApiUrlError> {
+    pub fn complete_path(mut self, target: &[&str]) -> Result<ApiUrl<Complete>, ApiUrlError> {
         let existing: Vec<String> = self
             .url
             .path_segments()
@@ -59,7 +56,7 @@ impl ApiUrl<Base> {
 }
 
 impl ApiUrl<Complete> {
-    pub(crate) fn append_query_pairs<'a>(
+    pub fn append_query_pairs<'a>(
         mut self,
         pairs: impl IntoIterator<Item = (&'a str, &'a str)>,
     ) -> Self {
@@ -67,7 +64,7 @@ impl ApiUrl<Complete> {
         self
     }
 
-    pub(crate) fn into_string(self) -> String {
+    pub fn into_string(self) -> String {
         self.url.into()
     }
 }

@@ -1,10 +1,10 @@
 use litellm_auth_gcp::{self as vertex, VertexConfig};
+use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::transformation::VertexAiOcrConfig;
 use crate::{
-    call_arguments::CallArguments,
     llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext},
     ocr::{
         OcrClient,
@@ -14,8 +14,6 @@ use crate::{
             OcrUsageInfo, PreparedOcrRequest,
         },
     },
-    params::OpaqueParams,
-    url_utils::ApiUrl,
 };
 
 const DEFAULT_API_BASE: &str = "https://aiplatform.googleapis.com";
@@ -82,7 +80,7 @@ enum DeepSeekContent {
 #[derive(Deserialize)]
 struct DeepSeekPage {
     #[serde(default)]
-    #[serde_as(deserialize_as = "crate::serde_compat::LaxI64")]
+    #[serde_as(deserialize_as = "litellm_core_utils::serde_compat::LaxI64")]
     index: i64,
     #[serde(default)]
     markdown: String,
@@ -434,8 +432,12 @@ mod tests {
             json!({})
         );
         assert_eq!(
-            crate::call_arguments::compose_body(&arguments, &json!({"model":"deepseek-ocr"}), &[])
-                .unwrap(),
+            litellm_core_utils::call_arguments::compose_body(
+                &arguments,
+                &json!({"model":"deepseek-ocr"}),
+                &[]
+            )
+            .unwrap(),
             json!({"model":"deepseek-ocr","temperature":0.5,"extension":null})
         );
     }

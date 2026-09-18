@@ -1,15 +1,18 @@
+use litellm_auth_aws::{
+    bedrock_model_id_and_region,
+    constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE},
+    resolve_bedrock_region,
+};
+use litellm_core_utils::core_helpers::json_type_name;
 use serde_json::{Map, Value, json};
 
-use crate::audio_transcription::Error;
-use crate::audio_transcription::json_type_name;
-use crate::audio_transcription::types::{
-    AudioTranscriptionRequestData, AudioTranscriptionResponseData,
+use crate::base_llm::{
+    audio_transcription::transformation::{
+        AudioTranscriptionAuth, AudioTranscriptionRequestData, AudioTranscriptionResponseData,
+        BaseAudioTranscriptionConfig,
+    },
+    chat::transformation::Error,
 };
-use crate::base_llm::audio_transcription::transformation::{
-    AudioTranscriptionAuth, BaseAudioTranscriptionConfig,
-};
-use litellm_auth_aws::constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE};
-use litellm_auth_aws::{bedrock_model_id_and_region, resolve_bedrock_region};
 
 const SUPPORTED_PARAMS: &[&str] = &["language", "prompt", "temperature", "response_format"];
 

@@ -4,8 +4,8 @@ use serde_json::{Map, Value, json};
 use super::{
     Error,
     prepare::{prepare_provider_request, resolve_request},
-    types::{ChatCompletionsRequest, ProviderChatCompletionsRequest},
 };
+use crate::chat_completions::types::{ChatCompletionsRequest, ProviderChatCompletionsRequest};
 
 fn prepare_chat_completions_call(
     request: ChatCompletionsRequest<'_>,

@@ -1,17 +1,15 @@
 use std::future::Future;
 
+use litellm_core_utils::call_arguments::CallArguments;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::{
-    call_arguments::CallArguments,
-    ocr::{
-        OcrClient,
-        route::OcrHost,
-        types::{
-            LiteLLMOcrResponse, OcrConnection, OcrCredentialInputs, OcrDocument, OcrResponseFormat,
-            PreparedOcrRequest, ResolvedOcrCredentials,
-        },
+use crate::ocr::{
+    OcrClient,
+    route::OcrHost,
+    types::{
+        LiteLLMOcrResponse, OcrConnection, OcrCredentialInputs, OcrDocument, OcrResponseFormat,
+        PreparedOcrRequest, ResolvedOcrCredentials,
     },
 };
 

@@ -1,8 +1,8 @@
+use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    call_arguments::CallArguments,
     constants::MISTRAL_OCR_API_BASE,
     llms::base_llm::ocr::transformation::{BaseOcrConfig, decode_and_normalize_response},
     ocr::{
@@ -13,8 +13,6 @@ use crate::{
             OcrUsageInfo, PreparedOcrRequest,
         },
     },
-    params::OpaqueParams,
-    url_utils::ApiUrl,
 };
 
 const MISTRAL_OCR_API_KEY_ENV_VAR: &str = "MISTRAL_API_KEY";

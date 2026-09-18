@@ -6,6 +6,7 @@ pub struct HeaderError {
     pub actual: &'static str,
 }
 
+use litellm_core_utils::core_helpers::json_type_name;
 use serde_json::{Map, Value};
 
 use crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS;
@@ -116,17 +117,6 @@ where
     T: serde::Deserialize<'de>,
 {
     <Option<T> as serde::Deserialize>::deserialize(deserializer).map(Some)
-}
-
-pub fn json_type_name(value: &serde_json::Value) -> &'static str {
-    match value {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "bool",
-        serde_json::Value::Number(_) => "number",
-        serde_json::Value::String(_) => "string",
-        serde_json::Value::Array(_) => "array",
-        serde_json::Value::Object(_) => "object",
-    }
 }
 
 #[cfg(test)]

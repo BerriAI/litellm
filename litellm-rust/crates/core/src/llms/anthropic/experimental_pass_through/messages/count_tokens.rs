@@ -1,13 +1,8 @@
+use litellm_types::llms::anthropic_messages::anthropic_request::{AnthropicMessage, SystemPrompt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{
-    constants::ANTHROPIC_OAUTH_TOKEN_PREFIX,
-    messages::{
-        Error,
-        types::{AnthropicMessage, SystemPrompt},
-    },
-};
+use crate::{constants::ANTHROPIC_OAUTH_TOKEN_PREFIX, messages::Error};
 
 const COUNT_TOKENS_ENDPOINT: &str = "https://api.anthropic.com/v1/messages/count_tokens";
 const TOKEN_COUNTING_BETA: &str = "token-counting-2024-11-01";
@@ -97,10 +92,10 @@ impl AnthropicCountTokensConfig for AnthropicCountTokensTransformation {
 
 #[cfg(test)]
 mod tests {
+    use litellm_types::llms::anthropic_messages::anthropic_request::MessageContent;
     use serde_json::{Map, json};
 
     use super::*;
-    use crate::messages::types::MessageContent;
 
     fn message() -> AnthropicMessage {
         AnthropicMessage {

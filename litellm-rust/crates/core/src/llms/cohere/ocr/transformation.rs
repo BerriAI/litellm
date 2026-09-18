@@ -1,9 +1,13 @@
+use litellm_core_utils::{
+    call_arguments::{CallArguments, parse_options},
+    serde_compat::LaxI64,
+    url_utils::ApiUrl,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 
 use crate::{
-    call_arguments::{CallArguments, parse_options},
     constants::{COHERE_API_KEY_ENV, COHERE_PARSE_API_BASE},
     llms::base_llm::ocr::transformation::{BaseOcrConfig, decode_and_normalize_response},
     ocr::{
@@ -15,8 +19,6 @@ use crate::{
             OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
         },
     },
-    serde_compat::LaxI64,
-    url_utils::ApiUrl,
 };
 
 const COHERE_PARSE_HEALTH_CHECK_IMAGE_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC";

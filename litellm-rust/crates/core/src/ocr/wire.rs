@@ -10,11 +10,11 @@ use super::{Error, LiteLLMOcrRequest, OcrConnectionInputs, OcrDocument, OcrDocum
 pub fn consumed_optional_params(
     model: &str,
     provider: Option<&str>,
-) -> Result<Vec<crate::call_arguments::ArgumentSpec>, Error> {
+) -> Result<Vec<litellm_core_utils::call_arguments::ArgumentSpec>, Error> {
     let specs = super::consumed_optional_params(model, provider)?;
     Ok(consumed_optional_param_names(model, provider)?
         .into_iter()
-        .map(|name| crate::call_arguments::ArgumentSpec {
+        .map(|name| litellm_core_utils::call_arguments::ArgumentSpec {
             name,
             secret: specs.iter().any(|spec| spec.name == name && spec.secret),
         })

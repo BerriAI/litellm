@@ -6,6 +6,9 @@ use std::{
 };
 
 use futures_util::{SinkExt, StreamExt};
+use litellm_types::responses::streaming_websocket::{
+    ResponsesWsEvent, ResponsesWsEventType, ResponsesWsTransformResult,
+};
 use rustls::{ClientConfig, RootCertStore};
 use tokio::{net::TcpStream, sync::Mutex};
 use tokio_tungstenite::{
@@ -20,10 +23,7 @@ use tokio_tungstenite::{
 };
 
 use super::Error;
-use crate::{
-    constants::{OPENAI_RESPONSES_DEFAULT_API_BASE, OPENAI_RESPONSES_PATH},
-    responses::types::{ResponsesWsEvent, ResponsesWsEventType, ResponsesWsTransformResult},
-};
+use crate::constants::{OPENAI_RESPONSES_DEFAULT_API_BASE, OPENAI_RESPONSES_PATH};
 
 pub trait ResponsesWebSocketProviderConfig: Sync {
     fn supports_native_websocket(&self) -> bool {

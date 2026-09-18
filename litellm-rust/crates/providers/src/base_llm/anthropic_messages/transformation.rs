@@ -1,5 +1,8 @@
-use crate::messages::Error;
-use crate::messages::types::{AnthropicMessagesRequest, AnthropicMessagesResponse};
+use litellm_types::llms::anthropic_messages::{
+    anthropic_request::AnthropicMessagesRequest, anthropic_response::AnthropicMessagesResponse,
+};
+
+use crate::base_llm::chat::transformation::Error;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessagesAuthStrategy {

@@ -2,8 +2,8 @@ use serde::{Deserialize, Deserializer, de::Error};
 use serde_json::Value;
 use serde_with::DeserializeAs;
 
-pub(crate) struct LaxI64;
-pub(crate) struct FiniteF64;
+pub struct LaxI64;
+pub struct FiniteF64;
 
 impl<'de> DeserializeAs<'de, i64> for LaxI64 {
     fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {

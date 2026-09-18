@@ -1,17 +1,21 @@
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::AzureAuthInputs;
+use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde_json::Value;
 
-use crate::call_arguments::CallArguments;
-use crate::constants::AZURE_AI_OCR_PATH;
-use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
-use crate::llms::mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest};
-use crate::ocr::OcrClient;
-use crate::ocr::document::{inline_remote_document, validate_inline_document};
-use crate::ocr::prepare::credential_env;
-use crate::ocr::types::{LiteLLMOcrResponse, OcrConnection, OcrDocument, PreparedOcrRequest};
-use crate::params::OpaqueParams;
-use crate::url_utils::ApiUrl;
+use crate::{
+    constants::AZURE_AI_OCR_PATH,
+    llms::{
+        base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext},
+        mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
+    },
+    ocr::{
+        OcrClient,
+        document::{inline_remote_document, validate_inline_document},
+        prepare::credential_env,
+        types::{LiteLLMOcrResponse, OcrConnection, OcrDocument, PreparedOcrRequest},
+    },
+};
 
 const AZURE_AI_API_KEY_ENV: &str = "AZURE_AI_API_KEY";
 const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
@@ -306,9 +310,9 @@ mod tests {
 
     use serde_json::json;
 
-    use crate::ocr::LocalOcrHost;
-    use crate::ocr::test_support::{
-        MockResponse, mock_server, perform_ocr, perform_ocr_with, wire_request,
+    use crate::ocr::{
+        LocalOcrHost,
+        test_support::{MockResponse, mock_server, perform_ocr, perform_ocr_with, wire_request},
     };
 
     #[tokio::test]
@@ -388,16 +392,16 @@ mod tests {
         assert!(error.to_string().contains("data URI"));
     }
 
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     use litellm_auth::{
         ResolvedCredential, SecretValue, TokenFuture, TokenProvider, TokenProviderHandle,
     };
 
-    use crate::ocr::LiteLLMOcrRequest;
-    use crate::ocr::test_support::header;
-    use crate::ocr::wire::decode_request;
+    use crate::ocr::{LiteLLMOcrRequest, test_support::header, wire::decode_request};
 
     #[derive(Debug)]
     struct CountingToken {

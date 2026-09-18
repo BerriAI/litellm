@@ -1,5 +1,6 @@
-use crate::base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig;
-use crate::messages::Error;
+use crate::base_llm::{
+    anthropic_messages::transformation::BaseAnthropicMessagesConfig, chat::transformation::Error,
+};
 
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 const ANTHROPIC_API_BASE_ENV: &str = "ANTHROPIC_API_BASE";

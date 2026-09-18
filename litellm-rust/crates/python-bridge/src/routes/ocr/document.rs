@@ -1,13 +1,14 @@
 use std::path::PathBuf;
 
 use bytes::Bytes;
-use pyo3::exceptions::{PyTypeError, PyValueError};
-use pyo3::gc::{PyTraverseError, PyVisit};
-use pyo3::prelude::*;
-use pyo3::pybacked::PyBackedBytes;
-use pyo3::types::{PyBytes, PyString};
-
 use litellm_core::ocr::{OcrDocumentInput, OcrFileContent};
+use pyo3::{
+    exceptions::{PyTypeError, PyValueError},
+    gc::{PyTraverseError, PyVisit},
+    prelude::*,
+    pybacked::PyBackedBytes,
+    types::{PyBytes, PyString},
+};
 
 #[derive(Debug)]
 pub(super) struct PythonFileReader {
@@ -128,8 +129,9 @@ impl FromPyObject<'_, '_> for FileDocumentInput {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pyo3::types::PyDict;
+
+    use super::*;
 
     fn eval<'py>(py: Python<'py>, source: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = PyDict::new(py);

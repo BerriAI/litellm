@@ -2,16 +2,16 @@ use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use bytes::Bytes;
 use litellm_auth::{InputSource, Sourced, TokenProviderHandle};
+use litellm_core_utils::{
+    call_arguments::CallArguments,
+    serde_compat::{FiniteF64, LaxI64},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 
 use super::provider_config::{OcrConfigKind, resolve_provider_config};
-use crate::{
-    call_arguments::CallArguments,
-    constants::OCR_HTTP_TIMEOUT_SECS,
-    serde_compat::{FiniteF64, LaxI64},
-};
+use crate::constants::OCR_HTTP_TIMEOUT_SECS;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]

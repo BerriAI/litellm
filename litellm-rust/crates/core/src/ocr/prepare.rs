@@ -2,9 +2,11 @@ use litellm_callbacks::event::{Passthrough, RequestContext, WireRequest};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use super::OcrClient;
-use super::route::OcrHost;
-use super::types::{OcrConnection, OcrDocument, PreparedOcrRequest, ResolvedOcrRequest};
+use super::{
+    OcrClient,
+    route::OcrHost,
+    types::{OcrConnection, OcrDocument, PreparedOcrRequest, ResolvedOcrRequest},
+};
 
 pub(crate) async fn transform_request_body<B>(
     client: &OcrClient,
@@ -17,7 +19,7 @@ pub(crate) async fn transform_request_body<B>(
 where
     B: Serialize,
 {
-    let composed = crate::call_arguments::compose_body(
+    let composed = litellm_core_utils::call_arguments::compose_body(
         &request.optional_params,
         &body,
         request.config.get_supported_ocr_params(&request.model),
@@ -191,9 +193,8 @@ pub(crate) fn prepare_request_for_test(request: ResolvedOcrRequest) -> PreparedO
 
 #[cfg(test)]
 mod tests {
+    use litellm_core_utils::call_arguments::{CallArguments, compose_body, parse_options};
     use serde_json::json;
-
-    use crate::call_arguments::{CallArguments, compose_body, parse_options};
 
     #[derive(serde::Deserialize)]
     struct KnownParams {

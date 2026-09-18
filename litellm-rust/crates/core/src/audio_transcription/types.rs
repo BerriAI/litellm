@@ -1,11 +1,9 @@
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
-
-use crate::base_llm::audio_transcription::transformation::{
+use litellm_providers::base_llm::audio_transcription::transformation::{
     AudioTranscriptionAuth, BaseAudioTranscriptionConfig,
 };
+use serde_json::{Map, Value};
 
 pub struct AudioTranscriptionRequest<'a> {
     pub model: &'a str,
@@ -50,23 +48,5 @@ impl ProviderAudioTranscriptionRequest {
 
     pub fn with_body(self, body: Value) -> Self {
         Self { body, ..self }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AudioTranscriptionRequestData {
-    pub body: Value,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AudioTranscriptionResponseData {
-    pub text: String,
-}
-
-impl AudioTranscriptionResponseData {
-    pub fn into_json(self) -> Value {
-        serde_json::json!({
-            "text": self.text,
-        })
     }
 }

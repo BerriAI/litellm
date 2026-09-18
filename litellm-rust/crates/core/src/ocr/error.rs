@@ -97,13 +97,13 @@ pub enum Error {
     #[error(transparent)]
     Transport(#[from] crate::transport::Error),
     #[error(transparent)]
-    Params(#[from] crate::params::Error),
+    Params(#[from] litellm_core_utils::params::Error),
     #[error(transparent)]
     Headers(#[from] crate::http_utils::HeaderError),
 }
 
-impl From<crate::call_arguments::ArgumentError> for Error {
-    fn from(error: crate::call_arguments::ArgumentError) -> Self {
+impl From<litellm_core_utils::call_arguments::ArgumentError> for Error {
+    fn from(error: litellm_core_utils::call_arguments::ArgumentError) -> Self {
         Self::RequestField {
             path: format!("optional_params.{}", error.path),
         }

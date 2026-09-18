@@ -1,13 +1,17 @@
 use litellm_auth::ResolvedCredential;
 use litellm_core::ocr::{LiteLLMOcrResponse, Ocr, OcrOp, OcrOpResult};
 use litellm_host_python::{RouteHost, missing_state, to_py};
-use pyo3::exceptions::PyBaseException;
-use pyo3::gc::{PyTraverseError, PyVisit};
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::{
+    exceptions::PyBaseException,
+    gc::{PyTraverseError, PyVisit},
+    prelude::*,
+    types::PyDict,
+};
 
-use super::errors::to_pyerr as ocr_error_to_pyerr;
-use super::project::{OcrHostHandles, project_request};
+use super::{
+    errors::to_pyerr as ocr_error_to_pyerr,
+    project::{OcrHostHandles, project_request},
+};
 
 enum OcrHostData {
     Unprojected,

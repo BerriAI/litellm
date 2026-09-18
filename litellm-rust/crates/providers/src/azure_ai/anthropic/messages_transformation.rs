@@ -1,15 +1,19 @@
+use litellm_types::llms::anthropic_messages::{
+    anthropic_request::{
+        AnthropicMessage, AnthropicMessagesRequest, ContentBlock, MessageContent, SystemPrompt,
+    },
+    anthropic_response::AnthropicMessagesResponse,
+};
 use serde_json::{Map, Value};
 
-use crate::anthropic::experimental_pass_through::messages::transformation::{
-    ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig, non_empty,
-};
-use crate::base_llm::anthropic_messages::transformation::{
-    BaseAnthropicMessagesConfig, MessagesAuthStrategy,
-};
-use crate::messages::Error;
-use crate::messages::types::{
-    AnthropicMessage, AnthropicMessagesRequest, AnthropicMessagesResponse, ContentBlock,
-    MessageContent, SystemPrompt,
+use crate::{
+    anthropic::experimental_pass_through::messages::transformation::{
+        ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig, non_empty,
+    },
+    base_llm::{
+        anthropic_messages::transformation::{BaseAnthropicMessagesConfig, MessagesAuthStrategy},
+        chat::transformation::Error,
+    },
 };
 
 const AZURE_API_KEY_ENV: &str = "AZURE_API_KEY";

@@ -1,6 +1,7 @@
+use litellm_types::responses::streaming_websocket::{ResponsesWsEvent, ResponsesWsTransformResult};
+
 use crate::responses::{
     Error,
-    types::{ResponsesWsEvent, ResponsesWsTransformResult},
     websocket::{ResponsesWebSocketProviderConfig, enforce_model},
 };
 

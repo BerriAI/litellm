@@ -1,3 +1,5 @@
+use litellm_providers::base_llm::chat::transformation::Error as LlmError;
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("expected {expected}, got {actual}")]
@@ -25,22 +27,15 @@ pub enum Error {
     Aws(#[from] litellm_auth_aws::Error),
 }
 
-impl From<litellm_providers::audio_transcription::Error> for Error {
-    fn from(error: litellm_providers::audio_transcription::Error) -> Self {
+impl From<LlmError> for Error {
+    fn from(error: LlmError) -> Self {
         match error {
-            litellm_providers::audio_transcription::Error::InvalidType { expected, actual } => {
-                Self::InvalidType { expected, actual }
-            }
-            litellm_providers::audio_transcription::Error::MissingField(field) => {
-                Self::MissingField(field)
-            }
-            litellm_providers::audio_transcription::Error::InvalidRequest(message) => {
-                Self::InvalidRequest(message)
-            }
-            litellm_providers::audio_transcription::Error::InvalidResponse(message) => {
-                Self::InvalidResponse(message)
-            }
-            litellm_providers::audio_transcription::Error::Auth(error) => Self::Auth(error),
+            LlmError::InvalidType { expected, actual } => Self::InvalidType { expected, actual },
+            LlmError::MissingField(field) => Self::MissingField(field),
+            LlmError::InvalidRequest(message) => Self::InvalidRequest(message),
+            LlmError::InvalidResponse(message) => Self::InvalidResponse(message),
+            LlmError::Unsupported(reason) => Self::Unsupported(reason),
+            LlmError::Auth(error) => Self::Auth(error),
         }
     }
 }
