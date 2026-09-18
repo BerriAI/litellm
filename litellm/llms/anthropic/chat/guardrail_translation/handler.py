@@ -530,7 +530,11 @@ class AnthropicMessagesHandler(BaseTranslation):
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
-            if guardrailed_tools is not None:
+            # A guardrail signals "I rewrote the tools" by returning a new list (same contract as
+            # structured_messages below). Re-serializing an untouched list would stamp type:"custom" onto
+            # every tool, which strict Anthropic-compat upstreams (e.g. DeepSeek) reject with
+            # `tools[0]: unknown variant 'custom'`.
+            if guardrailed_tools is not None and guardrailed_tools is not tools_to_check:
                 # Convert tools back from OpenAI format to Anthropic format
                 anthropic_config: Final = AnthropicConfig()
                 anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
