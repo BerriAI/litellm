@@ -175,6 +175,12 @@ def test_unknown_exception_name_raises_at_construction():
         Router(model_list=[], treat_finish_reason_as_failure={"x": "NotAnException"})
 
 
+def test_healthy_terminal_key_warns_at_construction(capsys: pytest.CaptureFixture):
+    Router(model_list=[], treat_finish_reason_as_failure={"stop": "RateLimitError"})
+    logged = capsys.readouterr().err + capsys.readouterr().out
+    assert "healthy terminal reasons" in logged
+
+
 @pytest.mark.asyncio
 async def test_mapped_finish_reason_helpers_direct(monkeypatch: MonkeyPatch):
     """Direct coverage of the knob helpers (the router code-coverage check matches by name)."""

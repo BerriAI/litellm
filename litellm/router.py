@@ -8708,9 +8708,12 @@ class Router:
 
     def _finish_reason_failure_error(self, model: str, reason: str) -> Exception:
         """Build the exception instance configured for a mapped finish reason."""
-        exception_name: Final = self.treat_finish_reason_as_failure[reason]
-        exception_cls: Final = getattr(litellm, exception_name)
         message: Final = f"Response finished with reason '{reason}' (treat_finish_reason_as_failure)."
+        finish_reason_map: Final = self.treat_finish_reason_as_failure
+        if finish_reason_map is None:
+            return litellm.APIError(status_code=500, message=message, llm_provider="", model=model)
+        exception_name: Final = finish_reason_map[reason]
+        exception_cls: Final = getattr(litellm, exception_name)
         if exception_name == "APIError":
             return exception_cls(status_code=500, message=message, llm_provider="", model=model)
         return exception_cls(message=message, llm_provider="", model=model)
