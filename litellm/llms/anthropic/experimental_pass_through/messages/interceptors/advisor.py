@@ -414,9 +414,7 @@ async def _call_messages_handler(
     Using the public function (decorated with @client) ensures logging, retries,
     and provider resolution all work correctly, identical to a direct user call.
     """
-    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
-        anthropic_messages,
-    )
+    from litellm.messages import anthropic_messages
 
     return await anthropic_messages(
         model=model,

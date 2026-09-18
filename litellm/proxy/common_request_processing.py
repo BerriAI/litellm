@@ -1937,6 +1937,14 @@ class ProxyBaseLLMRequestProcessing:
     ) -> tuple[dict, LiteLLMLoggingObj]:
         start_time: Final = datetime.now()  # start before calling guardrail hooks
 
+        requested_model: Final = self.data.get("model")
+        if requested_model is not None and not isinstance(requested_model, str):
+            raise ProxyException(
+                message="'model' must be a string.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="model",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
