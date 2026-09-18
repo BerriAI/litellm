@@ -16,7 +16,7 @@ Tests cover:
 - response input_type passthrough and initialize_guardrail wiring
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
 from fastapi import HTTPException
@@ -282,3 +282,117 @@ def test_initialize_guardrail_applies_optional_params_and_registry_keys():
     assert callback.unreachable_fallback == "fail_open"
     assert guardrail_initializer_registry[SupportedGuardrailIntegrations.TYPESAFE.value] is initialize_guardrail
     assert guardrail_class_registry[SupportedGuardrailIntegrations.TYPESAFE.value] is TypeSafeGuardrail
+
+
+def test_missing_api_key_raises(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="requires an API key"):
+        TypeSafeGuardrail(api_key=None)
+
+
+def test_get_config_model_and_ui_name():
+    from litellm.types.proxy.guardrails.guardrail_hooks.typesafe import (
+        TypeSafeGuardrailConfigModel,
+    )
+
+    assert TypeSafeGuardrail.get_config_model() is TypeSafeGuardrailConfigModel
+    assert TypeSafeGuardrailConfigModel.ui_friendly_name() == "TypeSafe (Jev) Compaction"
+
+
+@pytest.mark.asyncio
+async def test_non_list_and_non_dict_messages_return_identity():
+    guardrail = _make_guardrail()
+    not_a_list = GenericGuardrailAPIInputs(structured_messages={"role": "user"})
+    assert await guardrail.apply_guardrail(inputs=not_a_list, request_data={}, input_type="request", logging_obj=None) is not_a_list
+    with_bad_row = _inputs(_messages(tail=[["not", "a", "dict"]]))
+    assert await guardrail.apply_guardrail(inputs=with_bad_row, request_data={}, input_type="request", logging_obj=None) is with_bad_row
+
+
+def test_odd_tool_call_shapes_yield_no_entries():
+    from litellm.proxy.guardrails.guardrail_hooks.typesafe.typesafe import _tool_call_entries
+
+    assert _tool_call_entries({"tool_calls": "not-a-list"}) == ()
+    assert _tool_call_entries({"tool_calls": None}) == ()
+    assert list(_tool_call_entries({"tool_calls": [42]})) == []
+    entries = _tool_call_entries({"tool_calls": [{"function": {"name": "web_search", "arguments": "{}"}}]})
+    assert list(entries) == [{"name": "web_search", "arguments": "{}"}]
+
+
+@pytest.mark.asyncio
+async def test_short_max_chars_uses_prefix_slice():
+    handler = _make_handler({"e0": 0.9})
+    guardrail = _make_guardrail(handler, max_result_chars_in_state=5)
+    await _apply(guardrail, _messages(tail=[*_exchange("call_1", TOOL_OUTPUT_LONG), {"role": "assistant", "content": "x"}]))
+    result = handler.post.call_args.kwargs["json"]["state"]["tool_exchanges"]["e0"]["result"]
+    assert result == TOOL_OUTPUT_LONG[:5]
+
+
+@pytest.mark.asyncio
+async def test_unreadable_json_body_fails_open():
+    handler = MagicMock()
+    response = MagicMock()
+    response.status_code = 200
+    response.text = "not json"
+    response.json.side_effect = ValueError("no json")
+    handler.post = AsyncMock(return_value=response)
+    guardrail = _make_guardrail(handler)
+    inputs = _inputs(_messages(tail=[*_exchange("call_1", TOOL_OUTPUT_LONG), {"role": "assistant", "content": "x"}]))
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+    assert result is inputs
+
+
+@pytest.mark.asyncio
+async def test_malformed_answers_shape_fails_open():
+    handler = MagicMock()
+    response = MagicMock()
+    response.status_code = 200
+    response.text = '{"answers": "oops"}'
+    response.json.return_value = {"answers": "oops"}
+    handler.post = AsyncMock(return_value=response)
+    guardrail = _make_guardrail(handler)
+    inputs = _inputs(_messages(tail=[*_exchange("call_1", TOOL_OUTPUT_LONG), {"role": "assistant", "content": "x"}]))
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+    assert result is inputs
+
+
+@pytest.mark.asyncio
+async def test_http_status_error_includes_status_and_undecodable_body():
+    import httpx
+
+    response = MagicMock()
+    response.status_code = 503
+    type(response).text = PropertyMock(side_effect=httpx.DecodingError("bad codec"))
+    handler = MagicMock()
+    handler.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError("unavailable", request=MagicMock(), response=response)
+    )
+    guardrail = _make_guardrail(handler)
+    inputs = _inputs(_messages(tail=[*_exchange("call_1", TOOL_OUTPUT_LONG), {"role": "assistant", "content": "x"}]))
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+    assert result is inputs
+
+
+@pytest.mark.asyncio
+async def test_cancelled_jev_call_propagates():
+    import asyncio
+
+    handler = MagicMock()
+    handler.post = AsyncMock(side_effect=asyncio.CancelledError())
+    guardrail = _make_guardrail(handler)
+    inputs = _inputs(_messages(tail=[*_exchange("call_1", TOOL_OUTPUT_LONG), {"role": "assistant", "content": "x"}]))
+    with pytest.raises(asyncio.CancelledError):
+        await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+
+
+def test_optional_params_defaults_and_event_hook_coercion():
+    from litellm.proxy.guardrails.guardrail_hooks.typesafe import _coerce_event_hook, _optional_params
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+
+    assert _coerce_event_hook("pre_call") is GuardrailEventHooks.pre_call
+    assert _coerce_event_hook(["pre_call", "post_call"]) == [
+        GuardrailEventHooks.pre_call,
+        GuardrailEventHooks.post_call,
+    ]
+    litellm_params = LitellmParams(guardrail="typesafe", mode="pre_call", api_key=FAKE_API_KEY)
+    params = _optional_params(litellm_params)
+    assert params.relevance_threshold is None
