@@ -1072,6 +1072,7 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
 
     mock_jwt_response = {
         "is_proxy_admin": False,
+        "jwt_claims": {},
         "team_id": None,
         "team_object": None,
         "user_id": None,

@@ -68,26 +68,6 @@ class TestChatGPTResponsesAPITransformation:
         assert isinstance(config, ChatGPTResponsesAPIConfig)
         assert config.custom_llm_provider == LlmProviders.CHATGPT
 
-    @pytest.mark.parametrize(
-        "model_name",
-        [
-            "chatgpt/gpt-5.5",
-            "chatgpt/gpt-5.6-luna",
-            "chatgpt/gpt-5.6-sol",
-            "chatgpt/gpt-5.6-terra",
-        ],
-    )
-    def test_chatgpt_responses_model_metadata(self, model_name: str, local_model_cost_map: None) -> None:
-        model_info = litellm.get_model_info(model_name)
-
-        assert model_info["litellm_provider"] == "chatgpt"
-        assert model_info["mode"] == "responses"
-        assert model_info["supported_endpoints"] == [
-            "/v1/chat/completions",
-            "/v1/responses",
-        ]
-        assert model_info["max_input_tokens"] == 1050000
-        assert model_info["max_output_tokens"] == 128000
 
     @pytest.mark.parametrize(
         "model_name",

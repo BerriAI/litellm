@@ -1,6 +1,5 @@
 import pytest
 
-
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
@@ -62,15 +61,15 @@ def test_base_model_is_additive_not_replacement():
 def test_base_model_adds_capabilities_the_real_model_lacks():
     """Regression for #27717 (the behavior the union must preserve).
 
-    ``gemini-3.1-pro`` isn't in the bundled cost map, so it advertises no reasoning support,
+    ``gemini-exp-9999`` isn't in the bundled cost map, so it advertises no reasoning support,
     but the registered ``gemini-3.1-pro-preview`` base_model does. The hint must add
     ``reasoning_effort``/``thinking`` without the call erroring."""
-    real_only = set(get_supported_openai_params(model="gemini-3.1-pro", custom_llm_provider="gemini"))
+    real_only = set(get_supported_openai_params(model="gemini-exp-9999", custom_llm_provider="gemini"))
     assert "reasoning_effort" not in real_only
 
     combined = set(
         get_supported_openai_params(
-            model="gemini-3.1-pro",
+            model="gemini-exp-9999",
             custom_llm_provider="gemini",
             base_model="gemini-3.1-pro-preview",
         )

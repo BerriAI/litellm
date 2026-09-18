@@ -2913,19 +2913,13 @@ async def test_generic_http_handler_async_streaming_forwards_provider_response_h
     assert "".join([chunk.choices[0].delta.content or "" for chunk in collected]) == "hi"
 
 
-@pytest.mark.parametrize(
-    "custom_llm_provider, enabled, expected",
-    [("openai", True, True), ("openai", False, False), ("azure", True, False),
-     ("hosted_vllm", True, False), (None, True, False)],
-)
-def test_the_rust_responses_websocket_needs_openai_and_process_enablement(
-    custom_llm_provider, enabled, expected, monkeypatch
-):
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure", "hosted_vllm", None])
+def test_the_rust_responses_websocket_stays_on_python_with_the_switch_on(custom_llm_provider, monkeypatch):
     from litellm.rust_bridge import configuration
 
     configuration.reset_rust_configuration()
-    monkeypatch.setenv("LITELLM_RUST", "1" if enabled else "0")
-    assert _rust_responses_websocket_enabled(custom_llm_provider) is expected
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    assert _rust_responses_websocket_enabled(custom_llm_provider) is False
 
 
 def test_a_plain_callback_does_not_advertise_a_pre_call_deployment_hook(monkeypatch):

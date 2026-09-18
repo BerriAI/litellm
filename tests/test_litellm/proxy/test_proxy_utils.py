@@ -1,7 +1,7 @@
 import datetime as real_datetime
 import smtplib
 from typing import Final
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -154,6 +154,37 @@ async def test_proxy_only_error_log_keeps_litellm_metadata_in_litellm_params():
 
     assert captured["litellm_params"]["litellm_metadata"]["standard_logging_guardrail_information"] == guardrail_info
     assert "litellm_metadata" not in captured["optional_params"]
+
+
+@pytest.mark.asyncio
+async def test_proxy_only_error_log_keeps_the_request_litellm_call_id(monkeypatch: pytest.MonkeyPatch):
+    """LIT-7836: a route that already stamped the caller's litellm_call_id must
+    keep it when the failure is a proxy-only error, so the spend-log row and the
+    error line share one id instead of a fresh uuid minted here."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    call_id: Final = "caller-supplied-7836"
+    captured: dict[str, object] = {}
+
+    def fake_pre_call(self, *args, **kwargs):
+        captured["litellm_call_id"] = self.litellm_call_id
+
+    async def _noop_async_failure(self, *args, **kwargs):
+        return None
+
+    monkeypatch.setattr(Logging, "pre_call", fake_pre_call)
+    monkeypatch.setattr(Logging, "async_failure_handler", _noop_async_failure)
+    request_data: Final[dict[str, object]] = {"model": "gpt-4o", "input": "hi", "litellm_call_id": call_id}
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-bad", request_route="/v1/moderations"),
+        route="/v1/moderations",
+        original_exception=Exception("bad key"),
+    )
+
+    assert request_data["litellm_call_id"] == call_id
+    assert captured["litellm_call_id"] == call_id
 
 
 def test_get_model_group_info_order():
@@ -1299,12 +1330,10 @@ class TestPostCallFailureHookLLMExceptionAlerting:
     """The llm_exceptions alert is for infra / LLM-API failures, not user
     errors (https://github.com/BerriAI/litellm/issues/3395). Already-normalized
     client errors must be excluded so a guardrail content-policy block never
-    pages on-call. ProxyException is such an error; before LIT-3751 only
-    HTTPException was excluded, so AIM blocks paged as if the LLM API failed."""
+    pages on-call. 5xx proxy errors still alert."""
 
-    async def _alerted(self, exc) -> bool:
+    async def _alerted(self, exc: Exception) -> AsyncMock:
         import asyncio
-        from unittest.mock import AsyncMock
 
         from litellm.proxy._types import AlertType, UserAPIKeyAuth
 
@@ -1321,7 +1350,7 @@ class TestPostCallFailureHookLLMExceptionAlerting:
                 user_api_key_dict=UserAPIKeyAuth(),
             )
         await asyncio.sleep(0)  # let the fire-and-forget alert task run
-        return alerting_handler.called
+        return alerting_handler
 
     @pytest.mark.asyncio
     async def test_proxy_exception_does_not_alert(self):
@@ -1334,15 +1363,49 @@ class TestPostCallFailureHookLLMExceptionAlerting:
             code=400,
             openai_code="content_policy_violation",
         )
-        assert await self._alerted(exc) is False
+        assert (await self._alerted(exc)).called is False
 
     @pytest.mark.asyncio
     async def test_http_exception_does_not_alert(self):
-        assert await self._alerted(HTTPException(status_code=400, detail="blocked")) is False
+        assert (await self._alerted(HTTPException(status_code=400, detail="blocked"))).called is False
 
     @pytest.mark.asyncio
     async def test_genuine_llm_api_error_still_alerts(self):
-        assert await self._alerted(Exception("upstream 503")) is True
+        assert (await self._alerted(Exception("upstream 503"))).called is True
+
+    @pytest.mark.asyncio
+    async def test_http_exception_5xx_alerts(self):
+        alerting_handler = await self._alerted(
+            HTTPException(
+                status_code=502,
+                detail={
+                    "error": "Headroom compression service returned an error",
+                    "status_code": 503,
+                    "guardrail_name": "headroom-compression-global",
+                },
+            )
+        )
+        assert alerting_handler.called is True
+        assert "headroom-compression-global" in alerting_handler.call_args.kwargs["message"]
+
+    @pytest.mark.asyncio
+    async def test_proxy_exception_5xx_alerts(self):
+        from litellm.proxy._types import ProxyException
+
+        alerting_handler = await self._alerted(
+            ProxyException(
+                message="guardrail backend down",
+                type="internal_server_error",
+                param=None,
+                code=503,
+            )
+        )
+        assert alerting_handler.called is True
+
+    @pytest.mark.asyncio
+    async def test_http_exception_429_does_not_alert(self):
+        alerting_handler = await self._alerted(HTTPException(status_code=429, detail="rate limited"))
+        assert alerting_handler.called is False
 
 
 class TestPostCallFailureHookProxyExceptionLogging:
@@ -2202,12 +2265,15 @@ def test_create_model_info_response_resolves_mode_through_deployment_model():
     ],
 )
 def test_convert_mcp_to_llm_format_carries_key_and_team_guardrails(key_metadata, team_metadata, expected_to_run):
+    from litellm.responses.mcp.request_context import MCPRequestContext
+
     proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
     guardrail = CustomGuardrail(guardrail_name="key-scoped-guardrail", event_hook="pre_mcp_call", default_on=False)
     kwargs = {
         "name": "ask_question",
         "arguments": {"question": "hello"},
         "server_name": "deepwiki",
+        "guardrail_context": MCPRequestContext.resolve_guardrail_context({"guardrails": ["parent-rule"]}),
         "user_api_key_auth": UserAPIKeyAuth(metadata=key_metadata, team_metadata=team_metadata),
     }
     request_obj = proxy_logging._create_mcp_request_object_from_kwargs(kwargs)
@@ -2218,6 +2284,8 @@ def test_convert_mcp_to_llm_format_carries_key_and_team_guardrails(key_metadata,
         synthetic = proxy_logging._convert_mcp_to_llm_format(request_obj, kwargs)
 
     assert guardrail.should_run_guardrail(synthetic, GuardrailEventHooks.pre_mcp_call) is expected_to_run
+
+    assert "parent-rule" in synthetic["metadata"]["guardrails"]
 
 
 class _TracebackRecordingLogger(CustomLogger):
@@ -2442,3 +2510,80 @@ class TestPrismaClientTokenAuthBehindThePool:
         assert isinstance(client.db, RoutingPrismaWrapper)
         assert client.db.writer.iam_token_db_auth is True
         assert client.db.reader.iam_token_db_auth is True
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+def test_mcp_conversion_preserves_request_policy_and_isolates_guardrail_data(bucket):
+    from copy import deepcopy
+    from litellm.responses.mcp.request_context import MCPRequestContext
+
+    parent = {
+        "model": "parent-model",
+        bucket: {
+            "guardrails": ["policy-rule"], "guardrail_config": {"language": "en"},
+            "applied_policies": ["parent-policy"], "policy_sources": {"parent-policy": "model"},
+            "_guardrail_pipelines": [], "_pipeline_managed_guardrails": ["pipeline-rule"], "tags": ["review"],
+        },
+        "guardrails": [{"request-rule": {"extra_body": {"threshold": 0.9}}}],
+        "guardrail_config": {"entities": ["EMAIL_ADDRESS"]},
+    }
+    original = deepcopy(parent)
+    context = MCPRequestContext.resolve(kwargs=parent, tools=None)
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    kwargs = {"name": "execute", "arguments": {"text": "hello"}, "guardrail_context": context.guardrail_context}
+    request_obj = proxy_logging._create_mcp_request_object_from_kwargs(kwargs)
+    first = proxy_logging._convert_mcp_to_llm_format(request_obj, kwargs)
+    assert first["model"] == "parent-model"
+    assert first["metadata"]["guardrails"] == ["policy-rule", {"request-rule": {"extra_body": {"threshold": 0.9}}}]
+    assert first["metadata"]["guardrail_config"] == {"language": "en", "entities": ["EMAIL_ADDRESS"]}
+    assert first["metadata"]["applied_policies"] == ["parent-policy"]
+    assert first["metadata"]["policy_sources"] == {"parent-policy": "model"}
+    assert first["metadata"]["_pipeline_managed_guardrails"] == ["pipeline-rule"]
+    first["metadata"]["guardrails"].clear()
+    first["metadata"]["guardrail_config"]["entities"].clear()
+    assert parent == original
+    second = proxy_logging._convert_mcp_to_llm_format(request_obj, kwargs)
+    assert second["metadata"]["guardrails"] == ["policy-rule", {"request-rule": {"extra_body": {"threshold": 0.9}}}]
+    assert second["metadata"]["guardrail_config"]["entities"] == ["EMAIL_ADDRESS"]
+
+
+@pytest.mark.parametrize("opt_out", [False, True])
+def test_mcp_conversion_honors_only_authenticated_global_guardrail_opt_outs(opt_out):
+    from litellm.responses.mcp.request_context import MCPRequestContext
+
+    auth = UserAPIKeyAuth(metadata={"opted_out_global_guardrails": ["global-rule"] if opt_out else []})
+    context = MCPRequestContext.resolve(kwargs={"metadata": {
+        "user_api_key_auth": auth, "disable_global_guardrails": True,
+        "user_api_key_metadata": {"disable_global_guardrails": True},
+    }}, tools=None)
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    kwargs = {"name": "execute", "arguments": {}, "user_api_key_auth": auth, "guardrail_context": context.guardrail_context}
+    synthetic = proxy_logging._convert_mcp_to_llm_format(proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs)
+    guardrail = CustomGuardrail(guardrail_name="global-rule", event_hook="pre_mcp_call", default_on=True)
+    assert guardrail.should_run_guardrail(synthetic, GuardrailEventHooks.pre_mcp_call) is (not opt_out)
+    synthetic["metadata"]["user_api_key_metadata"]["opted_out_global_guardrails"].append("unrelated")
+    assert auth.metadata == {"opted_out_global_guardrails": ["global-rule"] if opt_out else []}
+
+
+@pytest.mark.parametrize("model, expected", [("parent-model", True), ("unmatched-model", False)])
+def test_mcp_auth_policy_uses_original_request_model(monkeypatch, model, expected):
+    from litellm.responses.mcp.request_context import MCPRequestContext
+    from litellm.proxy.policy_engine import policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyCondition, PolicyGuardrails
+
+    registry = policy_registry.PolicyRegistry()
+    registry._policies = {"model-policy": Policy(
+        condition=PolicyCondition(model="parent-model"), guardrails=PolicyGuardrails(add=["model-rule"])
+    )}
+    registry._initialized = True
+    monkeypatch.setattr(policy_registry, "_policy_registry", registry)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    kwargs = {
+        "name": "execute", "arguments": {},
+        "user_api_key_auth": UserAPIKeyAuth(metadata={"policies": ["model-policy"]}),
+        "guardrail_context": MCPRequestContext.resolve_guardrail_context({"model": model, "guardrails": ["request-rule"]}),
+    }
+    synthetic = proxy_logging._convert_mcp_to_llm_format(proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs)
+    assert ("model-rule" in synthetic["metadata"]["guardrails"]) is expected
+    assert "request-rule" in synthetic["metadata"]["guardrails"]

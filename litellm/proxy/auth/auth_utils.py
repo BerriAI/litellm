@@ -28,12 +28,13 @@ from litellm.litellm_core_utils.url_utils import (
     validate_url,
 )
 from litellm.llms.azure.passthrough.transformation import azure_router_model_in_endpoint
+from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.proxy._types import *
 from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_metadata
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
-from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
+from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS, Deployment
 from litellm.types.utils import CustomPricingLiteLLMParams
 
 
@@ -976,6 +977,26 @@ def _get_deployment_default_tpm_limit(model_name: str) -> int | None:
     return _get_deployment_default_limit(model_name, "default_api_key_tpm_limit")
 
 
+def get_key_own_model_rate_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+) -> dict[str, int] | None:
+    if user_api_key_dict.metadata:
+        result: Final = user_api_key_dict.metadata.get(rate_limit_key)
+        if result:
+            return result
+
+    if not user_api_key_dict.model_max_budget:
+        return None
+    budget_key: Final = "rpm_limit" if rate_limit_key == "model_rpm_limit" else "tpm_limit"
+    model_limit: Final = {
+        model: budget[budget_key]
+        for model, budget in user_api_key_dict.model_max_budget.items()
+        if isinstance(budget, dict) and budget.get(budget_key) is not None
+    }
+    return model_limit or None
+
+
 def get_key_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
     model_name: str | None = None,
@@ -989,20 +1010,9 @@ def get_key_model_rpm_limit(
     3. Team metadata (model_rpm_limit)
     4. Deployment default_api_key_rpm_limit (when model_name is provided)
     """
-    # 1. Check key metadata first (takes priority)
-    if user_api_key_dict.metadata:
-        result: Final = user_api_key_dict.metadata.get("model_rpm_limit")
-        if result:
-            return result
-
-    # 2. Check model_max_budget
-    if user_api_key_dict.model_max_budget:
-        model_rpm_limit: Final[dict[str, int]] = {}
-        for model, budget in user_api_key_dict.model_max_budget.items():
-            if isinstance(budget, dict) and budget.get("rpm_limit") is not None:
-                model_rpm_limit[model] = budget["rpm_limit"]
-        if model_rpm_limit:
-            return model_rpm_limit
+    key_own_limit: Final = get_key_own_model_rate_limit(user_api_key_dict, "model_rpm_limit")
+    if key_own_limit is not None:
+        return key_own_limit
 
     # 3. Fallback to team metadata
     if user_api_key_dict.team_metadata:
@@ -1032,20 +1042,9 @@ def get_key_model_tpm_limit(
     3. Team metadata (model_tpm_limit)
     4. Deployment default_api_key_tpm_limit (when model_name is provided)
     """
-    # 1. Check key metadata first (takes priority)
-    if user_api_key_dict.metadata:
-        result: Final = user_api_key_dict.metadata.get("model_tpm_limit")
-        if result:
-            return result
-
-    # 2. Check model_max_budget (iterate per-model like RPM does)
-    if user_api_key_dict.model_max_budget:
-        model_tpm_limit: Final[dict[str, int]] = {}
-        for model, budget in user_api_key_dict.model_max_budget.items():
-            if isinstance(budget, dict) and budget.get("tpm_limit") is not None:
-                model_tpm_limit[model] = budget["tpm_limit"]
-        if model_tpm_limit:
-            return model_tpm_limit
+    key_own_limit: Final = get_key_own_model_rate_limit(user_api_key_dict, "model_tpm_limit")
+    if key_own_limit is not None:
+        return key_own_limit
 
     # 3. Fallback to team metadata
     if user_api_key_dict.team_metadata:
@@ -1737,7 +1736,7 @@ def _append_model_candidates(candidates: list[str], value: Any) -> None:
         candidates.extend(model for model in model_names if model)
 
 
-def _dedupe_model_candidates(candidates: list[str]) -> list[str]:
+def _dedupe_model_candidates(candidates: Collection[str]) -> list[str]:
     deduped: Final[list[str]] = []
     for model in candidates:
         if model not in deduped:
@@ -1846,13 +1845,42 @@ def _resolve_model_id_with_router(model_id: str | None, llm_router: Router | Non
         return model_id
 
 
+def get_cache_prediction_deployments(
+    *, current_deployment_id: str, candidate_deployment_id: str, llm_router: Router, team_id: str | None
+) -> tuple[Deployment, Deployment] | None:
+    current: Final = llm_router.get_deployment(current_deployment_id)
+    candidate: Final = llm_router.get_deployment(candidate_deployment_id)
+    if current is None or candidate is None:
+        return None
+    if any(deployment.model_info.team_id not in (None, team_id) for deployment in (current, candidate)):
+        return None
+    return current, candidate
+
+
+def _cache_prediction_model_candidates(
+    request_data: Mapping[str, object], llm_router: Router | None, team_id: str | None
+) -> tuple[str, ...]:
+    current_id: Final = request_data.get("current_deployment_id")
+    candidate_id: Final = request_data.get("candidate_deployment_id")
+    if llm_router is None or not isinstance(current_id, str) or not isinstance(candidate_id, str):
+        return ()
+    deployments: Final = get_cache_prediction_deployments(
+        current_deployment_id=current_id, candidate_deployment_id=candidate_id, llm_router=llm_router, team_id=team_id
+    )
+    return tuple(deployment.model_name for deployment in deployments) if deployments is not None else ()
+
+
 def _extract_model_candidates_from_request(
     request_data: dict,
     route: str,
     request_headers: Mapping[str, object] | None = None,
     request_query_params: Mapping[str, object] | None = None,
     llm_router: Router | None = None,
+    team_id: str | None = None,
 ) -> list[str]:
+    if route == "/cost/predict-cache":
+        prediction_models: Final = _cache_prediction_model_candidates(request_data, llm_router, team_id)  # pyright: ignore[reportUnknownArgumentType]  # the typed reader validates each deployment ID from this legacy payload
+        return _dedupe_model_candidates(prediction_models)
     candidates: Final[list[str]] = []
     uses_model_routing_sources: Final = _route_uses_model_routing_sources(route=route)
     uses_header_or_query_model_sources: Final = _route_matches_any_marker(
@@ -1951,6 +1979,11 @@ def request_dispatched_to_pass_through_endpoint(request: Request | None) -> bool
     return getattr(endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
 
 
+def request_dispatched_to_provider_pass_through(request: Request) -> bool:
+    """Built-in provider pass-through handlers (``/anthropic/{endpoint:path}``, ...) bind ``endpoint``."""
+    return "endpoint" in request.path_params
+
+
 def get_model_from_request(
     request_data: dict,
     route: str,
@@ -1958,6 +1991,7 @@ def get_model_from_request(
     request_query_params: Mapping[str, object] | None = None,
     llm_router: Router | None = None,
     request: Request | None = None,
+    team_id: str | None = None,
 ) -> str | list[str] | None:
     """Resolve the model(s) a request targets, for model-access and budget checks.
 
@@ -1980,6 +2014,7 @@ def get_model_from_request(
         request_headers=request_headers,
         request_query_params=request_query_params,
         llm_router=llm_router,
+        team_id=team_id,
     )
     model = _format_model_candidates(candidates)
 
@@ -2021,6 +2056,12 @@ def get_model_from_request(
     if route.lower().startswith(("/azure/", "/azure_ai/")):
         azure_model: Final = _router_model_from_azure_route(route, llm_router)
         return model if azure_model is None else azure_model
+
+    if route.lower().startswith("/nvidia_nim/"):
+        nvidia_nim_model: Final = (
+            nvidia_nim_model_group_in_path(route, llm_router.get_model_list()) if llm_router else None
+        )
+        return model if nvidia_nim_model is None else nvidia_nim_model
 
     return model
 

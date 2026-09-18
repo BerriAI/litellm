@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     responses_reasoning_items_from_thinking_blocks,
     split_concatenated_json_objects,
     strip_encrypted_reasoning_from_messages,
+    system_messages_first,
     update_messages_with_model_file_ids,
 )
 
@@ -1105,6 +1106,38 @@ def test_drop_tool_reference_parts_leaves_non_tool_messages_alone():
 
     assert result[0] == user_message
     assert result[2]["content"] == ""
+
+
+class TestSystemMessagesFirst:
+    def test_stable_partition_keeps_order_within_each_group(self):
+        messages = [
+            {"role": "user", "content": "u1"},
+            {"role": "system", "content": "s1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "developer", "content": "d1"},
+            {"role": "tool", "tool_call_id": "c1", "content": "t1"},
+            {"role": "system", "content": "s2"},
+        ]
+
+        result = system_messages_first(messages)
+
+        assert [m["content"] for m in result] == ["s1", "d1", "s2", "u1", "a1", "t1"]
+        assert [m["content"] for m in messages] == ["u1", "s1", "a1", "d1", "t1", "s2"]
+        assert all(
+            result_message is original for result_message, original in zip(result[3:], messages[::2], strict=True)
+        )
+
+    @pytest.mark.parametrize(
+        "messages",
+        [
+            [],
+            [{"role": "user", "content": "u1"}, {"role": "assistant", "content": "a1"}],
+            [{"role": "system", "content": "s1"}, {"role": "user", "content": "u1"}],
+            [{"role": "system", "content": "s1"}, {"role": "system", "content": "s2"}],
+        ],
+    )
+    def test_already_ordered_messages_come_back_unchanged(self, messages):
+        assert system_messages_first(messages) == messages
 
 
 class TestFlattenTopLevelSchemaCombinators:

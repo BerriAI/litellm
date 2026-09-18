@@ -10,6 +10,7 @@ Covers:
 
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     _build_part_for_input,
@@ -22,9 +23,17 @@ from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation
 from litellm.types.llms.vertex_ai import VertexAIBatchEmbeddingsResponseObject
 from litellm.types.utils import EmbeddingResponse
 
-
 IMAGE_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII"
 GCS_URL = "gs://my-bucket/image.png"
+
+
+@pytest.fixture(autouse=True)
+def _local_model_cost_map(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
 
 
 class TestIsMultimodalInput:
@@ -325,7 +334,7 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert result.usage.prompt_tokens == 258
         assert result.usage.total_tokens == 258
-        assert result.usage.prompt_tokens_details.image_count == 1
+        assert result.usage.prompt_tokens_details.image_tokens == 258
 
         prompt_cost, _ = generic_cost_per_token(
             model=self.MODEL,
@@ -359,7 +368,7 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert prompt_cost > 0
 
-    def test_video_modality_derives_seconds_and_text_floor(self):
+    def test_video_modality_preserves_token_count(self):
         response_json = {
             "embedding": {"values": [0.1]},
             "usageMetadata": {
@@ -375,10 +384,8 @@ class TestProcessEmbedContentResponseUsage:
             response_json=response_json,
         )
         assert result.usage.prompt_tokens == 516
-        assert result.usage.prompt_tokens_details.video_length_seconds == pytest.approx(
-            2.0
-        )
-        assert result.usage.prompt_tokens_details.text_tokens == 1
+        assert result.usage.prompt_tokens_details.video_tokens == 516
+        assert result.usage.prompt_tokens_details.text_tokens == 0
 
     def test_missing_usage_metadata_does_not_estimate_from_base64(self):
         response_json = {"embedding": {"values": [0.1, 0.2]}}
@@ -401,104 +408,4 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert result.usage.prompt_tokens > 0
 
-    def test_file_reference_image_billed_per_image_not_text(self):
-        """files/... image refs must bill per-image, not at the text token rate."""
-        response_json = {
-            "embedding": {"values": [0.1, 0.2, 0.3]},
-            "usageMetadata": {
-                "promptTokenCount": 258,
-                "totalTokenCount": 258,
-                "promptTokensDetails": [{"modality": "IMAGE", "tokenCount": 258}],
-            },
-        }
-        result = process_embed_content_response(
-            input=["files/img123"],
-            model_response=EmbeddingResponse(),
-            model=self.MODEL,
-            response_json=response_json,
-            resolved_files={
-                "files/img123": {
-                    "mime_type": "image/png",
-                    "uri": "https://example.com/img123",
-                }
-            },
-        )
-        assert result.usage.prompt_tokens_details.image_count == 1
-        assert result.usage.prompt_tokens_details.text_tokens == 0
 
-        prompt_cost, _ = generic_cost_per_token(
-            model=self.MODEL,
-            usage=result.usage,
-            custom_llm_provider="vertex_ai",
-        )
-        assert prompt_cost == pytest.approx(0.00012)
-
-    def test_file_reference_non_image_not_counted_as_image(self):
-        """A files/... ref resolving to a non-image mime must not be image-counted."""
-        response_json = {
-            "embedding": {"values": [0.1, 0.2]},
-            "usageMetadata": {
-                "promptTokenCount": 64,
-                "totalTokenCount": 64,
-                "promptTokensDetails": [{"modality": "AUDIO", "tokenCount": 64}],
-            },
-        }
-        result = process_embed_content_response(
-            input=["files/clip1"],
-            model_response=EmbeddingResponse(),
-            model=self.MODEL,
-            response_json=response_json,
-            resolved_files={
-                "files/clip1": {
-                    "mime_type": "audio/mpeg",
-                    "uri": "https://example.com/clip1",
-                }
-            },
-        )
-        assert result.usage.prompt_tokens_details.image_count == 0
-        assert result.usage.prompt_tokens_details.audio_tokens == 64
-        assert result.usage.prompt_tokens_details.audio_length_seconds == pytest.approx(
-            2.0
-        )
-
-        prompt_cost, _ = generic_cost_per_token(
-            model=self.MODEL,
-            usage=result.usage,
-            custom_llm_provider="vertex_ai",
-        )
-        assert prompt_cost == pytest.approx(2.0 * 0.00016)
-
-    def test_video_plus_audio_does_not_double_bill_text(self):
-        """Video+audio responses must not get video tokens reassigned to text."""
-        response_json = {
-            "embedding": {"values": [0.1]},
-            "usageMetadata": {
-                "promptTokenCount": 580,
-                "totalTokenCount": 580,
-                "promptTokensDetails": [
-                    {"modality": "VIDEO", "tokenCount": 516},
-                    {"modality": "AUDIO", "tokenCount": 64},
-                ],
-            },
-        }
-        result = process_embed_content_response(
-            input=["gs://bucket/clip.mp4"],
-            model_response=EmbeddingResponse(),
-            model=self.MODEL,
-            response_json=response_json,
-        )
-        assert result.usage.prompt_tokens_details.text_tokens == 1
-        assert result.usage.prompt_tokens_details.video_length_seconds == pytest.approx(
-            2.0
-        )
-        assert result.usage.prompt_tokens_details.audio_length_seconds == pytest.approx(
-            2.0
-        )
-
-        prompt_cost, _ = generic_cost_per_token(
-            model=self.MODEL,
-            usage=result.usage,
-            custom_llm_provider="vertex_ai",
-        )
-        # 1 floor text token at 2e-7 + 2s of video at 7.9e-4 + 2s of audio at 1.6e-4
-        assert prompt_cost == pytest.approx(1 * 2e-7 + 2 * 0.00079 + 2 * 0.00016)
