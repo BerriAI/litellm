@@ -137,3 +137,46 @@ async def test_team_max_parallel_requests_is_enforced_across_keys_in_the_team():
         data={"model": "gpt-4o-mini"},
         call_type="",
     )
+
+
+@pytest.mark.asyncio
+async def test_failed_request_releases_team_parallel_slot():
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache)
+    )
+    key = UserAPIKeyAuth(
+        api_key=hash_token("sk-a"), team_id="legacy-team", team_max_parallel_requests=1
+    )
+    data = {"model": "gpt-4o-mini"}
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=key, cache=cache, data=data, call_type=""
+    )
+    with pytest.raises(HTTPException):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=key, cache=cache, data=data, call_type=""
+        )
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": key.api_key,
+                    "user_api_key_team_id": "legacy-team",
+                }
+            },
+            "exception": Exception("upstream 500"),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=key, cache=cache, data=data, call_type=""
+    )
