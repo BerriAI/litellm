@@ -1568,16 +1568,17 @@ class Delta(SafeAttributeModel, OpenAIObject):
 
 
 def map_finish_reason_and_stash_native(
-    finish_reason: str, provider_specific_fields: dict[str, Any] | None
-) -> tuple[OpenAIChatCompletionFinishReason, dict[str, Any] | None]:
+    finish_reason: str, provider_specific_fields: Mapping[str, Any] | None
+) -> tuple[OpenAIChatCompletionFinishReason, dict[str, Any] | None]:  # mutable-ok: callers extend the returned stash
     """Map a provider-native finish reason to the OpenAI set; when the native value differs
     from the mapped one, preserve it under provider_specific_fields["native_finish_reason"]
     so downstream consumers can still see what the provider actually sent."""
     mapped: Final = map_finish_reason(finish_reason)
-    if finish_reason != mapped:
-        provider_specific_fields = dict(provider_specific_fields) if provider_specific_fields else {}
-        provider_specific_fields["native_finish_reason"] = finish_reason
-    return mapped, provider_specific_fields
+    if finish_reason == mapped:
+        return mapped, provider_specific_fields
+    stash: Final = dict(provider_specific_fields or ())  # mutable-ok: the stash must stay a plain extensible dict
+    stash["native_finish_reason"] = finish_reason
+    return mapped, stash
 
 
 class Choices(SafeAttributeModel, OpenAIObject):

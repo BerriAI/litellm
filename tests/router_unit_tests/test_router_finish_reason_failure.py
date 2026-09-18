@@ -16,6 +16,7 @@ import httpx
 import pytest
 from pytest import MonkeyPatch
 
+import litellm
 from litellm import Router
 from litellm.router_utils.cooldown_handlers import _get_cooldown_deployments
 
@@ -172,3 +173,42 @@ async def test_knob_unset_ignores_terminal_stop_reason(monkeypatch: MonkeyPatch)
 def test_unknown_exception_name_raises_at_construction():
     with pytest.raises(ValueError, match="NotAnException"):
         Router(model_list=[], treat_finish_reason_as_failure={"x": "NotAnException"})
+
+
+@pytest.mark.asyncio
+async def test_mapped_finish_reason_helpers_direct(monkeypatch: MonkeyPatch):
+    """Direct coverage of the knob helpers (the router code-coverage check matches by name)."""
+    fake = FakeAnthropicUpstream()
+    router = Router(
+        model_list=[FABLE_TIER, OPUS_TARGET],
+        treat_finish_reason_as_failure=_knob(),
+        default_fallbacks=["opus-target"],
+        num_retries=0,
+        allowed_fails=0,
+        cooldown_time=10,
+    )
+    fake.install(monkeypatch)
+
+    ok = await router.acompletion(model="opus-target", max_tokens=16, messages=[{"role": "user", "content": "hi"}])
+    assert router._get_mapped_finish_reason(ok) is None
+    assert router._generic_fallback_available("fable-tier", {}) is True
+
+    error = router._finish_reason_failure_error(model="fable-tier", reason="model_context_window_exceeded")
+    assert error.status_code == 429
+
+    deployment = router.model_list[0]
+    accounted = router._account_mapped_finish_reason_failure(
+        model="fable-tier",
+        deployment=deployment,
+        reason="model_context_window_exceeded",
+        kwargs={},
+    )
+    assert accounted is not None
+
+    with pytest.raises(litellm.RateLimitError):
+        router._handle_mapped_finish_reason_failure(
+            model="fable-tier",
+            deployment=deployment,
+            reason="model_context_window_exceeded",
+            kwargs={},
+        )
