@@ -1183,6 +1183,7 @@ describe("Teams - which fields reach the create payload depends on the open sect
     expect(Object.keys(payload).sort()).toEqual([
       "budget_duration",
       "max_budget",
+      "max_parallel_requests",
       "metadata",
       "models",
       "organization_id",
@@ -1317,6 +1318,7 @@ describe("Teams - the exact bytes the create call sends", () => {
       tpm_limit: undefined,
       rpm_limit: undefined,
       tpd_limit: undefined,
+      max_parallel_requests: undefined,
       metadata: undefined,
     });
     expect(wireBody(payload)).toStrictEqual({
@@ -1345,6 +1347,7 @@ describe("Teams - the exact bytes the create call sends", () => {
       tpm_limit: undefined,
       rpm_limit: undefined,
       tpd_limit: undefined,
+      max_parallel_requests: undefined,
       metadata: undefined,
       team_id: undefined,
       team_member_budget: undefined,
@@ -1421,6 +1424,7 @@ describe("Teams - the exact bytes the create call sends", () => {
     fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "150.75" } });
     fireEvent.change(screen.getByLabelText("Tokens per minute Limit (TPM)"), { target: { value: "900" } });
     fireEvent.change(screen.getByLabelText("Requests per minute Limit (RPM)"), { target: { value: "800" } });
+    fireEvent.change(screen.getByLabelText("Max Parallel Requests"), { target: { value: "5" } });
 
     await openSection("Additional Settings", /Team Member Key Duration/);
 
@@ -1438,6 +1442,7 @@ describe("Teams - the exact bytes the create call sends", () => {
     expect(payload.max_budget).toBe("150.75");
     expect(payload.tpm_limit).toBe("900");
     expect(payload.rpm_limit).toBe("800");
+    expect(payload.max_parallel_requests).toBe("5");
     expect(payload.team_id).toBe("tid-1");
     expect(payload.team_member_budget).toBe(12.5);
     expect(payload.team_member_key_duration).toBe("30d");
@@ -1518,6 +1523,7 @@ describe("Teams - the exact bytes the create call sends", () => {
       tpm_limit: undefined,
       rpm_limit: undefined,
       tpd_limit: undefined,
+      max_parallel_requests: undefined,
       metadata: undefined,
       team_id: undefined,
       team_member_budget: undefined,

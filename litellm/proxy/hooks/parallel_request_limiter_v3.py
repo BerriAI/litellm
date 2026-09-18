@@ -2749,7 +2749,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         # Team rate limits
         if user_api_key_dict.team_id and (
-            user_api_key_dict.team_rpm_limit is not None or user_api_key_dict.team_tpm_limit is not None
+            user_api_key_dict.team_rpm_limit is not None
+            or user_api_key_dict.team_tpm_limit is not None
+            or user_api_key_dict.team_max_parallel_requests is not None
         ):
             descriptors.append(
                 RateLimitDescriptor(
@@ -2758,6 +2760,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     rate_limit={
                         "requests_per_unit": user_api_key_dict.team_rpm_limit,
                         "tokens_per_unit": user_api_key_dict.team_tpm_limit,
+                        "max_parallel_requests": user_api_key_dict.team_max_parallel_requests,
                         "window_size": self.window_size,
                     },
                 )
