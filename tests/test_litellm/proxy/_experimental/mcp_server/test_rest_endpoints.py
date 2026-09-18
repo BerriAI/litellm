@@ -4332,11 +4332,15 @@ class TestClientAllowlistOnRestRoutes:
     def _stub_listing(monkeypatch: pytest.MonkeyPatch) -> list[UserAPIKeyAuth]:
         listed_for: list[UserAPIKeyAuth] = []
 
-        async def fake_contexts(user_api_key_auth):
+        async def fake_contexts(user_api_key_auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
             listed_for.append(user_api_key_auth)
             return [user_api_key_auth]
 
-        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+        async def fake_get_allowed_mcp_servers(
+            user_api_key_auth: UserAPIKeyAuth | None = None,
+            *,
+            keyless_source: bool = False,
+        ) -> list[str]:
             return []
 
         monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", _CLIENT_ALLOWLIST_SETTINGS, raising=False)
