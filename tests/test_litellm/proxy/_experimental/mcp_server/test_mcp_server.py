@@ -8609,11 +8609,12 @@ class TestPreemptive401GatedByKeyAllowlist:
             mcp_servers: list[str] | None = None,
             client_ip: str | None = None,
         ) -> list[MCPServer]:
-            scoped = getattr(user_api_key_auth, "object_permission", None)
-            scoped_ids = getattr(scoped, "mcp_servers", None) if scoped else None
-            if scoped_ids:
-                return [srv for srv in allowed_servers if srv.server_id in scoped_ids]
-            return allowed_servers
+            if user_api_key_auth is None or user_api_key_auth.object_permission is None:
+                return allowed_servers
+            scoped_ids: Final = user_api_key_auth.object_permission.mcp_servers
+            if not scoped_ids:
+                return allowed_servers
+            return [srv for srv in allowed_servers if srv.server_id in scoped_ids]
 
         registry = server_module.global_mcp_server_manager.registry
         registry[server.server_id] = server
