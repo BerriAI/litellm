@@ -5014,10 +5014,6 @@ def _static_tag_limits(limits: dict[str, TagRateLimit]):
 
 @pytest.mark.asyncio
 async def test_tag_object_rpm_limit_enforced_v3(monkeypatch):
-    """
-    rpm_limit stored on the tag object (via /tag/new) is enforced for every key
-    sending that tag, independently of any key-level tag_rpm_limit metadata.
-    """
     monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
     _request_stash.set(None)
     resolver, calls = _static_tag_limits({"cell-1": TagRateLimit(rpm_limit=2, tpm_limit=None)})
@@ -5050,10 +5046,6 @@ async def test_tag_object_rpm_limit_enforced_v3(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_tag_object_tpm_limit_enforced_v3(monkeypatch):
-    """
-    tpm_limit stored on the tag object is charged from actual usage on success
-    and blocks the tag once exhausted, while untagged traffic keeps flowing.
-    """
     monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
     monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
     _request_stash.set(None)
@@ -5095,7 +5087,6 @@ async def test_tag_object_tpm_limit_enforced_v3(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_resolve_tag_rate_limits_from_db_reads_budget_row(monkeypatch):
-    """Only tags whose budget row carries an rpm or tpm limit are returned."""
     from litellm.models.budget import LiteLLM_BudgetTable
     from litellm.models.tag import LiteLLM_TagTable
     from litellm.proxy import proxy_server

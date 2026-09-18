@@ -571,7 +571,6 @@ def _tag_rate_limit_descriptor(tag: str, limit: TagRateLimit, window_size: int) 
 
 
 async def resolve_tag_rate_limits_from_db(tag_names: Sequence[str]) -> Mapping[str, TagRateLimit]:
-    """Read the rpm/tpm limits stored on each tag's budget row, served from the tag object cache."""
     from litellm.proxy.auth.auth_checks import get_tag_objects_batch
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -2731,7 +2730,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return descriptors
 
     async def _create_tag_rate_limit_descriptors(self, data: Mapping[str, object]) -> tuple[RateLimitDescriptor, ...]:
-        """One ``tag`` descriptor per request tag whose tag object carries an rpm or tpm limit."""
         tags: Final = tuple(dict.fromkeys(get_tags_from_request_body(data)))
         if not tags:
             return ()
