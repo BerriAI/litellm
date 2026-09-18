@@ -168,6 +168,22 @@ def test_settings_store_refuses_a_runtime_write_to_a_config_owned_key() -> None:
     assert store.source("max_parallel_requests") == "config"
 
 
+@pytest.mark.timeout(10)
+def test_settings_store_clear_terminates_and_keeps_config_owned_keys() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"max_parallel_requests": 3})
+    store.apply_db_row("general_settings", {"max_file_size_mb": 9})
+    store["ui_access_mode"] = "admin_only"
+    before: Final = dict(store)
+
+    store.clear()
+    cleared: Final = dict(store)
+    store.update(before)
+
+    assert cleared == {"max_parallel_requests": 3}
+    assert dict(store) == before
+
+
 def test_settings_store_reports_the_config_owned_keys_a_write_would_change() -> None:
     store: Final = SettingsStore("general_settings")
     store.load_yaml({"max_parallel_requests": 3, "ui_access_mode": "admin_only"})
