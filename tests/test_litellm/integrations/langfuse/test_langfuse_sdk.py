@@ -7,6 +7,7 @@ otherwise record its own duration instead of the call's.
 
 import json
 import logging
+import threading
 import uuid
 from base64 import b64encode
 from datetime import datetime, timedelta, timezone
@@ -19,6 +20,7 @@ import pytest
 from langfuse import LangfuseOtelSpanAttributes as A
 from langfuse.api import UnauthorizedError
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from litellm.integrations.langfuse.langfuse import (
@@ -521,6 +523,39 @@ def test_flush_langfuse_tracing_exports_the_queued_spans_of_every_channel(monkey
     assert [len(exporter.get_finished_spans()) for exporter in exporters] == [0, 0]
     assert flush_langfuse_tracing() is True
     assert [len(exporter.get_finished_spans()) for exporter in exporters] == [1, 1]
+
+
+def test_flush_langfuse_tracing_flushes_channels_concurrently_under_one_deadline(monkeypatch: pytest.MonkeyPatch):
+    """A channel stuck on an unreachable host must not spend the whole deadline before the
+    next channel gets its turn; the first exporter here only returns once the second exported."""
+    second_exported = threading.Event()
+
+    class WaitsForTheOther(SpanExporter):
+        def export(self, spans):
+            return SpanExportResult.SUCCESS if second_exported.wait(timeout=5.0) else SpanExportResult.FAILURE
+
+        def shutdown(self) -> None:
+            return None
+
+    class Unblocks(SpanExporter):
+        def export(self, spans):
+            second_exported.set()
+            return SpanExportResult.SUCCESS
+
+        def shutdown(self) -> None:
+            return None
+
+    exporters = iter((WaitsForTheOther(), Unblocks()))
+
+    def build_next(*, public_key: str, secret_key: str, base_url: str) -> SpanExporter:
+        return next(exporters)
+
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk._build_span_exporter", build_next)
+    for public_key in ("pk-concurrent-flush-a", "pk-concurrent-flush-b"):
+        _acquire(public_key=public_key, mock_mode=False, flush_interval=600.0).tracer.start_span("generation").end()
+
+    assert flush_langfuse_tracing(timeout_millis=2_000) is True
+    assert second_exported.is_set()
 
 
 def test_a_changed_sample_rate_rebuilds_the_channel(monkeypatch: pytest.MonkeyPatch):

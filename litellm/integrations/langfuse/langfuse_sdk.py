@@ -5,6 +5,7 @@ import re
 import threading
 from base64 import b64encode
 from collections.abc import Iterable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor, wait
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
@@ -605,11 +606,20 @@ def acquire_langfuse_tracing(
 
 
 def flush_langfuse_tracing(timeout_millis: int = 30_000) -> bool:
-    """Force-flush every export channel this process acquired; ``True`` when all of them succeeded."""
+    """Force-flush every export channel this process acquired, all within one ``timeout_millis`` deadline.
+
+    ``True`` only when every channel flushed in time; a channel still blocked at the deadline is left to
+    finish in the background rather than pushing the deadline out for the channels after it.
+    """
     with _TRACING_LOCK:
         channels: Final = tuple(_TRACING.values())
-    results: Final = tuple(channel.flush(timeout_millis) for channel in channels)
-    return all(results)
+    if not channels:
+        return True
+    pool: Final = ThreadPoolExecutor(max_workers=len(channels), thread_name_prefix="langfuse-flush")
+    futures: Final = tuple(pool.submit(channel.flush, timeout_millis) for channel in channels)
+    done, pending = wait(futures, timeout=timeout_millis / 1000)
+    pool.shutdown(wait=False)
+    return not pending and all(future.result() for future in done)
 
 
 def build_langfuse_tracing(
