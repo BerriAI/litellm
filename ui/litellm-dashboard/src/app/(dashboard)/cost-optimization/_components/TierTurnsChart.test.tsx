@@ -6,6 +6,7 @@ import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useMod
 
 vi.mock("@/components/shared/charts", () => ({
   DonutChart: ({ label }: { label: string }) => <div data-testid="donut">{label}</div>,
+  DEFAULT_COLOR_CYCLE: ["blue", "cyan", "sky", "indigo", "violet", "purple", "fuchsia", "slate"],
   SEQUENTIAL_COLOR_RAMP: ["indigo", "blue"],
   chartColorValue: (color: string) => color,
 }));
@@ -108,6 +109,19 @@ describe("TierTurnsChart", () => {
   it("widens a bare string tier (pinned single model) into its one-model list", () => {
     render(<TierTurnsChart view={groupView()} autoRouters={[deployment({ tiers: { SIMPLE: "gpt-4o-mini" } })]} />);
 
+    expect(screen.getByText("gpt-4o-mini")).toBeInTheDocument();
+  });
+
+  it("lists a custom tier's models, which the built-in name guard used to hide", () => {
+    render(
+      <TierTurnsChart
+        view={groupView({ tier_turns: { CASUAL: 3, SECURITY_REVIEW: 1 } })}
+        autoRouters={[deployment({ tiers: { CASUAL: ["gpt-4o-mini"], SECURITY_REVIEW: ["o1-preview"] } })]}
+      />,
+    );
+
+    expect(screen.getByText(/SECURITY_REVIEW/)).toBeInTheDocument();
+    expect(screen.getByText("o1-preview")).toBeInTheDocument();
     expect(screen.getByText("gpt-4o-mini")).toBeInTheDocument();
   });
 

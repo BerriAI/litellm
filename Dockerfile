@@ -1,15 +1,31 @@
 # syntax=docker/dockerfile:1.7
 
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:42df77a9974d6ec8b17a5ee8bc23b532600a44d705acef2409e0933c1251b45f
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:e624c5d5e42382ce7165ddafcbbf8e6769a24cbd02ea6114b880b05ae5ba2a8d
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:42df77a9974d6ec8b17a5ee8bc23b532600a44d705acef2409e0933c1251b45f
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:e624c5d5e42382ce7165ddafcbbf8e6769a24cbd02ea6114b880b05ae5ba2a8d
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
 # Pinned by digest like the other base images; bump explicitly on Node upgrades.
 ARG UI_BUILD_IMAGE=node:24.19-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43
+# Checksum from https://www.pgbouncer.org/downloads/ (the Wolfi repo only carries 1.24.x)
+ARG PGBOUNCER_VERSION=1.25.2
+ARG PGBOUNCER_SHA256=924ad35113fd0a71c8e2dbe85b5d03445532e2b7b37a9f8a48983beea238b332
 
 FROM $UV_IMAGE AS uvbin
+
+FROM $LITELLM_BUILD_IMAGE AS pgbouncer-builder
+ARG PGBOUNCER_VERSION
+ARG PGBOUNCER_SHA256
+USER root
+RUN apk add --no-cache build-base pkgconf libevent-dev openssl-dev curl
+WORKDIR /build
+RUN curl -fsSL -o pgbouncer.tar.gz "https://www.pgbouncer.org/downloads/files/${PGBOUNCER_VERSION}/pgbouncer-${PGBOUNCER_VERSION}.tar.gz" && \
+    echo "${PGBOUNCER_SHA256}  pgbouncer.tar.gz" | sha256sum -c - && \
+    tar xzf pgbouncer.tar.gz --strip-components=1 && \
+    ./configure --prefix=/usr/local --with-openssl=/usr && \
+    make -j"$(nproc)" pgbouncer && \
+    install -m 0755 pgbouncer /usr/local/bin/pgbouncer
 
 # Admin UI builder. Pinned to the build platform so the architecture-independent
 # Next.js static export compiles once natively even in a multi-arch build,
@@ -40,8 +56,8 @@ COPY --from=uvbin /uvx /usr/local/bin/uvx
 RUN apk add --no-cache \
     bash \
     gcc \
-    python3 \
-    python3-dev \
+    python-3.13 \
+    python-3.13-dev \
     rust \
     openssl \
     openssl-dev \
@@ -51,6 +67,7 @@ RUN apk add --no-cache \
 
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=0 \
     PATH="/app/.venv/bin:${PATH}"
 
 # Copy dependency metadata first for layer caching
@@ -65,7 +82,8 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
     --extra extra_proxy \
     --extra semantic-router \
     --extra saml \
-    --python python3
+    --extra bedrock-realtime \
+    --python python3.13
 
 # Copy full source tree
 COPY . .
@@ -86,7 +104,8 @@ RUN uv sync --frozen --no-default-groups --no-editable \
     --extra extra_proxy \
     --extra semantic-router \
     --extra saml \
-    --python python3
+    --extra bedrock-realtime \
+    --python python3.13
 
 RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     npm_config_cache=/root/.npm \
@@ -100,8 +119,15 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
 USER root
 
+# The base image only configures Chainguard's authenticated apk repo, which
+# requires an enterprise subscription. Add the public Wolfi repo so `apk add`
+# also works for anyone installing extra packages into a running container.
+# https://github.com/BerriAI/litellm/issues/33518
+RUN echo "https://packages.wolfi.dev/os" >> /etc/apk/repositories
+
 # node (without npm) is required by the prisma CLI at runtime
-RUN apk add --no-cache bash openssl tzdata nodejs python3 libsndfile
+RUN apk add --no-cache bash openssl tzdata nodejs python-3.13 libsndfile libevent
+COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 
 WORKDIR /app
 ENV PATH="/app/.venv/bin:${PATH}" \

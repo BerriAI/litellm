@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { cn } from "@/lib/cva.config";
 import { makeModelGroupPublic } from "../../networking";
 import ModelFilters from "../../model_filters";
-import NotificationsManager from "../../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 const STEP_TITLES = ["Select Models", "Confirm"];
 
@@ -59,7 +59,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   const handleNext = () => {
     if (currentStep === 0) {
       if (selectedModels.size === 0) {
-        NotificationsManager.fromBackend("Please select at least one model to make public");
+        toast.fromError("Please select at least one model to make public");
         return;
       }
       setCurrentStep(1);
@@ -112,7 +112,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
   const handleSubmit = async () => {
     if (selectedModels.size === 0) {
-      NotificationsManager.fromBackend("Please select at least one model to make public");
+      toast.fromError("Please select at least one model to make public");
       return;
     }
 
@@ -121,12 +121,12 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
       const modelGroupsToMakePublic = Array.from(selectedModels);
       await makeModelGroupPublic(accessToken, modelGroupsToMakePublic);
 
-      NotificationsManager.success(`Successfully made ${modelGroupsToMakePublic.length} model group(s) public!`);
+      toast.success(`Successfully made ${modelGroupsToMakePublic.length} model group(s) public!`);
       handleClose();
       onSuccess();
     } catch (error) {
       console.error("Error making model groups public:", error);
-      NotificationsManager.fromBackend("Failed to make model groups public. Please try again.");
+      toast.fromError("Failed to make model groups public. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -154,7 +154,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
           </div>
         </div>
 
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-muted-foreground">
           Select the models you want to be visible on the public model hub. Users will still require a valid Virtual Key
           to use these models.
         </p>
@@ -164,20 +164,20 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
           modelHubData={modelHubData}
           onFilteredDataChange={handleFilteredDataChange}
           showFiltersCard={false}
-          className="border rounded-lg p-4 bg-gray-50"
+          className="border rounded-lg p-4 bg-muted"
         />
 
         <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
           <div className="space-y-3">
             {filteredData.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
+              <div className="text-center py-8 text-muted-foreground">
                 <p>No models match the current filters.</p>
               </div>
             ) : (
               filteredData.map((model) => (
                 <div
                   key={model.model_group}
-                  className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50"
+                  className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-accent"
                 >
                   <Checkbox
                     checked={selectedModels.has(model.model_group)}
@@ -203,8 +203,8 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
         </div>
 
         {selectedModels.size > 0 && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-            <p className="text-sm text-blue-800">
+          <div className="bg-info/10 border border-info/20 rounded-lg p-3">
+            <p className="text-sm text-info">
               <strong>{selectedModels.size}</strong> model{selectedModels.size !== 1 ? "s" : ""} selected
             </p>
           </div>
@@ -218,8 +218,8 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
       <div className="space-y-4">
         <h3 className="text-lg font-semibold">Confirm Making Models Public</h3>
 
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <p className="text-sm text-yellow-800">
+        <div className="bg-warning/10 border border-warning/20 rounded-lg p-4">
+          <p className="text-sm text-warning">
             <strong>Warning:</strong> Once you make these models public, anyone who can go to the{" "}
             <code>/ui/model_hub_table</code> will be able to know they exist on the proxy.
           </p>
@@ -232,7 +232,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
               {Array.from(selectedModels).map((modelGroup) => {
                 const model = modelHubData.find((m) => m.model_group === modelGroup);
                 return (
-                  <div key={modelGroup} className="flex items-center justify-between p-2 bg-gray-50 rounded-sm">
+                  <div key={modelGroup} className="flex items-center justify-between p-2 bg-muted rounded-sm">
                     <div className="min-w-0">
                       <p className="font-medium break-words">{modelGroup}</p>
                       {model && (
@@ -252,8 +252,8 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
           </div>
         </div>
 
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-          <p className="text-sm text-blue-800">
+        <div className="bg-info/10 border border-info/20 rounded-lg p-3">
+          <p className="text-sm text-info">
             Total: <strong>{selectedModels.size}</strong> model{selectedModels.size !== 1 ? "s" : ""} will be made
             public
           </p>

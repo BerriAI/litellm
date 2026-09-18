@@ -1,5 +1,6 @@
 import pytest
 from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
+from pydantic import ValidationError
 
 
 def test_new_project_request_tags():
@@ -21,11 +22,11 @@ def test_update_project_request_tags():
 
 def test_new_project_request_invalid_tags_type():
     # tags must be a list — a string should raise a ValidationError
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         NewProjectRequest(project_id="test_proj", team_id="team_1", tags="not-a-list")
 
 
 def test_update_project_request_invalid_tags_type():
     # tags must be a list — a string should raise a ValidationError
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         UpdateProjectRequest(project_id="test_proj", tags="not-a-list")

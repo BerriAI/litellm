@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import LabeledField from "./LabeledField";
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 describe("LabeledField", () => {
   it("should render the label and value", () => {
@@ -49,5 +51,35 @@ describe("LabeledField", () => {
   it("should be copyable when copyable is true and value is present", () => {
     render(<LabeledField label="User ID" value="user-123" copyable />);
     expect(screen.getByRole("button", { name: "Copy User ID" })).toBeInTheDocument();
+  });
+
+  it("should render the value as a link when href is provided", () => {
+    render(<LabeledField label="Team" value="my-team" href="/ui/teams?team=t1" />);
+    expect(screen.getByRole("link", { name: "my-team" })).toHaveAttribute("href", "/ui/teams?team=t1");
+  });
+
+  it("should keep the copy button next to a linked value", () => {
+    render(<LabeledField label="Created By" value="alice" href="/ui/users?user=u1" copyable />);
+    expect(screen.getByRole("link", { name: "alice" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy Created By" })).toBeInTheDocument();
+  });
+
+  it("should not link an empty value even when href is provided", () => {
+    render(<LabeledField label="Team" value="" href="/ui/teams?team=t1" />);
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.getByText("-")).toBeInTheDocument();
+  });
+
+  it("should not link the Default Proxy Admin tag", () => {
+    render(
+      <LabeledField
+        label="Created By"
+        value="default_user_id"
+        href="/ui/users?user=default_user_id"
+        defaultUserIdCheck
+      />,
+    );
+    expect(screen.getByText("Default Proxy Admin")).toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 });

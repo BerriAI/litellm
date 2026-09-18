@@ -8,9 +8,13 @@ a test fail. The comment-scanner cases are the regression for the readline path:
 
 import importlib.util
 import json
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MODULE_PATH = _REPO_ROOT / "scripts" / "check_type_discipline.py"
@@ -695,3 +699,61 @@ def test_budget_covers_exactly_the_checker_rules():
     for spec in budget.values():
         assert isinstance(spec["limit"], int)
         assert spec["limit"] >= 0
+
+
+_FANS_OUT = checker._worker_count(checker.PARALLEL_MIN_PATHS) > 1
+_SERIAL_ONLY = "one usable core, so scan_paths stays serial and there is no fan-out to compare"
+
+
+def _corpus(tmp_path: Path, count: int) -> tuple[Path, ...]:
+    for index in range(count):
+        (tmp_path / f"mod_{index}.py").write_text(
+            f"def build_{index}(items: list[int]) -> None:\n    return None\n",
+            encoding="utf-8",
+        )
+    return tuple(sorted(tmp_path.rglob("*.py")))
+
+
+def _run_checker(target: Path) -> list[str]:
+    completed = subprocess.run(
+        [sys.executable, str(_MODULE_PATH), str(target)],
+        capture_output=True, text=True, timeout=300,
+    )
+    return completed.stdout.splitlines()
+
+
+def test_worker_count_stays_serial_below_the_threshold():
+    assert checker._worker_count(checker.PARALLEL_MIN_PATHS - 1) == 1
+
+
+def test_worker_count_fans_out_at_the_threshold():
+    assert checker._worker_count(checker.PARALLEL_MIN_PATHS) == max(
+        1, min(os.cpu_count() or 1, checker.MAX_WORKERS)
+    )
+
+
+def test_worker_count_never_exceeds_the_cap():
+    assert checker._worker_count(100_000) <= checker.MAX_WORKERS
+
+
+def test_scan_paths_below_the_threshold_returns_every_violation(tmp_path):
+    paths = _corpus(tmp_path, 3)
+    assert checker._worker_count(len(paths)) == 1
+    found = checker.scan_paths(paths)
+    assert found and len({v.path for v in found}) == 3
+
+
+@pytest.mark.skipif(not _FANS_OUT, reason=_SERIAL_ONLY)
+def test_a_fanned_out_run_reports_exactly_what_a_serial_run_reports(tmp_path):
+    paths = _corpus(tmp_path, checker.PARALLEL_MIN_PATHS + 5)
+    serial = [v.render() for v in sorted(v for path in paths for v in checker.check_file(path))]
+    assert serial, "corpus must produce violations or the comparison proves nothing"
+    assert _run_checker(tmp_path) == serial
+
+
+@pytest.mark.skipif(not _FANS_OUT, reason=_SERIAL_ONLY)
+def test_a_fanned_out_run_reports_each_generated_file_exactly_once(tmp_path):
+    paths = _corpus(tmp_path, checker.PARALLEL_MIN_PATHS + 5)
+    reported = _run_checker(tmp_path)
+    assert reported
+    assert len({line.split(":")[0] for line in reported}) == len(paths)

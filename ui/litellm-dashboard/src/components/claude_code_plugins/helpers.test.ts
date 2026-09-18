@@ -17,15 +17,16 @@ import {
   formatKeywords,
   parseSkillSource,
   isValidSubPath,
+  isValidSha256,
   buildMarketplaceSettingsSnippet,
 } from "./helpers";
-import { MarketplacePluginEntry, PluginSource } from "./types";
+import { MarketplacePluginEntry } from "./types";
 
 describe("buildMarketplaceSettingsSnippet", () => {
   it("nests the url under a source object so Claude Code accepts the marketplace", () => {
     expect(JSON.parse(buildMarketplaceSettingsSnippet("https://proxy.example.com"))).toEqual({
       extraKnownMarketplaces: {
-        "my-org": {
+        litellm: {
           source: {
             source: "url",
             url: "https://proxy.example.com/claude-code/marketplace.json",
@@ -37,28 +38,12 @@ describe("buildMarketplaceSettingsSnippet", () => {
 });
 
 describe("formatInstallCommand", () => {
-  it("formats github source with repo", () => {
-    const source: PluginSource = { source: "github", repo: "org/repo" };
-    expect(formatInstallCommand({ name: "my-plugin", source })).toBe("/plugin marketplace add org/repo");
+  it("produces a /plugin install command scoped to the litellm marketplace", () => {
+    expect(formatInstallCommand({ name: "my-plugin" })).toBe("/plugin install my-plugin@litellm");
   });
 
-  it("formats url source", () => {
-    const source: PluginSource = { source: "url", url: "https://example.com/plugin" };
-    expect(formatInstallCommand({ name: "my-plugin", source })).toBe(
-      "/plugin marketplace add https://example.com/plugin",
-    );
-  });
-
-  it("formats git-subdir source using its url", () => {
-    const source: PluginSource = { source: "git-subdir", url: "https://github.com/org/repo", path: "plugins/x" };
-    expect(formatInstallCommand({ name: "my-plugin", source })).toBe(
-      "/plugin marketplace add https://github.com/org/repo",
-    );
-  });
-
-  it("falls back to plugin name when no repo or url", () => {
-    const source: PluginSource = { source: "github" };
-    expect(formatInstallCommand({ name: "my-plugin", source })).toBe("/plugin marketplace add my-plugin");
+  it("uses the plugin name as the identifier", () => {
+    expect(formatInstallCommand({ name: "code-review" })).toBe("/plugin install code-review@litellm");
   });
 });
 
@@ -130,6 +115,12 @@ describe("getSourceDisplayText", () => {
     );
   });
 
+  it("shows the archive url for an archive source", () => {
+    expect(getSourceDisplayText({ source: "archive", url: "https://bucket.s3.amazonaws.com/skill.zip" })).toBe(
+      "https://bucket.s3.amazonaws.com/skill.zip",
+    );
+  });
+
   it("returns unknown for missing data", () => {
     expect(getSourceDisplayText({ source: "github" })).toBe("Unknown source");
   });
@@ -153,6 +144,12 @@ describe("getSourceLink", () => {
   it("returns the repo url for a gitlab git-subdir source", () => {
     expect(getSourceLink({ source: "git-subdir", url: "https://gitlab.com/org/repo", path: "sub/dir" })).toBe(
       "https://gitlab.com/org/repo",
+    );
+  });
+
+  it("returns the archive url for an archive source", () => {
+    expect(getSourceLink({ source: "archive", url: "https://bucket.s3.amazonaws.com/skill.zip" })).toBe(
+      "https://bucket.s3.amazonaws.com/skill.zip",
     );
   });
 
@@ -345,6 +342,20 @@ describe("isValidUrl", () => {
   });
 });
 
+describe("isValidSha256", () => {
+  it("accepts an empty digest and a 64-character hex digest in either case", () => {
+    expect(isValidSha256("")).toBe(true);
+    expect(isValidSha256("a".repeat(64))).toBe(true);
+    expect(isValidSha256(" " + "ABCDEF0123456789".repeat(4) + " ")).toBe(true);
+  });
+
+  it("rejects wrong length and non-hex digests", () => {
+    expect(isValidSha256("a".repeat(63))).toBe(false);
+    expect(isValidSha256("a".repeat(65))).toBe(false);
+    expect(isValidSha256("g".repeat(64))).toBe(false);
+  });
+});
+
 describe("parseKeywords", () => {
   it("splits comma-separated keywords", () => {
     expect(parseKeywords("a, b, c")).toEqual(["a", "b", "c"]);
@@ -459,6 +470,39 @@ describe("parseSkillSource", () => {
     expect(parseSkillSource("")).toBeNull();
     expect(parseSkillSource("   ")).toBeNull();
     expect(parseSkillSource("not a url")).toBeNull();
+  });
+
+  it("parses an S3 zip URL into an archive source and names the skill after the file", () => {
+    expect(parseSkillSource("https://skills-bucket.s3.us-east-1.amazonaws.com/plugins/My_Skill-1.0.0.zip")).toEqual({
+      parsed: { source: "archive", url: "https://skills-bucket.s3.us-east-1.amazonaws.com/plugins/My_Skill-1.0.0.zip" },
+      label: "Zip archive — skills-bucket.s3.us-east-1.amazonaws.com/plugins/My_Skill-1.0.0.zip",
+      suggestedName: "my-skill-1-0-0",
+    });
+  });
+
+  it("keeps the query string of a zip URL so versioned or signed object links still resolve", () => {
+    expect(parseSkillSource("https://bucket.s3.amazonaws.com/skill.ZIP?versionId=abc")?.parsed).toEqual({
+      source: "archive",
+      url: "https://bucket.s3.amazonaws.com/skill.ZIP?versionId=abc",
+    });
+  });
+
+  it("ignores the subfolder for a zip URL since the archive is installed whole", () => {
+    expect(parseSkillSource("https://artifacts.example.com/skill.zip", "plugins/x")?.parsed).toEqual({
+      source: "archive",
+      url: "https://artifacts.example.com/skill.zip",
+    });
+  });
+
+  it("rejects a plain http zip URL", () => {
+    expect(parseSkillSource("http://artifacts.example.com/skill.zip")).toBeNull();
+  });
+
+  it("treats a github zip download URL as an archive rather than a repo path", () => {
+    expect(parseSkillSource("https://github.com/org/repo/releases/download/v1/skill.zip")?.parsed).toEqual({
+      source: "archive",
+      url: "https://github.com/org/repo/releases/download/v1/skill.zip",
+    });
   });
 
   it("suggests a kebab-friendly name from the last path segment", () => {

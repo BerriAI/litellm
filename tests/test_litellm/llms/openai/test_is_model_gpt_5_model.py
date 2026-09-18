@@ -41,6 +41,8 @@ from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 
 # Models that MUST be classified as GPT-5 (routed through GPT-5 reasoning path)
 GPT5_MODELS = [
+    "gpt-6-astra",
+    "openai/gpt-6-astra",
     "gpt-5",
     "gpt-5.1",
     "gpt-5.2",
@@ -120,6 +122,8 @@ class TestOpenAIGPT5ConfigIsModelGpt5Model:
 # /v1/responses bridge (when reasoning_effort is set and tools are passed) on
 # is_model_gpt_5_4_plus_model, so the gpt-5.6 family must land on the True side.
 GPT5_4_PLUS_MODELS = [
+    "gpt-6-astra",
+    "openai/gpt-6-astra",
     "gpt-5.4",
     "gpt-5.5",
     "gpt-5.5-pro",

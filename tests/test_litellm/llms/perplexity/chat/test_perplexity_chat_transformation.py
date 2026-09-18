@@ -5,14 +5,11 @@ Tests the response transformation to extract citation tokens and search queries
 from Perplexity API responses.
 """
 
-import os
-import sys
 from unittest.mock import Mock
 
 import pytest
 
 # Add the project root to Python path
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm import ModelResponse
 from litellm.llms.perplexity.chat.transformation import PerplexityChatConfig
