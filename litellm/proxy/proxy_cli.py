@@ -1411,6 +1411,8 @@ def run_server(
         # DO NOT DELETE - enables global variables to work across files
         from litellm.proxy.proxy_server import app
 
+        os.environ["NUM_WORKERS"] = str(num_workers)
+
         # Auto-create PROMETHEUS_MULTIPROC_DIR for multi-worker setups
         prometheus_multiproc_dir: Final = ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
             num_workers=num_workers,
