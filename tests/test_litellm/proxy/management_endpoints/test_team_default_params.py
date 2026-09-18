@@ -24,13 +24,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 from litellm.proxy.proxy_server import ProxyConfig
 
 
-# ---------------------------------------------------------------------------
-# _update_config_fields: default_team_params loaded from DB on startup
-# ---------------------------------------------------------------------------
-
-
-class TestConfigFieldsDefaultTeamParams:
-    """Tests that _update_config_fields applies default_team_params from DB."""
+class TestDefaultTeamParamsFromSettingsStore:
 
     def _make_proxy_config(self) -> ProxyConfig:
         return ProxyConfig()
@@ -50,11 +44,8 @@ class TestConfigFieldsDefaultTeamParams:
             }
         }
 
-        pc._update_config_fields(
-            current_config={},
-            param_name="litellm_settings",
-            db_param_value=db_settings,
-        )
+        db_values = pc._prepared_db_settings_values("litellm_settings", db_settings)
+        pc._apply_litellm_settings_db_values(db_values)
 
         assert litellm.default_team_params == db_settings["default_team_params"]
 
@@ -68,11 +59,9 @@ class TestConfigFieldsDefaultTeamParams:
             }
         }
 
-        result = pc._update_config_fields(
-            current_config=config,
-            param_name="litellm_settings",
-            db_param_value=db_settings,
-        )
+        pc.litellm_settings.load_yaml(config["litellm_settings"])
+        pc.litellm_settings.apply_db_row("litellm_settings", db_settings)
+        result = {"litellm_settings": dict(pc.litellm_settings.resolved())}
 
         assert result["litellm_settings"]["default_team_params"] == {"max_budget": 100.0}
         # Existing keys preserved
@@ -83,11 +72,8 @@ class TestConfigFieldsDefaultTeamParams:
         monkeypatch.setattr(litellm, "default_team_params", None)
 
         pc = self._make_proxy_config()
-        pc._update_config_fields(
-            current_config={},
-            param_name="litellm_settings",
-            db_param_value={"cache": True},
-        )
+        db_values = pc._prepared_db_settings_values("litellm_settings", {"cache": True})
+        pc._apply_litellm_settings_db_values(db_values)
 
         assert litellm.default_team_params is None
 
@@ -111,13 +97,11 @@ class TestConfigFieldsDefaultTeamParams:
             }
         }
 
-        result = pc._update_config_fields(
-            current_config=config,
-            param_name="litellm_settings",
-            db_param_value=db_settings,
-        )
+        pc.litellm_settings.load_yaml(config["litellm_settings"])
+        db_values = pc._prepared_db_settings_values("litellm_settings", db_settings)
+        pc._apply_litellm_settings_db_values(db_values)
 
-        merged = result["litellm_settings"]["default_team_params"]
+        merged = pc.litellm_settings["default_team_params"]
         # DB value wins for max_budget
         assert merged["max_budget"] == 200.0
         # DB adds rpm_limit
@@ -125,8 +109,7 @@ class TestConfigFieldsDefaultTeamParams:
         # YAML tpm_limit preserved (not in DB)
         assert merged["tpm_limit"] == 100
 
-        # setattr should have applied the DB value
-        assert litellm.default_team_params == db_settings["default_team_params"]
+        assert litellm.default_team_params == merged
 
 
 # ---------------------------------------------------------------------------

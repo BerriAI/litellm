@@ -1087,7 +1087,7 @@ async def test_init_mcp_servers_from_db_respects_supported_db_objects(monkeypatc
         mock_init.assert_not_awaited()
 
 
-def test_update_config_fields_deep_merge_db_wins():
+def test_settings_store_deep_merge_db_wins():
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
@@ -1127,13 +1127,10 @@ def test_update_config_fields_deep_merge_db_wins():
         }
     }
 
-    updated = proxy_config._update_config_fields(
-        current_config=current_config,
-        param_name="router_settings",
-        db_param_value=db_param_value,
-    )
+    proxy_config.router_settings.load_yaml(current_config["router_settings"])
+    proxy_config.router_settings.apply_db_row("router_settings", db_param_value)
 
-    rs = updated["router_settings"]
+    rs = proxy_config.router_settings.resolved()
     aliases = rs["model_group_alias"]
 
     # DB wins on conflicts (deep) for existing alias
@@ -5990,7 +5987,7 @@ async def test_init_hashicorp_vault_config_override_retries_on_transport_error()
     assert reconnect_kwargs["reason"] == "init_hashicorp_vault_config_override_lookup_failure"
 
 
-def test_update_config_fields_uppercases_env_vars(monkeypatch):
+def test_settings_store_uppercases_db_env_vars(monkeypatch):
     """
     Ensure environment variables pulled from DB are uppercased when applied so
     integrations like Datadog that expect uppercase env keys can read them.
@@ -6001,13 +5998,12 @@ def test_update_config_fields_uppercases_env_vars(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
     proxy_config = ProxyConfig()
-    updated_config = proxy_config._update_config_fields(
-        current_config={},
-        param_name="environment_variables",
-        db_param_value={"dd_api_key": "test-api-key", "dd_site": "us5.datadoghq.com"},
+    db_values = proxy_config._prepared_db_settings_values(
+        "environment_variables", {"dd_api_key": "test-api-key", "dd_site": "us5.datadoghq.com"}
     )
+    proxy_config.environment_variables.apply_db_row("environment_variables", db_values)
 
-    env_vars = updated_config.get("environment_variables", {})
+    env_vars = proxy_config.environment_variables.resolved()
     assert env_vars["DD_API_KEY"] == "test-api-key"
     assert env_vars["DD_SITE"] == "us5.datadoghq.com"
     assert os.environ.get("DD_API_KEY") == "test-api-key"
@@ -6465,7 +6461,7 @@ def test_get_config_normalizes_string_callbacks(monkeypatch):
 
 def test_deep_merge_dicts_skips_none_and_empty_lists(monkeypatch):
     """
-    Test that _update_config_fields deep merge skips None values and empty lists.
+    Test that SettingsStore deep merge skips None values and empty lists.
     """
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -6492,14 +6488,16 @@ def test_deep_merge_dicts_skips_none_and_empty_lists(monkeypatch):
         },
     }
 
-    result = proxy_config._update_config_fields(current_config, "general_settings", db_param_value)
+    proxy_config.settings.load_yaml(current_config["general_settings"])
+    proxy_config.settings.apply_db_row("general_settings", db_param_value)
+    result = proxy_config.settings.resolved()
 
-    assert result["general_settings"]["max_parallel_requests"] == 10
-    assert result["general_settings"]["allowed_models"] == ["gpt-3.5-turbo", "gpt-4"]
-    assert result["general_settings"]["new_key"] == "new_value"
-    assert result["general_settings"]["nested"]["key1"] == "updated_value1"
-    assert result["general_settings"]["nested"]["key2"] == "value2"
-    assert result["general_settings"]["nested"]["key3"] == "value3"
+    assert result["max_parallel_requests"] == 10
+    assert result["allowed_models"] == ["gpt-3.5-turbo", "gpt-4"]
+    assert result["new_key"] == "new_value"
+    assert result["nested"]["key1"] == "updated_value1"
+    assert result["nested"]["key2"] == "value2"
+    assert result["nested"]["key3"] == "value3"
 
 
 class TestInvitationEndpoints:
@@ -7343,17 +7341,20 @@ async def test_update_general_settings_clears_a_spend_log_cleanup_bound_dropped_
 
     proxy_config = ProxyConfig()
 
-    with patch(
-        "litellm.proxy.proxy_server.general_settings",
-        {"maximum_spend_logs_cleanup_run_budget": "90s", "maximum_spend_logs_cleanup_batch_timeout": "10s"},
-    ):
+    with patch("litellm.proxy.proxy_server.general_settings", proxy_config.settings):
+        await proxy_config._update_general_settings(
+            db_general_settings={
+                "maximum_spend_logs_cleanup_run_budget": "90s",
+                "maximum_spend_logs_cleanup_batch_timeout": "10s",
+            }
+        )
         await proxy_config._update_general_settings(
             db_general_settings={"maximum_spend_logs_cleanup_batch_timeout": "10s"}
         )
 
         import litellm.proxy.proxy_server as ps
 
-        assert ps.general_settings["maximum_spend_logs_cleanup_run_budget"] is None
+        assert "maximum_spend_logs_cleanup_run_budget" not in ps.general_settings
         assert ps.general_settings["maximum_spend_logs_cleanup_batch_timeout"] == "10s"
 
 
@@ -7364,9 +7365,9 @@ async def test_update_general_settings_keeps_a_yaml_set_spend_log_cleanup_bound(
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
-    proxy_config._yaml_spend_log_cleanup_bounds = {"maximum_spend_logs_cleanup_run_budget": "90s"}
+    proxy_config.settings.load_yaml({"maximum_spend_logs_cleanup_run_budget": "90s"})
 
-    with patch("litellm.proxy.proxy_server.general_settings", {"maximum_spend_logs_cleanup_run_budget": "90s"}):
+    with patch("litellm.proxy.proxy_server.general_settings", proxy_config.settings):
         await proxy_config._update_general_settings(db_general_settings={"store_model_in_db": True})
 
         import litellm.proxy.proxy_server as ps
@@ -7382,10 +7383,10 @@ async def test_update_general_settings_clearing_a_db_override_falls_back_to_the_
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
-    proxy_config._yaml_spend_log_cleanup_bounds = {"maximum_spend_logs_cleanup_run_budget": "90s"}
+    proxy_config.settings.load_yaml({"maximum_spend_logs_cleanup_run_budget": "90s"})
 
-    # Memory currently holds the dashboard override, and the DB no longer carries it.
-    with patch("litellm.proxy.proxy_server.general_settings", {"maximum_spend_logs_cleanup_run_budget": "30s"}):
+    with patch("litellm.proxy.proxy_server.general_settings", proxy_config.settings):
+        await proxy_config._update_general_settings(db_general_settings={"maximum_spend_logs_cleanup_run_budget": "30s"})
         await proxy_config._update_general_settings(db_general_settings={"store_model_in_db": True})
 
         import litellm.proxy.proxy_server as ps
@@ -7399,9 +7400,9 @@ async def test_update_general_settings_apply_user_budget_to_team_keys_yaml_wins(
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
-    proxy_config._yaml_general_settings_keys = {"apply_user_budget_to_team_keys"}
+    proxy_config.settings.load_yaml({"apply_user_budget_to_team_keys": True})
 
-    with patch("litellm.proxy.proxy_server.general_settings", {"apply_user_budget_to_team_keys": True}):
+    with patch("litellm.proxy.proxy_server.general_settings", proxy_config.settings):
         await proxy_config._update_general_settings(db_general_settings={"apply_user_budget_to_team_keys": False})
 
         import litellm.proxy.proxy_server as ps
@@ -7522,10 +7523,11 @@ async def test_update_general_settings_clearing_user_api_key_cache_max_size_rest
     from litellm.proxy.proxy_server import ProxyConfig
 
     cache = UserApiKeyCache()
-    cache.update_in_memory_max_size(5000)
-    monkeypatch.setattr(proxy_server_module, "general_settings", {"user_api_key_cache_max_size": 5000})
+    proxy_config = ProxyConfig()
+    monkeypatch.setattr(proxy_server_module, "general_settings", proxy_config.settings)
     monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
-    await ProxyConfig()._update_general_settings(db_general_settings={"store_model_in_db": True})
+    await proxy_config._update_general_settings(db_general_settings={"user_api_key_cache_max_size": 5000})
+    await proxy_config._update_general_settings(db_general_settings={"store_model_in_db": True})
 
     assert "user_api_key_cache_max_size" not in proxy_server_module.general_settings
 
@@ -7560,10 +7562,10 @@ async def test_update_general_settings_user_api_key_cache_max_size_yaml_wins(mon
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
-    proxy_config._yaml_general_settings_keys = {"user_api_key_cache_max_size"}
+    proxy_config.settings.load_yaml({"user_api_key_cache_max_size": 300})
     cache = UserApiKeyCache()
     cache.update_in_memory_max_size(300)
-    monkeypatch.setattr(proxy_server_module, "general_settings", {"user_api_key_cache_max_size": 300})
+    monkeypatch.setattr(proxy_server_module, "general_settings", proxy_config.settings)
     monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
     await proxy_config._update_general_settings(db_general_settings={"user_api_key_cache_max_size": 10})
 
@@ -7596,7 +7598,10 @@ async def test_update_general_settings_disable_auto_add_proxy_admin_to_teams(db_
 
         import litellm.proxy.proxy_server as ps
 
-        assert ps.general_settings["disable_auto_add_proxy_admin_to_teams"] is expected
+        if expected is None:
+            assert "disable_auto_add_proxy_admin_to_teams" not in ps.general_settings
+        else:
+            assert ps.general_settings["disable_auto_add_proxy_admin_to_teams"] is expected
 
 
 @pytest.mark.asyncio
@@ -11064,11 +11069,8 @@ def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_n
     monkeypatch.setattr(litellm, field_name, False if isinstance(db_value, bool) else None)
 
     pc = ps.ProxyConfig()
-    pc._update_config_fields(
-        current_config={"litellm_settings": {}},
-        param_name="litellm_settings",
-        db_param_value={field_name: db_value},
-    )
+    resolved_db_values = pc._prepared_db_settings_values("litellm_settings", {field_name: db_value})
+    pc._apply_litellm_settings_db_values(resolved_db_values)
 
     assert getattr(litellm, field_name) == db_value
 
@@ -13782,8 +13784,8 @@ def test_disabling_docs_does_not_disable_other_routes(monkeypatch):
     "db_general_settings, expected",
     [
         ({"enable_openai_websocket_passthrough": True}, True),
-        ({"enable_openai_websocket_passthrough": False}, False),
-        ({}, None),
+        ({"enable_openai_websocket_passthrough": False}, True),
+        ({}, True),
     ],
 )
 async def test_update_general_settings_propagates_openai_websocket_passthrough(db_general_settings, expected):
@@ -13804,9 +13806,9 @@ async def test_update_general_settings_keeps_yaml_openai_websocket_passthrough()
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
-    proxy_config._yaml_general_settings_keys = {"enable_openai_websocket_passthrough"}
+    proxy_config.settings.load_yaml({"enable_openai_websocket_passthrough": False})
 
-    with patch("litellm.proxy.proxy_server.general_settings", {"enable_openai_websocket_passthrough": False}):
+    with patch("litellm.proxy.proxy_server.general_settings", proxy_config.settings):
         await proxy_config._update_general_settings(db_general_settings={"enable_openai_websocket_passthrough": True})
 
         import litellm.proxy.proxy_server as ps

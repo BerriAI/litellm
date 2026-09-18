@@ -1,11 +1,26 @@
 from __future__ import annotations
 
-from typing import Final
+import json
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Final, Literal, cast
 
 import pytest
 
 from litellm.proxy.config_resolvers._descriptors import FieldSource
-from litellm.proxy.config_resolvers.settings_rules import ABSENT, DUAL_SOURCE_KEYS, KeyRule, Resolved, resolve
+from litellm.proxy.config_resolvers.settings_rules import (
+    ABSENT,
+    DUAL_SOURCE_KEYS,
+    Absent,
+    JsonValue,
+    KeyRule,
+    Resolved,
+    Section,
+    SettingValue,
+    _build_dual_source_keys,
+    resolve,
+    rule_for,
+)
 
 
 @pytest.mark.parametrize(
@@ -97,3 +112,68 @@ def test_resolve_reports_config_db_and_unset_sources() -> None:
     )
 
     assert sources == ("config", "db", "unset")
+
+
+_PRECEDENCE_MATRIX_PATH: Final = Path(__file__).parent / "fixtures" / "precedence_matrix.json"
+
+
+def _load_precedence_matrix() -> tuple[dict[str, object], ...]:
+    raw: Final[object] = json.loads(_PRECEDENCE_MATRIX_PATH.read_text())
+    assert isinstance(raw, dict)
+    cases: Final[object] = raw.get("cases")
+    assert isinstance(cases, list)
+    assert all(isinstance(case, dict) for case in cases)
+    return tuple(cast(dict[str, object], case) for case in cases)
+
+
+def _matrix_value(case: Mapping[str, object], source: Literal["config", "db"]) -> SettingValue:
+    raw_value: Final[object] = case[source]
+    assert isinstance(raw_value, Mapping)
+    present: Final[object] = raw_value.get("present")
+    assert isinstance(present, bool)
+    if not present:
+        return ABSENT
+    return cast(JsonValue, raw_value["value"])
+
+
+def test_dual_source_key_registry_matches_the_golden_precedence_matrix() -> None:
+    registry: Final = _build_dual_source_keys()
+
+    for case in _load_precedence_matrix():
+        section: Final[object] = case["section"]
+        key: Final[object] = case["key"]
+        rule_kind: Final[object] = case["rule"]
+        db_row: Final[object] = case["db_row"]
+        assert isinstance(section, str)
+        assert isinstance(key, str)
+        assert isinstance(rule_kind, str)
+        assert isinstance(db_row, str)
+        resolved_rule: Final = registry.get((cast(Section, section), key), registry[(cast(Section, section), "*")])
+        assert resolved_rule.kind == rule_kind
+        assert resolved_rule.db_row == db_row
+
+
+@pytest.mark.parametrize("case", _load_precedence_matrix())
+def test_resolve_matches_the_golden_precedence_matrix(case: dict[str, object]) -> None:
+    section: Final[object] = case["section"]
+    key: Final[object] = case["key"]
+    rule_kind: Final[object] = case["rule"]
+    expected: Final[object] = case["expected"]
+    assert isinstance(section, str)
+    assert isinstance(key, str)
+    assert isinstance(rule_kind, str)
+    assert isinstance(expected, Mapping)
+
+    resolved: Final = resolve(
+        rule_for(cast(Section, section), key),
+        _matrix_value(case, "config"),
+        _matrix_value(case, "db"),
+    )
+
+    expected_present: Final[object] = expected["present"]
+    assert isinstance(expected_present, bool)
+    assert rule_for(cast(Section, section), key).kind == rule_kind
+    assert not isinstance(resolved.value, Absent) is expected_present
+    if expected_present:
+        assert resolved.value == expected["value"]
+    assert resolved.source == expected["source"]
