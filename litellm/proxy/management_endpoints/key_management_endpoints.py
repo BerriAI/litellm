@@ -2798,9 +2798,18 @@ async def _process_single_key_update(
             llm_router=llm_router,
         )
 
+    key_request: Final = await _with_validated_object_permission(
+        update_key_request=update_key_request,
+        team_obj=team_obj,
+        existing_key_row=existing_key_row,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     # Prepare update data
     non_default_values = await prepare_key_update_data(
-        data=update_key_request, existing_key_row=existing_key_row, prisma_client=prisma_client, llm_router=llm_router
+        data=key_request, existing_key_row=existing_key_row, prisma_client=prisma_client, llm_router=llm_router
     )
 
     await _enforce_custom_key_policy(
@@ -2809,7 +2818,7 @@ async def _process_single_key_update(
             operation="update",
             existing_key_row=existing_key_row,
             non_default_values=non_default_values,
-            request=update_key_request,
+            request=key_request,
         ),
     )
 
@@ -2825,15 +2834,15 @@ async def _process_single_key_update(
         existing_key_row=existing_key_row,
         prisma_client=prisma_client,
     )
-    _data: Final = {**update_values, "token": update_key_request.key}
+    _data: Final = {**update_values, "token": key_request.key}
     response: Final[Mapping[str, object] | None] = cast(  # cast-ok: every update_data branch returns a str-keyed dict
         "Mapping[str, object] | None",
-        await prisma_client.update_data(token=update_key_request.key, data=_data),
+        await prisma_client.update_data(token=key_request.key, data=_data),
     )
 
     # Delete cache
     await _delete_cache_key_object(
-        hashed_token=_hash_token_if_needed(update_key_request.key),
+        hashed_token=_hash_token_if_needed(key_request.key),
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
@@ -2842,17 +2851,15 @@ async def _process_single_key_update(
     # authenticating against the access groups it just lost.
     await sync_key_update_access_group_membership(
         prisma_client=prisma_client,
-        key_token=_hash_token_if_needed(
-            _resolve_token_to_update(data=update_key_request, existing_key_row=existing_key_row)
-        ),
-        data=update_key_request,
+        key_token=_hash_token_if_needed(_resolve_token_to_update(data=key_request, existing_key_row=existing_key_row)),
+        data=key_request,
         existing_key_row=existing_key_row,
     )
 
     # Trigger async hook
     asyncio.create_task(
         KeyManagementEventHooks.async_key_updated_hook(
-            data=update_key_request,
+            data=key_request,
             existing_key_row=existing_key_row,
             response=response,
             user_api_key_dict=user_api_key_dict,
@@ -2873,6 +2880,31 @@ async def _process_single_key_update(
     updated_key_info.pop("token", None)
 
     return updated_key_info
+
+
+async def _with_validated_object_permission(
+    update_key_request: UpdateKeyRequest,
+    team_obj: LiteLLM_TeamTableCachedObj | None,
+    existing_key_row: LiteLLM_VerificationToken,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> UpdateKeyRequest:
+    if update_key_request.object_permission is None:
+        return update_key_request
+    normalized_object_permission: Final = await _validate_mcp_servers_for_key_update(
+        data=update_key_request,
+        team_obj=team_obj,
+        existing_key_row=existing_key_row,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value,
+    )
+    if normalized_object_permission is None:
+        return update_key_request
+    return update_key_request.model_copy(
+        update=MappingProxyType({"object_permission": LiteLLM_ObjectPermissionBase(**normalized_object_permission)})
+    )
 
 
 async def _validate_mcp_servers_for_key_update(
