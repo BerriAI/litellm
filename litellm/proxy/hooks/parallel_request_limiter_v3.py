@@ -1595,12 +1595,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     self._gauge_status(gauge, in_flight, "OK") for gauge, in_flight in zip(gauges, acquired_in_flight)
                 ],
             )
-        gauge: Final = gauges[len(acquired_in_flight)]
+        next_gauge: Final = gauges[len(acquired_in_flight)]
         acquired_keys: Final = tuple(g["counter_key"] for g in gauges[: len(acquired_in_flight)])
         try:
             raw: Final = await acquire_script(
-                keys=(gauge["counter_key"],),
-                args=(gauge["limit"], PARALLEL_REQUEST_SLOT_TTL_SECONDS, slot_id),
+                keys=(next_gauge["counter_key"],),
+                args=(next_gauge["limit"], PARALLEL_REQUEST_SLOT_TTL_SECONDS, slot_id),
             )
         except Exception:
             await self._release_slots(counter_keys=acquired_keys, slot_id=slot_id, parent_otel_span=parent_otel_span)
@@ -1609,7 +1609,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             await self._release_slots(counter_keys=acquired_keys, slot_id=slot_id, parent_otel_span=parent_otel_span)
             return RateLimitResponse(
                 overall_code="OVER_LIMIT",
-                statuses=[self._gauge_status(gauge, int(raw[2]), "OVER_LIMIT")],
+                statuses=[self._gauge_status(next_gauge, int(raw[2]), "OVER_LIMIT")],
             )
         return await self._acquire_parallel_slots_in_redis(
             acquire_script=acquire_script,
