@@ -147,6 +147,19 @@ class TestChatGPTMultiAccountAuthenticator:
         assert get_chatgpt_auth_file(GenericLiteLLMParams()) is None
         assert get_chatgpt_auth_file(GenericLiteLLMParams(chatgpt_auth_file="/b/auth.json")) == "/b/auth.json"
 
+    def test_relative_and_absolute_auth_file_share_cached_authenticator(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        get_cached_authenticator.cache_clear()
+        auth_file = tmp_path / "x" / "auth.json"
+        auth_file.parent.mkdir(parents=True)
+        auth_file.write_text("{}")
+
+        relative_key = get_chatgpt_auth_file({"chatgpt_auth_file": "x/auth.json"})
+        absolute_key = get_chatgpt_auth_file({"chatgpt_auth_file": str(auth_file)})
+        assert relative_key is not None and absolute_key is not None
+
+        assert get_cached_authenticator(relative_key) is get_cached_authenticator(absolute_key)
+
 
 class TestChatGPTAuthFileEarlyProviderDetection:
     @staticmethod

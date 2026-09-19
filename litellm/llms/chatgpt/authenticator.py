@@ -54,7 +54,9 @@ def get_chatgpt_auth_file(
         if isinstance(litellm_params, Mapping)
         else litellm_params.chatgpt_auth_file
     )
-    return value if isinstance(value, str) and value else None
+    if not isinstance(value, str) or not value:
+        return None
+    return os.path.abspath(os.path.expanduser(value))
 
 
 @lru_cache(maxsize=128)
