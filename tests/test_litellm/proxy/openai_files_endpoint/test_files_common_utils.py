@@ -510,7 +510,8 @@ def test_get_credentials_for_model_honors_a_deployment_id_grant_for_the_public_n
     )
 
 
-def test_handle_model_based_routing_honors_a_deployment_id_grant_for_the_public_name():
+@pytest.mark.asyncio
+async def test_handle_model_based_routing_honors_a_deployment_id_grant_for_the_public_name():
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.openai_files_endpoints.common_utils import handle_model_based_routing
 
@@ -520,7 +521,7 @@ def test_handle_model_based_routing_honors_a_deployment_id_grant_for_the_public_
     request.query_params = {}
     request.headers = {}
 
-    should_route, model_used, _, credentials = handle_model_based_routing(
+    should_route, model_used, _, credentials = await handle_model_based_routing(
         file_id="",
         request=request,
         llm_router=router,

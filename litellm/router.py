@@ -10327,6 +10327,64 @@ class Router:
             return display_name
         return None
 
+    def get_credential_deployment(
+        self,
+        model_id: str,
+        team_id: str | None = None,
+        user_api_key_auth: "UserAPIKeyAuth | None" = None,
+    ) -> Deployment | None:
+        """
+        The deployment a passthrough endpoint (files, batches, etc.) resolves for a
+        model id or model name: by deployment id first, then by model_name, then by
+        the team's exact public model name, then by wildcard pattern (team wildcards
+        before global ones, so a global "openai/*" never shadows the team's own
+        entry). Name and wildcard lookups never resolve another team's deployment.
+        With the caller's auth, a name granted only through deployment IDs resolves
+        to one of those deployments rather than the first sibling sharing the name.
+
+        Returns None when nothing matches or the match is paused via
+        `LiteLLM_ProxyModelTable.blocked`, so callers cannot bypass an admin pause
+        by resolving the deployment directly.
+        """
+        deployment: Final = (
+            self.get_deployment(model_id=model_id)
+            or self._get_model_group_deployment_usable_by_team(
+                model_group_name=model_id, team_id=team_id, user_api_key_auth=user_api_key_auth
+            )
+            or self._get_team_public_name_deployment(model_id=model_id, team_id=team_id)
+            or self._get_wildcard_deployment_usable_by_team(model_id=model_id, team_id=team_id)
+        )
+        if deployment is None or self._is_deployment_blocked(deployment):
+            return None
+        return deployment
+
+    def _get_team_public_name_deployment(self, model_id: str, team_id: str | None) -> Deployment | None:
+        if team_id is None:
+            return None
+        team_indices: Final = self.team_model_to_deployment_indices.get((team_id, model_id))
+        if not team_indices:
+            return None
+        team_model: Final = self.model_list[team_indices[0]]
+        return Deployment(**team_model) if isinstance(team_model, dict) else team_model
+
+    def _get_wildcard_deployment_usable_by_team(self, model_id: str, team_id: str | None) -> Deployment | None:
+        team_pattern_router: Final = self.team_pattern_routers.get(team_id) if team_id is not None else None
+        team_wildcard_models: Final = team_pattern_router.route(model_id) if team_pattern_router else None
+        global_wildcard_models: Final = tuple(
+            wildcard_model
+            for wildcard_model in (self.pattern_router.route(model_id) or ())
+            if self._deployment_usable_by_team(wildcard_model, team_id)
+        )
+        potential_wildcard_models: Final = team_wildcard_models or global_wildcard_models
+        if not potential_wildcard_models:
+            return None
+        wildcard_deployment: Final = potential_wildcard_models[0]
+        if isinstance(wildcard_deployment, dict):
+            return Deployment(**wildcard_deployment)
+        if isinstance(wildcard_deployment, Deployment):
+            return wildcard_deployment
+        return None
+
     def get_deployment_credentials_with_provider(
         self,
         model_id: str,
@@ -10337,8 +10395,8 @@ class Router:
         Get API credentials and provider info from a model name in model_list.
         Useful for passthrough endpoints (files, batches, etc.) that need credentials.
 
-        This method tries to find a deployment by model_id first, and if not found,
-        it tries to find by model_group_name (model_name).
+        Resolves the deployment with `get_credential_deployment` (by deployment id,
+        then model_name, team public model name, and wildcard pattern).
 
         Args:
             model_id: Model ID or model name from model_list (e.g., "gpt-4o-litellm")
@@ -10363,45 +10421,10 @@ class Router:
             credentials = router.get_deployment_credentials_with_provider("gpt-4o-litellm")
             # Returns: {"api_key": "sk-...", "custom_llm_provider": "openai", "model": "gpt-4o", ...}
         """
-        # Try to get deployment by model_id first
-        deployment = self.get_deployment(model_id=model_id)
-
-        # If not found, try by model_group_name
+        deployment: Final = self.get_credential_deployment(
+            model_id=model_id, team_id=team_id, user_api_key_auth=user_api_key_auth
+        )
         if deployment is None:
-            deployment = self._get_model_group_deployment_usable_by_team(
-                model_group_name=model_id, team_id=team_id, user_api_key_auth=user_api_key_auth
-            )
-
-        # If not found, check team-scoped deployments whose team public model
-        # name exactly matches model_id (wildcard team names are matched via
-        # team_pattern_routers below).
-        if deployment is None and team_id is not None:
-            team_indices: Final = self.team_model_to_deployment_indices.get((team_id, model_id), [])
-            if team_indices:
-                team_model: Final = self.model_list[team_indices[0]]
-                deployment = Deployment(**team_model) if isinstance(team_model, dict) else team_model
-
-        # If still not found, check for wildcard pattern matches. Team wildcard
-        # matches take priority so a global pattern (e.g. "openai/*") doesn't
-        # shadow the team's own entry.
-        if deployment is None:
-            team_pattern_router: Final = self.team_pattern_routers.get(team_id) if team_id is not None else None
-            team_wildcard_models: Final = (team_pattern_router.route(model_id) or []) if team_pattern_router else []
-            global_wildcard_models: Final = [
-                wildcard_model
-                for wildcard_model in (self.pattern_router.route(model_id) or [])
-                if self._deployment_usable_by_team(wildcard_model, team_id)
-            ]
-            potential_wildcard_models: Final = team_wildcard_models or global_wildcard_models
-            if potential_wildcard_models:
-                # Use the first matching wildcard deployment
-                deployment_dict: Final = potential_wildcard_models[0]
-                if isinstance(deployment_dict, dict):
-                    deployment = Deployment(**deployment_dict)
-                elif isinstance(deployment_dict, Deployment):
-                    deployment = deployment_dict
-
-        if deployment is None or self._is_deployment_blocked(deployment):
             return None
 
         # Get basic credentials
