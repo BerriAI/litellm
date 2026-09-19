@@ -26714,6 +26714,1092 @@
         "prompt_tokens": 0,
         "completion_tokens": 0
       }
+    },
+    {
+      "name": "gpt-5.6-responses_cache_read",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "summarize this text"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "completed",
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 12928,
+            "output_tokens": 380,
+            "total_tokens": 13308,
+            "input_tokens_details": {
+              "cached_tokens": 12288
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0085904,
+        "input_cost": 0.0032704,
+        "output_cost": 0.00532,
+        "prompt_tokens": 12928,
+        "completion_tokens": 380,
+        "cache_read_cost": 0.0021504
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_reasoning",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "reason about this text"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "completed",
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "reasoning",
+              "id": "rs_$REQUEST_ID",
+              "status": "completed",
+              "summary": []
+            },
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 1240,
+            "output_tokens": 4040,
+            "total_tokens": 5280,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 3480
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.06569,
+        "input_cost": 0.00217,
+        "output_cost": 0.06352,
+        "prompt_tokens": 1240,
+        "completion_tokens": 4040,
+        "reasoning_cost": 0.05568
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_stream",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "stream this text",
+        "stream": true
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_$REQUEST_ID\",\"object\":\"response\",\"created_at\":1700000000,\"status\":\"in_progress\",\"model\":\"gpt-5.6\",\"output\":[{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}]}],\"usage\":null}}",
+          "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}",
+          "event: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"content_part\",\"text\":\"\"}}",
+          "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"delta\":\"scripted \"}",
+          "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"delta\":\"response\"}",
+          "event: response.output_text.done\ndata: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"text\":\"scripted response\"}",
+          "event: response.content_part.done\ndata: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}}",
+          "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}]}}",
+          "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_$REQUEST_ID\",\"object\":\"response\",\"created_at\":1700000000,\"status\":\"completed\",\"model\":\"gpt-5.6\",\"output\":[{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":1840,\"output_tokens\":412,\"total_tokens\":2252,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens_details\":{\"reasoning_tokens\":0}}}}"
+        ]
+      },
+      "expected": {
+        "spend": 0.008988,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_stream_cache_read",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "stream cached text",
+        "stream": true
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_$REQUEST_ID\",\"object\":\"response\",\"created_at\":1700000000,\"status\":\"in_progress\",\"model\":\"gpt-5.6\",\"output\":[{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}]}],\"usage\":null}}",
+          "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}",
+          "event: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"content_part\",\"text\":\"\"}}",
+          "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"delta\":\"scripted \"}",
+          "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"delta\":\"response\"}",
+          "event: response.output_text.done\ndata: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"text\":\"scripted response\"}",
+          "event: response.content_part.done\ndata: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}}",
+          "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}]}}",
+          "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_$REQUEST_ID\",\"object\":\"response\",\"created_at\":1700000000,\"status\":\"completed\",\"model\":\"gpt-5.6\",\"output\":[{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":12928,\"output_tokens\":380,\"total_tokens\":13308,\"input_tokens_details\":{\"cached_tokens\":12288},\"output_tokens_details\":{\"reasoning_tokens\":0}}}}"
+        ]
+      },
+      "expected": {
+        "spend": 0.0085904,
+        "input_cost": 0.0032704,
+        "output_cost": 0.00532,
+        "prompt_tokens": 12928,
+        "completion_tokens": 380,
+        "cache_read_cost": 0.0021504
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_incomplete",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "truncate this text",
+        "max_output_tokens": 100
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "incomplete",
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 100,
+            "total_tokens": 1940,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "incomplete_details": {
+            "reason": "max_output_tokens"
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.00462,
+        "input_cost": 0.00322,
+        "output_cost": 0.0014,
+        "prompt_tokens": 1840,
+        "completion_tokens": 100
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_previous_response_id",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "continue this text",
+        "previous_response_id": "resp_scripted_prior"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "completed",
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412,
+            "total_tokens": 2252,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.008988,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_web_search_medium",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "search this text",
+        "tools": [
+          {
+            "type": "web_search_preview",
+            "search_context_size": "medium"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "completed",
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "web_search_call",
+              "id": "ws_$REQUEST_ID",
+              "status": "completed",
+              "action": {
+                "type": "search",
+                "query": "scripted query"
+              }
+            },
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412,
+            "total_tokens": 2252,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.021488,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "tool_usage_cost": 0.0125
+      }
+    },
+    {
+      "name": "gpt-5.3-codex-responses_file_search",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.3-codex",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "search files",
+        "tools": [
+          {
+            "type": "file_search",
+            "vector_store_ids": [
+              "vs_scripted"
+            ]
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "completed",
+          "model": "gpt-5.3-codex",
+          "output": [
+            {
+              "type": "file_search_call",
+              "id": "fs_$REQUEST_ID",
+              "status": "completed",
+              "queries": [
+                "scripted query"
+              ],
+              "results": []
+            },
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412,
+            "total_tokens": 2252,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.010204,
+        "input_cost": 0.00276,
+        "output_cost": 0.004944,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "tool_usage_cost": 0.0025
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_service_tier_flex",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "flex text",
+        "service_tier": "flex"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "completed",
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412,
+            "total_tokens": 2252,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "service_tier": "flex"
+          },
+          "service_tier": "flex"
+        }
+      },
+      "expected": {
+        "spend": 0.004494,
+        "input_cost": 0.00161,
+        "output_cost": 0.002884,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_service_tier_priority",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "priority text",
+        "service_tier": "priority"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "completed",
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412,
+            "total_tokens": 2252,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "service_tier": "priority"
+          },
+          "service_tier": "priority"
+        }
+      },
+      "expected": {
+        "spend": 0.017976,
+        "input_cost": 0.00644,
+        "output_cost": 0.011536,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_input_text",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0117,
+        "input_cost": 0.00552,
+        "output_cost": 0.00618,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_cache_read",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "cached text",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 640,
+            "output_tokens": 380,
+            "cache_read_input_tokens": 12288
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0113064,
+        "input_cost": 0.0056064,
+        "output_cost": 0.0057,
+        "prompt_tokens": 12928,
+        "completion_tokens": 380,
+        "cache_read_cost": 0.0036864
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_cache_write_5m",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 350,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "cache this text",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 512,
+            "output_tokens": 350,
+            "cache_creation_input_tokens": 9216,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 9216,
+              "ephemeral_1h_input_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.041346,
+        "input_cost": 0.036096,
+        "output_cost": 0.00525,
+        "prompt_tokens": 9728,
+        "completion_tokens": 350,
+        "cache_creation_cost": 0.03456
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_cache_write_1h",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 350,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "cache this text for an hour",
+                "cache_control": {
+                  "type": "ephemeral",
+                  "ttl": "1h"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 512,
+            "output_tokens": 350,
+            "cache_creation_input_tokens": 9216,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 2048,
+              "ephemeral_1h_input_tokens": 7168
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.057474,
+        "input_cost": 0.052224,
+        "output_cost": 0.00525,
+        "prompt_tokens": 9728,
+        "completion_tokens": 350,
+        "cache_creation_cost": 0.050688
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_web_search",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ],
+        "tools": [
+          {
+            "type": "web_search_20250305",
+            "name": "web_search"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "server_tool_use",
+              "id": "srv_$REQUEST_ID",
+              "name": "web_search",
+              "input": {
+                "query": "scripted query"
+              }
+            },
+            {
+              "type": "web_search_tool_result",
+              "tool_use_id": "srv_$REQUEST_ID",
+              "content": [
+                {
+                  "type": "web_search_result",
+                  "title": "scripted result",
+                  "url": "https://scripted.example"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412,
+            "server_tool_use": {
+              "web_search_requests": 2
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0317,
+        "input_cost": 0.00552,
+        "output_cost": 0.00618,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "tool_usage_cost": 0.02
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_stream",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ],
+        "stream": true
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_$REQUEST_ID\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1840}}}",
+          "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}",
+          "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"scripted \"}}",
+          "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"response\"}}",
+          "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}",
+          "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":412}}",
+          "event: message_stop\ndata: {\"type\":\"message_stop\"}"
+        ]
+      },
+      "expected": {
+        "spend": 0.0117,
+        "input_cost": 0.00552,
+        "output_cost": 0.00618,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_stream_cache_read",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 380,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ],
+        "stream": true
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_$REQUEST_ID\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":640,\"cache_read_input_tokens\":12288}}}",
+          "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}",
+          "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"scripted \"}}",
+          "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"response\"}}",
+          "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}",
+          "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":380}}",
+          "event: message_stop\ndata: {\"type\":\"message_stop\"}"
+        ]
+      },
+      "expected": {
+        "spend": 0.0113064,
+        "input_cost": 0.0056064,
+        "output_cost": 0.0057,
+        "prompt_tokens": 12928,
+        "completion_tokens": 380,
+        "cache_read_cost": 0.0036864
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_tiered_input_above_200k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 620,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 210000,
+            "output_tokens": 620
+          }
+        }
+      },
+      "expected": {
+        "spend": 1.27395,
+        "input_cost": 1.26,
+        "output_cost": 0.01395,
+        "prompt_tokens": 210000,
+        "completion_tokens": 620
+      }
+    },
+    {
+      "name": "claude-haiku-4-5-messages_input_text",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-haiku-4-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-haiku-4-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0039,
+        "input_cost": 0.00184,
+        "output_cost": 0.00206,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "us.anthropic.claude-opus-5-v1:0-messages_input_text",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "us.anthropic.claude-opus-5-v1:0",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "output": {
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "text": "scripted response"
+                }
+              ]
+            }
+          },
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 1840,
+            "outputTokens": 412
+          },
+          "metrics": {
+            "latencyMs": 42
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.02145,
+        "input_cost": 0.01012,
+        "output_cost": 0.01133,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "anthropic.claude-sonnet-5-v1:0-messages_cache_read",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "anthropic.claude-sonnet-5-v1:0",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "output": {
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "text": "scripted response"
+                }
+              ]
+            }
+          },
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 640,
+            "outputTokens": 380,
+            "totalTokens": 13308,
+            "cacheReadInputTokens": 12288
+          },
+          "metrics": {
+            "latencyMs": 42
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.01243704,
+        "input_cost": 0.00616704,
+        "output_cost": 0.00627,
+        "prompt_tokens": 12928,
+        "completion_tokens": 380,
+        "cache_read_cost": 0.00405504
+      }
     }
   ]
 }
