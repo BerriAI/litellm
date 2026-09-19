@@ -11155,7 +11155,6 @@
                   "type": "null"
                 }
               ],
-              "default": "v1",
               "description": "API version for Javelin service",
               "title": "Api Version"
             },
