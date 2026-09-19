@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use litellm_llms::base_llm::audio_transcription::transformation::{
-    AudioTranscriptionAuth, BaseAudioTranscriptionConfig,
+    BaseAudioTranscriptionConfig, RequestAuth,
 };
 use serde_json::{Map, Value};
 
@@ -24,7 +24,7 @@ pub struct ProviderAudioTranscriptionRequest {
     pub url: String,
     pub body: Value,
     pub upstream_headers: Vec<(String, String)>,
-    pub auth: AudioTranscriptionAuth,
+    pub auth: RequestAuth,
     pub optional_params: Map<String, Value>,
     pub timeout: Option<Duration>,
 }

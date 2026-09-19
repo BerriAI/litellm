@@ -5,6 +5,7 @@ use litellm_core_utils::{
     params::OpaqueParams,
     url_utils::ApiUrl,
 };
+use litellm_http::outbound::OutboundRequest;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -166,7 +167,7 @@ impl BaseOcrConfig for ReductoParseV3Config {
         request: &PreparedOcrRequest,
         client: &OcrClient,
         hooks: &dyn CallHooks<Error>,
-    ) -> Result<reqwest::Request, Error> {
+    ) -> Result<OutboundRequest, Error> {
         prepare_upload_request(self, request, client, hooks).await
     }
 }
@@ -251,7 +252,7 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
         request: &PreparedOcrRequest,
         client: &OcrClient,
         hooks: &dyn CallHooks<Error>,
-    ) -> Result<reqwest::Request, Error> {
+    ) -> Result<OutboundRequest, Error> {
         prepare_upload_request(self, request, client, hooks).await
     }
 }
@@ -264,7 +265,7 @@ async fn prepare_upload_request<C: BaseOcrConfig<Environment = Vec<(String, Stri
     request: &PreparedOcrRequest,
     client: &OcrClient,
     hooks: &dyn CallHooks<Error>,
-) -> Result<reqwest::Request, Error> {
+) -> Result<OutboundRequest, Error> {
     let params = config.map_ocr_params(&request.optional_params, &request.model)?;
     let headers = config.validate_environment(request, client).await?;
     let url = config.get_complete_url(request, &params, &headers)?;
@@ -286,7 +287,7 @@ async fn prepare_upload_request<C: BaseOcrConfig<Environment = Vec<(String, Stri
         &body,
         config.get_supported_ocr_params(&request.model),
     )?;
-    build_http_request(client, request, &url, &headers, &body)
+    build_http_request(request, url, headers, &body)
 }
 
 fn uploaded_file_id(document: OcrDocument) -> Result<ReductoFileId, Error> {

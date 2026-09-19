@@ -24,6 +24,8 @@ pub enum Error {
     #[error(transparent)]
     Headers(#[from] litellm_http::request::HeaderError),
     #[error(transparent)]
+    Http(#[from] litellm_http::Error),
+    #[error(transparent)]
     Aws(#[from] litellm_auth_aws::Error),
 }
 

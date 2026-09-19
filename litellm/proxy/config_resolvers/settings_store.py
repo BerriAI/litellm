@@ -19,10 +19,21 @@ from litellm.proxy.config_resolvers.settings_rules import (
 
 
 class ConfigOwnedKeyError(RuntimeError):
-    def __init__(self, section: Section, key: str) -> None:
-        super().__init__(f"{section}.{key} is set in the config file and cannot be changed at runtime")
+    def __init__(self, section: Section, key: str, *, shadows_db_value: bool = False) -> None:
+        super().__init__(config_ownership_message(section=section, key=key, shadows_db_value=shadows_db_value))
         self.section: Final = section
         self.key: Final = key
+        self.shadows_db_value: Final = shadows_db_value
+
+
+def config_ownership_message(*, section: Section, key: str, shadows_db_value: bool) -> str:
+    stored: Final = (
+        " The value stored in the database for it is ignored and will never be applied." if shadows_db_value else ""
+    )
+    return (
+        f"{section}.{key} is set in the config file, so the config file owns it and it cannot be changed "
+        f"here.{stored} Edit the config file to change it, or remove it from the file to let the database own it."
+    )
 
 
 _EMPTY_VALUES: Final[Mapping[str, JsonValue]] = MappingProxyType({})
@@ -54,6 +65,13 @@ class SettingsStore(MutableMapping[str, JsonValue]):
             )
         )
 
+    def shadowed_db_keys(self) -> tuple[str, ...]:
+        """Keys the config file owns whose stored value differs, so the stored one never reaches a reader."""
+        return tuple(sorted(key for key in self._yaml_values if self._db_value_is_shadowed(key)))
+
+    def shadows_db_value(self, key: str) -> bool:
+        return self.owned_by_config(key) and self._db_value_is_shadowed(key)
+
     def apply_db_row(self, row: DbRow, db_row: Mapping[str, JsonValue]) -> None:
         previous_row: Final = self._database_rows.get(row, _EMPTY_VALUES)
         self._database_rows = MappingProxyType({**self._database_rows, row: MappingProxyType(dict(db_row))})
@@ -81,7 +99,7 @@ class SettingsStore(MutableMapping[str, JsonValue]):
 
     def __setitem__(self, key: str, value: JsonValue) -> None:
         if self.owned_by_config(key) and value != self.get(key):
-            raise ConfigOwnedKeyError(self._section, key)
+            raise ConfigOwnedKeyError(self._section, key, shadows_db_value=self._db_value_is_shadowed(key))
         self._runtime_values = MappingProxyType({**self._runtime_values, key: value})
         self._deleted_runtime_keys = self._deleted_runtime_keys - frozenset((key,))
 
@@ -89,7 +107,7 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         if key not in self:
             raise KeyError(key)
         if self.owned_by_config(key):
-            raise ConfigOwnedKeyError(self._section, key)
+            raise ConfigOwnedKeyError(self._section, key, shadows_db_value=self._db_value_is_shadowed(key))
         self._runtime_values = MappingProxyType(
             {key_: value for key_, value in self._runtime_values.items() if key_ != key}
         )
@@ -136,8 +154,14 @@ class SettingsStore(MutableMapping[str, JsonValue]):
             )
         )
 
-    def _resolution_for(self, key: str) -> Resolved:
+    def _db_value(self, key: str) -> SettingValue:
         rule: Final = rule_for(self._section, key)
+        return self._database_rows.get(rule.db_row, _EMPTY_VALUES).get(key, ABSENT)
+
+    def _db_value_is_shadowed(self, key: str) -> bool:
+        db_value: Final = self._db_value(key)
+        return not isinstance(db_value, Absent) and db_value is not None and db_value != self.get(key)
+
+    def _resolution_for(self, key: str) -> Resolved:
         yaml_value: Final[SettingValue] = self._yaml_values.get(key, ABSENT)
-        db_value: Final[SettingValue] = self._database_rows.get(rule.db_row, _EMPTY_VALUES).get(key, ABSENT)
-        return resolve(yaml_value, db_value)
+        return resolve(yaml_value, self._db_value(key))

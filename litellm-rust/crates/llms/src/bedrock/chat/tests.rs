@@ -281,8 +281,9 @@ fn signs_with_sigv4_in_the_resolved_region() {
                 &|_| None
             )
             .expect("auth resolves"),
-        ChatCompletionsAuth::AwsSigV4 {
-            region: "eu-central-1".to_string()
+        RequestAuth::AwsSigV4 {
+            region: "eu-central-1".to_string(),
+            service: "bedrock",
         }
     );
 }
@@ -306,11 +307,12 @@ fn a_bearer_token_outranks_sigv4_the_way_python_resolves_it() {
             )
             .expect("auth resolves")
     };
-    let bearer = |token: &str| ChatCompletionsAuth::Bearer {
+    let bearer = |token: &str| RequestAuth::Bearer {
         token: token.to_string(),
     };
-    let sigv4 = ChatCompletionsAuth::AwsSigV4 {
+    let sigv4 = RequestAuth::AwsSigV4 {
         region: "eu-central-1".to_string(),
+        service: "bedrock",
     };
 
     // A caller-supplied key is the bearer token, and outranks the env.

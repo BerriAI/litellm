@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Final
 from urllib.parse import parse_qsl
 
 import httpx
+import httpx2
 import pytest
 from e2e_config import PROXY_BASE_URL, REQUEST_TIMEOUT
 from e2e_http import AuthHeaders, NoBody, unwrap
@@ -29,7 +30,7 @@ from idp import Identity
 from mcp import ClientSession
 from mcp.client.auth import OAuthClientProvider
 from mcp.client.streamable_http import streamable_http_client
-from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
+from mcp.shared.auth import AuthorizationCodeResult, OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
 from mcp.types import TextContent
 from models import (
     ChatBody,
@@ -192,10 +193,10 @@ def _oauth_provider(
 
     redirect_handler: Final = _reject_redirect if storage_state_path is None else _follow_redirect
 
-    async def callback_handler() -> tuple[str, str | None]:
+    async def callback_handler() -> AuthorizationCodeResult:
         code = code_holder.get("code")
         assert code is not None, "callback_handler ran before the authorize redirect completed"
-        return code, code_holder.get("state")
+        return AuthorizationCodeResult(code=code, state=code_holder.get("state"))
 
     return OAuthClientProvider(
         server_url=url,
@@ -214,24 +215,24 @@ def _oauth_provider(
     )
 
 
-class _HeaderInjectingTransport(httpx.AsyncBaseTransport):
+class _HeaderInjectingTransport(httpx2.AsyncBaseTransport):
     """Adds the caller's LiteLLM key header to every outgoing SDK request
     (discovery, DCR, token exchange), so the gateway resolves which user to
     store the upstream token for from the key on the token exchange, exactly
     like a production MCP host configured with a LiteLLM key header."""
 
-    def __init__(self, inner: httpx.AsyncBaseTransport, headers: dict[str, str], gateway_url: str) -> None:
+    def __init__(self, inner: httpx2.AsyncBaseTransport, headers: dict[str, str], gateway_url: str) -> None:
         self._inner = inner
         self._headers = headers
-        self._gateway_url = httpx.URL(gateway_url)
+        self._gateway_url = httpx2.URL(gateway_url)
 
     @staticmethod
-    def _port(url: httpx.URL) -> int | None:
+    def _port(url: httpx2.URL) -> int | None:
         if url.port is not None:
             return url.port
         return {"http": 80, "https": 443}.get(url.scheme)
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         same_origin: Final = (
             request.url.scheme == self._gateway_url.scheme
             and request.url.host == self._gateway_url.host
@@ -253,12 +254,12 @@ class _HeaderInjectingTransport(httpx.AsyncBaseTransport):
 
 def _oauth_http_client(
     headers: dict[str, str], auth: OAuthClientProvider, gateway_url: str = PROXY_BASE_URL
-) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
+) -> httpx2.AsyncClient:
+    return httpx2.AsyncClient(
         auth=auth,
-        timeout=httpx.Timeout(REQUEST_TIMEOUT),
+        timeout=httpx2.Timeout(REQUEST_TIMEOUT),
         follow_redirects=True,
-        transport=_HeaderInjectingTransport(httpx.AsyncHTTPTransport(), headers, gateway_url),
+        transport=_HeaderInjectingTransport(httpx2.AsyncHTTPTransport(), headers, gateway_url),
     )
 
 
@@ -266,7 +267,7 @@ async def _seed_via_dance(
     url: str, headers: dict[str, str], storage: InMemoryTokenStorage, storage_state_path: str
 ) -> tuple[str, ...]:
     async with _oauth_http_client(headers, _oauth_provider(url, storage, storage_state_path)) as http_client:
-        async with streamable_http_client(url, http_client=http_client) as (read, write, _):
+        async with streamable_http_client(url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 listed = await session.list_tools()
@@ -297,7 +298,7 @@ async def _list_and_call(
         _oauth_provider(url, storage, storage_state_path, identity, server_alias, allow_upstream_consent),
         gateway_url,
     ) as http_client:
-        async with streamable_http_client(url, http_client=http_client) as (read, write, _):
+        async with streamable_http_client(url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 listed: Final = await session.list_tools()
@@ -305,7 +306,7 @@ async def _list_and_call(
                 text: Final = "".join(content.text for content in result.content if isinstance(content, TextContent))
                 return OauthToolRun(
                     tools=tuple(sorted(tool_item.name for tool_item in listed.tools)),
-                    is_error=result.isError,
+                    is_error=result.is_error,
                     text=text,
                 )
 

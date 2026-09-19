@@ -315,3 +315,47 @@ def test_settings_store_still_accepts_a_write_to_a_key_the_config_does_not_own()
     store["max_parallel_requests"] = 7
 
     assert store["max_parallel_requests"] == 7
+
+
+def test_settings_store_reports_a_config_owned_key_whose_stored_value_differs() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"allowed_ips": ["1.2.3.4"]})
+    store.apply_db_row("general_settings", {"allowed_ips": ["1.2.3.4", "5.6.7.8"], "max_parallel_requests": 7})
+
+    assert store.shadowed_db_keys() == ("allowed_ips",)
+    assert store.shadows_db_value("allowed_ips") is True
+    assert store.shadows_db_value("max_parallel_requests") is False
+    assert store["max_parallel_requests"] == 7
+
+
+def test_settings_store_reports_no_shadowing_when_the_stored_value_agrees() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"allowed_ips": ["1.2.3.4"]})
+    store.apply_db_row("general_settings", {"allowed_ips": ["1.2.3.4"]})
+
+    assert store.shadowed_db_keys() == ()
+    assert store.shadows_db_value("allowed_ips") is False
+
+
+def test_settings_store_says_the_stored_value_is_ignored_when_it_refuses_a_write() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"allowed_ips": ["1.2.3.4"]})
+    store.apply_db_row("general_settings", {"allowed_ips": ["1.2.3.4", "5.6.7.8"]})
+
+    with pytest.raises(ConfigOwnedKeyError) as refused:
+        store["allowed_ips"] = ["9.9.9.9"]
+
+    assert refused.value.shadows_db_value is True
+    assert "stored in the database" in str(refused.value)
+
+
+def test_settings_store_refusal_stays_quiet_about_the_database_when_nothing_is_stored() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"allowed_ips": ["1.2.3.4"]})
+
+    with pytest.raises(ConfigOwnedKeyError) as refused:
+        store["allowed_ips"] = ["9.9.9.9"]
+
+    assert refused.value.shadows_db_value is False
+    assert "stored in the database" not in str(refused.value)
+    assert "config file" in str(refused.value)

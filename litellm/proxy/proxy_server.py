@@ -447,7 +447,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     project_spend_counter_key,
     tag_cache_key,
 )
-from litellm.proxy.config_resolvers import SettingsStore, resolve_fields
+from litellm.proxy.config_resolvers import SettingsStore, config_ownership_message, resolve_fields
 from litellm.proxy.config_resolvers.alerting import (
     EMAIL_DESCRIPTORS,
     MS_TEAMS_DESCRIPTORS,
@@ -4907,6 +4907,7 @@ class ProxyConfig:
         self.router_settings: Final[SettingsStore] = SettingsStore("router_settings")
         self.litellm_settings: Final[SettingsStore] = SettingsStore("litellm_settings")
         self.environment_variables: Final[SettingsStore] = SettingsStore("environment_variables")
+        self._warned_shadowed_keys: frozenset[tuple[Section, str]] = frozenset()
         self._settings_stores: Final[Mapping[Section, SettingsStore]] = MappingProxyType(
             {
                 "general_settings": self.settings,
@@ -5128,12 +5129,20 @@ class ProxyConfig:
             f"key '{rejected[0]}' is" if len(rejected) == 1 else f"keys {', '.join(repr(key) for key in rejected)} are"
         )
         pronoun: Final = "it" if len(rejected) == 1 else "them"
+        shadowed: Final = tuple(key for key in rejected if store.shadows_db_value(key))
+        stored: Final = (
+            f" The {'value' if len(shadowed) == 1 else 'values'} already stored in the database for "
+            f"{', '.join(shadowed)} {'is' if len(shadowed) == 1 else 'are'} ignored and will never be applied."
+            if shadowed
+            else ""
+        )
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"{section_name} {subject} set in the config file and cannot be changed here",
+                "error": f"{section_name} {subject} set in the config file and cannot be changed here.{stored}",
                 "keys": list(rejected),
                 "section": section_name,
+                "stored_database_values_ignored": list(shadowed),
                 "resolution": (
                     f"edit {user_config_file_path} to change {pronoun}, "
                     f"or remove {pronoun} from the file to let the database own {pronoun}"
@@ -7430,7 +7439,18 @@ class ProxyConfig:
                     self._prepared_db_settings_values(section, param_value),
                 )
 
+        self._warn_about_shadowed_db_settings()
         return self._config_with_resolved_settings(config)
+
+    def _warn_about_shadowed_db_settings(self) -> None:
+        shadowed: Final[frozenset[tuple[Section, str]]] = frozenset(
+            (section, key) for section, store in self._settings_stores.items() for key in store.shadowed_db_keys()
+        )
+        for section, key in sorted(shadowed - self._warned_shadowed_keys):
+            verbose_proxy_logger.warning(
+                "%s", config_ownership_message(section=section, key=key, shadows_db_value=True)
+            )
+        self._warned_shadowed_keys = shadowed
 
     def _prepared_db_settings_values(self, section: Section, value: object) -> Mapping[str, SettingsJsonValue]:
         if section == "environment_variables":
@@ -17688,8 +17708,8 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
         "type": "Boolean",
         "tab": "prompt_caching",
         "description": (
-            "Auto-adds cache_control to the system prompt and trailing turn for supported Anthropic "
-            "and Bedrock Claude models. The cache is shared across callers on the same upstream credentials."
+            "Auto-adds cache_control to the system prompt and trailing turn for supported Claude models on "
+            "Anthropic, Bedrock, Vertex AI, and Azure AI. The cache is shared across callers on the same upstream credentials."
         ),
     },
     "anthropic_prompt_caching_ttl": {
