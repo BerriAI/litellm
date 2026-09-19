@@ -1,5 +1,6 @@
 import datetime
 from collections.abc import Mapping
+from functools import reduce
 from typing import Any, Final
 
 import httpx
@@ -23,6 +24,34 @@ def _timing_window_start(
     if isinstance(received_at, datetime.datetime):
         return received_at, True
     return start_time, False
+
+
+def _union_duration_ms(windows: object, lower: float, upper: float) -> float | None:
+    if not isinstance(windows, (list, tuple)):
+        return None
+    clipped: Final[tuple[tuple[float, float], ...]] = tuple(
+        (max(lower, float(window[0])), min(upper, float(window[1])))
+        for window in windows
+        if isinstance(window, (list, tuple))
+        and len(window) == 2
+        and isinstance(window[0], (int, float))
+        and isinstance(window[1], (int, float))
+        and max(lower, float(window[0])) < min(upper, float(window[1]))
+    )
+    if not clipped:
+        return None
+
+    ordered: Final[tuple[tuple[float, float], ...]] = tuple(sorted(clipped))
+
+    def merge_window(
+        merged: tuple[tuple[float, float], ...], current: tuple[float, float]
+    ) -> tuple[tuple[float, float], ...]:
+        if not merged or current[0] > merged[-1][1]:
+            return (*merged, current)
+        return (*merged[:-1], (merged[-1][0], max(merged[-1][1], current[1])))
+
+    merged: Final[tuple[tuple[float, float], ...]] = reduce(merge_window, ordered, ())
+    return sum(end - start for start, end in merged) * 1000
 
 
 def response_timing_metrics(
@@ -54,20 +83,17 @@ def response_timing_metrics(
     if cache_duration_ms is not None:
         overhead_ms: float | None = total_response_time_ms - cache_duration_ms
     elif llm_api_duration_ms is not None:
-        total_provider_duration_ms: Final = metadata.get("llm_api_duration_ms_total")
-        provider_duration_ms: Final = (
-            total_provider_duration_ms
+        provider_duration_ms: Final[float | None] = (
+            _union_duration_ms(
+                metadata.get("llm_api_timing_windows"),
+                window_start.timestamp(),
+                end_time.timestamp(),
+            )
             if receive_anchored
-            and isinstance(total_provider_duration_ms, float)
-            and isinstance(llm_api_duration_ms, (int, float))
-            and total_provider_duration_ms >= llm_api_duration_ms
-            else llm_api_duration_ms
-        )
-        overhead_ms = (
-            round(total_response_time_ms - provider_duration_ms, 4)
-            if isinstance(provider_duration_ms, (int, float))
             else None
         )
+        effective: Final = provider_duration_ms if provider_duration_ms is not None else llm_api_duration_ms
+        overhead_ms = round(total_response_time_ms - effective, 4) if isinstance(effective, (int, float)) else None
     else:
         overhead_ms = None
     if overhead_ms is None:
@@ -178,7 +204,8 @@ class ResponseMetadata:
             # pre-processing = time from request start to LLM API call start
             api_call_start: Final[datetime.datetime | None] = logging_obj.model_call_details.get("api_call_start_time")
             if api_call_start is not None and start_time is not None:
-                pre_ms: Final = (api_call_start - start_time).total_seconds() * 1000
+                anchor: Final = _timing_window_start(start_time, logging_obj)[0]
+                pre_ms: Final = (api_call_start - anchor).total_seconds() * 1000
                 detailed["timing_pre_processing_ms"] = round(pre_ms, 4)
 
                 # post-processing = total - pre - llm_api

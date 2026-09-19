@@ -13,7 +13,7 @@ Regression tests for https://github.com/BerriAI/litellm/issues/21343
 import asyncio
 import datetime
 from collections.abc import Awaitable, Callable
-from typing import Final, cast
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -21,6 +21,10 @@ import pytest
 import litellm
 from litellm import Router
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+    _union_duration_ms,
+    response_timing_metrics,
+)
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.rules import Rules
 from litellm.utils import function_setup
@@ -286,7 +290,11 @@ async def test_not_found_error_in_retry_loop_raises_immediately():
 
 @pytest.mark.asyncio
 async def test_retry_attempts_accumulate_timing_in_shared_request_metadata():
-    metadata: dict[str, object] = {"model_group": "test-model"}
+    received_at: Final = datetime.datetime.now()
+    metadata: dict[str, object] = {
+        "model_group": "test-model",
+        "litellm_received_at": received_at,
+    }
     logging_obj_raw, _ = function_setup(
         "acompletion",
         Rules(),
@@ -297,7 +305,8 @@ async def test_retry_attempts_accumulate_timing_in_shared_request_metadata():
         litellm_call_id="retry-timing-test",
         is_async_call=True,
     )
-    logging_obj: Final[Logging] = cast(Logging, logging_obj_raw)
+    assert isinstance(logging_obj_raw, Logging)
+    logging_obj: Final[Logging] = logging_obj_raw
     attempt_numbers: list[int] = []
     metadata_ids: list[int] = []
 
@@ -334,8 +343,17 @@ async def test_retry_attempts_accumulate_timing_in_shared_request_metadata():
         )
 
     request_metadata: Final = logging_obj.model_call_details["litellm_params"]["metadata"]
+    windows: Final = request_metadata["llm_api_timing_windows"]
+    end_time: Final = datetime.datetime.fromtimestamp(max(window[1] for window in windows))
+    timing_metrics: Final = response_timing_metrics(received_at, end_time, logging_obj)
     assert result == "success"
     assert attempt_numbers == [1, 2]
     assert request_metadata is metadata
     assert metadata_ids == [id(metadata), id(metadata)]
-    assert request_metadata["llm_api_duration_ms_total"] > logging_obj.model_call_details["llm_api_duration_ms"]
+    assert len(windows) == 2
+    union_duration_ms: Final = _union_duration_ms(windows, received_at.timestamp(), end_time.timestamp())
+    assert union_duration_ms is not None
+    total_response_time_ms: Final = (end_time.timestamp() - received_at.timestamp()) * 1000
+    assert timing_metrics["litellm_overhead_time_ms"] == pytest.approx(
+        round(total_response_time_ms - union_duration_ms, 4)
+    )
