@@ -438,6 +438,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     get_management_object_ttl,
     model_access_group_cache_key,
     model_access_group_spend_counter_key,
+    project_cache_key,
+    project_spend_counter_key,
     tag_cache_key,
 )
 from litellm.proxy.config_resolvers import SettingsStore, resolve_fields
@@ -2836,6 +2838,7 @@ async def increment_spend_counters(
     tags: list[str] | None = None,
     request_started_at: datetime | None = None,
     model_access_groups: Sequence[str] | None = None,
+    project_id: str | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -2857,6 +2860,7 @@ async def increment_spend_counters(
             end_user_id=end_user_id,
             tags=tags,
             model_access_groups=model_access_groups,
+            project_id=project_id,
         ),
     ):
         await _increment_spend_counters_batched(
@@ -2870,6 +2874,7 @@ async def increment_spend_counters(
             tags=tags,
             request_started_at=request_started_at,
             model_access_groups=model_access_groups,
+            project_id=project_id,
         )
 
 
@@ -2884,6 +2889,7 @@ async def _increment_spend_counters_batched(
     tags: list[str] | None,
     request_started_at: datetime | None,
     model_access_groups: Sequence[str] | None,
+    project_id: str | None = None,
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET."""
     reserved_counter_keys: Final = await _reconcile_budget_reservation_for_counter_update(
@@ -3084,6 +3090,13 @@ async def _increment_spend_counters_batched(
             )
             if org_id is not None
             else None,
+            _prepare_project_spend_increment(
+                project_id=project_id,
+                response_cost=cost,
+                reserved_counter_keys=reserved_counter_keys,
+            )
+            if project_id is not None
+            else None,
         )
         if coro is not None
     )
@@ -3230,6 +3243,23 @@ async def _prepare_org_spend_increment(
     pending: Final = await _prepare_unreserved_spend_counter_increment(
         counter_key=f"spend:org:{org_id}",
         source_cache_key=[f"org_id:{org_id}:with_budget", f"org_id:{org_id}"],
+        increment=response_cost,
+        reserved_counter_keys=reserved_counter_keys,
+    )
+    return (pending,) if pending is not None else ()
+
+
+async def _prepare_project_spend_increment(
+    project_id: str | None,
+    response_cost: float,
+    reserved_counter_keys: set[str],
+) -> tuple[PendingSpendIncrement, ...]:
+    if project_id is None:
+        return ()
+
+    pending: Final = await _prepare_unreserved_spend_counter_increment(
+        counter_key=project_spend_counter_key(project_id),
+        source_cache_key=project_cache_key(project_id),
         increment=response_cost,
         reserved_counter_keys=reserved_counter_keys,
     )
@@ -6889,9 +6919,7 @@ class ProxyConfig:
         self._add_callbacks_from_db_config(config_data)
 
         # router settings
-        await self._add_router_settings_from_db_config(
-            config_data=config_data, llm_router=llm_router, prisma_client=prisma_client
-        )
+        await self._add_router_settings_from_db_config(llm_router=llm_router, prisma_client=prisma_client)
 
         return still_desired_ids
 
@@ -7099,13 +7127,11 @@ class ProxyConfig:
 
     async def _add_router_settings_from_db_config(
         self,
-        config_data: Mapping[str, object],
         llm_router: Router | None,
         prisma_client: PrismaClient | None,
     ) -> None:
         if llm_router is None or prisma_client is None:
             return
-        self.router_settings.load_yaml(_as_settings_mapping(config_data.get("router_settings")))
         db_router_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
             where={"param_name": "router_settings"}
         )
@@ -17000,6 +17026,48 @@ async def update_config(
         if prisma_client is None:
             raise Exception("No DB Connected")
 
+        requested_general_settings: Final[Mapping[str, JsonValue]] = (
+            config_info.general_settings.model_dump(exclude_none=True, exclude_unset=True)
+            if config_info.general_settings is not None
+            else {}
+        )
+        raw_litellm_settings: Final[Mapping[str, JsonValue]] = _CONFIG_SECTION_VALUES.validate_python(
+            config_info.litellm_settings if config_info.litellm_settings is not None else {}
+        )
+        incoming_success_callback: Final = raw_litellm_settings.get("success_callback")
+        updated_litellm_settings: Final[Mapping[str, JsonValue]] = _CONFIG_SECTION_VALUES.validate_python(
+            {
+                **raw_litellm_settings,
+                **(
+                    {"success_callback": normalize_callback_names(incoming_success_callback)}
+                    if isinstance(incoming_success_callback, list)
+                    else {}
+                ),
+            }
+        )
+        typed_router_settings: Final[Mapping[str, JsonValue]] = (
+            config_info.router_settings.model_dump(exclude_none=True, exclude_unset=True)
+            if config_info.router_settings is not None
+            else {}
+        )
+        router_settings_updates: Final[Mapping[str, JsonValue]] = {
+            **typed_router_settings,
+            **(
+                {
+                    key: value
+                    for key, value in raw_router_settings.items()
+                    if key not in typed_router_settings and value is not None
+                }
+                if isinstance(raw_router_settings, dict)
+                else {}
+            ),
+        }
+        proxy_config.reject_config_owned_writes(
+            section_name="general_settings", changed_keys=requested_general_settings
+        )
+        proxy_config.reject_config_owned_writes(section_name="litellm_settings", changed_keys=raw_litellm_settings)
+        proxy_config.reject_config_owned_writes(section_name="router_settings", changed_keys=router_settings_updates)
+
         async def _read_section(param_name: str) -> dict:
             row: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
                 where={"param_name": param_name}
@@ -17026,8 +17094,7 @@ async def update_config(
         if config_info.general_settings is not None:
             existing = await _read_section("general_settings")
             before_general_settings: Final = copy.deepcopy(existing)
-            updates: Mapping[str, JsonValue] = config_info.general_settings.dict(exclude_none=True)
-            for k, v in updates.items():
+            for k, v in requested_general_settings.items():
                 if k == "alert_to_webhook_url":
                     if "alerting" not in existing:
                         existing["alerting"] = ["slack"]
@@ -17070,15 +17137,9 @@ async def update_config(
         if config_info.litellm_settings is not None:
             existing = await _read_section("litellm_settings")
             before_litellm_settings: Final = copy.deepcopy(existing)
-            updated_litellm_settings: Final = dict(config_info.litellm_settings)
-
-            incoming_cb = updated_litellm_settings.get("success_callback")
-            if isinstance(incoming_cb, list):
-                updated_litellm_settings["success_callback"] = normalize_callback_names(incoming_cb)
-
             merged: Final = {**existing, **updated_litellm_settings}
 
-            incoming_cb = updated_litellm_settings.get("success_callback")
+            incoming_cb: Final = updated_litellm_settings.get("success_callback")
             existing_cb: Final = existing.get("success_callback")
             if isinstance(incoming_cb, list):
                 if isinstance(existing_cb, list):
@@ -17101,15 +17162,6 @@ async def update_config(
         if isinstance(raw_router_settings, dict):
             existing = await _read_section("router_settings")
             before_router_settings: Final = copy.deepcopy(existing)
-            typed_router_settings: Final = (
-                config_info.router_settings.dict(exclude_none=True) if config_info.router_settings is not None else {}
-            )
-            raw_router_settings_without_none: Final = {
-                key: value
-                for key, value in raw_router_settings.items()
-                if key not in typed_router_settings and value is not None
-            }
-            router_settings_updates: Final = {**typed_router_settings, **raw_router_settings_without_none}
             new_router_settings: Final = {**existing, **router_settings_updates}
             await _upsert_section("router_settings", new_router_settings)
             asyncio.create_task(

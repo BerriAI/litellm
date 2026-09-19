@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import logging
 import re
 
 
@@ -15,12 +16,14 @@ import pytest
 from redis.exceptions import DataError
 
 import litellm
-from litellm.proxy._types import Litellm_EntityType
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,
     _TEAM_MEMBER_SPEND_SQL,
     DBSpendUpdateWriter,
 )
+from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
@@ -1144,6 +1147,114 @@ async def test_batch_database_updates_queues_org_member_spend_for_the_request_us
 
     assert transactions["org_list_transactions"] == {"org1": 0.1}
     assert transactions["org_member_list_transactions"] == {"organization_id::org1::user_id::u1": 0.1}
+
+
+@pytest.mark.asyncio
+async def test_project_spend_is_persisted_to_project_table_and_project_cache_is_evicted():
+    db_writer: Final = DBSpendUpdateWriter()
+    await db_writer._batch_database_updates(
+        response_cost=0.25,
+        user_id="u1",
+        hashed_token="t1",
+        team_id="team-1",
+        org_id=None,
+        end_user_id=None,
+        prisma_client=MagicMock(),
+        litellm_proxy_budget_name=None,
+        payload={"request_id": "req-1", "model": "gpt-4o-mini", "spend": 0.25},
+        project_id="proj-1",
+    )
+    await db_writer._batch_database_updates(
+        response_cost=0.5,
+        user_id="u1",
+        hashed_token="t1",
+        team_id="team-1",
+        org_id=None,
+        end_user_id=None,
+        prisma_client=MagicMock(),
+        litellm_proxy_budget_name=None,
+        payload={"request_id": "req-2", "model": "gpt-4o-mini", "spend": 0.5},
+        project_id="proj-1",
+    )
+    transactions: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert transactions["project_list_transactions"] == {"proj-1": 0.75}
+    assert transactions["team_member_list_transactions"] == {"team_id::team-1::user_id::u1": 0.75}
+
+    mock_batcher: Final = MagicMock()
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=_good_tx(mock_batcher))
+    user_api_key_cache: Final = MagicMock()
+    user_api_key_cache.async_delete_cache = AsyncMock()
+    proxy_logging: Final = MagicMock()
+    proxy_logging.call_details = {"user_api_key_cache": user_api_key_cache}
+
+    await db_writer._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=0,
+        proxy_logging_obj=proxy_logging,
+        db_spend_update_transactions=transactions,
+    )
+
+    mock_batcher.litellm_projecttable.update_many.assert_called_once_with(
+        where={"project_id": "proj-1"},
+        data={"spend": {"increment": 0.75}},
+    )
+    user_api_key_cache.async_delete_cache.assert_any_await(key="project_id:proj-1")
+
+
+@pytest.mark.asyncio
+async def test_batch_database_updates_without_project_id_touches_no_project_row():
+    db_writer: Final = DBSpendUpdateWriter()
+    await db_writer._batch_database_updates(
+        response_cost=0.1,
+        user_id="u1",
+        hashed_token="t1",
+        team_id=None,
+        org_id=None,
+        end_user_id=None,
+        prisma_client=MagicMock(),
+        litellm_proxy_budget_name=None,
+        payload={"request_id": "req-1", "model": "gpt-4o-mini", "spend": 0.1},
+    )
+    transactions: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+
+    assert transactions["project_list_transactions"] == {}
+
+
+@pytest.mark.asyncio
+async def test_failed_project_enqueue_is_reported_and_does_not_drop_the_rest_of_the_batch(
+    caplog: pytest.LogCaptureFixture,
+):
+    class _ProjectRejectingQueue(SpendUpdateQueue):
+        async def add_update(self, update: SpendUpdateQueueItem):
+            if update.get("entity_type") is Litellm_EntityType.PROJECT:
+                raise RuntimeError("project enqueue boom")
+            await super().add_update(update)
+
+    db_writer: Final = DBSpendUpdateWriter()
+    db_writer.spend_update_queue = _ProjectRejectingQueue()
+
+    with caplog.at_level(logging.ERROR, logger=verbose_proxy_logger.name):
+        await db_writer._batch_database_updates(
+            response_cost=0.25,
+            user_id="u1",
+            hashed_token="t1",
+            team_id="team-1",
+            org_id="org-1",
+            end_user_id=None,
+            prisma_client=MagicMock(),
+            litellm_proxy_budget_name=None,
+            payload={"request_id": "req-1", "model": "gpt-4o-mini", "spend": 0.25, "request_tags": ["tag-1"]},
+            project_id="proj-1",
+        )
+
+    assert any("proj-1" in record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR)
+
+    transactions: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert transactions["project_list_transactions"] == {}
+    assert transactions["tag_list_transactions"] == {"tag-1": 0.25}
+    assert transactions["key_list_transactions"] == {"t1": 0.25}
+    assert transactions["team_list_transactions"] == {"team-1": 0.25}
 
 
 @pytest.mark.asyncio
