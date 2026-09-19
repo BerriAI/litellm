@@ -492,6 +492,18 @@ class SpendLogCleanup:
             deadline=deadline,
         )
 
+    async def _delete_old_autorouter_user_session_rows(
+        self, prisma_client: PrismaClient, cutoff_date: datetime, deadline: float
+    ) -> TableCleanupResult:
+        return await self._delete_old_rows_batched(
+            prisma_client,
+            cutoff_date,
+            table_name="LiteLLM_AutoRouterUserSession",
+            key_columns=("user_id", "api_key", "session_id", "router_name"),
+            time_column="last_turn_at",
+            deadline=deadline,
+        )
+
     async def _delete_old_health_check_rows(
         self, prisma_client: PrismaClient, cutoff_date: datetime, deadline: float
     ) -> TableCleanupResult:
@@ -560,9 +572,17 @@ class SpendLogCleanup:
                 )
             except Exception:  # noqa: BLE001  # retained observations are retried by the next cleanup job
                 verbose_proxy_logger.warning("Auto-router baseline retention remains pending")
-        sessions_result: Final = await self._delete_old_autorouter_session_rows(prisma_client, session_cutoff, deadline)
+        sessions_result: Final = await self._delete_old_autorouter_session_rows(
+            prisma_client, session_cutoff, self._group_deadline(deadline, 2)
+        )
         verbose_proxy_logger.info("Deleted %s expired auto-router session rollup rows", sessions_result.rows_deleted)
-        return (sessions_result,)
+        user_sessions_result: Final = await self._delete_old_autorouter_user_session_rows(
+            prisma_client, session_cutoff, deadline
+        )
+        verbose_proxy_logger.info(
+            "Deleted %s expired auto-router user session rollup rows", user_sessions_result.rows_deleted
+        )
+        return (sessions_result, user_sessions_result)
 
     async def _clean_health_checks(
         self, prisma_client: PrismaClient, retention_seconds: int, deadline: float

@@ -312,8 +312,7 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
         length. Total actual spend includes every turn; savings and baseline spend include only turns with a current
         estimate, including turns with zero savings. Savings are net of recorded LLM classification cost. Classification
         cost per 1K turns is averaged over all auto-router turns, including those that skip classification. The range
-        counts whole sessions that overlap it, so totals can differ slightly from the Overall tab, which buckets savings
-        by UTC day.
+        counts whole sessions that overlap it, so totals can differ from savings views that group usage by UTC day.
       </p>
 
       <div className="space-y-4">
@@ -333,11 +332,17 @@ interface AutoRouterBenchmarksTabProps {
   accessToken: string | null;
   activity: Pick<DailyActivityRange, "dateValue" | "onDateChange">;
   apiKey?: string;
+  userId?: string;
 }
 
-export const AutoRouterUsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken, activity, apiKey }) => {
+export const AutoRouterUsageView: React.FC<AutoRouterBenchmarksTabProps> = ({
+  accessToken,
+  activity,
+  apiKey,
+  userId,
+}) => {
   const { dateValue, onDateChange } = activity;
-  const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, dateValue, apiKey);
+  const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, dateValue, apiKey, userId);
   const [selectedKey, setSelectedKey] = useState<string>(ALL_ROUTERS);
   const { data: autoRouters } = useAutoRouters();
 
@@ -372,6 +377,12 @@ export const AutoRouterUsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ ac
         </div>
       </div>
 
+      {userId && (
+        <p className="text-sm text-muted-foreground">
+          Usage for this user across API keys and JWT-authenticated requests. Older sessions recorded without a user ID
+          are not included.
+        </p>
+      )}
       <BenchmarksBody
         isPending={isPending}
         error={error}
