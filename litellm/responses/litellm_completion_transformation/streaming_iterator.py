@@ -927,12 +927,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _ensure_output_item_for_chunk(self, chunk: ModelResponseStream) -> None:
         # Change: Never return a value, just enqueue output item events
         if self.sent_output_item_added_event:
-            if (
-                not self.sent_message_item_added_event
-                and chunk.choices
-                and self._get_delta_string_from_streaming_choices(chunk.choices)
-            ):
-                self._queue_message_item_added_events()
             return
         if not chunk.choices:
             return

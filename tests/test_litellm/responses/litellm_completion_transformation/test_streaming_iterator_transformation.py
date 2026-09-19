@@ -1058,6 +1058,32 @@ async def test_reasoning_then_text_announces_message_item_before_text_events(syn
     assert announced_indexes_by_item_type["message"] != announced_indexes_by_item_type["reasoning"]
 
 
+@pytest.mark.asyncio
+async def test_reasoning_item_closes_before_message_item_opens():
+    iterator: Final = _build_iterator(
+        [
+            _reasoning_chunk("let me think"),
+            _chunk("Hello"),
+            _chunk("!", finish_reason="stop"),
+        ]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode=False)
+
+    item_lifecycle: Final = [
+        (event.type, event.item.type)
+        for event in events
+        if getattr(event, "type", None)
+        in (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+    ]
+    assert item_lifecycle == [
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "reasoning"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "reasoning"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "message"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "message"),
+    ]
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_tool_then_reasoning_then_text_gives_message_its_own_output_index(sync_mode: bool):
