@@ -174,14 +174,30 @@ async fn facade_retains_native_response_when_requested() {
     );
 }
 
+#[rstest]
+#[case::plain_key(&[("MISTRAL_API_KEY", "plain")], "plain")]
+#[case::azure_key_wins(&[("MISTRAL_AZURE_API_KEY", "azure"), ("MISTRAL_API_KEY", "plain")], "azure")]
+#[case::empty_azure_key_falls_through(&[("MISTRAL_AZURE_API_KEY", ""), ("MISTRAL_API_KEY", "plain")], "plain")]
 #[tokio::test]
-async fn provider_key_fallback_reads_the_injected_secret_source() {
+async fn mistral_env_fallbacks_follow_python_through_the_injected_secret_source(
+    #[case] secrets: &'static [(&'static str, &'static str)],
+    #[case] expected_key: &str,
+) {
     let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
+    let secret_base = base.clone();
+    let client = ocr_client().with_secrets(Arc::new(move |name: &str| match name {
+        "MISTRAL_AZURE_API_BASE" => Some(secret_base.clone()),
+        "MISTRAL_API_BASE" => Some("http://127.0.0.1:9/never-read".into()),
+        _ => secrets
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| value.to_string()),
+    }));
     let request = decode_request(OcrWireRequest {
         model: "mistral/model".into(),
         document: json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
         api_key: None,
-        api_base: Some(base.clone()),
+        api_base: None,
         custom_llm_provider: None,
         extra_headers: None,
         optional_params: Default::default(),
@@ -189,13 +205,10 @@ async fn provider_key_fallback_reads_the_injected_secret_source() {
         timeout_seconds: Some(2.0),
     })
     .unwrap();
-    let client = ocr_client().with_secrets(Arc::new(|name: &str| {
-        (name == "MISTRAL_API_KEY").then(|| "from-secret-manager".to_string())
-    }));
 
     crate::ocr::client::perform(&client, request).await.unwrap();
     server.await.unwrap();
-    assert!(seen.lock().unwrap()[0].contains("authorization: Bearer from-secret-manager"));
+    assert!(seen.lock().unwrap()[0].contains(&format!("authorization: Bearer {expected_key}")));
 }
 
 #[tokio::test]
