@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import pytest
 
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
@@ -6,6 +8,7 @@ from litellm.proxy.openai_files_endpoints import storage_backend_service
 from litellm.proxy.openai_files_endpoints.storage_backend_service import (
     StorageBackendFileService,
 )
+from litellm.proxy.utils import PrismaClient
 
 
 class _RecordingStorageBackend:
@@ -57,7 +60,7 @@ def _file_data():
 @pytest.mark.asyncio
 async def test_upload_with_target_model_names_but_no_hook_raises_before_uploading(monkeypatch):
     backend = _RecordingStorageBackend()
-    monkeypatch.setattr(storage_backend_service, "get_storage_backend", lambda name: backend)
+    monkeypatch.setattr(storage_backend_service, "get_storage_backend", lambda name, prisma_client=None: backend)
 
     with pytest.raises(ProxyException) as exc_info:
         await StorageBackendFileService.upload_file_to_storage_backend(
@@ -80,7 +83,7 @@ async def test_upload_with_target_model_names_but_no_hook_raises_before_uploadin
 @pytest.mark.asyncio
 async def test_upload_without_target_model_names_skips_hook_requirement(monkeypatch):
     backend = _RecordingStorageBackend()
-    monkeypatch.setattr(storage_backend_service, "get_storage_backend", lambda name: backend)
+    monkeypatch.setattr(storage_backend_service, "get_storage_backend", lambda name, prisma_client=None: backend)
 
     file_object = await StorageBackendFileService.upload_file_to_storage_backend(
         file_data=_file_data(),
@@ -101,7 +104,7 @@ async def test_upload_without_target_model_names_skips_hook_requirement(monkeypa
 @pytest.mark.asyncio
 async def test_upload_with_target_model_names_and_hook_stores_unified_id(monkeypatch):
     backend = _RecordingStorageBackend()
-    monkeypatch.setattr(storage_backend_service, "get_storage_backend", lambda name: backend)
+    monkeypatch.setattr(storage_backend_service, "get_storage_backend", lambda name, prisma_client=None: backend)
     hook = _FakeManagedFilesHook()
 
     file_object = await StorageBackendFileService.upload_file_to_storage_backend(
@@ -125,3 +128,28 @@ async def test_upload_with_target_model_names_and_hook_stores_unified_id(monkeyp
         "stored_id_matches_response": True,
         "model_mappings": {"gpt-x": "https://storage.example/blob-1"},
     }
+
+
+@pytest.mark.asyncio
+async def test_upload_hands_the_prisma_client_to_the_storage_backend_factory(monkeypatch: pytest.MonkeyPatch):
+    backend = _RecordingStorageBackend()
+    factory_calls: list[tuple[str, PrismaClient | None]] = []
+
+    def _factory(name: str, prisma_client: PrismaClient | None = None) -> _RecordingStorageBackend:
+        factory_calls.append((name, prisma_client))
+        return backend
+
+    monkeypatch.setattr(storage_backend_service, "get_storage_backend", _factory)
+    prisma_client = MagicMock()
+
+    await StorageBackendFileService.upload_file_to_storage_backend(
+        file_data=_file_data(),
+        target_storage="litellm_db",
+        target_model_names=[],
+        purpose="batch",
+        proxy_logging_obj=_FakeProxyLogging(hook=None),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        prisma_client=prisma_client,
+    )
+
+    assert factory_calls == [("litellm_db", prisma_client)]

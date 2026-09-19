@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 FILE_LIST_CONTINUATION_CHUNK_SIZE: Final = 500
 
 BATCH_CREATE_HIDDEN_PARAM: Final = "batch_create"
+LITELLM_EXECUTED_BATCH_ID_PREFIX: Final = "litellm_batch_"
 
 
 def validate_file_list_limit(limit: int | None) -> None:
@@ -177,6 +178,10 @@ def get_batch_id_from_unified_batch_id(file_id: str) -> str:
     else:
         batch_id = file_id.split("generic_response_id:", 1)[1]
     return re.split(r"[;,]", batch_id, maxsplit=1)[0]
+
+
+def is_litellm_executed_batch(decoded_unified_batch_id: str) -> bool:
+    return get_batch_id_from_unified_batch_id(decoded_unified_batch_id).startswith(LITELLM_EXECUTED_BATCH_ID_PREFIX)
 
 
 def encode_file_id_with_model(file_id: str, model: str, id_type: Literal["file", "batch"] = "file") -> str:

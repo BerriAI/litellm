@@ -51,7 +51,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.llms.openai import BatchJobStatus
-from litellm.types.utils import CredentialItem, LiteLLMBatch
+from litellm.types.utils import CredentialItem, LiteLLMBatch, SpecialEnums
 
 from fastapi import Request, Response
 
@@ -72,6 +72,12 @@ CREDS: Dict[str, Dict[str, str]] = {
         "api_key": "sk-vertex",
         "api_base": "https://vertex.test",
         "model": "vertex_ai/gemini-2.0",
+    },
+    "my-vllm": {
+        "custom_llm_provider": "hosted_vllm",
+        "api_key": "sk-vllm",
+        "api_base": "http://vllm.test/v1",
+        "model": "hosted_vllm/qwen",
     },
 }
 
@@ -161,9 +167,10 @@ class Harness:
         return dict(self.router_acreate.call_args.kwargs)
 
 
-def _creds_lookup(*, model_id: str) -> Dict[str, str]:
-    # KeyError on an unknown/hardcoded model_id - the bug cannot hide.
-    return dict(CREDS[model_id])
+def _creds_lookup(*, model_id: str, team_id: str | None = None) -> dict[str, str] | None:
+    # An unknown/hardcoded model_id resolves to None exactly like the real router,
+    # which the endpoint turns into a 400 and a missing dispatch - the bug cannot hide.
+    return dict(CREDS[model_id]) if model_id in CREDS else None
 
 
 @pytest.fixture
@@ -248,6 +255,25 @@ async def call_create(
         provider=provider,
         user_api_key_dict=user or UserAPIKeyAuth(api_key="sk-test"),
     )
+
+
+@pytest.fixture
+def executed_runner():
+    runner = MagicMock(spec=endpoints.LiteLLMExecutedBatchRunner)
+    runner.create = AsyncMock(return_value=make_batch(id="litellm-executed-batch"))
+    runner.cancel = AsyncMock(return_value=make_batch(id="litellm-executed-batch", status="cancelling"))
+    factory = MagicMock(return_value=runner)
+    with patch.object(  # test-quality-ok: the route builds its runner from proxy_server globals; the factory is the only seam
+        endpoints, "_litellm_executed_batch_runner", factory
+    ):
+        yield runner, factory
+
+
+def _managed_input_file_id(model: str) -> str:
+    unified = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+        "application/jsonl", "managed-id", model, "file-id", "file-model-id"
+    )
+    return base64.urlsafe_b64encode(unified.encode()).decode().rstrip("=")
 
 
 # =========================================================================== #
@@ -761,6 +787,98 @@ async def test_create__unified_file_id_legacy_row_without_storage_url_dispatches
     assert harness.router_kwargs()["input_file_id"] == "litellm_proxy_unified_id"
 
 
+# --------------------------------------------------------------------------- #
+# LiteLLM-executed batches: a unified file targeting a provider whose API has
+# no /v1/batches (hosted_vllm) runs inside LiteLLM instead of being forwarded.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_create__unified_executed_provider_runs_inside_litellm(harness, executed_runner):
+    runner, factory = executed_runner
+    caller = UserAPIKeyAuth(api_key="sk-test", team_id="team-vllm")
+    input_file_id = _managed_input_file_id("my-vllm")
+    set_body(
+        harness,
+        {
+            "input_file_id": input_file_id,
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "litellm_metadata": {"tags": ["batch-tag"]},
+        },
+    )
+    resp = await call_create(harness, user=caller)
+
+    harness.router_acreate.assert_not_called()
+    harness.litellm_acreate.assert_not_called()
+    harness.creds_resolver.assert_called_once_with(model_id="my-vllm", team_id="team-vllm")
+    factory.assert_called_once_with(harness.router, harness.logging)
+    runner.create.assert_awaited_once()
+    create_kwargs = runner.create.call_args.kwargs
+    assert create_kwargs["unified_input_file_id"] == input_file_id
+    assert create_kwargs["model"] == "my-vllm"
+    assert create_kwargs["provider"] == "hosted_vllm"
+    assert create_kwargs["request_tags"] == ("batch-tag",)
+    assert create_kwargs["user_api_key_dict"] is caller
+    assert create_kwargs["create_request"]["model"] == "my-vllm"
+    assert resp.id == "litellm-executed-batch"
+
+
+@pytest.mark.asyncio
+async def test_create__unified_executed_provider_without_database_400(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": _managed_input_file_id("my-vllm"),
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    with pytest.raises(ProxyException) as exc:
+        await call_create(harness)
+
+    assert exc.value.code == "400"
+    assert "need a database" in exc.value.message
+    harness.router_acreate.assert_not_called()
+    harness.litellm_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create__unified_provider_model_never_touches_executed_runner(harness, executed_runner):
+    runner, factory = executed_runner
+    set_body(
+        harness,
+        {
+            "input_file_id": _managed_input_file_id("azure/gpt-4o"),
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    await call_create(harness)
+
+    factory.assert_not_called()
+    runner.create.assert_not_called()
+    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o", team_id=None)
+    assert harness.router_kwargs()["model"] == "azure/gpt-4o"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("via", ["body", "header"])
+async def test_create__raw_file_with_executed_model_400_with_upload_guidance(harness, via):
+    body = {"input_file_id": "file-plain", "endpoint": "/v1/chat/completions", "completion_window": "24h"}
+    set_body(harness, {**body, "model": "my-vllm"} if via == "body" else body)
+    headers = {"x-litellm-model": "my-vllm"} if via == "header" else None
+
+    with pytest.raises(ProxyException) as exc:
+        await call_create(harness, headers=headers)
+
+    assert exc.value.code == "400"
+    assert "POST /v1/files" in exc.value.message
+    assert "x-litellm-model" in exc.value.message
+    harness.litellm_acreate.assert_not_called()
+    harness.router_acreate.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_create__model_encoded_beats_unified(harness):
     """Precedence row: a file id that is BOTH model-encoded and (pretend) unified
@@ -1140,6 +1258,11 @@ AZURE_BATCH_ID = encode_file_id_with_model("batch_orig123", "azure/gpt-4o", id_t
 # A realistic decoded unified batch id (what _is_base64_encoded_unified_file_id
 # returns). model_id / llm_batch_id are parsed out of this by the real helpers.
 UNIFIED_BATCH_ID = "litellm_proxy;model_id:gpt-4o-mini;llm_batch_id:batch-raw-xyz"
+
+# A decoded unified id of a batch LiteLLM runs itself: the llm_batch_id carries
+# the litellm_batch_ prefix, so no provider holds a batch to sync with.
+EXECUTED_BATCH_ID = "litellm_proxy;model_id:my-vllm;llm_batch_id:litellm_batch_abc"
+EXECUTED_BATCH_B64 = base64.urlsafe_b64encode(EXECUTED_BATCH_ID.encode()).decode().rstrip("=")
 
 
 @dataclass
@@ -1544,6 +1667,33 @@ async def test_retrieve__db_non_terminal_state_syncs_with_provider(retrieve_harn
     # Provider sync happened despite the DB hit.
     assert retrieve_harness.litellm_aretrieve.call_count == 1
     assert retrieve_harness.update_batch_in_db.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["validating", "in_progress", "finalizing", "cancelling"])
+async def test_retrieve__executed_batch_served_from_db_in_every_status(retrieve_harness, status):
+    db_response = make_batch(id="litellm-executed-batch", status=status)
+    db_batch_object = MagicMock()
+    retrieve_harness.get_batch_from_db.return_value = (db_batch_object, db_response)
+
+    resp = await call_retrieve(retrieve_harness, EXECUTED_BATCH_B64)
+
+    assert resp is db_response
+    retrieve_harness.litellm_aretrieve.assert_not_called()
+    retrieve_harness.router_aretrieve.assert_not_called()
+    retrieve_harness.update_batch_in_db.assert_not_called()
+    retrieve_harness.ensure_managed_files.assert_called_once()
+    assert retrieve_harness.ensure_managed_files.call_args.kwargs["unified_batch_id"] == EXECUTED_BATCH_ID
+
+
+@pytest.mark.asyncio
+async def test_retrieve__executed_batch_without_db_row_404(retrieve_harness):
+    with pytest.raises(ProxyException) as exc:
+        await call_retrieve(retrieve_harness, EXECUTED_BATCH_B64)
+
+    assert exc.value.code == "404"
+    retrieve_harness.litellm_aretrieve.assert_not_called()
+    retrieve_harness.router_aretrieve.assert_not_called()
 
 
 # --------------------------------------------------------------------------- #
@@ -2257,6 +2407,35 @@ async def test_cancel__unified_no_router_500(cancel_harness):
     assert exc.value.code == "500"
 
 
+@pytest.mark.asyncio
+async def test_cancel__executed_batch_routes_to_runner(cancel_harness, executed_runner):
+    runner, factory = executed_runner
+    caller = UserAPIKeyAuth(api_key="sk-test", user_id="user-cancel-2")
+    resp = await call_cancel(cancel_harness, EXECUTED_BATCH_B64, user=caller)
+
+    runner.cancel.assert_awaited_once_with(EXECUTED_BATCH_B64, caller)
+    factory.assert_called_once_with(cancel_harness.router, cancel_harness.logging)
+    cancel_harness.router_acancel.assert_not_called()
+    cancel_harness.litellm_acancel.assert_not_called()
+    cancel_harness.creds_resolver.assert_not_called()
+    assert resp is runner.cancel.return_value
+    assert cancel_harness.update_batch_in_db.call_args.kwargs["operation"] == "cancel"
+
+
+@pytest.mark.asyncio
+async def test_cancel__executed_batch_no_router_500(cancel_harness, executed_runner):
+    runner, factory = executed_runner
+    with patch.object(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        proxy_server, "llm_router", None
+    ):
+        with pytest.raises(ProxyException) as exc:
+            await call_cancel(cancel_harness, EXECUTED_BATCH_B64)
+
+    assert exc.value.code == "500"
+    factory.assert_not_called()
+    runner.cancel.assert_not_called()
+
+
 # --------------------------------------------------------------------------- #
 # SCENARIO 3 - fallback to custom_llm_provider. Rebuilds a CancelBatchRequest
 # and forwards only {custom_llm_provider, batch_id}.
@@ -2772,8 +2951,6 @@ async def test_cancel__unified_batch_id_allowed_when_managed_files_required(canc
         await call_cancel(cancel_harness, _unified_batch_id())
 
     assert cancel_harness.router_acancel.call_count == 1
-
-
 
 
 @pytest.mark.asyncio

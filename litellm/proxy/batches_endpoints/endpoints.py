@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Any, Final, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -18,6 +19,14 @@ from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
+from litellm.proxy.batches_endpoints.litellm_executed_batches import (
+    LITELLM_EXECUTED_BATCH_UPLOAD_GUIDANCE,
+    LiteLLMExecutedBatchRunner,
+    ManagedBatchStore,
+    batch_http_error,
+    litellm_executed_provider_of,
+    resolve_litellm_executed_provider,
+)
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     log_llm_api_exception,
@@ -45,16 +54,55 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_model_id_from_unified_batch_id,
     get_models_from_unified_file_id,
     get_original_file_id,
+    is_litellm_executed_batch,
     prepare_data_with_credentials,
     update_batch_in_database,
     validate_managed_id_requirement,
 )
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import request_tags_from_metadata
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
-from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
+from litellm.proxy.utils import ProxyLogging, handle_exception_on_proxy, is_known_model
 from litellm.repositories.table_repositories import ManagedFileRepository
+from litellm.router import Router
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
+from litellm.types.utils import LiteLLMBatch
 
 router: Final = APIRouter()
+_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _request_tags(data: Mapping[str, object]) -> tuple[str, ...] | None:
+    metadata: Final = data.get("litellm_metadata")
+    if metadata is None:
+        return None
+    return request_tags_from_metadata(_METADATA_ADAPTER.validate_python(metadata))
+
+
+def _litellm_executed_batch_runner(llm_router: Router, proxy_logging_obj: ProxyLogging) -> LiteLLMExecutedBatchRunner:
+    from litellm.proxy.proxy_server import prisma_client
+
+    managed_files: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+    if prisma_client is None or not isinstance(managed_files, ManagedBatchStore):
+        raise batch_http_error(
+            400,
+            "LiteLLM-executed batches need a database: set DATABASE_URL so LiteLLM can keep the batch and its files",
+        )
+    return LiteLLMExecutedBatchRunner(
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        managed_files=managed_files,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+def _raise_when_input_file_must_be_managed(model: str, credentials: Mapping[str, object]) -> None:
+    if litellm_executed_provider_of(credentials) is None:
+        return
+    raise batch_http_error(
+        400,
+        f"Batches for {model} run inside LiteLLM, so the input file must be a LiteLLM managed file: "
+        f"{LITELLM_EXECUTED_BATCH_UPLOAD_GUIDANCE}",
+    )
 
 
 def _raise_not_found_when_openai_fallback_unservable(
@@ -97,6 +145,24 @@ async def _resolve_managed_input_file_storage_url(input_file_id: str) -> "str | 
     if db_file is None:
         return None
     return db_file.storage_url or None
+
+
+async def _create_provider_batch_for_managed_file(
+    llm_router: Router,
+    create_batch_data: LiteLLMBatchCreateRequest,
+    input_file_id: str,
+    unified_file_id: str,
+) -> LiteLLMBatch:
+    resolved_storage_url: Final = await _resolve_managed_input_file_storage_url(input_file_id)
+    request: Final[LiteLLMBatchCreateRequest] = {
+        **create_batch_data,
+        "input_file_id": resolved_storage_url or input_file_id,
+        "disable_fallbacks": True,
+    }
+    response: Final = await llm_router.acreate_batch(**request)
+    response.input_file_id = input_file_id
+    response._hidden_params["unified_file_id"] = unified_file_id
+    return response
 
 
 @router.post(
@@ -292,24 +358,33 @@ async def create_batch(
             model: Final = target_model_names[0]
             _create_batch_data["model"] = model
 
-            resolved_storage_url: Final = await _resolve_managed_input_file_storage_url(input_file_id)
-            if resolved_storage_url is not None:
-                _create_batch_data["input_file_id"] = resolved_storage_url
-
             if llm_router is None:
                 raise HTTPException(
                     status_code=500,
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
-            _create_batch_data.update(disable_fallbacks=True)  # pyright: ignore[reportCallIssue]  # router flag
-            response = await llm_router.acreate_batch(**_create_batch_data)
-            response.input_file_id = input_file_id
-            response._hidden_params["unified_file_id"] = unified_file_id
+            executed_provider: Final = resolve_litellm_executed_provider(llm_router, model, user_api_key_dict.team_id)
+            response = (
+                await _litellm_executed_batch_runner(llm_router, proxy_logging_obj).create(
+                    create_request=_create_batch_data,
+                    unified_input_file_id=input_file_id,
+                    model=model,
+                    provider=executed_provider,
+                    user_api_key_dict=user_api_key_dict,
+                    request_tags=_request_tags(_create_batch_data),
+                )
+                if executed_provider is not None
+                else await _create_provider_batch_for_managed_file(
+                    llm_router, _create_batch_data, input_file_id, unified_file_id
+                )
+            )
         else:
             # Check if model specified via header/query/body param
             model_param: Final = (
-                data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+                _create_batch_data.get("model")
+                or request.query_params.get("model")
+                or request.headers.get("x-litellm-model")
             )
 
             # SCENARIO 2 & 3: Model from header/query OR custom_llm_provider fallback
@@ -320,6 +395,7 @@ async def create_batch(
                     model_id=model_param,
                     operation_context="batch creation",
                 )
+                _raise_when_input_file_must_be_managed(model_param, credentials)
 
                 prepare_data_with_credentials(
                     data=_create_batch_data,
@@ -478,15 +554,15 @@ async def retrieve_batch(
             verbose_proxy_logger=verbose_proxy_logger,
         )
 
+        executed_batch: Final = isinstance(unified_batch_id, str) and is_litellm_executed_batch(unified_batch_id)
+        if executed_batch and response is None:
+            raise batch_http_error(404, f"No batch found with id '{batch_id}'.")
+
         # If batch is in a terminal state, return immediately.
         # Include "complete" (DB-normalized form of "completed").
-        if response is not None and response.status in [
-            "completed",
-            "complete",
-            "failed",
-            "cancelled",
-            "expired",
-        ]:
+        if response is not None and (
+            response.status in ("completed", "complete", "failed", "cancelled", "expired") or executed_batch
+        ):
             # Call hooks and return
             response = await proxy_logging_obj.post_call_success_hook(
                 data=data, user_api_key_dict=user_api_key_dict, response=response
@@ -989,6 +1065,12 @@ async def cancel_batch(
             )
 
         # SCENARIO 2: target_model_names based routing
+        elif unified_batch_id and is_litellm_executed_batch(unified_batch_id):
+            if llm_router is None:
+                raise batch_http_error(500, "LLM Router not initialized. Ensure models added to proxy.")
+            response = await _litellm_executed_batch_runner(  # rebind-ok: each cancel path sets the route's response
+                llm_router, proxy_logging_obj
+            ).cancel(batch_id, user_api_key_dict)
         elif unified_batch_id:
             if llm_router is None:
                 raise HTTPException(
