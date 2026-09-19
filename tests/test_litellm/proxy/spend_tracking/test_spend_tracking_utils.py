@@ -1107,6 +1107,101 @@ def test_get_logging_payload_keeps_a_whitespace_model_name_on_success_or_a_route
     assert payload["model"] == _RAW_MODEL_WITH_PROMPT
 
 
+_WHITESPACE_MODEL_GROUP: Final = "Broken GPT Mini"
+_WHITESPACE_MODEL_GROUP_ALIAS: Final = "Broken GPT Alias"
+_COOLDOWN_ERROR_MESSAGE: Final = (
+    f"No deployments available for selected model. Passed model={_WHITESPACE_MODEL_GROUP}. Try again in 300 seconds"
+)
+
+
+def _router_serving_the_whitespace_model_group() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": _WHITESPACE_MODEL_GROUP,
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-test"},
+            }
+        ],
+        model_group_alias={_WHITESPACE_MODEL_GROUP_ALIAS: _WHITESPACE_MODEL_GROUP},
+    )
+
+
+def _router_serving_only_a_wildcard() -> litellm.Router:
+    return litellm.Router(
+        model_list=[{"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "sk-test"}}]
+    )
+
+
+@pytest.mark.parametrize(
+    ("requested_model", "llm_router", "expected_model", "expected_model_group", "expected_error_message"),
+    [
+        (
+            _WHITESPACE_MODEL_GROUP,
+            _router_serving_the_whitespace_model_group(),
+            _WHITESPACE_MODEL_GROUP,
+            _WHITESPACE_MODEL_GROUP,
+            _COOLDOWN_ERROR_MESSAGE,
+        ),
+        (
+            _WHITESPACE_MODEL_GROUP_ALIAS,
+            _router_serving_the_whitespace_model_group(),
+            _WHITESPACE_MODEL_GROUP_ALIAS,
+            _WHITESPACE_MODEL_GROUP_ALIAS,
+            _COOLDOWN_ERROR_MESSAGE,
+        ),
+        (
+            _WHITESPACE_MODEL_GROUP,
+            _router_serving_only_a_wildcard(),
+            UNKNOWN_MODEL_SPEND_LOG_MODEL,
+            "",
+            _COOLDOWN_ERROR_MESSAGE.replace(_WHITESPACE_MODEL_GROUP, UNKNOWN_MODEL_SPEND_LOG_MODEL),
+        ),
+        (
+            _WHITESPACE_MODEL_GROUP,
+            None,
+            UNKNOWN_MODEL_SPEND_LOG_MODEL,
+            "",
+            _COOLDOWN_ERROR_MESSAGE.replace(_WHITESPACE_MODEL_GROUP, UNKNOWN_MODEL_SPEND_LOG_MODEL),
+        ),
+    ],
+)
+def test_get_logging_payload_keeps_a_configured_whitespace_model_group_that_failed_before_a_deployment_was_picked(
+    requested_model: str,
+    llm_router: litellm.Router | None,
+    expected_model: str,
+    expected_model_group: str,
+    expected_error_message: str,
+):
+    kwargs: Final = {
+        "model": requested_model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test",
+                "model_group": requested_model,
+                "status": "failure",
+                "error_information": {"error_message": _COOLDOWN_ERROR_MESSAGE, "error_class": "RateLimitError"},
+            }
+        },
+    }
+
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=litellm.RateLimitError(message=_COOLDOWN_ERROR_MESSAGE, model=requested_model, llm_provider=""),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+        llm_router=llm_router,
+    )
+
+    persisted_error: Final = json.loads(payload["metadata"])["error_information"]
+    assert (payload["model"], payload["model_group"], persisted_error["error_message"]) == (
+        expected_model,
+        expected_model_group,
+        expected_error_message,
+    )
+
+
 def _openai_invalid_model_error_message(model: str) -> str:
     body: Final = {
         "error": {
