@@ -408,6 +408,89 @@
       "mode": "chat",
       "output_cost_per_token": 3.6e-06,
       "supports_function_calling": true
+    },
+    "whisper-next": {
+      "litellm_provider": "openai",
+      "mode": "audio_transcription",
+      "input_cost_per_second": 0.0001
+    },
+    "whisper-verbose-next": {
+      "litellm_provider": "openai",
+      "mode": "audio_transcription",
+      "input_cost_per_second": 0.0002
+    },
+    "gpt-4o-transcribe-next": {
+      "litellm_provider": "openai",
+      "mode": "audio_transcription",
+      "input_cost_per_token": 2.11e-06,
+      "output_cost_per_token": 3.11e-06,
+      "input_cost_per_audio_token": 1e-05
+    },
+    "nova-next": {
+      "litellm_provider": "deepgram",
+      "mode": "audio_transcription",
+      "input_cost_per_second": 0.0003
+    },
+    "azure/whisper-next": {
+      "litellm_provider": "azure",
+      "mode": "audio_transcription",
+      "input_cost_per_second": 0.00011
+    },
+    "tts-next": {
+      "litellm_provider": "openai",
+      "mode": "audio_speech",
+      "input_cost_per_character": 1e-05
+    },
+    "tts-next-hd": {
+      "litellm_provider": "openai",
+      "mode": "audio_speech",
+      "input_cost_per_character": 2e-05
+    },
+    "azure/tts-next": {
+      "litellm_provider": "azure",
+      "mode": "audio_speech",
+      "input_cost_per_character": 1.1e-05
+    },
+    "gpt-image-next": {
+      "litellm_provider": "openai",
+      "mode": "image_generation",
+      "input_cost_per_token": 1.71e-06,
+      "output_cost_per_token": 4.3e-06,
+      "input_cost_per_image_token": 2.2e-06,
+      "output_cost_per_image_token": 5.1e-06
+    },
+    "1024-x-1024/dall-e-3-next": {
+      "litellm_provider": "openai",
+      "mode": "image_generation",
+      "input_cost_per_image": 0.04
+    },
+    "hd/1024-x-1024/dall-e-3-next": {
+      "litellm_provider": "openai",
+      "mode": "image_generation",
+      "input_cost_per_image": 0.08
+    },
+    "1792-x-1024/dall-e-3-next": {
+      "litellm_provider": "openai",
+      "mode": "image_generation",
+      "input_cost_per_image": 0.06
+    },
+    "low/1024-x-1024/gpt-image-next": {
+      "litellm_provider": "openai",
+      "mode": "image_generation",
+      "input_cost_per_token": 1.7e-06,
+      "output_cost_per_token": 4.3e-06,
+      "input_cost_per_image_token": 2.2e-06,
+      "output_cost_per_image_token": 5.1e-06
+    },
+    "1024-x-1024/imagen-next": {
+      "litellm_provider": "vertex_ai-image-models",
+      "mode": "image_generation",
+      "output_cost_per_image": 0.05
+    },
+    "amazon.nova-canvas-next": {
+      "litellm_provider": "bedrock",
+      "mode": "image_generation",
+      "output_cost_per_image": 0.045
     }
   },
   "cases": [
@@ -25776,6 +25859,512 @@
         "output_cost": 0.01133,
         "prompt_tokens": 11056,
         "completion_tokens": 412
+      }
+    },
+    {
+      "name": "whisper-next-transcriptions-per-second",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "whisper-next",
+      "endpoint": "/v1/audio/transcriptions",
+      "upload": {
+        "kind": "wav",
+        "seconds": 3.5
+      },
+      "request": {
+        "language": "en",
+        "response_format": "json"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "text": "hello"
+        }
+      },
+      "expected": {
+        "spend": 0.00035,
+        "input_cost": 0.00035,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "whisper-verbose-next-transcriptions-duration",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "whisper-verbose-next",
+      "endpoint": "/v1/audio/transcriptions",
+      "upload": {
+        "kind": "wav",
+        "seconds": 3.5
+      },
+      "request": {
+        "response_format": "verbose_json"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "text": "hello",
+          "duration": 12.25
+        }
+      },
+      "expected": {
+        "spend": 0.00245,
+        "input_cost": 0.00245,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "gpt-4o-transcribe-next-transcriptions-tokens",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-4o-transcribe-next",
+      "endpoint": "/v1/audio/transcriptions",
+      "upload": {
+        "kind": "wav",
+        "seconds": 1.0
+      },
+      "request": {
+        "response_format": "json"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "text": "hello",
+          "usage": {
+            "type": "tokens",
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "total_tokens": 12,
+            "input_token_details": {
+              "text_tokens": 2,
+              "audio_tokens": 8
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 9.044e-05,
+        "input_cost": 8.422e-05,
+        "output_cost": 6.22e-06,
+        "prompt_tokens": 10,
+        "completion_tokens": 2
+      }
+    },
+    {
+      "name": "nova-next-transcriptions-per-second",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "nova-next",
+      "endpoint": "/v1/audio/transcriptions",
+      "upload": {
+        "kind": "wav",
+        "seconds": 4.0
+      },
+      "request": {},
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "results": {
+            "channels": [
+              {
+                "alternatives": [
+                  {
+                    "transcript": "hello",
+                    "confidence": 0.9
+                  }
+                ]
+              }
+            ]
+          },
+          "metadata": {
+            "duration": 4.0,
+            "channels": 1
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0012,
+        "input_cost": 0.0012,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "azure-whisper-next-transcriptions-deployment",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "azure/whisper-next",
+      "endpoint": "/v1/audio/transcriptions",
+      "deployment": {
+        "model": "azure/cc-whisper-deployment",
+        "base_model": "azure/whisper-next"
+      },
+      "upload": {
+        "kind": "wav",
+        "seconds": 3.5
+      },
+      "request": {
+        "response_format": "json"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "text": "hello"
+        }
+      },
+      "expected": {
+        "spend": 0.000385,
+        "input_cost": 0.000385,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "tts-next-speech-per-character",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "tts-next",
+      "endpoint": "/v1/audio/speech",
+      "request": {
+        "input": "hello world",
+        "voice": "alloy",
+        "response_format": "mp3"
+      },
+      "response": {
+        "content_type": "audio/mpeg",
+        "length": 2048
+      },
+      "expected": {
+        "spend": 0.0001,
+        "input_cost": 0.0001,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "tts-next-hd-speech-per-character",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "tts-next-hd",
+      "endpoint": "/v1/audio/speech",
+      "request": {
+        "input": "hello world",
+        "voice": "alloy",
+        "response_format": "mp3"
+      },
+      "response": {
+        "content_type": "audio/mpeg",
+        "length": 2048
+      },
+      "expected": {
+        "spend": 0.0002,
+        "input_cost": 0.0002,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "azure-tts-next-speech-deployment",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "azure/tts-next",
+      "endpoint": "/v1/audio/speech",
+      "deployment": {
+        "model": "azure/cc-tts-deployment",
+        "base_model": "azure/tts-next"
+      },
+      "request": {
+        "input": "hello world",
+        "voice": "alloy",
+        "response_format": "mp3"
+      },
+      "response": {
+        "content_type": "audio/mpeg",
+        "length": 2048
+      },
+      "expected": {
+        "spend": 0.00011,
+        "input_cost": 0.00011,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "dall-e-3-next-images-standard",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "1024-x-1024/dall-e-3-next",
+      "endpoint": "/v1/images/generations",
+      "deployment": {
+        "model": "openai/dall-e-3-next"
+      },
+      "request": {
+        "prompt": "a deterministic square",
+        "size": "1024x1024",
+        "quality": "standard",
+        "n": 1
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "created": 1700000000,
+          "data": [
+            {
+              "url": "https://x/1.png"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "spend": 0.04,
+        "input_cost": 0.04,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "dall-e-3-next-images-hd",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "hd/1024-x-1024/dall-e-3-next",
+      "endpoint": "/v1/images/generations",
+      "deployment": {
+        "model": "openai/dall-e-3-next"
+      },
+      "request": {
+        "prompt": "a deterministic square",
+        "size": "1024x1024",
+        "quality": "hd",
+        "n": 1
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "created": 1700000001,
+          "data": [
+            {
+              "url": "https://x/1.png"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "spend": 0.08,
+        "input_cost": 0.08,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "dall-e-3-next-images-wide",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "1792-x-1024/dall-e-3-next",
+      "endpoint": "/v1/images/generations",
+      "deployment": {
+        "model": "openai/dall-e-3-next"
+      },
+      "request": {
+        "prompt": "a deterministic wide image",
+        "size": "1792x1024",
+        "quality": "standard",
+        "n": 1
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "created": 1700000002,
+          "data": [
+            {
+              "url": "https://x/1.png"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "spend": 0.06,
+        "input_cost": 0.06,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "dall-e-3-next-images-two",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "1024-x-1024/dall-e-3-next",
+      "endpoint": "/v1/images/generations",
+      "deployment": {
+        "model": "openai/dall-e-3-next"
+      },
+      "request": {
+        "prompt": "two deterministic squares",
+        "size": "1024x1024",
+        "quality": "standard",
+        "n": 2
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "created": 1700000003,
+          "data": [
+            {
+              "url": "https://x/1.png"
+            },
+            {
+              "url": "https://x/2.png"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "spend": 0.08,
+        "input_cost": 0.08,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "gpt-image-next-images-low",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-image-next",
+      "endpoint": "/v1/images/generations",
+      "deployment": {
+        "model": "openai/gpt-image-next"
+      },
+      "request": {
+        "prompt": "a deterministic generated image",
+        "size": "1024x1024",
+        "quality": "low",
+        "n": 1
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "created": 1700000004,
+          "data": [
+            {
+              "b64_json": "AA=="
+            }
+          ],
+          "usage": {
+            "total_tokens": 30,
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "input_tokens_details": {
+              "text_tokens": 10,
+              "image_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0001191,
+        "input_cost": 1.71e-05,
+        "output_cost": 0.000102,
+        "prompt_tokens": 10,
+        "completion_tokens": 20
+      }
+    },
+    {
+      "name": "imagen-next-images-one",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "1024-x-1024/imagen-next",
+      "endpoint": "/v1/images/generations",
+      "request": {
+        "prompt": "a deterministic vertex image",
+        "sampleCount": 1
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "predictions": [
+            {
+              "bytesBase64Encoded": "AA==",
+              "mimeType": "image/png"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "spend": 0.05,
+        "input_cost": 0.05,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "amazon-nova-canvas-next-images-one",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "amazon.nova-canvas-next",
+      "endpoint": "/v1/images/generations",
+      "deployment": {
+        "model": "amazon.nova-canvas-next"
+      },
+      "request": {
+        "prompt": "a deterministic bedrock image"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "images": [
+            "AA=="
+          ]
+        }
+      },
+      "expected": {
+        "spend": 0.045,
+        "input_cost": 0.045,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "gpt-image-next-images-edit",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "low/1024-x-1024/gpt-image-next",
+      "endpoint": "/v1/images/edits",
+      "deployment": {
+        "model": "openai/gpt-image-next"
+      },
+      "upload": {
+        "kind": "png"
+      },
+      "request": {
+        "prompt": "edit this deterministic image",
+        "size": "1024x1024",
+        "quality": "low",
+        "n": 1
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "created": 1700000005,
+          "data": [
+            {
+              "b64_json": "AA=="
+            }
+          ],
+          "usage": {
+            "total_tokens": 30,
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "input_tokens_details": {
+              "text_tokens": 10,
+              "image_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.000119,
+        "input_cost": 1.7e-05,
+        "output_cost": 0.000102,
+        "prompt_tokens": 10,
+        "completion_tokens": 20
       }
     }
   ]

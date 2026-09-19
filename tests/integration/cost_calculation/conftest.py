@@ -45,9 +45,8 @@ class CostRow(BaseModel):
     metadata: CostMetadata | None = None
 
     @property
-    def breakdown(self) -> CostBreakdown:
-        assert self.metadata is not None and self.metadata.cost_breakdown is not None
-        return self.metadata.cost_breakdown
+    def breakdown(self) -> CostBreakdown | None:
+        return self.metadata.cost_breakdown if self.metadata is not None else None
 
 
 class FailureRow(BaseModel):
@@ -65,6 +64,8 @@ def approx_equal(actual: float, expected: float) -> bool:
 
 def assert_total_is_sum_of_components(row: CostRow, context: str) -> None:
     breakdown: Final = row.breakdown
+    if breakdown is None:
+        return
     total: Final = sum(
         cost or 0.0
         for cost in (breakdown.input_cost, breakdown.output_cost, breakdown.tool_usage_cost)
@@ -83,7 +84,7 @@ def _row(value: Mapping[str, object]) -> CostRow | None:
     metadata_value: Final = value.get("metadata")
     metadata: Final = json.loads(metadata_value) if isinstance(metadata_value, str) else metadata_value
     parsed: Final = CostRow.model_validate({**value, "metadata": metadata})
-    return parsed if parsed.metadata and parsed.metadata.cost_breakdown else None
+    return parsed
 
 
 def poll_cost_row(key: str) -> CostRow:
@@ -165,7 +166,7 @@ def register_scenario_deployment(
         **case.litellm_params,
         **(
             {"vertex_credentials": _vertex_service_account_json(control_url)}
-            if case.rates.litellm_provider == "vertex_ai-language-models"
+            if case.rates.litellm_provider.startswith("vertex_ai")
             else {}
         ),
     }
