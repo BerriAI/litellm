@@ -27,6 +27,7 @@ from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.websearch_interception.tools import is_web_search_tool_responses
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import sanitized_forwardable_call_metadata
 from litellm.litellm_core_utils.llm_judge import (
@@ -61,9 +62,9 @@ _MAX_CONCURRENT_SHADOW_TASKS: Final = 16
 _MAX_JUDGE_RESPONSE_CHARS: Final = 8_000
 _MAX_JUDGE_PROMPT_CHARS: Final = 24_000
 
-# The judge answers with a small JSON object; a tighter budget truncates the JSON
-# mid-object and the attempt is lost to an error row.
-JUDGE_MAX_OUTPUT_TOKENS: Final = 1500
+# Covers the judge's reasoning tokens as well as its small JSON answer: a judge deployment
+# carrying an elevated reasoning_effort spends a tight cap before it ever answers.
+JUDGE_MAX_OUTPUT_TOKENS: Final = 4096
 
 _MAX_ERROR_CHARS: Final = 500
 
@@ -335,6 +336,16 @@ def _forwards_nothing(value: object) -> bool:
     return value is None or (isinstance(value, list) and len(value) == 0)
 
 
+def _request_has_hosted_web_search(request: Mapping[str, object]) -> bool:
+    if request.get("web_search_options") is not None:
+        return True
+    tools: Final = request.get("tools")
+    return isinstance(tools, Sequence) and any(
+        isinstance(tool, Mapping) and tool.get("type") != "function" and is_web_search_tool_responses(tool)
+        for tool in tools
+    )
+
+
 def _judgeable_sample(
     ops: _SurfaceOps,
     kwargs: Mapping[str, object],
@@ -343,9 +354,14 @@ def _judgeable_sample(
 ) -> tuple[tuple[Mapping[str, object], ...], Mapping[str, object], str] | None:
     """The normalized chat conversation, the forwardable generation params, and the
     judgeable final text; None when this request's shapes cannot be sampled (no text and no
-    tool call to serialize, or a shape the owner transformations reject)."""
+    tool call to serialize, hosted web search the shadow cannot replay comparably,
+    or a shape the owner transformations reject)."""
+    if _request_has_hosted_web_search(_proxy_wire_body(kwargs) if ops.wire_params else model_parameters):
+        return None
     try:
         request: Final = ops.chat_request(kwargs, model_parameters)
+        if _request_has_hosted_web_search(request):
+            return None
         items: Final = _MESSAGE_ITEMS_ADAPTER.validate_python(request.get("messages"))
         messages: Final = _CHAT_MESSAGES_ADAPTER.validate_python(
             tuple(m.model_dump(exclude_none=True) if isinstance(m, BaseModel) else m for m in items)
@@ -417,6 +433,20 @@ def _failure_detail(e: BaseException) -> str:
     frames: Final = traceback.extract_tb(e.__traceback__)
     location: Final = f" at {frames[-1].filename.rsplit('/', 1)[-1]}:{frames[-1].lineno}" if frames else ""
     return f"{type(e).__name__}{location}: {e}"
+
+
+def _judge_reply_shape(response: object) -> str:
+    """How an unparseable judge reply was shaped. The parser's own message cannot separate a
+    judge that answered with nothing from one truncated mid-object, and those want opposite
+    fixes. Shape only, never the reply text: the judge quotes the sampled turns it compares,
+    and no attempt row carries sampled content today."""
+    read: Final = _chat_message_reader(response)
+    if read is None:
+        return "unreadable judge reply"
+    content: Final = read("content")
+    served: Final = str(_field_reader(response)("model") or "unknown")
+    body: Final = f"{len(str(content))} chars" if content else "no content"
+    return f"finish_reason={_chat_finish_reason(response)}, content={body}, model={served}"
 
 
 def _call_cost(response: object) -> float:
@@ -1266,7 +1296,9 @@ class ShadowEvalLogger(CustomLogger):
             verdict: Final = PairwiseVerdict.model_validate(parse_json_verdict(raw))
         except Exception as e:  # noqa: BLE001  # malformed verdicts become error rows
             verbose_logger.debug("shadow_eval: unparseable judge verdict: %s", e)
-            return _CallFailure(f"unparseable judge verdict: {e}", cost=_call_cost(response))
+            return _CallFailure(
+                f"unparseable judge verdict: {e}; {_judge_reply_shape(response)}", cost=_call_cost(response)
+            )
         return _JudgeVerdict(
             preference=_unmask_preference(verdict.preference, real_is_a),
             confidence=max(0.0, min(1.0, verdict.confidence)),

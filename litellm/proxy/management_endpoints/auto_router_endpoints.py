@@ -32,11 +32,23 @@ from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.db.autorouter_session_rollup import AUTOROUTER_BENCHMARKS_SQL
+from litellm.proxy.db.autorouter_session_rollup import (
+    AUTOROUTER_BENCHMARKS_SQL,
+    bounded_session_id,
+)
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     refresh_proxy_server_request_body_snapshot,
 )
+from litellm.proxy.management_endpoints.common_utils import (
+    _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # shared owner of team-admin membership
+)
+from litellm.proxy.management_helpers.auto_router_permissions import (
+    authorize_member_auto_router_dependencies,
+    authorize_member_auto_router_team,
+    validate_member_auto_router_config,
+)
+from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
@@ -54,6 +66,7 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterCacheStats,
     AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
+    AutoRouterSessionResponse,
     ComplexityRouterConfigValidationRequest,
     ComplexityRouterConfigValidationResponse,
     RequestComplexityRouterConfig,
@@ -67,13 +80,13 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
 )
 
 if TYPE_CHECKING:
-    from fastapi import APIRouter, Depends, HTTPException, Query, status
+    from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
     from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
 else:
     try:
-        from fastapi import APIRouter, Depends, HTTPException, Query, status
+        from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
     except ImportError:
         # fastapi is only required for proxy, not for SDK usage
         pass
@@ -196,21 +209,14 @@ async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -
     return await prisma_client.db.query_raw(query, *args)
 
 
-async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> None:
-    """Allow exactly the callers who could create this router.
-
-    Both dry runs are gated like the write they rehearse rather than as reads: a proxy
-    admin, or a team admin naming their own team, matching /model/new. Routing a test
-    prompt can also spend money (an `llm` classifier config calls its classifier, a
-    semantic config embeds the prompt), so a read-level gate would be too loose anyway.
-    """
+async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> LiteLLM_TeamTable | None:
     from litellm.proxy.management_endpoints.model_management_endpoints import (
         ModelManagementAuthChecks,
     )
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
-        return
+        return None
 
     if team_id is None:
         raise HTTPException(
@@ -239,12 +245,47 @@ async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: 
             },
         )
 
-    ModelManagementAuthChecks.can_user_make_team_model_call(
-        team_id=team_id,
+    team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
+    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team):
+        ModelManagementAuthChecks.can_user_make_team_model_call(
+            team_id=team_id,
+            user_api_key_dict=user_api_key_dict,
+            team_obj=team,
+            premium_user=premium_user,
+        )
+        return None
+    authorize_member_auto_router_team(
         user_api_key_dict=user_api_key_dict,
-        team_obj=LiteLLM_TeamTable.model_validate(team_row.model_dump()),
+        team=team,
         premium_user=premium_user,
     )
+    return team
+
+
+async def _authorize_member_dry_run_config(
+    *,
+    config: Mapping[str, object],
+    default_model: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    team: LiteLLM_TeamTable,
+) -> UserAPIKeyAuth:
+    from litellm.proxy.proxy_server import llm_router, prisma_client
+
+    if prisma_client is None or llm_router is None:
+        raise HTTPException(status_code=503, detail="Cannot verify auto-router model access")
+    validated: Final = validate_member_auto_router_config(config)
+    scoped_actor: Final = user_api_key_dict.model_copy(
+        update=MappingProxyType({"team_id": team.team_id, "team_models": team.models, "org_id": team.organization_id})
+    )
+    await authorize_member_auto_router_dependencies(
+        config=validated,
+        default_model=default_model,
+        user_api_key_dict=scoped_actor,
+        team=team,
+        prisma_client=prisma_client,
+        llm_router=llm_router,
+    )
+    return scoped_actor
 
 
 def _models_this_test_can_call(config: RequestComplexityRouterConfig) -> tuple[str, ...]:
@@ -321,16 +362,23 @@ async def validate_complexity_router_config(
 
     Runs the same check every write path runs (the router's own pydantic model), so a form can
     show the backend's exact verdict while the operator is still editing rather than after a
-    rejected save. Gated exactly like the save it rehearses: a proxy admin, or a team admin
-    naming their own team. Nothing is created, routed, or billed.
+    rejected save. Uses the same team opt-in and model-access checks as configuration
+    writes for members. Nothing is created, routed, or billed.
     """
-    await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
+    member_team: Final = await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
 
     from litellm.router_utils.auto_router_model_naming import (
         validate_complexity_router_config_write,
     )
 
     error: Final = validate_complexity_router_config_write(data.complexity_router_config)
+    if error is None and member_team is not None:
+        await _authorize_member_dry_run_config(
+            config=data.complexity_router_config,
+            default_model=None,
+            user_api_key_dict=user_api_key_dict,
+            team=member_team,
+        )
     return ComplexityRouterConfigValidationResponse(valid=error is None, error=error)
 
 
@@ -344,6 +392,7 @@ async def validate_complexity_router_config(
 async def preview_auto_router_routing(
     data: AutoRouterRoutingTestRequest,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    http_request: Request,
 ) -> AutoRouterRoutingTestResponse:
     """
     Route a single request through a complexity-router config and report where it landed.
@@ -387,7 +436,34 @@ async def preview_auto_router_routing(
     )
     from litellm.proxy.utils import get_available_models_for_user
 
-    await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
+    member_team: Final = await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
+    actor: Final = (
+        await _authorize_member_dry_run_config(
+            config=data.complexity_router_config.model_dump(exclude_none=True),
+            default_model=data.default_model,
+            user_api_key_dict=user_api_key_dict,
+            team=member_team,
+        )
+        if member_team is not None
+        else user_api_key_dict
+    )
+    request_data: Final[dict[str, object]] = {  # mutable-ok: auth and routing enrich this request in place
+        **data.wire_body(),
+        "metadata": {},  # mutable-ok: centralized auth and identity stamping share this metadata bucket
+        "proxy_server_request": {"body": None},  # mutable-ok: the snapshot owner fills this body in place
+    }
+
+    if member_team is not None and _models_this_test_can_call(data.complexity_router_config):
+        from litellm.proxy.auth.user_api_key_auth import (
+            _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse the serving admission policy
+        )
+
+        await _run_centralized_common_checks(
+            user_api_key_auth_obj=actor,
+            request=http_request,
+            request_data=request_data,
+            route="/auto_router/test_routing",
+        )
 
     if llm_router is None:
         raise HTTPException(
@@ -399,7 +475,7 @@ async def preview_auto_router_routing(
 
     await _authorize_models_this_test_can_call(
         config=data.complexity_router_config,
-        user_api_key_dict=user_api_key_dict,
+        user_api_key_dict=actor,
         llm_router=llm_router,
     )
 
@@ -412,12 +488,8 @@ async def preview_auto_router_routing(
     )
 
     request_kwargs: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
-        data={  # mutable-ok: the request-metadata helper takes and returns request kwargs as a dict
-            **data.wire_body(),
-            "metadata": {},  # mutable-ok: the request-metadata helper writes the auth fields into this dict
-            "proxy_server_request": {"body": None},  # mutable-ok: the snapshot owner fills body in place
-        },
-        user_api_key_dict=user_api_key_dict,
+        data=request_data,
+        user_api_key_dict=actor,
         _metadata_variable_name="metadata",
     )
     refresh_proxy_server_request_body_snapshot(request_kwargs)
@@ -484,6 +556,8 @@ class _SessionAggRow(BaseModel):
     total_tokens: int
     spend: float
     saved_spend: float
+    classifier_cost: float
+    classifier_cost_recorded_turns: int
     session_seconds: float
 
 
@@ -520,6 +594,7 @@ def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
         avg_tokens_per_session=row.total_tokens / sessions if sessions else 0.0,
         spend=row.spend,
         saved_spend=row.saved_spend,
+        classifier_cost=row.classifier_cost if row.classifier_cost_recorded_turns == row.turns else None,
         baseline_spend=baseline_spend,
         saved_pct=_pct(row.saved_spend, baseline_spend),
         saved_per_session=row.saved_spend / sessions if sessions else 0.0,
@@ -552,6 +627,7 @@ def _benchmark_group(row: _SessionAggRow) -> AutoRouterBenchmarkGroup:
         avg_tokens_per_session=totals.avg_tokens_per_session,
         spend=totals.spend,
         saved_spend=totals.saved_spend,
+        classifier_cost=totals.classifier_cost,
         baseline_spend=totals.baseline_spend,
         saved_pct=totals.saved_pct,
         saved_per_session=totals.saved_per_session,
@@ -582,6 +658,8 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
         total_tokens=sum(row.total_tokens for row in rows),
         spend=sum(row.spend for row in rows),
         saved_spend=sum(row.saved_spend for row in rows),
+        classifier_cost=sum(row.classifier_cost for row in rows),
+        classifier_cost_recorded_turns=sum(row.classifier_cost_recorded_turns for row in rows),
         session_seconds=sum(row.session_seconds for row in rows),
     )
 
@@ -645,6 +723,7 @@ async def get_auto_router_benchmarks(
         str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to 30 days before end_date)")
     ] = None,
     end_date: Annotated[str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to today)")] = None,
+    api_key: Annotated[str | None, Query(description="Filter to one virtual key token hash")] = None,
 ) -> AutoRouterBenchmarksResponse:
     """
     Benchmarks for the auto-router dashboard: session shape, savings against the configured
@@ -681,6 +760,7 @@ async def get_auto_router_benchmarks(
         AUTOROUTER_BENCHMARKS_SQL,
         start_day.isoformat(),
         (end_day + timedelta(days=1)).isoformat(),
+        api_key,
     )
     rows: Final = _SESSION_AGG_ROWS.validate_python(raw_rows or ())
     groups: Final = (
@@ -693,6 +773,51 @@ async def get_auto_router_benchmarks(
         routers_in_scope=len(groups),
         totals=_benchmark_totals(_summed_agg_row(rows)),
         groups=groups,
+    )
+
+
+@router.get(
+    "/auto_router/session",
+    tags=("auto router",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=AutoRouterSessionResponse,
+)
+async def get_auto_router_session(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    session_id: Annotated[
+        str, Query(description="The client session id (x-*-session-id header) the turns were sent under")
+    ],
+) -> AutoRouterSessionResponse:
+    """
+    One auto-routed session, for the key that ran it: the model its last turn was routed to and the
+    session's spend against the router's savings baseline. Built for a coding agent's status line
+    or stop hook, so any virtual key may call it and only ever sees rows written under its own
+    key hash. Reads the LiteLLM_AutoRouterSession rollup, which the asynchronous spend flush
+    fills a moment after each turn; a session with no flushed auto-routed turn yet is a 404. The
+    id is bounded the way the writer bounded it, so an oversized client id still finds its row.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    row: Final = await AutoRouterSessionRepository(prisma_client).find_latest_for_key(
+        user_api_key_dict.api_key, bounded_session_id(session_id)
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=404, detail=f"No auto-routed turns recorded for session {session_id!r} under this key"
+        )
+    return AutoRouterSessionResponse(
+        session_id=session_id,
+        router_name=row.router_name,
+        router_type=row.router_type,
+        turns=row.turns,
+        last_model=row.last_model,
+        spend=row.spend,
+        saved_spend=row.saved_spend,
+        baseline_spend=row.spend + row.saved_spend,
+        baseline_model=row.baseline_model,
+        baseline_models=row.baseline_models,
     )
 
 

@@ -1,4 +1,5 @@
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.caching import DualCache
@@ -7,6 +8,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import CallTypesLiteral
 
 
 def test_has_post_call_response_headers_callbacks_ignores_empty_callbacks(
@@ -73,7 +75,7 @@ async def test_post_call_response_headers_hook_returns_early_without_callbacks(
 
 def test_callback_capabilities_skips_default_custom_logger(monkeypatch):
     """
-    Internal proxy hooks (e.g. _PROXY_MaxBudgetLimiter, ManagedFiles) inherit
+    Internal proxy hooks (e.g. _PROXY_CacheControlCheck, ManagedFiles) inherit
     the default ``async_post_call_streaming_iterator_hook`` body.  The
     capability scanner must NOT report them as iterator overrides — wrapping
     the chunk stream through every no-op layer was responsible for ~10x
@@ -603,6 +605,96 @@ async def test_during_call_hook_keeps_native_moderation_hook_when_opted_out(monk
     assert routed.native_hooks_ran == []
 
 
+class _RejectsInModeration(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.moderated: list[str] = []
+
+    async def async_moderation_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: CallTypesLiteral,
+    ) -> None:
+        self.moderated.append(call_type)
+        raise HTTPException(status_code=400, detail={"error": "rejected"})
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_runs_custom_logger_moderation_override(monkeypatch):
+    moderator = _RejectsInModeration()
+    monkeypatch.setattr(litellm, "callbacks", [CustomLogger(), moderator])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
+            data={"messages": [{"role": "user", "content": "hi"}]},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+            call_type="acompletion",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert moderator.moderated == ["acompletion"]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_skips_custom_logger_moderation_without_auth(monkeypatch):
+    moderator = _RejectsInModeration()
+    monkeypatch.setattr(litellm, "callbacks", [moderator])
+    data = {"messages": [{"role": "user", "content": "hi"}]}
+
+    result = await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
+        data=data,
+        user_api_key_dict=None,
+        call_type="acompletion",
+    )
+
+    assert result == data
+    assert moderator.moderated == []
+
+
+class _InheritsModerationOverride(_RejectsInModeration):
+    pass
+
+
+class _V1PreCallGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="v1-pre-call")
+        self.moderation_check = "pre_call"
+
+
+@pytest.mark.asyncio
+@pytest.mark.filterwarnings("error::RuntimeWarning")
+async def test_during_call_hook_runs_moderation_override_after_v1_pre_call_guardrail(monkeypatch):
+    moderator = _RejectsInModeration()
+    monkeypatch.setattr(litellm, "callbacks", [_V1PreCallGuardrail(), moderator])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
+            data={"messages": [{"role": "user", "content": "hi"}]},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+            call_type="acompletion",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert moderator.moderated == ["acompletion"]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_runs_moderation_override_inherited_from_parent(monkeypatch):
+    moderator = _InheritsModerationOverride()
+    monkeypatch.setattr(litellm, "callbacks", [moderator])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
+            data={"messages": [{"role": "user", "content": "hi"}]},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+            call_type="acompletion",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert moderator.moderated == ["acompletion"]
+
+
 @pytest.mark.asyncio
 async def test_post_call_success_hook_keeps_native_hook_when_opted_out(monkeypatch):
     from litellm.types.utils import Choices, Message, ModelResponse
@@ -637,14 +729,14 @@ def test_callback_capabilities_excludes_opted_out_guardrail_from_iterator_overri
     assert [cb for cb, _ in caps.iterator_overrides if cb is opted_out] == []
 
 
-def test_deployment_pre_call_target_stays_native_when_opted_out():
+def test_deployment_hook_target_stays_native_when_opted_out():
     """Model-level guardrails resolve their target here rather than through ProxyLogging."""
-    assert _KeepsNativeHooks()._deployment_pre_call_target() is not None
+    assert _KeepsNativeHooks()._deployment_hook_target() is not None
     opted_out = _KeepsNativeHooks()
-    assert opted_out._deployment_pre_call_target() is opted_out
-    assert _AppliesGuardrail()._deployment_pre_call_target() is not None
+    assert opted_out._deployment_hook_target() is opted_out
+    assert _AppliesGuardrail()._deployment_hook_target() is not None
     routed = _AppliesGuardrail()
-    assert routed._deployment_pre_call_target() is not routed
+    assert routed._deployment_hook_target() is not routed
 
 
 @pytest.mark.asyncio
@@ -669,6 +761,95 @@ async def test_deferred_stream_guardrails_run_native_hook_when_opted_out(monkeyp
 
     assert opted_out.native_hooks_ran == ["post_call"]
     assert routed.native_hooks_ran == []
+
+
+@pytest.mark.asyncio
+async def test_deferred_stream_guardrails_skip_pipeline_managed_native_hook(monkeypatch):
+    """A post_call pipeline step already ran the opted-out guardrail's own hook against
+    the buffered stream, so the deferred audit must not run it a second time."""
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    pipeline_managed = _KeepsNativeHooks(event_hook=GuardrailEventHooks.post_call, default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [pipeline_managed])
+    pipeline = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="keeps_native", on_fail="block")])
+
+    await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+        captured_data={
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"_guardrail_pipelines": [("response-governance", pipeline)]},
+        },
+        captured_user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/chat/completions"),
+        captured_logging_obj=_streaming_logging_obj(),
+        assembled_response=ModelResponse(choices=[Choices(message=Message(role="assistant", content="hello"))]),
+        cache_hit=False,
+    )
+
+    assert pipeline_managed.native_hooks_ran == []
+
+
+@pytest.mark.asyncio
+async def test_deferred_stream_guardrails_run_native_hook_whose_pipeline_could_not_stream(monkeypatch):
+    """A pipeline step with neither streaming interface keeps the whole pipeline off the
+    stream, so the deferred audit is the only place the opted-out guardrail's own hook
+    still runs, the way it did before pipelines ran on streams."""
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    class NeitherHookGuardrail(CustomGuardrail):
+        pass
+
+    pipeline_managed = _KeepsNativeHooks(event_hook=GuardrailEventHooks.post_call, default_on=True)
+    neither = NeitherHookGuardrail(guardrail_name="gr-neither", event_hook=GuardrailEventHooks.post_call)
+    monkeypatch.setattr(litellm, "callbacks", [pipeline_managed, neither])
+    pipeline = GuardrailPipeline(
+        mode="post_call",
+        steps=[
+            PipelineStep(guardrail="keeps_native", on_fail="next"),
+            PipelineStep(guardrail="gr-neither", on_fail="block"),
+        ],
+    )
+
+    await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+        captured_data={
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"_guardrail_pipelines": [("response-governance", pipeline)]},
+        },
+        captured_user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/chat/completions"),
+        captured_logging_obj=_streaming_logging_obj(),
+        assembled_response=ModelResponse(choices=[Choices(message=Message(role="assistant", content="hello"))]),
+        cache_hit=False,
+    )
+
+    assert pipeline_managed.native_hooks_ran == ["post_call"]
+
+
+@pytest.mark.asyncio
+async def test_deferred_stream_guardrails_run_native_hook_on_route_without_translation(monkeypatch):
+    """A route with no endpoint guardrail translation cannot gate the stream through its
+    pipelines, so the deferred audit still owes the opted-out guardrail its own hook."""
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    pipeline_managed = _KeepsNativeHooks(event_hook=GuardrailEventHooks.post_call, default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [pipeline_managed])
+    pipeline = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="keeps_native", on_fail="block")])
+
+    await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+        captured_data={
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"_guardrail_pipelines": [("response-governance", pipeline)]},
+        },
+        captured_user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/custom/stream"),
+        captured_logging_obj=_streaming_logging_obj(),
+        assembled_response=ModelResponse(choices=[Choices(message=Message(role="assistant", content="hello"))]),
+        cache_hit=False,
+    )
+
+    assert pipeline_managed.native_hooks_ran == ["post_call"]
 
 
 @pytest.mark.asyncio

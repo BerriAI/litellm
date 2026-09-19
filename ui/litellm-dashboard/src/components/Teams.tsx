@@ -48,8 +48,10 @@ import BudgetDurationDropdown, {
 } from "./common_components/budget_duration_dropdown";
 import { Organization, getDefaultTeamSettings, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
+import { ModelMaxBudget, ModelMaxBudgetField } from "./key_team_helpers/ModelMaxBudgetEditor";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "./search_tools/SearchToolSelector";
+import SkillSelector from "./skills/SkillSelector";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface TeamProps {
@@ -76,6 +78,7 @@ const teamCreateFieldsSchema = z.object({
   budget_duration: z.string().nullish(),
   tpm_limit: numericInputSchema,
   rpm_limit: numericInputSchema,
+  tpd_limit: numericInputSchema,
   metadata: metadataPairsSchema.optional(),
   team_id: z.string().optional(),
   team_member_budget: z.number().optional(),
@@ -99,6 +102,7 @@ const teamCreateFieldsSchema = z.object({
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
   allowed_agents_and_groups: z.object({ agents: z.array(z.string()), accessGroups: z.array(z.string()) }).optional(),
   object_permission_search_tools: z.array(z.string()).optional(),
+  object_permission_skills: z.array(z.string()).optional(),
 });
 
 type TeamCreateFormValues = z.infer<typeof teamCreateFieldsSchema>;
@@ -111,6 +115,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
   budget_duration: undefined,
   tpm_limit: undefined,
   rpm_limit: undefined,
+  tpd_limit: undefined,
   metadata: [],
   team_id: undefined,
   team_member_budget: undefined,
@@ -128,6 +133,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
   mcp_tool_permissions: {},
   allowed_agents_and_groups: undefined,
   object_permission_search_tools: undefined,
+  object_permission_skills: undefined,
 };
 
 const ADDITIONAL_SETTINGS_FIELDS = [
@@ -147,6 +153,7 @@ const ADDITIONAL_SETTINGS_FIELDS = [
 const MCP_SETTINGS_FIELDS = ["allowed_mcp_servers_and_groups", "mcp_tool_permissions"] as const;
 const AGENT_SETTINGS_FIELDS = ["allowed_agents_and_groups"] as const;
 const SEARCH_TOOL_SETTINGS_FIELDS = ["object_permission_search_tools"] as const;
+const SKILL_SETTINGS_FIELDS = ["object_permission_skills"] as const;
 
 const isParsableJson = (value: string | undefined): boolean => {
   if (!value) {
@@ -214,6 +221,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [mcpSettingsOpen, setMcpSettingsOpen] = useState(false);
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
   const [searchToolSettingsOpen, setSearchToolSettingsOpen] = useState(false);
+  const [skillSettingsOpen, setSkillSettingsOpen] = useState(false);
 
   const adminOrgs = useMemo(
     () => getAdminOrganizations(userRole, userID, organizations),
@@ -264,6 +272,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
+  const [modelMaxBudget, setModelMaxBudget] = useState<ModelMaxBudget>({});
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
 
@@ -323,11 +332,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   };
 
   const selectCreateTeamOrganization = (
-    next: string,
+    next: string | null,
     currentOrganizationId: string | null,
     onChange: (organizationId: string | null) => void,
   ) => {
-    const nextOrganizationId = next === "" ? null : next;
+    const nextOrganizationId = next;
     if (nextOrganizationId === currentOrganizationId) return;
     onChange(nextOrganizationId);
     form.setValue("models", []);
@@ -341,6 +350,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     setSearchToolSettingsOpen(false);
     setLoggingSettings([]);
     setModelAliases({});
+    setModelMaxBudget({});
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
   };
@@ -443,6 +453,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           (formValues.allowed_mcp_servers_and_groups &&
             (formValues.allowed_mcp_servers_and_groups.servers?.length > 0 ||
               formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0 ||
+              formValues.allowed_mcp_servers_and_groups.toolsets?.length > 0 ||
               formValues.allowed_mcp_servers_and_groups.toolPermissions))
         ) {
           if (!formValues.object_permission) {
@@ -453,12 +464,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
             delete formValues.allowed_vector_store_ids;
           }
           if (formValues.allowed_mcp_servers_and_groups) {
-            const { servers, accessGroups } = formValues.allowed_mcp_servers_and_groups;
+            const { servers, accessGroups, toolsets } = formValues.allowed_mcp_servers_and_groups;
             if (servers && servers.length > 0) {
               formValues.object_permission.mcp_servers = servers;
             }
             if (accessGroups && accessGroups.length > 0) {
               formValues.object_permission.mcp_access_groups = accessGroups;
+            }
+            if (toolsets && toolsets.length > 0) {
+              formValues.object_permission.mcp_toolsets = toolsets;
             }
             delete formValues.allowed_mcp_servers_and_groups;
           }
@@ -501,9 +515,21 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           delete formValues.object_permission_search_tools;
         }
 
+        if (Array.isArray(formValues.object_permission_skills) && formValues.object_permission_skills.length > 0) {
+          if (!formValues.object_permission) {
+            formValues.object_permission = {};
+          }
+          formValues.object_permission.skills = formValues.object_permission_skills;
+        }
+        delete formValues.object_permission_skills;
+
         // Add model_aliases if any are defined
         if (Object.keys(modelAliases).length > 0) {
           formValues.model_aliases = modelAliases;
+        }
+
+        if (Object.keys(modelMaxBudget).length > 0) {
+          formValues.model_max_budget = modelMaxBudget;
         }
 
         // Add router_settings if any are defined
@@ -536,6 +562,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
       ...(mcpSettingsOpen ? [] : MCP_SETTINGS_FIELDS),
       ...(agentSettingsOpen ? [] : AGENT_SETTINGS_FIELDS),
       ...(searchToolSettingsOpen ? [] : SEARCH_TOOL_SETTINGS_FIELDS),
+      ...(skillSettingsOpen ? [] : SKILL_SETTINGS_FIELDS),
     ]);
     return Object.fromEntries(Object.entries(values).filter(([key]) => !unmounted.has(key)));
   };
@@ -789,16 +816,36 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                         showNeverResets
                         placeholder={budgetDurationPlaceholder}
                         value={value}
-                        onChange={onChange}
+                        onChange={(next) => onChange(next ?? undefined)}
                       />
                     )}
                   </FormField>
+                  <ModelMaxBudgetField
+                    key={`model-max-budget-${routerSettingsKey}`}
+                    premiumUser={premiumUser}
+                    value={modelMaxBudget}
+                    onChange={setModelMaxBudget}
+                    availableModels={userModels}
+                    hint="Cap this team's spend on individual models, each with its own reset window. Every key on the team shares the cap unless the key sets its own budget for that model."
+                  />
                   <FormField control={form.control} name="tpm_limit" label="Tokens per minute Limit (TPM)">
                     {({ ref, value, ...field }) => (
                       <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} width={400} />
                     )}
                   </FormField>
                   <FormField control={form.control} name="rpm_limit" label="Requests per minute Limit (RPM)">
+                    {({ ref, value, ...field }) => (
+                      <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} width={400} />
+                    )}
+                  </FormField>
+                  <FormField
+                    control={form.control}
+                    name="tpd_limit"
+                    label={labelWithHint(
+                      "Tokens per day Limit (TPD)",
+                      "Daily token budget for batch submissions (/v1/batches). When set, batch input files are charged against this 24h window instead of the team's TPM/RPM limits. Online requests keep using TPM/RPM.",
+                    )}
+                  >
                     {({ ref, value, ...field }) => (
                       <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} width={400} />
                     )}
@@ -1086,6 +1133,8 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                         <MCPToolPermissions
                           accessToken={accessToken || ""}
                           selectedServers={watchedMcpSelection?.servers || []}
+                          selectedAccessGroups={watchedMcpSelection?.accessGroups || []}
+                          selectedToolsets={watchedMcpSelection?.toolsets || []}
                           toolPermissions={watchedToolPermissions || {}}
                           onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
                         />
@@ -1151,6 +1200,38 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                             value={value}
                             accessToken={accessToken || ""}
                             placeholder="Select search tools (optional, empty = all allowed)"
+                          />
+                        )}
+                      </FormField>
+                    </CollapsibleContent>
+                  </Collapsible>
+
+                  <Collapsible
+                    open={skillSettingsOpen}
+                    onOpenChange={setSkillSettingsOpen}
+                    className="mt-8 mb-8 overflow-hidden rounded-lg border"
+                  >
+                    <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
+                      <b>Skill Settings</b>
+                      <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="px-4 pb-3">
+                      <FormField
+                        control={form.control}
+                        name="object_permission_skills"
+                        className="mt-4"
+                        label={labelWithHint(
+                          "Allowed Skills",
+                          "Enabled skills are visible to every team. Grant disabled (private) Claude Code plugins to this team here.",
+                        )}
+                        description="Private skills keys on this team may see in the Claude Code marketplace."
+                      >
+                        {({ value, onChange }) => (
+                          <SkillSelector
+                            onChange={onChange}
+                            value={value}
+                            accessToken={accessToken || ""}
+                            placeholder="Select skills (optional)"
                           />
                         )}
                       </FormField>

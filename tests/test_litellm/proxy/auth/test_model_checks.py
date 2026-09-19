@@ -1,9 +1,6 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
-
-from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, Member
-from litellm.proxy.auth.handle_jwt import JWTAuthManager
 
 
 def test_get_team_models_for_all_models_and_team_only_models():
@@ -856,6 +853,7 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
         litellm.vertex_language_models.discard(fake_model)
         litellm.add_known_models(model_cost_map={})
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
+
 
 def test_get_complete_model_list_drops_no_default_models_sentinel():
     from litellm.proxy.auth.model_checks import get_complete_model_list

@@ -9,7 +9,7 @@ import functools
 import json
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 
 if TYPE_CHECKING:
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -28,27 +29,63 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret, get_secret_str
+from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
 
 
+_ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
+_OPENAI_FAMILY_MODEL_RE: Final = re.compile(r"(^|[./])openai\.")
+
+
+def error_response_text(response: httpx.Response) -> str:
+    try:
+        return response.text
+    except httpx.ResponseNotRead:
+        return response.reason_phrase
+
+
+def _synthesize_error_response(
+    *, status_code: int, headers: dict[str, object] | httpx.Headers, request: httpx.Request | None
+) -> tuple[httpx.Request, httpx.Response]:
+    error_request: Final = request or httpx.Request(method="POST", url=_ERROR_REQUEST_URL)
+    safe_headers: Final = (
+        headers
+        if isinstance(headers, httpx.Headers)
+        else tuple((key, value) for key, value in headers.items() if isinstance(value, (str, bytes)))
+    )
+    return error_request, httpx.Response(status_code=status_code, headers=safe_headers, request=error_request)
+
+
 class BedrockError(BaseLLMException):
-    pass
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        headers: dict[str, object] | httpx.Headers | None = None,
+        request: httpx.Request | None = None,
+        response: httpx.Response | None = None,
+        body: dict[str, object] | None = None,
+        status_code_is_synthesized: bool = False,
+    ) -> None:
+        error_request, error_response = (
+            _synthesize_error_response(status_code=status_code, headers=headers, request=request)
+            if response is None and headers
+            else (request, response)
+        )
+        super().__init__(
+            status_code=status_code,
+            message=message,
+            headers=headers,
+            request=error_request,
+            response=error_response,
+            body=body,
+            status_code_is_synthesized=status_code_is_synthesized,
+        )
 
 
-_BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (
-    "aws_access_key_id",
-    "aws_secret_access_key",
-    "aws_session_token",
-    "aws_region_name",
-    "aws_session_name",
-    "aws_profile_name",
-    "aws_role_name",
-    "aws_web_identity_token",
-    "aws_sts_endpoint",
-    "aws_external_id",
-)
+_BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (*AWS_AUTH_PARAM_KEYS, "aws_region_name")
 
 
 def merge_bedrock_aws_request_params(
@@ -292,6 +329,17 @@ def normalize_custom_field_on_tools(request_body: dict) -> None:
         deferred: object = custom.get("defer_loading")
         if isinstance(deferred, bool):
             tool["defer_loading"] = deferred
+
+
+_TOOL_DICTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def tools_without_eager_input_streaming(request_body: Mapping[str, object]) -> Sequence[object] | None:
+    try:
+        tools: Final = _TOOL_DICTS_ADAPTER.validate_python(request_body.get("tools"))
+    except ValidationError:
+        return None
+    return [{key: value for key, value in tool.items() if key != "eager_input_streaming"} for tool in tools]
 
 
 def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
@@ -832,9 +880,10 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     """
     Whether Converse ``cachePoint`` blocks may be sent to this model.
 
-    Bedrock rejects requests carrying cachePoint blocks for models without prompt
-    caching support ("You invoked an unsupported model or your request did not allow
-    prompt caching"), so a model whose cost-map entry does not declare
+    OpenAI-family models only support implicit caching and never accept explicit
+    ``cachePoint`` blocks. Bedrock rejects requests carrying cachePoint blocks for
+    models without prompt caching support ("You invoked an unsupported model or your
+    request did not allow prompt caching"), so a model whose cost-map entry does not declare
     ``supports_prompt_caching`` must not receive them. A model absent from the map
     (an application inference profile ARN, a model newer than the map) keeps emitting
     so existing caching setups never silently degrade. ``litellm.utils.supports_prompt_caching``
@@ -842,6 +891,8 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     """
     if model is None:
         return True
+    if _OPENAI_FAMILY_MODEL_RE.search(model):
+        return False
     entries: Final = tuple(
         entry
         for candidate in (model, get_bedrock_base_model(model))
@@ -850,6 +901,20 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     if not entries:
         return True
     return any(entry.get("supports_prompt_caching") is True for entry in entries)
+
+
+def bedrock_supports_tool_search(model: str) -> bool:
+    """
+    Whether Bedrock InvokeModel admits the ``tool_search_tool_*`` tool types on ``model``.
+
+    Backed by the ``supports_tool_search`` flag in ``model_prices_and_context_window.json``,
+    an exact entry or the ``claude-tool-search`` fallback rule for Claude 4.5 and newer, so a
+    newly released Claude carries the flag with no code change. An explicit ``false`` on the
+    resolved entry wins over the rule.
+    """
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    return AnthropicModelInfo._supports_model_capability(model, "supports_tool_search", "bedrock")
 
 
 def is_claude_4_5_on_bedrock(model: str) -> bool:
@@ -1605,19 +1670,9 @@ class CommonBatchFilesUtils:
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-        # Get AWS credentials using existing methods
         aws_region_name: Final = self._base_aws._get_aws_region_name(optional_params=optional_params, model="")
-        credentials: Final = self._base_aws.get_credentials(
-            aws_access_key_id=optional_params.get("aws_access_key_id"),
-            aws_secret_access_key=optional_params.get("aws_secret_access_key"),
-            aws_session_token=optional_params.get("aws_session_token"),
-            aws_region_name=aws_region_name,
-            aws_session_name=optional_params.get("aws_session_name"),
-            aws_profile_name=optional_params.get("aws_profile_name"),
-            aws_role_name=optional_params.get("aws_role_name"),
-            aws_web_identity_token=optional_params.get("aws_web_identity_token"),
-            aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
-            aws_external_id=optional_params.get("aws_external_id"),
+        credentials: Final = self._base_aws.resolve_credentials(
+            AwsAuthParams.model_validate(optional_params), aws_region_name
         )
 
         # Prepare the request data

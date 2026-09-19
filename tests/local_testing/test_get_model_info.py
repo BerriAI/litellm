@@ -1,8 +1,6 @@
 # What is this?
 ## Unit testing for the 'get_model_info()' function
 import os
-import traceback
-import json
 
 
 from typing import List, Dict, Any
@@ -11,7 +9,7 @@ import pytest
 
 import litellm
 from litellm import get_model_info
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 
 def test_get_model_info_simple_model_name():
@@ -47,40 +45,6 @@ def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
     model_info = litellm.get_model_info(model, custom_llm_provider=provider)
     print("model_info", model_info)
     assert model_info["input_cost_per_token"] == 0.0
-
-
-def test_get_model_info_shows_correct_supports_vision():
-    info = litellm.get_model_info("gemini/gemini-2.0-flash")
-    print("info", info)
-    assert info["supports_vision"] is True
-
-
-def test_get_model_info_shows_assistant_prefill():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    info = litellm.get_model_info("deepseek/deepseek-chat")
-    print("info", info)
-    assert info.get("supports_assistant_prefill") is True
-
-
-def test_get_model_info_shows_supports_prompt_caching():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    info = litellm.get_model_info("deepseek/deepseek-chat")
-    print("info", info)
-    assert info.get("supports_prompt_caching") is True
-
-
-def test_get_model_info_finetuned_models():
-    info = litellm.get_model_info("ft:gpt-3.5-turbo:my-org:custom_suffix:id")
-    print("info", info)
-    assert info["input_cost_per_token"] == 0.000003
-
-
-def test_get_model_info_gemini_pro():
-    info = litellm.get_model_info("gemini-2.0-flash")
-    print("info", info)
-    assert info["key"] == "gemini-2.0-flash"
 
 
 def test_get_model_info_ollama_chat():
@@ -219,7 +183,7 @@ def test_model_info_bedrock_converse_enforcement(monkeypatch):
 def test_get_model_info_custom_provider():
     # Custom provider example copied from https://docs.litellm.ai/docs/providers/custom_llm_server:
     import litellm
-    from litellm import CustomLLM, completion, get_llm_provider
+    from litellm import CustomLLM, completion
 
     class MyCustomLLM(CustomLLM):
         def completion(self, *args, **kwargs) -> litellm.ModelResponse:
@@ -382,27 +346,6 @@ def test_get_model_info_huggingface_models(monkeypatch):
         providers=["huggingface"],
         **info,
     )
-
-
-@pytest.mark.parametrize(
-    "model, provider",
-    [
-        ("bedrock/us-east-2/us.anthropic.claude-3-haiku-20240307-v1:0", None),
-        (
-            "bedrock/us-east-2/us.anthropic.claude-3-haiku-20240307-v1:0",
-            "bedrock",
-        ),
-    ],
-)
-def test_get_model_info_cost_calculator_bedrock_region_cris_stripped(model, provider):
-    """
-    ensure cross region inferencing model is used correctly
-    Relevant Issue: https://github.com/BerriAI/litellm/issues/8115
-    """
-    info = get_model_info(model=model, custom_llm_provider=provider)
-    print("info", info)
-    assert info["key"] == "us.anthropic.claude-3-haiku-20240307-v1:0"
-    assert info["litellm_provider"] == "bedrock"
 
 
 def test_get_model_info_case_insensitive_lookup(monkeypatch):

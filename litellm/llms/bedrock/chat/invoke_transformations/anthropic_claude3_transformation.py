@@ -8,7 +8,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
-    async_convert_url_to_base64,
+    async_inline_remote_media,
     convert_url_to_base64,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -18,13 +18,18 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 )
 from litellm.llms.bedrock.common_utils import (
     apply_bedrock_invoke_structured_output,
+    bedrock_supports_tool_search,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     strip_unsupported_bedrock_invoke_output_config_keys,
+    tools_without_eager_input_streaming,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
+    ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -172,6 +177,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         return _anthropic_request
 
+    @property
+    def uses_async_transform_request(self) -> bool:
+        return True
+
     async def async_transform_request(
         self,
         model: str,
@@ -180,25 +189,13 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        _anthropic_request: Final = self._build_bedrock_anthropic_request_base(
+        return self.transform_request(
             model=model,
-            messages=messages,
+            messages=await async_inline_remote_media(messages),
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
         )
-
-        await self._async_convert_document_url_sources_to_base64(_anthropic_request)
-        beta_list: Final = self._compute_bedrock_invoke_beta_headers(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            headers=headers,
-        )
-        if beta_list:
-            _anthropic_request["anthropic_beta"] = beta_list
-
-        return _anthropic_request
 
     def _build_bedrock_anthropic_request_base(
         self,
@@ -244,6 +241,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         # Hoist `custom.defer_loading` then drop `custom` (Bedrock doesn't support it)
         normalize_custom_field_on_tools(anthropic_request)
         normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_request)
+        outbound_tools: Final = tools_without_eager_input_streaming(anthropic_request)
+        if outbound_tools is not None:
+            anthropic_request["tools"] = outbound_tools
         return anthropic_request
 
     def _compute_bedrock_invoke_beta_headers(
@@ -273,8 +273,11 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         if tool_search_used and not (programmatic_tool_calling_used or input_examples_used):
             beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
-            if "opus-4" in model.lower() or "opus_4" in model.lower():
+            if bedrock_supports_tool_search(model):
                 beta_set.add("tool-search-tool-2025-10-19")
+
+        if self.is_eager_input_streaming_used(tools):
+            beta_set.add(ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER)
 
         auto_beta_list: Final = filter_and_transform_beta_headers(
             beta_headers=list(beta_set - user_beta_set),
@@ -311,45 +314,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                 if source_url.lower().endswith(".pdf"):
                     inferred_format = "application/pdf"
                 base64_url = convert_url_to_base64(url=source_url)
-                image_chunk = convert_to_anthropic_image_obj(
-                    openai_image_url=base64_url,
-                    format=inferred_format,
-                )
-                block["source"] = {
-                    "type": "base64",
-                    "media_type": image_chunk["media_type"],
-                    "data": image_chunk["data"],
-                }
-
-    async def _async_convert_document_url_sources_to_base64(self, anthropic_request: dict) -> None:
-        """
-        Async version of document URL conversion for async completion paths.
-        """
-        messages: Final = anthropic_request.get("messages")
-        if not isinstance(messages, list):
-            return
-
-        for message in messages:
-            if not isinstance(message, dict):
-                continue
-            content = message.get("content")
-            if not isinstance(content, list):
-                continue
-
-            for block in content:
-                if not isinstance(block, dict) or block.get("type") != "document":
-                    continue
-                source = block.get("source")
-                if not isinstance(source, dict) or source.get("type") != "url":
-                    continue
-                source_url = source.get("url")
-                if not isinstance(source_url, str):
-                    continue
-
-                inferred_format: str | None = None
-                if source_url.lower().endswith(".pdf"):
-                    inferred_format = "application/pdf"
-                base64_url = await async_convert_url_to_base64(url=source_url)
                 image_chunk = convert_to_anthropic_image_obj(
                     openai_image_url=base64_url,
                     format=inferred_format,

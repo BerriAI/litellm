@@ -587,6 +587,24 @@
     "default_model_placeholder": "azure_ai/command-r-plus"
   },
   {
+    "provider": "Azure_Speech",
+    "provider_display_name": "Azure AI Speech",
+    "litellm_provider": "azure_speech",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Azure AI Speech Subscription Key",
+        "placeholder": null,
+        "tooltip": "The Ocp-Apim-Subscription-Key for your Azure AI Speech resource. The proxy injects it on every /azure_speech/* pass-through request. Region and API base come from AZURE_SPEECH_REGION / AZURE_SPEECH_API_BASE",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "azure_speech/short-audio"
+  },
+  {
     "provider": "AZURE_TEXT",
     "provider_display_name": "Azure Text",
     "litellm_provider": "azure_text",
@@ -687,6 +705,13 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "CHATGPT",
+    "provider_display_name": "ChatGPT Subscription",
+    "litellm_provider": "chatgpt",
+    "credential_fields": [],
+    "default_model_placeholder": "chatgpt/gpt-5.4"
   },
   {
     "provider": "CLARIFAI",

@@ -3,6 +3,8 @@ Unit tests for Bedrock Guardrails
 """
 
 import json
+import asyncio
+from datetime import datetime, timezone
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -28,6 +30,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockTextContent,
 )
 from litellm.types.utils import CallTypes, ModelResponse
+from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
 
 @pytest.mark.asyncio
@@ -1137,7 +1140,11 @@ async def test_bedrock_apply_guardrail_response_uses_OUTPUT_source():
         mock_api.assert_called_once()
         kwargs = mock_api.call_args.kwargs
         assert kwargs["source"] == "OUTPUT"
-        assert kwargs["request_data"] == {"model": "gpt-4o"}
+        assert kwargs["request_data"]["model"] == "gpt-4o"
+        recorded = kwargs["request_data"]["metadata"]["standard_logging_guardrail_information"]
+        assert [(e["guardrail_name"], e["guardrail_status"]) for e in recorded] == [
+            (guardrail.guardrail_name, "success")
+        ]
         synthetic = kwargs["response"]
         assert isinstance(synthetic, ModelResponse)
         assert len(synthetic.choices) == 2
@@ -2368,8 +2375,12 @@ _GROUNDING_QUERY_TEXT = "What is the capital of Japan?"
 _GROUNDING_RESPONSE_TEXT = "The capital of Japan is Tokyo."
 
 
-def _grounding_guardrail() -> BedrockGuardrail:
-    return BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+def _grounding_guardrail(from_messages: bool = False) -> BedrockGuardrail:
+    return BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        contextual_grounding_from_messages=from_messages,
+    )
 
 
 def _grounding_messages() -> list:
@@ -2411,9 +2422,11 @@ def _input_request(messages: list) -> dict:
     return _grounding_guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
 
 
-def _output_request(messages: list, response=None) -> dict:
+def _output_request(messages: list, response=None, from_messages: bool = False) -> dict:
     """Arrange a guardrail and act: build the Bedrock OUTPUT payload."""
-    return _grounding_guardrail().convert_to_bedrock_format(source="OUTPUT", response=response, messages=messages)
+    return _grounding_guardrail(from_messages).convert_to_bedrock_format(
+        source="OUTPUT", response=response, messages=messages
+    )
 
 
 def test_grounding_input_strips_grounding_and_query_qualifiers():
@@ -2463,6 +2476,131 @@ def test_grounding_output_keeps_legacy_payload_without_tags():
     }
 
     actual_request = _output_request([{"role": "user", "content": "hello"}], _model_response("Hi there."))
+
+    assert actual_request == expected_request
+
+
+def test_grounding_output_derives_source_and_query_from_plain_messages():
+    """Flag on: untagged system + user text is sent as grounding_source + query."""
+    messages = [
+        {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
+        {"role": "user", "content": _GROUNDING_QUERY_TEXT},
+    ]
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [_GROUNDING_SOURCE_BLOCK, _QUERY_BLOCK, _GUARD_BLOCK],
+    }
+
+    actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT), from_messages=True)
+
+    assert actual_request == expected_request
+
+
+def test_grounding_output_plain_messages_stay_legacy_when_flag_is_off():
+    """Default config: plain system + user text is never sent as grounding context."""
+    messages = [
+        {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
+        {"role": "user", "content": _GROUNDING_QUERY_TEXT},
+    ]
+    expected_request = {"source": "OUTPUT", "content": [{"text": {"text": _GROUNDING_RESPONSE_TEXT}}]}
+
+    actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT))
+
+    assert actual_request == expected_request
+
+
+def test_grounding_output_derived_query_is_latest_user_turn_only():
+    """Only the latest user turn is the query; system and developer turns are the source."""
+    developer_text = "Answer in one sentence."
+    messages = [
+        {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
+        {"role": "developer", "content": [{"type": "text", "text": developer_text}]},
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Hello, how can I help?"},
+        {"role": "user", "content": _GROUNDING_QUERY_TEXT},
+    ]
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [
+            _GROUNDING_SOURCE_BLOCK,
+            {"text": {"text": developer_text, "qualifiers": ["grounding_source"]}},
+            _QUERY_BLOCK,
+            _GUARD_BLOCK,
+        ],
+    }
+
+    actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT), from_messages=True)
+
+    assert actual_request == expected_request
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param([{"role": "system", "content": _GROUNDING_SOURCE_TEXT}], id="system-without-user"),
+        pytest.param(
+            [
+                {"role": "tool", "content": _GROUNDING_SOURCE_TEXT, "tool_call_id": "c1"},
+                {"role": "user", "content": _GROUNDING_QUERY_TEXT},
+            ],
+            id="tool-result-is-not-a-source",
+        ),
+        pytest.param(
+            [
+                {"role": "system", "content": ""},
+                {"role": "user", "content": _GROUNDING_QUERY_TEXT},
+            ],
+            id="empty-system-prompt",
+        ),
+        pytest.param(
+            [
+                {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
+                {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://x.test/a.png"}}]},
+            ],
+            id="image-only-user-turn",
+        ),
+    ],
+)
+def test_grounding_output_stays_legacy_when_plain_source_or_query_is_missing(messages):
+    """Bedrock rejects a source without a query and vice versa, so send neither."""
+    expected_request = {"source": "OUTPUT", "content": [{"text": {"text": _GROUNDING_RESPONSE_TEXT}}]}
+
+    actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT), from_messages=True)
+
+    assert actual_request == expected_request
+
+
+def test_grounding_output_explicit_tags_take_precedence_over_plain_messages():
+    """Tagged blocks win: untagged text around them is not added as source or query."""
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        *_grounding_messages(),
+        {"role": "user", "content": "Please be brief."},
+    ]
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [_GROUNDING_SOURCE_BLOCK, _QUERY_BLOCK, _GUARD_BLOCK],
+    }
+
+    actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT), from_messages=True)
+
+    assert actual_request == expected_request
+
+
+def test_grounding_input_ignores_plain_message_derivation():
+    """INPUT scans never derive grounding qualifiers from plain messages."""
+    messages = [
+        {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
+        {"role": "user", "content": _GROUNDING_QUERY_TEXT},
+    ]
+    expected_request = {
+        "source": "INPUT",
+        "content": [{"text": {"text": _GROUNDING_SOURCE_TEXT}}, {"text": {"text": _GROUNDING_QUERY_TEXT}}],
+    }
+
+    actual_request = _grounding_guardrail(from_messages=True).convert_to_bedrock_format(
+        source="INPUT", messages=messages
+    )
 
     assert actual_request == expected_request
 
@@ -2588,6 +2726,56 @@ async def test_grounding_output_blocked_raises_400():
             )
 
     assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "from_messages, request_messages",
+    [
+        (
+            True,
+            [
+                {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
+                {"role": "user", "content": _GROUNDING_QUERY_TEXT},
+            ],
+        ),
+        (
+            False,
+            [
+                {"role": "system", "content": [{"type": "grounding_source", "text": _GROUNDING_SOURCE_TEXT}]},
+                {"role": "user", "content": [{"type": "query", "text": _GROUNDING_QUERY_TEXT}]},
+            ],
+        ),
+    ],
+    ids=["plain-messages-flag-on", "tagged-messages-flag-off"],
+)
+async def test_apply_guardrail_response_forwards_request_messages_for_grounding(from_messages, request_messages):
+    guardrail = _grounding_guardrail(from_messages=from_messages)
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [_GROUNDING_SOURCE_BLOCK, _QUERY_BLOCK, _GUARD_BLOCK],
+    }
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()) as mock_prepare,
+    ):
+        mock_post.return_value = _passing_bedrock_httpx_response(_GROUNDING_RESPONSE_TEXT)
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": [_GROUNDING_RESPONSE_TEXT]},
+            request_data={"messages": request_messages},
+            input_type="response",
+        )
+
+    assert mock_prepare.call_count == 1
+    assert json.loads(json.dumps(mock_prepare.call_args.kwargs["data"])) == expected_request
 
 
 ###############################################################################
@@ -5415,6 +5603,7 @@ def test_initialize_bedrock_wires_streaming_flags():
             streaming_buffer_until_moderated=False,
             streaming_sampling_rate=3,
             streaming_end_of_stream_only=True,
+            streaming_buffer_release_on_scan=True,
         ),
         {"guardrail_name": "bedrock-streaming"},
     )
@@ -5428,9 +5617,11 @@ def test_initialize_bedrock_wires_streaming_flags():
     assert configured.streaming_buffer_until_moderated is False
     assert configured.streaming_sampling_rate == 3
     assert configured.streaming_end_of_stream_only is True
+    assert configured.streaming_buffer_release_on_scan is True
     assert defaulted.streaming_buffer_until_moderated is True
     assert defaulted.streaming_sampling_rate == 5
     assert defaulted.streaming_end_of_stream_only is False
+    assert defaulted.streaming_buffer_release_on_scan is False
 
 
 def test_initialize_bedrock_rejects_non_positive_sampling_rate():
@@ -5531,6 +5722,44 @@ async def test_buffered_default_hook_scans_before_any_chunk():
     assert events[0] == "scan"
     assert all(e == "scan" or e[0] == "chunk" for e in events)
     assert len([e for e in events if e != "scan"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_buffered_release_on_scan_hook_releases_each_window_after_its_scan():
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-release-on-scan",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+        streaming_buffer_release_on_scan=True,
+        streaming_sampling_rate=1,
+    )
+
+    assert guardrail._streams_incrementally() is True
+    events = await _run_streaming_hook_recording_order(guardrail)
+
+    assert events == ["scan", ("chunk", "Hello"), "scan", ("chunk", " world"), ("chunk", "")]
+
+
+@pytest.mark.asyncio
+async def test_buffered_release_on_scan_defers_to_end_of_stream_only():
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-release-on-scan-end-only",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+        streaming_buffer_release_on_scan=True,
+        streaming_end_of_stream_only=True,
+        streaming_sampling_rate=1,
+    )
+
+    assert guardrail._streams_incrementally() is False
+    events = await _run_streaming_hook_recording_order(guardrail)
+
+    assert events.count("scan") == 1
+    assert events[0] == "scan"
 
 
 @pytest.mark.asyncio
@@ -5838,3 +6067,36 @@ async def test_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
 
     assert response["action"] == "NONE"
     assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_signs_off_the_event_loop(monkeypatch):
+    """Regression for issue #40165: the ApplyGuardrail request is signed with SigV4, and botocore
+    refreshes expiring credentials inside that signing with a blocking HTTP call, so it must run
+    on a worker thread to keep the loop serving other requests."""
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+    probe = EventLoopProbe()
+    allowed = httpx.Response(
+        200,
+        json={"action": "NONE", "outputs": [], "assessments": []},
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com"),
+    )
+
+    with patch.object(guardrail.async_handler, "post", new=AsyncMock(return_value=allowed)):
+        release = asyncio.create_task(probe.release_refresh_from_the_loop())
+        response = await guardrail._post_apply_guardrail_content(
+            content=[{"text": {"text": "hello"}}],
+            base_request_data={"source": "INPUT"},
+            credentials=probe.credentials(),
+            aws_region_name="us-east-1",
+            api_key=None,
+            request_data={},
+            event_type=GuardrailEventHooks.pre_call,
+            start_time=datetime.now(timezone.utc),
+            completed_chunk_usages=[],
+        )
+        await release
+
+    assert response["action"] == "NONE"
+    assert probe.served_during_refresh is True

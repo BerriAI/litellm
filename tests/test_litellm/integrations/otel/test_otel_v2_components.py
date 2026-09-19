@@ -3,14 +3,24 @@ baggage helpers, metrics, the typed coercion helpers, mapper branches, span-name
 builders, and the registry validator's failure paths. Needs the OTel SDK."""
 
 import json
+import threading
+from collections.abc import Iterator
+from contextvars import Context as ContextVarContext
 from dataclasses import replace
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 import pytest
 
 pytest.importorskip("opentelemetry")
 
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (  # noqa: E402
+    ExportTraceServiceRequest,
+)
+from opentelemetry import baggage  # noqa: E402
+from opentelemetry.context import attach, detach  # noqa: E402
 from opentelemetry.sdk.metrics import MeterProvider  # noqa: E402
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader  # noqa: E402
+from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
 from opentelemetry.sdk.trace.export import (  # noqa: E402
     BatchSpanProcessor,
     ConsoleSpanExporter,
@@ -19,7 +29,10 @@ from opentelemetry.sdk.trace.export import (  # noqa: E402
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
     InMemorySpanExporter,
 )
-from opentelemetry.trace import SpanKind  # noqa: E402
+from opentelemetry.trace import SpanKind, get_current_span  # noqa: E402
+from opentelemetry.trace.propagation.tracecontext import (  # noqa: E402
+    TraceContextTextMapPropagator,
+)
 
 from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
@@ -457,6 +470,150 @@ def test_extract_traceparent():
     assert ctx_mod.extract_traceparent({"x": "y"}) is None
 
 
+def _test_tracer():
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return provider.get_tracer("test")
+
+
+_CALLER_TRACEPARENT = "00-11111111111111111111111111111111-2222222222222222-01"
+
+
+def test_inject_trace_context_prefers_request_root_span():
+    def run():
+        tracer = _test_tracer()
+        inbound = TraceContextTextMapPropagator().extract({"traceparent": _CALLER_TRACEPARENT})
+        with tracer.start_as_current_span("root", context=inbound) as root:
+            ctx_mod.set_request_root_span(root)
+            result = ctx_mod.inject_trace_context({"traceparent": _CALLER_TRACEPARENT})
+            propagated = get_current_span(TraceContextTextMapPropagator().extract(result))
+            return result, root, propagated
+
+    result, root, propagated = ContextVarContext().run(run)
+    assert result["traceparent"] != _CALLER_TRACEPARENT
+    assert propagated.get_span_context().trace_id == root.get_span_context().trace_id
+    assert propagated.get_span_context().span_id == root.get_span_context().span_id
+
+
+def test_inject_trace_context_uses_ambient_span_without_request_root():
+    def run():
+        tracer = _test_tracer()
+        with tracer.start_as_current_span("ambient") as ambient:
+            result = ctx_mod.inject_trace_context({})
+            propagated = get_current_span(TraceContextTextMapPropagator().extract(result))
+            return ambient, propagated
+
+    ambient, propagated = ContextVarContext().run(run)
+    assert propagated.get_span_context().trace_id == ambient.get_span_context().trace_id
+    assert propagated.get_span_context().span_id == ambient.get_span_context().span_id
+
+
+def test_inject_trace_context_replaces_same_trace_headers_with_request_span():
+    def run():
+        tracer = _test_tracer()
+        headers = {"Traceparent": _CALLER_TRACEPARENT, "Tracestate": "vendor=caller", "x-keep": "1"}
+        inbound = TraceContextTextMapPropagator().extract({key.lower(): value for key, value in headers.items()})
+        with tracer.start_as_current_span("ambient", context=inbound) as ambient:
+            result = ctx_mod.inject_trace_context(headers)
+            propagated = get_current_span(TraceContextTextMapPropagator().extract(result))
+            return result, ambient, propagated
+
+    result, ambient, propagated = ContextVarContext().run(run)
+    assert sum(key.lower() == "traceparent" for key in result) == 1
+    assert sum(key.lower() == "tracestate" for key in result) == 1
+    assert result["x-keep"] == "1"
+    assert result["tracestate"] == "vendor=caller"
+    assert propagated.get_span_context().span_id == ambient.get_span_context().span_id
+
+
+def test_inject_trace_context_keeps_caller_traceparent_from_another_trace():
+    def run():
+        tracer = _test_tracer()
+        parent = tracer.start_span("litellm_request")
+        with tracer.start_as_current_span("ambient") as ambient:
+            ctx_mod.set_request_root_span(ambient)
+            headers = {"Traceparent": _CALLER_TRACEPARENT, "Tracestate": "vendor=caller", "x-keep": "1"}
+            result = ctx_mod.inject_trace_context(headers, parent_span=parent)
+            propagated = get_current_span(TraceContextTextMapPropagator().extract(result))
+            return result, parent, propagated
+
+    result, parent, propagated = ContextVarContext().run(run)
+    assert result["traceparent"] == _CALLER_TRACEPARENT
+    assert result["tracestate"] == "vendor=caller"
+    assert result["x-keep"] == "1"
+    assert sum(key.lower() == "traceparent" for key in result) == 1
+    assert sum(key.lower() == "tracestate" for key in result) == 1
+    assert propagated.get_span_context().trace_id != parent.get_span_context().trace_id
+
+
+def test_inject_trace_context_replaces_malformed_caller_traceparent():
+    def run():
+        tracer = _test_tracer()
+        parent = tracer.start_span("litellm_request")
+        with tracer.start_as_current_span("ambient"):
+            headers = {"traceparent": "not-a-traceparent", "tracestate": "vendor=caller"}
+            result = ctx_mod.inject_trace_context(headers, parent_span=parent)
+            propagated = get_current_span(TraceContextTextMapPropagator().extract(result))
+            return result, parent, propagated
+
+    result, parent, propagated = ContextVarContext().run(run)
+    assert propagated.get_span_context().span_id == parent.get_span_context().span_id
+    assert "tracestate" not in result
+
+
+def test_inject_trace_context_prefers_explicit_parent_span_over_root_and_ambient():
+    def run():
+        tracer = _test_tracer()
+        parent = tracer.start_span("litellm_request")
+        with tracer.start_as_current_span("ambient") as ambient:
+            ctx_mod.set_request_root_span(ambient)
+            result = ctx_mod.inject_trace_context({}, parent_span=parent)
+            propagated = get_current_span(TraceContextTextMapPropagator().extract(result))
+            return parent, ambient, propagated
+
+    parent, ambient, propagated = ContextVarContext().run(run)
+    assert propagated.get_span_context().trace_id == parent.get_span_context().trace_id
+    assert propagated.get_span_context().span_id == parent.get_span_context().span_id
+    assert propagated.get_span_context().span_id != ambient.get_span_context().span_id
+
+
+def test_inject_trace_context_skips_unusable_parent_span():
+    def run():
+        tracer = _test_tracer()
+        with tracer.start_as_current_span("ambient") as ambient:
+            result = ctx_mod.inject_trace_context({}, parent_span=object())
+            propagated = get_current_span(TraceContextTextMapPropagator().extract(result))
+            return ambient, propagated
+
+    ambient, propagated = ContextVarContext().run(run)
+    assert propagated.get_span_context().span_id == ambient.get_span_context().span_id
+
+
+def test_inject_trace_context_returns_headers_unchanged_without_context():
+    headers = {"x-custom": "value"}
+
+    result = ContextVarContext().run(lambda: ctx_mod.inject_trace_context(headers))
+
+    assert result == headers
+    assert "traceparent" not in result
+    assert result is not headers
+
+
+def test_inject_trace_context_does_not_forward_baggage():
+    def run():
+        tracer = _test_tracer()
+        with tracer.start_as_current_span("ambient"):
+            token = attach(baggage.set_baggage("litellm.team.id", "team"))
+            try:
+                return ctx_mod.inject_trace_context({})
+            finally:
+                detach(token)
+
+    result = ContextVarContext().run(run)
+    assert "baggage" not in result
+
+
 def test_set_request_baggage_empty_returns_context():
     assert ctx_mod.set_request_baggage({}) is not None
 
@@ -536,6 +693,175 @@ def test_build_span_exporter_variants():
     )
     http_exporter = providers.build_span_exporter(OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318"))
     assert "OTLPSpanExporter" in type(http_exporter).__name__
+
+
+def _export_one_trace_to_local_collector(exporter_kind: str) -> tuple[list[dict], tuple[int, int, int]]:
+    """Run a parent/child trace through the configured exporter against a
+    throwaway HTTP collector. Returns the requests as the collector saw them
+    (child first, since it ends first) and (trace_id, parent span_id, child span_id)."""
+    received: list[dict] = []
+
+    class Collector(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            received.append({"path": self.path, "headers": dict(self.headers), "body": body})
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Collector)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        config = OpenTelemetryV2Config(
+            exporter=exporter_kind,
+            endpoint=f"http://127.0.0.1:{server.server_port}",
+            headers="x-collector-token=secret",
+        )
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(providers.build_span_exporter(config)))
+        tracer = provider.get_tracer("test")
+        with tracer.start_as_current_span("parent", kind=SpanKind.SERVER) as parent:
+            with tracer.start_as_current_span("child") as child:
+                ids = (
+                    parent.get_span_context().trace_id,
+                    parent.get_span_context().span_id,
+                    child.get_span_context().span_id,
+                )
+        provider.shutdown()
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert len(received) == 2
+    return received, ids
+
+
+def _only_span(request: dict) -> dict:
+    scope_spans = json.loads(request["body"])["resourceSpans"][0]["scopeSpans"][0]["spans"]
+    assert len(scope_spans) == 1
+    return scope_spans[0]
+
+
+def test_http_json_exporter_posts_otlp_json_to_traces_endpoint():
+    """``http/json`` must put the OTLP/JSON mapping on the wire (camelCase
+    fields, integer enums, hex ids) with a JSON content type, so collectors that
+    cannot decode protobuf can ingest the trace. Headers still travel."""
+    (child_request, parent_request), (trace_id, parent_id, child_id) = _export_one_trace_to_local_collector("http/json")
+
+    assert parent_request["path"] == "/v1/traces"
+    assert parent_request["headers"]["Content-Type"] == "application/json"
+    assert parent_request["headers"]["x-collector-token"] == "secret"
+    parent = _only_span(parent_request)
+    assert parent["name"] == "parent"
+    assert parent["kind"] == 2
+    assert parent["traceId"] == format(trace_id, "032x")
+    assert parent["spanId"] == format(parent_id, "016x")
+    assert "parentSpanId" not in parent
+    child = _only_span(child_request)
+    assert child["traceId"] == format(trace_id, "032x")
+    assert child["spanId"] == format(child_id, "016x")
+    assert child["parentSpanId"] == format(parent_id, "016x")
+
+
+def test_http_protobuf_exporter_still_posts_protobuf():
+    (_child_request, parent_request), (trace_id, _parent_id, _child_id) = _export_one_trace_to_local_collector(
+        "http/protobuf"
+    )
+
+    assert parent_request["path"] == "/v1/traces"
+    assert parent_request["headers"]["Content-Type"] == "application/x-protobuf"
+    assert format(trace_id, "032x").encode() not in parent_request["body"]
+    decoded = ExportTraceServiceRequest.FromString(parent_request["body"])
+    span = decoded.resource_spans[0].scope_spans[0].spans[0]
+    assert span.name == "parent"
+    assert span.trace_id == trace_id.to_bytes(16, "big")
+
+
+@pytest.fixture
+def otlp_collector() -> Iterator[tuple[str, list[str]]]:
+    received_paths: list[str] = []
+
+    class RecordingHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            received_paths.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), RecordingHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", received_paths
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _export_one_span(cfg: OpenTelemetryV2Config) -> None:
+    provider = providers.build_tracer_provider(cfg)
+    provider.get_tracer("probe").start_span("probe").end()
+    assert provider.force_flush()
+    provider.shutdown()
+
+
+def test_traces_endpoint_env_posts_to_the_configured_url_verbatim(monkeypatch, otlp_collector):
+    base_url, received_paths = otlp_collector
+    for var in ("OTEL_EXPORTER", "OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_EXPORTER_OTLP_ENDPOINT"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("OTEL_ENDPOINT", f"{base_url}/services/collector")
+    monkeypatch.setenv("OTEL_TRACES_ENDPOINT", f"{base_url}/services/collector/traces")
+
+    cfg = OpenTelemetryV2Config.from_env()
+    assert cfg.exporter == "otlp_http"
+    _export_one_span(cfg)
+    assert received_paths == ["/services/collector/traces"]
+
+
+def test_traces_endpoint_alias_alone_implies_otlp_http(monkeypatch, otlp_collector):
+    base_url, received_paths = otlp_collector
+    for var in ("OTEL_EXPORTER", "OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", f"{base_url}/custom/traces")
+
+    cfg = OpenTelemetryV2Config.from_env()
+    assert cfg.exporter == "otlp_http"
+    _export_one_span(cfg)
+    assert received_paths == ["/custom/traces"]
+
+
+def test_traces_endpoint_per_exporter_coexists_with_default_normalization(otlp_collector):
+    base_url, received_paths = otlp_collector
+    cfg = OpenTelemetryV2Config(
+        exporters=[
+            {"kind": "otlp_http", "endpoint": base_url},
+            {
+                "kind": "otlp_http",
+                "endpoint": f"{base_url}/services/collector",
+                "traces_endpoint": f"{base_url}/services/collector/traces",
+            },
+        ]
+    )
+    _export_one_span(cfg)
+    assert sorted(received_paths) == ["/services/collector/traces", "/v1/traces"]
+
+
+def test_http_json_exporter_honors_traces_endpoint(otlp_collector):
+    base_url, received_paths = otlp_collector
+    cfg = OpenTelemetryV2Config(
+        exporters=[
+            {
+                "kind": "http/json",
+                "endpoint": base_url,
+                "traces_endpoint": f"{base_url}/services/collector/traces",
+            }
+        ]
+    )
+    _export_one_span(cfg)
+    assert received_paths == ["/services/collector/traces"]
 
 
 def test_otlp_metric_exporter_uses_cumulative_histogram_temporality():

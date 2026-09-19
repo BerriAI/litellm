@@ -21,19 +21,18 @@ import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Callable
+from typing import Final
 
 import pytest
-from pydantic import BaseModel
-
-from e2e_config import PROXY_BASE_URL, unique_marker
-
+from batch_cleanup import cleanup_batch, cleanup_file
 from batch_client import (
+    AZURE_FILE_EXPIRY_SECONDS,
     UPLOAD_FILENAME,
     BatchClient,
     BatchCreateBody,
     BatchObject,
     FileObject,
+    batch_upload_form,
     is_model_access_denied,
     is_result_access_denied,
 )
@@ -55,6 +54,7 @@ from capabilities import (
     openai_batch_params,
     raw_id_matches_provider,
 )
+from e2e_config import MASTER_KEY, PROXY_BASE_URL, unique_marker
 from e2e_http import (
     FileUploadForm,
     Result,
@@ -66,6 +66,7 @@ from e2e_http import (
 )
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, KeyMetadata, LiteLLMParamsBody, SpendLogRow
+from pydantic import BaseModel, Field
 
 pytestmark = pytest.mark.e2e
 
@@ -73,6 +74,25 @@ CREATED_BATCH_STATUSES = {"validating", "in_progress", "finalizing"}
 BATCH_CANCEL_DELAY_SECONDS = 2
 BATCH_TERMINAL_BEFORE_CANCEL = {"failed", "cancelled", "expired"}
 BATCH_OP_RETRIES = 5
+
+
+class _GovCloudBedrockContent(BaseModel):
+    text: str
+
+
+class _GovCloudBedrockMessage(BaseModel):
+    content: tuple[_GovCloudBedrockContent, ...]
+
+
+class _GovCloudBedrockInput(BaseModel):
+    messages: tuple[_GovCloudBedrockMessage, ...]
+
+
+class _GovCloudBedrockRecord(BaseModel):
+    record_id: str = Field(alias="recordId")
+    model_input: _GovCloudBedrockInput = Field(alias="modelInput")
+
+
 # Azure / Vertex cancel and the pre-cancel re-retrieve are provider-side flakes
 # (connection refused, brief 500s) and the registry only has one basic cell per
 # provider (shared across scenarios). Create + retrieve already prove routing;
@@ -155,19 +175,19 @@ def upload_for_scenario(
     if cap.scenario == "encoded":
         return client.upload_file(
             content=content,
-            form=FileUploadForm(purpose="batch"),
+            form=batch_upload_form(cap.provider),
             model=cap.model,
             key=key,
         )
     if cap.scenario == "unified":
         return client.upload_file(
             content=content,
-            form=FileUploadForm(purpose="batch", target_model_names=cap.model),
+            form=batch_upload_form(cap.provider, target_model_names=cap.model),
             key=key,
         )
     return client.upload_file(
         content=content,
-        form=FileUploadForm(purpose="batch"),
+        form=batch_upload_form(cap.provider),
         key=key,
         provider=cap.provider,
     )
@@ -188,18 +208,9 @@ def create_for_scenario(
 
 
 def op_provider(cap: Capability) -> str | None:
-    """provider_fallback ids are raw, so retrieve/cancel/list/delete need the provider
+    """provider_fallback batch ids are raw, so retrieve/cancel/list need the provider
     hint; the other scenarios encode it into the id and route automatically."""
     return cap.provider if cap.scenario == "provider_fallback" else None
-
-
-def quietly(action: Callable[[], object]) -> Callable[[], None]:
-    """Adapt a value-returning call into a best-effort cleanup the teardown can run."""
-
-    def run() -> None:
-        action()
-
-    return run
 
 
 def assert_file_object(file: FileObject, *, provider: str) -> None:
@@ -209,6 +220,10 @@ def assert_file_object(file: FileObject, *, provider: str) -> None:
     if provider != "bedrock":
         assert file.bytes > 0, f"file.bytes={file.bytes!r}"
     assert file.status, "file.status missing"
+    if provider == "azure":
+        assert file.expires_at is not None, "Azure batch input has no automatic expiry"
+        assert file.created_at is not None
+        assert file.expires_at - file.created_at == AZURE_FILE_EXPIRY_SECONDS
     assert (
         file.created_at is not None and file.created_at > 0
     ), "file.created_at missing"
@@ -249,7 +264,7 @@ def test_batch_lifecycle(
 
     file = unwrap(upload_for_scenario(client, cap, render_jsonl(cap.jsonl_model), key))
     resources.defer(
-        quietly(lambda: client.delete_file(file.id, key=key, provider=provider))
+        lambda: cleanup_file(client, file.id, key=key, provider=cap.file_provider)
     )
     assert_file_object(file, provider=cap.provider)
     assert matches_id_shape(
@@ -260,7 +275,9 @@ def test_batch_lifecycle(
     require_successful_call(created)
     batch = BatchObject.model_validate_json(created.body)
     resources.defer(
-        quietly(lambda: client.cancel_batch(batch.id, key=key, provider=provider))
+        lambda: cleanup_batch(
+            client, batch.id, key=key, provider=provider, delete_output_files=cap.provider in {"openai", "azure"}
+        )
     )
 
     assert batch.id, f"create returned no batch id (body={created.body[:200]})"
@@ -339,7 +356,7 @@ def test_batch_key_model_access_denied(
 
     denied_upload = client.upload_file(
         content=render_jsonl(AZURE_BATCH_MODEL),
-        form=FileUploadForm(purpose="batch"),
+        form=batch_upload_form("azure"),
         model=AZURE_BATCH_MODEL,
         key=key,
     )
@@ -356,7 +373,7 @@ def test_batch_key_model_access_denied(
         )
     ).id
     resources.defer(
-        quietly(lambda: client.delete_file(raw_file, key=key, provider="openai"))
+        lambda: cleanup_file(client, raw_file, key=key, provider="openai")
     )
 
     denied_create = client.create_batch(
@@ -383,6 +400,7 @@ def test_file_upload_and_delete_outputs(
             key=key,
         )
     )
+    resources.defer(lambda: cleanup_file(client, file.id, key=key))
     assert_file_object(file, provider="openai")
 
     deleted = unwrap(client.delete_file(file.id, key=key))
@@ -458,12 +476,12 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
             key=key,
         )
     )
-    resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+    resources.defer(lambda: cleanup_file(client, file.id, key=key))
 
     created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
     require_successful_call(created)
     batch = BatchObject.model_validate_json(created.body)
-    resources.defer(quietly(lambda: client.cancel_batch(batch.id, key=key)))
+    resources.defer(lambda: cleanup_batch(client, batch.id, key=key))
 
     _ = client.proxy.poll_logs_for_key(key, min_rows=1)
 
@@ -517,7 +535,7 @@ class TestBatchFileContent:
                 key=key,
             )
         )
-        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+        resources.defer(lambda: cleanup_file(client, file.id, key=key))
         assert file.id
 
         downloaded = client.proxy.transport.download(
@@ -559,11 +577,11 @@ class TestBatchFileContent:
         file = unwrap(
             client.upload_file(
                 content=payload,
-                form=FileUploadForm(purpose="batch", target_model_names=provider.model),
+                form=batch_upload_form(provider.name, target_model_names=provider.model),
                 key=key,
             )
         )
-        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+        resources.defer(lambda: cleanup_file(client, file.id, key=key))
         assert_file_object(file, provider=provider.name)
         assert is_managed_id(file.id), (
             f"{provider.name}: unified upload must return a managed file id, got {file.id!r}"
@@ -626,7 +644,7 @@ class TestOpenAIFiles:
             )
         )
         resources.defer(
-            quietly(lambda: client.delete_file(file.id, key=key, provider="openai"))
+            lambda: cleanup_file(client, file.id, key=key, provider="openai")
         )
 
         listed = unwrap(client.list_files(key=key))
@@ -690,7 +708,7 @@ class TestOpenAIFiles:
                 key=key,
             )
         )
-        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+        resources.defer(lambda: cleanup_file(client, file.id, key=key))
 
         fetched = unwrap(client.retrieve_file(file.id, key=key))
         assert fetched.id == file.id, "retrieve must echo the uploaded file id"
@@ -760,7 +778,7 @@ class TestBatchRateLimitErrorMapping:
                 key=key,
             )
         )
-        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+        resources.defer(lambda: cleanup_file(client, file.id, key=key))
 
         created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
 
@@ -803,7 +821,7 @@ class TestBatchEnqueuedTokenLimit:
     """
 
     def _upload_batch_file(
-        self, client: BatchClient, resources: ResourceManager, key: str
+        self, client: BatchClient, resources: ResourceManager, key: str, *, cleanup_key: str | None = None
     ) -> FileObject:
         file = unwrap(
             client.upload_file(
@@ -813,7 +831,7 @@ class TestBatchEnqueuedTokenLimit:
                 key=key,
             )
         )
-        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+        resources.defer(lambda: cleanup_file(client, file.id, key=cleanup_key or key))
         return file
 
     def _generate_enqueued_key(
@@ -850,7 +868,7 @@ class TestBatchEnqueuedTokenLimit:
             marker="rpm",
             rpm_limit=BATCH_RL_RPM_LIMIT,
         )
-        file = self._upload_batch_file(client, resources, key)
+        file = self._upload_batch_file(client, resources, key, cleanup_key=MASTER_KEY)
 
         created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
 
@@ -861,7 +879,7 @@ class TestBatchEnqueuedTokenLimit:
         )
         require_successful_call(created)
         batch = BatchObject.model_validate_json(created.body)
-        resources.defer(quietly(lambda: client.cancel_batch(batch.id, key=key)))
+        resources.defer(lambda: cleanup_batch(client, batch.id, key=MASTER_KEY, delete_output_files=True))
 
     @pytest.mark.covers(
         "quota_management.ratelimit.batch_enqueued_tokens.blocks_when_exhausted",
@@ -904,7 +922,7 @@ class TestBatchEnqueuedTokenLimit:
         first = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
         require_successful_call(first)
         first_batch = BatchObject.model_validate_json(first.body)
-        resources.defer(quietly(lambda: client.cancel_batch(first_batch.id, key=key)))
+        resources.defer(lambda: cleanup_batch(client, first_batch.id, key=key))
 
         blocked = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
         assert blocked.status_code == 429, (
@@ -928,7 +946,7 @@ class TestBatchEnqueuedTokenLimit:
         )
         require_successful_call(retried)
         retry_batch = BatchObject.model_validate_json(retried.body)
-        resources.defer(quietly(lambda: client.cancel_batch(retry_batch.id, key=key)))
+        resources.defer(lambda: cleanup_batch(client, retry_batch.id, key=key))
 
 
 ASSUME_ROLE_RAW_MODEL = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -984,13 +1002,13 @@ class TestBedrockBatchAssumeRole:
                 key=key,
             )
         )
-        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+        resources.defer(lambda: cleanup_file(client, file.id, key=key))
         assert_file_object(file, provider="bedrock")
 
         created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
         require_successful_call(created)
         batch = BatchObject.model_validate_json(created.body)
-        resources.defer(quietly(lambda: client.cancel_batch(batch.id, key=key)))
+        resources.defer(lambda: cleanup_batch(client, batch.id, key=key))
 
         assert batch.id, f"assume-role create returned no batch id: {created.body[:200]}"
         assert is_managed_id(batch.id), (
@@ -1003,6 +1021,91 @@ class TestBedrockBatchAssumeRole:
         assert_batch_object(batch)
 
         fetched = unwrap(client.retrieve_batch(batch.id, key=key))
+        assert fetched.id == batch.id
+
+
+GOVCLOUD_REGION: Final = "us-gov-west-1"
+GOVCLOUD_RAW_MODEL: Final = "bedrock/amazon.nova-lite-v1:0"
+
+
+def _govcloud_params() -> LiteLLMParamsBody:
+    return LiteLLMParamsBody(
+        model=GOVCLOUD_RAW_MODEL,
+        aws_access_key_id="os.environ/AWS_GOVCLOUD_ACCESS_KEY_ID",
+        aws_secret_access_key="os.environ/AWS_GOVCLOUD_SECRET_ACCESS_KEY",
+        aws_region_name=GOVCLOUD_REGION,
+        s3_region_name=GOVCLOUD_REGION,
+        s3_bucket_name="os.environ/AWS_GOVCLOUD_BATCH_S3_BUCKET",
+        s3_access_key_id="os.environ/AWS_GOVCLOUD_ACCESS_KEY_ID",
+        s3_secret_access_key="os.environ/AWS_GOVCLOUD_SECRET_ACCESS_KEY",
+        aws_batch_role_arn="os.environ/AWS_GOVCLOUD_BATCH_ROLE_ARN",
+    )
+
+
+class TestBedrockBatchGovCloud:
+    """Bedrock batch lifecycle in the AWS GovCloud partition (us-gov-west-1).
+
+    The deployment carries a GovCloud region for both Bedrock and S3, so the proxy has to
+    sign the file upload against the us-gov S3 endpoint and submit the job to the us-gov
+    Bedrock endpoint. Commercial-partition hostnames or arn:aws: ARNs reject the GovCloud
+    key, so a partition regression fails the upload instead of passing silently.
+    """
+
+    @pytest.mark.covers(
+        "llm.batches.bedrock.govcloud_partition.nonstream.works",
+        "llm.files.bedrock.govcloud_partition.nonstream.works",
+        exercised_on=["batches", "files"],
+    )
+    def test_unified_file_upload_and_batch_create_in_govcloud(
+        self, client: BatchClient, resources: ResourceManager
+    ) -> None:
+        model_name: Final = batch_model_name("bedrock-govcloud-batch")
+        model_id: Final = client.create_model(model_name, _govcloud_params())
+        resources.defer(lambda: client.delete_model(model_id))
+        key: Final = resources.key()
+        file: Final = unwrap(
+            client.upload_file(
+                content=render_jsonl(GOVCLOUD_RAW_MODEL),
+                form=FileUploadForm(purpose="batch", target_model_names=model_name),
+                key=key,
+            )
+        )
+        resources.defer(lambda: cleanup_file(client, file.id, key=key))
+        assert_file_object(file, provider="bedrock")
+
+        downloaded: Final = client.proxy.transport.download(
+            f"/v1/files/{file.id}/content",
+            headers=client.proxy.transport.bearer(key),
+        )
+        assert downloaded.status_code == 200, (
+            f"GovCloud file content must be 200, got {downloaded.status_code}: {downloaded.body[:300]}"
+        )
+        downloaded_lines: Final = downloaded.body.strip().splitlines()
+        assert len(downloaded_lines) == 1, (
+            f"GovCloud file content download must contain one JSONL record, got {len(downloaded_lines)}"
+        )
+        downloaded_record: Final = _GovCloudBedrockRecord.model_validate(json.loads(downloaded_lines[0]))
+        assert downloaded_record.record_id == "req-1", (
+            f"GovCloud file content must preserve the uploaded custom_id, got {downloaded_record.record_id!r}"
+        )
+        assert downloaded_record.model_input.messages[0].content[0].text == "ping", (
+            "GovCloud file content must preserve the uploaded message text"
+        )
+
+        created: Final = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
+        require_successful_call(created)
+        batch: Final = BatchObject.model_validate_json(created.body)
+        resources.defer(lambda: cleanup_batch(client, batch.id, key=key))
+
+        assert is_managed_id(batch.id), (
+            f"GovCloud create via target_model_names must return a managed batch id, got {batch.id!r}"
+        )
+        assert batch.status in CREATED_BATCH_STATUSES, (
+            f"GovCloud batch has non-transitional status {batch.status!r}"
+        )
+        assert_batch_object(batch)
+
+        fetched: Final = unwrap(client.retrieve_batch(batch.id, key=key))
         assert fetched.id == batch.id
 
 
@@ -1044,7 +1147,7 @@ class TestGeminiFiles:
                 key=key,
             )
         )
-        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+        resources.defer(lambda: cleanup_file(client, file.id, key=key))
         assert_file_object(file, provider="gemini")
         assert file.id, "gemini file upload returned no id"
 
@@ -1099,13 +1202,13 @@ class TestHostedVllmBatch:
                 key=key,
             )
         )
-        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+        resources.defer(lambda: cleanup_file(client, file.id, key=key))
         assert_file_object(file, provider="hosted_vllm")
 
         created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
         require_successful_call(created)
         batch = BatchObject.model_validate_json(created.body)
-        resources.defer(quietly(lambda: client.cancel_batch(batch.id, key=key)))
+        resources.defer(lambda: cleanup_batch(client, batch.id, key=key))
 
         assert batch.id, f"hosted_vllm create returned no batch id: {created.body[:200]}"
         assert batch.status in CREATED_BATCH_STATUSES, (
@@ -1192,7 +1295,7 @@ class TestBatchFailurePaths:
                 key=key,
             )
         )
-        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+        resources.defer(lambda: cleanup_file(client, file.id, key=key))
 
         created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
         require_successful_call(created)
@@ -1243,12 +1346,12 @@ class TestBatchFailurePaths:
         file = unwrap(
             client.upload_file(
                 content=render_jsonl(AZURE_BATCH_RAW_MODEL),
-                form=FileUploadForm(purpose="batch"),
+                form=batch_upload_form("azure"),
                 model=AZURE_BATCH_MODEL,
                 key=key,
             )
         )
-        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+        resources.defer(lambda: cleanup_file(client, file.id, key=key))
         assert decoded_model_from_id(file.id) == AZURE_BATCH_MODEL, (
             f"upload did not encode the azure deployment into the file id: {file.id!r}"
         )
@@ -1258,7 +1361,7 @@ class TestBatchFailurePaths:
         )
         require_successful_call(created)
         batch = BatchObject.model_validate_json(created.body)
-        resources.defer(quietly(lambda: client.cancel_batch(batch.id, key=key)))
+        resources.defer(lambda: cleanup_batch(client, batch.id, key=key))
 
         assert decoded_model_from_id(batch.id) == AZURE_BATCH_MODEL, (
             "create with a foreign encoded file id must route by the file's embedded model, "
@@ -1307,7 +1410,7 @@ class TestBatchSecondHop:
                 key=key,
             )
         )
-        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+        resources.defer(lambda: cleanup_file(client, file.id, key=key))
         assert is_managed_id(file.id), (
             f"second-hop unified upload must return a managed file id, got {file.id!r}"
         )
@@ -1315,7 +1418,7 @@ class TestBatchSecondHop:
         created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
         require_successful_call(created)
         batch = BatchObject.model_validate_json(created.body)
-        resources.defer(quietly(lambda: client.cancel_batch(batch.id, key=key)))
+        resources.defer(lambda: cleanup_batch(client, batch.id, key=key))
 
         assert is_managed_id(batch.id), (
             f"second-hop create must return a managed batch id, got {batch.id!r}"
