@@ -294,10 +294,11 @@ class OllamaConfig(BaseConfig):
         if request_data.get("format", "") == "json":
             # Check if response field exists and is not empty before parsing JSON
             response_text = response_json.get("response", "")
+            thinking: Final = _OllamaGenerateReasoning.from_response(response_json).thinking or None
 
             if not response_text or not response_text.strip():
                 # Handle empty response gracefully - set empty content
-                message = litellm.Message(content="")
+                message = litellm.Message(content="", reasoning_content=thinking)
                 model_response.choices[0].message = message
                 model_response.choices[0].finish_reason = "stop"
             else:
@@ -314,6 +315,7 @@ class OllamaConfig(BaseConfig):
                         function_call: Final = response_content
                         message = litellm.Message(
                             content=None,
+                            reasoning_content=thinking,
                             tool_calls=[
                                 {
                                     "id": f"call_{uuid.uuid4()}",
@@ -331,6 +333,7 @@ class OllamaConfig(BaseConfig):
                         # Handle as regular JSON (new behavior)
                         message = litellm.Message(
                             content=json.dumps(response_content),
+                            reasoning_content=thinking,
                         )
                         model_response.choices[0].message = message
                         model_response.choices[0].finish_reason = "stop"

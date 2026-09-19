@@ -411,7 +411,9 @@ class TestOllamaConfig:
         )
         assert result.choices[0]["finish_reason"] == "stop"
 
-    def _transform(self, response_json, request_data=None):
+    def _transform(
+        self, response_json: dict[str, object], request_data: dict[str, object] | None = None
+    ) -> ModelResponse:
         config = OllamaConfig()
 
         raw_response = MagicMock()
@@ -477,7 +479,7 @@ class TestOllamaConfig:
         assert result.choices[0]["message"].reasoning_content == "from field"
         assert result.choices[0]["message"].content == "<think>inline</think>Answer"
 
-    def test_transform_response_json_mode_with_thinking_field(self):
+    def test_transform_response_json_mode_non_json_text_with_thinking_field(self):
         """JSON mode falls back to text handling when the payload is not JSON, so the
         `thinking` field has to be picked up on that path too."""
         result = self._transform(
@@ -502,6 +504,69 @@ class TestOllamaConfig:
 
         assert result.choices[0]["message"].reasoning_content == "inline reasoning"
         assert result.choices[0]["message"].content == "Answer"
+
+    def test_transform_response_json_mode_valid_json_keeps_thinking_field(self):
+        """A valid JSON `response` is returned as content, and the reasoning that came
+        with it must not be dropped."""
+        result = self._transform(
+            {
+                "response": '{"answer": 42}',
+                "thinking": "reasoned before answering in json",
+            },
+            request_data={"format": "json"},
+        )
+
+        assert result.choices[0]["message"].content == '{"answer": 42}'
+        assert result.choices[0]["message"].reasoning_content == "reasoned before answering in json"
+        assert result.choices[0]["finish_reason"] == "stop"
+
+    def test_transform_response_json_mode_function_call_keeps_thinking_field(self):
+        """A JSON `response` shaped like a function call becomes a tool call, and the
+        reasoning behind the call must survive alongside it."""
+        result = self._transform(
+            {
+                "response": '{"name": "get_weather", "arguments": {"city": "Paris"}}',
+                "thinking": "the user wants weather, so call the tool",
+            },
+            request_data={"format": "json"},
+        )
+
+        message = result.choices[0]["message"]
+        assert message.tool_calls is not None
+        assert message.tool_calls[0].function.name == "get_weather"
+        assert message.reasoning_content == "the user wants weather, so call the tool"
+        assert result.choices[0]["finish_reason"] == "tool_calls"
+
+    def test_transform_response_json_mode_empty_response_keeps_thinking_field(self):
+        """In JSON mode a model that spends its whole turn reasoning leaves `response`
+        empty; the reasoning must still come back instead of a blank message."""
+        result = self._transform(
+            {
+                "response": "",
+                "thinking": "all of the tokens went into reasoning",
+            },
+            request_data={"format": "json"},
+        )
+
+        assert result.choices[0]["message"].content == ""
+        assert result.choices[0]["message"].reasoning_content == "all of the tokens went into reasoning"
+
+    def test_transform_response_null_response_keeps_content_null(self):
+        """Ollama sends `response: null` when the reply carries no text; that stays null
+        rather than becoming an empty string, while `thinking` is still surfaced."""
+        result = self._transform({"response": None, "thinking": "reasoning only"})
+
+        assert result.choices[0]["message"].content is None
+        assert result.choices[0]["message"].reasoning_content == "reasoning only"
+
+    def test_transform_response_malformed_reasoning_fields_do_not_crash(self):
+        """A reply whose `response` and `thinking` are not strings must still produce a
+        response instead of raising, with no reasoning invented."""
+        result = self._transform({"response": 5, "thinking": ["not", "a", "string"]})
+
+        assert result.choices[0]["message"].reasoning_content is None
+        assert result.choices[0]["message"].content == ""
+        assert result.choices[0]["finish_reason"] == "stop"
 
 
 class TestOllamaTextCompletionResponseIterator:
