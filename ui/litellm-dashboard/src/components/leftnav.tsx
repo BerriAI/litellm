@@ -637,7 +637,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
         </div>
       </SidebarHeader>
 
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea className="min-h-0 flex-1 overflow-hidden">
         <nav className="flex flex-col gap-0.5 px-3 pb-3">
           {visibleGroups.map((group, gi) => (
             <SidebarGroup key={group.groupLabel}>
