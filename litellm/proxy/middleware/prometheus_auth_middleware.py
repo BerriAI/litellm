@@ -7,6 +7,7 @@ from collections.abc import MutableMapping
 from typing import Any, Final
 
 from fastapi import Request
+from starlette.routing import get_route_path
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 import litellm
@@ -15,6 +16,12 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 # Cache the header name at module level to avoid repeated enum attribute access
 _AUTHORIZATION_HEADER: Final = SpecialHeaders.openai_authorization.value  # "Authorization"
+_METRICS_MOUNT: Final = "/metrics"
+
+
+def _is_metrics_route(scope: Scope) -> bool:
+    route_path: Final = get_route_path(scope)
+    return route_path == _METRICS_MOUNT or route_path.startswith(_METRICS_MOUNT + "/")
 
 
 class PrometheusAuthMiddleware:
@@ -36,7 +43,7 @@ class PrometheusAuthMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         # Fast path: only inspect HTTP requests; pass through websocket/lifespan immediately
-        if scope["type"] != "http" or "/metrics" not in scope.get("path", ""):
+        if scope["type"] != "http" or not _is_metrics_route(scope):
             await self.app(scope, receive, send)
             return
 

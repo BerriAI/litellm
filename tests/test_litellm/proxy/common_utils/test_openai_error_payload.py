@@ -6,8 +6,10 @@ from fastapi import HTTPException
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
+    litellm_call_id_headers,
     openai_error_param,
     openai_error_type,
+    with_litellm_call_id,
 )
 
 
@@ -145,6 +147,20 @@ def test_a_status_carried_by_an_exception_drives_the_type_it_reports():
     assert openai_error_type(exc, error_status_code(exc, 400)) == "permission_error"
 
 
+def test_an_upstream_5xx_body_does_not_relabel_the_internal_server_error():
+    from litellm.exceptions import InternalServerError
+
+    carried = InternalServerError(
+        message="Controlled provider failure",
+        model="gpt-5.4-mini",
+        llm_provider="openai",
+        body={"message": "Controlled provider failure", "type": "server_error", "code": "500"},
+    )
+
+    assert carried.body == {"message": "Controlled provider failure", "type": "server_error", "code": "500"}
+    assert openai_error_type(carried, error_status_code(carried, 400)) == "internal_server_error"
+
+
 def test_a_stringified_none_type_or_param_is_treated_as_absent():
     from litellm.exceptions import BadRequestError
 
@@ -158,3 +174,32 @@ def test_a_stringified_none_type_or_param_is_treated_as_absent():
     assert carried.type == "None"
     assert openai_error_type(carried, 400) == "invalid_request_error"
     assert openai_error_param(carried) is None
+
+
+def test_a_failed_request_answers_with_the_call_id_it_was_logged_under():
+    assert litellm_call_id_headers("call-7836") == {"x-litellm-call-id": "call-7836"}
+    assert litellm_call_id_headers(None) is None
+
+
+def test_an_already_shaped_proxy_error_answers_with_the_call_id_it_was_logged_under():
+    raised_without_id = ProxyException(message="budget exceeded", type="budget_exceeded", param="key", code=402)
+
+    carried = with_litellm_call_id(raised_without_id, "call-7836")
+
+    assert carried is raised_without_id
+    assert carried.headers == {"x-litellm-call-id": "call-7836"}
+    assert (carried.message, carried.type, carried.param, carried.code) == (
+        "budget exceeded",
+        "budget_exceeded",
+        "key",
+        "402",
+    )
+
+
+def test_a_proxy_error_keeps_the_call_id_it_was_raised_with():
+    raised_with_id = ProxyException(
+        message="nope", type="None", param=None, code=400, headers={"x-litellm-call-id": "first"}
+    )
+
+    assert with_litellm_call_id(raised_with_id, "second").headers == {"x-litellm-call-id": "first"}
+    assert with_litellm_call_id(ProxyException(message="nope", type="None", param=None, code=400), None).headers == {}

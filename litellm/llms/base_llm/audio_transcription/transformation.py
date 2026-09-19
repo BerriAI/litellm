@@ -52,6 +52,15 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         """
         return False
 
+    @property
+    def has_native_transcription_endpoint(self) -> bool:
+        """
+        Opt-in for OpenAI-compatible providers whose transcription lives on a
+        non-OpenAI route: when True the request skips the OpenAI SDK transport
+        and goes through this config via the shared http handler.
+        """
+        return False
+
     def get_complete_url(
         self,
         api_base: str | None,

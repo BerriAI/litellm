@@ -9,6 +9,7 @@ import pytest
 import litellm
 from litellm.llms.azure.common_utils import (
     BaseAzureLLM,
+    _cached_azure_ad_token_refresh_provider,
     _cached_entra_id_token_provider,
     get_azure_ad_token,
     get_azure_ad_token_from_entra_id,
@@ -34,6 +35,7 @@ def setup_mocks(monkeypatch):
     monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
     monkeypatch.delenv("AZURE_SCOPE", raising=False)
     monkeypatch.delenv("AZURE_AD_TOKEN", raising=False)
+    _cached_azure_ad_token_refresh_provider.cache_clear()
 
     with (
         patch(
@@ -78,6 +80,7 @@ def setup_mocks(monkeypatch):
             "logger": mock_logger,
             "select_url": mock_select_url,
         }
+    _cached_azure_ad_token_refresh_provider.cache_clear()
 
 
 def test_initialize_with_api_key(setup_mocks):

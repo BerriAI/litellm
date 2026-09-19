@@ -31,6 +31,7 @@ cannot drift without a test failure.
 
 import base64
 import json
+import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
@@ -50,6 +51,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.llms.openai import BatchJobStatus
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.types.utils import CredentialItem, LiteLLMBatch
 
 from fastapi import Request, Response
@@ -177,6 +179,10 @@ def harness():
     logging.get_proxy_hook = MagicMock(return_value=None)
 
     router = MagicMock(spec=Router)
+    router.model_group_alias = {}
+    router.get_model_access_groups = MagicMock(return_value={})
+    router.resolve_model_name_from_model_id = MagicMock(side_effect=lambda model_id: model_id)
+    router.model_list = []
     router.acreate_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
 
@@ -1088,6 +1094,28 @@ async def test_create__exception_calls_failure_hook(harness, openai_env_creds):
     assert harness.logging.post_call_failure_hook.call_args.kwargs["original_exception"].args[0] == "provider boom"
 
 
+async def test_create__exception_carries_the_litellm_call_id(harness, openai_env_creds, caplog):
+    call_id = "lit7836-batch-call-id"
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "litellm_call_id": call_id,
+        },
+    )
+    harness.litellm_acreate.side_effect = ValueError("provider boom")
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"), pytest.raises(ProxyException) as raised:
+        await call_create(harness)
+
+    assert raised.value.headers["x-litellm-call-id"] == call_id
+    record = next(r for r in caplog.records if "Exception occured" in r.getMessage())
+    assert record.litellm_call_id == call_id
+    assert call_id in record.getMessage()
+
+
 # =========================================================================== #
 #                                                                             #
 #   GET /v1/batches/{batch_id}  -  retrieve_batch routing-contract tests      #
@@ -1161,8 +1189,13 @@ def retrieve_harness():
     logging.get_proxy_hook = MagicMock(return_value=None)
 
     router = MagicMock(spec=Router)
+    router.model_group_alias = {}
+    router.get_model_access_groups = MagicMock(return_value={})
+    router.resolve_model_name_from_model_id = MagicMock(side_effect=lambda model_id: model_id)
+    router.model_list = []
     router.aretrieve_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
+    router.get_credential_deployment = MagicMock(return_value=None)
 
     pre_call = AsyncMock(side_effect=lambda **kw: (data_holder["data"], MagicMock()))
     get_headers = MagicMock(return_value={})
@@ -1279,6 +1312,30 @@ async def test_retrieve__model_encoded_id(retrieve_harness):
     # write-back to the managed-object table happened, tagged as a retrieve.
     assert retrieve_harness.update_batch_in_db.call_count == 1
     assert retrieve_harness.update_batch_in_db.call_args.kwargs["operation"] == "retrieve"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__model_encoded_id__stamps_deployment_model_info_for_cost(retrieve_harness):
+    """Regression: this path calls litellm.aretrieve_batch directly, so nothing stamped the
+    deployment's model_info the way the router does for routed calls. Cost tracking then never
+    saw the deployment id, and a completed batch on a deployment with its own per-page pricing
+    was billed at the published rate with an empty model_id on the spend row."""
+    retrieve_harness.router.get_credential_deployment.return_value = Deployment(
+        model_name="azure-gpt",
+        litellm_params=LiteLLM_Params(model="azure/gpt-4o"),
+        model_info=ModelInfo(id="dep-123"),
+    )
+    retrieve_harness.pre_call.side_effect = lambda **kw: (
+        {**retrieve_harness.data["data"], "litellm_metadata": {"user_api_key_alias": "qa-key"}},
+        MagicMock(),
+    )
+
+    await call_retrieve(retrieve_harness, AZURE_BATCH_ID)
+
+    retrieve_harness.router.get_credential_deployment.assert_called_once_with(model_id="azure/gpt-4o")
+    litellm_metadata = retrieve_harness.aretrieve_kwargs()["litellm_metadata"]
+    assert litellm_metadata["model_info"]["id"] == "dep-123"
+    assert litellm_metadata["user_api_key_alias"] == "qa-key"
 
 
 @pytest.mark.asyncio
@@ -1616,6 +1673,10 @@ def list_harness():
     logging.get_proxy_hook = MagicMock(return_value=None)
 
     router = MagicMock(spec=Router)
+    router.model_group_alias = {}
+    router.get_model_access_groups = MagicMock(return_value={})
+    router.resolve_model_name_from_model_id = MagicMock(side_effect=lambda model_id: model_id)
+    router.model_list = []
     router.alist_batches = AsyncMock(return_value=FakeListPage([]))
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
 
@@ -1953,6 +2014,24 @@ async def test_list__exception_calls_failure_hook(list_harness):
     assert list_harness.logging.post_call_failure_hook.call_args.kwargs["original_exception"].args[0] == "provider boom"
 
 
+@pytest.mark.asyncio
+async def test_list__failure_hook_and_response_share_the_request_litellm_call_id(list_harness):
+    call_id = "lit7836-list-batches-call-id"
+    list_harness.pre_call.side_effect = lambda **kw: (
+        {**list_harness.body["body"], "litellm_call_id": call_id},
+        MagicMock(),
+    )
+    list_harness.litellm_alist.side_effect = ValueError("provider boom")
+
+    with pytest.raises(ProxyException) as raised:
+        await call_list(list_harness, after="batch-0", limit=5)
+
+    failure_request_data = list_harness.logging.post_call_failure_hook.call_args.kwargs["request_data"]
+    assert failure_request_data["litellm_call_id"] == call_id
+    assert (failure_request_data["after"], failure_request_data["limit"]) == ("batch-0", 5)
+    assert raised.value.headers["x-litellm-call-id"] == call_id
+
+
 # =========================================================================== #
 #                                                                             #
 #   POST /v1/batches/{batch_id}/cancel  -  cancel_batch routing-contract tests #
@@ -2012,6 +2091,10 @@ def cancel_harness():
     logging.get_proxy_hook = MagicMock(return_value=None)
 
     router = MagicMock(spec=Router)
+    router.model_group_alias = {}
+    router.get_model_access_groups = MagicMock(return_value={})
+    router.resolve_model_name_from_model_id = MagicMock(side_effect=lambda model_id: model_id)
+    router.model_list = []
     router.acancel_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
 
@@ -2733,8 +2816,6 @@ async def test_cancel__unified_batch_id_allowed_when_managed_files_required(canc
     assert cancel_harness.router_acancel.call_count == 1
 
 
-
-
 @pytest.mark.asyncio
 async def test_retrieve__managed_batch_defers_cost_to_the_poller_when_it_is_running(retrieve_harness):
     with patch.object(endpoints, "batch_cost_poller_is_active", MagicMock(return_value=True)):
@@ -2762,3 +2843,116 @@ async def test_retrieve__raw_batch_id_is_untouched_by_the_poller_handoff(retriev
 
     metadata = retrieve_harness.litellm_aretrieve.await_args.kwargs.get("litellm_metadata") or {}
     assert metadata.get("batch_ignore_default_logging") is None
+
+
+def _key_restricted_to(*models: str) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(api_key="sk-restricted", team_id="team-a", team_models=list(models), models=list(models))
+
+
+@pytest.mark.asyncio
+async def test_create__header_model_rejects_key_without_model_grant(harness):
+    """A key not granted the model named in x-litellm-model must not receive that deployment's credentials."""
+    set_body(harness, {"input_file_id": "file-plain", "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+
+    with pytest.raises(ProxyException) as exc_info:
+        await call_create(harness, user=_key_restricted_to("azure/gpt-4o"), headers={"x-litellm-model": "vertex-model"})
+
+    assert exc_info.value.code == "403"
+    harness.creds_resolver.assert_not_called()
+    harness.litellm_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create__header_model_allows_key_with_model_grant(harness):
+    set_body(harness, {"input_file_id": "file-plain", "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+
+    await call_create(harness, user=_key_restricted_to("vertex-model"), headers={"x-litellm-model": "vertex-model"})
+
+    harness.creds_resolver.assert_called_once_with(model_id="vertex-model")
+    assert harness.acreate_kwargs()["custom_llm_provider"] == "vertex_ai"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__model_encoded_id_rejects_key_without_model_grant(retrieve_harness):
+    """The model embedded in a batch id is caller-controlled, so it is checked against the key's grants too."""
+    with pytest.raises(ProxyException) as exc_info:
+        await call_retrieve(retrieve_harness, AZURE_BATCH_ID, user=_key_restricted_to("vertex-model"))
+
+    assert exc_info.value.code == "403"
+    retrieve_harness.creds_resolver.assert_not_called()
+    retrieve_harness.litellm_aretrieve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel__model_encoded_id_rejects_key_without_model_grant(cancel_harness):
+    with pytest.raises(ProxyException) as exc_info:
+        await call_cancel(cancel_harness, AZURE_BATCH_ID, user=_key_restricted_to("vertex-model"))
+
+    assert exc_info.value.code == "403"
+    cancel_harness.creds_resolver.assert_not_called()
+    cancel_harness.litellm_acancel.assert_not_called()
+
+
+def _b64_unified_id(decoded: str) -> str:
+    return base64.urlsafe_b64encode(decoded.encode()).decode().rstrip("=")
+
+
+UNIFIED_FILE_ID_FOR_GPT4O_MINI = _b64_unified_id(
+    "litellm_proxy:application/octet-stream;unified_id,c4843482-b176-4901-8292-7523fd0f2c6e;"
+    "target_model_names,gpt-4o-mini;llm_output_file_id,file-provider;llm_output_file_model_id,dep-1"
+)
+UNIFIED_BATCH_ID_FOR_GPT4O_MINI = _b64_unified_id(UNIFIED_BATCH_ID)
+
+
+@pytest.mark.asyncio
+async def test_create__unified_file_id_rejects_key_without_model_grant(harness):
+    """The model carried inside a unified file id is caller-controlled too, so it is checked against the key's grants."""
+    set_body(
+        harness,
+        {
+            "input_file_id": UNIFIED_FILE_ID_FOR_GPT4O_MINI,
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await call_create(harness, user=_key_restricted_to("vertex-model"))
+
+    assert exc_info.value.code == "403"
+    harness.router_acreate.assert_not_called()
+    harness.litellm_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retrieve__unified_batch_id_rejects_key_without_model_grant(retrieve_harness):
+    with pytest.raises(ProxyException) as exc_info:
+        await call_retrieve(retrieve_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=_key_restricted_to("vertex-model"))
+
+    assert exc_info.value.code == "403"
+    retrieve_harness.router_aretrieve.assert_not_called()
+    retrieve_harness.creds_resolver.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retrieve__unified_batch_id_rejects_key_without_model_grant_before_db_terminal_shortcut(
+    retrieve_harness,
+):
+    retrieve_harness.get_batch_from_db.return_value = (MagicMock(), make_batch(id="batch-from-db", status="completed"))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await call_retrieve(retrieve_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=_key_restricted_to("vertex-model"))
+
+    assert exc_info.value.code == "403"
+    retrieve_harness.logging.post_call_success_hook.assert_not_called()
+    retrieve_harness.ensure_managed_files.assert_not_called()
+    retrieve_harness.router_aretrieve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel__unified_batch_id_rejects_key_without_model_grant(cancel_harness):
+    with pytest.raises(ProxyException) as exc_info:
+        await call_cancel(cancel_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=_key_restricted_to("vertex-model"))
+
+    assert exc_info.value.code == "403"
+    cancel_harness.router_acancel.assert_not_called()

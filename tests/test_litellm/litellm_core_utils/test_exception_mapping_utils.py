@@ -1437,6 +1437,33 @@ def test_openai_compatible_vendor_400_keeps_body_but_not_headers():
     assert not exc_info.value.response.headers
 
 
+@pytest.mark.parametrize(
+    ("status_code", "mapped_class", "reported_type"),
+    [(429, litellm.RateLimitError, "throttling_error"), (500, litellm.InternalServerError, "internal_server_error")],
+)
+def test_openai_429_and_500_keep_body_but_report_litellm_type(
+    status_code: int, mapped_class: type[openai.APIError], reported_type: str
+):
+    with pytest.raises(mapped_class) as exc_info:
+        exception_type(
+            model="gpt-5.4-mini",
+            original_exception=_openai_handler_error(
+                "server_error", {}, status_code=status_code, message="upstream cannot complete this response"
+            ),
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.body == {
+        **_GUARDRAIL_BLOCK_ERROR,
+        "type": "server_error",
+        "code": str(status_code),
+        "message": "upstream cannot complete this response",
+    }
+    assert exc_info.value.type == reported_type
+
+
 def test_litellm_proxy_repeated_response_header_keeps_each_value():
     repeated = [("x-litellm-call-id", "call-guardrail"), ("set-cookie", "a=1"), ("set-cookie", "b=2")]
 

@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from opentelemetry.context import Context, attach, get_current
 from opentelemetry.sdk._logs import LoggerProvider
@@ -21,6 +21,7 @@ from opentelemetry.trace import (
     use_span,
 )
 from opentelemetry.trace import TracerProvider as ApiTracerProvider
+from typing_extensions import TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_logger
@@ -33,6 +34,7 @@ from litellm.integrations.otel.model.metadata import (
     LLMCallEvent,
     RequestIdentity,
     auth_metadata,
+    metadata_from_request_data,
     model_from_request_data,
 )
 from litellm.integrations.otel.model.payloads import (
@@ -139,6 +141,10 @@ def _request_trace_links(context: Context | None) -> tuple[Link, ...] | None:
     return (Link(anchor),) if anchor.is_valid else None
 
 
+class _CustomLoggerOptions(TypedDict, total=False, extra_items=object):
+    pass
+
+
 class _LLMCallSpan:
     """The state carried from the ``pre_call`` boundary to span close.
 
@@ -178,7 +184,7 @@ class OpenTelemetryV2(CustomLogger):
         tracer_provider: TracerProvider | None = None,
         logger_provider: LoggerProvider | None = None,
         meter_provider: "MeterProvider | None" = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomLoggerOptions],
     ) -> None:
         super().__init__(**kwargs)
         self.config: OpenTelemetryV2Config = config or OpenTelemetryV2Config(**kwargs)
@@ -554,7 +560,7 @@ class OpenTelemetryV2(CustomLogger):
             capture_content=self.config.capture_span_content,
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
             request_route=request_root_http_route(),
-            trace_name=call.trace_name,
+            trace=call.trace,
         )
         end_time_ns: Final = to_ns(end_time)
         if carrier is not None and carrier.span is not None:
@@ -679,7 +685,12 @@ class OpenTelemetryV2(CustomLogger):
     #  / errors are the FastAPI instrumentor's job, so we don't touch it here.
     # ====================================================================== #
 
-    def seed_request_identity(self, user_api_key_dict: object, model: str | None = None) -> None:
+    def seed_request_identity(
+        self,
+        user_api_key_dict: object,
+        model: str | None = None,
+        request_metadata: Mapping[str, object] | None = None,
+    ) -> None:
         """Attach request-identity Baggage to the current context + server span.
 
         Seeding identity into Baggage makes **every** span emitted afterwards for
@@ -691,7 +702,7 @@ class OpenTelemetryV2(CustomLogger):
         isn't determined yet, which is correct.
         """
         try:
-            identity: Final = RequestIdentity.from_user_api_key_auth(user_api_key_dict)
+            identity: Final = RequestIdentity.from_user_api_key_auth(user_api_key_dict, request_metadata)
             bag: Final = promoted_baggage(
                 identity,
                 model,
@@ -743,6 +754,7 @@ class OpenTelemetryV2(CustomLogger):
         self.seed_request_identity(
             user_api_key_dict,
             model=model_from_request_data(data),
+            request_metadata=metadata_from_request_data(data),
         )
         return data
 
