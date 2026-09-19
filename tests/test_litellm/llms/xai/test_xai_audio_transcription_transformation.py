@@ -8,6 +8,7 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.xai.audio_transcription.transformation import (
     XAIAudioTranscriptionConfig,
+    XAIAudioTranscriptionError,
 )
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -128,6 +129,21 @@ def test_transform_response_maps_xai_shape():
         {"word": "world", "start": 0.5, "end": 1.0},
     ]
     assert response._hidden_params["audio_transcription_duration"] == 3.2
+
+
+def test_transform_response_raises_on_error_status():
+    raw = httpx.Response(
+        400,
+        json={
+            "code": "Client specified an invalid argument",
+            "error": "Incorrect API key provided",
+        },
+        request=httpx.Request("POST", "https://api.x.ai/v1/stt"),
+    )
+    with pytest.raises(XAIAudioTranscriptionError) as exc:
+        CONFIG.transform_audio_transcription_response(raw_response=raw)
+    assert exc.value.status_code == 400
+    assert "Incorrect API key provided" in exc.value.message
 
 
 def test_transcription_routes_to_xai_stt(monkeypatch):

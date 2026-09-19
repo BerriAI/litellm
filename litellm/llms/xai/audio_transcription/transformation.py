@@ -130,6 +130,13 @@ class XAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         raw_response: Response,
     ) -> TranscriptionResponse:
+        if raw_response.status_code >= 400:
+            raise self.get_error_class(
+                error_message=raw_response.text,
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
+
         try:
             payload: Final = _XAISttResponse.model_validate_json(raw_response.content)
         except ValidationError as e:
