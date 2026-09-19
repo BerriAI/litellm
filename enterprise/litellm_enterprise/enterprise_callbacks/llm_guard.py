@@ -173,12 +173,10 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
                     *(self._moderate_message(message) for message in messages)
                 )
             )
-            return data
 
         input_ = data.get("input")
         if input_ is not None:
             data["input"] = await self._moderate_text_or_list(input_)
-            return data
 
         prompt = data.get("prompt")
         if prompt is not None:

@@ -1,8 +1,8 @@
 from typing import Final, Literal
 
 import pytest
-from fastapi import HTTPException
 from litellm_enterprise.enterprise_callbacks.llm_guard import _ENTERPRISE_LLMGuard
+from starlette.exceptions import HTTPException
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
@@ -92,6 +92,38 @@ async def test_llm_guard_scans_list_prompt(
     )
     assert result is data
     assert data["prompt"] == ["[REDACTED]", "[REDACTED]", [1, 2, 3]]
+
+
+@pytest.mark.parametrize("call_type", ("aembedding", "atext_completion"))
+@pytest.mark.parametrize("is_valid", (True, False))
+@pytest.mark.asyncio
+async def test_llm_guard_scans_input_and_prompt_alongside_messages(
+    call_type: CallTypesLiteral, is_valid: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "llm_guard_mode", "all")
+    llm_guard: Final = _ENTERPRISE_LLMGuard(
+        mock_testing=True,
+        mock_redacted_text={"sanitized_prompt": "[REDACTED]", "is_valid": is_valid},
+    )
+    data: Final = {
+        "messages": [],
+        "input": "email: person@example.com",
+        "prompt": ["say ok"],
+    }
+
+    if not is_valid:
+        with pytest.raises(HTTPException) as exc_info:
+            await llm_guard.async_moderation_hook(data=data, user_api_key_dict=UserAPIKeyAuth(), call_type=call_type)
+        assert exc_info.value.status_code == 400
+        return
+
+    result: Final = await llm_guard.async_moderation_hook(
+        data=data, user_api_key_dict=UserAPIKeyAuth(), call_type=call_type
+    )
+    assert result is data
+    assert data["messages"] == []
+    assert data["input"] == "[REDACTED]"
+    assert data["prompt"] == ["[REDACTED]"]
 
 
 @pytest.mark.parametrize(
