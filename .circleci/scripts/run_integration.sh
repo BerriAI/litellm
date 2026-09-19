@@ -9,6 +9,10 @@ fi
 suite="${1:?integration suite required}"
 results="test-results/integration-${suite}"
 mkdir -p "$results"
+shard_timeout=11m
+if [ "$suite" = cost ]; then
+  shard_timeout=20m
+fi
 integration_identity="$(.venv/bin/python -c 'import uuid; print(uuid.uuid4().hex)')"
 upstream_pid=""
 scripted_provider_pid=""
@@ -181,7 +185,7 @@ if [ "$suite" = browser ]; then
   exit 0
 fi
 
-timeout --signal=TERM --kill-after=20s 11m env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
+timeout --signal=TERM --kill-after=20s "$shard_timeout" env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_RUN_ID="$integration_identity" \
   DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
   INTEGRATION_PROXY_URL="$INTEGRATION_PROXY_URL" INTEGRATION_PEER_URL="$INTEGRATION_PEER_URL" \

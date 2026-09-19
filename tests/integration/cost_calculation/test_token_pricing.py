@@ -200,24 +200,46 @@ def test_scripted_usage_bills_at_map_rates(
         if case.stream:
             _assert_stream_has_no_error(response.text)
         row: Final = poll_cost_row(key)
+        context: Final = f"{model.map_key}/{case.name}"
         if not case.exact_spend:
-            assert row.prompt_tokens is not None and row.prompt_tokens > 0
-            assert row.completion_tokens is not None and row.completion_tokens > 0
-            if case.image_input:
-                assert row.prompt_tokens < 4000
-            assert row.spend is not None and approx_equal(
-                row.spend, recount_cost(model, case, row.prompt_tokens, row.completion_tokens)
+            assert row.prompt_tokens is not None and row.prompt_tokens > 0, (
+                f"{context}: no-usage stream counted no input tokens: prompt_tokens={row.prompt_tokens}"
             )
-            assert_total_is_sum_of_components(row)
+            assert row.completion_tokens is not None and row.completion_tokens > 0, (
+                f"{context}: no-usage stream counted no output tokens: completion_tokens={row.completion_tokens}"
+            )
+            if case.image_input:
+                assert row.prompt_tokens < 4000, (
+                    f"{context}: image data URL looks tokenized as text: prompt_tokens={row.prompt_tokens}"
+                )
+            recount: Final = recount_cost(model, case, row.prompt_tokens, row.completion_tokens)
+            assert row.spend is not None and approx_equal(
+                row.spend, recount
+            ), f"{context}: no-usage stream spend {row.spend} != recount {recount} at map rates"
+            assert_total_is_sum_of_components(row, context)
             return
         golden: Final = case.expected_for(model)
         if not case.stream:
             header: Final = cast(str | None, response.headers.get("x-litellm-response-cost"))
-            assert header is not None and approx_equal(float(header), golden.spend)
-        assert row.spend is not None and approx_equal(row.spend, golden.spend)
+            assert header is not None and approx_equal(float(header), golden.spend), (
+                f"{context}: x-litellm-response-cost {header} != golden {golden.spend}"
+            )
+        assert row.spend is not None and approx_equal(row.spend, golden.spend), (
+            f"{context}: spend {row.spend} != golden {golden.spend} "
+            f"(breakdown {row.breakdown.model_dump()})"
+        )
         breakdown: Final = row.breakdown
-        assert breakdown.input_cost is not None and approx_equal(breakdown.input_cost, golden.input_cost)
-        assert breakdown.output_cost is not None and approx_equal(breakdown.output_cost, golden.output_cost)
-        assert row.prompt_tokens == golden.prompt_tokens
-        assert row.completion_tokens == golden.completion_tokens
-        assert_total_is_sum_of_components(row)
+        assert breakdown.input_cost is not None and approx_equal(breakdown.input_cost, golden.input_cost), (
+            f"{context}: gross input_cost {breakdown.input_cost} != golden {golden.input_cost}; "
+            "cached/written tokens billed at the input rate"
+        )
+        assert breakdown.output_cost is not None and approx_equal(breakdown.output_cost, golden.output_cost), (
+            f"{context}: output_cost {breakdown.output_cost} != golden {golden.output_cost}"
+        )
+        assert row.prompt_tokens == golden.prompt_tokens, (
+            f"{context}: prompt_tokens {row.prompt_tokens} != golden {golden.prompt_tokens}"
+        )
+        assert row.completion_tokens == golden.completion_tokens, (
+            f"{context}: completion_tokens {row.completion_tokens} != golden {golden.completion_tokens}"
+        )
+        assert_total_is_sum_of_components(row, context)
