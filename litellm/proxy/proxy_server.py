@@ -342,6 +342,14 @@ from litellm.proxy.auth.login_throttle import (
     warn_login_counters_are_per_worker,
     warn_source_login_limit_is_off,
 )
+from litellm.proxy.auth.master_key_boot_check import (
+    MASTER_KEY_ENV_VAR,
+    SALT_KEY_ENV_VAR,
+    UNSAFE_PROXY_OVERRIDE_ENV_VAR,
+    announce_on_stderr_at_exit,
+    enforce_master_key_boot_verdict,
+    master_key_boot_verdict,
+)
 from litellm.proxy.auth.model_checks import (
     expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,
@@ -1214,6 +1222,19 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             worker_config = json.loads(worker_config)
             if isinstance(worker_config, dict):
                 await initialize(**worker_config)
+
+    enforce_master_key_boot_verdict(
+        master_key_boot_verdict(
+            master_key=master_key,
+            environment_master_key=os.getenv(MASTER_KEY_ENV_VAR),
+            general_settings=general_settings,
+            config_file_path=user_config_file_path,
+            override_env_is_on=get_secret_bool(UNSAFE_PROXY_OVERRIDE_ENV_VAR) is True,
+            salt_key_is_set=os.getenv(SALT_KEY_ENV_VAR) is not None,
+            database_is_configured=prisma_client is not None or get_secret("DATABASE_URL", None) is not None,
+        ),
+        announce=announce_on_stderr_at_exit,
+    )
 
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
