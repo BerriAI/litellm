@@ -117,8 +117,6 @@ async def test_team_member_reset_budget_authz_matrix(
 
 
 async def test_team_member_reset_budget_leaves_shared_default_row_untouched(proxy_client, prisma, scratch, world):
-    """Relinking must point the member at the shared row, not copy or edit it, so a later
-    /team/update to team_member_budget reaches this member again."""
     member_id = scratch.tag("member")
     default_budget_id = await _seed_team_with_default_budget(prisma, world, "alpha", scratch.prefix, scratch)
     await _seed_custom_member(prisma, scratch.prefix, member_id, scratch)
@@ -161,8 +159,6 @@ async def test_team_member_reset_budget_without_team_default_detaches_member(pro
 
 
 async def test_team_member_reset_budget_with_deleted_team_default_detaches_member(proxy_client, prisma, scratch, world):
-    """metadata.team_member_budget_id can outlive its budget row; a stale id must not be
-    relinked to (the FK would fail) and must read as no budget, not as the team default."""
     member_id = scratch.tag("member")
     await create_scratch_team(
         prisma,
