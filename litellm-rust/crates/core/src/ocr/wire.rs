@@ -96,7 +96,17 @@ pub fn decode_request_input<D: Into<OcrDocumentInput>>(
 }
 
 pub fn decode_document(value: Value) -> Result<OcrDocument, Error> {
-    let kind = value.get("type").and_then(Value::as_str);
+    let Some(fields) = value.as_object() else {
+        return Err(Error::DocumentNotObject);
+    };
+    let kind = match fields.get("type") {
+        Some(Value::String(kind)) if matches!(kind.as_str(), "document_url" | "image_url") => {
+            Some(kind.as_str())
+        }
+        Some(Value::String(kind)) => return Err(Error::InvalidDocumentType(kind.clone())),
+        Some(other) => return Err(Error::InvalidDocumentType(other.to_string())),
+        None => return Err(Error::InvalidDocumentType("None".into())),
+    };
     if matches!(kind, Some("document_url")) && value.get("document_url").is_none()
         || matches!(kind, Some("image_url")) && value.get("image_url").is_none()
     {
@@ -122,9 +132,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::non_object(json!([]), "document")]
-    #[case::missing_type(json!({"document_url":"https://example.com/a.pdf"}), "document")]
-    #[case::unsupported_type(json!({"type":"text"}), "type")]
+    #[case::non_object(json!([]), "document must be a dict")]
+    #[case::missing_type(
+        json!({"document_url":"https://example.com/a.pdf"}),
+        "Invalid document type: None"
+    )]
+    #[case::unsupported_type(json!({"type":"text"}), "Invalid document type: text")]
     #[case::missing_document_url(json!({"type":"document_url"}), "Document URL")]
     #[case::missing_image_url(json!({"type":"image_url"}), "Document URL")]
     fn ocr_contract_malformed_document_is_bad_request(
@@ -134,7 +147,7 @@ mod tests {
         let error = decode_document(document).unwrap_err();
         assert!(matches!(
             error,
-            Error::RequestField { .. } | Error::MissingDocumentUrl
+            Error::DocumentNotObject | Error::InvalidDocumentType(_) | Error::MissingDocumentUrl
         ));
         assert_eq!(error.http_status_code(), Some(400));
         assert!(error.to_string().contains(field), "{error}");

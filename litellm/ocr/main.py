@@ -73,7 +73,7 @@ def _prepare_ocr_request(
         raise litellm.BadRequestError(
             message="document must be a dict with 'type' and URL/file field",
             model=model,
-            llm_provider=_error_provider(model, custom_llm_provider) or "",
+            llm_provider=resolve_error_provider(model, custom_llm_provider) or "",
         )
 
     normalized_document: Final = (
@@ -85,13 +85,13 @@ def _prepare_ocr_request(
         raise litellm.BadRequestError(
             message=f"Invalid document type: {doc_type}. Must be 'document_url', 'image_url', or 'file'",
             model=model,
-            llm_provider=_error_provider(model, custom_llm_provider) or "",
+            llm_provider=resolve_error_provider(model, custom_llm_provider) or "",
         )
     if not normalized_document.get(doc_type):
         raise litellm.BadRequestError(
             message="Document URL is required",
             model=model,
-            llm_provider=_error_provider(model, custom_llm_provider) or "",
+            llm_provider=resolve_error_provider(model, custom_llm_provider) or "",
         )
 
     (
@@ -182,7 +182,7 @@ def _prepare_ocr_request(
     )
 
 
-def _error_provider(model: str, custom_llm_provider: str | None) -> str | None:
+def resolve_error_provider(model: str, custom_llm_provider: str | None) -> str | None:
     if custom_llm_provider is not None:
         return custom_llm_provider
     prefix: Final = model.partition("/")[0]
@@ -252,7 +252,7 @@ async def aocr(
 
         return response
     except Exception as e:
-        error_provider: Final = _error_provider(model, custom_llm_provider)
+        error_provider: Final = resolve_error_provider(model, custom_llm_provider)
         error_model: Final = model.removeprefix(f"{error_provider}/") if error_provider else model
         raise litellm.exception_type(
             model=error_model,
@@ -412,7 +412,7 @@ def ocr(
 
         return response
     except Exception as e:
-        error_provider: Final = _error_provider(model, custom_llm_provider)
+        error_provider: Final = resolve_error_provider(model, custom_llm_provider)
         error_model: Final = model.removeprefix(f"{error_provider}/") if error_provider else model
         raise litellm.exception_type(
             model=error_model,

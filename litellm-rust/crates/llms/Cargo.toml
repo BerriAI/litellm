@@ -22,6 +22,7 @@ base64.workspace = true
 bytes.workspace = true
 data-url = "0.3.2"
 futures-util.workspace = true
+percent-encoding.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }

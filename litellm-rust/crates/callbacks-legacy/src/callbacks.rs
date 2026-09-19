@@ -229,6 +229,60 @@ impl LegacyCallbacks for PythonLogger {
     }
 }
 
+impl PythonLogger {
+    /// `Logging.update_from_kwargs` with what the caller's arguments alone say, ahead of
+    /// provider preparation. Only the metadata keys are handed over, so no credential in
+    /// the keyword view reaches the logger unredacted.
+    pub(crate) fn update_before_preparation(
+        &self,
+        py: Python<'_>,
+        kwargs: &Py<PyDict>,
+        model: Option<String>,
+        custom_llm_provider: Option<String>,
+    ) -> PyResult<()> {
+        let Some(model) = model else {
+            return Ok(());
+        };
+        let (provider, model) = match custom_llm_provider.filter(|provider| !provider.is_empty()) {
+            Some(provider) => {
+                let model = model
+                    .strip_prefix(provider.as_str())
+                    .and_then(|model| model.strip_prefix('/'))
+                    .unwrap_or(&model)
+                    .to_string();
+                (provider, model)
+            }
+            None => match model.split_once('/') {
+                Some((provider, model)) if !provider.is_empty() && !model.is_empty() => {
+                    (provider.to_string(), model.to_string())
+                }
+                _ => return Ok(()),
+            },
+        };
+        let kwargs = kwargs.bind(py);
+        let metadata = PyDict::new(py);
+        for name in ["metadata", "litellm_metadata"] {
+            if let Some(value) = kwargs.get_item(name)? {
+                metadata.set_item(name, value)?;
+            }
+        }
+        let params = PyDict::new(py);
+        params.set_item("litellm_call_id", kwargs.get_item("litellm_call_id")?)?;
+        Logging::Update.call(
+            py,
+            (
+                self.object(py),
+                metadata,
+                model,
+                PyDict::new(py),
+                params,
+                provider,
+            ),
+        )?;
+        Ok(())
+    }
+}
+
 fn custom_pricing_fields(py: Python<'_>) -> PyResult<Vec<String>> {
     Logging::CustomPricingFields.call(py, ())?.extract()
 }

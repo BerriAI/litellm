@@ -83,3 +83,33 @@ def test_map_failure_leaves_non_upstream_errors_unwrapped() -> None:
 def test_map_failure_reports_invalid_request_format_as_unsupported_params() -> None:
     with pytest.raises(litellm.UnsupportedParamsError, match="Invalid `req_format`: 'markdown'"):
         raise map_failure(RustFormatError(), REQUEST, "mistral")
+
+
+def test_failure_before_projection_reports_the_provider_python_reports() -> None:
+    error: Final = ValueError("Document URL is required")
+    error.status_code = 400  # type: ignore[attr-defined]
+
+    mapped: Final = map_failure(error, REQUEST, "")
+
+    assert isinstance(mapped, litellm.BadRequestError)
+    assert mapped.llm_provider == "mistral"
+    assert "BadRequestError:  - " not in str(mapped)
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected_type", "expected_message"),
+    [
+        ("openai", litellm.APIConnectionError, "OCR is not supported for provider: openai"),
+        ("not_a_provider", litellm.BadRequestError, "LLM Provider NOT provided"),
+    ],
+)
+def test_invalid_provider_failures_follow_the_python_route(
+    provider: str, expected_type: type[Exception], expected_message: str
+) -> None:
+    error: Final = ValueError(f"invalid provider: {provider}")
+    error.ocr_invalid_provider = provider  # type: ignore[attr-defined]
+
+    mapped: Final = map_failure(error, REQUEST, "")
+
+    assert isinstance(mapped, expected_type)
+    assert expected_message in str(mapped)

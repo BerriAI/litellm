@@ -1,4 +1,4 @@
-use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
+use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_llms::{
     aws_textract::ocr::{
         analyze_transformation::TextractAnalyzeDocumentConfig, common_utils::TextractOperation,
@@ -168,11 +168,8 @@ pub(crate) fn resolve_provider_config(
     model: &str,
     custom_llm_provider: Option<&str>,
 ) -> Result<(String, OcrConfigKind), Error> {
-    let provider =
-        get_custom_llm_provider(model, custom_llm_provider).unwrap_or(CustomLlmProvider {
-            model,
-            custom_llm_provider: OcrProvider::Mistral.into(),
-        });
+    let provider = get_custom_llm_provider(model, custom_llm_provider)
+        .ok_or_else(|| Error::ProviderNotProvided(model.to_string()))?;
     let ocr_provider = provider
         .custom_llm_provider
         .parse::<OcrProvider>()
@@ -480,6 +477,15 @@ mod tests {
             resolve_provider_config(model, None).unwrap().0,
             model.split_once('/').unwrap().1
         );
+    }
+
+    #[rstest]
+    #[case::bare("mistral-ocr-latest")]
+    #[case::other_route_model("gpt-4o")]
+    fn ocr_contract_model_without_a_provider_is_rejected_like_python(#[case] model: &str) {
+        let error = resolve_provider_config(model, None).unwrap_err();
+        assert!(matches!(&error, Error::ProviderNotProvided(passed) if passed == model));
+        assert_eq!(error.http_status_code(), Some(400));
     }
 
     #[rstest]

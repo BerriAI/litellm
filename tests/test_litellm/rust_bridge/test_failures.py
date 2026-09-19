@@ -52,3 +52,18 @@ def test_kwargs_are_handed_to_the_mapper_as_owned_copies(monkeypatch: pytest.Mon
     assert seen[0]["completion_kwargs"] is not request_kwargs
     assert seen[0]["model"] == "gpt-4o"
     assert seen[0]["custom_llm_provider"] == "openai"
+
+
+def test_native_provider_failure_message_is_the_provider_body_not_the_args_tuple() -> None:
+    class NativeUpstream(Exception):
+        headers = [("retry-after", "7")]
+
+    native_error: Final = NativeUpstream(429, '{"message": "slow down"}')
+
+    mapped: Final = failures.map_native_failure(
+        native_error, "mistral/mistral-ocr-latest", "mistral", MappingProxyType({}), "https://api.mistral.ai/v1"
+    )
+
+    assert isinstance(mapped, litellm.RateLimitError)
+    assert '{"message": "slow down"}' in str(mapped)
+    assert "(429," not in str(mapped)

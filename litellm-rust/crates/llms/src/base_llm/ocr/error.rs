@@ -30,6 +30,10 @@ pub enum Error {
     MissingField(&'static str),
     #[error("Document URL is required")]
     MissingDocumentUrl,
+    #[error("document must be a dict with 'type' and URL/file field")]
+    DocumentNotObject,
+    #[error("Invalid document type: {0}. Must be 'document_url', 'image_url', or 'file'")]
+    InvalidDocumentType(String),
     #[error("invalid OCR document data URI")]
     InvalidDataUri,
     #[error(
@@ -76,6 +80,10 @@ pub enum Error {
     Unsupported(&'static str),
     #[error("invalid provider: {0}")]
     InvalidProvider(String),
+    #[error(
+        "LLM Provider NOT provided. Pass in the LLM provider you are trying to call. You passed model={0}"
+    )]
+    ProviderNotProvided(String),
     #[error("invalid model: {provider} has no model {model:?} - use one of: {}", supported.join(", "))]
     InvalidModel {
         provider: &'static str,
@@ -149,6 +157,8 @@ impl Error {
                 | Self::RequestField { .. }
                 | Self::MissingField(_)
                 | Self::MissingDocumentUrl
+                | Self::DocumentNotObject
+                | Self::InvalidDocumentType(_)
                 | Self::InvalidDataUri
                 | Self::ReductoSource
                 | Self::InlineDocumentTooLarge
@@ -161,6 +171,7 @@ impl Error {
                 | Self::DotModel
                 | Self::InvalidRequest(_)
                 | Self::InvalidProvider(_)
+                | Self::ProviderNotProvided(_)
                 | Self::InvalidModel { .. }
                 | Self::Params(_)
                 | Self::Headers(_)

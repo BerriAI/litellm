@@ -17,8 +17,8 @@ _UPSTREAM_HEADERS: Final = TypeAdapter(list[tuple[str, str]])
 
 class UpstreamFailure(Exception):
     def __init__(self, response: httpx.Response, cause: Exception) -> None:
-        super().__init__(str(cause))
-        self.message: Final = str(cause)
+        super().__init__(response.text)
+        self.message: Final = response.text
         self.response: Final = response
         self.status_code: Final = response.status_code
         self.__cause__ = cause
@@ -49,13 +49,13 @@ class ExceptionMapper(Protocol):
     ) -> Exception: ...
 
 
-def map_failure(error: Exception, model: str, request_provider: str, kwargs: Mapping[str, object]) -> Exception:
+def map_failure(error: Exception, model: str, request_provider: str | None, kwargs: Mapping[str, object]) -> Exception:
     mapper: Final = cast(  # cast-ok: bounded adapter for the legacy public exception mapper
         ExceptionMapper, litellm.exception_type
     )
     try:
         return mapper(
-            model=model.removeprefix(f"{request_provider}/"),
+            model=model.removeprefix(f"{request_provider}/") if request_provider else model,
             custom_llm_provider=request_provider,
             original_exception=error,
             completion_kwargs=dict(kwargs),  # mutable-ok: exception mapper requires owned kwargs
@@ -67,7 +67,11 @@ def map_failure(error: Exception, model: str, request_provider: str, kwargs: Map
 
 
 def map_native_failure(
-    error: Exception, model: str, request_provider: str, kwargs: Mapping[str, object], api_base: str | None = None
+    error: Exception,
+    model: str,
+    request_provider: str | None,
+    kwargs: Mapping[str, object],
+    api_base: str | None = None,
 ) -> Exception:
     """`map_failure`, reading a native `(status, body)` provider failure as the HTTP response it was."""
     original: Final = _upstream_failure(error, api_base)

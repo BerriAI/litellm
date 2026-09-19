@@ -32,6 +32,10 @@ pub struct LegacySurface {
     pub input_description: &'static str,
     /// How a streamed response is billed; `None` for a route that never streams.
     pub stream: Option<PassThroughStream>,
+    /// Whether `Logging` learns the model, provider and metadata before provider
+    /// preparation, as the Python route does, so a failure ahead of the wire request
+    /// (credentials, document download) is still attributed.
+    pub updates_logging_before_preparation: bool,
 }
 
 /// The pass-through billing a streamed response goes through once its chunks are in.
@@ -123,6 +127,16 @@ impl LegacyLogging {
     fn prepare(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
         let prepared = prepare(py, self.call.kwargs().bind(py), self.logger()?)?.unbind();
         self.call.set_kwargs(prepared);
+        if self.surface.updates_logging_before_preparation {
+            let model = self.call.lookup(py, "model")?;
+            let provider = self.call.lookup(py, "custom_llm_provider")?;
+            self.logger()?.update_before_preparation(
+                py,
+                self.call.kwargs(),
+                model.and_then(|model| model.extract::<String>().ok()),
+                provider.and_then(|provider| provider.extract::<String>().ok()),
+            )?;
+        }
         Ok(LifecycleStep::Arguments(self.call.kwargs().clone_ref(py)))
     }
 

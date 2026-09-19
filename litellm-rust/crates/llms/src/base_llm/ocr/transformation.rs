@@ -32,14 +32,29 @@ pub enum OcrDocument {
     DocumentUrl {
         document_url: String,
         #[serde(flatten)]
-        extra_fields: BTreeMap<String, Option<String>>,
+        extra_fields: BTreeMap<String, Value>,
     },
     #[serde(rename = "image_url")]
     ImageUrl {
+        #[serde(deserialize_with = "image_url_source")]
         image_url: String,
         #[serde(flatten)]
-        extra_fields: BTreeMap<String, Option<String>>,
+        extra_fields: BTreeMap<String, Value>,
     },
+}
+
+/// Mistral accepts `image_url` as a string or as `{"url": ...}`; providers only consume the
+/// source, so the object form is read down to its URL.
+fn image_url_source<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ImageUrl {
+        Source(String),
+        Object { url: String },
+    }
+    Ok(match ImageUrl::deserialize(deserializer)? {
+        ImageUrl::Source(url) | ImageUrl::Object { url } => url,
+    })
 }
 
 impl OcrDocument {
@@ -346,8 +361,13 @@ pub struct DecodedOcrResponse<T> {
 
 pub fn decode_request_value<T: DeserializeOwned>(value: Value, prefix: &str) -> Result<T, Error> {
     serde_path_to_error::deserialize(value.into_deserializer()).map_err(|error| {
+        let path = error.path().to_string();
         Error::RequestField {
-            path: format!("{prefix}.{}", error.path()),
+            path: if path == "." {
+                prefix.to_string()
+            } else {
+                format!("{prefix}.{path}")
+            },
         }
     })
 }
@@ -639,10 +659,8 @@ mod tests {
             assert!(serde_json::from_value::<LiteLLMOcrResponse>(Value::Object(payload)).is_err());
         }
         assert!(
-            serde_json::from_value::<OcrDocument>(json!({
-                "type":"image_url", "image_url":"https://example.com/image", "detail":42
-            }))
-            .is_err()
+            serde_json::from_value::<OcrDocument>(json!({"type":"image_url", "image_url":42}))
+                .is_err()
         );
     }
 
@@ -692,6 +710,20 @@ mod tests {
             serde_json::to_value(document.with_source(replacement.clone())).unwrap(),
             json!({"type": kind, kind: replacement, field: extra})
         );
+    }
+
+    #[test]
+    fn documents_accept_what_python_forwards_to_the_provider() {
+        let document: OcrDocument = serde_json::from_value(json!({
+            "type":"image_url", "image_url":{"url":"https://example.com/image", "detail":"high"}
+        }))
+        .unwrap();
+        assert_eq!(document.source(), "https://example.com/image");
+        let document = json!({
+            "type":"document_url", "document_url":"https://example.com/a.pdf", "n":3
+        });
+        let decoded: OcrDocument = serde_json::from_value(document.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), document);
     }
 
     #[test]

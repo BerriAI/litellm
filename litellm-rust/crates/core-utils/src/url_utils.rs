@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 
+use percent_encoding::{AsciiSet, utf8_percent_encode};
 use url::Url;
 
 #[derive(Debug, thiserror::Error)]
@@ -64,6 +65,35 @@ impl ApiUrl<Complete> {
         self
     }
 
+    /// Like [`Self::append_query_pairs`], but percent-encodes keys and values with `escape`
+    /// instead of form encoding, so callers choose which reserved characters stay literal.
+    /// An existing query is kept; an empty result leaves no dangling `?`.
+    pub fn append_query_pairs_escaped<'a>(
+        mut self,
+        pairs: impl IntoIterator<Item = (&'a str, &'a str)>,
+        escape: &'static AsciiSet,
+    ) -> Self {
+        let appended = pairs.into_iter().map(|(key, value)| {
+            format!(
+                "{}={}",
+                utf8_percent_encode(key, escape),
+                utf8_percent_encode(value, escape)
+            )
+        });
+        let query = self
+            .url
+            .query()
+            .filter(|existing| !existing.is_empty())
+            .map(str::to_owned)
+            .into_iter()
+            .chain(appended)
+            .collect::<Vec<_>>()
+            .join("&");
+        self.url
+            .set_query(Some(query.as_str()).filter(|query| !query.is_empty()));
+        self
+    }
+
     pub fn into_string(self) -> String {
         self.url.into()
     }
@@ -109,6 +139,43 @@ mod tests {
         assert_eq!(
             actual,
             "https://example.test/analyze?model=name+with+spaces"
+        );
+    }
+
+    const KEEP_COMMAS: &AsciiSet = &percent_encoding::NON_ALPHANUMERIC.remove(b',');
+
+    #[rstest::rstest]
+    #[case::fresh_query("https://example.test", &[("pages", "1,2")], "?pages=1,2")]
+    #[case::existing_query_kept(
+        "https://example.test?tenant=a",
+        &[("pages", "1,2")],
+        "?tenant=a&pages=1,2"
+    )]
+    #[case::bare_question_mark("https://example.test?", &[("pages", "1")], "?pages=1")]
+    #[case::no_pairs_no_query("https://example.test", &[], "")]
+    #[case::no_pairs_keeps_query("https://example.test?tenant=a", &[], "?tenant=a")]
+    #[case::outside_set_escaped(
+        "https://example.test",
+        &[("q", "a b&c=d+e%2C#")],
+        "?q=a%20b%26c%3Dd%2Be%252C%23"
+    )]
+    #[case::keys_escaped_too("https://example.test", &[("a&b", "1")], "?a%26b=1")]
+    #[case::non_ascii_as_utf8("https://example.test", &[("q", "é")], "?q=%C3%A9")]
+    fn escaped_query_pairs(
+        #[case] base: &str,
+        #[case] pairs: &[(&str, &str)],
+        #[case] expected_query: &str,
+    ) {
+        let actual = ApiUrl::parse(base)
+            .and_then(|url| url.complete_path(&["analyze"]))
+            .map(|url| {
+                url.append_query_pairs_escaped(pairs.iter().copied(), KEEP_COMMAS)
+                    .into_string()
+            })
+            .expect("url builds");
+        assert_eq!(
+            actual,
+            format!("https://example.test/analyze{expected_query}")
         );
     }
 }

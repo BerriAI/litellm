@@ -52,13 +52,21 @@ class ExecutionVariant:
 
 
 class SubprocessWorker:
-    def __init__(self, runner: SubprocessRunner, provider: ReplayServer, variant: ExecutionVariant) -> None:
+    def __init__(
+        self,
+        runner: SubprocessRunner,
+        provider: ReplayServer,
+        variant: ExecutionVariant,
+        *,
+        baseline: bool,
+    ) -> None:
         project_root: Final = str(PROJECT_ROOT)
         existing_pythonpath: Final = os.environ.get("PYTHONPATH")
         env: Final = {
             **os.environ,
             **dict(variant.environment),
-            "LITELLM_USER_AGENT": runner.baseline_user_agent,
+            # Both implementations honor LITELLM_USER_AGENT, so only the baseline carries the sentinel.
+            **({"LITELLM_USER_AGENT": runner.baseline_user_agent} if baseline else {}),
             "PYTHONPATH": os.pathsep.join(path for path in (project_root, existing_pythonpath) if path),
         }
         self.mode: Final = variant.name
@@ -159,9 +167,11 @@ class SubprocessWorker:
 def execution_worker(
     runner: SubprocessRunner,
     variant: ExecutionVariant,
+    *,
+    baseline: bool,
 ) -> Generator[SubprocessWorker]:
     with replay_server() as provider:
-        worker: Final = SubprocessWorker(runner, provider, variant)
+        worker: Final = SubprocessWorker(runner, provider, variant, baseline=baseline)
         try:
             yield worker
         finally:
@@ -174,8 +184,8 @@ def execution_worker_pair(
     baseline: ExecutionVariant,
     candidate: ExecutionVariant,
 ) -> Generator[tuple[SubprocessWorker, SubprocessWorker]]:
-    with execution_worker(runner, baseline) as baseline_worker:
-        with execution_worker(runner, candidate) as candidate_worker:
+    with execution_worker(runner, baseline, baseline=True) as baseline_worker:
+        with execution_worker(runner, candidate, baseline=False) as candidate_worker:
             yield baseline_worker, candidate_worker
 
 
