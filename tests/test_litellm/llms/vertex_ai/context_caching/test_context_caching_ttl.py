@@ -7,8 +7,6 @@ from litellm.llms.vertex_ai.context_caching.transformation import (
 
 
 class TestTTLNormalization:
-    """Gemini only takes "<seconds>s"; Anthropic clients send "5m" and "1h" too"""
-
     @pytest.mark.parametrize(
         "ttl, expected",
         [
@@ -23,6 +21,8 @@ class TestTTLNormalization:
             ("1h", "3600s"),
             ("0.5h", "1800s"),
             ("48h", "172800s"),
+            ("315576000000s", "315576000000s"),
+            ("87660000h", "315576000000s"),
         ],
     )
     def test_normalizes_supported_units_to_seconds(self, ttl, expected):
@@ -44,6 +44,10 @@ class TestTTLNormalization:
             "3600 s",
             "3600ss",
             "1 h",
+            "0.0000000001s",
+            "315576000001s",
+            "87660001h",
+            "9" * 400 + "h",
             None,
             123,
         ],
