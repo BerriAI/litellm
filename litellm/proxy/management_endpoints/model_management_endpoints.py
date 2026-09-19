@@ -137,7 +137,12 @@ from litellm.types.router import (
     updateDeployment,
     updateLiteLLMParams,
 )
-from litellm.types.utils import echoed_cost_map_pricing_fields, without_server_derived_pricing
+from litellm.types.utils import (
+    COST_MAP_LOOKUP_KEY,
+    echoed_cost_map_fields,
+    echoed_cost_map_pricing_fields,
+    without_server_derived_pricing,
+)
 from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
@@ -871,6 +876,16 @@ def _ptu_priced_deployment(model_params: Deployment) -> Deployment:
     )
 
 
+def _cost_map_entry(model_info: Mapping[str, object]) -> Mapping[str, object]:
+    key: Final = model_info.get(COST_MAP_LOOKUP_KEY)
+    if not isinstance(key, str):
+        return MappingProxyType({})
+    try:
+        return MappingProxyType(dict(litellm.get_model_info(model=key)))
+    except Exception:
+        return MappingProxyType({})
+
+
 def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> PrismaCompatibleUpdateDBModel:
     if updated_patch.model_info is not None:
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
@@ -893,7 +908,17 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
 
     # update model info
     if updated_patch.model_info:
-        merged_model_info.update(without_server_derived_pricing(updated_patch.model_info.model_dump(exclude_none=True)))
+        incoming_model_info: Final = updated_patch.model_info.model_dump(exclude_none=True)
+        echoed_fields: Final = echoed_cost_map_fields(incoming_model_info, _cost_map_entry(incoming_model_info))
+        merged_model_info.update(
+            MappingProxyType(
+                dict(
+                    (k, v)
+                    for k, v in without_server_derived_pricing(incoming_model_info).items()
+                    if k not in echoed_fields
+                )
+            )
+        )
 
     # Honor explicit-null clears LAST, after both merges, so a model_info blob a client
     # passes through cannot silently undo a litellm_params clear via .update().

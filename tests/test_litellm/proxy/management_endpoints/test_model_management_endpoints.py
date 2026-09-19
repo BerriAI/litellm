@@ -3949,6 +3949,124 @@ class TestModelInfoServerDerivedPricingFilter:
         assert written["access_groups"] == ["prod"]
 
 
+class TestModelInfoCostMapEchoFilter:
+    """LIT-5534. ``/model/info`` fills a deployment's ``model_info`` from the cost map (context
+    limits, mode, provider, supported params, capability flags), and the Admin UI edit form sends
+    that whole blob back on any save. Only values that still equal the cost-map entry are the
+    echo; a value the operator changed is a real override and stays."""
+
+    def test_echoed_cost_map_metadata_is_not_persisted(self):
+        import litellm
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        entry = litellm.get_model_info("gpt-5.6")
+        echo = {**entry, "id": "dep-echo-0", "db_model": True, "access_groups": ["prod"]}
+        db_model = Deployment(
+            model_name="gpt-5.6",
+            litellm_params=LiteLLM_Params(model="openai/gpt-5.6"),
+            model_info=ModelInfo(id="dep-echo-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_info=ModelInfo(**echo)),
+        )
+
+        info = json.loads(result["model_info"])
+        assert info["access_groups"] == ["prod"]
+        assert set(info).isdisjoint(entry)
+        assert "max_input_tokens" not in info and "mode" not in info and "supports_vision" not in info, (
+            "cost-map metadata must not be persisted from an unchanged /model/info echo"
+        )
+
+    def test_an_edited_value_survives_the_echo_filter(self):
+        import litellm
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        entry = litellm.get_model_info("gpt-5.6")
+        echo = {
+            **entry,
+            "id": "dep-echo-1",
+            "db_model": True,
+            "access_groups": ["prod"],
+            "max_input_tokens": entry["max_input_tokens"] + 1,
+            "mode": "completion" if entry["mode"] != "completion" else "chat",
+        }
+        db_model = Deployment(
+            model_name="gpt-5.6",
+            litellm_params=LiteLLM_Params(model="openai/gpt-5.6"),
+            model_info=ModelInfo(id="dep-echo-1"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_info=ModelInfo(**echo)),
+        )
+
+        info = json.loads(result["model_info"])
+        assert info["max_input_tokens"] == echo["max_input_tokens"]
+        assert info["mode"] == echo["mode"]
+        assert "litellm_provider" not in info
+        assert "supported_openai_params" not in info
+
+    def test_metadata_without_a_cost_map_key_is_persisted(self):
+        import litellm
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+        from litellm.types.utils import echoed_cost_map_fields
+
+        entry = litellm.get_model_info("gpt-5.6")
+        assert echoed_cost_map_fields({"max_input_tokens": entry["max_input_tokens"]}, entry) == ()
+        db_model = Deployment(
+            model_name="gpt-5.6",
+            litellm_params=LiteLLM_Params(model="openai/gpt-5.6"),
+            model_info=ModelInfo(id="dep-echo-2"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(
+                    id="dep-echo-2",
+                    max_input_tokens=entry["max_input_tokens"],
+                    mode=entry["mode"],
+                )
+            ),
+        )
+
+        info = json.loads(result["model_info"])
+        assert info["max_input_tokens"] == entry["max_input_tokens"]
+        assert info["mode"] == entry["mode"]
+
+    def test_a_stored_mode_survives_an_echoed_save(self):
+        import litellm
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        entry = litellm.get_model_info("gpt-5.6")
+        db_model = Deployment(
+            model_name="gpt-5.6",
+            litellm_params=LiteLLM_Params(model="openai/gpt-5.6"),
+            model_info=ModelInfo(id="dep-echo-3", mode=entry["mode"]),
+        )
+        echo = {**entry, "id": "dep-echo-3", "db_model": True, "access_groups": ["prod"]}
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_info=ModelInfo(**echo)),
+        )
+
+        info = json.loads(result["model_info"])
+        assert info["mode"] == entry["mode"]
+        assert "max_input_tokens" not in info
+
+
 class TestUpdateDBModelClearCacheControlInjectionPoints:
     def test_explicit_null_removes_stored_injection_points(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
