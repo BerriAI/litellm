@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import json
 import time
-from collections.abc import AsyncIterator, Awaitable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, cast, get_args
@@ -1376,7 +1376,7 @@ def _extract_model_from_first_ws_event(first_event: Any) -> str | None:
 class _ResponseCreateRoutingHints(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    input: str | list[object] | None = None
+    input: str | Sequence[object] | None = None
     previous_response_id: str | None = None
     response: "_ResponseCreateRoutingHints | None" = None
 
@@ -1567,12 +1567,13 @@ async def responses_websocket_endpoint(
         await websocket.close(code=1008, reason="Pre-call error")
         return
 
+    routed_data: Final = dict(
+        data, user_api_key_dict=user_api_key_dict, **_routing_hints_from_first_ws_frame(first_message)
+    )
     # Phase 2: route to upstream provider
     try:
-        data["user_api_key_dict"] = user_api_key_dict
-        data.update(_routing_hints_from_first_ws_frame(first_message))
         llm_call: Final = await route_request(
-            data=data,
+            data=routed_data,
             route_type="_aresponses_websocket",
             llm_router=llm_router,
             user_model=user_model,
@@ -1582,7 +1583,7 @@ async def responses_websocket_endpoint(
             await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=failure,
-                request_data=data,
+                request_data=routed_data,
             )
     except Exception as e:
         verbose_proxy_logger.exception("Responses WebSocket error")
@@ -1591,6 +1592,6 @@ async def responses_websocket_endpoint(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
-            request_data=data,
+            request_data=routed_data,
         )
         await websocket.close(code=1011, reason="Internal server error")
