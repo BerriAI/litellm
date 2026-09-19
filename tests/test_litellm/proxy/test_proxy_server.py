@@ -3381,6 +3381,24 @@ async def test_db_reload_finishes_when_the_config_owns_a_setting_the_db_also_set
     assert proxy_config.settings["user_api_key_cache_max_size"] == config_cache_size
 
 
+@pytest.mark.asyncio
+async def test_db_reload_keeps_the_resolved_value_of_a_config_owned_env_reference(monkeypatch):
+    from litellm.proxy import proxy_server as proxy_server_module
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", MagicMock(), raising=False)
+    monkeypatch.setattr(proxy_server_module, "store_model_in_db", True, raising=False)
+    proxy_config: Final = ProxyConfig()
+    proxy_config.settings.load_yaml({"store_model_in_db": "os.environ/PROOF_STORE_FLAG"})
+    proxy_config.settings.apply_runtime_values({"store_model_in_db": True})
+    monkeypatch.setattr(proxy_server_module, "general_settings", proxy_config.settings, raising=False)
+
+    await proxy_config._update_general_settings({"store_model_in_db": True})
+
+    assert proxy_config.settings["store_model_in_db"] is True
+    assert proxy_server_module.store_model_in_db is True
+
+
 def test_max_ui_session_budget_default_is_one_dollar():
     """LIT-4662: the dashboard session budget default is a product decision; the
     old 0.25 default locked admins out of auto router Test Connection and the

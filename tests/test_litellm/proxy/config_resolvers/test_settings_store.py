@@ -86,11 +86,21 @@ def test_settings_store_keeps_unaffected_runtime_values_on_a_db_row_refresh() ->
 def test_settings_store_keeps_a_config_owned_key_when_a_db_row_disagrees() -> None:
     store: Final = SettingsStore("general_settings")
     store.load_yaml({"changed": "config"})
-    store.apply_runtime_values({"changed": "resolved-config"})
 
     store.apply_db_row("general_settings", {"changed": "database"})
 
     assert store["changed"] == "config"
+    assert store.source("changed") == "config"
+
+
+def test_settings_store_keeps_the_resolved_value_of_a_config_owned_key_across_a_db_row() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"changed": "os.environ/SETTING"})
+    store.apply_runtime_values({"changed": "resolved-config"})
+
+    store.apply_db_row("general_settings", {"changed": "database"})
+
+    assert store["changed"] == "resolved-config"
     assert store.source("changed") == "config"
 
 

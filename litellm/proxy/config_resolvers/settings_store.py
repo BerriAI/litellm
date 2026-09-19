@@ -117,12 +117,13 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         self._deleted_runtime_keys = frozenset()
 
     def _clear_runtime_keys(self, keys: frozenset[str]) -> None:
-        if not keys:
+        stale: Final = frozenset(key for key in keys if not self.owned_by_config(key))
+        if not stale:
             return
         self._runtime_values = MappingProxyType(
-            {key: value for key, value in self._runtime_values.items() if key not in keys}
+            {key: value for key, value in self._runtime_values.items() if key not in stale}
         )
-        self._deleted_runtime_keys = self._deleted_runtime_keys - keys
+        self._deleted_runtime_keys = self._deleted_runtime_keys - stale
 
     def _keys(self) -> tuple[str, ...]:
         return tuple(
