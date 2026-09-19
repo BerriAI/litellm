@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from prisma.models import LiteLLM_MCPServerTable as PrismaMCPServer
+from respx import MockRouter
 
 from litellm.proxy._experimental.mcp_server.db import (
     _decode_user_credential,
@@ -1751,3 +1752,44 @@ async def test_unverified_legacy_cache_cannot_bypass_enforcement(monkeypatch):
     await mcp_per_user_token_cache.set("alice", "srv", "bob", 60)
     assert await module.resolve_user_oauth_access_token("alice", server) is None
     assert await mcp_per_user_token_cache.get("alice", "srv") is None
+
+
+@pytest.mark.parametrize("user_id", ["normal-user", "user\r\nFORGED"])
+def test_undecryptable_credential_logs_escape_user_id(user_id: str, caplog: pytest.LogCaptureFixture) -> None:
+    from litellm.proxy._experimental.mcp_server.db import _warn_undecryptable_credential
+
+    _warn_undecryptable_credential(user_id, "srv-1")
+
+    message: Final = caplog.records[-1].getMessage()
+    assert len(message.splitlines()) == 1
+    assert user_id.replace("\r", "\\r").replace("\n", "\\n") in message
+    assert "could not be decrypted" in message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_status", [None, 503, 200])
+@pytest.mark.respx(using="httpx", assert_all_called=False)
+async def test_refresh_failure_logs_escape_user_id(
+    response_status: int | None, respx_mock: MockRouter, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm._logging import verbose_proxy_logger
+    from litellm.proxy._experimental.mcp_server.db import refresh_user_oauth_token
+
+    caplog.set_level(10, logger=verbose_proxy_logger.name)
+    route: Final = respx_mock.post("https://idp.example.com/token").respond(response_status or 200, json={})
+
+    result: Final = await refresh_user_oauth_token(
+        prisma_client=MagicMock(),
+        user_id="user\r\nFORGED",
+        server=_refresh_server(),
+        cred={} if response_status is None else {"refresh_token": "rt"},
+    )
+
+    messages: Final = tuple(
+        record.getMessage() for record in caplog.records if record.funcName == "refresh_user_oauth_token"
+    )
+    assert result is None
+    assert route.called is (response_status is not None)
+    assert len(messages) == 1
+    assert "user\\r\\nFORGED" in messages[0].splitlines()[0]
+    assert "\r\nFORGED" not in messages[0]

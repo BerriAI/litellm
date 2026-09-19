@@ -4701,3 +4701,25 @@ class TestClientAllowlistOnRestRoutes:
         )
 
         assert result.model_dump() in ({"prompts": []}, {"resources": [], "resource_templates": []})
+
+
+@pytest.mark.asyncio
+async def test_oauth_header_failure_escapes_logged_identity(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.proxy._experimental.mcp_server import db as mcp_db
+
+    server: Final = MCPServer(
+        server_id="oauth2-srv", name="oauth2-srv", url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http, auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True,
+    )
+    auth: Final = UserAPIKeyAuth(user_id="user\r\nFORGED")
+    resolver: Final = AsyncMock(side_effect=RuntimeError("lookup failed"))
+    monkeypatch.setattr(mcp_db, "resolve_valid_user_oauth_token", resolver)
+
+    result: Final = await rest_endpoints._get_user_oauth_extra_headers(server, auth, prefetched_creds={})
+
+    assert result is None
+    assert resolver.await_args.kwargs["user_id"] == "user\r\nFORGED"
+    assert "failed to retrieve credential" in caplog.text
+    assert all("\n" not in record.getMessage() and "\r" not in record.getMessage() for record in caplog.records)

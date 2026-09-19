@@ -164,8 +164,10 @@ async def test_build_effective_auth_contexts_never_widens_caller_passed_keys(mon
 
 
 @pytest.mark.asyncio
-async def test_build_effective_auth_contexts_survives_admitted_reload_failure(monkeypatch):
-    user_auth = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="user-9")
+async def test_build_effective_auth_contexts_survives_admitted_reload_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    user_auth = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="user-9\r\nFORGED")
 
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.ui_session_utils.resolve_ui_session_team_ids",
@@ -179,6 +181,9 @@ async def test_build_effective_auth_contexts_survives_admitted_reload_failure(mo
     contexts = await build_effective_auth_contexts(user_auth)
 
     assert [ctx.team_id for ctx in contexts] == ["team-a"]
+    assert contexts[0].user_id == "user-9\r\nFORGED"
+    assert all("\n" not in record.getMessage() and "\r" not in record.getMessage() for record in caplog.records)
+    assert "admitted-subject reload failed" in caplog.text
 
 
 @pytest.mark.asyncio

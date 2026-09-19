@@ -502,7 +502,7 @@ if MCP_AVAILABLE:
         except Exception as e:
             verbose_logger.warning(
                 "_get_user_oauth_extra_headers: failed to retrieve credential for user=%s server=%s: %s",
-                user_id,
+                user_id.replace("\r", "\\r").replace("\n", "\\n"),
                 server_id,
                 e,
             )

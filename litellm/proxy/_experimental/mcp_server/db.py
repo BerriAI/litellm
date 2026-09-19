@@ -1227,7 +1227,7 @@ def _warn_undecryptable_credential(user_id: str, server_id: str) -> None:
     verbose_proxy_logger.warning(
         "MCP user credential for user=%s server=%s could not be decrypted (likely written under a "
         "previous LITELLM_SALT_KEY); the user is treated as not connected and must re-authorize.",
-        user_id,
+        user_id.replace("\r", "\\r").replace("\n", "\\n"),
         server_id,
     )
 
@@ -1451,7 +1451,7 @@ async def store_user_oauth_credential(
                 "store_user_oauth_credential: existing credential for user=%s server=%s could not be "
                 "decrypted (likely written under a previous LITELLM_SALT_KEY); replacing it with the "
                 "newly authorized OAuth2 token.",
-                user_id,
+                user_id.replace("\r", "\\r").replace("\n", "\\n"),
                 server_id,
             )
 
@@ -1685,7 +1685,7 @@ async def refresh_user_oauth_token(
     if not refresh_token:
         verbose_proxy_logger.debug(
             "refresh_user_oauth_token: no refresh_token stored for user=%s server=%s",
-            user_id,
+            user_id.replace("\r", "\\r").replace("\n", "\\n"),
             server_id,
         )
         return None
@@ -1719,7 +1719,7 @@ async def refresh_user_oauth_token(
     except Exception as exc:
         verbose_proxy_logger.warning(
             "refresh_user_oauth_token: refresh request failed for user=%s server=%s: %s",
-            user_id,
+            user_id.replace("\r", "\\r").replace("\n", "\\n"),
             server_id,
             exc,
         )
@@ -1742,7 +1742,7 @@ async def refresh_user_oauth_token(
     if not access_token:
         verbose_proxy_logger.warning(
             "refresh_user_oauth_token: token response missing access_token for user=%s server=%s",
-            user_id,
+            user_id.replace("\r", "\\r").replace("\n", "\\n"),
             server_id,
         )
         return None
@@ -1776,7 +1776,7 @@ async def refresh_user_oauth_token(
 
     verbose_proxy_logger.info(
         "refresh_user_oauth_token: refreshed token for user=%s server=%s",
-        user_id,
+        user_id.replace("\r", "\\r").replace("\n", "\\n"),
         server_id,
     )
     return await get_user_oauth_credential(prisma_client, user_id, server_id)
