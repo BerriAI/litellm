@@ -79,12 +79,22 @@ def _resolution_for_short_side(short_side: int) -> str:
     return next((resolution for threshold, resolution in _RESOLUTION_TIERS if short_side <= threshold), "4k")
 
 
-def _model_path_from_queue_url(url: object) -> str | None:
-    if not isinstance(url, str) or not url:
+def _model_path_from_request_url(raw_response: httpx.Response) -> str | None:
+    segments: Final[tuple[str, ...]] = tuple(segment for segment in raw_response.request.url.path.split("/") if segment)
+    if "requests" not in segments:
         return None
-    path: Final[str] = httpx.URL(url).path.strip("/")
-    model_path, separator, _ = path.partition("/requests/")
-    return model_path if separator and model_path else None
+    model_segments: Final[tuple[str, ...]] = segments[: segments.index("requests")]
+    segment_count: Final[int] = 3 if len(model_segments) >= 3 and model_segments[-3] in _QUEUE_NAMESPACES else 2
+    return "/".join(model_segments[-segment_count:]) if len(model_segments) >= segment_count else None
+
+
+def _request_id_from_request_url(raw_response: httpx.Response) -> str | None:
+    segments: Final[tuple[str, ...]] = tuple(segment for segment in raw_response.request.url.path.split("/") if segment)
+    if "requests" not in segments:
+        return None
+    request_index: Final[int] = segments.index("requests")
+    request_id_index: Final[int] = request_index + 1
+    return segments[request_id_index] if len(segments) > request_id_index else None
 
 
 def _size_params(size: object) -> Mapping[str, str]:
@@ -295,12 +305,16 @@ class FalAIVideoConfig(BaseVideoConfig):
         error_value: Final[object] = response_data.get("error")
         error: Final[str | None] = error_value if isinstance(error_value, str) else None
         provider: Final[str] = custom_llm_provider or _FAL_AI_PROVIDER
-        model_path: Final[str | None] = _model_path_from_queue_url(response_data.get("response_url"))
+        model_path: Final[str | None] = _model_path_from_request_url(raw_response)
+        request_id: Final[str] = _response_string(response_data, "request_id") or (
+            _request_id_from_request_url(raw_response) or ""
+        )
         return VideoObject(
-            id=encode_video_id_with_provider(_response_string(response_data, "request_id"), provider, model_path),
+            id=encode_video_id_with_provider(request_id, provider, model_path),
             object="video",
             status="failed" if error else status,
             created_at=0,
+            model=model_path,
             error=(
                 {"code": "fal_error", "message": error} if error else None  # mutable-ok: VideoObject requires a dict
             ),
