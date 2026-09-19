@@ -5,6 +5,18 @@
   http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
   {{- end }}
 {{- end }}
+{{- end }}
+{{- if .Values.httpRoute.enabled }}
+{{- if .Values.httpRoute.hostnames }}
+{{- range .Values.httpRoute.hostnames }}
+  Served by the parent Gateway on: {{ . }}
+{{- end }}
+{{- else }}
+  The HTTPRoute inherits the hostnames of its parent Gateway listener:
+  kubectl get --namespace {{ .Release.Namespace }} httproute {{ include "litellm.fullname" . }} -o jsonpath="{.spec.parentRefs}"
+{{- end }}
+{{- end }}
+{{- if or .Values.ingress.enabled .Values.httpRoute.enabled }}
 {{- else if contains "NodePort" .Values.service.type }}
   export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "litellm.fullname" . }})
   export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
