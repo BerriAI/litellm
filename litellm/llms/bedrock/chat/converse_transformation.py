@@ -4,6 +4,7 @@ Translating between OpenAI's `/chat/completion` format and Amazon's `/converse` 
 
 import copy
 import json
+import re
 import time
 import types
 from collections.abc import Mapping
@@ -104,6 +105,7 @@ BEDROCK_COMPUTER_USE_TOOLS: Final = [
     "bash_",
     "text_editor_",
 ]
+BEDROCK_OPENAI_COMPAT_MIN_MAX_TOKENS: Final = 16
 
 # Beta header patterns that are not supported by Bedrock Converse API
 # These will be filtered out to prevent errors
@@ -291,6 +293,10 @@ class AmazonConverseConfig(BaseConfig):
                     model="bedrock",
                     llm_provider="bedrock",
                 )
+
+    @staticmethod
+    def _requires_min_max_tokens(model: str) -> bool:
+        return re.search(r"openai\.gpt-\d|xai\.grok-", model) is not None
 
     def _is_nova_2_model(self, model: str) -> bool:
         """
@@ -874,7 +880,11 @@ class AmazonConverseConfig(BaseConfig):
                     is_thinking_enabled=is_thinking_enabled,
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
-                optional_params["maxTokens"] = value
+                optional_params["maxTokens"] = (
+                    max(value, BEDROCK_OPENAI_COMPAT_MIN_MAX_TOKENS)
+                    if isinstance(value, int) and self._requires_min_max_tokens(model)
+                    else value
+                )
             if param == "stream":
                 optional_params["stream"] = value
             if param == "stop":
