@@ -629,7 +629,7 @@ class TestManagedTables:
 
 class TestAutoRouterSession:
     @staticmethod
-    def _row(baseline_models: dict) -> LiteLLM_AutoRouterSession:
+    def _row(estimated_baseline_models: dict[str, int]) -> LiteLLM_AutoRouterSession:
         return LiteLLM_AutoRouterSession(
             api_key="k",
             session_id="s",
@@ -643,7 +643,9 @@ class TestAutoRouterSession:
             saved_spend=0.24,
             classifier_cost=0.0,
             tier_turns={},
-            baseline_models=baseline_models,
+            baseline_models={"legacy-baseline": 100},
+            savings_estimated_turns=sum(estimated_baseline_models.values()),
+            savings_estimated_baseline_models=estimated_baseline_models,
         )
 
     def test_the_baseline_label_is_the_one_most_turns_were_priced_against(self):
@@ -655,5 +657,5 @@ class TestAutoRouterSession:
         assert self._row({"b-model": 1, "a-model": 1}).baseline_model == "b-model"
         assert self._row({"a-model": 1, "b-model": 1}).baseline_model == "b-model"
 
-    def test_a_row_whose_turns_recorded_no_baseline_has_no_label(self):
+    def test_a_row_without_current_estimates_has_no_baseline_label(self) -> None:
         assert self._row({}).baseline_model is None
