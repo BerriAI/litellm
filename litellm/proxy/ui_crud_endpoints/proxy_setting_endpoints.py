@@ -6,6 +6,7 @@ from collections import Counter
 from collections.abc import Mapping, MutableMapping, Sequence
 from types import MappingProxyType
 from typing import (
+    Annotated,
     Final,
     NamedTuple,
     Protocol,
@@ -1471,7 +1472,7 @@ async def update_mcp_semantic_filter_settings(
     response_model=WebSearchInterceptionSettingsResponse,
 )
 async def get_websearch_interception_settings(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
     Get web search interception configuration.
@@ -1502,7 +1503,7 @@ async def get_websearch_interception_settings(
 )
 async def update_websearch_interception_settings(
     settings: WebSearchInterceptionSettings,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
     Update web search interception settings in database.
