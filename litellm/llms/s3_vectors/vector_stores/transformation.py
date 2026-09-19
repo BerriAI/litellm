@@ -8,6 +8,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     VectorStoreEmbeddingExecutor,
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.types.rag import RAGIngestEmbeddingOptions
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
     VECTOR_STORE_OPENAI_PARAMS,
@@ -57,6 +58,21 @@ def s3_vectors_ingest_target(vector_store_config: Mapping[str, object]) -> tuple
     return explicit_bucket_name or derived_bucket_name, explicit_index_name or derived_index_name
 
 
+def s3_vectors_configured_embedding_model(litellm_params: Mapping[str, object]) -> str | None:
+    return _non_empty_str(litellm_params.get("litellm_embedding_model") or litellm_params.get("embedding_model"))
+
+
+def s3_vectors_ingest_embedding_options(
+    vector_store_config: Mapping[str, object],
+    embedding_options: RAGIngestEmbeddingOptions | None,
+) -> RAGIngestEmbeddingOptions | None:
+    store_embedding_model: Final = s3_vectors_configured_embedding_model(vector_store_config)
+    if store_embedding_model is None:
+        return embedding_options
+    store_embedding_options: Final[RAGIngestEmbeddingOptions] = {"model": store_embedding_model}
+    return store_embedding_options
+
+
 class S3VectorsVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAWSLLM):
     """Vector store configuration for AWS S3 Vectors."""
 
@@ -98,8 +114,7 @@ class S3VectorsVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAWSLLM
 
     @staticmethod
     def query_embedding_model(litellm_params: Mapping[str, object]) -> str:
-        configured: Final = litellm_params.get("litellm_embedding_model") or litellm_params.get("embedding_model")
-        return configured if isinstance(configured, str) and configured else _DEFAULT_QUERY_EMBEDDING_MODEL
+        return s3_vectors_configured_embedding_model(litellm_params) or _DEFAULT_QUERY_EMBEDDING_MODEL
 
     @staticmethod
     def _query_target(vector_store_id: str, litellm_params: Mapping[str, object]) -> tuple[str, str]:

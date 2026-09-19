@@ -1,17 +1,67 @@
+from types import SimpleNamespace
+
 import pytest
 
 from litellm.rag.ingestion.s3_vectors_ingestion import S3VectorsRAGIngestion
 
 STORE_ID_FORMAT_ERROR = "vector_store_id must be in format 'bucket_name:index_name'"
+REQUEST_EMBEDDING_MODEL = "text-embedding-3-small"
+STORE_EMBEDDING_MODEL = "text-embedding-3-large"
+REQUEST_EMBEDDING = {"model": REQUEST_EMBEDDING_MODEL}
 
 
-def _ingestion(**vector_store):
-    return S3VectorsRAGIngestion(
-        ingest_options={
-            "embedding": {"model": "text-embedding-3-small"},
-            "vector_store": {"custom_llm_provider": "s3_vectors", "aws_region_name": "us-west-2", **vector_store},
-        }
+class _RecordingRouter:
+    def __init__(self):
+        self.embedding_models = []
+
+    async def aembedding(self, model, input):
+        self.embedding_models.append(model)
+        return SimpleNamespace(data=[{"embedding": [0.1, 0.2]} for _ in input])
+
+
+def _ingestion(embedding=REQUEST_EMBEDDING, router=None, **vector_store):
+    vector_store_options = {"custom_llm_provider": "s3_vectors", "aws_region_name": "us-west-2", **vector_store}
+    ingest_options = {"vector_store": vector_store_options} if embedding is None else {
+        "embedding": embedding,
+        "vector_store": vector_store_options,
+    }
+    return S3VectorsRAGIngestion(ingest_options=ingest_options, router=router)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("store_model_key", ["embedding_model", "litellm_embedding_model"])
+async def test_a_registered_store_embedding_model_wins_over_the_request_on_ingest(store_model_key):
+    router = _RecordingRouter()
+    ingestion = _ingestion(
+        router=router, vector_store_id="my-embeddings:my-index", **{store_model_key: STORE_EMBEDDING_MODEL}
     )
+
+    await ingestion.embed(["chunk one", "chunk two"])
+
+    assert router.embedding_models == [STORE_EMBEDDING_MODEL]
+
+
+@pytest.mark.asyncio
+async def test_a_registered_store_embedding_model_is_used_when_the_request_names_none():
+    router = _RecordingRouter()
+    ingestion = _ingestion(
+        embedding=None, router=router, vector_store_id="my-embeddings:my-index", embedding_model=STORE_EMBEDDING_MODEL
+    )
+
+    await ingestion.embed(["chunk"])
+
+    assert router.embedding_models == [STORE_EMBEDDING_MODEL]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("store_model", [{}, {"embedding_model": ""}])
+async def test_the_request_embedding_model_is_kept_when_the_store_names_none(store_model):
+    router = _RecordingRouter()
+    ingestion = _ingestion(router=router, vector_store_id="my-embeddings:my-index", **store_model)
+
+    await ingestion.embed(["chunk"])
+
+    assert router.embedding_models == [REQUEST_EMBEDDING_MODEL]
 
 
 def test_store_id_alone_names_the_bucket_and_index():
