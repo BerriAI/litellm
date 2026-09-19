@@ -199,11 +199,6 @@ class RouteCheck(Protocol):
     ) -> bool: ...
 
 
-_DEFAULT_TEAM_LOOKUP: Final[TeamLookup] = get_team_object
-_DEFAULT_MODEL_ACCESS_CHECK: Final[TeamModelAccessCheck] = can_team_access_model
-_DEFAULT_ROUTE_CHECK: Final[RouteCheck] = allowed_routes_check
-
-
 class _NoRegisteredAgents:
     """The lookup in force until the proxy binds its agent registry: no agent is registered, so no claim matches."""
 
@@ -1684,22 +1679,16 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
         request_method: str | None = None,
         *,
-        team_lookup: TeamLookup = get_team_object,
-        model_access_check: TeamModelAccessCheck = can_team_access_model,
-        route_check: RouteCheck = allowed_routes_check,
+        team_lookup: TeamLookup | None = None,
+        model_access_check: TeamModelAccessCheck | None = None,
+        route_check: RouteCheck | None = None,
     ) -> tuple[str | None, LiteLLM_TeamTable | None]:
         """Find first team with access to the requested model"""
         from litellm.proxy.proxy_server import llm_router
 
-        effective_team_lookup: Final[TeamLookup] = (
-            get_team_object if team_lookup is _DEFAULT_TEAM_LOOKUP else team_lookup
-        )
-        effective_model_access_check: Final[TeamModelAccessCheck] = (
-            can_team_access_model if model_access_check is _DEFAULT_MODEL_ACCESS_CHECK else model_access_check
-        )
-        effective_route_check: Final[RouteCheck] = (
-            allowed_routes_check if route_check is _DEFAULT_ROUTE_CHECK else route_check
-        )
+        lookup_team: Final[TeamLookup] = team_lookup or get_team_object
+        check_model_access: Final[TeamModelAccessCheck] = model_access_check or can_team_access_model
+        check_route: Final[RouteCheck] = route_check or allowed_routes_check
         denied_auth_enforced_pass_through_route = False
 
         if not team_ids:
@@ -1716,7 +1705,7 @@ class JWTAuthManager:
         any_claim_team_resolved = False
         for team_id in team_ids:
             try:
-                team_object = await effective_team_lookup(
+                team_object = await lookup_team(
                     team_id=team_id,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
@@ -1729,20 +1718,17 @@ class JWTAuthManager:
 
                 if team_object and team_object.models is not None:
                     team_models = team_object.models
+                    aliases: Final = team_model_aliases(team_object)
                     if isinstance(team_models, list) and (
                         not requested_model
-                        or await effective_model_access_check(
+                        or await check_model_access(
                             model=requested_model,
                             team_object=team_object,
                             llm_router=llm_router,
-                            team_model_aliases=(
-                                dict(team_aliases)
-                                if (team_aliases := team_model_aliases(team_object)) is not None
-                                else None
-                            ),
+                            team_model_aliases=dict(aliases) if aliases is not None else None,
                         )
                     ):
-                        is_allowed = effective_route_check(
+                        is_allowed = check_route(
                             user_role=LitellmUserRoles.TEAM,
                             user_route=route,
                             litellm_proxy_roles=jwt_handler.litellm_jwtauth,

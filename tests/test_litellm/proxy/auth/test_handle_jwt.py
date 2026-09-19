@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 import httpx
 import pytest
+from opentelemetry.trace import Span
 
 import litellm
 
@@ -42,7 +43,6 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
 from litellm.types.agents import AgentResponse
-from opentelemetry.trace import Span
 
 
 @pytest.mark.asyncio
