@@ -1308,6 +1308,71 @@ def test_responses_api_bridge_check_azure_with_api_base_and_unset_effort_routes(
     assert model_info.get("mode") == "responses"
 
 
+_FOUNDRY_API_BASE: Final = "https://myproject.services.ai.azure.com"
+_FOUNDRY_FUNCTION_TOOL: Final = ({"type": "function", "function": {"name": "get_weather"}},)
+
+
+@pytest.mark.parametrize(
+    "api_base, reasoning_effort",
+    [
+        pytest.param(_FOUNDRY_API_BASE, None, id="foundry-host-unset-effort"),
+        pytest.param(_FOUNDRY_API_BASE, "low", id="foundry-host-explicit-effort"),
+        pytest.param("https://myresource.openai.azure.com", None, id="azure-openai-host-unset-effort"),
+    ],
+)
+def test_responses_api_bridge_check_azure_ai_foundry_gpt_5_4_plus_tools_routes_to_responses(api_base, reasoning_effort):
+    """
+    An azure_ai deployment of a gpt-5.4+ model on a Foundry OpenAI v1 host is the same Azure OpenAI
+    backend the azure provider bridges: its chat surface rejects function tools whenever reasoning is
+    on, and for gpt-6-astra it rejects reasoning_effort "none" too, so the Responses route on the same
+    endpoint is the only way to serve the request. Regression guard: the gate used to bridge only the
+    openai and azure providers, so these requests died at Foundry's /models/chat/completions.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model="gpt-6-astra",
+        custom_llm_provider="azure_ai",
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort=reasoning_effort,
+        api_base=api_base,
+    )
+
+    assert model == "gpt-6-astra"
+    assert model_info.get("mode") == "responses"
+
+
+@pytest.mark.parametrize(
+    "model_name, api_base, reasoning_effort",
+    [
+        pytest.param("gpt-6-astra", _FOUNDRY_API_BASE, "none", id="explicit-none-stays-chat"),
+        pytest.param("gpt-6-astra", "https://myproject.models.ai.azure.com", None, id="serverless-host-stays-chat"),
+        pytest.param("Mistral-large-2411", _FOUNDRY_API_BASE, None, id="non-gpt-5-model-stays-chat"),
+        pytest.param("claude-opus-4-1", _FOUNDRY_API_BASE, None, id="claude-on-foundry-stays-chat"),
+    ],
+)
+def test_responses_api_bridge_check_azure_ai_without_foundry_responses_route_stays_chat(
+    model_name, api_base, reasoning_effort
+):
+    """
+    The azure_ai bridge fires only where the Foundry Responses config is selectable: a serverless
+    host, a non-OpenAI model, and claude-on-Foundry have no Responses route to bridge to, and an
+    explicit reasoning_effort "none" keeps the request chat-servable on the same terms as azure.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model=model_name,
+        custom_llm_provider="azure_ai",
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort=reasoning_effort,
+        api_base=api_base,
+    )
+
+    assert model == model_name
+    assert model_info.get("mode") != "responses"
+
+
 def test_responses_api_bridge_check_older_gpt_5_tools_without_reasoning_stays_chat():
     """Pre-5.4 GPT-5 names keep the old boundary: tools alone never bridge."""
     from litellm.main import responses_api_bridge_check
@@ -1486,6 +1551,86 @@ def test_responses_bridge_preserves_reasoning_effort_with_drop_params(
 
     request_body: Final = json.loads(response_route.calls[0].request.content)
     assert request_body["reasoning"] == {"effort": "high"}
+
+
+_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY: Final = {
+    "id": "resp_foundry",
+    "object": "response",
+    "created_at": 1789852145,
+    "status": "completed",
+    "model": "gpt-6-astra",
+    "output": [
+        {
+            "id": "fc_1",
+            "type": "function_call",
+            "status": "completed",
+            "arguments": '{"city":"Paris"}',
+            "call_id": "call_1",
+            "name": "get_weather",
+        }
+    ],
+    "parallel_tool_calls": True,
+    "usage": {
+        "input_tokens": 53,
+        "output_tokens": 18,
+        "total_tokens": 71,
+        "output_tokens_details": {"reasoning_tokens": 0},
+    },
+    "error": None,
+    "incomplete_details": None,
+    "instructions": None,
+    "metadata": {},
+    "temperature": 1.0,
+    "tool_choice": "auto",
+    "tools": [],
+    "top_p": 1.0,
+    "max_output_tokens": 200,
+    "previous_response_id": None,
+    "reasoning": {"effort": "medium", "summary": None},
+    "truncation": "disabled",
+    "user": None,
+}
+
+
+def test_completion_bridges_azure_ai_foundry_gpt_5_4_plus_function_tools_to_responses(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    The bridged azure_ai call is posted to <base>/openai/v1/responses with the tool in Responses
+    shape and Foundry's api-key header, never to <base>/models/chat/completions, and comes back as a
+    chat completion carrying the function call.
+    """
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/gpt-6-astra",
+        messages=[{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather for a city",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+                },
+            }
+        ],
+        max_tokens=200,
+        api_base=_FOUNDRY_API_BASE,
+        api_key="fake-foundry-key",
+    )
+
+    assert [str(call.request.url) for call in respx_mock.calls] == [f"{_FOUNDRY_API_BASE}/openai/v1/responses"]
+    request: Final = responses_route.calls[0].request
+    request_body: Final = json.loads(request.content)
+    assert request_body["tools"][0]["type"] == "function"
+    assert request_body["tools"][0]["name"] == "get_weather"
+    assert request.headers["api-key"] == "fake-foundry-key"
+    assert response.choices[0].finish_reason == "tool_calls"
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
 
 
 @pytest.mark.parametrize(
