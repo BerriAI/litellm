@@ -89,9 +89,7 @@ class TestMcpToolCallGuardrail:
         marker = unique_marker()
         banned_keyword = f"e2eblocked{marker}"
 
-        guardrail_id = client.register_mcp_content_filter(
-            name=f"e2e-mcp-cf-{marker}", blocked_keyword=banned_keyword
-        )
+        guardrail_id = client.register_mcp_content_filter(name=f"e2e-mcp-cf-{marker}", blocked_keyword=banned_keyword)
         guardrail_created_at = time.monotonic()
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
@@ -100,7 +98,7 @@ class TestMcpToolCallGuardrail:
         key = client.generate_key(user_id=f"e2e-mcp-guard-{marker}", mcp_servers=[server_id])
         resources.defer(lambda: client.proxy.delete_key(key))
 
-        tool_name = client.await_tool(key, server_id, SEARCH_LOGS_TOOL)
+        tool = client.await_tool_entry(key, server_id, SEARCH_LOGS_TOOL)
 
         def search(query: str) -> Result[McpCallToolResponse]:
             arguments: McpToolArguments = {
@@ -109,7 +107,8 @@ class TestMcpToolCallGuardrail:
                 "to": "now",
                 "max_tokens": 500,
             }
-            return client.call_tool(key, server_id=server_id, name=tool_name, arguments=arguments)
+            tool.assert_arguments_are_documented(arguments)
+            return client.call_tool(key, server_id=server_id, name=tool.name, arguments=arguments)
 
         # Registering the guardrail is a control-plane write; the data-plane worker
         # that serves tools/call picks it up on its next guardrail sync, so an
@@ -162,6 +161,4 @@ class TestMcpToolCallGuardrail:
                     f"a clean MCP tool call must reach the server and not error, got: {result}"
                 )
             case _:
-                pytest.fail(
-                    f"a clean MCP tool call must pass the guardrail and reach the server; got {allowed}"
-                )
+                pytest.fail(f"a clean MCP tool call must pass the guardrail and reach the server; got {allowed}")

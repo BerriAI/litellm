@@ -1,4 +1,9 @@
-"""Shared helpers for e2e tests that register the real Datadog remote MCP server."""
+"""Shared helpers for e2e tests that register the real Datadog remote MCP server.
+
+The search_datadog_logs arguments these suites send (query, from, to, max_tokens) come from
+https://docs.datadoghq.com/mcp_server/tools/ (checked 2026-09-19). McpToolEntry.assert_arguments_are_documented
+compares them with the schema the gateway advertises live, so a failure there after a Datadog rename is stale,
+not broken litellm code"""
 
 from __future__ import annotations
 

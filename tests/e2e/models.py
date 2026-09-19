@@ -1159,6 +1159,7 @@ class TeamMetadata(BaseModel):
 
 
 class TeamNewBody(BaseModel):
+    object_permission: ObjectPermission | None = None
     team_alias: str
     models: list[str] = []
     team_id: str | None = None
@@ -1219,6 +1220,7 @@ UserRole = Literal["proxy_admin", "proxy_admin_viewer", "internal_user", "intern
 
 
 class UserNewBody(BaseModel):
+    object_permission: ObjectPermission | None = None
     user_email: str
     user_role: UserRole
     user_id: str | None = None
@@ -1271,6 +1273,7 @@ class UserListResponse(BaseModel):
 
 
 class OrgNewBody(BaseModel):
+    object_permission: ObjectPermission | None = None
     organization_alias: str
     models: list[str] = []
 
