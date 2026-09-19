@@ -2,11 +2,13 @@
 Tests for backend domain models.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.models.access_group import LiteLLM_AccessGroupTable
+from litellm.models.autorouter_session import LiteLLM_AutoRouterSession
 from litellm.models.budget import (
     LiteLLM_BudgetTable,
     LiteLLM_BudgetTableFull,
@@ -39,6 +41,7 @@ from litellm.models.verification_token import (
     LiteLLM_DeletedVerificationToken,
     LiteLLM_VerificationToken,
 )
+from pydantic import ValidationError
 
 
 class TestBudget:
@@ -67,6 +70,34 @@ class TestBudget:
         assert budget.budget_id is None
         assert budget.max_budget is None
         assert budget.allowed_models is None
+
+    def test_effective_max_budget_applies_unexpired_increase(self):
+        budget = LiteLLM_BudgetTable(
+            max_budget=100.0,
+            temp_budget_increase=50.0,
+            temp_budget_expiry=datetime(2100, 1, 1),
+        )
+        assert budget.effective_max_budget(now=datetime(2026, 1, 1, tzinfo=timezone.utc)) == 150.0
+
+    def test_effective_max_budget_ignores_expired_increase(self):
+        expiry = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        budget = LiteLLM_BudgetTable(max_budget=100.0, temp_budget_increase=50.0, temp_budget_expiry=expiry)
+        assert budget.effective_max_budget(now=datetime(2026, 1, 1, tzinfo=timezone.utc)) == 100.0
+        assert budget.effective_max_budget(now=expiry) == 100.0
+
+    def test_effective_max_budget_without_increase(self):
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        assert LiteLLM_BudgetTable(max_budget=100.0).effective_max_budget(now=now) == 100.0
+        assert LiteLLM_BudgetTable(max_budget=None, temp_budget_increase=50.0).effective_max_budget(now=now) is None
+
+    def test_active_temp_budget_increase_is_independent_of_max_budget(self):
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        bare = LiteLLM_BudgetTable(max_budget=None, temp_budget_increase=50.0, temp_budget_expiry=datetime(2100, 1, 1))
+        assert bare.active_temp_budget_increase(now=now) == 50.0
+        assert bare.effective_max_budget(now=now) is None
+        expired = LiteLLM_BudgetTable(max_budget=None, temp_budget_increase=50.0, temp_budget_expiry=now)
+        assert expired.active_temp_budget_increase(now=now) == 0.0
+        assert LiteLLM_BudgetTable(max_budget=None).active_temp_budget_increase(now=now) == 0.0
 
 
 class TestCredentials:
@@ -128,6 +159,33 @@ class TestModel:
         )
         assert model.litellm_params == {"model": "gpt-4"}
         assert model.model_info == {"team_id": "t1"}
+
+    def test_response_type_adapter_accepts_pydantic_row(self):
+        class PrismaModelRow(BaseModel):
+            model_id: str
+            model_name: str
+            litellm_params: dict[str, str]
+            model_info: dict[str, str] | None = None
+            blocked: bool = False
+
+        row = PrismaModelRow(
+            model_id="m1",
+            model_name="gpt-4",
+            litellm_params={"model": "gpt-4"},
+            model_info={"team_id": "t1"},
+            blocked=True,
+        )
+
+        model = TypeAdapter(LiteLLM_ProxyModelTable | None).validate_python(
+            row,
+            from_attributes=True,
+        )
+
+        assert model is not None
+        assert model.model_id == "m1"
+        assert model.litellm_params == {"model": "gpt-4"}
+        assert model.model_info == {"team_id": "t1"}
+        assert model.blocked is True
 
     def test_team_helpers_none_when_no_model_info(self):
         model = LiteLLM_ProxyModelTable(
@@ -332,6 +390,14 @@ class TestVerificationToken:
         assert deleted.deleted_at is not None
         assert deleted.token == "t1"
 
+    def test_total_spend_is_carried_separately_from_resettable_spend(self):
+        token = LiteLLM_VerificationToken(token="t1", spend=0.0, total_spend=12.5)
+        assert token.model_dump()["total_spend"] == 12.5
+        assert token.model_dump()["spend"] == 0.0
+
+        deleted = LiteLLM_DeletedVerificationToken.model_validate({**token.model_dump(), "deleted_by": "admin"})
+        assert deleted.total_spend == 12.5
+
 
 class TestConfigTable:
     def test_config_creation(self):
@@ -421,7 +487,7 @@ class TestBudgetTableFull:
         assert budget.max_budget == 10.0
 
     def test_full_requires_created_at(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             LiteLLM_BudgetTableFull(budget_id="b1")
 
 
@@ -480,7 +546,7 @@ class TestMCPServerTable:
         assert server.env == {}
 
     def test_mcp_server_requires_transport(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             LiteLLM_MCPServerTable(server_id="s1")
 
 
@@ -498,6 +564,25 @@ class TestSpendLogs:
         assert log.request_id == "r1"
         assert log.spend == 0.0
         assert log.cache_hit == "False"
+        assert log.created_at is None
+        assert log.updated_at is None
+
+    def test_spend_logs_parse_database_timestamps(self):
+        created_at = datetime(2026, 8, 18, 12, 0, 0)
+        updated_at = datetime(2026, 8, 18, 12, 5, 0)
+        log = LiteLLM_SpendLogs(
+            request_id="r1",
+            api_key="sk-1",
+            call_type="completion",
+            startTime=None,
+            endTime=None,
+            messages=None,
+            response=None,
+            created_at=created_at,
+            updated_at=updated_at,
+        )
+        assert log.created_at == created_at
+        assert log.updated_at == updated_at
 
     def test_error_logs_creation(self):
         log = LiteLLM_ErrorLogs(
@@ -519,7 +604,7 @@ class TestManagedTables:
         assert table.flat_model_file_ids == ["file-abc"]
 
     def test_managed_object_table_requires_purpose(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             LiteLLM_ManagedObjectTable(
                 unified_object_id="o1", model_object_id="m1", file_object={}
             )
@@ -540,3 +625,35 @@ class TestManagedTables:
         )
         assert table.vector_store_id == "vs1"
         assert table.custom_llm_provider == "openai"
+
+
+class TestAutoRouterSession:
+    @staticmethod
+    def _row(baseline_models: dict) -> LiteLLM_AutoRouterSession:
+        return LiteLLM_AutoRouterSession(
+            api_key="k",
+            session_id="s",
+            router_name="auto",
+            router_type="complexity",
+            first_turn_at=datetime(2026, 9, 1, 12, 0, 0),
+            last_turn_at=datetime(2026, 9, 1, 12, 5, 0),
+            last_model="anthropic/claude-sonnet-5",
+            turns=3,
+            spend=0.14,
+            saved_spend=0.24,
+            classifier_cost=0.0,
+            tier_turns={},
+            baseline_models=baseline_models,
+        )
+
+    def test_the_baseline_label_is_the_one_most_turns_were_priced_against(self):
+        assert self._row({"anthropic/claude-opus-5": 2, "anthropic/claude-sonnet-5": 1}).baseline_model == (
+            "anthropic/claude-opus-5"
+        )
+
+    def test_a_tie_between_baselines_is_broken_deterministically(self):
+        assert self._row({"b-model": 1, "a-model": 1}).baseline_model == "b-model"
+        assert self._row({"a-model": 1, "b-model": 1}).baseline_model == "b-model"
+
+    def test_a_row_whose_turns_recorded_no_baseline_has_no_label(self):
+        assert self._row({}).baseline_model is None

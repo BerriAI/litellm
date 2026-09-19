@@ -4,10 +4,13 @@ Tests for gateway repository layer.
 
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from typing import Any, Dict, Final, List, Optional
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from prisma import models as prisma_models
+from prisma.builder import QueryBuilder
 
 from litellm.models.base import DomainModel
 from litellm.models.budget import LiteLLM_BudgetTable
@@ -203,23 +206,32 @@ class TestBaseRepository:
         assert len(budgets) == 1
 
     def test_record_to_dict_branches(self):
-        from litellm.repositories.base_repository import _record_to_dict
+        from litellm.repositories.base_repository import record_to_dict
 
-        assert _record_to_dict({"a": 1}) == {"a": 1}
+        assert record_to_dict({"a": 1}) == {"a": 1}
 
         class WithModelDump:
             def model_dump(self):
                 return {"src": "model_dump"}
 
-        assert _record_to_dict(WithModelDump()) == {"src": "model_dump"}
+        assert record_to_dict(WithModelDump()) == {"src": "model_dump"}
 
         class WithDict:
             def dict(self):
                 return {"src": "dict"}
 
-        assert _record_to_dict(WithDict()) == {"src": "dict"}
+        assert record_to_dict(WithDict()) == {"src": "dict"}
 
-        assert _record_to_dict([("k", "v")]) == {"k": "v"}
+        assert record_to_dict([("k", "v")]) == {"k": "v"}
+
+        class WithBoth:
+            def model_dump(self):
+                return {"src": "model_dump"}
+
+            def dict(self):
+                return {"src": "dict"}
+
+        assert record_to_dict(WithBoth()) == {"src": "model_dump"}
 
 
 class TestBudgetRepository:
@@ -297,6 +309,32 @@ class TestModelRepository:
     def repo(self):
         client = MockPrismaClient()
         return ModelRepository(client)
+
+    @pytest.mark.asyncio
+    async def test_find_all_except_serializes_exclusion_for_prisma(self) -> None:
+        find_many: Final = AsyncMock(return_value=[])
+        client: Final = SimpleNamespace(
+            db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many))
+        )
+
+        await ModelRepository(client).find_all_except("current-model")
+
+        find_many.assert_awaited_once()
+        query: Final = QueryBuilder(
+            method="find_many",
+            model=prisma_models.LiteLLM_ProxyModelTable,
+            arguments=find_many.call_args.kwargs,
+        ).build_query()
+        assert 'where: { model_id: { not: "current-model" } }' in " ".join(query.split())
+
+    def test_table_is_wrapped_for_config_sync(self, repo):
+        from litellm.proxy.common_utils.config_sync_pubsub import (
+            _PublishOnWriteActions,
+        )
+
+        table = repo.table
+        assert isinstance(table, _PublishOnWriteActions)
+        assert table._actions is repo.prisma_client.db.litellm_proxymodeltable
 
     @pytest.mark.asyncio
     @patch(
@@ -498,6 +536,51 @@ class TestTeamRepository:
         )
         assert team.team_id == "team-123"
         assert team.team_alias == "Engineering"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raw_value, expected_ids",
+        [
+            (
+                [
+                    {"user_id": "a", "role": "user"},
+                    {"user_id": "b", "role": "admin"},
+                ],
+                ["a", "b"],
+            ),
+            (json.dumps([{"user_id": "a", "role": "user"}]), ["a"]),
+            ({}, []),
+            (None, []),
+        ],
+    )
+    async def test_get_members_with_roles_locked(self, repo, raw_value, expected_ids):
+        tx = MagicMock()
+        tx.query_raw = AsyncMock(return_value=[{"members_with_roles": raw_value}])
+
+        members = await repo.get_members_with_roles_locked(tx, "team-1")
+
+        assert [m.user_id for m in members] == expected_ids
+        sql = tx.query_raw.call_args.args[0]
+        assert "FOR UPDATE" not in sql, (
+            "a row lock here can deadlock with the access-group endpoints; the caller must "
+            "already hold the team's advisory lock, so a plain read is all this needs"
+        )
+        assert tx.query_raw.call_args.args[1] == "team-1"
+
+    @pytest.mark.asyncio
+    async def test_get_members_with_roles_locked_missing_row(self, repo):
+        """None, not [], so a caller can tell a deleted team from an empty one.
+
+        /team/member_add reconciles membership under the team's advisory lock and has to
+        fail, without writing anything, when a /team/delete committed underneath it. An
+        empty list would look like a live team with no members and it would carry on writing.
+        """
+        tx = MagicMock()
+        tx.query_raw = AsyncMock(return_value=[])
+
+        members = await repo.get_members_with_roles_locked(tx, "missing")
+
+        assert members is None
 
     @pytest.mark.asyncio
     async def test_create_team_all_fields(self, repo):
@@ -1268,6 +1351,15 @@ class TestCredentialsRepository:
         client = MockPrismaClient()
         return CredentialsRepository(client)
 
+    def test_table_is_wrapped_for_config_sync(self, repo):
+        from litellm.proxy.common_utils.config_sync_pubsub import (
+            _PublishOnWriteActions,
+        )
+
+        table = repo.table
+        assert isinstance(table, _PublishOnWriteActions)
+        assert table._actions is repo.prisma_client.db.litellm_credentialstable
+
     @pytest.mark.asyncio
     async def test_create(self, repo):
         record = await repo.create(
@@ -1355,27 +1447,6 @@ class TestConfigRepository:
         client = MockPrismaClient()
         return ConfigRepository(client)
 
-    def test_deep_merge_dicts_db_wins(self, repo):
-        dst = {"a": 1, "b": {"c": 2}}
-        src = {"a": 10, "b": {"d": 3}}
-        repo._deep_merge_dicts(dst, src)
-        assert dst["a"] == 10
-        assert dst["b"]["c"] == 2
-        assert dst["b"]["d"] == 3
-
-    def test_deep_merge_dicts_skips_none(self, repo):
-        dst = {"a": 1}
-        src = {"a": None, "b": 2}
-        repo._deep_merge_dicts(dst, src)
-        assert dst["a"] == 1
-        assert dst["b"] == 2
-
-    def test_deep_merge_dicts_skips_empty_list(self, repo):
-        dst = {"models": ["gpt-4"]}
-        src = {"models": []}
-        repo._deep_merge_dicts(dst, src)
-        assert dst["models"] == ["gpt-4"]
-
     @pytest.mark.asyncio
     async def test_get_param(self, repo):
         repo._prisma_client.db.litellm_config._records["general_settings"] = {
@@ -1419,99 +1490,6 @@ class TestConfigRepository:
         }
         params = await repo.get_all_params()
         assert len(params) == 2
-
-    @pytest.mark.asyncio
-    async def test_reconcile_config_skips_when_store_model_false(self, repo):
-        yaml_config = {"general_settings": {"key": "value"}}
-        result = await repo.reconcile_config(yaml_config, store_model_in_db=False)
-        assert result == yaml_config
-
-    @pytest.mark.asyncio
-    async def test_prefetch_params(self, repo):
-        repo._prisma_client.db.litellm_config._records["general_settings"] = {
-            "param_name": "general_settings",
-            "param_value": "{}",
-        }
-        await repo.prefetch_params(["general_settings"])
-
-    @pytest.mark.asyncio
-    async def test_reconcile_config_with_db_values(self, repo):
-        repo._prisma_client.db.litellm_config._records["general_settings"] = {
-            "param_name": "general_settings",
-            "param_value": '{"master_key": "db-key", "db_only": "from_db"}',
-        }
-        repo._prisma_client.db.litellm_config._records["router_settings"] = {
-            "param_name": "router_settings",
-            "param_value": '{"timeout": 60}',
-        }
-        yaml_config = {
-            "general_settings": {"master_key": "yaml-key", "yaml_only": "from_yaml"},
-        }
-        result = await repo.reconcile_config(yaml_config, store_model_in_db=True)
-        assert result["general_settings"]["master_key"] == "db-key"
-        assert result["general_settings"]["yaml_only"] == "from_yaml"
-        assert result["general_settings"]["db_only"] == "from_db"
-        assert result["router_settings"]["timeout"] == 60
-
-    @pytest.mark.asyncio
-    @patch("litellm.repositories.config_repository.decrypt_value_helper")
-    async def test_reconcile_config_with_environment_variables(
-        self, mock_decrypt, repo
-    ):
-        mock_decrypt.side_effect = lambda value, **kw: f"decrypted_{value}"
-        repo._prisma_client.db.litellm_config._records["environment_variables"] = {
-            "param_name": "environment_variables",
-            "param_value": '{"api_key": "encrypted_key", "secret": "encrypted_secret"}',
-        }
-        yaml_config = {}
-        result = await repo.reconcile_config(yaml_config, store_model_in_db=True)
-        assert "environment_variables" in result
-        assert "api_key" in result["environment_variables"]
-        assert "API_KEY" in result["environment_variables"]
-
-    @pytest.mark.asyncio
-    async def test_reconcile_config_none_values_preserved(self, repo):
-        repo._prisma_client.db.litellm_config._records["general_settings"] = {
-            "param_name": "general_settings",
-            "param_value": '{"new_key": "value", "null_key": null}',
-        }
-        yaml_config = {"general_settings": {"existing": "keep"}}
-        result = await repo.reconcile_config(yaml_config, store_model_in_db=True)
-        assert result["general_settings"]["existing"] == "keep"
-        assert result["general_settings"]["new_key"] == "value"
-
-    def test_update_config_fields_non_dict(self, repo):
-        config = {"litellm_settings": "old_value"}
-        result = repo._update_config_fields(
-            current_config=config,
-            param_name="litellm_settings",
-            db_param_value="new_value",
-        )
-        assert result["litellm_settings"] == "new_value"
-
-    def test_update_config_fields_new_param(self, repo):
-        config = {}
-        result = repo._update_config_fields(
-            current_config=config,
-            param_name="router_settings",
-            db_param_value={"timeout": 30},
-        )
-        assert result["router_settings"] == {"timeout": 30}
-
-    @patch("litellm.repositories.config_repository.decrypt_value_helper")
-    def test_decrypt_env_variables_non_string(self, mock_decrypt, repo):
-        mock_decrypt.side_effect = lambda value, **kw: value
-        env_vars = {"string_val": "encrypted", "int_val": 123, "bool_val": True}
-        result = repo._decrypt_env_variables(env_vars)
-        assert result["int_val"] == "123"
-        assert result["bool_val"] == "True"
-
-    @patch("litellm.repositories.config_repository.decrypt_value_helper")
-    def test_decrypt_env_variables_none_value(self, mock_decrypt, repo):
-        mock_decrypt.return_value = None
-        env_vars = {"key": "value"}
-        result = repo._decrypt_env_variables(env_vars)
-        assert "key" not in result
 
 
 class TestVerificationTokenRepositoryExtended:
@@ -1860,6 +1838,28 @@ class TestUserRepositoryExtended:
         )
         assert updated.user_email == "new@example.com"
 
+    @pytest.mark.asyncio
+    async def test_find_by_id_decodes_only_the_json_encoded_columns(self, repo):
+        repo._prisma_client.db.litellm_usertable._records["user-json"] = {
+            "user_id": "user-json",
+            "user_email": "json@example.com",
+            "user_role": '{"not": "json"}',
+            "teams": [],
+            "models": [],
+            "metadata": '{"department": "engineering"}',
+            "model_spend": '{"gpt-4": 10.5}',
+            "model_max_budget": '{"gpt-4": 100.0}',
+        }
+
+        user = await repo.find_by_id("user-json")
+
+        assert user is not None
+        assert user.metadata == {"department": "engineering"}
+        assert user.model_spend == {"gpt-4": 10.5}
+        assert user.model_max_budget == {"gpt-4": 100.0}
+        assert user.user_email == "json@example.com"
+        assert user.user_role == '{"not": "json"}'
+
 
 class TestProjectRepositoryExtended:
     @pytest.fixture
@@ -2099,50 +2099,11 @@ class TestTeamRepositoryArchiveData:
         assert "router_settings" in archive_data
 
 
-class TestConfigRepositoryDeepCopy:
-    @pytest.fixture
-    def repo(self):
-        client = MockPrismaClient()
-        return ConfigRepository(client)
-
-    @pytest.mark.asyncio
-    async def test_reconcile_config_does_not_mutate_original(self, repo):
-        import copy
-
-        repo._prisma_client.db.litellm_config._records["general_settings"] = {
-            "param_name": "general_settings",
-            "param_value": '{"db_key": "db_value", "nested": {"db_nested": "from_db"}}',
-        }
-        original_config = {
-            "general_settings": {
-                "yaml_key": "yaml_value",
-                "nested": {"yaml_nested": "from_yaml"},
-            }
-        }
-        original_copy = copy.deepcopy(original_config)
-        result = await repo.reconcile_config(original_config, store_model_in_db=True)
-        assert original_config == original_copy
-        assert result["general_settings"]["db_key"] == "db_value"
-        assert result["general_settings"]["yaml_key"] == "yaml_value"
-        assert result["general_settings"]["nested"]["db_nested"] == "from_db"
-        assert result["general_settings"]["nested"]["yaml_nested"] == "from_yaml"
-
-    @pytest.mark.asyncio
-    async def test_reconcile_config_repeated_calls_independent(self, repo):
-        repo._prisma_client.db.litellm_config._records["general_settings"] = {
-            "param_name": "general_settings",
-            "param_value": '{"db_key": "db_value"}',
-        }
-        yaml_config = {"general_settings": {"yaml_key": "yaml_value"}}
-        result1 = await repo.reconcile_config(yaml_config, store_model_in_db=True)
-        result1["general_settings"]["modified"] = "in_result1"
-        result2 = await repo.reconcile_config(yaml_config, store_model_in_db=True)
-        assert "modified" not in yaml_config.get("general_settings", {})
-        assert "modified" not in result2.get("general_settings", {})
-
-
 class TestPrismaTableRepository:
     def test_table_property_returns_named_delegate(self):
+        from litellm.proxy.common_utils.config_sync_pubsub import (
+            _PublishOnWriteActions,
+        )
         from litellm.repositories.table_repositories import (
             AgentsRepository,
             PolicyRepository,
@@ -2152,9 +2113,11 @@ class TestPrismaTableRepository:
         agents = AgentsRepository(prisma_client)
         policy = PolicyRepository(prisma_client)
 
-        assert agents.table is prisma_client.db.litellm_agentstable
-        assert policy.table is prisma_client.db.litellm_policytable
-        assert agents.table is not policy.table
+        assert isinstance(agents.table, _PublishOnWriteActions)
+        assert isinstance(policy.table, _PublishOnWriteActions)
+        assert agents.table._actions is prisma_client.db.litellm_agentstable
+        assert policy.table._actions is prisma_client.db.litellm_policytable
+        assert agents.table._actions is not policy.table._actions
 
     def test_table_access_raises_without_db(self):
         from litellm.repositories.table_repositories import SpendLogsRepository
@@ -2163,8 +2126,28 @@ class TestPrismaTableRepository:
         with pytest.raises(RuntimeError, match="No DB Connected"):
             _ = repo.table
 
+    CONFIG_SYNCED_TABLE_NAMES = frozenset(
+        {
+            "litellm_agentstable",
+            "litellm_cacheconfig",
+            "litellm_configoverrides",
+            "litellm_guardrailstable",
+            "litellm_managedvectorstoreindextable",
+            "litellm_managedvectorstorestable",
+            "litellm_mcpservertable",
+            "litellm_policyattachmenttable",
+            "litellm_policytable",
+            "litellm_prompttable",
+            "litellm_searchtoolstable",
+            "litellm_ssoconfig",
+        }
+    )
+
     def test_each_repository_binds_its_own_table_name(self):
         import litellm.repositories.table_repositories as tr
+        from litellm.proxy.common_utils.config_sync_pubsub import (
+            _PublishOnWriteActions,
+        )
 
         prisma_client = MagicMock()
         repos = [
@@ -2181,7 +2164,14 @@ class TestPrismaTableRepository:
             assert name.startswith("litellm_")
             assert name not in seen, f"duplicate table_name {name}"
             seen.add(name)
-            assert repo_cls(prisma_client).table is getattr(prisma_client.db, name)
+            table = repo_cls(prisma_client).table
+            raw_actions = getattr(prisma_client.db, name)
+            if name in self.CONFIG_SYNCED_TABLE_NAMES:
+                assert isinstance(table, _PublishOnWriteActions), name
+                assert table._actions is raw_actions
+            else:
+                assert table is raw_actions, name
+        assert self.CONFIG_SYNCED_TABLE_NAMES <= seen
 
 
 def _json_path_equals(
@@ -2261,3 +2251,60 @@ class TestCountBillableUsers:
         client.db.litellm_usertable = _RacyTable()
         repo = UserRepository(client)
         assert await repo.count_billable_users() == 0
+
+
+class TestAutoRouterSessionRepository:
+    ROW: Final = {
+        "api_key": "hashed-key",
+        "session_id": "s1",
+        "router_name": "claude-auto",
+        "router_type": "complexity",
+        "first_turn_at": datetime(2026, 9, 1, 12, 0, 0),
+        "last_turn_at": datetime(2026, 9, 1, 12, 5, 0),
+        "last_model": "anthropic/claude-sonnet-5",
+        "models": {"anthropic/claude-sonnet-5": {"at": 1.0, "ttl": None}},
+        "turns": 3,
+        "spend": 0.14,
+        "saved_spend": 0.24,
+        "classifier_cost": 0.01,
+        "tier_turns": {"complex": 3},
+        "baseline_models": {"anthropic/claude-opus-5": 3},
+    }
+
+    @staticmethod
+    def _repo(record: Optional[Dict[str, Any]]):
+        from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
+
+        lookups: List[Dict[str, Any]] = []
+
+        class _Table:
+            async def find_first(self, where: Dict[str, Any], order: Dict[str, str]):
+                lookups.append({"where": where, "order": order})
+                return MockRecord(record) if record is not None else None
+
+        client = MagicMock()
+        client.db.litellm_autoroutersession = _Table()
+        return AutoRouterSessionRepository(client), lookups
+
+    @pytest.mark.asyncio
+    async def test_find_latest_for_key_reads_the_keys_own_partition_newest_router_first(self):
+        repo, lookups = self._repo(dict(self.ROW))
+        row = await repo.find_latest_for_key("hashed-key", "s1")
+        assert lookups == [{"where": {"api_key": "hashed-key", "session_id": "s1"}, "order": {"last_turn_at": "desc"}}]
+        assert row is not None
+        assert (row.router_name, row.turns, row.spend, row.saved_spend) == ("claude-auto", 3, 0.14, 0.24)
+        assert row.baseline_models == {"anthropic/claude-opus-5": 3}
+        assert row.baseline_model == "anthropic/claude-opus-5"
+
+    @pytest.mark.asyncio
+    async def test_find_latest_for_key_is_none_when_the_key_wrote_no_such_session(self):
+        repo, _ = self._repo(None)
+        assert await repo.find_latest_for_key("hashed-key", "unknown") is None
+
+    def test_table_is_the_session_rollup_and_needs_a_database(self):
+        from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
+
+        client = MagicMock()
+        assert AutoRouterSessionRepository(client).table is client.db.litellm_autoroutersession
+        with pytest.raises(RuntimeError, match="No DB Connected"):
+            _ = AutoRouterSessionRepository(None).table

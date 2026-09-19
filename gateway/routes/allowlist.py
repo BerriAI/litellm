@@ -3,7 +3,8 @@
 The gateway exposes the LLM data-plane surface: chat/completions, embeddings,
 audio, batches, files, fine-tuning, rerank, ocr, rag, video, search, image,
 responses, vector stores, passthrough providers, realtime websockets, MCP
-tool-call endpoints, and operational endpoints (/health, /metrics).
+tool-call endpoints, and operational endpoints (/health, /metrics, and the
+/debug/memory/summary read of the serving worker's RSS).
 
 Any path not listed here is dropped from the gateway process so management/UI
 endpoints don't ride on the same pods.
@@ -54,6 +55,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/messages",
     "/v1/skills",
     "/v1/a2a/",
+    "/a2a/",
     # LiteLLM-native LLM surface
     "/v1/rerank",
     "/v2/rerank",
@@ -80,18 +82,25 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/anthropic/",
     "/azure/",
     "/azure_ai/",
+    "/azure_speech/",
     "/aws/",
     "/bedrock/",
+    "/comprehendmedical",
+    "/transcribe",
     "/cohere/",
     "/gemini/",
+    "/gigachat/",
     "/google/",
     "/vertex_ai/",
     "/vertex-ai/",
     "/assemblyai/",
     "/eu.assemblyai/",
+    "/deepgram/",
     "/langfuse/",
     "/vllm/",
     "/mistral/",
+    "/typesafe/",
+    "/nvidia_nim/",
     "/groq/",
     "/voyage/",
     "/cursor/",
@@ -118,6 +127,7 @@ GATEWAY_EXACT_PATHS: frozenset[str] = frozenset(
         "/docs/oauth2-redirect",
         "/redoc",
         "/test",
+        "/debug/memory/summary",
     }
 )
 

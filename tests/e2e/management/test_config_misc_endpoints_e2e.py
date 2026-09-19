@@ -3,9 +3,17 @@
 One method per registry cell, each asserting the real contract against a live
 proxy: read-only inventory routes return their documented shape, stateless
 validators compute their verdict from the request, and the write routes persist
-so a read-back reflects the change. The two routes that mutate global proxy state
-(cache settings and router settings, both driven from the admin UI) are exercised
-with a benign, self-restoring change so a shared proxy is left as it was found.
+so a read-back reflects the change. Router settings, which mutate global proxy
+state, are exercised with a benign, self-restoring change so a shared proxy is left
+as it was found.
+
+Cache settings and the Vault config override are deliberately not covered here.
+Both routes reconfigure the whole proxy: /cache/settings persists what it receives
+into a row that outranks the YAML cache_params and is re-applied on a timer, and
+/config_overrides/hashicorp_vault swaps the process-wide secret manager. Neither can
+be exercised safely against the shared proxy the suites run on, so they need an
+isolated proxy before a test lands. Do not add a read-then-write-back test for
+either one.
 """
 
 from __future__ import annotations
@@ -13,9 +21,10 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
+from typing import Final
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue, RootModel
 
 from e2e_config import unique_marker
 from e2e_http import NoBody, Success, unwrap, unwrap_status
@@ -124,34 +133,6 @@ class ComplianceResponse(BaseModel):
     checks: list[ComplianceCheck]
 
 
-# ---- cache settings --------------------------------------------------------
-
-
-class CacheSettingsValue(BaseModel):
-    type: str
-    host: str = ""
-    port: str = ""
-
-
-class CacheSettingsUpdateBody(BaseModel):
-    cache_settings: CacheSettingsValue
-
-
-class CacheCurrentValues(BaseModel):
-    type: str | None = None
-    host: str | None = None
-    port: str | None = None
-
-
-class CacheGetResponse(BaseModel):
-    current_values: CacheCurrentValues
-
-
-class CacheUpdateResponse(BaseModel):
-    status: str
-    settings: CacheSettingsValue
-
-
 # ---- fallback management ---------------------------------------------------
 
 
@@ -216,6 +197,37 @@ class ConfigUpdateBody(BaseModel):
 
 class ConfigUpdateResponse(BaseModel):
     message: str
+
+
+class AllowedIpBody(BaseModel):
+    ip: str
+
+
+class ConfigFieldInfoParams(BaseModel):
+    field_name: str
+
+
+class ConfigFieldInfoResponse(BaseModel):
+    field_name: str
+    field_value: JsonValue
+    source: str
+    editable: bool
+
+
+class ConfigListParams(BaseModel):
+    config_type: str
+
+
+class ConfigListEntry(BaseModel):
+    field_name: str
+    field_value: JsonValue
+    stored_in_db: bool | None
+    source: str
+    editable: bool
+
+
+class ConfigListResponse(RootModel[list[ConfigListEntry]]):
+    pass
 
 
 class RouterCurrentValues(BaseModel):
@@ -366,70 +378,6 @@ class TestComplianceRoutes:
         )
         assert all(check.check_name and check.detail for check in result.checks), (
             "every compliance check must carry a name and a human-readable detail"
-        )
-
-
-class TestCacheSettings:
-    @pytest.mark.covers("mgmt.cache_settings.update.happy_path")
-    def test_update_persists_cache_backend_to_get(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
-        """Exercise the update route without changing global state: capture the live
-        cache backend and write exactly that back, so the config the proxy ends on is
-        byte-for-byte the one it started with. A teardown restore of the same captured
-        settings is the safety net if the body fails partway. The update route is only
-        meaningful against a configured cache, so an unconfigured proxy fails loudly
-        here rather than being silently switched to redis."""
-        before = self._read_settings(client)
-        assert before.type is not None, (
-            "GET /cache/settings reported no cache type; refusing to invent one and mutate the shared proxy"
-        )
-        captured = CacheSettingsValue(type=before.type, host=before.host or "", port=before.port or "")
-        resources.defer(lambda: self._write_settings(client, captured))
-
-        updated = unwrap(
-            client.proxy.transport.post(
-                "/cache/settings",
-                headers=client.proxy.transport.master,
-                json=CacheSettingsUpdateBody(cache_settings=captured),
-                response_type=CacheUpdateResponse,
-            )
-        )
-        assert updated.status == "success", f"/cache/settings update status {updated.status!r}, expected 'success'"
-        assert updated.settings.type == captured.type, (
-            f"/cache/settings echoed type {updated.settings.type!r}, wrote {captured.type!r}"
-        )
-
-        def reflected() -> CacheCurrentValues | None:
-            current = self._read_settings(client)
-            return current if current.type == captured.type else None
-
-        after = _poll(client, reflected, f"/cache/settings never reported type {captured.type!r} after the update")
-        assert after.host == captured.host and after.port == captured.port, (
-            f"/cache/settings persisted host/port {after.host!r}/{after.port!r}, "
-            f"wrote {captured.host!r}/{captured.port!r}"
-        )
-
-    @staticmethod
-    def _read_settings(client: ManagementClient) -> CacheCurrentValues:
-        return unwrap(
-            client.proxy.transport.get(
-                "/cache/settings",
-                headers=client.proxy.transport.master,
-                params=NoBody(),
-                response_type=CacheGetResponse,
-            )
-        ).current_values
-
-    @staticmethod
-    def _write_settings(client: ManagementClient, settings: CacheSettingsValue) -> None:
-        _ = unwrap(
-            client.proxy.transport.post(
-                "/cache/settings",
-                headers=client.proxy.transport.master,
-                json=CacheSettingsUpdateBody(cache_settings=settings),
-                response_type=CacheUpdateResponse,
-            )
         )
 
 
@@ -598,6 +546,58 @@ class TestRouterSettings:
                 response_type=ConfigUpdateResponse,
             )
         )
+
+
+class TestConfigPersistence:
+    @pytest.mark.covers("mgmt.config.allowed_ip.changed_key_only")
+    def test_add_allowed_ip_does_not_store_unrelated_config_value(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        allowed_ip: Final = "127.0.0.1"
+        added: Final = unwrap(
+            client.proxy.transport.post(
+                "/add/allowed_ip",
+                headers=client.proxy.transport.master,
+                json=AllowedIpBody(ip=allowed_ip),
+                response_type=ConfigUpdateResponse,
+            )
+        )
+        resources.defer(
+            lambda: unwrap(
+                client.proxy.transport.post(
+                    "/delete/allowed_ip",
+                    headers=client.proxy.transport.master,
+                    json=AllowedIpBody(ip=allowed_ip),
+                    response_type=ConfigUpdateResponse,
+                )
+            )
+        )
+        assert added.message == f"IP {allowed_ip} address added successfully"
+
+        listed: Final = unwrap(
+            client.proxy.transport.get(
+                "/config/list",
+                headers=client.proxy.transport.master,
+                params=ConfigListParams(config_type="general_settings"),
+                response_type=ConfigListResponse,
+            )
+        )
+        unrelated: Final = next(entry for entry in listed.root if entry.field_name == "max_parallel_requests")
+        assert unrelated.stored_in_db is not True
+        assert unrelated.source == "config"
+        assert unrelated.editable is False
+
+        field_info: Final = unwrap(
+            client.proxy.transport.get(
+                "/config/field/info",
+                headers=client.proxy.transport.master,
+                params=ConfigFieldInfoParams(field_name="max_parallel_requests"),
+                response_type=ConfigFieldInfoResponse,
+            )
+        )
+        assert field_info.source == "config"
+        assert field_info.editable is False
+        assert field_info.field_value == unrelated.field_value
 
 
 class TestMcpServerSubmission:

@@ -4,7 +4,7 @@ Anthropic CountTokens API transformation logic.
 This module handles the transformation of requests to Anthropic's CountTokens API format.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Final
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 
@@ -31,16 +31,16 @@ class AnthropicCountTokensConfig:
     def transform_request_to_count_tokens(
         self,
         model: str,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
-        system: Optional[Any] = None,
-    ) -> Dict[str, Any]:
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        system: Any | None = None,
+    ) -> dict[str, Any]:
         """
         Transform request to Anthropic CountTokens format.
 
         Includes optional system and tools fields for accurate token counting.
         """
-        request: Dict[str, Any] = {
+        request: Final[dict[str, Any]] = {
             "model": model,
             "messages": messages,
         }
@@ -53,7 +53,7 @@ class AnthropicCountTokensConfig:
 
         return request
 
-    def get_required_headers(self, api_key: str) -> Dict[str, str]:
+    def get_required_headers(self, api_key: str) -> dict[str, str]:
         """
         Get the required headers for the CountTokens API.
 
@@ -67,7 +67,7 @@ class AnthropicCountTokensConfig:
             optionally_handle_anthropic_oauth,
         )
 
-        headers: Dict[str, str] = {
+        headers: dict[str, str] = {
             "Content-Type": "application/json",
             "x-api-key": api_key,
             "anthropic-version": "2023-06-01",
@@ -76,7 +76,7 @@ class AnthropicCountTokensConfig:
         headers, _ = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
         return headers
 
-    def validate_request(self, model: str, messages: List[Dict[str, Any]]) -> None:
+    def validate_request(self, model: str, messages: list[dict[str, Any]]) -> None:
         """
         Validate the incoming count tokens request.
 

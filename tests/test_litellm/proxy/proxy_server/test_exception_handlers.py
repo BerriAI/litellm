@@ -28,9 +28,11 @@ from litellm.proxy.proxy_server import (
 from .conftest import normalize
 
 
-def _make_request(parent_otel_span=None):
+def _make_request(parent_otel_span=None, path="/chat/completions"):
+    """A real Request always carries a url; the validation handler reads its path to
+    decide whether the caller is on a surface with its own error contract."""
     state = SimpleNamespace(parent_otel_span=parent_otel_span)
-    return SimpleNamespace(state=state)
+    return SimpleNamespace(state=state, url=SimpleNamespace(path=path))
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +223,60 @@ async def test_otel_request_validation_exception_handler_empty_errors_invalid_pa
     assert body == {"detail": []}
 
 
+@pytest.mark.asyncio
+async def test_otel_request_validation_exception_handler_returns_a_problem_on_the_control_plane():
+    """`/management/v1` answers validation errors as RFC 9457, so a caller there gets a
+    400 problem document rather than the proxy-wide 422 `{"detail": [...]}` shape."""
+    errors = [
+        {"loc": ["query", "page_size"], "msg": "Input should be less than or equal to 100", "type": "less_than_equal"}
+    ]
+    exc = RequestValidationError(errors)
+    request = _make_request(path="/management/v1/spend_logs/end_users")
+
+    response = await otel_request_validation_exception_handler(request=request, exc=exc)
+    body = json.loads(response.body)
+
+    assert response.status_code == 400
+    assert response.media_type == "application/problem+json"
+    assert body["type"].startswith("urn:")
+    assert body["status"] == 400
+    assert "page_size" in body["detail"]
+    assert "detail" in body and not isinstance(body["detail"], list)
+
+
+@pytest.mark.asyncio
+async def test_otel_request_validation_exception_handler_answers_a_bad_control_plane_body_with_422():
+    """A request body that fails validation, an unknown field included, is 422 on
+    `/management/v1`; only query parameter problems are 400."""
+    errors = [
+        {"loc": ["body", "users", 0, "user_emial"], "msg": "Extra inputs are not permitted", "type": "extra_forbidden"}
+    ]
+    exc = RequestValidationError(errors)
+    request = _make_request(path="/management/v1/users/bulk")
+
+    response = await otel_request_validation_exception_handler(request=request, exc=exc)
+    body = json.loads(response.body)
+
+    assert response.status_code == 422
+    assert response.media_type == "application/problem+json"
+    assert body["type"] == "urn:litellm:error:invalid-request-body"
+    assert body["status"] == 422
+    assert "users.0.user_emial: Extra inputs are not permitted" in body["detail"]
+
+
+@pytest.mark.asyncio
+async def test_otel_request_validation_exception_handler_leaves_other_routes_on_422():
+    """The problem+json branch is scoped by path prefix. A route that merely contains
+    the word management, or sits above the prefix, keeps the shape its callers parse."""
+    exc = RequestValidationError([])
+
+    for path in ("/management", "/v1/management/foo", "/customer/list"):
+        response = await otel_request_validation_exception_handler(request=_make_request(path=path), exc=exc)
+
+        assert response.status_code == 422, path
+        assert json.loads(response.body) == {"detail": []}, path
+
+
 # ---------------------------------------------------------------------------
 # otel_unhandled_exception_handler
 # ---------------------------------------------------------------------------
@@ -258,6 +314,4 @@ async def test_otel_unhandled_exception_handler_reraises_proxy_exception_error()
 async def test_otel_unhandled_exception_handler_reraises_http_exception_invalid():
     request = _make_request()
     with pytest.raises(HTTPException):
-        await otel_unhandled_exception_handler(
-            request=request, exc=HTTPException(status_code=418, detail="teapot")
-        )
+        await otel_unhandled_exception_handler(request=request, exc=HTTPException(status_code=418, detail="teapot"))
