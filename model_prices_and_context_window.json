@@ -60115,6 +60115,7 @@
         "supports_audio_output": true
     },
     "claude-mythos-5": {
+        "deprecation_date": "2027-06-09",
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 1e-06,
