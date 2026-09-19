@@ -1,0 +1,119 @@
+{
+  "openai_chat": {
+    "shape": "openai_chat",
+    "mount": "openai",
+    "usage": [
+      "cache_read_tokens",
+      "reasoning_tokens",
+      "audio_input_tokens",
+      "audio_output_tokens",
+      "web_search_calls"
+    ],
+    "terminals": []
+  },
+  "openai_responses": {
+    "shape": "openai_responses",
+    "mount": "openai",
+    "usage": [
+      "cache_read_tokens",
+      "reasoning_tokens",
+      "web_search_calls",
+      "file_search_calls"
+    ],
+    "terminals": [
+      "incomplete",
+      "unvalidated"
+    ]
+  },
+  "anthropic_messages": {
+    "shape": "anthropic_messages",
+    "mount": "anthropic",
+    "usage": [
+      "cache_read_tokens",
+      "web_search_calls",
+      "cache_write_5m_tokens",
+      "cache_write_1h_tokens"
+    ],
+    "terminals": []
+  },
+  "gemini_generate": {
+    "shape": "gemini_generate",
+    "mount": "gemini",
+    "usage": [
+      "cache_read_tokens",
+      "reasoning_tokens",
+      "audio_input_tokens",
+      "audio_output_tokens",
+      "image_input_tokens",
+      "video_input_tokens",
+      "web_search_calls",
+      "google_maps_calls"
+    ],
+    "terminals": [
+      "prompt_blocked"
+    ]
+  },
+  "together_chat": {
+    "shape": "openai_chat",
+    "mount": "together",
+    "usage": [
+      "cache_read_tokens",
+      "reasoning_tokens",
+      "audio_input_tokens",
+      "audio_output_tokens",
+      "web_search_calls"
+    ],
+    "terminals": []
+  },
+  "fireworks_chat": {
+    "shape": "openai_chat",
+    "mount": "fireworks",
+    "usage": [
+      "cache_read_tokens",
+      "reasoning_tokens",
+      "audio_input_tokens",
+      "audio_output_tokens",
+      "web_search_calls"
+    ],
+    "terminals": []
+  },
+  "azure_chat": {
+    "shape": "openai_chat",
+    "mount": "azure",
+    "usage": [
+      "cache_read_tokens",
+      "reasoning_tokens",
+      "audio_input_tokens",
+      "audio_output_tokens",
+      "web_search_calls"
+    ],
+    "terminals": []
+  },
+  "bedrock_converse": {
+    "shape": "bedrock_converse",
+    "mount": "bedrock",
+    "usage": [
+      "cache_read_tokens",
+      "cache_write_5m_tokens",
+      "cache_write_1h_tokens"
+    ],
+    "terminals": []
+  },
+  "vertex_generate": {
+    "shape": "gemini_generate",
+    "mount": "vertex",
+    "usage": [
+      "cache_read_tokens",
+      "reasoning_tokens",
+      "audio_input_tokens",
+      "audio_output_tokens",
+      "image_input_tokens",
+      "video_input_tokens",
+      "web_search_calls",
+      "google_maps_calls"
+    ],
+    "terminals": [
+      "prompt_blocked"
+    ]
+  }
+}

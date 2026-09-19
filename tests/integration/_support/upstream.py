@@ -19,12 +19,12 @@ from starlette.routing import Route
 
 from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
 from integration._support.scripted_wires import (
-    WIRE_MOUNTS,
     RenderedResponse,
     Scenario,
     ScenarioDeleted,
     ScenarioRegistered,
     ScenarioStore,
+    WIRES,
     Wire,
     render,
 )
@@ -218,7 +218,7 @@ class ScenarioHandle:
         return f"{self.control_url}/{self.scenario_id}/{self._mount()}"
 
     def _mount(self) -> str:
-        return WIRE_MOUNTS[self.wire]
+        return WIRES[self.wire].mount
 
 
 def register_scenario(scenario: Scenario) -> ScenarioHandle:

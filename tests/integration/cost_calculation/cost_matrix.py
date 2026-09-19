@@ -27,7 +27,14 @@ from types import MappingProxyType
 from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
-from integration._support.scripted_wires import Scenario, ScriptedOutput, ScriptedToolCall, ScriptedUsage, Wire
+from integration._support.scripted_wires import (
+    WIRES,
+    Scenario,
+    ScriptedOutput,
+    ScriptedToolCall,
+    ScriptedUsage,
+    Wire,
+)
 
 COST_MAP_PATH: Final = Path(__file__).resolve().parent / "cost_map.json"
 CASES_PATH: Final = Path(__file__).resolve().parent / "cases.json"
@@ -251,9 +258,20 @@ class Case(BaseModel):
         )
 
 
+class _ProviderWiringRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    litellm_provider: str
+    mode: str
+    wire: str
+    model_prefix: str | None
+    litellm_params: Mapping[str, str]
+
+
 class _CasesFile(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    providers: tuple[_ProviderWiringRow, ...] = ()
     deployments: tuple[DeploymentSpec, ...] = ()
     cases: tuple[Case, ...] = ()
 
@@ -267,7 +285,7 @@ _DEPLOYMENTS: Final[Mapping[str, DeploymentSpec]] = MappingProxyType(
 
 @dataclass(frozen=True, slots=True)
 class _ProviderWiring:
-    """How a (litellm_provider, mode) pair maps to a sidecar wire, the provider
+    """How a (litellm_provider, mode) pair maps to a provider wire, the provider
     prefix on the registered litellm model string, and extra litellm_params."""
 
     wire: Wire
@@ -275,42 +293,26 @@ class _ProviderWiring:
     litellm_params: Mapping[str, str]
 
 
-_AZURE_PARAMS: Final[Mapping[str, str]] = MappingProxyType({"api_version": "2025-04-01-preview"})
-_BEDROCK_PARAMS: Final[Mapping[str, str]] = MappingProxyType(
-    {
-        "aws_access_key_id": "AKIASCRIPTEDPROVIDER",
-        "aws_secret_access_key": "scripted-secret",
-        "aws_region_name": "us-east-1",
-    }
-)
-_VERTEX_PARAMS: Final[Mapping[str, str]] = MappingProxyType(
-    {
-        "vertex_project": "cc-scripted-project",
-        "vertex_location": "us-central1",
-    }
-)
+def _provider_wiring(rows: tuple[_ProviderWiringRow, ...]) -> Mapping[tuple[str, str], _ProviderWiring]:
+    unknown_wires: Final = sorted({row.wire for row in rows if row.wire not in WIRES})
+    if unknown_wires:
+        raise ValueError(
+            f"cases.json providers has unknown wires: {unknown_wires}; "
+            f"known wires are {sorted(WIRES)}"
+        )
+    return MappingProxyType(
+        {
+            (row.litellm_provider, row.mode): _ProviderWiring(
+                row.wire,
+                row.model_prefix,
+                MappingProxyType(dict(row.litellm_params)),
+            )
+            for row in rows
+        }
+    )
 
-_PROVIDER_WIRING: Final[Mapping[tuple[str, str], _ProviderWiring]] = MappingProxyType(
-    {
-        ("openai", "chat"): _ProviderWiring("openai_chat", "openai", MappingProxyType({})),
-        ("openai", "responses"): _ProviderWiring(
-            "openai_responses", "openai/responses", MappingProxyType({})
-        ),
-        ("anthropic", "chat"): _ProviderWiring(
-            "anthropic_messages", "anthropic", MappingProxyType({})
-        ),
-        ("gemini", "chat"): _ProviderWiring("gemini_generate", None, MappingProxyType({})),
-        ("together_ai", "chat"): _ProviderWiring("together_chat", None, MappingProxyType({})),
-        ("fireworks_ai", "chat"): _ProviderWiring("fireworks_chat", None, MappingProxyType({})),
-        ("azure", "chat"): _ProviderWiring("azure_chat", None, _AZURE_PARAMS),
-        ("bedrock_converse", "chat"): _ProviderWiring(
-            "bedrock_converse", "bedrock/converse", _BEDROCK_PARAMS
-        ),
-        ("vertex_ai-language-models", "chat"): _ProviderWiring(
-            "vertex_generate", "vertex_ai", _VERTEX_PARAMS
-        ),
-    }
-)
+
+_PROVIDER_WIRING: Final[Mapping[tuple[str, str], _ProviderWiring]] = _provider_wiring(CASES_FILE.providers)
 
 
 @dataclass(frozen=True, slots=True)
@@ -390,11 +392,7 @@ def _frontier() -> tuple[FrontierModel, ...]:
         pair = (entry.litellm_provider, entry.mode)
         wiring = _PROVIDER_WIRING.get(pair)
         if wiring is None:
-            raise ValueError(
-                f"cost_map entry {map_key} has no wiring for "
-                f"(litellm_provider={pair[0]}, mode={pair[1]}); add a "
-                f"_ProviderWiring row in cost_matrix.py"
-            )
+            continue
         siblings = groups[pair]
         override_key = (
             siblings[(siblings.index(map_key) + 1) % len(siblings)] if len(siblings) > 1 else None
@@ -567,6 +565,13 @@ def matrix_data_errors() -> tuple[str, ...]:
         for case in CASES
         if (case.family == "transport") != (not case.owns and not case.fallback_for)
     )
+    missing_provider_rows: Final = sorted(
+        f"cost_map entry {map_key} has no providers row for "
+        f"(litellm_provider={entry.litellm_provider}, mode={entry.mode}); "
+        f"add a providers row in cases.json"
+        for map_key, entry in COST_MAP.items()
+        if (entry.litellm_provider, entry.mode) not in _PROVIDER_WIRING
+    )
     input_rates: Final = tuple(entry.input_cost_per_token for entry in COST_MAP.values())
     findings: Final = (
         (
@@ -613,6 +618,11 @@ def matrix_data_errors() -> tuple[str, ...]:
         (
             f"cases with owns/fallback_for inconsistent with family: {family_violations}"
             if family_violations
+            else None
+        ),
+        (
+            f"cost_map entries without providers rows: {missing_provider_rows}"
+            if missing_provider_rows
             else None
         ),
     )
