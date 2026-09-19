@@ -376,9 +376,10 @@ class TestCiscoAIDefenseMCPMode:
             assert sent_payload["result"]["content"][0]["text"] == text_content
             assert result is None
 
+    @pytest.mark.parametrize("use_wrapper", [True, False])
     @pytest.mark.asyncio
-    async def test_mcp_response_hook_through_real_logging_wrapper(self):
-        from mcp.types import CallToolResult, TextContent
+    async def test_mcp_response_hook_through_real_logging_wrapper(self, use_wrapper):
+        from mcp.types import AudioContent, CallToolResult, EmbeddedResource, ImageContent, TextContent, TextResourceContents
 
         from litellm.types.mcp import MCPPostCallResponseObject
 
@@ -387,22 +388,20 @@ class TestCiscoAIDefenseMCPMode:
         )
 
         real_result = CallToolResult(
-            content=[TextContent(type="text", text="leak 9045629876")],
+            content=[
+                TextContent(type="text", text="leak 9045629876"),
+                ImageContent(type="image", data="aGVsbG8=", mimeType="image/png"),
+                AudioContent(type="audio", data="aGVsbG8=", mimeType="audio/wav"),
+                EmbeddedResource(type="resource", resource=TextResourceContents(
+                    uri="memo://status", mimeType="text/plain", text="resource text"
+                )),
+            ],
             structuredContent={"patient": {"ssn": "123-45-6789"}},
             isError=False,
         )
         wrapped = MCPPostCallResponseObject(
             mcp_tool_call_response=real_result,
             hidden_params={},
-        )
-
-        assert isinstance(wrapped.mcp_tool_call_response, list)
-        assert all(
-            isinstance(item, tuple) and len(item) == 2
-            for item in wrapped.mcp_tool_call_response
-        ), (
-            "Pydantic coercion shape changed — update the normalizer to "
-            "match the new wire format."
         )
 
         post_mock = AsyncMock(return_value=_safe_response(url=MCP_URL))
@@ -414,7 +413,7 @@ class TestCiscoAIDefenseMCPMode:
                     "mcp_server_name": "vault",
                     "litellm_call_id": "real-wire-call",
                 },
-                response_obj=wrapped,
+                response_obj=wrapped if use_wrapper else real_result,
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
@@ -428,8 +427,8 @@ class TestCiscoAIDefenseMCPMode:
         sent_payload = post_mock.call_args.kwargs["json"]
         content_items = sent_payload["result"]["content"]
 
-        assert len(content_items) == 1, (
-            f"expected exactly 1 content item from the real "
+        assert len(content_items) == 4, (
+            f"expected exactly 4 content items from the real "
             f"CallToolResult.content list, got {len(content_items)}: "
             f"{content_items!r}"
         )
@@ -441,6 +440,11 @@ class TestCiscoAIDefenseMCPMode:
             f"``content`` field."
         )
         assert content_items[0].get("type") == "text"
+        assert content_items[1:] == [
+            {"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"},
+            {"type": "audio", "data": "aGVsbG8=", "mimeType": "audio/wav"},
+            {"type": "resource", "resource": {"uri": "memo://status", "mimeType": "text/plain", "text": "resource text"}},
+        ]
         assert sent_payload["result"]["structuredContent"] == {
             "patient": {"ssn": "123-45-6789"}
         }
