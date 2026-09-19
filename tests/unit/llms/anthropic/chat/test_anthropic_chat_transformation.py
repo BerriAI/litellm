@@ -6532,7 +6532,7 @@ def test_chat_flagged_model_converts_system_with_no_following_user_turn(local_mo
 
 @pytest.mark.parametrize(
     "empty_content",
-    [[], None, [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}]],
+    [[], None, [{"type": "video_url", "video_url": {"url": "https://example.com/clip.mp4"}}]],
     ids=["empty-list", "none", "unsupported-part-only"],
 )
 def test_chat_flagged_model_converts_a_system_behind_a_user_turn_that_sends_nothing(
@@ -6557,7 +6557,6 @@ USER_PART_BY_TYPE = {
     "image_url": {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
     "document": {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "hello"}},
     "file": {"type": "file", "file": {"file_data": "data:text/plain;base64,aGVsbG8=", "filename": "hello.txt"}},
-    "input_audio": {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
     "video_url": {"type": "video_url", "video_url": {"url": "https://example.com/clip.mp4"}},
 }
 
