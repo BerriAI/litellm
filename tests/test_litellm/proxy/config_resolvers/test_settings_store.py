@@ -427,7 +427,7 @@ def test_settings_store_truthiness_stops_at_the_first_key() -> None:
     resolutions: Final[list[str]] = []
     original: Final = SettingsStore._resolution_for
 
-    def counted(self: SettingsStore, key: str):  # type: ignore[no-untyped-def]
+    def counted(self: SettingsStore, key: str):
         resolutions.append(key)
         return original(self, key)
 
