@@ -219,6 +219,7 @@ async def test_aresponses_drops_stream_options():
         post_kwargs = mock_post.call_args.kwargs
         request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
         assert "stream_options" not in request_body
+        assert request_body["input"] == [{"role": "user", "content": "hi"}]
 
 
 @pytest.mark.asyncio

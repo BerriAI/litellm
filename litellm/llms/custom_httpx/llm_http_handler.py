@@ -2686,9 +2686,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
+        canonical_input: Final = BaseResponsesAPIConfig.normalize_responses_input(input)
         data = responses_api_provider_config.transform_responses_api_request(
             model=model,
-            input=input,
+            input=canonical_input,
             response_api_optional_request_params=response_api_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
@@ -2874,9 +2875,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
+        canonical_input: Final = BaseResponsesAPIConfig.normalize_responses_input(input)
         data = responses_api_provider_config.transform_responses_api_request(
             model=model,
-            input=input,
+            input=canonical_input,
             response_api_optional_request_params=response_api_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,

@@ -227,7 +227,7 @@ def _assert_native_responses_request(route, expected_url, expected_model):
     assert f"{request.url.scheme}://{request.url.host}{request.url.path}" == expected_url
     assert request.headers["api-key"] == "fake-key"
     assert body["model"] == expected_model
-    assert body["input"] == "What is the weather in SF?"
+    assert body["input"] == [{"role": "user", "content": "What is the weather in SF?"}]
     assert "messages" not in body
     assert body["reasoning"] == {"effort": "high"}
     assert body["tools"] == [WEATHER_TOOL]

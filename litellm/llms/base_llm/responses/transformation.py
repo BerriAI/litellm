@@ -332,6 +332,15 @@ class BaseResponsesAPIConfig(ABC):
     #########################################################
 
     @staticmethod
+    def normalize_responses_input(input: str | ResponseInputParam) -> ResponseInputParam:
+        if isinstance(input, str):
+            return cast(
+                "ResponseInputParam",
+                [{"role": "user", "content": input}],  # mutable-ok: outbound Responses input item
+            )  # cast-ok: OpenAI string shorthand is one user item
+        return input
+
+    @staticmethod
     def strip_custom_tool_call_namespace_from_responses_input(
         input: str | ResponseInputParam,
     ) -> str | ResponseInputParam:

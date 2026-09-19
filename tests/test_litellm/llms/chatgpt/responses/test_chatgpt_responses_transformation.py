@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.main import responses_api_bridge_check
@@ -113,6 +114,22 @@ class TestChatGPTResponsesAPITransformation:
         assert headers["content-type"] == "application/json"
         assert headers["accept"] == "text/event-stream"
         assert headers["session_id"] == "session-123"
+
+    def test_chatgpt_string_input_is_list_after_central_normalize(self):
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.3-codex",
+            input=BaseResponsesAPIConfig.normalize_responses_input(
+                "Reply with exactly ROUTE_OK."
+            ),
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [
+            {"role": "user", "content": "Reply with exactly ROUTE_OK."}
+        ]
 
     @pytest.mark.parametrize(
         "model_name",
