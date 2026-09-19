@@ -246,3 +246,9 @@ class AuditLogRepository(PrismaTableRepository["prisma_models.LiteLLM_AuditLog"]
 
 class AdaptiveRouterSessionRepository(PrismaTableRepository["prisma_models.LiteLLM_AdaptiveRouterSession"]):
     table_name = "litellm_adaptiveroutersession"
+
+
+class BackgroundInteractionSettlementRepository(
+    PrismaTableRepository["prisma_models.LiteLLM_BackgroundInteractionSettlement"]
+):
+    table_name = "litellm_backgroundinteractionsettlement"
