@@ -1,11 +1,10 @@
-use serde_json::{Map, Value};
 use std::collections::BTreeMap;
-use strum::EnumString;
 
-use litellm_auth::Error;
 use litellm_auth::{
-    CredentialResolverHandle, InputSource, SecretValue, Sourced, TokenProviderHandle,
+    CredentialResolverHandle, Error, InputSource, SecretValue, Sourced, TokenProviderHandle,
 };
+use serde_json::{Map, Value};
+use strum::EnumString;
 
 pub const DEFAULT_AZURE_SCOPE: &str = "https://cognitiveservices.azure.com/.default";
 
@@ -52,6 +51,16 @@ pub struct AzureAuthInputs {
 }
 
 impl AzureAuthInputs {
+    pub fn or_configured_token_refresh(self, enabled: bool) -> Self {
+        if *self.enable_azure_ad_token_refresh.value() || !enabled {
+            return self;
+        }
+        Self {
+            enable_azure_ad_token_refresh: Sourced::new(true, InputSource::Deployment),
+            ..self
+        }
+    }
+
     #[cfg(test)]
     pub fn from_optional_params(params: &Map<String, Value>) -> Result<Self, Error> {
         Self::from_sourced_optional_params(params, &BTreeMap::new())
@@ -115,12 +124,12 @@ fn source_for(sources: &BTreeMap<String, InputSource>, name: &str) -> InputSourc
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use std::collections::BTreeMap;
 
-    use super::{AzureAuthInputs, AzureCredentialType, ConfigValue};
     use litellm_auth::{InputSource, Sourced};
+    use serde_json::json;
+
+    use super::{AzureAuthInputs, AzureCredentialType, ConfigValue};
 
     #[test]
     fn selector_parsing_is_exact() {
@@ -188,5 +197,30 @@ mod tests {
 
         assert!(!debug.contains("token-value"));
         assert!(!debug.contains("secret-value"));
+    }
+
+    #[rstest::rstest]
+    #[case::global_turns_refresh_on(json!({}), true, true, InputSource::Deployment)]
+    #[case::global_overrides_a_call_false_like_python(json!({"enable_azure_ad_token_refresh": false}), true, true, InputSource::Deployment)]
+    #[case::call_true_survives_a_global_false(json!({"enable_azure_ad_token_refresh": true}), false, true, InputSource::Request)]
+    #[case::both_off(json!({}), false, false, InputSource::Request)]
+    fn token_refresh_follows_the_configured_global(
+        #[case] params: serde_json::Value,
+        #[case] global: bool,
+        #[case] enabled: bool,
+        #[case] source: InputSource,
+    ) {
+        let sources = BTreeMap::from([(
+            "enable_azure_ad_token_refresh".to_string(),
+            InputSource::Request,
+        )]);
+        let inputs =
+            AzureAuthInputs::from_sourced_optional_params(params.as_object().unwrap(), &sources)
+                .unwrap()
+                .or_configured_token_refresh(global);
+        assert_eq!(
+            inputs.enable_azure_ad_token_refresh,
+            Sourced::new(enabled, source)
+        );
     }
 }

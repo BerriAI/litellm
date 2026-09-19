@@ -1,8 +1,8 @@
 use litellm_auth::InputSource;
-use litellm_llms::base_llm::ocr::transformation::OcrResponseFormat;
+use litellm_llms::base_llm::ocr::{settings::OcrSettings, transformation::OcrResponseFormat};
 use serde_json::{Value, json};
 
-use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
+use super::test_support::{MockResponse, mock_server, ocr_client, perform_ocr, wire_request};
 
 fn request_body(request: &str) -> Value {
     serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
@@ -46,6 +46,27 @@ async fn facade_executes_vertex_mistral_with_resolved_project_and_location() {
             "extract_footer":true
         })
     );
+}
+
+#[tokio::test]
+async fn configured_project_and_location_apply_when_the_call_sets_neither() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
+    let client = ocr_client().with_settings(OcrSettings {
+        vertex_project: Some("configured-project".into()),
+        vertex_location: Some("europe-west4".into()),
+        ..OcrSettings::default()
+    });
+
+    crate::ocr::client::perform(
+        &client,
+        wire_request("vertex_ai/mistral-ocr-maas", &base, json!({})),
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+    assert!(seen.lock().unwrap()[0].starts_with(
+        "POST /v1/projects/configured-project/locations/europe-west4/publishers/mistralai/models/mistral-ocr-maas:rawPredict "
+    ));
 }
 
 #[tokio::test]
@@ -139,17 +160,16 @@ async fn adapters_build_complete_requests_and_share_mistral_normalization() {
         .prepare_request(&vertex, &client, &crate::ocr::test_support::NoHooks)
         .await
         .unwrap();
-    assert_eq!(direct_http.url().as_str(), "https://mistral.test/v1/ocr");
+    assert_eq!(direct_http.url(), "https://mistral.test/v1/ocr");
     assert_eq!(
-        vertex_http.url().as_str(),
+        vertex_http.url(),
         "https://vertex.test/v1/projects/project-1/locations/us-central1/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
     );
     for http in [&direct_http, &vertex_http] {
-        assert_eq!(http.method(), reqwest::Method::POST);
-        assert_eq!(http.headers()["authorization"], "Bearer test-key");
-        assert_eq!(http.headers()["content-type"], "application/json");
-        assert_eq!(http.timeout(), Some(&Duration::from_secs(2)));
-        let body: Value = serde_json::from_slice(http.body().unwrap().as_bytes().unwrap()).unwrap();
+        assert_eq!(http.header("authorization").unwrap(), "Bearer test-key");
+        assert_eq!(http.header("content-type").unwrap(), "application/json");
+        assert_eq!(http.timeout(), Some(Duration::from_secs(2)));
+        let body: Value = serde_json::from_slice(http.body()).unwrap();
         assert_eq!(
             body,
             json!({
@@ -229,9 +249,9 @@ mod transformation {
             .prepare_request(&vertex, &client, &crate::ocr::test_support::NoHooks)
             .await
             .unwrap();
-        assert_eq!(direct_http.url().as_str(), "https://mistral.test/v1/ocr");
+        assert_eq!(direct_http.url(), "https://mistral.test/v1/ocr");
         assert_eq!(
-            vertex_http.url().as_str(),
+            vertex_http.url(),
             "https://vertex.test/v1/projects/project-1/locations/us-central1/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
         );
         let http = if use_vertex {
@@ -239,11 +259,10 @@ mod transformation {
         } else {
             &direct_http
         };
-        assert_eq!(http.method(), reqwest::Method::POST);
-        assert_eq!(http.headers()["authorization"], "Bearer test-key");
-        assert_eq!(http.headers()["content-type"], "application/json");
-        assert_eq!(http.timeout(), Some(&Duration::from_secs(2)));
-        let body: Value = serde_json::from_slice(http.body().unwrap().as_bytes().unwrap()).unwrap();
+        assert_eq!(http.header("authorization").unwrap(), "Bearer test-key");
+        assert_eq!(http.header("content-type").unwrap(), "application/json");
+        assert_eq!(http.timeout(), Some(Duration::from_secs(2)));
+        let body: Value = serde_json::from_slice(http.body()).unwrap();
         assert_eq!(
             body,
             json!({

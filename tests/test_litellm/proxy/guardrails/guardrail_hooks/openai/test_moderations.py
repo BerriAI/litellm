@@ -369,6 +369,7 @@ async def test_openai_moderation_guardrail_streaming_safe_content():
             chunk1.choices[0].delta = MagicMock()
             chunk1.choices[0].delta.content = "Hello "
             chunk1.choices[0].finish_reason = None
+            chunk1.choices[0].index = 0
 
             chunk2 = MagicMock()
             chunk2.model = "gpt-4"
@@ -376,6 +377,7 @@ async def test_openai_moderation_guardrail_streaming_safe_content():
             chunk2.choices[0].delta = MagicMock()
             chunk2.choices[0].delta.content = "world"
             chunk2.choices[0].finish_reason = None
+            chunk2.choices[0].index = 0
 
             # Last chunk with finish_reason
             chunk3 = MagicMock()
@@ -384,6 +386,7 @@ async def test_openai_moderation_guardrail_streaming_safe_content():
             chunk3.choices[0].delta = MagicMock()
             chunk3.choices[0].delta.content = "!"
             chunk3.choices[0].finish_reason = "stop"
+            chunk3.choices[0].index = 0
 
             for chunk in [chunk1, chunk2, chunk3]:
                 yield chunk
@@ -480,6 +483,7 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
             chunk1.choices[0].delta = MagicMock()
             chunk1.choices[0].delta.content = "This is "
             chunk1.choices[0].finish_reason = None
+            chunk1.choices[0].index = 0
 
             # Last chunk - with finish_reason to signal end of stream
             chunk2 = MagicMock()
@@ -488,6 +492,7 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
             chunk2.choices[0].delta = MagicMock()
             chunk2.choices[0].delta.content = "harmful content"
             chunk2.choices[0].finish_reason = "stop"
+            chunk2.choices[0].index = 0
 
             for chunk in [chunk1, chunk2]:
                 yield chunk

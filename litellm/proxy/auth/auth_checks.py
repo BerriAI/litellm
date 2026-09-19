@@ -15,10 +15,10 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol
 
 from fastapi import HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -94,6 +94,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     model_access_group_registry_cache_key,
     model_access_group_spend_counter_key,
     object_permission_cache_key,
+    project_cache_key,
+    project_spend_counter_key,
     tag_cache_key,
     tag_registry_cache_key,
     team_membership_auth_cache_key,
@@ -1214,21 +1216,19 @@ async def common_checks(
     return True
 
 
+def effective_user_role(user_role: str | None) -> LitellmUserRoles:
+    try:
+        return LitellmUserRoles(user_role)
+    except ValueError:
+        return LitellmUserRoles.INTERNAL_USER
+
+
 def _get_user_role(
     user_obj: LiteLLM_UserTable | None,
 ) -> LitellmUserRoles | None:
     if user_obj is None:
         return None
-
-    _user: Final = user_obj
-
-    _user_role: Final = _user.user_role
-    try:
-        role: Final = LitellmUserRoles(_user_role)
-    except ValueError:
-        return LitellmUserRoles.INTERNAL_USER
-
-    return role
+    return effective_user_role(user_obj.user_role)
 
 
 def _is_api_route_allowed(
@@ -2412,22 +2412,22 @@ def _update_last_db_access_time(key: str, value: object | None, last_db_access_t
     last_db_access_time[key] = (value, time.time())
 
 
+ROLE_BASED_PERMISSIONS_ADAPTER: Final[TypeAdapter[list[RoleBasedPermissions]]] = TypeAdapter(list[RoleBasedPermissions])
+
+
 def _get_role_based_permissions(
     rbac_role: RBAC_ROLES,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
     key: Literal["models", "routes"],
 ) -> list[str] | None:
     """
     Get the role based permissions from the general settings.
     """
-    role_based_permissions: Final = cast(
-        list[RoleBasedPermissions] | None,
-        general_settings.get("role_permissions", []),
-    )
-    if role_based_permissions is None:
+    configured: Final = general_settings.get("role_permissions")
+    if configured is None:
         return None
 
-    for role_based_permission in role_based_permissions:
+    for role_based_permission in ROLE_BASED_PERMISSIONS_ADAPTER.validate_python(configured):
         if role_based_permission.role == rbac_role:
             return role_based_permission.models if key == "models" else role_based_permission.routes
 
@@ -2436,7 +2436,7 @@ def _get_role_based_permissions(
 
 def get_role_based_models(
     rbac_role: RBAC_ROLES,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
 ) -> list[str] | None:
     """
     Get the models allowed for a user role.
@@ -2453,7 +2453,7 @@ def get_role_based_models(
 
 def get_role_based_routes(
     rbac_role: RBAC_ROLES,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
 ) -> list[str] | None:
     """
     Get the routes allowed for a user role.
@@ -2575,7 +2575,7 @@ async def get_user_object(
         raise Exception("No db connected")
     try:
         db_access_time_key: Final = f"user_id:{user_id}"
-        should_check_db: Final = _should_check_db(
+        should_check_db: Final = bool(check_db_only) or _should_check_db(
             key=db_access_time_key,
             last_db_access_time=last_db_access_time,
             db_cache_expiry=db_cache_expiry,
@@ -5680,16 +5680,22 @@ async def _project_max_budget_check(
     if project_object.litellm_budget_table is not None:
         max_budget = project_object.litellm_budget_table.max_budget
 
-    if (
-        max_budget is not None
-        and project_object.spend is not None
-        and math.isfinite(max_budget)
-        and project_object.spend > max_budget
-    ):
+    if max_budget is None or max_budget <= 0 or not math.isfinite(max_budget):
+        return
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    project_spend: Final = await get_current_spend(
+        counter_key=project_spend_counter_key(project_object.project_id),
+        fallback_spend=project_object.spend or 0.0,
+        max_budget=max_budget,
+    )
+
+    if project_spend >= max_budget:
         if valid_token:
             call_info: Final = CallInfo(
                 token=valid_token.token,
-                spend=project_object.spend,
+                spend=project_spend,
                 max_budget=max_budget,
                 user_id=valid_token.user_id,
                 team_id=valid_token.team_id,
@@ -5705,9 +5711,9 @@ async def _project_max_budget_check(
             )
 
         raise litellm.BudgetExceededError(
-            current_cost=project_object.spend,
+            current_cost=project_spend,
             max_budget=max_budget,
-            message=f"Budget has been exceeded! Project={project_object.project_id} Current cost: {project_object.spend}, Max budget: {max_budget}",
+            message=f"Budget has been exceeded! Project={project_object.project_id} Current cost: {project_spend}, Max budget: {max_budget}",
             entity_type=Litellm_EntityType.PROJECT.value,
             entity_id=project_object.project_id,
         )
@@ -5757,10 +5763,6 @@ async def _project_soft_budget_check(
             )
 
 
-def _project_cache_key(project_id: str) -> str:
-    return f"project_id:{project_id}"
-
-
 async def get_project_object(
     project_id: str,
     prisma_client: PrismaClient | None,
@@ -5778,7 +5780,7 @@ async def get_project_object(
         return None
 
     # Check cache first
-    cache_key: Final = _project_cache_key(project_id)
+    cache_key: Final = project_cache_key(project_id)
     deserialized_project: Final = await user_api_key_cache.async_get_cache(
         key=cache_key,
         model_type=LiteLLM_ProjectTableCachedObj,
@@ -5820,7 +5822,7 @@ async def delete_cached_project_object(
     from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 
     await evict_and_broadcast(
-        cache_keys=(_project_cache_key(project_id),),
+        cache_keys=(project_cache_key(project_id),),
         user_api_key_cache=user_api_key_cache,
     )
 

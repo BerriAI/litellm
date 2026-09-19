@@ -2,17 +2,17 @@ use litellm_auth_gcp::{self as vertex, VertexConfig};
 use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde_json::Value;
 
-use super::common_utils::validate_destination;
+use super::common_utils::{validate_destination, vertex_config};
 use crate::{
     base_llm::ocr::{
         document::{inline_remote_document, validate_inline_document},
         error::Error,
+        handler::OcrClient,
         transformation::{
             BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrEnvironment,
-            OcrRequestContext, OcrResponseFormat, PreparedOcrRequest, credential_env,
+            OcrRequestContext, OcrResponseFormat, PreparedOcrRequest,
         },
     },
-    custom_httpx::llm_http_handler::OcrClient,
     mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
 };
 
@@ -47,10 +47,7 @@ impl BaseOcrConfig for VertexAiOcrConfig {
         request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<Self::Environment, Error> {
-        let config = VertexConfig::from_sourced_optional_params(
-            &request.optional_params,
-            &request.input_sources,
-        )?;
+        let config = vertex_config(request)?;
         self.resolve_environment(&request.connection, &config, client)
             .await
     }
@@ -61,12 +58,10 @@ impl BaseOcrConfig for VertexAiOcrConfig {
         _optional_params: &Self::OcrParams,
         environment: &Self::Environment,
     ) -> Result<String, Error> {
-        let config = VertexConfig::from_sourced_optional_params(
-            &request.optional_params,
-            &request.input_sources,
-        )?;
-        let location = vertex::get_vertex_ai_location(&config, &credential_env)
-            .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
+        let config = vertex_config(request)?;
+        let location =
+            vertex::get_vertex_ai_location(&config, &|name: &str| request.connection.secret(name))
+                .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
         self.build_ocr_url(
             request.connection.api_base.as_deref(),
             &environment.project_id,
@@ -112,7 +107,7 @@ impl BaseOcrConfig for VertexAiOcrConfig {
     }
 
     fn validate_request_body(&self, body: &Value) -> Result<(), Error> {
-        validate_inline_document(&crate::custom_httpx::llm_http_handler::body_document(body)?)
+        validate_inline_document(&crate::base_llm::ocr::handler::body_document(body)?)
     }
 }
 
@@ -134,9 +129,12 @@ impl VertexAiOcrConfig {
             .vertex_auth()
             .validate_environment(
                 connection.extra_headers.clone(),
-                connection.api_key.as_deref(),
+                connection
+                    .api_key
+                    .as_ref()
+                    .map(litellm_auth::SecretValue::expose),
                 config,
-                &credential_env,
+                &|name: &str| connection.secret(name),
             )
             .await
             .map_err(Error::from)
