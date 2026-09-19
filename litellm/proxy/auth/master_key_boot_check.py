@@ -211,7 +211,7 @@ def _fix_steps(source: MasterKeySource) -> str:
     match source:
         case ConfigFileSource():
             return (
-                f"1. Make {_config_label(source)} read the key from the environment:\n"
+                f"1. Make sure {_config_label(source)} reads the key from the environment:\n"
                 f"     general_settings:\n       {MASTER_KEY_SETTING}: os.environ/{MASTER_KEY_ENV_VAR}\n"
                 f"2. {_SAVE_KEY_STEP}"
             )
