@@ -16,7 +16,11 @@ use pyo3::{
     types::{PyDict, PyTuple},
 };
 
-use crate::{errors::RustBridgeDeclined, http, python_settings::PythonSecrets};
+use crate::{
+    errors::RustBridgeDeclined,
+    http,
+    python_settings::{PythonSecrets, PythonSettings},
+};
 
 const SURFACE: LegacySurface = LegacySurface {
     call_type: "ocr",
@@ -44,7 +48,7 @@ fn run_ocr(
         &config,
         http::url_policy(py)?,
         VERTEX_AUTH.clone(),
-        OcrSettings::from_environment(&ProcessEnvironment),
+        ocr_settings(py)?,
         Arc::new(PythonSecrets),
     )
     .map_err(|error| RustBridgeDeclined::new_err(error.to_string()))?;
@@ -56,6 +60,30 @@ fn run_ocr(
         OcrRouteHost::new(request.unbind()),
         asynchronous,
     )
+}
+
+#[derive(FromPyObject)]
+struct PythonProviderDefaults {
+    vertex_project: Option<String>,
+    vertex_location: Option<String>,
+    enable_azure_ad_token_refresh: Option<bool>,
+}
+
+fn ocr_settings(py: Python<'_>) -> PyResult<OcrSettings> {
+    let defaults: PythonProviderDefaults = PythonSettings::ProviderDefaults
+        .read(py)?
+        .extract()
+        .map_err(|error: PyErr| {
+            RustBridgeDeclined::new_err(format!(
+                "litellm provider defaults cannot be used by the Rust route: {error}"
+            ))
+        })?;
+    Ok(OcrSettings {
+        vertex_project: defaults.vertex_project,
+        vertex_location: defaults.vertex_location,
+        enable_azure_ad_token_refresh: defaults.enable_azure_ad_token_refresh == Some(true),
+        ..OcrSettings::from_environment(&ProcessEnvironment)
+    })
 }
 
 #[pyfunction]

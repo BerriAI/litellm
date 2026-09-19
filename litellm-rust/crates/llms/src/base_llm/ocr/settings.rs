@@ -11,6 +11,9 @@ pub struct OcrSettings {
     pub poll_timeout: Duration,
     pub document_intelligence_api_version: String,
     pub document_intelligence_dpi: i64,
+    pub vertex_project: Option<String>,
+    pub vertex_location: Option<String>,
+    pub enable_azure_ad_token_refresh: bool,
 }
 
 impl Default for OcrSettings {
@@ -21,6 +24,9 @@ impl Default for OcrSettings {
             poll_timeout: Duration::from_secs(120),
             document_intelligence_api_version: "2024-11-30".into(),
             document_intelligence_dpi: 96,
+            vertex_project: None,
+            vertex_location: None,
+            enable_azure_ad_token_refresh: false,
         }
     }
 }
@@ -48,6 +54,7 @@ impl OcrSettings {
             document_intelligence_dpi: env
                 .parsed("AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI")
                 .unwrap_or(defaults.document_intelligence_dpi),
+            ..defaults
         }
     }
 }
@@ -96,6 +103,7 @@ mod tests {
                 poll_timeout: Duration::from_secs(600),
                 document_intelligence_api_version: "2025-01-01".into(),
                 document_intelligence_dpi: 72,
+                ..OcrSettings::default()
             }
         );
     }

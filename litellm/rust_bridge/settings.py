@@ -24,6 +24,13 @@ class UrlPolicy:
     user_url_allowed_hosts: Sequence[str]
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderDefaults:
+    vertex_project: str | None
+    vertex_location: str | None
+    enable_azure_ad_token_refresh: bool | None
+
+
 def warn(message: str) -> None:
     from litellm._logging import verbose_logger
 
@@ -34,6 +41,16 @@ def secret(name: str) -> str | None:
     from litellm.secret_managers.main import get_secret_str
 
     return get_secret_str(name)
+
+
+def provider_defaults() -> ProviderDefaults:
+    import litellm
+
+    return ProviderDefaults(
+        vertex_project=litellm.vertex_project,
+        vertex_location=litellm.vertex_location,
+        enable_azure_ad_token_refresh=litellm.enable_azure_ad_token_refresh,
+    )
 
 
 def url_policy() -> UrlPolicy:
