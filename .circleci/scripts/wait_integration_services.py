@@ -9,6 +9,7 @@ from redis import Redis
 def main() -> None:
     primary: Final = os.environ["INTEGRATION_PROXY_URL"]
     peer: Final = os.environ.get("INTEGRATION_PEER_URL")
+    scripted_provider: Final = os.environ.get("INTEGRATION_SCRIPTED_PROVIDER_URL") or None
     proxies: Final = (primary, peer) if peer else (primary,)
     deadline: Final = time.monotonic() + 90
     headers: Final = {"Authorization": f"Bearer {os.environ['INTEGRATION_MASTER_KEY']}"}
@@ -19,6 +20,10 @@ def main() -> None:
             try:
                 ready: Final = (
                     client.get(f"{os.environ['INTEGRATION_UPSTREAM_URL']}/health").status_code == 200
+                    and (
+                        scripted_provider is None
+                        or client.get(f"{scripted_provider}/health").status_code == 200
+                    )
                     and all(client.get(f"{url}/health/readiness").status_code == 200 for url in proxies)
                 )
                 if ready:

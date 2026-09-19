@@ -1,6 +1,6 @@
-"""Scripted provider sidecar for the cost-calculation e2e suite.
+"""Scripted provider sidecar for the cost-calculation integration suite.
 
-A standalone process (``python -m cost_calculation.scripted_provider``) that
+A standalone process (``python -m integration._support.scripted_provider``) that
 pretends to be an LLM provider for the proxy under test. The suite registers a
 Scenario over a small control API; the provider wire routes then answer the
 proxy's upstream calls with the scripted usage figures, in the exact wire shape
@@ -32,6 +32,7 @@ final stream chunk carries usage or the provider reports none.
 
 from __future__ import annotations
 
+import argparse
 import json
 import struct
 import sys
@@ -41,8 +42,9 @@ import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, TypeAlias, cast
 from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, model_validator
@@ -1362,6 +1364,12 @@ def handle_request(store: _ScenarioStore, method: str, raw_path: str, body: byte
     segments: Final = tuple(segment for segment in path.split("/") if segment)
     if method == "GET" and segments == ("health",):
         return RenderedResponse(200, "application/json", _json_bytes(_jobj(("status", "ok"))))
+    if method == "GET" and segments == ("_cost_map",):
+        return RenderedResponse(
+            200,
+            "application/json",
+            (Path(__file__).resolve().parents[1] / "cost_calculation" / "cost_map.json").read_bytes(),
+        )
     if segments and segments[0] == "_oauth":
         if method == "POST" and segments == ("_oauth", "token"):
             return RenderedResponse(
@@ -1459,7 +1467,7 @@ class _ScriptedHandler(BaseHTTPRequestHandler):
 
 
 
-DEFAULT_PORT: Final = 9100
+DEFAULT_PORT: Final = 8191
 
 
 def serve(port: int = DEFAULT_PORT, bind_host: str = "127.0.0.1") -> None:
@@ -1469,5 +1477,6 @@ def serve(port: int = DEFAULT_PORT, bind_host: str = "127.0.0.1") -> None:
 
 
 if __name__ == "__main__":
-    port_arg: Final = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
-    serve(port=port_arg)
+    parser: Final = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=8191)
+    serve(port=cast(int, parser.parse_args().port))
