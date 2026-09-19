@@ -1,9 +1,9 @@
 import * as networking from "@/components/networking";
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import GuardrailInfoView from "./guardrail_info";
-import { chooseSelectOption } from "@/../tests/test-utils";
+import { chooseSelectOption, renderWithProviders } from "@/../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
   getGuardrailInfo: vi.fn(),
@@ -83,7 +83,8 @@ const saveChanges = async (user: ReturnType<typeof userEvent.setup>) => {
   await user.click(screen.getByText("Save Changes"));
 };
 
-const renderView = () => render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin />);
+const renderView = () =>
+  renderWithProviders(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin />);
 
 const lastPayload = () => vi.mocked(networking.updateGuardrailCall).mock.calls.at(-1)?.[2];
 

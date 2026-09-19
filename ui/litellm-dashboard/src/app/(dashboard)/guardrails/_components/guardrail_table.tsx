@@ -1,10 +1,9 @@
 "use client";
 
-import { SortingState } from "@tanstack/react-table";
 import { Inbox } from "lucide-react";
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 
-import { DataTable } from "@/components/shared/DataTable";
+import { DataTable, useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 import { Guardrail } from "@/components/guardrails/types";
 
 import { getGuardrailTableColumns } from "./guardrailTableColumns";
@@ -16,7 +15,12 @@ interface GuardrailTableProps {
   onGuardrailClick: (id: string) => void;
 }
 
-const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: ["guardrail_id", "guardrail_name", "created_at", "updated_at"],
+  defaultSort: { id: "created_at", desc: true },
+  defaultPageSize: 25,
+  filterColumns: [],
+};
 
 function EmptyState() {
   return (
@@ -36,7 +40,7 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
   onDeleteClick,
   onGuardrailClick,
 }) => {
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
+  const { sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
 
   const columns = useMemo(
     () => getGuardrailTableColumns({ onGuardrailClick, onDeleteClick }),
@@ -47,11 +51,13 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
     <DataTable
       data={guardrailsList}
       paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       columns={columns}
       getRowId={(guardrail, index) => guardrail.guardrail_id || String(index)}
       sortingMode="client"
       sorting={sorting}
-      onSortingChange={setSorting}
+      onSortingChange={onSortingChange}
       isLoading={isLoading}
       loadingMessage="Loading guardrails…"
       noDataMessage={<EmptyState />}

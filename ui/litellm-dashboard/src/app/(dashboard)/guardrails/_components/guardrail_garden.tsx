@@ -1,9 +1,18 @@
-import React, { useState } from "react";
+import React, { useEffect } from "react";
 import { ArrowRight, Search } from "lucide-react";
+import { parseAsBoolean, parseAsString, useQueryState, useQueryStates } from "nuqs";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
-import { GuardrailCardInfo, ALL_CARDS } from "./guardrail_garden_data";
+import { ALL_CARDS } from "./guardrail_garden_data";
 import GuardrailCard from "./guardrail_garden_card";
 import GuardrailDetailView from "./guardrail_garden_detail";
+import { GARDEN_TAB_KEY } from "./useGardenDetailTab";
+
+const searchParser = parseAsString.withDefault("");
+const showAllParser = parseAsBoolean.withDefault(false);
+const selectedCardParsers = {
+  garden_card: parseAsString.withOptions({ history: "push" }),
+  [GARDEN_TAB_KEY]: parseAsString,
+};
 
 interface GuardrailGardenProps {
   accessToken: string | null;
@@ -11,9 +20,10 @@ interface GuardrailGardenProps {
 }
 
 const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardrailCreated }) => {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedCard, setSelectedCard] = useState<GuardrailCardInfo | null>(null);
-  const [showAllLitellm, setShowAllLitellm] = useState(false);
+  const [searchQuery, setSearchQuery] = useQueryState("garden_q", searchParser);
+  const [showAllLitellm, setShowAllLitellm] = useQueryState("garden_all", showAllParser);
+  const [{ garden_card: selectedCardId }, setSelectedCardState] = useQueryStates(selectedCardParsers);
+  const selectedCard = ALL_CARDS.find((card) => card.id === selectedCardId) ?? null;
   const CARDS_PER_ROW = 5;
   const VISIBLE_ROWS = 2;
 
@@ -30,11 +40,19 @@ const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardr
   const litellmCards = filteredCards.filter((c) => c.category === "litellm");
   const partnerCards = filteredCards.filter((c) => c.category === "partner");
 
+  const unknownCardSelected = selectedCardId !== null && selectedCard === null;
+  useEffect(() => {
+    if (unknownCardSelected) void setSelectedCardState(null, { history: "replace" });
+  }, [unknownCardSelected, setSelectedCardState]);
+
+  const openCard = (cardId: string) => void setSelectedCardState({ garden_card: cardId, [GARDEN_TAB_KEY]: null });
+  const closeCard = () => void setSelectedCardState(null, { history: "replace" });
+
   if (selectedCard) {
     return (
       <GuardrailDetailView
         card={selectedCard}
-        onBack={() => setSelectedCard(null)}
+        onBack={closeCard}
         accessToken={accessToken}
         onGuardrailCreated={onGuardrailCreated}
       />
@@ -51,7 +69,7 @@ const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardr
           <InputGroupInput
             placeholder="Search guardrails"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => void setSearchQuery(e.target.value)}
           />
         </InputGroup>
       </div>
@@ -61,7 +79,7 @@ const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardr
           <h2 className="m-0 text-xl font-semibold text-foreground">LiteLLM Content Filter</h2>
           <span
             className="inline-flex cursor-pointer items-center gap-1.5 text-sm text-primary"
-            onClick={() => setShowAllLitellm(!showAllLitellm)}
+            onClick={() => void setShowAllLitellm(!showAllLitellm)}
           >
             {showAllLitellm ? (
               <>Show less</>
@@ -78,7 +96,7 @@ const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardr
         </p>
         <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4">
           {(showAllLitellm ? litellmCards : litellmCards.slice(0, CARDS_PER_ROW * VISIBLE_ROWS)).map((card) => (
-            <GuardrailCard key={card.id} card={card} onClick={() => setSelectedCard(card)} />
+            <GuardrailCard key={card.id} card={card} onClick={() => openCard(card.id)} />
           ))}
         </div>
       </div>
@@ -90,7 +108,7 @@ const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardr
         </p>
         <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4">
           {partnerCards.map((card) => (
-            <GuardrailCard key={card.id} card={card} onClick={() => setSelectedCard(card)} />
+            <GuardrailCard key={card.id} card={card} onClick={() => openCard(card.id)} />
           ))}
         </div>
       </div>

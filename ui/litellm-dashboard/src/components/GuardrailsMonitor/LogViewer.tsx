@@ -1,13 +1,20 @@
 import { CircleCheck, ChevronDown, MinusCircle, TriangleAlert, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import moment from "moment";
-import React, { useState } from "react";
+import React, { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { uiSpendLogsCall } from "@/components/networking";
 import { LogDetailsDrawer } from "@/components/view_logs/LogDetailsDrawer";
 import type { LogEntry as ViewLogsLogEntry } from "@/components/view_logs/columns";
 import type { LogEntry } from "./mockData";
+import {
+  LOG_FILTERS,
+  LOG_SAMPLE_SIZES,
+  type LogFilter,
+  type LogViewerState,
+  useLocalLogViewerState,
+} from "./useLogViewerState";
 
 const actionConfig: Record<
   "blocked" | "passed" | "flagged" | "not_run",
@@ -45,13 +52,14 @@ const actionConfig: Record<
 
 interface LogViewerProps {
   guardrailName?: string;
-  filterAction?: "all" | "blocked" | "passed" | "flagged";
+  filterAction?: LogFilter;
   logs?: LogEntry[];
   logsLoading?: boolean;
   totalLogs?: number;
   accessToken?: string | null;
   startDate?: string;
   endDate?: string;
+  viewState?: LogViewerState;
 }
 
 export function LogViewer({
@@ -63,17 +71,22 @@ export function LogViewer({
   accessToken = null,
   startDate = "",
   endDate = "",
+  viewState,
 }: LogViewerProps) {
-  const [sampleSize, setSampleSize] = useState(10);
-  const [activeFilter, setActiveFilter] = useState<string>(filterAction);
-  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const localState = useLocalLogViewerState(filterAction);
+  const {
+    filter: activeFilter,
+    setFilter: setActiveFilter,
+    sampleSize,
+    setSampleSize,
+    requestId: selectedRequestId,
+    setRequestId: setSelectedRequestId,
+  } = viewState ?? localState;
+  const drawerOpen = selectedRequestId !== null;
 
   const filteredLogs = logs.filter((log) => activeFilter === "all" || log.action === activeFilter);
   const displayLogs = filteredLogs.slice(0, sampleSize);
   const total = totalLogs ?? logs.length;
-  const sampleSizes = [10, 50, 100];
-  const filters: Array<"all" | "blocked" | "flagged" | "passed"> = ["all", "blocked", "flagged", "passed"];
 
   const startTime = startDate
     ? moment(startDate).utc().format("YYYY-MM-DD HH:mm:ss")
@@ -96,21 +109,15 @@ export function LogViewer({
       });
       return res as { data: ViewLogsLogEntry[]; total: number };
     },
-    enabled: Boolean(accessToken && selectedRequestId && drawerOpen),
+    enabled: Boolean(accessToken && selectedRequestId),
   });
 
   const selectedLog: ViewLogsLogEntry | null =
     fullLogResponse?.data?.find((log) => log.request_id === selectedRequestId) ?? fullLogResponse?.data?.[0] ?? null;
 
-  const handleLogClick = (log: LogEntry) => {
-    setSelectedRequestId(log.id);
-    setDrawerOpen(true);
-  };
-
-  const handleCloseDrawer = () => {
-    setDrawerOpen(false);
-    setSelectedRequestId(null);
-  };
+  useEffect(() => {
+    if (fullLogResponse && !selectedLog) setSelectedRequestId(null);
+  }, [fullLogResponse, selectedLog, setSelectedRequestId]);
 
   return (
     <div className="bg-card border border-border rounded-lg">
@@ -131,11 +138,12 @@ export function LogViewer({
           {logs.length > 0 && (
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-1">
-                {filters.map((f) => (
+                {LOG_FILTERS.map((f) => (
                   <Button
                     key={f}
                     variant={activeFilter === f ? "default" : "outline"}
                     size="sm"
+                    aria-pressed={activeFilter === f}
                     onClick={() => setActiveFilter(f)}
                   >
                     {f.charAt(0).toUpperCase() + f.slice(1)}
@@ -145,11 +153,12 @@ export function LogViewer({
               <div className="h-4 w-px bg-border" />
               <div className="flex items-center gap-1">
                 <span className="text-xs text-muted-foreground mr-1">Sample:</span>
-                {sampleSizes.map((size) => (
+                {LOG_SAMPLE_SIZES.map((size) => (
                   <Button
                     key={size}
                     variant={sampleSize === size ? "default" : "outline"}
                     size="sm"
+                    aria-pressed={sampleSize === size}
                     onClick={() => setSampleSize(size)}
                   >
                     {size}
@@ -180,7 +189,7 @@ export function LogViewer({
               <button
                 key={log.id}
                 type="button"
-                onClick={() => handleLogClick(log)}
+                onClick={() => setSelectedRequestId(log.id)}
                 className="w-full text-left px-4 py-3 hover:bg-accent transition-colors flex items-start gap-3"
               >
                 <ActionIcon className={`w-4 h-4 mt-0.5 shrink-0 ${config.color}`} />
@@ -208,7 +217,7 @@ export function LogViewer({
 
       <LogDetailsDrawer
         open={drawerOpen}
-        onClose={handleCloseDrawer}
+        onClose={() => setSelectedRequestId(null)}
         logEntry={selectedLog}
         accessToken={accessToken}
         allLogs={selectedLog ? [selectedLog] : []}

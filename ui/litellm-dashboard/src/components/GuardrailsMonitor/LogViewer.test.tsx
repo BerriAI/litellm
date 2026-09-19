@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../tests/test-utils";
 import type { LogEntry as SpendLogEntry } from "@/components/view_logs/columns";
 import { LogViewer } from "./LogViewer";
+import type { LogViewerState } from "./useLogViewerState";
 
 vi.mock("@/components/networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/networking")>();
@@ -14,14 +15,17 @@ vi.mock("@/components/networking", async (importOriginal) => {
 vi.mock("@/components/view_logs/LogDetailsDrawer", () => ({
   LogDetailsDrawer: function LogDetailsDrawerMock({
     open,
+    onClose,
     logEntry,
   }: {
     open: boolean;
+    onClose: () => void;
     logEntry?: { request_id: string } | null;
   }) {
     return (
       <div data-testid="log-details-drawer" data-log-id={logEntry?.request_id ?? ""}>
         {open ? "open" : "closed"}
+        <button onClick={onClose}>close drawer</button>
       </div>
     );
   },
@@ -106,5 +110,122 @@ describe("GuardrailsMonitor LogViewer not_run rows", () => {
     expect(within(row).getByText("Not run")).toHaveClass("text-muted-foreground");
     expect(within(row).queryByText("Passed")).not.toBeInTheDocument();
     expect(within(row).queryByText("Blocked")).not.toBeInTheDocument();
+  });
+});
+
+describe("GuardrailsMonitor LogViewer view state", () => {
+  const logs = [
+    { id: "log-passed", timestamp: "2026-09-02 09:50:13", action: "passed" as const, input_snippet: "safe prompt" },
+    { id: "log-blocked", timestamp: "2026-09-02 09:51:13", action: "blocked" as const, input_snippet: "bad prompt" },
+  ];
+  const makeViewState = (overrides: Partial<LogViewerState> = {}): LogViewerState => ({
+    filter: "all",
+    setFilter: vi.fn(),
+    sampleSize: 10,
+    setSampleSize: vi.fn(),
+    requestId: null,
+    setRequestId: vi.fn(),
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    vi.mocked(uiSpendLogsCall).mockReset();
+    vi.mocked(uiSpendLogsCall).mockResolvedValue({ data: [spendLog({ request_id: "log-blocked" })], total: 1 });
+    testQueryClient.clear();
+  });
+
+  it("shows the filter, sample size and open request that the caller passes in", () => {
+    const viewState = makeViewState({ filter: "blocked", sampleSize: 50, requestId: "log-blocked" });
+    renderWithProviders(<LogViewer logs={logs} accessToken="sk-test" viewState={viewState} />);
+
+    expect(screen.queryByText("safe prompt")).not.toBeInTheDocument();
+    expect(screen.getByText("bad prompt")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "50" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "10" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Blocked" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByTestId("log-details-drawer")).toHaveTextContent("open");
+    expect(vi.mocked(uiSpendLogsCall)).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { request_id: "log-blocked" } }),
+    );
+  });
+
+  it("reports filter, sample size, row and drawer changes to the caller instead of keeping them", async () => {
+    const user = userEvent.setup();
+    const viewState = makeViewState();
+    renderWithProviders(<LogViewer logs={logs} accessToken="sk-test" viewState={viewState} />);
+
+    await user.click(screen.getByRole("button", { name: "Blocked" }));
+    expect(viewState.setFilter).toHaveBeenCalledWith("blocked");
+    expect(screen.getByText("safe prompt")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "100" }));
+    expect(viewState.setSampleSize).toHaveBeenCalledWith(100);
+
+    await user.click(screen.getByText("bad prompt"));
+    expect(viewState.setRequestId).toHaveBeenLastCalledWith("log-blocked");
+    expect(screen.getByTestId("log-details-drawer")).toHaveTextContent("closed");
+
+    await user.click(screen.getByRole("button", { name: "close drawer" }));
+    expect(viewState.setRequestId).toHaveBeenLastCalledWith(null);
+  });
+
+  it("keeps its own filter and drawer state when the caller passes none", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<LogViewer logs={logs} accessToken="sk-test" />);
+
+    await user.click(screen.getByRole("button", { name: "Blocked" }));
+    expect(screen.queryByText("safe prompt")).not.toBeInTheDocument();
+    expect(screen.getByText("bad prompt")).toBeInTheDocument();
+
+    await user.click(screen.getByText("bad prompt"));
+    expect(screen.getByTestId("log-details-drawer")).toHaveTextContent("open");
+
+    await user.click(screen.getByRole("button", { name: "close drawer" }));
+    expect(screen.getByTestId("log-details-drawer")).toHaveTextContent("closed");
+  });
+
+  it("clears the open request when its spend log cannot be found", async () => {
+    vi.mocked(uiSpendLogsCall).mockResolvedValue({ data: [], total: 0 });
+    const viewState = makeViewState({ requestId: "missing" });
+    renderWithProviders(<LogViewer logs={logs} accessToken="sk-test" viewState={viewState} />);
+
+    await waitFor(() => expect(viewState.setRequestId).toHaveBeenCalledWith(null));
+    expect(vi.mocked(uiSpendLogsCall)).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { request_id: "missing" } }),
+    );
+  });
+
+  it("keeps the open request once its spend log is found", async () => {
+    const viewState = makeViewState({ requestId: "log-blocked" });
+    renderWithProviders(<LogViewer logs={logs} accessToken="sk-test" viewState={viewState} />);
+
+    await waitFor(() => expect(screen.getByTestId("log-details-drawer")).toHaveAttribute("data-log-id", "log-blocked"));
+    expect(viewState.setRequestId).not.toHaveBeenCalled();
+  });
+
+  it("keeps its own sample size when the caller passes no view state", async () => {
+    const user = userEvent.setup();
+    const manyLogs = Array.from({ length: 11 }, (_, i) => ({
+      id: `l-${i}`,
+      timestamp: "2026-09-02 09:50:13",
+      action: "passed" as const,
+      input_snippet: `prompt ${i}`,
+    }));
+    renderWithProviders(<LogViewer logs={manyLogs} />);
+
+    expect(screen.getByText("Showing 10 of 11 entries")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "50" }));
+
+    expect(screen.getByText("Showing 11 of 11 entries")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "50" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("starts on the filter given by filterAction when the caller passes no view state", () => {
+    renderWithProviders(<LogViewer logs={logs} filterAction="passed" />);
+
+    expect(screen.getByText("safe prompt")).toBeInTheDocument();
+    expect(screen.queryByText("bad prompt")).not.toBeInTheDocument();
   });
 });
