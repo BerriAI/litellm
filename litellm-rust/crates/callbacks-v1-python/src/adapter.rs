@@ -171,7 +171,10 @@ impl V1PythonLifecycle {
             else {
                 continue;
             };
-            let request = to_py(py, &RequestFacts::new(&current, &context))?;
+            let request = to_py(
+                py,
+                &RequestFacts::new(&current, &context, self.surface.redact_payloads),
+            )?;
             let result = handler.call(py, request)?;
             if handler.is_async() {
                 self.pending = Some(Pending::Intercept {
@@ -183,8 +186,11 @@ impl V1PythonLifecycle {
             }
             current = Box::new(self.apply_patch(py, index, *current, result.unbind())?);
         }
-        let envelope =
-            self.envelope(Event::RequestSending(RequestFacts::new(&current, &context)))?;
+        let envelope = self.envelope(Event::RequestSending(RequestFacts::new(
+            &current,
+            &context,
+            self.surface.redact_payloads,
+        )))?;
         self.observe(py, envelope, 0, Continuation::Wire(current))
     }
 
@@ -269,18 +275,29 @@ impl PythonLifecycle for V1PythonLifecycle {
         match event {
             LifecycleEvent::Machine(MachineEvent::ResponseReceived { raw }) => {
                 let envelope = self.envelope(Event::ResponseReceived {
-                    body: raw.body.clone(),
+                    body: if self.surface.redact_payloads {
+                        litellm_callbacks_v1::REDACTED.to_string()
+                    } else {
+                        raw.body.clone()
+                    },
                 })?;
                 self.observe(py, envelope, 0, Continuation::Done)
             }
             LifecycleEvent::Succeeded { timing, response } => {
-                let projected = V1Python::ProjectResponse
-                    .call(py, (response,))
-                    .and_then(|value| from_py::<Value>(&value));
-                let (response, response_error) = match projected {
-                    Ok(response) => (response, None),
-                    Err(error) if is_cancellation(py, &error) => return Err(error),
-                    Err(error) => (Value::Null, Some(error.to_string())),
+                let (response, response_error) = if self.surface.redact_payloads {
+                    (
+                        Value::String(litellm_callbacks_v1::REDACTED.to_string()),
+                        None,
+                    )
+                } else {
+                    let projected = V1Python::ProjectResponse
+                        .call(py, (response,))
+                        .and_then(|value| from_py::<Value>(&value));
+                    match projected {
+                        Ok(response) => (response, None),
+                        Err(error) if is_cancellation(py, &error) => return Err(error),
+                        Err(error) => (Value::Null, Some(error.to_string())),
+                    }
                 };
                 let envelope = self.envelope(Event::CallSucceeded {
                     timing: timing.into(),

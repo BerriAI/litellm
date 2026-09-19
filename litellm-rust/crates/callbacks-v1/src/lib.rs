@@ -13,3 +13,4 @@ pub use envelope::{
 };
 pub use patch::{HeaderPatch, PatchError, WirePatch, apply};
 pub use policy::{ExecutionMode, HandlerSelection, select_handler};
+pub use redact::REDACTED;

@@ -30,6 +30,7 @@ const SURFACE: CallSurface = CallSurface {
     input_description: "OCR document processing",
     stream: None,
     updates_logging_before_preparation: true,
+    redact_payloads: true,
 };
 
 const ASYNC_SURFACE: CallSurface = CallSurface {

@@ -92,14 +92,18 @@ pub struct RequestFacts {
 }
 
 impl RequestFacts {
-    pub fn new(wire: &WireRequest, context: &RequestContext) -> Self {
+    pub fn new(wire: &WireRequest, context: &RequestContext, redact_payloads: bool) -> Self {
         Self {
             model: context.model.clone(),
             custom_llm_provider: context.custom_llm_provider.clone(),
             optional_params: redact::params(&context.optional_params, &context.secret_fields),
             url: wire.url.clone(),
             headers: redact::headers(&wire.headers),
-            body: wire.body.clone(),
+            body: if redact_payloads {
+                Value::String(redact::REDACTED.to_string())
+            } else {
+                wire.body.clone()
+            },
         }
     }
 }
@@ -296,7 +300,7 @@ mod tests {
             api_key: Some(SecretValue::new(sentinel.to_string())),
         };
         assert!(
-            !serde_json::to_string(&RequestFacts::new(&wire, &context))
+            !serde_json::to_string(&RequestFacts::new(&wire, &context, false))
                 .unwrap()
                 .contains(sentinel)
         );

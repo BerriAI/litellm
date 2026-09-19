@@ -45,8 +45,23 @@ fn subscriber(
 }
 
 fn lifecycle(subscribers: Vec<Subscriber>, asynchronous: bool) -> V1PythonLifecycle {
+    lifecycle_with(subscribers, asynchronous, false)
+}
+
+fn redacting_lifecycle(subscribers: Vec<Subscriber>, asynchronous: bool) -> V1PythonLifecycle {
+    lifecycle_with(subscribers, asynchronous, true)
+}
+
+fn lifecycle_with(
+    subscribers: Vec<Subscriber>,
+    asynchronous: bool,
+    redact_payloads: bool,
+) -> V1PythonLifecycle {
     V1PythonLifecycle::new(
-        V1PythonSurface { call_type: "ocr" },
+        V1PythonSurface {
+            call_type: "ocr",
+            redact_payloads,
+        },
         subscribers,
         asynchronous,
     )
@@ -100,7 +115,7 @@ response = {'id': 'response'}
             Some(("observe", false)),
             None,
         );
-        let mut adapter = lifecycle(vec![observer], false);
+        let mut adapter = redacting_lifecycle(vec![observer], false);
         let arguments = PyDict::new(py);
         arguments.set_item("litellm_call_id", "call-123").unwrap();
         let LifecycleStep::Arguments(returned) =
@@ -166,7 +181,11 @@ response = {'id': 'response'}
                 .collect::<Vec<_>>(),
             [0, 1, 2, 3]
         );
-        assert!(!serde_json::to_string(&seen).unwrap().contains(secret));
+        let serialized = serde_json::to_string(&seen).unwrap();
+        assert!(!serialized.contains(secret));
+        assert!(!serialized.contains("hello"));
+        assert!(!serialized.contains("raw response"));
+        assert!(!serialized.contains("\"id\":\"response\""));
     });
 }
 

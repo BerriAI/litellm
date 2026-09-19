@@ -8,6 +8,7 @@ use crate::subscribers::snapshot;
 #[derive(Clone, Copy, Debug)]
 pub struct V1PythonSurface {
     pub call_type: &'static str,
+    pub redact_payloads: bool,
 }
 
 impl V1PythonLifecycle {

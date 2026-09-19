@@ -20,6 +20,7 @@ pub(crate) struct CallSurface {
     /// streams.
     pub stream: Option<PassThroughStream>,
     pub updates_logging_before_preparation: bool,
+    pub redact_payloads: bool,
 }
 
 impl CallSurface {
@@ -35,6 +36,7 @@ impl CallSurface {
     fn v1(self) -> V1PythonSurface {
         V1PythonSurface {
             call_type: self.call_type,
+            redact_payloads: self.redact_payloads,
         }
     }
 }

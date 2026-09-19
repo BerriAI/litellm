@@ -20,6 +20,7 @@ const SURFACE: CallSurface = CallSurface {
         endpoint_type: "anthropic",
     }),
     updates_logging_before_preparation: false,
+    redact_payloads: false,
 };
 
 fn run_messages(
