@@ -706,6 +706,30 @@ def test_batch_upload_for_a_litellm_executed_model_is_kept_by_litellm(
     assert kwargs["purpose"] == "batch"
 
 
+@pytest.mark.parametrize(
+    "headers, form",
+    [({"x-litellm-model": "my-vllm"}, {}), ({}, {"target_model_names": "my-vllm"})],
+    ids=["x-litellm-model header", "target_model_names form field"],
+)
+def test_batch_upload_for_a_litellm_executed_model_the_key_cannot_call_is_refused_before_the_server_is_probed(
+    batch_upload_seams, headers: dict[str, str], form: dict[str, str]
+):
+    import litellm.proxy.proxy_server as ps
+
+    stored, provider_upload, upstream_files_route = batch_upload_seams
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="restricted-user", models=["gemini-2.0-flash"]
+    )
+
+    response = _upload_batch_file(headers, form)
+
+    assert response.status_code == 403, response.text
+    assert "my-vllm" in response.text
+    assert upstream_files_route.call_count == 0
+    stored.assert_not_awaited()
+    provider_upload.assert_not_awaited()
+
+
 def test_batch_upload_naming_an_executed_and_a_provider_model_is_rejected(batch_upload_seams):
     stored, provider_upload, _ = batch_upload_seams
 
