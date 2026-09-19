@@ -203,15 +203,22 @@ def _str_field(source: Mapping[str, object], key: str) -> str:
 
 
 def _accumulated_tool_input(partial_json: Sequence[str]) -> object:
+    """Assemble a tool block's streamed arguments.
+
+    A stream cut mid-block leaves unparseable JSON. Returning an empty input there would
+    drop whatever the model had already emitted, and a caller can force exactly that by
+    prompting for restricted content inside a tool argument and letting max_tokens truncate
+    it: the text would reach the client in the replayed frames having never been scanned.
+    So the raw fragment is carried under ``_raw`` instead, keeping the block a well-formed
+    object while leaving the text visible to whatever inspects the assembled body.
+    """
     joined: Final = "".join(partial_json)
     if not joined:
         return {}
     try:
         return json.loads(joined)
     except json.JSONDecodeError:
-        # A stream cut mid-block leaves unparseable JSON; an empty input keeps the block
-        # well-formed for the scan instead of failing the whole assembly.
-        return {}
+        return {"_raw": joined}
 
 
 @dataclass(frozen=True, slots=True)

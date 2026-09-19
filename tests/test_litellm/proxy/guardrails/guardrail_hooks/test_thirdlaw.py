@@ -1256,6 +1256,83 @@ async def test_streaming_sampled_interim_block_terminates_stream():
         await agen.__anext__()
 
 
+def _truncated_tool_use_sse_frames() -> list[bytes]:
+    """A tool_use block whose argument JSON was cut off by max_tokens.
+
+    The secret only ever exists inside the unparseable fragment, so if assembly drops it the
+    scan never sees it while the original frames still reach the client.
+    """
+    events = [
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_tool",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-5",
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 9, "output_tokens": 0},
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}},
+            },
+        ),
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"query": "sk-live-TRUNC'},
+            },
+        ),
+        (
+            "message_delta",
+            {"type": "message_delta", "delta": {"stop_reason": "max_tokens"}, "usage": {"output_tokens": 5}},
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+    return [f"event: {name}\ndata: {json.dumps(body)}\n\n".encode() for name, body in events]
+
+
+async def test_a_truncated_tool_argument_still_reaches_the_scan():
+    """Text the model emitted inside a tool argument reaches the client in the replayed frames,
+    so dropping it from the assembled body would let a caller pick truncation as a bypass."""
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter(_truncated_tool_use_sse_frames()),
+            request_data=_request_data(),
+        )
+    )
+    assert "sk-live-TRUNC" in json.dumps(_sent_payload(g)["response_body"])
+
+
+async def test_a_truncated_tool_argument_can_still_be_blocked():
+    """The scan seeing the text is only half the fix; the block decision has to land."""
+    g = _make_guardrail(decisions=[_decision_response({"action": "block", "message": "secret in tool args"})])
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter(_truncated_tool_use_sse_frames()),
+            request_data=_request_data(),
+        )
+    )
+    blob = b"".join(item for item in out if isinstance(item, bytes))
+    assert b"secret in tool args" in blob
+    assert b"sk-live-TRUNC" not in blob
+
+
 def _anthropic_sse_frames() -> list[bytes]:
     events = [
         (
