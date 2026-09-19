@@ -20,7 +20,7 @@ use crate::{
     DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger,
     deferred::{PendingLogging, PendingSuccess},
     finalize, is_internal_call,
-    legacy_python::Streaming,
+    python::Streaming,
     prepare, setup,
 };
 

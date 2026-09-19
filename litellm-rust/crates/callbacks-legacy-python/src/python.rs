@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use strum::{IntoStaticStr, VariantArray};
 
-const MODULE: &str = "litellm.rust_bridge.legacy_callbacks";
+const MODULE: &str = "litellm.rust_bridge.callbacks_legacy_python";
 
 /// Every litellm Python internal the native call still borrows, grouped by the subsystem it
 /// belongs to. Rust drives the call; these exist only so behaviour that Python owns today
@@ -9,7 +9,7 @@ const MODULE: &str = "litellm.rust_bridge.legacy_callbacks";
 /// A group is deleted once Rust owns that subsystem, so this enum only shrinks. Calling a
 /// user's own callback is not borrowing and does not belong here.
 ///
-/// `litellm/rust_bridge/legacy_callbacks.py` is the only Python module behind it, and
+/// `litellm/rust_bridge/callbacks_legacy_python.py` is the only Python module behind it, and
 /// `python_contract.json` pins each function's parameters on both sides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LegacyPython {
