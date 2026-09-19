@@ -55,8 +55,6 @@ class PromptGuardHTTPView(TypedDict):
 
 
 class _CustomGuardrailOptions(ExtraItemsTypedDict, total=False, extra_items=object):
-    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
-
     supported_event_hooks: ReadOnly[list[GuardrailEventHooks] | None]
 
 

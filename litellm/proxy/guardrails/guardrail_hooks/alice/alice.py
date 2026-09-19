@@ -92,7 +92,7 @@ class AliceVerdict(TypedDict):
 
 
 class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
-    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+    pass
 
 
 class AliceGuardrailMissingSecrets(Exception):

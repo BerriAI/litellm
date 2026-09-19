@@ -142,7 +142,7 @@ def _request_trace_links(context: Context | None) -> tuple[Link, ...] | None:
 
 
 class _CustomLoggerOptions(TypedDict, total=False, extra_items=object):
-    """Keyword arguments forwarded untouched to ``CustomLogger`` and ``OpenTelemetryV2Config``."""
+    pass
 
 
 class _LLMCallSpan:
