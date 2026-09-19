@@ -60,6 +60,13 @@ TQ007   A module global that a conftest saves before every test and restores aft
         names are read from the keys the conftest assigns directly and from whatever the
         save loop iterates, including a module-level tuple or dict it names rather than
         spells out.
+TQ009   A child interpreter spawned as `subprocess.run([sys.executable, ...])` without
+        `-I`/`-P` as its first flag. Without isolation the child's sys.path leads with
+        the working directory, so a source checkout shadows the installed package and
+        the child tests a different `litellm` than the parent imported -- TQ003 is the
+        same working-directory hazard seen from the child's side. Use
+        tests.test_litellm_rust.support.child_interpreter.run_child_interpreter, which
+        also asserts the child resolved the same `litellm.__file__` as the parent.
 
 Every rule is suppressible with `# test-quality-ok: <reason>` on the reported
 line, following the repo's `*-ok: <reason>` convention. A suppression without a
@@ -139,6 +146,9 @@ ENVIRON_MAPPINGS: Final = frozenset(("os.environ", "environ"))
 SKIP_CALLS: Final = frozenset(("pytest.skip", "skip"))
 CONFTEST_NAME: Final = "conftest.py"
 SDK_MODULE: Final = "litellm"
+
+SUBPROCESS_SPAWNS: Final = frozenset(("run", "Popen", "check_output", "check_call", "call"))
+INTERPRETER_ISOLATION_FLAGS: Final = frozenset(("-I", "-P"))
 
 CREDENTIAL_NAME_RE: Final = re.compile(
     r"(?:API_KEY|_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|DATABASE_URL|ACCESS_KEY_ID)$"
@@ -709,6 +719,35 @@ def _snapshotted_names(tree: ast.Module) -> Iterator[tuple[str, int]]:
                 yield from _string_members(iterable)
 
 
+def iter_child_interpreter_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and node.args):
+            continue
+        if _dotted_name(node.func).rsplit(".", 1)[-1] not in SUBPROCESS_SPAWNS:
+            continue
+        argv: Final = node.args[0]
+        if not isinstance(argv, (ast.List, ast.Tuple)) or not argv.elts:
+            continue
+        if _dotted_name(argv.elts[0]) != "sys.executable":
+            continue
+        isolated: Final = (
+            len(argv.elts) > 1
+            and isinstance(argv.elts[1], ast.Constant)
+            and argv.elts[1].value in INTERPRETER_ISOLATION_FLAGS
+        )
+        if isolated:
+            continue
+        yield Violation(
+            path,
+            node.lineno,
+            "TQ009",
+            "child interpreter spawned without -I/-P; the working directory lands on sys.path "
+            "and a source checkout can shadow the installed package, use "
+            "tests.test_litellm_rust.support.child_interpreter.run_child_interpreter or pass -I "
+            f"(suppress: `# {SUPPRESSION_TOKEN}: <reason>`)",
+        )
+
+
 def iter_conftest_inventory_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
     if path.name != CONFTEST_NAME:
         return
@@ -746,6 +785,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
             *iter_credential_skip_violations(path, tree),
             *iter_conftest_inventory_violations(path, tree),
             *iter_internal_patch_violations(path, tree),
+            *iter_child_interpreter_violations(path, tree),
         )
         if violation.line not in skip
     )

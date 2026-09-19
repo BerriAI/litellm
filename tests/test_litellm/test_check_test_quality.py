@@ -737,3 +737,28 @@ def test_a_fanned_out_run_reports_each_generated_file_exactly_once(tmp_path):
     assert len(reported) == len(paths)
     assert len({line.split(":")[0] for line in reported}) == len(paths)
     assert all(" TQ001 " in line for line in reported)
+
+
+def test_sys_executable_child_without_isolation_flag_is_flagged(tmp_path):
+    source = 'import subprocess, sys\nsubprocess.run([sys.executable, "-c", "pass"])\n'
+    assert _codes(tmp_path, source) == ["TQ009"]
+
+
+def test_sys_executable_child_with_dash_i_is_clean(tmp_path):
+    source = 'import subprocess, sys\nsubprocess.run([sys.executable, "-I", "-c", "pass"])\n'
+    assert _codes(tmp_path, source) == []
+
+
+def test_sys_executable_child_with_dash_p_is_clean(tmp_path):
+    source = 'import subprocess, sys\nsubprocess.run([sys.executable, "-P", "-c", "pass"])\n'
+    assert _codes(tmp_path, source) == []
+
+
+def test_non_interpreter_subprocess_call_is_untouched(tmp_path):
+    source = 'import subprocess\nsubprocess.run(["python", "-c", "pass"])\n'
+    assert _codes(tmp_path, source) == []
+
+
+def test_popen_sys_executable_tuple_is_flagged(tmp_path):
+    source = 'import subprocess, sys\nsubprocess.Popen((sys.executable, "script.py"))\n'
+    assert _codes(tmp_path, source) == ["TQ009"]
