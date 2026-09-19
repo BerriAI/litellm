@@ -45,7 +45,7 @@ interface WebSearchInterceptionFormValues {
   max_agentic_loops: number | null;
 }
 
-const NO_STORED_VALUES: WebSearchInterceptionStoredValues = {};
+const NO_STORED_VALUES: Readonly<Record<string, unknown>> = {};
 
 const MAX_AGENTIC_LOOPS_MIN = 1;
 
@@ -68,6 +68,16 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
 
 const parseLoops = (raw: string, rawAsNumber: number): number | null =>
   raw === "" || Number.isNaN(rawAsNumber) ? null : rawAsNumber;
+
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((entry) => typeof entry === "string");
+
+const toStoredValues = (raw: Readonly<Record<string, unknown>>): WebSearchInterceptionStoredValues => ({
+  enabled: typeof raw.enabled === "boolean" ? raw.enabled : undefined,
+  enabled_providers: isStringArray(raw.enabled_providers) ? raw.enabled_providers : undefined,
+  search_tool_name: typeof raw.search_tool_name === "string" ? raw.search_tool_name : null,
+  max_agentic_loops: typeof raw.max_agentic_loops === "number" ? raw.max_agentic_loops : null,
+});
 
 const toFormValues = (values: WebSearchInterceptionStoredValues): WebSearchInterceptionFormValues => ({
   enabled: values.enabled ?? false,
@@ -282,7 +292,7 @@ export default function WebSearchInterceptionSettings() {
     );
   }
 
-  const values: WebSearchInterceptionStoredValues = data?.values ?? NO_STORED_VALUES;
+  const values: WebSearchInterceptionStoredValues = toStoredValues(data?.values ?? NO_STORED_VALUES);
 
   return (
     <div className="w-full">

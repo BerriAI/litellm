@@ -127,6 +127,29 @@ describe("WebSearchInterceptionSettings", () => {
     expect(mockMutate.mock.calls[0][0]).toEqual(ENABLED_PAYLOAD);
   });
 
+  it("ignores stored values whose types do not match the field", async () => {
+    vi.mocked(useWebSearchInterceptionSettings).mockReturnValue({
+      data: {
+        ...storedSettings,
+        values: {
+          enabled: "yes",
+          enabled_providers: "bedrock",
+          search_tool_name: 7,
+          max_agentic_loops: "3",
+        },
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    } as any);
+
+    await renderSettings();
+
+    expect(screen.getByRole("switch")).not.toBeChecked();
+    expect(screen.getByLabelText(/max agentic loops/i)).toHaveValue(null);
+    expect(screen.queryByText("bedrock")).not.toBeInTheDocument();
+  });
+
   it("reseeds the form when the stored settings change underneath it", async () => {
     vi.mocked(useWebSearchInterceptionSettings).mockReturnValue({
       data: { ...storedSettings, values: { ...storedSettings.values, max_agentic_loops: 3 } },
