@@ -636,9 +636,9 @@ async def test_update_refuses_a_config_owned_coordination_redis_block(monkeypatc
     from_file = {"coordination_redis": {"host": "yaml-redis.example.com", "port": 6379}}
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch("litellm.proxy.proxy_server.proxy_config", _real_proxy_config(from_file)),
-        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+        patch("litellm.proxy.proxy_server.proxy_config", _real_proxy_config(from_file)),  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
     ):
         with pytest.raises(HTTPException) as refused:
             await update_coordination_redis_settings(
@@ -661,10 +661,10 @@ async def test_update_still_persists_when_the_config_file_declares_no_block(monk
         return None
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch("litellm.proxy.proxy_server.proxy_config", _real_proxy_config({"master_key": "sk-1234"})),
-        patch("litellm.proxy.proxy_server.store_model_in_db", True),
-        patch(
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+        patch("litellm.proxy.proxy_server.proxy_config", _real_proxy_config({"master_key": "sk-1234"})),  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+        patch(  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
             "litellm.proxy.management_endpoints.coordination_redis_endpoints.invalidate_config_param",
             new=_capture_invalidate,
         ),
