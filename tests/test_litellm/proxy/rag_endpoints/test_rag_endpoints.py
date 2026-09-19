@@ -269,6 +269,17 @@ BEDROCK_REGISTRY_STORE = {
         "aws_secret_access_key": "registry-secret",
     },
 }
+CREDENTIALED_REGISTRY_STORE = {
+    "vector_store_id": "cred-store",
+    "custom_llm_provider": "openai",
+    "litellm_credential_name": "registry-openai",
+    "litellm_params": {},
+}
+VERTEX_REGISTRY_STORE = {
+    "vector_store_id": "projects/registry-project/locations/us-central1/ragCorpora/42",
+    "custom_llm_provider": "vertex_ai",
+    "litellm_params": {"vertex_project": "registry-project", "vertex_location": "us-central1"},
+}
 UNSUPPORTED_INGEST_PROVIDER_ERROR = (
     "Provider '{provider}' is not supported for RAG ingestion. "
     "Supported providers: openai, bedrock, gemini, s3_vectors, vertex_ai"
@@ -426,11 +437,12 @@ def test_rag_ingest_unmanaged_store_keeps_the_callers_full_config(client_interna
     assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"] == caller_config
 
 
-def test_rag_ingest_db_managed_store_keeps_the_callers_credential_name(client_internal_user):
+def test_rag_ingest_db_managed_store_drops_the_callers_credential_name(client_internal_user):
     """
-    A store synced from the database carries litellm_credential_name=None; that
-    null is the absence of a store-side value, not an override, so the credential
-    the caller named must survive the merge exactly as it did before the fix.
+    litellm_credential_name expands into api_key and api_base at ingest time, so a
+    caller naming one would point a managed store's upload at a different endpoint.
+    A store synced from the database carries litellm_credential_name=None, and that
+    null must not resurrect the caller's choice either.
     """
     aingest_patch, registry_patch = _patched_ingest_boundary(
         DB_MANAGED_STORE, {"vector_store_id": "db-store", "file_id": "file_123"}
@@ -447,9 +459,58 @@ def test_rag_ingest_db_managed_store_keeps_the_callers_credential_name(client_in
 
     assert response.status_code == 200, response.json()
     forwarded = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
-    assert forwarded["litellm_credential_name"] == "team-openai"
+    assert "litellm_credential_name" not in forwarded
     assert forwarded["custom_llm_provider"] == "openai"
     assert forwarded["ttl_days"] == 7
+
+
+def test_rag_ingest_registry_store_credential_name_beats_the_callers(client_internal_user):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        CREDENTIALED_REGISTRY_STORE, {"vector_store_id": "cred-store", "file_id": "file_123"}
+    )
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        _patched_prisma_client(None),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            **_ingest_form({"vector_store_id": "cred-store", "litellm_credential_name": "team-openai"}),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["litellm_credential_name"] == "registry-openai"
+
+
+def test_rag_ingest_registry_store_keeps_the_callers_vertex_embedding_throttle(client_internal_user):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        VERTEX_REGISTRY_STORE, {"vector_store_id": VERTEX_REGISTRY_STORE["vector_store_id"], "file_id": "file_123"}
+    )
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        _patched_prisma_client(None),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            **_ingest_form(
+                {
+                    "vector_store_id": VERTEX_REGISTRY_STORE["vector_store_id"],
+                    "max_embedding_requests_per_min": 500,
+                    "vector_db_config": {"pinecone": {"index_name": "attacker-index"}},
+                }
+            ),
+        )
+
+    assert response.status_code == 200, response.json()
+    assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"] == {
+        "vector_store_id": VERTEX_REGISTRY_STORE["vector_store_id"],
+        "custom_llm_provider": "vertex_ai",
+        "vertex_project": "registry-project",
+        "vertex_location": "us-central1",
+        "max_embedding_requests_per_min": 500,
+    }
 
 
 def test_rag_ingest_rejects_registry_store_provider_without_ingestion_support(client_internal_user):

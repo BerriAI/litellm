@@ -169,12 +169,12 @@ def _ingest_provider_error(vector_store_config: Mapping[str, object]) -> str | N
 _MANAGED_STORE_CALLER_OPTIONS: Final = frozenset(
     {
         "vector_store_id",
-        "litellm_credential_name",
         "data_source_id",
         "wait_for_ingestion",
         "ingestion_timeout",
         "custom_metadata",
         "file_description",
+        "max_embedding_requests_per_min",
     }
 )
 
