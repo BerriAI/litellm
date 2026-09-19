@@ -113,7 +113,7 @@ def test_completion_cost_uses_response_model_for_dynamic_routing(_local_model_co
 
 def test_completion_cost_strips_dated_azure_snapshot_model(_local_model_cost_map: None) -> None:
     dated_response = ModelResponse(
-        model="gpt-5.6-luna-2026-07-09",
+        model="gpt-5.6-luna-2099-01-01",
         choices=[Choices(index=0, message=Message(role="assistant", content="hi"), finish_reason="stop")],
         usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
     )

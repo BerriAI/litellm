@@ -1,11 +1,9 @@
-pub(super) use litellm_llms::custom_httpx::http_handler::{
-    has_bearer_auth, has_header, truncate_error_body,
-};
+use litellm_http::request::string_headers as shared_string_headers;
+pub(super) use litellm_http::request::{has_bearer_auth, has_header, truncate_error_body};
 use litellm_llms::{
     anthropic::experimental_pass_through::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
     azure_ai::anthropic::messages_transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
     base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig,
-    custom_httpx::http_handler::string_headers as shared_string_headers,
 };
 use serde_json::{Map, Value};
 

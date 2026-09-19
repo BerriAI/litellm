@@ -95,11 +95,11 @@ pub enum Error {
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
     #[error(transparent)]
-    Transport(#[from] crate::custom_httpx::transport::Error),
+    Transport(#[from] litellm_http::transport::Error),
     #[error(transparent)]
     Params(#[from] litellm_core_utils::params::Error),
     #[error(transparent)]
-    Headers(#[from] crate::custom_httpx::http_handler::HeaderError),
+    Headers(#[from] litellm_http::request::HeaderError),
 }
 
 impl From<litellm_host::machine::MachineFault> for Error {
@@ -125,9 +125,7 @@ impl Error {
     pub fn http_status_code(&self) -> Option<u16> {
         match self {
             Self::Provider { status, .. }
-            | Self::Transport(crate::custom_httpx::transport::Error::Http { status, .. }) => {
-                Some(*status)
-            }
+            | Self::Transport(litellm_http::transport::Error::Http { status, .. }) => Some(*status),
             error if error.is_request() => Some(400),
             _ => None,
         }

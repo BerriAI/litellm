@@ -7,13 +7,13 @@ use litellm_llms::{
     },
     base_llm::ocr::{
         error::Error,
+        handler::{self, CallHooks, OcrClient},
         transformation::{
             BaseOcrConfig, LiteLLMOcrResponse, OcrCredentialInputs, OcrDocument,
             PreparedOcrRequest, ResolvedOcrCredentials,
         },
     },
     cohere::ocr::transformation::CohereParseConfig,
-    custom_httpx::llm_http_handler::{self, CallHooks, OcrClient},
     mistral::ocr::transformation::MistralOcrConfig,
     reducto::ocr::transformation::{ReductoParseLegacyConfig, ReductoParseV3Config},
     vertex_ai::ocr::{
@@ -116,7 +116,7 @@ impl OcrConfigKind {
         request: &PreparedOcrRequest,
         hooks: &dyn CallHooks<Error>,
     ) -> Result<LiteLLMOcrResponse, Error> {
-        with_config!(self, config => llm_http_handler::ocr(&config, client, request, hooks).await)
+        with_config!(self, config => handler::ocr(&config, client, request, hooks).await)
     }
 }
 

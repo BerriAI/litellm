@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from litellm.proxy.config_resolvers.settings_rules import JsonValue
-from litellm.proxy.config_resolvers.settings_store import SettingsStore
+from litellm.proxy.config_resolvers.settings_store import ConfigOwnedKeyError, SettingsStore
 
 
 def test_settings_store_matches_plain_dict_mapping_operations() -> None:
@@ -86,11 +86,21 @@ def test_settings_store_keeps_unaffected_runtime_values_on_a_db_row_refresh() ->
 def test_settings_store_keeps_a_config_owned_key_when_a_db_row_disagrees() -> None:
     store: Final = SettingsStore("general_settings")
     store.load_yaml({"changed": "config"})
-    store.apply_runtime_values({"changed": "resolved-config"})
 
     store.apply_db_row("general_settings", {"changed": "database"})
 
     assert store["changed"] == "config"
+    assert store.source("changed") == "config"
+
+
+def test_settings_store_keeps_the_resolved_value_of_a_config_owned_key_across_a_db_row() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"changed": "os.environ/SETTING"})
+    store.apply_runtime_values({"changed": "resolved-config"})
+
+    store.apply_db_row("general_settings", {"changed": "database"})
+
+    assert store["changed"] == "resolved-config"
     assert store.source("changed") == "config"
 
 
@@ -162,11 +172,25 @@ def test_settings_store_refuses_a_runtime_write_to_a_config_owned_key() -> None:
     store: Final = SettingsStore("general_settings")
     store.load_yaml({"max_parallel_requests": 3})
 
-    store["max_parallel_requests"] = 11
-    del store["max_parallel_requests"]
+    with pytest.raises(ConfigOwnedKeyError) as write:
+        store["max_parallel_requests"] = 11
+    with pytest.raises(ConfigOwnedKeyError):
+        del store["max_parallel_requests"]
 
+    assert "max_parallel_requests" in str(write.value)
     assert store["max_parallel_requests"] == 3
     assert store.source("max_parallel_requests") == "config"
+
+
+def test_settings_store_accepts_a_write_that_does_not_change_a_config_owned_value() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"master_key": "os.environ/MASTER_KEY"})
+    store.apply_runtime_values({"master_key": "sk-resolved"})
+
+    store["master_key"] = "sk-resolved"
+
+    assert store["master_key"] == "sk-resolved"
+    assert store.source("master_key") == "config"
 
 
 @pytest.mark.timeout(10)
@@ -282,3 +306,12 @@ def test_settings_store_starts_with_an_unset_source() -> None:
     store: Final = SettingsStore("general_settings")
 
     assert store.source("unknown") == "unset"
+
+
+def test_settings_store_still_accepts_a_write_to_a_key_the_config_does_not_own() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"allowed_ips": ["1.2.3.4"]})
+
+    store["max_parallel_requests"] = 7
+
+    assert store["max_parallel_requests"] == 7

@@ -265,7 +265,7 @@ fn rejects_non_string_extra_headers() {
     call.extra_headers = Some(Map::from_iter([("x-trace".to_string(), json!(7))]));
     assert_eq!(
         decline(call),
-        Error::Headers(litellm_llms::custom_httpx::http_handler::HeaderError {
+        Error::Headers(litellm_http::request::HeaderError {
             context: "chat completions",
             name: "x-trace".to_string(),
             actual: "number",
@@ -771,10 +771,7 @@ mod round_trip {
         assert!(
             matches!(
                 err,
-                Error::Transport(litellm_llms::custom_httpx::transport::Error::Http {
-                    status: 429,
-                    ..
-                })
+                Error::Transport(litellm_http::transport::Error::Http { status: 429, .. })
             ),
             "expected a 429, got {err:?}"
         );
@@ -801,7 +798,7 @@ mod round_trip {
         assert!(
             matches!(
                 err,
-                Error::Transport(litellm_llms::custom_httpx::transport::Error::Connect(_))
+                Error::Transport(litellm_http::transport::Error::Connect(_))
             ),
             "expected a pre-send connect failure, got {err:?}"
         );
@@ -825,16 +822,11 @@ mod round_trip {
         }
         // An upstream status is already unambiguous, so it survives intact.
         assert!(matches!(
-            as_response_error(Error::Transport(
-                litellm_llms::custom_httpx::transport::Error::Http {
-                    status: 500,
-                    body: "boom".to_string()
-                }
-            )),
-            Error::Transport(litellm_llms::custom_httpx::transport::Error::Http {
+            as_response_error(Error::Transport(litellm_http::transport::Error::Http {
                 status: 500,
-                ..
-            })
+                body: "boom".to_string()
+            })),
+            Error::Transport(litellm_http::transport::Error::Http { status: 500, .. })
         ));
     }
 }
