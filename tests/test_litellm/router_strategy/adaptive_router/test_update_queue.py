@@ -81,6 +81,15 @@ async def test_flush_state_sums_correctly(queue, mock_prisma):
 
 
 @pytest.mark.asyncio
+async def test_flush_state_floors_create_shapes(queue, mock_prisma):
+    await queue.add_state_delta("r1", "general", "gpt-4", 0.0, 1.0)
+    await queue.flush_state_to_db(mock_prisma)
+    call = mock_prisma.db.litellm_adaptiverouterstate.upsert.call_args
+    assert call.kwargs["data"]["create"]["alpha"] > 0.0
+    assert call.kwargs["data"]["create"]["beta"] > 0.0
+
+
+@pytest.mark.asyncio
 async def test_flush_session_drains_aggregator(queue, mock_prisma):
     await queue.add_session_state("s1", "r1", "gpt-4", {"classified_type": "general"})
     n = await queue.flush_session_to_db(mock_prisma)

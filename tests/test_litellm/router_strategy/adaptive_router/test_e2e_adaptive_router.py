@@ -99,9 +99,9 @@ async def test_pick_record_flush_full_cycle():
     assert n_state == 1
     assert n_session == 1
     state_call = prisma.db.litellm_adaptiverouterstate.upsert.call_args
-    # satisfaction signal -> +1 alpha, no existing row -> create.alpha == 1.0
+    # satisfaction signal -> +1 alpha, no existing row -> both Beta shapes stay positive
     assert state_call.kwargs["data"]["create"]["alpha"] >= 1.0
-    assert state_call.kwargs["data"]["create"]["beta"] == 0.0
+    assert state_call.kwargs["data"]["create"]["beta"] > 0.0
     assert state_call.kwargs["data"]["create"]["total_samples"] == 1
 
     session_call = prisma.db.litellm_adaptiveroutersession.upsert.call_args
@@ -182,7 +182,7 @@ async def test_failure_signal_increments_beta_after_flush():
     assert n_state == 1
     state_call = prisma.db.litellm_adaptiverouterstate.upsert.call_args
     assert state_call.kwargs["data"]["create"]["beta"] >= 1.0
-    assert state_call.kwargs["data"]["create"]["alpha"] == 0.0
+    assert state_call.kwargs["data"]["create"]["alpha"] > 0.0
 
 
 @pytest.mark.asyncio
