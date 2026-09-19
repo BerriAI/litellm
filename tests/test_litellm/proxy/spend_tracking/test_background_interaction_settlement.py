@@ -17,6 +17,7 @@ from litellm.interactions.background_cost_polling import (
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.proxy.spend_tracking.background_interaction_settlement import (
     configure_background_interaction_settlement,
+    install_background_interaction_settlement,
     PrismaBackgroundSettlementStore,
 )
 from litellm.types.interactions import InteractionsAPIResponse
@@ -231,6 +232,19 @@ async def test_configure_installs_the_store_and_resumes_the_orphaned_rows():
         assert table.rows["interactions/bg-created-elsewhere"].claimed_by == "replica-b:1"
     finally:
         configure_background_settlement_store(previous_store)
+
+
+class _PrismaClientWithoutSettlementTable:
+    pass
+
+
+@pytest.mark.asyncio
+async def test_install_keeps_booting_when_the_settlement_table_is_unreachable():
+    previous_store = bg._STORE.store
+
+    await install_background_interaction_settlement(_PrismaClientWithoutSettlementTable())
+
+    assert bg._STORE.store is previous_store
 
 
 @dataclass(frozen=True)

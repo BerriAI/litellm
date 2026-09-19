@@ -211,7 +211,6 @@ _CARRIED_METADATA_KEYS: Final = frozenset(
         "spend_logs_metadata",
         "requester_metadata",
         "requester_ip_address",
-        "requester_custom_headers",
         "user_agent",
         "agent_id",
         "session_id",

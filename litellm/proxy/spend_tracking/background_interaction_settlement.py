@@ -169,7 +169,13 @@ async def configure_background_interaction_settlement(
 
 
 async def install_background_interaction_settlement(prisma_client: "PrismaClient") -> None:
-    await configure_background_interaction_settlement(
-        table=BackgroundInteractionSettlementRepository(prisma_client).table,
-        claimed_by=f"{socket.gethostname()}:{os.getpid()}",
-    )
+    try:
+        await configure_background_interaction_settlement(
+            table=BackgroundInteractionSettlementRepository(prisma_client).table,
+            claimed_by=f"{socket.gethostname()}:{os.getpid()}",
+        )
+    except Exception as e:  # noqa: BLE001  # a boot step must survive any DB error; billing then settles in-process as before
+        verbose_proxy_logger.warning(
+            "Durable background interaction settlement is off on this replica, so billing settles in-process only: %s",
+            e,
+        )

@@ -682,6 +682,23 @@ async def test_delete_settles_once_however_many_replicas_try():
     assert second_calls == []
 
 
+def test_create_context_carries_no_request_headers():
+    logging_obj = _logging_obj(
+        litellm_params={
+            "metadata": _create_metadata(
+                requester_custom_headers={"x-api-key": "sk-customer-secret"},
+                proxy_server_request={"headers": {"x-api-key": "sk-customer-secret"}},
+            )
+        }
+    )
+
+    carried = _create_context(logging_obj, "gemini").metadata
+
+    assert carried["user_api_key_team_id"] == "team-1"
+    assert "requester_custom_headers" not in carried
+    assert "proxy_server_request" not in carried
+
+
 @pytest.mark.asyncio
 async def test_restart_resumes_only_the_rows_no_replica_claimed():
     store = InMemoryBackgroundSettlementStore()
