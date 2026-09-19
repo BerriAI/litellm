@@ -12,7 +12,9 @@ from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+import httpx
 import pytest
+from prisma.errors import RawQueryError
 from redis.exceptions import DataError
 
 import litellm
@@ -1777,6 +1779,33 @@ async def test_update_daily_spend_keeps_failed_transactions_for_retry():
 
 
 @pytest.mark.asyncio
+async def test_update_daily_spend_drops_the_batch_whose_failure_cannot_be_resent():
+    """A reply lost after the statement was sent may already have applied, so the batch is
+    taken out of the caller's dict before the error propagates: whichever requeue the caller
+    runs afterwards, the Redis restore included, cannot send it a second time."""
+
+    def lose_the_reply() -> int:
+        raise httpx.ReadTimeout("no reply")
+
+    prisma_client = _RecordingPrisma(execute_raw=lose_the_reply)
+    daily_spend_transactions = {"user-key": _daily_txn(user_id="user-1")}
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    with pytest.raises(httpx.ReadTimeout):
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=0,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_spend_transactions,
+            entity_type="user",
+            entity_id_field="user_id",
+        )
+
+    assert daily_spend_transactions == {}
+
+
+@pytest.mark.asyncio
 async def test_commit_key_spend_updates_includes_last_active():
     """
     Test that _commit_spend_updates_to_db sets last_active alongside spend
@@ -2950,6 +2979,162 @@ async def test_failed_window_spend_commit_requeues_the_increments_and_continues_
     db_writer._flush_tool_discovery_queue.assert_called_once()
     requeued = await db_writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
     assert requeued == (transaction,)
+
+
+class _DailySpendFakeDB(_WindowSpendFakeDB):
+    """Records the daily rollup upserts it is handed and fails the ones aimed at one table."""
+
+    def __init__(self, failing_table: str | None, failure: Exception | None = None) -> None:
+        super().__init__()
+        self.failing_table = failing_table
+        self.failure = failure
+        self.execute_raw_calls: list[Statement] = []
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        if self.failing_table is not None and self.failing_table in query:
+            raise self.failure if self.failure is not None else Exception("connection reset")
+        self.execute_raw_calls.append((query, args))
+        return len(args)
+
+
+def _daily_upserts(db: _DailySpendFakeDB, table: str) -> list[Statement]:
+    return [statement for statement in db.execute_raw_calls if table in statement[0]]
+
+
+def _postgres_rejection(sqlstate: str) -> RawQueryError:
+    return RawQueryError(
+        data={"user_facing_error": {"error_code": "P2010", "meta": {"code": sqlstate, "message": "db error"}}}
+    )
+
+
+@pytest.mark.parametrize(
+    ("failure", "lands_on_the_next_tick"),
+    [
+        pytest.param(httpx.ReadTimeout("no reply"), False, id="reply lost after the statement was sent"),
+        pytest.param(httpx.ConnectError("refused"), True, id="statement never reached the database"),
+        pytest.param(_postgres_rejection("22021"), False, id="postgres refused the data itself"),
+        pytest.param(_postgres_rejection("23502"), False, id="postgres refused a constraint violation"),
+        pytest.param(_postgres_rejection("42P01"), True, id="table missing"),
+        pytest.param(_postgres_rejection("57014"), True, id="statement cancelled"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_failed_daily_spend_commit_is_requeued_only_when_the_rows_are_provably_uncommitted(
+    failure: Exception, lands_on_the_next_tick: bool
+):
+    """A lost reply means the statement may already have applied, and re-sending it stacks a
+    second increment into the same transaction (LIT-4823); a row Postgres refuses would fail
+    every tick forever. Both are dropped loudly. Every other failure left nothing committed,
+    so its rows go back on the queue and land on the next tick."""
+    db_writer = DBSpendUpdateWriter()
+    await db_writer.daily_spend_update_queue.add_update({"user-key": _daily_txn(user_id="user-1")})
+    db = _DailySpendFakeDB(failing_table="LiteLLM_DailyUserSpend", failure=failure)
+    db_writer._flush_tool_discovery_queue = AsyncMock()
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db), n_retry_times=0, proxy_logging_obj=proxy_logging_obj
+    )
+    db.failing_table = None
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db), n_retry_times=0, proxy_logging_obj=proxy_logging_obj
+    )
+
+    assert len(_daily_upserts(db, "LiteLLM_DailyUserSpend")) == (1 if lands_on_the_next_tick else 0)
+    assert db_writer.daily_spend_update_queue.update_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_failed_daily_spend_commit_drops_only_the_batch_that_was_sent():
+    """A tick holding more than one batch of 100 rows sends them one statement at a time, and
+    a reply lost on one statement says nothing about the batches after it: only the batch that
+    was on the wire is dropped, the ones never sent go back on the queue and land next tick."""
+    db_writer = DBSpendUpdateWriter()
+    await db_writer.daily_spend_update_queue.add_update(
+        {f"user-{i:03d}": _daily_txn(user_id=f"user-{i:03d}") for i in range(150)}
+    )
+    db = _DailySpendFakeDB(failing_table="LiteLLM_DailyUserSpend", failure=httpx.ReadTimeout("no reply"))
+    db_writer._flush_tool_discovery_queue = AsyncMock()
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db), n_retry_times=0, proxy_logging_obj=proxy_logging_obj
+    )
+    db.failing_table = None
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db), n_retry_times=0, proxy_logging_obj=proxy_logging_obj
+    )
+
+    (upsert,) = _daily_upserts(db, "LiteLLM_DailyUserSpend")
+    assert _row_values(upsert, "user_id") == [f"user-{i:03d}" for i in range(100, 150)]
+    assert db_writer.daily_spend_update_queue.update_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_failed_daily_spend_commit_requeues_the_rows_and_flushes_the_other_tables():
+    """With the Redis buffer off, a daily batch that failed to commit was discarded along
+    with the tick's exception, so the Usage page stayed short of LiteLLM_SpendLogs for good.
+    The uncommitted rows must go back on their queue and land on the next tick, and the
+    other daily tables must still be flushed on the failing tick."""
+    db_writer = DBSpendUpdateWriter()
+    await db_writer.daily_spend_update_queue.add_update({"user-key": _daily_txn(user_id="user-1")})
+    team_txn = {key: value for key, value in _daily_txn().items() if key != "user_id"} | {"team_id": "team-1"}
+    await db_writer.daily_team_spend_update_queue.add_update({"team-key": team_txn})
+    db = _DailySpendFakeDB(failing_table="LiteLLM_DailyUserSpend")
+    db_writer._flush_tool_discovery_queue = AsyncMock()
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db), n_retry_times=0, proxy_logging_obj=proxy_logging_obj
+    )
+
+    assert _daily_upserts(db, "LiteLLM_DailyUserSpend") == []
+    (team_upsert,) = _daily_upserts(db, "LiteLLM_DailyTeamSpend")
+    assert _row_values(team_upsert, "team_id") == ["team-1"]
+    db_writer._flush_tool_discovery_queue.assert_called_once()
+
+    db.failing_table = None
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db), n_retry_times=0, proxy_logging_obj=proxy_logging_obj
+    )
+
+    (user_upsert,) = _daily_upserts(db, "LiteLLM_DailyUserSpend")
+    assert _row_values(user_upsert, "user_id") == ["user-1"]
+    assert _row_values(user_upsert, "spend") == [0.1]
+    assert len(_daily_upserts(db, "LiteLLM_DailyTeamSpend")) == 1
+    assert db_writer.daily_spend_update_queue.update_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_failed_daily_tag_spend_commit_requeues_the_rows():
+    """The tag rollup drains on its own scheduler job with the same no-Redis drop:
+    a failed LiteLLM_DailyTagSpend commit has to put the rows back for the next tick."""
+    db_writer = DBSpendUpdateWriter()
+    tag_txn = {key: value for key, value in _daily_txn().items() if key != "user_id"} | {"tag": "tag-1"}
+    await db_writer.daily_tag_spend_update_queue.add_update({"tag-key": tag_txn})
+    db = _DailySpendFakeDB(failing_table="LiteLLM_DailyTagSpend")
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    await db_writer._commit_daily_tag_spend_to_db(
+        prisma_client=_WindowSpendFakePrisma(db), n_retry_times=0, proxy_logging_obj=proxy_logging_obj
+    )
+
+    assert _daily_upserts(db, "LiteLLM_DailyTagSpend") == []
+    assert not db_writer.daily_tag_spend_update_queue.update_queue.empty()
+
+    db.failing_table = None
+    await db_writer._commit_daily_tag_spend_to_db(
+        prisma_client=_WindowSpendFakePrisma(db), n_retry_times=0, proxy_logging_obj=proxy_logging_obj
+    )
+
+    (tag_upsert,) = _daily_upserts(db, "LiteLLM_DailyTagSpend")
+    assert _row_values(tag_upsert, "tag") == ["tag-1"]
+    assert _row_values(tag_upsert, "spend") == [0.1]
+    assert db_writer.daily_tag_spend_update_queue.update_queue.empty()
 
 
 @pytest.mark.asyncio
