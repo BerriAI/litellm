@@ -220,7 +220,7 @@ def test_add_proxy_hooks_registers_callbacks(proxy_logging, monkeypatch):
     what gets registered. Verifies that the resulting instances land in
     ``proxy_logging.proxy_hook_mapping`` keyed by hook name.
     """
-    hook_keys = ["cache_control_check", "max_budget_limiter"]
+    hook_keys = ["cache_control_check", "max_iterations_limiter"]
     registered: List[Any] = []
 
     from litellm.proxy import utils as utils_mod
@@ -362,22 +362,22 @@ def test_add_proxy_hooks_unknown_hook_raises(proxy_logging, monkeypatch):
 
 def test_get_proxy_hook_returns_registered_instance(proxy_logging):
     s_cache = MagicMock()
-    s_budget = MagicMock()
+    s_iterations = MagicMock()
     s_parallel = MagicMock()
     proxy_logging.proxy_hook_mapping = {
         "cache_control_check": s_cache,
-        "max_budget_limiter": s_budget,
+        "max_iterations_limiter": s_iterations,
         "max_parallel_request_limiter": s_parallel,
     }
     snapshot = {
         "cache_control_check": proxy_logging.get_proxy_hook("cache_control_check") is s_cache,
-        "max_budget_limiter": proxy_logging.get_proxy_hook("max_budget_limiter") is s_budget,
+        "max_iterations_limiter": proxy_logging.get_proxy_hook("max_iterations_limiter") is s_iterations,
         "max_parallel_request_limiter": proxy_logging.get_proxy_hook("max_parallel_request_limiter") is s_parallel,
         "unknown_returns_none": proxy_logging.get_proxy_hook("unknown") is None,
     }
     assert snapshot == {
         "cache_control_check": True,
-        "max_budget_limiter": True,
+        "max_iterations_limiter": True,
         "max_parallel_request_limiter": True,
         "unknown_returns_none": True,
     }

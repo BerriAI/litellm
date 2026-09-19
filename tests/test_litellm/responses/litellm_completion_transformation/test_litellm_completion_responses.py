@@ -1900,6 +1900,38 @@ class TestToolTransformation:
         assert "defer_loading" not in result_tool
         assert "allowed_callers" not in result_tool
         assert "input_examples" not in result_tool
+        assert "eager_input_streaming" not in result_tool
+
+    @pytest.mark.parametrize("eager_input_streaming", [True, False])
+    def test_transform_function_tools_forwards_eager_input_streaming(self, eager_input_streaming: bool) -> None:
+        function_tool: Final = {
+            "type": "function",
+            "name": "write_file",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+            "eager_input_streaming": eager_input_streaming,
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[function_tool]
+        )
+
+        assert result_tools[0]["eager_input_streaming"] is eager_input_streaming
+
+    @pytest.mark.parametrize("eager_input_streaming", [True, False])
+    def test_chat_completion_tools_to_responses_tools_keeps_eager_input_streaming(
+        self, eager_input_streaming: bool
+    ) -> None:
+        chat_tool: Final = {
+            "type": "function",
+            "function": {"name": "write_file", "parameters": {"type": "object"}},
+            "eager_input_streaming": eager_input_streaming,
+        }
+
+        result_tools: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(
+            [chat_tool]
+        )
+
+        assert result_tools[0]["eager_input_streaming"] is eager_input_streaming
 
     def test_transform_code_execution_tools(self):
         """Test that code_execution tools are passed through as-is"""
@@ -4906,6 +4938,67 @@ class TestStreamingSnapshotItemIds:
         reasoning_items = _bridged_output_items(completed_event.response, "reasoning")
         assert len(reasoning_items) == 1
         assert reasoning_items[0].id == streamed_event.item_id
+
+
+def test_transform_chat_completion_response_incomplete_details():
+    from litellm.types.llms.openai import IncompleteDetails
+
+    resp_length = ModelResponse(
+        id="resp-length",
+        choices=[Choices(index=0, finish_reason="length", message=Message(content="cutoff", role="assistant"))],
+        model="gpt-4o",
+    )
+    result_length = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_length,
+    )
+    assert result_length.status == "incomplete"
+    assert result_length.incomplete_details is not None
+    assert result_length.incomplete_details.reason == "max_output_tokens"
+
+    resp_filter = ModelResponse(
+        id="resp-filter",
+        choices=[Choices(index=0, finish_reason="content_filter", message=Message(content=None, role="assistant"))],
+        model="gpt-4o",
+    )
+    result_filter = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_filter,
+    )
+    assert result_filter.status == "incomplete"
+    assert result_filter.incomplete_details is not None
+    assert result_filter.incomplete_details.reason == "content_filter"
+
+    resp_refusal = ModelResponse(
+        id="resp-refusal",
+        choices=[Choices(index=0, finish_reason="refusal", message=Message(content=None, role="assistant"))],
+        model="gpt-4o",
+    )
+    result_refusal = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_refusal,
+    )
+    assert result_refusal.status == "incomplete"
+    assert result_refusal.incomplete_details is not None
+    assert result_refusal.incomplete_details.reason == "content_filter"
+
+    existing_details = IncompleteDetails(reason="content_filter")
+    resp_existing = ModelResponse(
+        id="resp-existing",
+        choices=[Choices(index=0, finish_reason="length", message=Message(content="cutoff", role="assistant"))],
+        model="gpt-4o",
+    )
+    resp_existing.incomplete_details = existing_details
+    result_existing = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_existing,
+    )
+    assert result_existing.status == "incomplete"
+    assert result_existing.incomplete_details == existing_details
 
 
 @pytest.mark.parametrize("stream", [True, False])

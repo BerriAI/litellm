@@ -1,18 +1,18 @@
 """
 Unit tests for Prometheus invalid API key request filtering.
 
-Tests functionality that prevents invalid API key requests (401 status codes)
-from being recorded in Prometheus metrics.
+Tests the 401 detection helpers, that LLM-level metrics skip invalid API key
+requests, and that the proxy-level failed request counter still records them.
 """
 
 from unittest.mock import Mock, patch
 
 import pytest
+from fastapi import HTTPException
 from prometheus_client import REGISTRY
 
-
 from litellm.integrations.prometheus import PrometheusLogger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 
 
 @pytest.fixture(scope="function")
@@ -129,28 +129,29 @@ class TestSkipMetricsValidation:
 
 
 class TestAsyncHooks:
-    """Test async hook methods skip metrics for invalid API keys."""
-
-    @pytest.fixture
-    def mock_user_api_key(self):
-        """Create a mock UserAPIKeyAuth object."""
-        user_key = Mock(spec=UserAPIKeyAuth)
-        user_key.api_key = "test-key"
-        user_key.end_user_id = None
-        user_key.user_id = None
-        user_key.user_email = None
-        user_key.key_alias = None
-        user_key.team_id = None
-        user_key.team_alias = None
-        user_key.request_route = "/test"
-        return user_key
+    """Test how async hook methods treat invalid API key requests."""
 
     @pytest.mark.asyncio
-    async def test_post_call_failure_hook_skips_401(
-        self, prometheus_logger, mock_user_api_key
+    @pytest.mark.parametrize(
+        "exception",
+        [
+            HTTPException(
+                status_code=401,
+                detail="LiteLLM Virtual Key expected. Received=nota****tall, expected to start with 'sk-'.",
+            ),
+            ProxyException(
+                message="Authentication Error, Invalid proxy server token passed.",
+                type=ProxyErrorTypes.token_not_found_in_db,
+                param="key",
+                code=401,
+            ),
+        ],
+    )
+    async def test_post_call_failure_hook_counts_401_without_key_hash(
+        self, prometheus_logger, exception
     ):
-        exception = ExceptionWithCode("401")
-        exception.__class__.__name__ = "ProxyException"
+        unauthenticated = UserAPIKeyAuth(request_route="/v1/chat/completions")
+        unauthenticated.api_key = "notakeyatall"
 
         with (
             patch.object(
@@ -160,15 +161,50 @@ class TestAsyncHooks:
                 prometheus_logger, "litellm_proxy_total_requests_metric"
             ) as mock_total,
         ):
-
             await prometheus_logger.async_post_call_failure_hook(
                 request_data={"model": "test-model"},
                 original_exception=exception,
-                user_api_key_dict=mock_user_api_key,
+                user_api_key_dict=unauthenticated,
             )
 
-            mock_failed.labels.assert_not_called()
-            mock_total.labels.assert_not_called()
+        failed_labels = mock_failed.labels.call_args.kwargs
+        assert failed_labels["exception_status"] == "401"
+        assert failed_labels["hashed_api_key"] is None
+        assert failed_labels["route"] == "/v1/chat/completions"
+        mock_failed.labels.return_value.inc.assert_called_once()
+        assert mock_total.labels.call_args.kwargs["status_code"] == "401"
+        mock_total.labels.return_value.inc.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_post_call_failure_hook_keeps_resolved_identity_labels_for_401(
+        self, prometheus_logger
+    ):
+        expired_key = UserAPIKeyAuth(
+            api_key="sk-expired",
+            key_alias="expired-alias",
+            team_id="team-1",
+        )
+        exception = ProxyException(
+            message="Authentication Error - Expired Key.",
+            type=ProxyErrorTypes.expired_key,
+            param="key",
+            code=401,
+        )
+
+        with patch.object(
+            prometheus_logger, "litellm_proxy_failed_requests_metric"
+        ) as mock_failed:
+            await prometheus_logger.async_post_call_failure_hook(
+                request_data={"model": "test-model"},
+                original_exception=exception,
+                user_api_key_dict=expired_key,
+            )
+
+        failed_labels = mock_failed.labels.call_args.kwargs
+        assert failed_labels["exception_status"] == "401"
+        assert failed_labels["hashed_api_key"] is None
+        assert failed_labels["api_key_alias"] == "expired-alias"
+        assert failed_labels["team"] == "team-1"
 
     @pytest.mark.asyncio
     async def test_log_failure_event_skips_401(self, prometheus_logger):

@@ -58,6 +58,11 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
+def _metadata_bucket(request_data: Mapping[str, object], key: str) -> Mapping[str, object]:
+    bucket: Final = request_data.get(key)
+    return bucket if isinstance(bucket, Mapping) else {}
+
+
 class CustomCodeGuardrailError(Exception):
     """Raised when custom code guardrail execution fails."""
 
@@ -280,12 +285,16 @@ class CustomCodeGuardrail(CustomGuardrail):
         Returns:
             Safe subset of request data
         """
+        metadata: Final = {
+            **_metadata_bucket(request_data, "metadata"),
+            **_metadata_bucket(request_data, "litellm_metadata"),
+        }
         return {
             "model": request_data.get("model"),
-            "user_id": request_data.get("user_api_key_user_id"),
-            "team_id": request_data.get("user_api_key_team_id"),
-            "end_user_id": request_data.get("user_api_key_end_user_id"),
-            "metadata": request_data.get("metadata", {}),
+            "user_id": metadata.get("user_api_key_user_id"),
+            "team_id": metadata.get("user_api_key_team_id"),
+            "end_user_id": metadata.get("user_api_key_end_user_id"),
+            "metadata": metadata,
         }
 
     def _process_result(

@@ -69,6 +69,15 @@ vi.mock("../organisms/create_key_button", () => ({
   fetchTeamModels: vi.fn().mockResolvedValue(["team-model-1", "team-model-2"]),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/budgets/useBudgetOptions", () => ({
+  useBudgetOptions: () => ({
+    data: [
+      { budget_id: "svc-a-budget", max_budget: 0.5, created_at: "", updated_at: "" },
+      { budget_id: "svc-b-budget", max_budget: 100, created_at: "", updated_at: "" },
+    ],
+  }),
+}));
+
 const routerSettingsMocks = vi.hoisted(() => ({
   receivedValue: undefined as { router_settings: Record<string, unknown> } | undefined,
   editedValue: null as Record<string, unknown> | null,
@@ -174,6 +183,7 @@ describe("KeyEditView", () => {
     key_name: "sk-...TUuw",
     key_alias: "asdasdas",
     spend: 0,
+    total_spend: 0,
     max_budget: 0,
     expires: "null",
     models: [],
@@ -181,6 +191,9 @@ describe("KeyEditView", () => {
     config: {},
     user_id: "default_user_id",
     team_id: null,
+    project_id: null,
+    key_type: null,
+    last_active: null,
     max_parallel_requests: 10,
     metadata: {
       logging: [],
@@ -188,6 +201,7 @@ describe("KeyEditView", () => {
     },
     tpm_limit: 10,
     rpm_limit: 10,
+    tpd_limit: 250000,
     duration: "30d",
     budget_duration: "30d",
     budget_reset_at: "never",
@@ -1804,6 +1818,86 @@ describe("KeyEditView", () => {
     });
   });
 
+  describe("default customer budget", () => {
+    const serviceAccountKey = (endUserBudgetId?: string): KeyResponse => ({
+      ...MOCK_KEY_DATA,
+      metadata: {
+        service_account_id: "svc-a",
+        ...(endUserBudgetId === undefined ? {} : { end_user_budget_id: endUserBudgetId }),
+      },
+    });
+
+    const renderEditView = (keyData: KeyResponse, userRole: string = "Admin") => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyData}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={userRole}
+          premiumUser={false}
+        />,
+      );
+      return onSubmit;
+    };
+
+    const budgetField = () => screen.findByRole("combobox", { name: "Default Customer Budget" });
+    const save = async () => userEvent.click(await screen.findByRole("button", { name: /save changes/i }));
+
+    it("shows the stored budget and leaves it off an edit that did not touch it", async () => {
+      const onSubmit = renderEditView(serviceAccountKey("svc-a-budget"));
+
+      expect(await budgetField()).toHaveValue("svc-a-budget");
+      await save();
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("end_user_budget_id");
+    });
+
+    it("sends the newly chosen budget id", async () => {
+      const onSubmit = renderEditView(serviceAccountKey());
+      const user = userEvent.setup();
+
+      await chooseSelectOption(user, await budgetField(), /svc-b-budget/);
+      await save();
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ end_user_budget_id: "svc-b-budget" }));
+      });
+    });
+
+    it("sends an empty string when the stored budget is cleared so the backend removes it", async () => {
+      const onSubmit = renderEditView(serviceAccountKey("svc-a-budget"));
+
+      await budgetField();
+      await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+      await save();
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ end_user_budget_id: "" }));
+      });
+    });
+
+    it("keeps the stored budget visible but read-only for a non-admin", async () => {
+      renderEditView(serviceAccountKey("svc-a-budget"), "Internal User");
+
+      const field = await budgetField();
+      expect(field).toHaveValue("svc-a-budget");
+      expect(field).toBeDisabled();
+    });
+
+    it("does not render the control on a plain key that has no budget to show", async () => {
+      renderEditView(MOCK_KEY_DATA);
+
+      await screen.findByRole("button", { name: /save changes/i });
+      expect(screen.queryByRole("combobox", { name: "Default Customer Budget" })).not.toBeInTheDocument();
+    });
+  });
+
   describe("estimated output tokens", () => {
     const renderEditView = (
       keyData: KeyResponse,
@@ -1986,6 +2080,7 @@ describe("KeyEditView", () => {
     tpm_limit_type: null,
     rpm_limit: 10,
     rpm_limit_type: null,
+    tpd_limit: 250000,
     throttle_on_budget_exceeded: false,
     enable_prompt_caching: false,
     max_parallel_requests: 10,

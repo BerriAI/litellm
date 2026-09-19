@@ -17,10 +17,13 @@ model LiteLLM_BudgetTable {
   max_parallel_requests Int?
   tpm_limit     BigInt?
   rpm_limit     BigInt?
+  tpd_limit     BigInt?
   model_max_budget Json?
   budget_duration String?
   budget_reset_at DateTime?
   allowed_models String[] @default([]) // per-member model scope; empty = inherit team models
+  temp_budget_increase Float?
+  temp_budget_expiry DateTime?
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -133,6 +136,7 @@ model LiteLLM_TeamTable {
     max_parallel_requests Int?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
+    tpd_limit     BigInt?
     budget_duration String? 
     budget_reset_at DateTime?
     blocked Boolean @default(false)
@@ -203,6 +207,7 @@ model LiteLLM_DeletedTeamTable {
     max_parallel_requests   Int?
     tpm_limit               BigInt?
     rpm_limit               BigInt?
+    tpd_limit               BigInt?
     budget_duration         String?
     budget_reset_at         DateTime?
     blocked                 Boolean  @default(false)
@@ -423,6 +428,7 @@ model LiteLLM_VerificationToken {
     key_alias   String?
     soft_budget_cooldown Boolean @default(false) // key-level state on if budget alerts need to be cooled down
     spend      Float    @default(0.0)
+    total_spend Float   @default(0.0)
     expires    DateTime?
     models     String[]
     aliases    Json  @default("{}")
@@ -438,6 +444,7 @@ model LiteLLM_VerificationToken {
     blocked Boolean?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
+    tpd_limit     BigInt?
     max_budget Float?    
     budget_duration String? 
     budget_reset_at DateTime?
@@ -483,6 +490,10 @@ model LiteLLM_VerificationToken {
 
 model LiteLLM_JWTKeyMapping {
     id                String   @id @default(uuid())
+    jwt_issuer        String   @default("")  // Scopes the mapping to one configured issuer; "" matches any issuer.
+                                              // Not nullable: Postgres unique constraints treat every NULL as
+                                              // distinct, so a nullable column would let multiple unscoped
+                                              // mappings collide on the same claim without a constraint violation.
     jwt_claim_name    String   // e.g. "sub", "email"
     jwt_claim_value   String   // The claim value to match
     token             String   // Hashed virtual key (FK)
@@ -495,8 +506,8 @@ model LiteLLM_JWTKeyMapping {
 
     litellm_verification_token LiteLLM_VerificationToken @relation(fields: [token], references: [token], onDelete: Cascade)
 
-    @@unique([jwt_claim_name, jwt_claim_value])
-    @@index([jwt_claim_name, jwt_claim_value, is_active])
+    @@unique([jwt_issuer, jwt_claim_name, jwt_claim_value])
+    @@index([jwt_issuer, jwt_claim_name, jwt_claim_value, is_active])
 }
 
 // Deprecated keys during grace period - allows old key to work until revoke_at
@@ -520,6 +531,7 @@ model LiteLLM_DeletedVerificationToken {
     key_alias               String?
     soft_budget_cooldown    Boolean  @default(false)
     spend                   Float    @default(0.0)
+    total_spend             Float    @default(0.0)
     expires                 DateTime?
     models                  String[]
     aliases                 Json     @default("{}")
@@ -534,6 +546,7 @@ model LiteLLM_DeletedVerificationToken {
     blocked                 Boolean?
     tpm_limit               BigInt?
     rpm_limit               BigInt?
+    tpd_limit               BigInt?
     max_budget              Float?
     budget_duration         String?
     budget_reset_at         DateTime?
@@ -667,6 +680,7 @@ model LiteLLM_SpendLogs {
   @@index([end_user])
   @@index([session_id])
   @@index([litellm_call_id])
+  @@index([api_key, startTime])
 }
 
 model LiteLLM_BudgetWindowSpend {
@@ -792,6 +806,8 @@ model LiteLLM_DailyUserSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -802,6 +818,37 @@ model LiteLLM_DailyUserSpend {
   @@index([model])
   @@index([mcp_namespaced_tool_name])
   @@index([endpoint])
+}
+
+// Key-free daily rollup of LiteLLM_DailyUserSpend, read by the global usage view
+model LiteLLM_DailyGlobalSpend {
+  id                  String   @id @default(uuid())
+  date                String
+  model               String?
+  model_group         String?
+  custom_llm_provider String?
+  mcp_namespaced_tool_name String?
+  endpoint               String?
+  prompt_tokens       BigInt      @default(0)
+  completion_tokens   BigInt      @default(0)
+  cache_read_input_tokens     BigInt      @default(0)
+  cache_creation_input_tokens BigInt      @default(0)
+  compression_saved_tokens    BigInt      @default(0)
+  compression_savings_spend    Float       @default(0.0)
+  prompt_caching_savings_spend Float       @default(0.0)
+  gateway_injected_caching_savings_spend Float @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
+  spend               Float    @default(0.0)
+  api_requests        BigInt      @default(0)
+  successful_requests BigInt      @default(0)
+  failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@unique([date, model, model_group, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
+  @@index([date])
 }
 
 // Track daily organization spend metrics per model and key
@@ -828,6 +875,8 @@ model LiteLLM_DailyOrganizationSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -864,6 +913,8 @@ model LiteLLM_DailyEndUserSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
   @@unique([end_user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
@@ -899,6 +950,8 @@ model LiteLLM_DailyAgentSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
   @@unique([agent_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
@@ -934,6 +987,8 @@ model LiteLLM_DailyTeamSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   ptu_flat_cost       Float    @default(0.0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
@@ -972,6 +1027,8 @@ model LiteLLM_DailyTagSpend {
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -1355,6 +1412,7 @@ model LiteLLM_PolicyAttachmentTable {
   keys             String[]  @default([])  // Key aliases or patterns
   models           String[]  @default([])  // Model names or patterns
   tags             String[]  @default([])  // Tag patterns (e.g., ["healthcare", "prod-*"])
+  priority         Int?                    // Explicit execution order
   created_at       DateTime  @default(now())
   created_by       String?
   updated_at       DateTime  @default(now()) @updatedAt

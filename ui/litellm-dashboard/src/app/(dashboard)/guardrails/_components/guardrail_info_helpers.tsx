@@ -210,6 +210,7 @@ export const guardrailLogoMap = {
   "RepelloAI Argus": repelloAiLogo.src,
   Straiker: straikerLogo.src,
   Alice: aliceLogo.src,
+  "Microsoft Agent 365": microsoftAzureLogo.src,
   "Conduct Guard": conductLogo.src,
 } satisfies Record<string, string>;
 

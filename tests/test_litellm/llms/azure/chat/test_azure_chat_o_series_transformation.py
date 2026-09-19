@@ -68,3 +68,24 @@ def test_azure_o_series_transform_request_flattens_top_level_anyof():
     assert parameters["required"] == ["id"]
     assert "anyOf" in tool["function"]["parameters"]
     assert optional_params["tools"][0] is tool
+
+
+def test_azure_o_series_transform_request_moves_system_messages_first(monkeypatch):
+    monkeypatch.setattr(litellm, "openai_system_messages_first", True)
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "developer", "content": "dev"},
+        {"role": "assistant", "content": "reply"},
+        {"role": "user", "content": "more"},
+    ]
+
+    request = AzureOpenAIO1Config().transform_request(
+        model="o3-mini",
+        messages=messages,
+        optional_params={},
+        litellm_params={"custom_llm_provider": "azure"},
+        headers={},
+    )
+
+    assert [m["content"] for m in request["messages"]] == ["dev", "hi", "reply", "more"]
+    assert [m["content"] for m in messages] == ["hi", "dev", "reply", "more"]

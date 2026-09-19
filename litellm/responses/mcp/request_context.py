@@ -9,9 +9,12 @@ still executes the tool, just with no credentials.
 """
 
 from collections.abc import Iterable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 if TYPE_CHECKING:
@@ -36,6 +39,7 @@ class MCPRequestContext:
     request_tags: Sequence[str] | None = None
     litellm_trace_id: str | None = None
     litellm_call_id: str | None = None
+    guardrail_context: Mapping[str, object] | None = None
 
     @classmethod
     def resolve(
@@ -82,4 +86,57 @@ class MCPRequestContext:
             request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(dict(kwargs)),
             litellm_trace_id=kwargs.get("litellm_trace_id"),
             litellm_call_id=kwargs.get("litellm_call_id"),
+            guardrail_context=cls.resolve_guardrail_context(kwargs),
+        )
+
+    @staticmethod
+    def resolve_guardrail_context(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+        metadata_keys: Final = (
+            "guardrails",
+            "guardrail_config",
+            "_guardrail_pipelines",
+            "_pipeline_managed_guardrails",
+            "applied_policies",
+            "policy_sources",
+            "tags",
+        )
+        buckets: Final = tuple(
+            TypeAdapter(dict[str, object]).validate_python(kwargs[key])
+            for key in ("litellm_metadata", "metadata")
+            if isinstance(kwargs.get(key), Mapping)
+        )
+        sources: Final = (*buckets, kwargs)
+        metadata: Final = MappingProxyType(
+            {
+                **MappingProxyType(
+                    {
+                        key: deepcopy(value)
+                        for bucket in buckets
+                        for key, value in bucket.items()
+                        if key in metadata_keys
+                    }
+                ),
+                "guardrails": deepcopy(
+                    tuple(
+                        selection
+                        for source in sources
+                        for selection in TypeAdapter(list[object]).validate_python(source.get("guardrails") or ())
+                    )
+                ),
+                "guardrail_config": deepcopy(
+                    {  # mutable-ok: per-request guardrail configuration is a mutable JSON object in existing callbacks
+                        key: value
+                        for source in sources
+                        for key, value in TypeAdapter(dict[str, object])
+                        .validate_python(source.get("guardrail_config") or MappingProxyType({}))
+                        .items()
+                    }
+                ),
+            }
+        )
+        return MappingProxyType(
+            {
+                **MappingProxyType({key: kwargs[key] for key in ("model",) if key in kwargs}),
+                "metadata": metadata,
+            }
         )
