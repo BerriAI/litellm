@@ -1,10 +1,20 @@
 import React, { useState } from "react";
-import { Modal, Select, Button as AntdButton, Tabs } from "antd";
-import { CodeOutlined } from "@ant-design/icons";
-import { Button as TremorButton, Text } from "@tremor/react";
+import { CodeIcon, CopyIcon } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
+import { toast } from "@/lib/toast";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+const LANGUAGE_ITEMS = [
+  { value: "curl", label: "cURL" },
+  { value: "python", label: "Python (OpenAI SDK)" },
+  { value: "javascript", label: "JavaScript (OpenAI SDK)" },
+] as const;
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface PromptCodeSnippetsProps {
   promptId: string;
@@ -12,6 +22,7 @@ interface PromptCodeSnippetsProps {
   promptVariables?: Record<string, string>;
   accessToken: string | null;
   version?: string;
+  environment?: string;
   proxySettings?: {
     PROXY_BASE_URL?: string;
     LITELLM_UI_API_DOC_BASE_URL?: string | null;
@@ -24,8 +35,10 @@ const PromptCodeSnippets: React.FC<PromptCodeSnippetsProps> = ({
   promptVariables = {},
   accessToken,
   version = "1",
+  environment,
   proxySettings,
 }) => {
+  const syntaxTheme = useSyntaxTheme(coy);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState<"curl" | "python" | "javascript">("curl");
   const [selectedTab, setSelectedTab] = useState("basic");
@@ -53,6 +66,9 @@ const PromptCodeSnippets: React.FC<PromptCodeSnippetsProps> = ({
   // Generate code based on selected language and tab
   const generateCode = () => {
     const hasVariables = Object.keys(promptVariables).length > 0;
+    const curlEnvironment = environment ? `,\n    "prompt_environment": "${environment}"` : "";
+    const pythonEnvironment = environment ? `,\n        "prompt_environment": "${environment}"` : "";
+    const jsEnvironment = environment ? `,\n        prompt_environment: "${environment}"` : "";
 
     if (selectedLanguage === "curl") {
       if (selectedTab === "basic") {
@@ -61,7 +77,7 @@ const PromptCodeSnippets: React.FC<PromptCodeSnippetsProps> = ({
   -H 'Authorization: Bearer ${effectiveApiKey}' \\
   -d '{
     "model": "${model}",
-    "prompt_id": "${promptId}"${
+    "prompt_id": "${promptId}"${curlEnvironment}${
       hasVariables
         ? `,
     "prompt_variables": ${JSON.stringify(promptVariables, null, 6).replace(/\n/g, "\n    ")}`
@@ -74,7 +90,7 @@ const PromptCodeSnippets: React.FC<PromptCodeSnippetsProps> = ({
   -H 'Authorization: Bearer ${effectiveApiKey}' \\
   -d '{
     "model": "${model}",
-    "prompt_id": "${promptId}"${
+    "prompt_id": "${promptId}"${curlEnvironment}${
       hasVariables
         ? `,
     "prompt_variables": ${JSON.stringify(promptVariables, null, 6).replace(/\n/g, "\n    ")}`
@@ -93,7 +109,7 @@ const PromptCodeSnippets: React.FC<PromptCodeSnippetsProps> = ({
   -H 'Authorization: Bearer ${effectiveApiKey}' \\
   -d '{
     "model": "${model}",
-    "prompt_id": "${promptId}",
+    "prompt_id": "${promptId}"${curlEnvironment},
     "prompt_version": ${version},
     "messages": [
       {
@@ -116,7 +132,7 @@ client = openai.OpenAI(
 response = client.chat.completions.create(
     model="${model}",
     extra_body={
-        "prompt_id": "${promptId}"${
+        "prompt_id": "${promptId}"${pythonEnvironment}${
           hasVariables
             ? `,
         "prompt_variables": ${JSON.stringify(promptVariables, null, 8).replace(/\n/g, "\n        ")}`
@@ -134,7 +150,7 @@ response = client.chat.completions.create(
         {"role": "user", "content": "hi"}
     ],
     extra_body={
-        "prompt_id": "${promptId}"${
+        "prompt_id": "${promptId}"${pythonEnvironment}${
           hasVariables
             ? `,
         "prompt_variables": ${JSON.stringify(promptVariables, null, 8).replace(/\n/g, "\n        ")}`
@@ -152,7 +168,7 @@ response = client.chat.completions.create(
         {"role": "user", "content": "Who are u"}
     ],
     extra_body={
-        "prompt_id": "${promptId}",
+        "prompt_id": "${promptId}"${pythonEnvironment},
         "prompt_version": ${version}
     }
 )
@@ -175,9 +191,9 @@ async function main() {
         model: "${model}",
         ${
           hasVariables
-            ? `prompt_id: "${promptId}",
+            ? `prompt_id: "${promptId}"${jsEnvironment},
         prompt_variables: ${JSON.stringify(promptVariables, null, 8).replace(/\n/g, "\n        ")}`
-            : `prompt_id: "${promptId}"`
+            : `prompt_id: "${promptId}"${jsEnvironment}`
         }
     });
     
@@ -195,9 +211,9 @@ async function main() {
         ],
         ${
           hasVariables
-            ? `prompt_id: "${promptId}",
+            ? `prompt_id: "${promptId}"${jsEnvironment},
         prompt_variables: ${JSON.stringify(promptVariables, null, 8).replace(/\n/g, "\n        ")}`
-            : `prompt_id: "${promptId}"`
+            : `prompt_id: "${promptId}"${jsEnvironment}`
         }
     });
     
@@ -213,7 +229,7 @@ async function main() {
         messages: [
             { role: "user", content: "Who are u" }
         ],
-        prompt_id: "${promptId}",
+        prompt_id: "${promptId}"${jsEnvironment},
         prompt_version: ${version}
     });
     
@@ -230,66 +246,80 @@ main();`;
     if (isModalVisible) {
       setGeneratedCode(generateCode());
     }
-  }, [isModalVisible, selectedLanguage, selectedTab, promptId, model, promptVariables]);
+  }, [isModalVisible, selectedLanguage, selectedTab, promptId, model, promptVariables, version, environment]);
 
   return (
     <>
-      <TremorButton variant="secondary" icon={CodeOutlined} onClick={showModal}>
+      <Button variant="outline" onClick={showModal}>
+        <CodeIcon />
         Get Code
-      </TremorButton>
+      </Button>
 
-      <Modal title="Generated Code" open={isModalVisible} onCancel={handleCancel} footer={null} width={800}>
-        <div className="flex justify-between items-center mb-4">
-          <div>
-            <Text className="font-medium block mb-1 text-gray-700">Language</Text>
-            <Select
-              value={selectedLanguage}
-              onChange={(value) => setSelectedLanguage(value as "curl" | "python" | "javascript")}
-              style={{ width: 180 }}
-              options={[
-                { value: "curl", label: "cURL" },
-                { value: "python", label: "Python (OpenAI SDK)" },
-                { value: "javascript", label: "JavaScript (OpenAI SDK)" },
-              ]}
-            />
+      <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Generated Code</DialogTitle>
+          </DialogHeader>
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <label htmlFor="prompt-code-language" className="font-medium block mb-1 text-foreground">
+                Language
+              </label>
+              <Select
+                items={LANGUAGE_ITEMS}
+                value={selectedLanguage}
+                onValueChange={(value) => setSelectedLanguage(value as "curl" | "python" | "javascript")}
+              >
+                <SelectTrigger id="prompt-code-language" className="w-[180px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {LANGUAGE_ITEMS.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => {
+                navigator.clipboard.writeText(generatedCode);
+                toast.success("Copied to clipboard!");
+              }}
+            >
+              <CopyIcon />
+              Copy to Clipboard
+            </Button>
           </div>
-          <AntdButton
-            onClick={() => {
-              navigator.clipboard.writeText(generatedCode);
-              NotificationsManager.success("Copied to clipboard!");
+
+          <Tabs value={selectedTab} onValueChange={(value) => setSelectedTab(String(value))}>
+            <TabsList aria-label="Generated code type">
+              <TabsTrigger value="basic">Basic</TabsTrigger>
+              <TabsTrigger value="messages">With Messages</TabsTrigger>
+              <TabsTrigger value="version">With Version</TabsTrigger>
+            </TabsList>
+          </Tabs>
+
+          <SyntaxHighlighter
+            language={selectedLanguage === "curl" ? "bash" : selectedLanguage === "python" ? "python" : "javascript"}
+            style={syntaxTheme}
+            wrapLines={true}
+            wrapLongLines={true}
+            className="rounded-md mt-0"
+            customStyle={{
+              maxHeight: "60vh",
+              overflowY: "auto",
+              marginTop: 0,
+              borderTopLeftRadius: 0,
+              borderTopRightRadius: 0,
             }}
           >
-            Copy to Clipboard
-          </AntdButton>
-        </div>
-
-        <Tabs
-          activeKey={selectedTab}
-          onChange={setSelectedTab}
-          items={[
-            { label: "Basic", key: "basic" },
-            { label: "With Messages", key: "messages" },
-            { label: "With Version", key: "version" },
-          ]}
-        />
-
-        <SyntaxHighlighter
-          language={selectedLanguage === "curl" ? "bash" : selectedLanguage === "python" ? "python" : "javascript"}
-          style={coy as any}
-          wrapLines={true}
-          wrapLongLines={true}
-          className="rounded-md mt-0"
-          customStyle={{
-            maxHeight: "60vh",
-            overflowY: "auto",
-            marginTop: 0,
-            borderTopLeftRadius: 0,
-            borderTopRightRadius: 0,
-          }}
-        >
-          {generatedCode}
-        </SyntaxHighlighter>
-      </Modal>
+            {generatedCode}
+          </SyntaxHighlighter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 };

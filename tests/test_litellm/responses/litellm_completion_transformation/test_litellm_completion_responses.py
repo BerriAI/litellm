@@ -1,18 +1,23 @@
-import os
-import sys
+import json
+from copy import deepcopy
+from typing import Final, Literal
 
 import pytest
+from openai.types.responses.response_function_web_search import (
+    ActionFind,
+    ActionOpenPage,
+    ActionSearch,
+    ActionSearchSource,
+    ResponseFunctionWebSearch,
+)
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
-
+import litellm
+from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.types.llms.openai import (
-    ChatCompletionResponseMessage,
-    ChatCompletionToolMessage,
-)
+from litellm.types.responses.main import build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
@@ -32,7 +37,11 @@ class TestLiteLLMCompletionResponsesConfig:
         input_item = {"type": "input_file", "file_id": "file-abc123xyz"}
 
         # Execute
-        result = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(input_item)
+        result = (
+            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                input_item
+            )
+        )
 
         # Assert
         expected = {"type": "file", "file": {"file_id": "file-abc123xyz"}}
@@ -47,7 +56,11 @@ class TestLiteLLMCompletionResponsesConfig:
         input_item = {"type": "input_file", "file_data": file_data}
 
         # Execute
-        result = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(input_item)
+        result = (
+            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                input_item
+            )
+        )
 
         # Assert
         expected = {"type": "file", "file": {"file_data": file_data}}
@@ -65,7 +78,11 @@ class TestLiteLLMCompletionResponsesConfig:
         }
 
         # Execute
-        result = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(input_item)
+        result = (
+            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                input_item
+            )
+        )
 
         # Assert
         expected = {
@@ -83,7 +100,11 @@ class TestLiteLLMCompletionResponsesConfig:
         input_item = {"type": "input_file"}
 
         # Execute
-        result = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(input_item)
+        result = (
+            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                input_item
+            )
+        )
 
         # Assert
         expected = {"type": "file", "file": {}}
@@ -102,7 +123,11 @@ class TestLiteLLMCompletionResponsesConfig:
         }
 
         # Execute
-        result = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(input_item)
+        result = (
+            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                input_item
+            )
+        )
 
         # Assert
         expected = {"type": "file", "file": {"file_id": "file-abc123xyz"}}
@@ -110,10 +135,31 @@ class TestLiteLLMCompletionResponsesConfig:
         assert "extra_field" not in result["file"]
         assert "another_field" not in result["file"]
 
+    def test_transform_input_file_item_to_file_item_keeps_filename(self):
+        """OpenAI rejects file_data with no filename beside it, so dropping it 400s the request"""
+        result = (
+            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                {
+                    "type": "input_file",
+                    "filename": "report.pdf",
+                    "file_data": "data:application/pdf;base64,JVBERi0=",
+                }
+            )
+        )
+        assert result == {
+            "type": "file",
+            "file": {
+                "file_data": "data:application/pdf;base64,JVBERi0=",
+                "filename": "report.pdf",
+            },
+        }
+
     def test_transform_input_file_item_to_file_item_with_file_url(self):
         """file_url should be mapped to file_id for downstream URL handling"""
-        result = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
-            {"type": "input_file", "file_url": "https://example.com/doc.pdf"}
+        result = (
+            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                {"type": "input_file", "file_url": "https://example.com/doc.pdf"}
+            )
         )
         assert result == {
             "type": "file",
@@ -122,12 +168,14 @@ class TestLiteLLMCompletionResponsesConfig:
 
     def test_transform_input_file_item_file_id_takes_precedence_over_file_url(self):
         """explicit file_id should not be overwritten by file_url"""
-        result = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
-            {
-                "type": "input_file",
-                "file_id": "file-abc123",
-                "file_url": "https://example.com/doc.pdf",
-            }
+        result = (
+            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                {
+                    "type": "input_file",
+                    "file_id": "file-abc123",
+                    "file_url": "https://example.com/doc.pdf",
+                }
+            )
         )
         assert result == {"type": "file", "file": {"file_id": "file-abc123"}}
 
@@ -138,7 +186,11 @@ class TestLiteLLMCompletionResponsesConfig:
         input_item = {"type": "input_image", "image_url": image_url, "detail": "high"}
 
         # Execute
-        result = LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(input_item)
+        result = (
+            LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
+                input_item
+            )
+        )
 
         # Assert
         expected = {
@@ -157,7 +209,11 @@ class TestLiteLLMCompletionResponsesConfig:
         input_item = {"type": "input_image", "image_url": image_url, "detail": "high"}
 
         # Execute
-        result = LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(input_item)
+        result = (
+            LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
+                input_item
+            )
+        )
 
         # Assert
         expected = {
@@ -176,7 +232,11 @@ class TestLiteLLMCompletionResponsesConfig:
         input_item = {"type": "input_image", "image_url": image_url}
 
         # Execute
-        result = LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(input_item)
+        result = (
+            LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
+                input_item
+            )
+        )
 
         # Assert
         expected = {
@@ -194,7 +254,11 @@ class TestLiteLLMCompletionResponsesConfig:
         input_item = {"type": "input_image"}
 
         # Execute
-        result = LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(input_item)
+        result = (
+            LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
+                input_item
+            )
+        )
 
         # Assert
         expected = {"type": "image_url", "image_url": {"url": "", "detail": "auto"}}
@@ -214,7 +278,11 @@ class TestLiteLLMCompletionResponsesConfig:
         }
 
         # Execute
-        result = LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(input_item)
+        result = (
+            LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
+                input_item
+            )
+        )
 
         # Assert
         expected = {
@@ -250,26 +318,28 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Execute
-        responses_api_response = (
-            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                request_input="What is the meaning of life?",
-                responses_api_request={},
-                chat_completion_response=chat_completion_response,
-            )
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="What is the meaning of life?",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
         )
 
         # Assert
         assert hasattr(responses_api_response, "output")
         assert len(responses_api_response.output) >= 2
 
-        reasoning_items = [item for item in responses_api_response.output if item.type == "reasoning"]
+        reasoning_items = [
+            item for item in responses_api_response.output if item.type == "reasoning"
+        ]
         assert len(reasoning_items) == 1, "Should have exactly one reasoning item"
 
         reasoning_item = reasoning_items[0]
         # Note: ID auto-generation was disabled, so reasoning items may not have IDs
         # Only assert ID format if an ID is present
         if hasattr(reasoning_item, "id") and reasoning_item.id:
-            assert reasoning_item.id.startswith("rs_"), f"Expected ID to start with 'rs_', got: {reasoning_item.id}"
+            assert reasoning_item.id.startswith(
+                "rs_"
+            ), f"Expected ID to start with 'rs_', got: {reasoning_item.id}"
         assert reasoning_item.status == "completed"
         assert reasoning_item.role == "assistant"
         assert len(reasoning_item.content) == 1
@@ -277,7 +347,9 @@ class TestLiteLLMCompletionResponsesConfig:
         assert "step by step" in reasoning_item.content[0].text
         assert "42" in reasoning_item.content[0].text
 
-        message_items = [item for item in responses_api_response.output if item.type == "message"]
+        message_items = [
+            item for item in responses_api_response.output if item.type == "message"
+        ]
         assert len(message_items) == 1, "Should have exactly one message item"
 
         message_item = message_items[0]
@@ -304,19 +376,21 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Execute
-        responses_api_response = (
-            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                request_input="A simple question?",
-                responses_api_request={},
-                chat_completion_response=chat_completion_response,
-            )
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="A simple question?",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
         )
 
         # Assert
-        reasoning_items = [item for item in responses_api_response.output if item.type == "reasoning"]
+        reasoning_items = [
+            item for item in responses_api_response.output if item.type == "reasoning"
+        ]
         assert len(reasoning_items) == 0, "Should have no reasoning items"
 
-        message_items = [item for item in responses_api_response.output if item.type == "message"]
+        message_items = [
+            item for item in responses_api_response.output if item.type == "message"
+        ]
         assert len(message_items) == 1, "Should have exactly one message item"
         assert message_items[0].content[0].text == "Just a regular answer."
         assert responses_api_response.object == "response"
@@ -352,21 +426,124 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Execute
-        responses_api_response = (
-            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                request_input="A question with multiple answers?",
-                responses_api_request={},
-                chat_completion_response=chat_completion_response,
-            )
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="A question with multiple answers?",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
         )
 
         # Assert
-        reasoning_items = [item for item in responses_api_response.output if item.type == "reasoning"]
+        reasoning_items = [
+            item for item in responses_api_response.output if item.type == "reasoning"
+        ]
         assert len(reasoning_items) == 1, "Should have exactly one reasoning item"
         assert reasoning_items[0].content[0].text == "First reasoning process."
 
-        message_items = [item for item in responses_api_response.output if item.type == "message"]
+        message_items = [
+            item for item in responses_api_response.output if item.type == "message"
+        ]
         assert len(message_items) == 2, "Should have two message items"
+
+    def test_signature_only_thinking_block_still_emits_reasoning_item(self):
+        response = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="10",
+                        role="assistant",
+                        reasoning_content="",
+                        thinking_blocks=[
+                            {"type": "thinking", "thinking": "", "signature": "signature-payload"}
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test input",
+            responses_api_request={},
+            chat_completion_response=response,
+        )
+
+        reasoning_items = [
+            item for item in responses_api_response.output if item.type == "reasoning"
+        ]
+        assert len(reasoning_items) == 1, "Signature-only thinking should still surface a reasoning item"
+        assert reasoning_items[0].content == []
+        assert "signature-payload" in reasoning_items[0].encrypted_content
+
+    def test_redacted_thinking_block_preserved_as_encrypted_content(self):
+        response = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="10",
+                        role="assistant",
+                        thinking_blocks=[{"type": "redacted_thinking", "data": "redacted-payload"}],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test input",
+            responses_api_request={},
+            chat_completion_response=response,
+        )
+
+        reasoning_items = [
+            item for item in responses_api_response.output if item.type == "reasoning"
+        ]
+        assert len(reasoning_items) == 1
+        assert "redacted-payload" in reasoning_items[0].encrypted_content
+
+    def test_visible_thinking_keeps_text_and_signature(self):
+        response = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="10",
+                        role="assistant",
+                        reasoning_content="counting the primes",
+                        thinking_blocks=[
+                            {"type": "thinking", "thinking": "counting the primes", "signature": "sig"}
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test input",
+            responses_api_request={},
+            chat_completion_response=response,
+        )
+
+        reasoning_items = [
+            item for item in responses_api_response.output if item.type == "reasoning"
+        ]
+        assert len(reasoning_items) == 1
+        assert reasoning_items[0].content[0].text == "counting the primes"
+        assert "sig" in reasoning_items[0].encrypted_content
 
     def test_transform_chat_completion_response_status_with_stop(self):
         """
@@ -392,12 +569,10 @@ class TestLiteLLMCompletionResponsesConfig:
             ],
         )
 
-        responses_api_response = (
-            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                request_input="this is a test",
-                responses_api_request={},
-                chat_completion_response=chat_completion_response,
-            )
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="this is a test",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
         )
 
         assert responses_api_response.status == "completed"
@@ -433,15 +608,15 @@ class TestLiteLLMCompletionResponsesConfig:
             ],
         )
 
-        responses_api_response = (
-            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                request_input="this is a test",
-                responses_api_request={},
-                chat_completion_response=chat_completion_response,
-            )
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="this is a test",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
         )
 
-        message_items = [item for item in responses_api_response.output if item.type == "message"]
+        message_items = [
+            item for item in responses_api_response.output if item.type == "message"
+        ]
         assert len(message_items) > 0
 
         for item in message_items:
@@ -476,15 +651,79 @@ class TestLiteLLMCompletionResponsesConfig:
             ],
         )
 
-        responses_api_response = (
-            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                request_input="this is a test",
-                responses_api_request={},
-                chat_completion_response=chat_completion_response,
-            )
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="this is a test",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
         )
 
         assert responses_api_response.status == "incomplete"
+
+    def test_tool_call_only_response_emits_no_null_text_message_item(self):
+        """A tool-calls-only turn (message content None, e.g. from Anthropic)
+        must not emit a message output item whose output_text has text null.
+        OpenAI rejects such an item on replay with
+        "Invalid type for 'input[..].content[..].text': expected a string, but
+        got null instead." Native OpenAI tool-only turns carry no message item."""
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="toolu_01OnlyToolCall",
+                                type="function",
+                                function=Function(name="get_weather", arguments='{"city": "SF"}'),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="what's the weather in SF?",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        output_types = [item.type for item in responses_api_response.output]
+        assert "message" not in output_types
+        assert "function_call" in output_types
+
+    def test_content_bearing_response_still_emits_message_item(self):
+        """Turns with real text content must keep their message output item."""
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="It is sunny.", role="assistant"),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="what's the weather in SF?",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        message_items = [item for item in responses_api_response.output if item.type == "message"]
+        assert len(message_items) == 1
+        assert message_items[0].content[0].text == "It is sunny."
 
     def test_transform_chat_completion_response_preserves_hidden_params(self):
         """Test that _hidden_params from chat completion response are preserved in responses API response"""
@@ -513,12 +752,10 @@ class TestLiteLLMCompletionResponsesConfig:
         }
 
         # Execute
-        responses_api_response = (
-            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                request_input="Test",
-                responses_api_request={},
-                chat_completion_response=chat_completion_response,
-            )
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
         )
 
         # Assert
@@ -550,17 +787,190 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Execute
-        responses_api_response = (
-            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                request_input="Test",
-                responses_api_request={},
-                chat_completion_response=chat_completion_response,
-            )
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
         )
 
         # Assert - should default to empty dict
         assert hasattr(responses_api_response, "_hidden_params")
         assert responses_api_response._hidden_params == {}
+
+    def test_transform_chat_completion_response_restores_namespace_tool_call(self):
+        tool_call_id = "call_namespace_restore"
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gemini-3.1-pro-preview-customtools",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id,
+                                type="function",
+                                function=Function(
+                                    name="collaboration__spawn_agent",
+                                    arguments='{"message":"hello"}',
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        try:
+            responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="Spawn an agent",
+                responses_api_request={
+                    "tools": [
+                        {
+                            "type": "namespace",
+                            "name": "collaboration",
+                            "tools": [
+                                {
+                                    "type": "function",
+                                    "name": "spawn_agent",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {},
+                                    },
+                                }
+                            ],
+                        }
+                    ]
+                },
+                chat_completion_response=chat_completion_response,
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        tool_calls = [
+            item
+            for item in responses_api_response.output
+            if item.type == "function_call"
+        ]
+        assert len(tool_calls) == 1
+        assert tool_calls[0].name == "spawn_agent"
+        assert tool_calls[0].namespace == "collaboration"
+        assert tool_calls[0].arguments == '{"message":"hello"}'
+
+    def test_transform_chat_completion_response_plain_tool_call_has_no_namespace(self):
+        """A non-namespace function call must not gain a namespace attribute, matching
+        the streaming path which only sets it when a namespace was restored."""
+        tool_call_id = "call_plain_no_namespace"
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gpt-4o",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id,
+                                type="function",
+                                function=Function(
+                                    name="get_weather",
+                                    arguments='{"city":"Paris"}',
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        try:
+            responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="What is the weather in Paris?",
+                responses_api_request={
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "get_weather",
+                            "parameters": {"type": "object", "properties": {}},
+                        }
+                    ]
+                },
+                chat_completion_response=chat_completion_response,
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        tool_calls = [
+            item
+            for item in responses_api_response.output
+            if item.type == "function_call"
+        ]
+        assert len(tool_calls) == 1
+        assert tool_calls[0].name == "get_weather"
+        assert tool_calls[0].namespace is None
+        assert "namespace" not in tool_calls[0].model_fields_set
+
+
+    def test_transform_top_level_function_collision_stays_unnamespaced(self):
+        tool_call_id = "call_top_level_collision"
+        chat_completion_response = ModelResponse(
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id,
+                                type="function",
+                                function=Function(name="run", arguments="{}"),
+                            )
+                        ],
+                    ),
+                )
+            ]
+        )
+        responses_api_request = {
+            "tools": [
+                {"type": "function", "name": "run", "parameters": {"type": "object"}},
+                {
+                    "type": "namespace",
+                    "name": "admin",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "run",
+                            "parameters": {"type": "object"},
+                        }
+                    ],
+                },
+            ]
+        }
+
+        try:
+            response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="Run the tool",
+                responses_api_request=responses_api_request,
+                chat_completion_response=chat_completion_response,
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        tool_call = next(item for item in response.output if item.type == "function_call")
+        assert tool_call.name == "run"
+        assert getattr(tool_call, "namespace", None) is None
 
 
 class TestFunctionCallTransformation:
@@ -584,14 +994,26 @@ class TestFunctionCallTransformation:
         regular_message = {"type": "message", "role": "user", "content": "Hello"}
 
         # Test function_call detection
-        assert LiteLLMCompletionResponsesConfig._is_input_item_function_call(function_call_item)
-        assert not LiteLLMCompletionResponsesConfig._is_input_item_function_call(function_call_output_item)
-        assert not LiteLLMCompletionResponsesConfig._is_input_item_function_call(regular_message)
+        assert LiteLLMCompletionResponsesConfig._is_input_item_function_call(
+            function_call_item
+        )
+        assert not LiteLLMCompletionResponsesConfig._is_input_item_function_call(
+            function_call_output_item
+        )
+        assert not LiteLLMCompletionResponsesConfig._is_input_item_function_call(
+            regular_message
+        )
 
         # Test function_call_output detection (should still work)
-        assert LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(function_call_output_item)
-        assert not LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(function_call_item)
-        assert not LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(regular_message)
+        assert LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(
+            function_call_output_item
+        )
+        assert not LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(
+            function_call_item
+        )
+        assert not LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(
+            regular_message
+        )
 
     def test_function_call_transformation(self):
         """Test that function_call items are correctly transformed to assistant messages with tool calls"""
@@ -626,6 +1048,68 @@ class TestFunctionCallTransformation:
         function = tool_call.get("function", {})
         assert function.get("name") == "get_weather"
         assert function.get("arguments") == '{"location": "São Paulo, Brazil"}'
+
+    def test_function_call_transformation_normalizes_redacted_arguments(self):
+        """Redacted rows hold the bare sentinel in arguments, which is invalid JSON."""
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call={
+                "type": "function_call",
+                "name": "get_weather",
+                "arguments": "redacted-by-litellm",
+                "call_id": "call_123",
+            }
+        )
+
+        assert result[0]["tool_calls"][0]["function"]["arguments"] == "{}"
+
+    def test_function_call_transformation_json_encodes_object_arguments(self):
+        """A decoded arguments object must be JSON-encoded, not str()'d.
+
+        Clients and providers sometimes send `arguments` as an object rather
+        than a JSON string; `str()` on a dict produces a Python repr with
+        single quotes, which downstream JSON parsers reject with errors like
+        "Expecting ',' delimiter".
+        """
+        function_call_item = {
+            "type": "function_call",
+            "name": "shell",
+            "arguments": {"command": "ls", "timeout": 30, "flags": ["-l", "-a"]},
+            "call_id": "call_123",
+            "id": "call_123",
+            "status": "completed",
+        }
+
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call=function_call_item
+        )
+
+        arguments = result[0].get("tool_calls", [])[0].get("function", {}).get("arguments")
+        assert json.loads(arguments) == {"command": "ls", "timeout": 30, "flags": ["-l", "-a"]}
+        assert "'" not in arguments
+
+    def test_create_tool_call_chunk_json_encodes_object_arguments(self):
+        """Cached tool_call definitions with object arguments stay valid JSON."""
+        chunk = LiteLLMCompletionResponsesConfig._create_tool_call_chunk(
+            tool_use_definition={
+                "id": "call_456",
+                "type": "function",
+                "function": {"name": "shell", "arguments": {"command": "ls"}},
+            },
+            tool_call_id="call_456",
+            index=0,
+        )
+
+        assert json.loads(chunk["function"]["arguments"]) == {"command": "ls"}
+
+    def test_create_tool_call_chunk_keeps_empty_arguments_default(self):
+        """Missing arguments still fall back to an empty JSON object."""
+        chunk = LiteLLMCompletionResponsesConfig._create_tool_call_chunk(
+            tool_use_definition={"id": "call_789", "type": "function", "function": {"name": "shell"}},
+            tool_call_id="call_789",
+            index=0,
+        )
+
+        assert chunk["function"]["arguments"] == "{}"
 
     def test_complete_input_transformation_with_function_calls(self):
         """Test the complete transformation with the exact input from the issue"""
@@ -675,7 +1159,9 @@ class TestFunctionCallTransformation:
         tool_msg = messages[2]
         assert tool_msg.get("role") == "tool"
         assert tool_msg.get("content") == "Rainy"
-        assert tool_msg.get("tool_call_id") == "call_1fe70e2a-a596-45ef-b72c-9b8567c460e5"
+        assert (
+            tool_msg.get("tool_call_id") == "call_1fe70e2a-a596-45ef-b72c-9b8567c460e5"
+        )
 
     def test_complete_request_transformation_with_function_calls(self):
         """Test the complete request transformation that would be used by the responses API"""
@@ -749,6 +1235,18 @@ class TestFunctionCallTransformation:
         assert tool_msg["role"] == "tool"
 
         assert result["extra_headers"] == {"X-Test-Header": "test-value"}
+
+    def test_drops_tool_choice_when_no_tools(self):
+        """Chat completions providers reject tool_choice when no tools are present."""
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="azure_ai/grok-4.3",
+            input="who are you?",
+            responses_api_request={"tool_choice": "auto", "tools": []},
+            custom_llm_provider="azure_ai",
+        )
+
+        assert "tool_choice" not in result
+        assert "tools" not in result
 
     def test_function_call_without_call_id_fallback_to_id(self):
         """Test that function_call items can use 'id' field when 'call_id' is missing"""
@@ -880,7 +1378,9 @@ class TestToolChoiceTransformation:
         Test that {"type": "tool"} is transformed to "required".
         This fixes the Anthropic error: "tool_choice.tool.name: Field required"
         """
-        result = LiteLLMCompletionResponsesConfig._transform_tool_choice({"type": "tool"})
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "tool"}
+        )
         assert result == "required"
 
     def test_transform_tool_choice_preserves_function_with_name(self):
@@ -892,18 +1392,127 @@ class TestToolChoiceTransformation:
     def test_transform_tool_choice_responses_flat_function_name(self):
         """Responses-API forced-function with a top-level name maps to the nested Chat
         Completions shape instead of degrading to required and dropping the name"""
-        result = LiteLLMCompletionResponsesConfig._transform_tool_choice({"type": "function", "name": "get_weather"})
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "function", "name": "get_weather"}
+        )
         assert result == {"type": "function", "function": {"name": "get_weather"}}
+
+    def test_transform_tool_choice_custom_follows_function_downgrade(self):
+        """
+        This bridge downgrades custom tools to function tools
+        (convert_custom_tool_to_function_tool), so a custom tool_choice must become a
+        function tool_choice naming the same tool or it references a tool type absent
+        from the converted request.
+        """
+        flat = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "custom", "name": "ApplyPatch"}
+        )
+        assert flat == {"type": "function", "function": {"name": "ApplyPatch"}}
+
+        nested = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "custom", "custom": {"name": "ApplyPatch"}}
+        )
+        assert nested == {"type": "function", "function": {"name": "ApplyPatch"}}
+
+    def test_transform_tool_choice_custom_without_name_falls_back_to_required(self):
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice({"type": "custom"})
+        assert result == "required"
 
     def test_transform_tool_choice_function_without_name_falls_back_to_required(self):
         """A function-type dict with no name still falls back to required"""
-        result = LiteLLMCompletionResponsesConfig._transform_tool_choice({"type": "function"})
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "function"}
+        )
         assert result == "required"
 
     def test_transform_tool_choice_function_empty_name_falls_back_to_required(self):
         """An empty top-level name is falsy and must not produce an empty function name"""
-        result = LiteLLMCompletionResponsesConfig._transform_tool_choice({"type": "function", "name": ""})
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+            {"type": "function", "name": ""}
+        )
         assert result == "required"
+
+    @pytest.mark.parametrize(
+        "request_tool_choice,expected",
+        [
+            ({"type": "function", "name": "run_command"}, {"type": "function", "name": "run_command"}),
+            ({"type": "function", "function": {"name": "run_command"}}, {"type": "function", "name": "run_command"}),
+            ({"type": "custom", "name": "ApplyPatch"}, {"type": "custom", "name": "ApplyPatch"}),
+            ({"type": "custom", "custom": {"name": "ApplyPatch"}}, {"type": "custom", "name": "ApplyPatch"}),
+            ({"type": "function"}, "required"),
+            ({"type": "tool"}, "required"),
+            ({"type": "auto"}, "auto"),
+            ("required", "required"),
+            ("none", "none"),
+            (None, "auto"),
+            ("any", "auto"),
+            ("run_command", "auto"),
+            ({"name": "run_command"}, "auto"),
+        ],
+    )
+    def test_transform_tool_choice_for_responses_api_response(
+        self, request_tool_choice: object, expected: str | dict[str, str]
+    ) -> None:
+        result: Final = LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+            request_tool_choice
+        )
+        assert result == expected
+
+    def test_non_streamed_response_echoes_named_tool_choice_in_responses_api_shape(self) -> None:
+        chat_completion_response: Final = ModelResponse(
+            id="chatcmpl-named-tool-choice",
+            created=1748575031,
+            model="claude-haiku-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="tool_calls",
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_pwd",
+                                type="function",
+                                function=Function(name="run_command", arguments='{"command":"pwd"}'),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Run the command pwd.",
+            responses_api_request={"tool_choice": {"type": "function", "name": "run_command"}},
+            chat_completion_response=chat_completion_response,
+        )
+
+        assert responses_api_response.tool_choice == {"type": "function", "name": "run_command"}
+
+    def test_non_streamed_response_with_unrecognized_tool_choice_echoes_auto(self) -> None:
+        chat_completion_response: Final = ModelResponse(
+            id="chatcmpl-unrecognized-tool-choice",
+            created=1748575031,
+            model="claude-haiku-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="stop",
+                    message=Message(role="assistant", content="/Users/dev"),
+                )
+            ],
+        )
+
+        responses_api_response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Run the command pwd.",
+            responses_api_request={"tool_choice": "any"},
+            chat_completion_response=chat_completion_response,
+        )
+
+        assert responses_api_response.tool_choice == "auto"
 
 
 class TestContentTypeTransformation:
@@ -914,12 +1523,20 @@ class TestContentTypeTransformation:
         Test that 'tool_result' content type is transformed to 'text'.
         This fixes: Invalid user message - content type 'tool_result' not valid.
         """
-        result = LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type("tool_result")
+        result = (
+            LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
+                "tool_result"
+            )
+        )
         assert result == "text"
 
     def test_input_text_content_type_transformed_to_text(self):
         """Test that 'input_text' content type is transformed to 'text'"""
-        result = LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type("input_text")
+        result = (
+            LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
+                "input_text"
+            )
+        )
         assert result == "text"
 
     def test_none_text_blocks_filtered_out(self):
@@ -933,10 +1550,35 @@ class TestContentTypeTransformation:
             {"type": "text", "text": None},  # Should be filtered out
             {"type": "text", "text": "another valid"},
         ]
-        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(content)
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
         assert len(result) == 2
         assert result[0]["text"] == "valid text"
         assert result[1]["text"] == "another valid"
+
+    def test_encrypted_content_blocks_preserved_as_text(self):
+        """
+        OpenAI Responses agent messages can include encrypted_content blocks.
+        Chat-completions providers need the payload as text instead of silently
+        dropping it.
+        """
+        content = [
+            {"type": "input_text", "text": "Payload:\n"},
+            {
+                "type": "encrypted_content",
+                "encrypted_content": "Reply exactly INPUT_AGENT_OK",
+            },
+        ]
+
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+
+        assert result == [
+            {"type": "text", "text": "Payload:\n"},
+            {"type": "text", "text": "Reply exactly INPUT_AGENT_OK"},
+        ]
 
 
 class TestToolTransformation:
@@ -955,7 +1597,9 @@ class TestToolTransformation:
         (
             result_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert
         assert len(result_tools) == 1
@@ -977,7 +1621,9 @@ class TestToolTransformation:
         (
             result_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert
         assert len(result_tools) == 1
@@ -1005,7 +1651,9 @@ class TestToolTransformation:
         (
             result_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert - computer_use has no Chat Completions equivalent, so it is dropped
         assert len(result_tools) == 0
@@ -1030,7 +1678,9 @@ class TestToolTransformation:
         (
             result_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert - custom tool is converted to a function tool
         assert len(result_tools) == 1
@@ -1055,7 +1705,9 @@ class TestToolTransformation:
         (
             result_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert
         assert len(result_tools) == 1
@@ -1079,7 +1731,9 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert
         assert len(result_tools) == 1
@@ -1100,7 +1754,9 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert
         assert len(result_tools) == 1
@@ -1119,7 +1775,9 @@ class TestToolTransformation:
         tools = [custom_tool]
 
         with pytest.raises(ValueError, match="allowed_callers must be a list of strings"):
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=tools
+            )
 
     def test_transform_web_search_tools_to_web_search_options(self):
         """Test that web_search tools are converted to web_search_options"""
@@ -1135,7 +1793,9 @@ class TestToolTransformation:
         (
             result_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert
         assert len(result_tools) == 0  # Web search is not added to tools
@@ -1166,7 +1826,9 @@ class TestToolTransformation:
         (
             result_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert
         assert len(result_tools) == 1
@@ -1196,7 +1858,9 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert
         assert len(result_tools) == 1
@@ -1222,7 +1886,9 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert
         assert len(result_tools) == 1
@@ -1234,6 +1900,38 @@ class TestToolTransformation:
         assert "defer_loading" not in result_tool
         assert "allowed_callers" not in result_tool
         assert "input_examples" not in result_tool
+        assert "eager_input_streaming" not in result_tool
+
+    @pytest.mark.parametrize("eager_input_streaming", [True, False])
+    def test_transform_function_tools_forwards_eager_input_streaming(self, eager_input_streaming: bool) -> None:
+        function_tool: Final = {
+            "type": "function",
+            "name": "write_file",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+            "eager_input_streaming": eager_input_streaming,
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[function_tool]
+        )
+
+        assert result_tools[0]["eager_input_streaming"] is eager_input_streaming
+
+    @pytest.mark.parametrize("eager_input_streaming", [True, False])
+    def test_chat_completion_tools_to_responses_tools_keeps_eager_input_streaming(
+        self, eager_input_streaming: bool
+    ) -> None:
+        chat_tool: Final = {
+            "type": "function",
+            "function": {"name": "write_file", "parameters": {"type": "object"}},
+            "eager_input_streaming": eager_input_streaming,
+        }
+
+        result_tools: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(
+            [chat_tool]
+        )
+
+        assert result_tools[0]["eager_input_streaming"] is eager_input_streaming
 
     def test_transform_code_execution_tools(self):
         """Test that code_execution tools are passed through as-is"""
@@ -1248,7 +1946,9 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert
         assert len(result_tools) == 1
@@ -1272,7 +1972,9 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert
         assert len(result_tools) == 2
@@ -1304,10 +2006,14 @@ class TestToolTransformation:
         (
             result_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert
-        assert len(result_tools) == 3  # function, mcp, vertex (web_search becomes options)
+        assert (
+            len(result_tools) == 3
+        )  # function, mcp, vertex (web_search becomes options)
         assert web_search_options is not None
 
         # Check function tool
@@ -1337,13 +2043,28 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert
         assert len(result_tools) == 1
         result_tool = result_tools[0]
         assert result_tool["function"]["parameters"]["type"] == "object"
         assert "properties" in result_tool["function"]["parameters"]
+
+    def test_transform_function_tools_parameters_keep_client_key_order(self):
+        tools = [
+            {"type": "function", "name": "a", "parameters": {"properties": {"arg": {"type": "string"}}, "required": ["arg"]}},
+            {"type": "function", "name": "b", "parameters": {"type": "object", "properties": {}}},
+        ]
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        assert list(result_tools[0]["function"]["parameters"]) == ["properties", "required", "type"]
+        assert list(result_tools[1]["function"]["parameters"]) == ["type", "properties"]
 
     def test_transform_function_tools_empty_parameters(self):
         """Test that empty parameters get 'type': 'object' added"""
@@ -1360,7 +2081,9 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert
         assert len(result_tools) == 1
@@ -1381,7 +2104,9 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert
         assert len(result_tools) == 1
@@ -1403,14 +2128,19 @@ class TestToolTransformation:
         (
             result_tools,
             _,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
 
         # Assert
         assert len(result_tools) == 1
         result_tool = result_tools[0]
         assert result_tool["function"]["parameters"]["type"] == "object"
         assert "properties" in result_tool["function"]["parameters"]
-        assert result_tool["function"]["parameters"]["properties"]["arg"]["type"] == "string"
+        assert (
+            result_tool["function"]["parameters"]["properties"]["arg"]["type"]
+            == "string"
+        )
 
     def test_bedrock_anthropic_drops_derived_web_search_options(self):
         """
@@ -1500,6 +2230,540 @@ class TestToolTransformation:
 
         assert "web_search_options" not in result
 
+    def test_transform_nested_namespace_tools_to_function_tools(self):
+        """Codex Responses namespace tools contain nested functions that chat
+        providers need as flattened function names."""
+        namespace_tool = {
+            "type": "namespace",
+            "name": "collaboration",
+            "description": "Multi-agent tools",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "spawn_agent",
+                    "description": "Spawn an agent",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "task_name": {"type": "string"},
+                            "message": {"type": "string"},
+                        },
+                        "required": ["task_name", "message"],
+                    },
+                }
+            ],
+        }
+
+        result_tools, web_search_options = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[namespace_tool]
+            )
+        )
+
+        assert web_search_options is None
+        assert len(result_tools) == 1
+        result_tool = result_tools[0]
+        assert result_tool["type"] == "function"
+        assert result_tool["function"]["name"] == "collaboration__spawn_agent"
+        assert result_tool["function"]["parameters"] == namespace_tool["tools"][0]["parameters"]
+        assert result_tool["function"]["description"] == "Multi-agent tools\n\nSpawn an agent"
+
+    def test_transform_namespace_tools_are_json_serializable(self):
+        """Outbound chat payloads go through json.dumps, which rejects MappingProxyType."""
+        namespace_tool = {
+            "type": "namespace",
+            "name": "mcp__everything",
+            "description": "MCP tools",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_sum",
+                    "description": "Add two numbers",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"a": {"type": "number"}, "b": {"type": "number"}},
+                        "required": ["a", "b"],
+                    },
+                }
+            ],
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[namespace_tool]
+        )
+
+        assert "mcp__everything__get_sum" in json.dumps(result_tools)
+
+    def test_function_call_echo_requalifies_namespace_tool_name(self):
+        """Codex echoes restored history items as short name plus namespace; the
+        outbound chat tool_call must use the flattened name the provider was given."""
+        messages = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call={
+                "type": "function_call",
+                "name": "get_sum",
+                "namespace": "mcp__everything",
+                "call_id": "call_1",
+                "arguments": '{"a": 21, "b": 21}',
+            }
+        )
+
+        assert messages[0]["tool_calls"][0]["function"]["name"] == "mcp__everything__get_sum"
+
+    def test_custom_tool_call_echo_keeps_short_name(self):
+        """Custom tools stay advertised under their short name, so a namespace on
+        a custom_tool_call echo is routing metadata and must not be prefixed."""
+        messages = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call={
+                "type": "custom_tool_call",
+                "name": "apply_patch",
+                "namespace": "mcp__everything",
+                "call_id": "call_2",
+                "input": "patch body",
+            }
+        )
+
+        assert messages[0]["tool_calls"][0]["function"]["name"] == "apply_patch"
+
+    @pytest.mark.parametrize("nested", [True, False])
+    def test_transform_namespace_tools_preserves_allowed_callers(self, nested):
+        function_tool = {
+            "type": "function",
+            "name": "spawn_agent",
+            "parameters": {"type": "object", "properties": {}},
+            "allowed_callers": ["code_execution_20250825"],
+        }
+        namespace_tool = (
+            {
+                "type": "namespace",
+                "name": "collaboration",
+                "tools": [function_tool],
+            }
+            if nested
+            else {**function_tool, "type": "namespace"}
+        )
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[namespace_tool]
+        )
+
+        assert result_tools[0]["allowed_callers"] == ["code_execution_20250825"]
+
+
+    @pytest.mark.parametrize("nested", [True, False])
+    def test_transform_namespace_tools_rejects_invalid_allowed_callers(self, nested):
+        function_tool = {
+            "type": "function",
+            "name": "spawn_agent",
+            "parameters": {"type": "object", "properties": {}},
+            "allowed_callers": "code_execution_20250825",
+        }
+        namespace_tool = (
+            {
+                "type": "namespace",
+                "name": "collaboration",
+                "tools": [function_tool],
+            }
+            if nested
+            else {**function_tool, "type": "namespace"}
+        )
+
+        with pytest.raises(ValueError, match="allowed_callers must be a list of strings"):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[namespace_tool]
+            )
+
+
+    def test_transform_flat_namespace_tools_to_function_tools(self):
+        namespace_tool = {
+            "type": "namespace",
+            "name": "mcp__node_repl",
+            "description": "Run JavaScript in the node REPL",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "JavaScript source to evaluate",
+                    }
+                },
+                "required": ["code"],
+            },
+        }
+
+        result_tools, web_search_options = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[namespace_tool]
+            )
+        )
+
+        assert web_search_options is None
+        assert len(result_tools) == 1
+        result_tool = result_tools[0]
+        assert result_tool["type"] == "function"
+        assert result_tool["function"]["name"] == "mcp__node_repl"
+        assert result_tool["function"]["description"] == "Run JavaScript in the node REPL"
+        assert result_tool["function"]["parameters"] == namespace_tool["parameters"]
+
+    def test_namespace_tool_name_map_accepts_unique_unqualified_tool_names(self):
+        """Some chat providers return the nested tool name without its namespace."""
+        namespace_tool = {
+            "type": "namespace",
+            "name": "collaboration",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "wait_agent",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+        }
+
+        result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            [namespace_tool]
+        )
+
+        assert result["collaboration__wait_agent"] == ("collaboration", "wait_agent")
+        assert result["wait_agent"] == ("collaboration", "wait_agent")
+
+    def test_namespace_tool_name_map_drops_ambiguous_unqualified_names(self):
+        tools = [
+            {"type": "function", "name": "ordinary"},
+            {
+                "type": "namespace",
+                "name": "alpha",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "run",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            },
+            {
+                "type": "namespace",
+                "name": "beta",
+                "tools": [
+                    {"type": "namespace", "name": "ignored"},
+                    {
+                        "type": "function",
+                        "name": "run",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                ],
+            },
+            {
+                "type": "namespace",
+                "name": "gamma",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "run",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            },
+        ]
+
+        result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            tools
+        )
+
+        assert result["alpha__run"] == ("alpha", "run")
+        assert result["beta__run"] == ("beta", "run")
+        assert result["gamma__run"] == ("gamma", "run")
+        assert "run" not in result
+
+    def test_namespace_tool_name_map_drops_top_level_function_collision(self):
+        tools = [
+            {"type": "function", "name": "run", "parameters": {"type": "object"}},
+            {
+                "type": "namespace",
+                "name": "admin",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "run",
+                        "parameters": {"type": "object"},
+                    }
+                ],
+            },
+        ]
+
+        result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
+
+        assert result["admin__run"] == ("admin", "run")
+        assert "run" not in result
+
+
+    def test_transform_tools_rejects_flattened_name_collision(self):
+        tools = [
+            {
+                "type": "function",
+                "name": "admin__run",
+                "parameters": {"type": "object"},
+            },
+            {
+                "type": "namespace",
+                "name": "admin",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "run",
+                        "parameters": {"type": "object"},
+                    }
+                ],
+            },
+        ]
+
+        with pytest.raises(
+            ValueError,
+            match="Top-level function names conflict with flattened namespace tools: admin__run",
+        ):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+
+
+    def test_restore_namespace_tool_name_leaves_unknown_tool_unchanged(self):
+        tool_name, namespace = LiteLLMCompletionResponsesConfig._restore_namespace_tool_name(
+            "mcp__node_repl",
+            {},
+        )
+
+        assert tool_name == "mcp__node_repl"
+        assert namespace is None
+
+    def test_transform_nested_namespace_ignores_non_function_subtools(self):
+        namespace_tool = {
+            "type": "namespace",
+            "name": "collaboration",
+            "tools": [
+                "ignored",
+                {"type": "namespace", "name": "ignored"},
+                {"type": "web_search", "name": "ignored"},
+                {
+                    "type": "function",
+                    "name": "spawn_agent",
+                    "parameters": {"properties": {"task_name": {"type": "string"}}},
+                },
+            ],
+        }
+
+        result_tools, _ = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[namespace_tool]
+            )
+        )
+
+        assert len(result_tools) == 1
+        assert result_tools[0]["function"]["name"] == "collaboration__spawn_agent"
+        assert result_tools[0]["function"]["parameters"] == {
+            "properties": {"task_name": {"type": "string"}},
+            "type": "object",
+        }
+
+    def test_transform_nested_namespace_custom_tool_becomes_a_content_function_under_its_short_name(self):
+        namespace_tool = {
+            "type": "namespace",
+            "name": "functions",
+            "description": "Codex shell tools.",
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "exec",
+                    "description": "Runs a shell command.",
+                    "format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"},
+                },
+            ],
+        }
+
+        result_tools, _ = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[namespace_tool]
+            )
+        )
+
+        assert len(result_tools) == 1
+        function = result_tools[0]["function"]
+        assert function["name"] == "exec"
+        assert function["description"].startswith("Codex shell tools.")
+        assert "Runs a shell command." in function["description"]
+        assert "start: /.+/" in function["description"]
+        assert function["parameters"]["required"] == ["content"]
+        assert function["parameters"]["properties"]["content"]["type"] == "string"
+
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider",
+        [
+            ("bedrock/converse/global.anthropic.claude-sonnet-5", "bedrock_converse"),
+            ("anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock"),
+            ("claude-sonnet-5", "vertex_ai"),
+            ("gemini-3.1-pro-preview", "vertex_ai"),
+            ("moonshotai.kimi-k2-thinking", "bedrock_mantle"),
+        ],
+    )
+    def test_reasoning_summary_still_yields_a_string_reasoning_effort(self, model, custom_llm_provider):
+        """
+        A Responses request carrying ``reasoning.summary`` must still reach a chat provider as a
+        plain ``reasoning_effort`` string. ``summary`` is Responses-only, and forwarding the whole
+        object turns reasoning off: Bedrock Converse and Vertex silently discard a non-string
+        ``reasoning_effort``, and Bedrock Mantle rejects the request outright.
+        """
+        responses_api_request = {"reasoning": {"effort": "medium", "summary": "auto"}}
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        assert result["reasoning_effort"] == "medium"
+
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider",
+        [
+            ("gpt-5.4-pro", "azure_ai"),
+            ("gpt-5", "openai"),
+            ("gpt-5.1", "openai"),
+            ("gpt-5", "azure"),
+        ],
+    )
+    def test_bridged_model_carries_the_summary_as_an_alias(self, model, custom_llm_provider):
+        """
+        ``summary`` reaches a bridged model through the ``reasoning_summary`` alias, never smuggled
+        inside ``reasoning_effort``. ``litellm.completion`` reads that alias back with
+        ``peek_reasoning_summary_aliases`` and reassembles ``{effort, summary}``, so the far end
+        gets the same object it always did while no chat provider ever sees a non-string effort.
+        """
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        assert result["reasoning_effort"] == "medium"
+        assert result["reasoning_summary"] == "auto"
+
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider",
+        [
+            ("gpt-5", "openai"),
+            ("gpt-5.1", "openai"),
+            ("gpt-5", "azure"),
+        ],
+    )
+    def test_gpt_5_summary_survives_the_bridge_it_claims_to_take(self, model, custom_llm_provider):
+        """
+        Regression for the probe disagreeing with the real decision. The transform asked
+        ``responses_api_bridge_check`` with ``reasoning_summary`` taken straight off the Responses
+        object, but ``litellm.completion`` reads it from ``optional_params`` via
+        ``peek_reasoning_summary_aliases``, which the bridged request never populated. So these
+        models answered "bridging" to the probe and "not bridging" for real, and the object landed
+        on Chat Completions, which only takes a string. Emitting the alias makes the two agree.
+        """
+        from litellm.main import responses_api_bridge_check
+        from litellm.utils import get_optional_params, peek_reasoning_summary_aliases
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
+            custom_llm_provider=custom_llm_provider,
+        )
+        optional_params = get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            reasoning_effort=result["reasoning_effort"],
+            reasoning_summary=result["reasoning_summary"],
+        )
+        model_info, _ = responses_api_bridge_check(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            reasoning_effort=result["reasoning_effort"],
+            reasoning_summary=peek_reasoning_summary_aliases(optional_params),
+        )
+
+        assert model_info.get("mode") == "responses"
+
+    def test_a_failing_bridge_probe_falls_back_to_the_string_effort(self, monkeypatch):
+        """
+        The probe is a capability question, so a model-info lookup blowing up must not fail the
+        request. It degrades to the chat-safe form: a string effort and no alias.
+        """
+        import litellm.main
+
+        def _boom(**_kwargs):
+            raise RuntimeError("model info unavailable")
+
+        monkeypatch.setattr(litellm.main, "responses_api_bridge_check", _boom)
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="gpt-5.4-pro",
+            input="hi",
+            responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
+            custom_llm_provider="azure_ai",
+        )
+
+        assert result["reasoning_effort"] == "medium"
+        assert "reasoning_summary" not in result
+
+    @pytest.mark.parametrize(
+        "reasoning, expected",
+        [
+            ({"effort": "high"}, "high"),
+            ("low", "low"),
+            ({"summary": "auto"}, None),
+            ({}, None),
+            (None, None),
+        ],
+    )
+    def test_reasoning_param_shapes_map_to_reasoning_effort(self, reasoning, expected):
+        """
+        An object without ``effort`` carries nothing Chat Completions can use, so no
+        ``reasoning_effort`` is sent at all (the bridge drops None-valued params).
+        """
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            input="hi",
+            responses_api_request={"reasoning": reasoning},
+            custom_llm_provider="bedrock",
+        )
+
+        assert result.get("reasoning_effort") == expected
+        assert ("reasoning_effort" in result) is (expected is not None)
+
+    @pytest.mark.parametrize(
+        "model, expected_thinking",
+        [
+            ("global.anthropic.claude-sonnet-5", {"type": "adaptive"}),
+            (
+                "anthropic.claude-sonnet-4-5-20250929-v1:0",
+                {"type": "enabled", "budget_tokens": 2048},
+            ),
+        ],
+    )
+    def test_reasoning_summary_still_enables_thinking_on_bedrock(self, model, expected_thinking):
+        """
+        End to end through Bedrock Converse's own param mapping: the effort a Responses request asks
+        for must survive into ``thinking``, whether the model takes an adaptive effort or a legacy
+        token budget. Forwarding the object instead leaves ``thinking`` unset and the model never
+        reasons, which is the failure this guards.
+        """
+        from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+        bridged = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
+            custom_llm_provider="bedrock",
+        )
+
+        mapped = AmazonConverseConfig().map_openai_params(
+            {"reasoning_effort": bridged["reasoning_effort"]}, {}, model, True
+        )
+
+        assert expected_thinking.items() <= mapped["thinking"].items()
+
     def test_bedrock_anthropic_responses_tools_yield_only_function_toolspec(self):
         """
         End-to-end (no network) of the LIT-3858 acceptance criterion: the mixed tools array
@@ -1536,7 +2800,11 @@ class TestToolTransformation:
         assert "web_search_options" not in result
 
         bedrock_tool_blocks = _bedrock_tools_pt(tools=result["tools"], model=model)
-        names = [block["toolSpec"]["name"] for block in bedrock_tool_blocks if "toolSpec" in block]
+        names = [
+            block["toolSpec"]["name"]
+            for block in bedrock_tool_blocks
+            if "toolSpec" in block
+        ]
         assert names == ["noop"]
         assert not any(name.startswith("litellm_unnamed_tool_") for name in names)
 
@@ -1584,6 +2852,7 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details is not None
         assert response_usage.input_tokens_details.cached_tokens == 5
         assert response_usage.input_tokens_details.text_tokens == 8
+        assert "cache_write_tokens" not in response_usage.input_tokens_details.model_dump()
 
     def test_transform_usage_with_cached_tokens_gemini(self):
         """Test that cached_tokens from Gemini are properly transformed to input_tokens_details"""
@@ -1625,6 +2894,28 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details is not None
         assert response_usage.input_tokens_details.cached_tokens == 3
         assert response_usage.input_tokens_details.text_tokens == 6
+
+    def test_transform_usage_preserves_cache_write_tokens(self):
+        """Regression for #34801: the chat-completions to Responses bridge dropped
+        cache-write tokens, so cache-creation billing disappeared on that route."""
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=10,
+            total_tokens=1010,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=100,
+                cache_write_tokens=800,
+            ),
+        )
+
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=usage
+        )
+
+        assert response_usage.input_tokens_details is not None
+        assert response_usage.input_tokens_details.cached_tokens == 100
+        assert getattr(response_usage.input_tokens_details, "cache_write_tokens", None) == 800
+        assert response_usage.input_tokens_details.model_dump()["cache_write_tokens"] == 800
 
     def test_transform_usage_with_reasoning_tokens_gemini(self):
         """Test that reasoning_tokens from Gemini are properly transformed to output_tokens_details"""
@@ -1815,7 +3106,9 @@ class TestUsageTransformation:
                 Choices(
                     finish_reason="stop",
                     index=0,
-                    message=Message(content="Here is the generated image.", role="assistant"),
+                    message=Message(
+                        content="Here is the generated image.", role="assistant"
+                    ),
                 )
             ],
         )
@@ -1832,10 +3125,10 @@ class TestUsageTransformation:
         assert response_usage.output_tokens_details.text_tokens == 50
         assert response_usage.output_tokens_details.image_tokens == 100
 
-    def test_reasoning_tokens_not_forced_to_zero_when_absent(self):
-        # Regression: previously the else branch wrote reasoning_tokens=0 even when
-        # completion_tokens_details had no reasoning (reasoning_tokens=None). That caused
-        # the proxy to always report reasoning_tokens=0 for non-thinking responses.
+    def test_reasoning_tokens_fall_back_to_zero_when_absent(self):
+        # The OpenAI SDK's ResponseUsage requires output_tokens_details.reasoning_tokens
+        # as an int, so an absent count degrades to 0 on the responses wire instead of
+        # dropping output_tokens_details and breaking SDK clients.
         usage = Usage(
             prompt_tokens=10,
             completion_tokens=50,
@@ -1866,7 +3159,8 @@ class TestUsageTransformation:
         )
 
         assert response_usage.output_tokens_details is not None
-        assert response_usage.output_tokens_details.reasoning_tokens is None
+        assert response_usage.output_tokens_details.reasoning_tokens == 0
+        assert response_usage.output_tokens_details.text_tokens == 50
 
     def test_reasoning_tokens_preserved_when_thinking_occurred(self):
         # Regression: reasoning_tokens must survive the chat->responses translation
@@ -2016,7 +3310,7 @@ class TestStreamingIDConsistency:
         # Transform chunks to response API events
         event1 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk1)
         event2 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk2)
-        event3 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk3)
+        iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk3)
 
         # Assert: All events should use the same item_id (from the first chunk)
         assert event1 is not None, "First event should not be None"
@@ -2039,7 +3333,9 @@ class TestStreamingIDConsistency:
         # Verify the cached ID is set and matches
         assert iterator._cached_item_id is not None, "Iterator should cache the item_id"
         assert iterator._cached_item_id == item_id_1, "Cached ID should match event IDs"
-        assert iterator._cached_item_id == "chatcmpl-first-id", "Should use the first chunk's ID"
+        assert iterator._cached_item_id.startswith(
+            "msg_"
+        ), "Message item IDs must use the Responses API msg_ prefix (issue #27333)"
 
     def test_streaming_iterator_initial_events_use_cached_id(self):
         """
@@ -2129,7 +3425,9 @@ class TestStreamingIDConsistency:
 
         # Create done events
         text_done_event = iterator.create_output_text_done_event(complete_response)
-        content_done_event = iterator.create_output_content_part_done_event(complete_response)
+        content_done_event = iterator.create_output_content_part_done_event(
+            complete_response
+        )
         item_done_event = iterator.create_output_item_done_event(complete_response)
 
         # Extract IDs
@@ -2189,19 +3487,27 @@ class TestStreamingIDConsistency:
             input=input_items
         )
 
-        roles = [m.get("role") if isinstance(m, dict) else getattr(m, "role", None) for m in messages]
+        roles = [
+            m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+            for m in messages
+        ]
 
         # Must not have two consecutive assistant messages
         for i in range(len(roles) - 1):
-            assert not (roles[i] == "assistant" and roles[i + 1] == "assistant"), (
-                f"Consecutive assistant messages at indices {i} and {i + 1}: {roles}"
-            )
+            assert not (
+                roles[i] == "assistant" and roles[i + 1] == "assistant"
+            ), f"Consecutive assistant messages at indices {i} and {i+1}: {roles}"
 
         # The single assistant message must contain BOTH tool_calls
         assistant_messages = [
-            m for m in messages if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "assistant"
+            m
+            for m in messages
+            if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None))
+            == "assistant"
         ]
-        assert len(assistant_messages) == 1, f"Expected 1 assistant message, got {len(assistant_messages)}"
+        assert (
+            len(assistant_messages) == 1
+        ), f"Expected 1 assistant message, got {len(assistant_messages)}"
 
         assistant_msg = assistant_messages[0]
         tool_calls = (
@@ -2209,19 +3515,27 @@ class TestStreamingIDConsistency:
             if isinstance(assistant_msg, dict)
             else getattr(assistant_msg, "tool_calls", None)
         )
-        assert tool_calls is not None and len(tool_calls) == 2, (
-            f"Expected 2 tool_calls in the merged assistant message, got: {tool_calls}"
-        )
+        assert (
+            tool_calls is not None and len(tool_calls) == 2
+        ), f"Expected 2 tool_calls in the merged assistant message, got: {tool_calls}"
 
-        call_ids = [(tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)) for tc in tool_calls]
+        call_ids = [
+            (tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None))
+            for tc in tool_calls
+        ]
         assert "toolu_01" in call_ids, f"toolu_01 missing from tool_calls: {call_ids}"
         assert "toolu_02" in call_ids, f"toolu_02 missing from tool_calls: {call_ids}"
 
         # Both tool messages must be present
         tool_messages = [
-            m for m in messages if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "tool"
+            m
+            for m in messages
+            if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None))
+            == "tool"
         ]
-        assert len(tool_messages) == 2, f"Expected 2 tool messages, got {len(tool_messages)}"
+        assert (
+            len(tool_messages) == 2
+        ), f"Expected 2 tool messages, got {len(tool_messages)}"
 
     def test_single_tool_call_still_works_after_merge_fix(self):
         """
@@ -2243,14 +3557,20 @@ class TestStreamingIDConsistency:
             input=input_items
         )
 
-        roles = [m.get("role") if isinstance(m, dict) else getattr(m, "role", None) for m in messages]
+        roles = [
+            m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+            for m in messages
+        ]
 
         assert "user" in roles
         assert "assistant" in roles
         assert "tool" in roles
 
         assistant_messages = [
-            m for m in messages if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "assistant"
+            m
+            for m in messages
+            if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None))
+            == "assistant"
         ]
         assert len(assistant_messages) == 1
 
@@ -2417,13 +3737,13 @@ class TestEnsureOutputItemContentPartAdded:
 
     def _make_iterator(self):
         """Create a minimal LiteLLMCompletionStreamingIterator for testing."""
-        from unittest.mock import MagicMock
-
         from litellm.responses.litellm_completion_transformation.streaming_iterator import (
             LiteLLMCompletionStreamingIterator,
         )
 
-        iterator = LiteLLMCompletionStreamingIterator.__new__(LiteLLMCompletionStreamingIterator)
+        iterator = LiteLLMCompletionStreamingIterator.__new__(
+            LiteLLMCompletionStreamingIterator
+        )
         iterator.sent_output_item_added_event = False
         iterator.sent_content_part_added_event = False
         iterator._sequence_number = 0
@@ -2431,6 +3751,19 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._cached_reasoning_item_id = None
         iterator._reasoning_active = False
         iterator._pending_response_events = []
+        iterator._pending_tool_events = []
+        iterator._tool_output_index_by_call_id = {}
+        iterator._tool_args_by_call_id = {}
+        iterator._tool_item_id_by_call_id = {}
+        iterator._tool_call_id_by_index = {}
+        iterator._ambiguous_tool_call_indexes = set()
+        iterator._next_tool_output_index = 1
+        iterator._final_tool_events_queued = False
+        iterator._custom_tool_names = set()
+        iterator.responses_api_request = {}
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(None)
+        iterator._web_search_calls = {}
+        iterator._queued_web_search_call_ids = set()
         return iterator
 
     def _make_text_chunk(self):
@@ -2477,6 +3810,420 @@ class TestEnsureOutputItemContentPartAdded:
         assert events[1].part.type == "output_text"
         assert iterator.sent_content_part_added_event is True
 
+    def test_streaming_namespace_tool_calls_restore_responses_namespace(self):
+        """Flattened chat-completion namespace tool calls must stream back as
+        Responses function calls with name + namespace split."""
+        iterator = self._make_iterator()
+        iterator.responses_api_request = {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "collaboration",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "spawn_agent",
+                            "parameters": {"type": "object", "properties": {}},
+                        }
+                    ],
+                }
+            ]
+        }
+
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            iterator.responses_api_request.get("tools")
+        )
+
+        iterator._queue_tool_call_delta_events(
+            [
+                {
+                    "index": 0,
+                    "id": "call_1",
+                    "function": {
+                        "name": "collaboration__spawn_agent",
+                        "arguments": '{"task_name":"input_test"}',
+                    },
+                }
+            ]
+        )
+
+        added = iterator._pending_tool_events[0]
+        assert added.item.name == "spawn_agent"
+        assert added.item.namespace == "collaboration"
+
+    def test_streaming_nested_custom_tool_call_comes_back_as_custom_tool_call(self):
+        from litellm.responses.litellm_completion_transformation.custom_tools import extract_custom_tool_names
+
+        iterator = self._make_iterator()
+        iterator.responses_api_request = {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "functions",
+                    "tools": [
+                        {
+                            "type": "custom",
+                            "name": "exec",
+                            "format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"},
+                        }
+                    ],
+                }
+            ]
+        }
+        iterator._custom_tool_names = extract_custom_tool_names(iterator.responses_api_request.get("tools"))
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            iterator.responses_api_request.get("tools")
+        )
+
+        iterator._queue_tool_call_delta_events(
+            [{"index": 0, "id": "call_exec", "function": {"name": "exec", "arguments": '{"content":"ls"}'}}]
+        )
+        iterator._queue_final_tool_call_done_events(
+            ModelResponse(
+                id="chatcmpl-exec",
+                created=1,
+                model="us.openai.gpt-5.6",
+                object="chat.completion",
+                choices=[
+                    Choices(
+                        finish_reason="tool_calls",
+                        index=0,
+                        message=Message(
+                            content=None,
+                            role="assistant",
+                            tool_calls=[
+                                ChatCompletionMessageToolCall(
+                                    id="call_exec",
+                                    type="function",
+                                    function=Function(name="exec", arguments='{"content":"ls"}'),
+                                )
+                            ],
+                        ),
+                    )
+                ],
+            )
+        )
+
+        added = iterator._pending_tool_events[0]
+        assert added.item.type == "custom_tool_call"
+        assert added.item.name == "exec"
+        done = iterator._pending_tool_events[-1]
+        assert done.item.type == "custom_tool_call"
+        assert done.item.input == "ls"
+
+    def test_streaming_namespaced_function_sharing_a_nested_custom_short_name_stays_a_function_call(self):
+        from litellm.responses.litellm_completion_transformation.custom_tools import extract_custom_tool_names
+
+        iterator = self._make_iterator()
+        iterator.responses_api_request = {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "alpha",
+                    "tools": [
+                        {
+                            "type": "custom",
+                            "name": "run",
+                            "format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"},
+                        }
+                    ],
+                },
+                {
+                    "type": "namespace",
+                    "name": "beta",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "run",
+                            "parameters": {"type": "object", "properties": {"job_id": {"type": "string"}}},
+                        }
+                    ],
+                },
+            ]
+        }
+        iterator._custom_tool_names = extract_custom_tool_names(iterator.responses_api_request.get("tools"))
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            iterator.responses_api_request.get("tools")
+        )
+        function_call = {"id": "call_fn", "function": {"name": "beta__run", "arguments": '{"job_id":"42"}'}}
+        custom_call = {"id": "call_custom", "function": {"name": "run", "arguments": '{"content":"echo hi"}'}}
+
+        iterator._queue_tool_call_delta_events([{"index": 0, **function_call}, {"index": 1, **custom_call}])
+        iterator._queue_final_tool_call_done_events(
+            ModelResponse(
+                id="chatcmpl-run",
+                created=1,
+                model="us.openai.gpt-5.6",
+                object="chat.completion",
+                choices=[
+                    Choices(
+                        finish_reason="tool_calls",
+                        index=0,
+                        message=Message(
+                            content=None,
+                            role="assistant",
+                            tool_calls=[
+                                ChatCompletionMessageToolCall(
+                                    id=call["id"], type="function", function=Function(**call["function"])
+                                )
+                                for call in (function_call, custom_call)
+                            ],
+                        ),
+                    )
+                ],
+            )
+        )
+
+        items = [
+            event.item
+            for event in iterator._pending_tool_events
+            if event.type in ("response.output_item.added", "response.output_item.done")
+        ]
+        function_items = [item for item in items if item.call_id == "call_fn"]
+        custom_items = [item for item in items if item.call_id == "call_custom"]
+        assert len(function_items) == 2 and len(custom_items) == 2
+        assert all((item.type, item.name, item.namespace) == ("function_call", "run", "beta") for item in function_items)
+        assert function_items[-1].arguments == '{"job_id":"42"}'
+        assert all(item.type == "custom_tool_call" and item.name == "run" for item in custom_items)
+        assert all(getattr(item, "namespace", None) is None for item in custom_items)
+        assert custom_items[-1].input == "echo hi"
+
+    def test_streaming_unqualified_namespace_tool_calls_restore_namespace(self):
+        """A unique nested tool name without the namespace still maps back."""
+        iterator = self._make_iterator()
+        iterator.responses_api_request = {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "collaboration",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "wait_agent",
+                            "parameters": {"type": "object", "properties": {}},
+                        }
+                    ],
+                }
+            ]
+        }
+
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            iterator.responses_api_request.get("tools")
+        )
+
+        iterator._queue_tool_call_delta_events(
+            [
+                {
+                    "index": 0,
+                    "id": "call_1",
+                    "function": {
+                        "name": "wait_agent",
+                        "arguments": "{}",
+                    },
+                }
+            ]
+        )
+
+        added = iterator._pending_tool_events[0]
+        assert added.item.name == "wait_agent"
+        assert added.item.namespace == "collaboration"
+
+    def test_streaming_flat_namespace_tool_call_keeps_flat_name(self):
+        iterator = self._make_iterator()
+        iterator.responses_api_request = {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "mcp__node_repl",
+                    "description": "Run JavaScript",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"code": {"type": "string"}},
+                    },
+                }
+            ]
+        }
+
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            iterator.responses_api_request.get("tools")
+        )
+
+        iterator._queue_tool_call_delta_events(
+            [
+                {
+                    "index": 0,
+                    "id": "call_1",
+                    "function": {
+                        "name": "mcp__node_repl",
+                        "arguments": '{"code":"1+1"}',
+                    },
+                }
+            ]
+        )
+
+        chat_completion_response = ModelResponse(
+            id="chatcmpl-test",
+            created=1234567890,
+            model="gemini-3.1-pro-preview-customtools",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_1",
+                                type="function",
+                                function=Function(
+                                    name="mcp__node_repl",
+                                    arguments='{"code":"1+1"}',
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        iterator._queue_final_tool_call_done_events(chat_completion_response)
+
+        added = iterator._pending_tool_events[0]
+        done = iterator._pending_tool_events[-1]
+        assert added.item.name == "mcp__node_repl"
+        assert getattr(added.item, "namespace", None) is None
+        assert done.item.name == "mcp__node_repl"
+        assert getattr(done.item, "namespace", None) is None
+
+    def test_streaming_final_only_namespace_tool_call_restores_namespace(self):
+        from unittest.mock import MagicMock
+
+        iterator = self._make_iterator()
+        iterator.responses_api_request = {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "collaboration",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "spawn_agent",
+                            "parameters": {"type": "object", "properties": {}},
+                        }
+                    ],
+                }
+            ]
+        }
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            iterator.responses_api_request.get("tools")
+        )
+
+        message = MagicMock()
+        message.tool_calls = [
+            {
+                "id": "call_1",
+                "function": {
+                    "name": "collaboration__spawn_agent",
+                    "arguments": '{"message":"hello world"}',
+                },
+            }
+        ]
+        complete_response = MagicMock()
+        complete_response.choices = [MagicMock(message=message)]
+
+        iterator._queue_final_tool_call_done_events(complete_response)
+
+        added = iterator._pending_tool_events[0]
+        delta_events = iterator._pending_tool_events[1:-2]
+        done = iterator._pending_tool_events[-1]
+        assert added.item.name == "spawn_agent"
+        assert added.item.namespace == "collaboration"
+        assert "".join(event.delta for event in delta_events) == '{"message":"hello world"}'
+        assert done.item.name == "spawn_agent"
+        assert done.item.namespace == "collaboration"
+
+    def test_streaming_top_level_function_collision_stays_unnamespaced(self):
+        iterator = self._make_iterator()
+        iterator.responses_api_request = {
+            "tools": [
+                {"type": "function", "name": "run", "parameters": {"type": "object"}},
+                {
+                    "type": "namespace",
+                    "name": "admin",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "run",
+                            "parameters": {"type": "object"},
+                        }
+                    ],
+                },
+            ]
+        }
+
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            iterator.responses_api_request.get("tools")
+        )
+
+        iterator._queue_tool_call_delta_events(
+            [
+                {
+                    "index": 0,
+                    "id": "call_top_level",
+                    "function": {"name": "run", "arguments": "{}"},
+                }
+            ]
+        )
+
+        added = iterator._pending_tool_events[0]
+        assert added.item.name == "run"
+        assert getattr(added.item, "namespace", None) is None
+
+
+    def test_streaming_namespace_map_is_built_once(self):
+        from unittest.mock import MagicMock, patch
+
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        mock_stream_wrapper = MagicMock()
+        mock_stream_wrapper.logging_obj = MagicMock()
+        request = {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "admin",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "run",
+                            "parameters": {"type": "object"},
+                        }
+                    ],
+                }
+            ]
+        }
+
+        with patch.object(
+            LiteLLMCompletionResponsesConfig,
+            "namespace_tool_name_map",
+            wraps=LiteLLMCompletionResponsesConfig.namespace_tool_name_map,
+        ) as namespace_map:
+            iterator = LiteLLMCompletionStreamingIterator(
+                model="test-model",
+                litellm_custom_stream_wrapper=mock_stream_wrapper,
+                request_input="test",
+                responses_api_request=request,
+            )
+            iterator._responses_namespace_tool_call_fields("admin__run")
+            iterator._responses_namespace_tool_call_fields("admin__run")
+
+        namespace_map.assert_called_once_with(request["tools"])
+
+
     def test_emit_response_completed_uses_stream_finish_reason(self):
         """
         When the assembled model response carries finish_reason="content_filter"
@@ -2516,7 +4263,9 @@ class TestEnsureOutputItemContentPartAdded:
             usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
         )
 
-        completed_event = iterator._emit_response_completed_event(litellm_model_response)
+        completed_event = iterator._emit_response_completed_event(
+            litellm_model_response
+        )
 
         assert completed_event is not None
         assert completed_event.response.status == "incomplete"
@@ -2559,7 +4308,9 @@ class TestCacheControlPreservation:
                 "cache_control": {"type": "ephemeral"},
             }
         ]
-        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(content)
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
         assert isinstance(result, list)
         assert len(result) == 1
         assert result[0]["cache_control"] == {"type": "ephemeral"}
@@ -2567,7 +4318,9 @@ class TestCacheControlPreservation:
     def test_content_without_cache_control_unaffected(self):
         """Content blocks that don't have cache_control should be unaffected."""
         content = [{"type": "text", "text": "hello"}]
-        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(content)
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
         assert isinstance(result, list)
         assert len(result) == 1
         assert "cache_control" not in result[0]
@@ -2589,7 +4342,9 @@ class TestCacheControlPreservation:
         )
         assert len(messages) == 1
         msg_content = (
-            messages[0].get("content") if isinstance(messages[0], dict) else getattr(messages[0], "content", None)
+            messages[0].get("content")
+            if isinstance(messages[0], dict)
+            else getattr(messages[0], "content", None)
         )
         assert isinstance(msg_content, list)
         assert msg_content[0]["cache_control"] == {"type": "ephemeral"}
@@ -2602,7 +4357,9 @@ class TestCacheControlPreservation:
                 "cache_control": {"type": "ephemeral"},
             }
         ]
-        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(content)
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
         assert isinstance(result, list)
         assert len(result) == 1
         assert result[0]["cache_control"] == {"type": "ephemeral"}
@@ -2615,106 +4372,12 @@ class TestCacheControlPreservation:
                 "cache_control": {"type": "ephemeral"},
             }
         ]
-        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(content)
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
         assert isinstance(result, list)
         assert len(result) == 1
         assert result[0]["cache_control"] == {"type": "ephemeral"}
-
-    def test_cache_control_preserved_for_object_input_item(self):
-        """Test that cache_control is preserved when input_item is a real Pydantic model."""
-        from pydantic import BaseModel, Field
-
-        class RealInputItem(BaseModel):
-            role: str = "user"
-            content: str = "hello"
-            cache_control: dict = Field(default_factory=lambda: {"type": "ephemeral"})
-
-        input_item = RealInputItem()
-        messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
-            input_item
-        )
-        assert messages == [{"role": "user", "content": "hello", "cache_control": {"type": "ephemeral"}}]
-
-    def test_none_cache_control_omitted_from_content_blocks(self):
-        from pydantic import BaseModel
-        from typing import Optional
-
-        class MockContentItem(BaseModel):
-            type: str = "text"
-            text: str = "hello world"
-            cache_control: Optional[dict] = None
-
-        item = MockContentItem()
-        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content([item])
-        assert isinstance(result, list)
-        assert len(result) == 1
-        assert "cache_control" not in result[0]
-
-        dict_item = {"type": "text", "text": "hello", "cache_control": None}
-        result_dict = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content([dict_item])
-        assert isinstance(result_dict, list)
-        assert len(result_dict) == 1
-        assert "cache_control" not in result_dict[0]
-
-        image_item = {"type": "input_image", "image_url": "https://example.com/a.png", "cache_control": None}
-        result_img = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content([image_item])
-        assert isinstance(result_img, list)
-        assert len(result_img) == 1
-        assert "cache_control" not in result_img[0]
-
-    def test_tool_call_output_as_custom_object(self):
-        """Test _transform_responses_api_tool_call_output_to_chat_completion_message with a custom object."""
-        class MockToolCallOutput:
-            def __init__(self):
-                self.call_id = "call_abc123"
-                self.output = "tool output content"
-                self.status = "completed"
-
-        item = MockToolCallOutput()
-        messages = LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
-            item
-        )
-        assert len(messages) == 1
-        assert messages[0]["role"] == "tool"
-        assert messages[0]["tool_call_id"] == "call_abc123"
-        assert messages[0]["content"] == "tool output content"
-
-    def test_function_call_as_custom_object(self):
-        """Test _transform_responses_api_function_call_to_chat_completion_message with a custom object."""
-        class MockFunctionCall:
-            def __init__(self):
-                self.type = "function_call"
-                self.arguments = '{"location": "Boston"}'
-                self.call_id = "call_xyz789"
-                self.name = "get_weather"
-                self.id = "fc_12345"
-                self.status = "completed"
-
-        item = MockFunctionCall()
-        messages = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
-            item
-        )
-        assert len(messages) == 1
-        assert messages[0]["role"] == "assistant"
-        assert len(messages[0]["tool_calls"]) == 1
-        assert messages[0]["tool_calls"][0]["id"] == "call_xyz789"
-        assert messages[0]["tool_calls"][0]["function"]["name"] == "get_weather"
-
-    def test_is_input_item_object_type_checks(self):
-        """Test _is_input_item_tool_call_output and _is_input_item_function_call with custom objects."""
-        class MockObj:
-            def __init__(self, t):
-                self.type = t
-
-        # Test tool call output
-        assert LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(MockObj("function_call_output")) is True
-        assert LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(MockObj("custom_tool_call_output")) is True
-        assert LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(MockObj("text")) is False
-
-        # Test function call
-        assert LiteLLMCompletionResponsesConfig._is_input_item_function_call(MockObj("function_call")) is True
-        assert LiteLLMCompletionResponsesConfig._is_input_item_function_call(MockObj("custom_tool_call")) is True
-        assert LiteLLMCompletionResponsesConfig._is_input_item_function_call(MockObj("text")) is False
 
 
 def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
@@ -2727,10 +4390,613 @@ def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
     for the bedrock-mantle gpt-5.5 non-streaming path."""
     from types import SimpleNamespace
 
-    convert = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call
+    convert = (
+        LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call
+    )
 
-    mantle = SimpleNamespace(id="fc_unique_abc123", call_id="call_0", name="get_weather", arguments="{}")
+    mantle = SimpleNamespace(
+        id="fc_unique_abc123", call_id="call_0", name="get_weather", arguments="{}"
+    )
     assert convert(mantle)["id"] == "fc_unique_abc123"
 
-    openai = SimpleNamespace(id="fc_2", call_id="call_tokyo", name="get_weather", arguments="{}")
+    openai = SimpleNamespace(
+        id="fc_2", call_id="call_tokyo", name="get_weather", arguments="{}"
+    )
     assert convert(openai)["id"] == "call_tokyo"
+
+
+class TestHostedWebSearchReplay:
+    def test_emitted_hosted_search_output_round_trips_with_client_tool_result(self) -> None:
+        search_result: Final = {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_round_trip_search",
+            "content": [{"type": "web_search_result", "url": "https://example.com/forecast"}],
+        }
+        search: Final = build_web_search_call(
+            tool_id="srvtoolu_round_trip_search", tool_input={"query": "Paris forecast"}, result=search_result
+        )
+        message: Final = Message(
+            role="assistant",
+            content="I found a forecast source.",
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    id="srvtoolu_round_trip_search",
+                    type="function",
+                    function=Function(name="web_search", arguments='{"query":"Paris forecast"}'),
+                ),
+                ChatCompletionMessageToolCall(
+                    id="call_round_trip_weather",
+                    type="function",
+                    function=Function(name="get_weather", arguments='{"city":"Paris"}'),
+                ),
+            ],
+            provider_specific_fields={"web_search_calls": [search], "web_search_results": [search_result]},
+        )
+        response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Find a forecast source and check the weather in Paris.",
+            responses_api_request={
+                "tools": [
+                    {"type": "web_search"},
+                    {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+                ]
+            },
+            chat_completion_response=_bridged_chat_completion_response(
+                choices=[Choices(index=0, finish_reason="tool_calls", message=message)]
+            ),
+        )
+        assert [item for item in response.output if item.type == "web_search_call"] == [search]
+        assert [item.call_id for item in response.output if item.type == "function_call"] == ["call_round_trip_weather"]
+        history: Final = [
+            {"role": "user", "content": "Find a forecast source and check the weather in Paris."},
+            *(item.model_dump(exclude_none=True) for item in response.output),
+            {"type": "function_call_output", "call_id": "call_round_trip_weather", "output": "Paris is sunny."},
+        ]
+        original: Final = deepcopy(history)
+
+        messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=history, responses_api_request={}
+        )
+
+        assert [item.get("role") for item in messages] == ["user", "assistant", "tool"]
+        assistant: Final = messages[1]
+        assert [call["id"] for call in assistant["tool_calls"]] == ["call_round_trip_weather"]
+        assert [call["function"]["name"] for call in assistant["tool_calls"]] == ["get_weather"]
+        content: Final = assistant["content"]
+        assert isinstance(content, list)
+        text_parts: Final = tuple(block["text"] for block in content if block.get("type") == "text")
+        assert text_parts[0] == "I found a forecast source."
+        replayed_searches: Final = tuple(
+            ResponseFunctionWebSearch.model_validate_json(text[text.index("{"):])
+            for text in text_parts
+            if "web_search_call" in text
+        )
+        assert replayed_searches == (search,)
+        assert messages[2]["tool_call_id"] == "call_round_trip_weather"
+        assert messages[2]["content"] == "Paris is sunny."
+        assert history == original
+
+    @pytest.mark.parametrize(
+        "action",
+        (
+            ActionSearch(
+                type="search",
+                query="hosted search history",
+                queries=["hosted search history", "search replay"],
+                sources=[ActionSearchSource(type="url", url="https://example.com/search-result")],
+            ),
+            ActionOpenPage(type="open_page", url="https://example.com/opened-page"),
+            ActionFind(type="find_in_page", url="https://example.com/find-page", pattern="search history"),
+        ),
+        ids=("search", "open_page", "find"),
+    )
+    @pytest.mark.parametrize("status", ("completed", "failed"))
+    def test_replays_typed_search_action_without_client_tool_call(
+        self,
+        action: ActionSearch | ActionOpenPage | ActionFind,
+        status: Literal["completed", "failed"],
+    ) -> None:
+        search: Final = ResponseFunctionWebSearch(
+            id="ws_replayed_search", type="web_search_call", status=status, action=action
+        )
+        input_item: Final = search.model_dump(exclude_none=True)
+        original: Final = deepcopy(input_item)
+
+        messages: Final = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item=input_item
+        )
+
+        assert len(messages) == 1
+        assert messages[0]["role"] == "assistant"
+        assert not messages[0].get("tool_calls")
+        content: Final = messages[0].get("content")
+        assert isinstance(content, str)
+        replayed: Final = ResponseFunctionWebSearch.model_validate_json(content[content.index("{"):])
+        assert replayed == search
+        assert input_item == original
+
+    @pytest.mark.parametrize("order", ((0, 1, 2, 3), (1, 0, 3, 2), (1, 3, 0, 2)))
+    @pytest.mark.parametrize("modify_params", (False, True))
+    @pytest.mark.parametrize("structured_content", (False, True))
+    def test_search_replay_preserves_client_tool_result_adjacency(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        order: tuple[int, int, int, int],
+        modify_params: bool,
+        structured_content: bool,
+    ) -> None:
+        monkeypatch.setattr(litellm, "modify_params", modify_params)
+        searches: Final = tuple(
+            ResponseFunctionWebSearch(
+                id=f"ws_search_{index}",
+                type="web_search_call",
+                status="completed",
+                action=ActionSearch(
+                    type="search",
+                    query=f"search query {index}",
+                    queries=[f"search query {index}"],
+                    sources=[ActionSearchSource(type="url", url=f"https://example.com/result-{index}")],
+                ),
+            )
+            for index in (1, 2)
+        )
+        replay_items: Final = (
+            {
+                "type": "function_call",
+                "name": "get_weather",
+                "call_id": "call_weather",
+                "arguments": '{"city":"Paris"}',
+            },
+            searches[0].model_dump(exclude_none=True),
+            {"type": "function_call", "name": "get_time", "call_id": "call_time", "arguments": "{}"},
+            searches[1].model_dump(exclude_none=True),
+        )
+        history: Final = [
+            {"role": "user", "content": "Research the forecast and call get_weather."},
+            {
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "I will check the forecast."}]
+                if structured_content
+                else "I will check the forecast.",
+            },
+            *(replay_items[index] for index in order),
+            {"role": "assistant", "content": [{"type": "output_text", "text": "I found two sources."}]},
+            {"type": "function_call_output", "call_id": "call_weather", "output": "Paris is sunny."},
+            {"type": "function_call_output", "call_id": "call_time", "output": "12:00"},
+        ]
+        original: Final = deepcopy(history)
+
+        messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=history, responses_api_request={}
+        )
+
+        assert [message.get("role") for message in messages] == ["user", "assistant", "tool", "tool"]
+        assistant: Final = messages[1]
+        assert [call["id"] for call in assistant["tool_calls"]] == ["call_weather", "call_time"]
+        assert [call["function"]["name"] for call in assistant["tool_calls"]] == ["get_weather", "get_time"]
+        assert messages[2]["tool_call_id"] == "call_weather"
+        assert messages[2]["content"] == "Paris is sunny."
+        assert messages[3]["tool_call_id"] == "call_time"
+        assert messages[3]["content"] == "12:00"
+        content: Final = assistant["content"]
+        assert isinstance(content, list)
+        text_parts: Final = tuple(block["text"] for block in content if block.get("type") == "text")
+        assert text_parts[0] == "I will check the forecast."
+        assert text_parts[-1] == "I found two sources."
+        replayed_searches: Final = tuple(
+            ResponseFunctionWebSearch.model_validate_json(text[text.index("{"):])
+            for text in text_parts
+            if "web_search_call" in text
+        )
+        assert replayed_searches == searches
+        assert history == original
+
+        provider_messages: Final = anthropic_messages_pt(
+            messages=messages, model="claude-fable-5-1", llm_provider="anthropic"
+        )
+
+        assert [message["role"] for message in provider_messages] == ["user", "assistant", "user"]
+        assistant_blocks: Final = provider_messages[1]["content"]
+        result_blocks: Final = provider_messages[2]["content"]
+        assert [block["id"] for block in assistant_blocks if block.get("type") == "tool_use"] == [
+            "call_weather", "call_time"
+        ]
+        assert [block["tool_use_id"] for block in result_blocks if block.get("type") == "tool_result"] == [
+            "call_weather", "call_time"
+        ]
+        assert [block["content"] for block in result_blocks if block.get("type") == "tool_result"] == [
+            "Paris is sunny.", "12:00"
+        ]
+        assert [block["text"] for block in assistant_blocks if block.get("type") == "text"] == list(text_parts)
+        assert history == original
+
+
+BRIDGED_CHAT_COMPLETION_ID = "chatcmpl-dfa2da3a-1586-4ff7-b64e-f59c692a5d11"
+
+
+def _bridged_chat_completion_response(**overrides):
+    defaults = dict(
+        id=BRIDGED_CHAT_COMPLETION_ID,
+        created=1717000000,
+        model="claude-sonnet-4-5",
+        object="chat.completion",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(role="assistant", content="apple"),
+            )
+        ],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+    defaults.update(overrides)
+    return ModelResponse(**defaults)
+
+
+def _bridged_output_items(response, item_type):
+    return [item for item in response.output if getattr(item, "type", None) == item_type]
+
+
+class TestBridgedOutputItemIdPrefixes:
+    """Bridged output items must carry Responses API ID prefixes (issue #27333).
+
+    Native OpenAI Responses rejects a replayed history whose message item ID does not
+    begin with "msg", so leaking the upstream chatcmpl-* ID makes the conversation
+    impossible to hand off from a bridged provider to OpenAI.
+    """
+
+    def _transform(self, chat_completion_response):
+        return LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Say the single word: apple",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+    @pytest.mark.parametrize(
+        "tool_type,result_kind,expected_sources",
+        [
+            (
+                "web_search",
+                "valid",
+                {"srvtoolu_01Search": ["https://example.com/one"], "srvtoolu_02Search": ["https://example.com/two"]},
+            ),
+            (
+                "web_search_preview",
+                "valid",
+                {"srvtoolu_01Search": ["https://example.com/one"], "srvtoolu_02Search": ["https://example.com/two"]},
+            ),
+            ("function", "valid", {}),
+            ("web_search", "unpaired", {"srvtoolu_01Search": ["https://example.com/one"]}),
+            ("web_search", "web_fetch", {"srvtoolu_02Search": ["https://example.com/two"]}),
+            ("web_search", "error", {"srvtoolu_01Search": [], "srvtoolu_02Search": ["https://example.com/two"]}),
+        ],
+    )
+    def test_anthropic_web_search_output_mapping(self, tool_type, result_kind, expected_sources):
+        call_ids: Final = ("srvtoolu_01Search", "srvtoolu_02Search")
+        valid_results: Final = (
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": call_ids[0],
+                "content": [{"type": "web_search_result", "url": "https://example.com/one"}],
+            },
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": call_ids[1],
+                "content": [{"type": "web_search_result", "url": "https://example.com/two"}],
+            },
+        )
+        first_result: Final = (
+            {**valid_results[0], "type": "web_fetch_tool_result"}
+            if result_kind == "web_fetch"
+            else {**valid_results[0], "content": {"type": "web_search_tool_result_error", "error_code": "unavailable"}}
+            if result_kind == "error"
+            else valid_results[0]
+        )
+        results: Final = (first_result,) if result_kind == "unpaired" else (first_result, valid_results[1])
+        message: Final = Message(
+            role="assistant",
+            content="answer",
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    id=call_id,
+                    type="function",
+                    function=Function(name="web_search", arguments=json.dumps({"query": query})),
+                )
+                for call_id, query in zip(call_ids, ("one", "two"), strict=True)
+            ]
+            + [
+                ChatCompletionMessageToolCall(
+                    id="toolu_regular",
+                    type="function",
+                    function=Function(name="get_weather", arguments='{"city":"Paris"}'),
+                )
+            ],
+            provider_specific_fields={
+                "web_search_results": results,
+                "web_search_calls": [
+                    build_web_search_call(
+                        tool_id=result["tool_use_id"],
+                        tool_input={"query": "one" if result["tool_use_id"].endswith("01Search") else "two"},
+                        result=result,
+                    )
+                    for result in results
+                    if tool_type != "function" and result["type"] == "web_search_tool_result"
+                ],
+            },
+        )
+        request_tools: Final = (
+            [{"type": "function", "name": "web_search", "parameters": {"type": "object"}}]
+            if tool_type == "function"
+            else [{"type": tool_type}]
+        )
+        response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="search",
+            responses_api_request={"tools": request_tools},
+            chat_completion_response=_bridged_chat_completion_response(
+                choices=[Choices(index=0, finish_reason="stop", message=message)]
+            ),
+        )
+        search_items: Final = {
+            item.id.removeprefix("ws_"): item for item in response.output if item.type == "web_search_call"
+        }
+        function_ids: Final = {item.call_id for item in response.output if item.type == "function_call"}
+
+        assert set(search_items) == set(expected_sources)
+        assert function_ids == set(call_ids).difference(expected_sources) | {"toolu_regular"}
+        assert [item.content[0].text for item in response.output if item.type == "message"] == ["answer"]
+        for call_id, item in search_items.items():
+            assert item.status == ("failed" if result_kind == "error" and call_id.endswith("01Search") else "completed")
+            assert item.action.type == "search"
+            assert item.action.query == ("one" if call_id.endswith("01Search") else "two")
+            assert item.action.queries == [item.action.query]
+            assert [source.url for source in item.action.sources] == expected_sources[call_id]
+
+    def test_message_item_id_uses_msg_prefix(self):
+        response = self._transform(_bridged_chat_completion_response())
+
+        message_items = _bridged_output_items(response, "message")
+        assert len(message_items) == 1
+        assert message_items[0].id.startswith("msg_")
+
+    def test_message_item_id_does_not_leak_chat_completion_id(self):
+        response = self._transform(_bridged_chat_completion_response())
+
+        for item in _bridged_output_items(response, "message"):
+            assert item.id != BRIDGED_CHAT_COMPLETION_ID
+            assert not item.id.startswith("chatcmpl-")
+
+    def test_message_item_ids_are_unique_across_responses(self):
+        first = self._transform(_bridged_chat_completion_response())
+        second = self._transform(_bridged_chat_completion_response())
+
+        first_id = _bridged_output_items(first, "message")[0].id
+        second_id = _bridged_output_items(second, "message")[0].id
+        assert first_id != second_id
+
+    def _reasoning_items(self):
+        message = Message(role="assistant", content="apple")
+        message.reasoning_content = "thinking about fruit"
+        choice = Choices(index=0, finish_reason="stop", message=message)
+        return LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(
+            chat_completion_response=_bridged_chat_completion_response(),
+            choices=[choice],
+        )
+
+    def test_reasoning_item_id_uses_rs_prefix(self):
+        items = self._reasoning_items()
+
+        assert len(items) == 1
+        assert items[0].id.startswith("rs_")
+
+    def test_reasoning_item_id_is_not_a_salted_hash(self):
+        """Python's hash() is salted per process, so the old rs_{hash(...)} ID for the
+        same reasoning text differed between workers and across restarts."""
+        suffix = self._reasoning_items()[0].id.removeprefix("rs_")
+
+        assert not suffix.lstrip("-").isdigit()
+        assert not suffix.startswith("-")
+
+
+class TestStreamingSnapshotItemIds:
+    """The response.completed snapshot must reuse the streamed item ID (issue #27333).
+
+    The incremental events already minted msg_* IDs while the final snapshot went back
+    through the non-streaming transform, so a streaming client replaying the snapshot
+    sent back an ID it had never been shown.
+    """
+
+    def _make_iterator(self):
+        from unittest.mock import Mock
+
+        import litellm
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        mock_stream_wrapper = Mock(spec=litellm.CustomStreamWrapper)
+        mock_stream_wrapper.logging_obj = Mock()
+        return LiteLLMCompletionStreamingIterator(
+            model="anthropic/claude-sonnet-4-5",
+            litellm_custom_stream_wrapper=mock_stream_wrapper,
+            request_input="Say the single word: apple",
+            responses_api_request={},
+            custom_llm_provider="anthropic",
+        )
+
+    def _make_chunk(self, content):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        return ModelResponseStream(
+            id=BRIDGED_CHAT_COMPLETION_ID,
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=content, role="assistant"),
+                    finish_reason=None,
+                )
+            ],
+            created=1717000000,
+            model="claude-sonnet-4-5",
+            object="chat.completion.chunk",
+        )
+
+    def test_incremental_item_id_uses_msg_prefix(self):
+        iterator = self._make_iterator()
+
+        event = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_chunk("apple")
+        )
+
+        assert event is not None
+        assert event.item_id.startswith("msg_")
+        assert event.item_id != BRIDGED_CHAT_COMPLETION_ID
+
+    def test_completed_snapshot_reuses_streamed_item_id(self):
+        iterator = self._make_iterator()
+
+        streamed_event = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_chunk("apple")
+        )
+        assert streamed_event is not None
+
+        completed_event = iterator._emit_response_completed_event(
+            _bridged_chat_completion_response()
+        )
+
+        assert completed_event is not None
+        message_items = _bridged_output_items(completed_event.response, "message")
+        assert len(message_items) == 1
+        assert message_items[0].id == streamed_event.item_id
+
+    def test_completed_snapshot_item_id_is_replayable(self):
+        iterator = self._make_iterator()
+        iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_chunk("apple")
+        )
+
+        completed_event = iterator._emit_response_completed_event(
+            _bridged_chat_completion_response()
+        )
+
+        assert completed_event is not None
+        for item in _bridged_output_items(completed_event.response, "message"):
+            assert item.id.startswith("msg_")
+            assert not item.id.startswith("chatcmpl-")
+
+    def _make_reasoning_chunk(self, reasoning_content):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        return ModelResponseStream(
+            id=BRIDGED_CHAT_COMPLETION_ID,
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(role="assistant", reasoning_content=reasoning_content),
+                    finish_reason=None,
+                )
+            ],
+            created=1717000000,
+            model="claude-sonnet-4-5",
+            object="chat.completion.chunk",
+        )
+
+    def _reasoning_chat_completion_response(self):
+        message = Message(role="assistant", content="apple")
+        message.reasoning_content = "thinking about fruit"
+        return _bridged_chat_completion_response(
+            choices=[Choices(index=0, finish_reason="stop", message=message)]
+        )
+
+    def test_reasoning_delta_events_share_one_item_id(self):
+        """The old rs_{hash(text)} ID changed with every delta, so a client accumulating
+        reasoning by item ID saw a new item per chunk."""
+        iterator = self._make_iterator()
+
+        first = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_reasoning_chunk("thinking ")
+        )
+        second = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_reasoning_chunk("about fruit")
+        )
+
+        assert first is not None and second is not None
+        assert first.item_id.startswith("rs_")
+        assert first.item_id == second.item_id
+
+    def test_completed_snapshot_reuses_streamed_reasoning_item_id(self):
+        iterator = self._make_iterator()
+
+        streamed_event = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_reasoning_chunk("thinking about fruit")
+        )
+        assert streamed_event is not None
+
+        completed_event = iterator._emit_response_completed_event(
+            self._reasoning_chat_completion_response()
+        )
+
+        assert completed_event is not None
+        reasoning_items = _bridged_output_items(completed_event.response, "reasoning")
+        assert len(reasoning_items) == 1
+        assert reasoning_items[0].id == streamed_event.item_id
+
+
+def test_transform_chat_completion_response_incomplete_details():
+    from litellm.types.llms.openai import IncompleteDetails
+
+    resp_length = ModelResponse(
+        id="resp-length",
+        choices=[Choices(index=0, finish_reason="length", message=Message(content="cutoff", role="assistant"))],
+        model="gpt-4o",
+    )
+    result_length = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_length,
+    )
+    assert result_length.status == "incomplete"
+    assert result_length.incomplete_details is not None
+    assert result_length.incomplete_details.reason == "max_output_tokens"
+
+    resp_filter = ModelResponse(
+        id="resp-filter",
+        choices=[Choices(index=0, finish_reason="content_filter", message=Message(content=None, role="assistant"))],
+        model="gpt-4o",
+    )
+    result_filter = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_filter,
+    )
+    assert result_filter.status == "incomplete"
+    assert result_filter.incomplete_details is not None
+    assert result_filter.incomplete_details.reason == "content_filter"
+
+    resp_refusal = ModelResponse(
+        id="resp-refusal",
+        choices=[Choices(index=0, finish_reason="refusal", message=Message(content=None, role="assistant"))],
+        model="gpt-4o",
+    )
+    result_refusal = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_refusal,
+    )
+    assert result_refusal.status == "incomplete"
+    assert result_refusal.incomplete_details is not None
+    assert result_refusal.incomplete_details.reason == "content_filter"
+
+    existing_details = IncompleteDetails(reason="content_filter")
+    resp_existing = ModelResponse(
+        id="resp-existing",
+        choices=[Choices(index=0, finish_reason="length", message=Message(content="cutoff", role="assistant"))],
+        model="gpt-4o",
+    )
+    resp_existing.incomplete_details = existing_details
+    result_existing = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_existing,
+    )
+    assert result_existing.status == "incomplete"
+    assert result_existing.incomplete_details == existing_details
+

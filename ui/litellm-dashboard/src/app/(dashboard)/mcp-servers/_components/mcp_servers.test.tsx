@@ -1,5 +1,6 @@
 import React from "react";
-import { render, waitFor, screen, fireEvent, act } from "@testing-library/react";
+import { render, waitFor, screen, act, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import MCPServers from "./mcp_servers";
@@ -16,14 +17,8 @@ vi.mock("@/components/networking", () => ({
   updateConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
   deleteConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
   listMCPUserEnvVarStatus: vi.fn().mockResolvedValue([]),
-}));
-
-// Mock NotificationsManager
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
+  fetchMCPGatewaySessions: vi.fn(),
+  terminateMCPGatewaySessions: vi.fn(),
 }));
 
 const createQueryClient = () =>
@@ -52,7 +47,7 @@ describe("MCPServers", () => {
     vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
 
     const queryClient = createQueryClient();
-    const { getByText } = render(
+    render(
       <QueryClientProvider client={queryClient}>
         <MCPServers {...defaultProps} />
       </QueryClientProvider>,
@@ -60,11 +55,25 @@ describe("MCPServers", () => {
 
     // Wait for the component to load and check if title renders
     await waitFor(() => {
-      expect(getByText("MCP Servers")).toBeInTheDocument();
+      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
     });
 
     // Verify the title is rendered
-    expect(getByText("MCP Servers")).toBeInTheDocument();
+    expect(screen.getByText("MCP Servers")).toBeInTheDocument();
+  });
+
+  it.each(["Admin", "Internal User"])("links a %s to their MCP connections page", async (userRole) => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} userRole={userRole} />
+      </QueryClientProvider>,
+    );
+
+    const myConnections = await screen.findByRole("link", { name: "My Connections" });
+    expect(myConnections).toBeVisible();
+    expect(myConnections).toHaveAttribute("href", "/ui/connect");
   });
 
   it("should render mocked MCP servers data in the table", async () => {
@@ -103,7 +112,7 @@ describe("MCPServers", () => {
     vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
 
     const queryClient = createQueryClient();
-    const { getByText, getAllByText } = render(
+    render(
       <QueryClientProvider client={queryClient}>
         <MCPServers {...defaultProps} />
       </QueryClientProvider>,
@@ -111,19 +120,19 @@ describe("MCPServers", () => {
 
     // Wait for the component to load
     await waitFor(() => {
-      expect(getByText("MCP Servers")).toBeInTheDocument();
+      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
     });
 
     // Wait for the mocked data to render in the table
     await waitFor(() => {
-      expect(getByText("Test Server 1")).toBeInTheDocument();
+      expect(screen.getByText("Test Server 1")).toBeInTheDocument();
     });
 
     // Verify the mocked server data is rendered in the table
-    expect(getByText("Test Server 1")).toBeInTheDocument();
-    expect(getByText("Test Server 2")).toBeInTheDocument();
-    expect(getAllByText("test-server-1").length).toBeGreaterThan(0);
-    expect(getAllByText("test-server-2").length).toBeGreaterThan(0);
+    expect(screen.getByText("Test Server 1")).toBeInTheDocument();
+    expect(screen.getByText("Test Server 2")).toBeInTheDocument();
+    expect(screen.getAllByText("test-server-1").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("test-server-2").length).toBeGreaterThan(0);
 
     // Verify the API was called
     // Note: useMCPServers uses useAuthorized() internally, which returns "123" from global mock
@@ -175,7 +184,7 @@ describe("MCPServers", () => {
     vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue(mockHealthStatuses);
 
     const queryClient = createQueryClient();
-    const { getByText } = render(
+    render(
       <QueryClientProvider client={queryClient}>
         <MCPServers {...defaultProps} />
       </QueryClientProvider>,
@@ -183,7 +192,7 @@ describe("MCPServers", () => {
 
     // Wait for the component to load
     await waitFor(() => {
-      expect(getByText("MCP Servers")).toBeInTheDocument();
+      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
     });
 
     // Verify the health check API was called (without a server ID filter — the hook always
@@ -218,7 +227,7 @@ describe("MCPServers", () => {
     );
 
     const queryClient = createQueryClient();
-    const { getByText } = render(
+    render(
       <QueryClientProvider client={queryClient}>
         <MCPServers {...defaultProps} />
       </QueryClientProvider>,
@@ -226,7 +235,7 @@ describe("MCPServers", () => {
 
     // Wait for the component to load
     await waitFor(() => {
-      expect(getByText("MCP Servers")).toBeInTheDocument();
+      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
     });
 
     // Verify that health check was initiated
@@ -307,36 +316,15 @@ describe("MCPServers", () => {
     expect(screen.getByText("Team B Server")).toBeInTheDocument();
     expect(screen.getByText("Team A Server 2")).toBeInTheDocument();
 
-    // Find the team select dropdown by looking for the "Team" label
+    // Find the team select by its "Team" label, then the combobox it labels
     const teamLabel = screen.getByText("Team");
-    const teamSelectContainer = teamLabel.closest("div")?.querySelector(".ant-select");
-    expect(teamSelectContainer).toBeTruthy();
+    const teamSelect = within(teamLabel.parentElement!).getByRole("combobox");
 
-    // Open the dropdown by clicking on the selector
-    const selectSelector = teamSelectContainer?.querySelector(".ant-select-selector");
-    expect(selectSelector).toBeTruthy();
+    await userEvent.click(teamSelect);
 
-    act(() => {
-      fireEvent.mouseDown(selectSelector!);
-    });
-
-    // Wait for dropdown to open
-    await waitFor(
-      () => {
-        const dropdownOptions = document.querySelectorAll(".ant-select-item-option");
-        expect(dropdownOptions.length).toBeGreaterThan(0);
-      },
-      { timeout: 5000 },
-    );
-
-    // Find and click on "Team A" option
-    const dropdownOptions = document.querySelectorAll(".ant-select-item-option");
-    const teamAOption = Array.from(dropdownOptions).find((option) => option.textContent?.includes("Team A"));
-    expect(teamAOption).toBeTruthy();
-
-    act(() => {
-      fireEvent.click(teamAOption!);
-    });
+    // Pick the "Team A" option once the listbox opens
+    const teamAOption = await screen.findByText("Team A");
+    await userEvent.click(teamAOption);
 
     // Wait for filtering to complete
     await waitFor(() => {
@@ -427,5 +415,51 @@ describe("MCPServers", () => {
 
     // The server list refresh must NOT trigger a second health check
     expect(networking.fetchMCPServerHealth).toHaveBeenCalledTimes(1);
+  });
+
+  const liveSessionsReport = {
+    worker_pid: 4242,
+    total_sessions: 1,
+    by_client: [{ label: "claude-code", count: 1 }],
+    by_user: [{ label: "alice", count: 1 }],
+    sessions: [
+      {
+        session_id_prefix: "aaaa1111",
+        client_name: "claude-code",
+        client_version: "1.0.0",
+        user_id: "alice",
+        user_email: "alice@example.com",
+        key_alias: "alice-key",
+        team_id: null,
+        team_alias: null,
+        client_ip: "10.0.0.1",
+        idle_seconds: 5,
+        in_flight_requests: 0,
+      },
+    ],
+  };
+
+  const openLiveConnections = async (props: { isViewOnly?: boolean }) => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+    vi.mocked(networking.fetchMCPGatewaySessions).mockResolvedValue(liveSessionsReport);
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} {...props} />
+      </QueryClientProvider>,
+    );
+    await userEvent.click(await screen.findByRole("tab", { name: "Live Connections" }));
+    return within(await screen.findByRole("region", { name: "Live sessions" })).getByRole("row", { name: /aaaa1111/ });
+  };
+
+  it("lets a full admin disconnect a live session", async () => {
+    const row = await openLiveConnections({ isViewOnly: false });
+    expect(within(row).getByRole("button", { name: "Disconnect session aaaa1111" })).toBeInTheDocument();
+  });
+
+  it("shows live sessions to a view-only admin session without any disconnect control", async () => {
+    const row = await openLiveConnections({ isViewOnly: true });
+    expect(row).toHaveTextContent("alice@example.com");
+    expect(within(row).queryByRole("button", { name: /^Disconnect/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Disconnect all/ })).not.toBeInTheDocument();
   });
 });

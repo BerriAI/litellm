@@ -11,31 +11,12 @@ shape: a payload that silently lands the membership against the WRONG
 user_id is invisible from response-body alone).
 """
 
-from typing import Any, Dict, Optional
-
 import pytest
 
 from .actors import Actor
-from .conftest import create_scratch_team
+from .conftest import create_scratch_team, create_scratch_user
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
-
-
-async def _seed_scratch_user(
-    prisma,
-    scratch_prefix: str,
-    *,
-    suffix: str,
-    user_email: Optional[str] = None,
-) -> str:
-    """Raw-seed a scratch-prefixed user row; returns user_id. Scratch teardown
-    reclaims by user_id prefix."""
-    user_id = f"{scratch_prefix}-{suffix}"
-    data: Dict[str, Any] = {"user_id": user_id, "user_role": "internal_user"}
-    if user_email is not None:
-        data["user_email"] = user_email
-    await prisma.db.litellm_usertable.create(data=data)
-    return user_id
 
 
 # ---------------------------------------------------------------------------
@@ -68,10 +49,10 @@ async def test_member_add_email_id_mismatch_rejected(
     proxy_client, prisma, scratch, world
 ):
     email = f"{scratch.prefix}-mismatch@example.com"
-    real_user_id = await _seed_scratch_user(
+    real_user_id = await create_scratch_user(
         prisma, scratch.prefix, suffix="real", user_email=email
     )
-    other_user_id = await _seed_scratch_user(prisma, scratch.prefix, suffix="other")
+    other_user_id = await create_scratch_user(prisma, scratch.prefix, suffix="other")
     assert real_user_id != other_user_id  # sanity
     team_id = await create_scratch_team(prisma, team_id=scratch.tag("team"))
     seeder = world.keys[Actor.PROXY_ADMIN].cleartext
@@ -102,7 +83,7 @@ async def test_member_add_email_only_resolves_user_id(
     proxy_client, prisma, scratch, world
 ):
     email = f"{scratch.prefix}-resolve@example.com"
-    user_id = await _seed_scratch_user(
+    user_id = await create_scratch_user(
         prisma, scratch.prefix, suffix="lookup", user_email=email
     )
     team_id = await create_scratch_team(prisma, team_id=scratch.tag("team"))
@@ -171,8 +152,8 @@ async def test_member_add_duplicate_email_rejected(
     proxy_client, prisma, scratch, world
 ):
     email = f"{scratch.prefix}-dup@example.com"
-    await _seed_scratch_user(prisma, scratch.prefix, suffix="dup1", user_email=email)
-    await _seed_scratch_user(prisma, scratch.prefix, suffix="dup2", user_email=email)
+    await create_scratch_user(prisma, scratch.prefix, suffix="dup1", user_email=email)
+    await create_scratch_user(prisma, scratch.prefix, suffix="dup2", user_email=email)
     team_id = await create_scratch_team(prisma, team_id=scratch.tag("team"))
     seeder = world.keys[Actor.PROXY_ADMIN].cleartext
     resp = await proxy_client.post(

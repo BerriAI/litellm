@@ -7,14 +7,11 @@ including various guardrail types and proper exception handling.
 
 import asyncio
 import pytest
-import sys
-import os
 from datetime import datetime
 from typing import Optional, Dict, Any
 from unittest.mock import MagicMock, AsyncMock, patch
 
 # Add the project root to the path
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException

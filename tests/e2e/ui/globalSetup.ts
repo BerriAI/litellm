@@ -1,10 +1,21 @@
 import { chromium, expect, request } from "@playwright/test";
 import { users, Role, STORAGE_PATHS } from "./fixtures/users";
+import { ARTIFACT_DIR, UI_BASE_URL } from "./constants";
+import { expectUnrestrictedDashboard, setInvitedUserPassword } from "./helpers/userOnboarding";
 import * as fs from "fs";
+import * as path from "path";
 
 async function globalSetup() {
   const browser = await chromium.launch();
   const rootPath = process.env.SERVER_ROOT_PATH ?? "";
+
+  // Create the artifact root before anything writes into it. storageState() does
+  // not create missing parents, so pointing E2E_UI_ARTIFACT_DIR at a path that
+  // does not exist yet would fail with ENOENT on the first role's snapshot,
+  // before any test ran. Playwright creates its own outputDir lazily, so this is
+  // the only place that has to do it. recursive:true makes it idempotent, and
+  // keeps the default "." a no-op.
+  fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
 
   // The Projects sidebar item is hidden unless the enterprise-gated
   // enable_projects_ui setting is on, and the seeded DB starts with it off.
@@ -12,28 +23,53 @@ async function globalSetup() {
   // the admin UI toggle does; the projects migration smoke needs the link.
   const masterKey = process.env.LITELLM_MASTER_KEY || "sk-1234";
   const api = await request.newContext();
-  const settingsRes = await api.patch(`http://localhost:4000${rootPath}/update/ui_settings`, {
+  const settingsRes = await api.patch(`${UI_BASE_URL}${rootPath}/update/ui_settings`, {
     headers: { Authorization: `Bearer ${masterKey}` },
     data: { enable_projects_ui: true },
   });
   if (!settingsRes.ok()) {
     throw new Error(`Enabling enable_projects_ui failed (${settingsRes.status()}): ${await settingsRes.text()}`);
   }
-  await api.dispose();
 
-  for (const role of Object.values(Role)) {
-    const { email, password } = users[role];
+  const roles = [Role.ProxyAdmin, ...Object.values(Role).filter((role) => role !== Role.ProxyAdmin)];
+  for (const role of roles) {
+    const { email, password, seedApiRole } = users[role];
     const storagePath = STORAGE_PATHS[role];
     const page = await browser.newPage();
     try {
-      await page.goto(`http://localhost:4000${rootPath}/ui/login`);
+      if (seedApiRole) {
+        const createRes = await api.post(`${UI_BASE_URL}${rootPath}/user/new`, {
+          headers: { Authorization: `Bearer ${masterKey}` },
+          data: { user_email: email, user_role: seedApiRole, auto_create_key: false },
+        });
+        if (!createRes.ok() && createRes.status() !== 409) {
+          throw new Error(`Seeding user ${email} failed (${createRes.status()}): ${await createRes.text()}`);
+        }
+        const userId = createRes.ok()
+          ? (await createRes.json()).user_id
+          : await (async () => {
+              const existing = await api.get(`${UI_BASE_URL}${rootPath}/user/list`, {
+                headers: { Authorization: `Bearer ${masterKey}` },
+                params: { user_email: email },
+              });
+              expect(existing.ok(), `Find seeded user ${email}: HTTP ${existing.status()}`).toBe(true);
+              const matches = (await existing.json()).users.filter(
+                (user: { user_email: string }) => user.user_email === email,
+              );
+              expect(matches, `Exactly one seeded user for ${email}`).toHaveLength(1);
+              return matches[0].user_id;
+            })();
+        expect(typeof userId, `User ID for ${email}`).toBe("string");
+        await setInvitedUserPassword(api, userId, password);
+      }
+      await page.goto(`${UI_BASE_URL}${rootPath}/ui/login`);
       await page.getByPlaceholder("Enter your username").fill(email);
       await page.getByPlaceholder("Enter your password").fill(password);
       await page.getByRole("button", { name: "Login", exact: true }).click();
       await page.waitForURL((url) => url.pathname.startsWith(`${rootPath}/ui`) && !url.pathname.includes("/login"), {
         timeout: 30_000,
       });
-      await expect(page.locator("a", { hasText: "Virtual Keys" })).toBeVisible({ timeout: 30_000 });
+      await expectUnrestrictedDashboard(page);
       // Dismiss feedback popup if present
       const dismiss = page.getByText("Don't ask me again");
       if (await dismiss.isVisible({ timeout: 1_500 }).catch(() => false)) {
@@ -46,15 +82,31 @@ async function globalSetup() {
       await page.context().clearCookies({ name: "litellm_return_url" });
       await page.context().storageState({ path: storagePath });
     } catch (e) {
-      fs.mkdirSync("test-results", { recursive: true });
-      await page.screenshot({ path: `test-results/global-setup-${role}-failure.png`, fullPage: true });
-      console.error(`Global setup failed for role ${role}. Screenshot saved. URL: ${page.url()}`);
+      // Best-effort diagnostics only: this handler must never replace the real
+      // failure with its own. Writing the screenshot used to throw ENOENT/EROFS
+      // on the read-only cwd in the e2e image, which masked every underlying
+      // login error and made the run look like a filesystem bug.
+      try {
+        const failureDir = path.join(ARTIFACT_DIR, "test-results");
+        fs.mkdirSync(failureDir, { recursive: true });
+        await page.screenshot({
+          path: path.join(failureDir, `global-setup-${role}-failure.png`),
+          fullPage: true,
+        });
+        console.error(`Global setup failed for role ${role}. Screenshot saved. URL: ${page.url()}`);
+      } catch (diagnosticError) {
+        console.error(
+          `Global setup failed for role ${role} at URL: ${page.url()}. ` +
+            `Could not save a screenshot: ${diagnosticError}`,
+        );
+      }
       throw e;
     } finally {
       await page.close();
     }
   }
 
+  await api.dispose();
   await browser.close();
 }
 

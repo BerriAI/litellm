@@ -422,7 +422,7 @@ def test_apply_patch_ops_invalid_entitlements_value_raises_400():
     patch_ops = SCIMPatchOp(
         Operations=[
             SCIMPatchOperation(
-                op="replace", path="entitlements", value=[{"display": "no value"}]
+                op="replace", path="entitlements", value=[42]
             )
         ]
     )
@@ -431,6 +431,22 @@ def test_apply_patch_ops_invalid_entitlements_value_raises_400():
         _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
 
     assert exc_info.value.status_code == 400
+
+
+def test_apply_patch_ops_replace_entitlements_without_value_member_is_stored_as_sent():
+    patch_ops = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="replace", path="entitlements", value=[{"groups": ["S0506MKA55L"]}]
+            )
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata({}), patch_ops=patch_ops
+    )
+
+    assert update_data["metadata"]["scim_entitlements"] == [{"groups": ["S0506MKA55L"]}]
 
 
 def test_apply_patch_ops_add_without_value_raises_400_naming_value_member():
@@ -465,3 +481,58 @@ def test_apply_patch_ops_filtered_path_raises_400_instead_of_junk_metadata():
         )
 
     assert exc_info.value.status_code == 400
+
+
+def test_apply_patch_ops_remove_group_filtered_path_without_value():
+    """Okta removes a user from a team with groups[value eq "..."] and no body
+    value; the team id must be parsed from the filter so the remove takes effect"""
+    user = LiteLLM_UserTable(
+        user_id="user-fp",
+        user_email="fp@example.com",
+        teams=["team-1", "team-2"],
+        metadata={},
+    )
+    patch_ops = SCIMPatchOp(
+        Operations=[SCIMPatchOperation(op="remove", path='groups[value eq "team-1"]')]
+    )
+
+    _, final_team_set = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
+
+    assert final_team_set == {"team-2"}
+
+
+def test_apply_patch_ops_add_group_filtered_path_without_value():
+    """A filtered add path with no body value adds the team id from the filter."""
+    user = LiteLLM_UserTable(
+        user_id="user-fp",
+        user_email="fp@example.com",
+        teams=["team-1"],
+        metadata={},
+    )
+    patch_ops = SCIMPatchOp(
+        Operations=[SCIMPatchOperation(op="add", path="groups[value eq 'team-3']")]
+    )
+
+    _, final_team_set = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
+
+    assert final_team_set == {"team-1", "team-3"}
+
+
+def test_apply_patch_ops_replace_groups_empty_value_does_not_use_path_filter():
+    """A filtered replace with an explicit empty value must not resurrect the
+    filter id; the team set is replaced with the empty value as given."""
+    user = LiteLLM_UserTable(
+        user_id="user-fp",
+        user_email="fp@example.com",
+        teams=["team-1", "team-2"],
+        metadata={},
+    )
+    patch_ops = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(op="replace", path='groups[value eq "team-1"]', value=[])
+        ]
+    )
+
+    _, final_team_set = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
+
+    assert final_team_set == set()

@@ -7,14 +7,9 @@ causing duplicate spend log entries for non-OpenAI providers.
 """
 
 import asyncio
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger

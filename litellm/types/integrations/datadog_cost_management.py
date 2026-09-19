@@ -1,5 +1,4 @@
-from typing import Dict, List, Optional, TypedDict
-
+from typing import TypedDict
 
 from litellm.types.integrations.custom_logger import StandardCustomLoggerInitParams
 
@@ -9,7 +8,7 @@ class DatadogCostManagementInitParams(StandardCustomLoggerInitParams):
     Init params for Datadog Cost Management
     """
 
-    cost_tag_keys: Optional[List[str]] = None
+    cost_tag_keys: list[str] | None = None
 
 
 class DatadogFOCUSCostEntry(TypedDict):
@@ -24,4 +23,4 @@ class DatadogFOCUSCostEntry(TypedDict):
     ChargePeriodEnd: str
     BilledCost: float
     BillingCurrency: str
-    Tags: Optional[Dict[str, str]]
+    Tags: dict[str, str] | None

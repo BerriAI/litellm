@@ -13,8 +13,9 @@ bounded list of recent tool call signatures.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 
 from litellm.router_strategy.adaptive_router.config import (
     LOOP_REPEAT_THRESHOLD,
@@ -92,35 +93,35 @@ class Turn:
     user_content: str | None = None
     assistant_content: str | None = None
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
-    tool_results: list[dict[str, Any]] = field(default_factory=list)
+    tool_results: Sequence[Mapping[str, object]] = field(default_factory=list)
     response_status: int | None = None
 
 
 # ---- Detection helpers ----------------------------------------------------
 
-_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+_TOKEN_RE: Final = re.compile(r"[A-Za-z0-9]+")
 
 
 def _tokens(text: str | None) -> set[str]:
     if not text:
         return set()
-    return {t.lower() for t in _TOKEN_RE.findall(text)}
+    return {match.group(0).lower() for match in _TOKEN_RE.finditer(text)}
 
 
 def _jaccard(a: set[str], b: set[str]) -> float:
-    union = a | b
+    union: Final = a | b
     if not union:
         return 0.0
     return len(a & b) / len(union)
 
 
-_DISENGAGEMENT_PATTERNS = [
+_DISENGAGEMENT_PATTERNS: Final = [
     re.compile(r"\b(forget it|never mind|give up|talk to (?:a )?human|cancel)\b", re.IGNORECASE),
     re.compile(r"\b(this (?:isn'?t|is not) working|stop|abort)\b", re.IGNORECASE),
     re.compile(r"\bi'?ll do it (?:myself|manually)\b", re.IGNORECASE),
 ]
 
-_SATISFACTION_PATTERNS = [
+_SATISFACTION_PATTERNS: Final = [
     re.compile(
         r"\b(that worked|that did it|works now|fixed it|solved it|nice)\b",
         re.IGNORECASE,
@@ -136,7 +137,7 @@ def _detect_misalignment(prev_user: str | None, curr_user: str | None) -> bool:
     rephrasing, not changing topic, not repeating."""
     if not prev_user or not curr_user:
         return False
-    j = _jaccard(_tokens(prev_user), _tokens(curr_user))
+    j: Final = _jaccard(_tokens(prev_user), _tokens(curr_user))
     return 0.0 < j < MISALIGNMENT_JACCARD_THRESHOLD
 
 
@@ -144,7 +145,7 @@ def _detect_stagnation(prev_asst: str | None, curr_asst: str | None) -> bool:
     """Fires when consecutive assistant messages are near-duplicates."""
     if not prev_asst or not curr_asst:
         return False
-    j = _jaccard(_tokens(prev_asst), _tokens(curr_asst))
+    j: Final = _jaccard(_tokens(prev_asst), _tokens(curr_asst))
     return j >= STAGNATION_JACCARD_NEAR_DUP
 
 
@@ -160,7 +161,7 @@ def _detect_satisfaction(curr_user: str | None) -> bool:
     return any(p.search(curr_user) for p in _SATISFACTION_PATTERNS)
 
 
-def _detect_failure(tool_results: list[dict[str, Any]]) -> bool:
+def _detect_failure(tool_results: Sequence[Mapping[str, object]]) -> bool:
     """Any tool result explicitly flagged as an error.
 
     We do NOT treat empty content as failure — many tools legitimately return
@@ -175,7 +176,7 @@ def _detect_failure(tool_results: list[dict[str, Any]]) -> bool:
 
 def _signature(call: dict[str, Any]) -> str:
     """Stable signature for loop detection: name + sorted JSON-ish args."""
-    name = call.get("name") or call.get("function", {}).get("name", "")
+    name: Final = call.get("name") or call.get("function", {}).get("name", "")
     call_args = call.get("arguments")
     if call_args is None:
         call_args = call.get("function", {}).get("arguments", "")
@@ -197,9 +198,9 @@ def _detect_loop(history: list[str], new_calls: list[dict[str, Any]]) -> bool:
     return False
 
 
-_EXHAUSTION_STATUSES = {408, 413, 429, 503, 504}
+_EXHAUSTION_STATUSES: Final = {408, 413, 429, 503, 504}
 
-_EXHAUSTION_KEYWORDS = (
+_EXHAUSTION_KEYWORDS: Final = (
     "context length",
     "context window",
     "token limit",
@@ -209,7 +210,7 @@ _EXHAUSTION_KEYWORDS = (
 )
 
 
-def _detect_exhaustion(status: int | None, tool_results: list[dict[str, Any]]) -> bool:
+def _detect_exhaustion(status: int | None, tool_results: Sequence[Mapping[str, object]]) -> bool:
     if status is not None and status in _EXHAUSTION_STATUSES:
         return True
     for r in tool_results:
@@ -222,7 +223,7 @@ def _detect_exhaustion(status: int | None, tool_results: list[dict[str, Any]]) -
 def detect_user_feedback(
     previous_user_content: str | None,
     current_user_content: str | None,
-    tool_results: list[dict[str, Any]],
+    tool_results: Sequence[Mapping[str, object]],
     allow_satisfaction: bool,
 ) -> SignalDelta:
     return SignalDelta(
@@ -238,7 +239,7 @@ def detect_response_signals(
     current_assistant_content: str | None,
     tool_call_history: list[str],
     tool_calls: list[dict[str, Any]],
-    tool_results: list[dict[str, Any]],
+    tool_results: Sequence[Mapping[str, object]],
     response_status: int | None,
 ) -> SignalDelta:
     return SignalDelta(
@@ -303,13 +304,13 @@ def apply_turn(state: SessionState, turn: Turn) -> SignalDelta:
     O(1) per turn (no full-history rescan). Only inspects last_*, recent tool history
     (which is bounded at TOOL_CALL_HISTORY_MAX), and the new turn payload.
     """
-    feedback_delta = detect_user_feedback(
+    feedback_delta: Final = detect_user_feedback(
         state.last_user_content,
         turn.user_content,
         turn.tool_results,
         allow_satisfaction=(not state.clean_credit_awarded and state.turn_count + 1 >= MIN_TURNS_FOR_CLEAN_CREDIT),
     )
-    response_delta = detect_response_signals(
+    response_delta: Final = detect_response_signals(
         state.last_assistant_content,
         turn.assistant_content,
         state.tool_call_history,
@@ -317,7 +318,7 @@ def apply_turn(state: SessionState, turn: Turn) -> SignalDelta:
         turn.tool_results,
         turn.response_status,
     )
-    delta = merge_signal_deltas(
+    delta: Final = merge_signal_deltas(
         feedback_delta,
         response_delta,
     )

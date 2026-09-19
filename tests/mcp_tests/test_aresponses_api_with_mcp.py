@@ -1,11 +1,9 @@
 import logging
 import os
-import sys
 import pytest
 from typing import List, Any, cast
 from unittest.mock import AsyncMock, patch
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 # Import required modules
 import litellm
@@ -1441,9 +1439,7 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
             print(
                 f"ERROR: Duplicate MCP fetching detected! Called {mock_get_tools.call_count} times"
             )
-            assert (
-                False
-            ), f"MCP tools should be fetched exactly once, but were fetched {mock_get_tools.call_count} times"
+            pytest.fail(f"MCP tools should be fetched exactly once, but were fetched {mock_get_tools.call_count} times")
 
         # Additional validation: ensure no duplicate tools in any LLM call
         total_duplicates_found = 0
@@ -1466,9 +1462,7 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
                     )
 
         if total_duplicates_found > 0:
-            assert (
-                False
-            ), f"Found {total_duplicates_found} duplicate tools across all LLM calls"
+            pytest.fail(f"Found {total_duplicates_found} duplicate tools across all LLM calls")
 
         print("No duplicate MCP tools E2E test passed!")
         print(f"Summary:")

@@ -11,7 +11,6 @@ sent in the request.
 from __future__ import annotations
 
 import pytest
-
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, require_successful_call, unwrap
 from endpoints_client import EndpointsClient

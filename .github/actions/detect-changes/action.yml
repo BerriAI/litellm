@@ -1,0 +1,41 @@
+name: "Detect relevant changes"
+description: >-
+  Classify the pull request's changed files with .circleci/scripts/classify_changes.sh
+  and expose decision=run|skip for one category. backend means anything outside ui/,
+  docs/ and markdown; ui means the dashboard sources alone. decision=skip lets callers
+  short-circuit expensive steps while the job still completes successfully and satisfies
+  its required status check, which a paths: filter cannot do because a workflow that
+  never starts never reports. The file list comes from the pull request itself rather
+  than from a git diff, because the checked-out merge ref is recomputed as the base
+  branch advances and would otherwise attribute the base branch's own commits to the
+  pull request. The decision defaults to run for any non pull_request event or whenever
+  the changed set cannot be resolved, so jobs are never skipped when the classification
+  is uncertain.
+
+inputs:
+  category:
+    description: "Which classification to apply: backend, client or ui"
+    required: false
+    default: backend
+  github-token:
+    description: "Token used to list the pull request's files; needs pull-requests: read"
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  decision:
+    description: "run when category-relevant files changed, otherwise skip"
+    value: ${{ steps.classify.outputs.decision }}
+
+runs:
+  using: composite
+  steps:
+    - id: classify
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        CATEGORY: ${{ inputs.category }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        CHANGED_FILE_COUNT: ${{ github.event.pull_request.changed_files }}
+      run: bash "${GITHUB_ACTION_PATH}/../../scripts/detect_changes.sh"

@@ -1,12 +1,16 @@
+import { Info } from "lucide-react";
 import React, { useState } from "react";
-import { Form, Input, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { FormInstance } from "antd/es/form";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { Input } from "@/components/ui/input";
 import { AUTH_TYPE, OAUTH_FLOW } from "@/components/mcp_tools/types";
+import { MountedFormField } from "@/components/common_components/MountedFormField";
+import { requiredRule } from "@/components/common_components/formRules";
 import OpenAPIQuickPicker, { OpenAPIRegistryEntry, OpenAPIKeyTool } from "./OpenAPIQuickPicker";
+import { McpForm, resetFields, setFieldsValue } from "./mcpFormStore";
+import { textControl } from "./mcpFieldRules";
 
 interface OpenAPIFormSectionProps {
-  form: FormInstance;
+  form: McpForm;
   accessToken: string | null;
   /** Called when a preset is selected so the parent can sync its formValues state. */
   onValuesChange: (updates: Record<string, any>) => void;
@@ -47,13 +51,11 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
       updates.oauth_flow_type = OAUTH_FLOW.INTERACTIVE;
       updates.authorization_url = entry.oauth.authorization_url;
       updates.token_url = entry.oauth.token_url;
-      form.setFieldsValue(updates);
+      setFieldsValue(form, updates);
       onOAuthDocsUrlChange?.(entry.oauth.docs_url ?? null);
     } else {
-      // resetFields is required to visually clear Ant Design form fields —
-      // setFieldsValue with undefined silently skips undefined keys.
-      form.resetFields(["auth_type", "authorization_url", "token_url"]);
-      form.setFieldsValue(updates);
+      resetFields(form, ["auth_type", "authorization_url", "token_url"]);
+      setFieldsValue(form, updates);
       onOAuthDocsUrlChange?.(null);
     }
     onValuesChange(updates);
@@ -63,30 +65,35 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
     <>
       <OpenAPIQuickPicker accessToken={accessToken} selectedName={selectedPreset} onSelect={handlePresetSelect} />
 
-      <Form.Item
+      <MountedFormField
         label={
-          <span className="text-sm font-medium text-gray-700 flex items-center">
+          <span className="text-sm font-medium text-foreground flex items-center">
             OpenAPI Spec URL
-            <Tooltip title="URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.">
-              <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-            </Tooltip>
+            <SimpleTooltip content="URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.">
+              <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+            </SimpleTooltip>
           </span>
         }
         name="spec_path"
-        rules={[{ required: true, message: "Please enter an OpenAPI spec URL" }]}
+        required
+        rules={{ validate: { required: requiredRule("Please enter an OpenAPI spec URL") } }}
       >
-        <Input
-          placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
-          className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-          onChange={() => {
-            // Clear the preset selection when the user manually edits the spec URL
-            // so stale suggested tools from a previous preset don't persist.
-            setSelectedPreset(null);
-            onKeyToolsChange?.([]);
-            onOAuthDocsUrlChange?.(null);
-          }}
-        />
-      </Form.Item>
+        {(control) => (
+          <Input
+            {...textControl(control)}
+            placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
+            className="rounded-lg border-border focus:border-info focus:ring-ring"
+            onChange={(event) => {
+              control.onChange(event);
+              // Clear the preset selection when the user manually edits the spec URL
+              // so stale suggested tools from a previous preset don't persist.
+              setSelectedPreset(null);
+              onKeyToolsChange?.([]);
+              onOAuthDocsUrlChange?.(null);
+            }}
+          />
+        )}
+      </MountedFormField>
     </>
   );
 };

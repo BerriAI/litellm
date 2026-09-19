@@ -1,11 +1,11 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
-import { Tooltip } from "antd";
 
 import { ToolRow } from "@/components/networking";
 import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { DateCell, IdCell, IdentityCell } from "@/components/shared/table_cells";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 import { PolicySelect } from "./PolicySelect";
 
@@ -20,9 +20,12 @@ interface ToolPoliciesTableColumnsDeps {
 function TruncatedText({ value, className }: { value: string | undefined; className?: string }) {
   const text = value ?? "-";
   return (
-    <Tooltip title={text}>
-      <span className={className}>{text}</span>
-    </Tooltip>
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger render={<span className={className}>{text}</span>} />
+        <TooltipContent>{text}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 

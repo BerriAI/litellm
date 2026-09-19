@@ -1,12 +1,14 @@
 "use client";
 
-import { useQuery, useQueryClient, type UseQueryOptions } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useCallback, useMemo, useState } from "react";
 
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
-import NotificationsManager from "@/components/molecules/notifications_manager";
-import { fetchToolsList, ToolRow, updateToolPolicy } from "@/components/networking";
+import { toast } from "@/lib/toast";
+import { ToolRow, updateToolPolicy } from "@/components/networking";
 
+import { toolPoliciesListOptions } from "./toolPoliciesQueries";
 import { ToolPoliciesTable } from "./ToolPoliciesTable";
 
 function getUTCDateKey(date: Date): string {
@@ -41,8 +43,6 @@ const withTool = (names: ReadonlySet<string>, toolName: string): ReadonlySet<str
 const withoutTool = (names: ReadonlySet<string>, toolName: string): ReadonlySet<string> =>
   new Set([...names].filter((name) => name !== toolName));
 
-const TOOLS_QUERY_KEY = "tool-policies";
-
 interface ToolPoliciesPanelProps {
   accessToken: string | null;
   onSelectTool: (toolName: string) => void;
@@ -50,19 +50,12 @@ interface ToolPoliciesPanelProps {
 
 export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToken, onSelectTool }) => {
   const queryClient = useQueryClient();
+  const canViewToolPolicies = useCan("viewToolPolicies");
   const [savingInput, setSavingInput] = useState<ReadonlySet<string>>(() => new Set());
   const [savingOutput, setSavingOutput] = useState<ReadonlySet<string>>(() => new Set());
 
-  const queryKey = useMemo(() => [TOOLS_QUERY_KEY, accessToken], [accessToken]);
-
-  const queryOptions: UseQueryOptions<ToolRow[]> = {
-    queryKey,
-    queryFn: async () => (accessToken === null ? [] : fetchToolsList(accessToken)),
-    enabled: accessToken !== null,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-  };
-  const query = useQuery(queryOptions);
+  const listOptions = useMemo(() => toolPoliciesListOptions(accessToken), [accessToken]);
+  const query = useQuery({ ...listOptions, enabled: canViewToolPolicies && accessToken !== null });
 
   const tools = useMemo(() => query.data ?? [], [query.data]);
 
@@ -70,12 +63,12 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
   // and overwrite the row we just wrote with its pre-save snapshot.
   const patchTool = useCallback(
     async (toolName: string, patch: Partial<ToolRow>) => {
-      await queryClient.cancelQueries({ queryKey });
-      queryClient.setQueryData<ToolRow[]>(queryKey, (previous) =>
+      await queryClient.cancelQueries({ queryKey: listOptions.queryKey });
+      queryClient.setQueryData(listOptions.queryKey, (previous) =>
         (previous ?? []).map((tool) => (tool.tool_name === toolName ? { ...tool, ...patch } : tool)),
       );
     },
-    [queryClient, queryKey],
+    [queryClient, listOptions],
   );
 
   const handleInputPolicyChange = useCallback(
@@ -86,7 +79,7 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
         await updateToolPolicy(accessToken, toolName, { input_policy: newPolicy });
         await patchTool(toolName, { input_policy: newPolicy });
       } catch (e) {
-        NotificationsManager.fromBackend(`Failed to update input policy: ${toMessage(e, "unknown error")}`);
+        toast.fromError(`Failed to update input policy: ${toMessage(e, "unknown error")}`);
       } finally {
         setSavingInput((previous) => withoutTool(previous, toolName));
       }
@@ -102,7 +95,7 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
         await updateToolPolicy(accessToken, toolName, { output_policy: newPolicy });
         await patchTool(toolName, { output_policy: newPolicy });
       } catch (e) {
-        NotificationsManager.fromBackend(`Failed to update output policy: ${toMessage(e, "unknown error")}`);
+        toast.fromError(`Failed to update output policy: ${toMessage(e, "unknown error")}`);
       } finally {
         setSavingOutput((previous) => withoutTool(previous, toolName));
       }
@@ -138,16 +131,16 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
 
   return (
     <div className="w-full">
-      <h1 className="text-2xl font-semibold text-gray-900 mb-6">Tool Policies</h1>
+      <h1 className="text-2xl font-semibold text-foreground mb-6">Tool Policies</h1>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <MetricCard
           label="New Today"
           value={newToday}
-          valueColor="text-green-600"
+          valueColor="text-success"
           subtitle={trendSubtitle}
           icon={
-            <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
             </svg>
           }
@@ -156,15 +149,15 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
         <MetricCard
           label="Blocked Tools"
           value={blockedCount}
-          valueColor={blockedCount > 0 ? "text-red-600" : undefined}
+          valueColor={blockedCount > 0 ? "text-destructive" : undefined}
         />
         <MetricCard label="Active Teams" value={activeTeamsCount > 0 ? activeTeamsCount : "—"} />
       </div>
 
       {needsReviewTools.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
-          <h2 className="text-sm font-semibold text-amber-900 mb-1">Needs Review</h2>
-          <p className="text-sm text-amber-800 mb-3">
+        <div className="bg-warning/10 border border-warning/20 rounded-lg p-4 mb-6">
+          <h2 className="text-sm font-semibold text-warning mb-1">Needs Review</h2>
+          <p className="text-sm text-warning mb-3">
             {needsReviewTools.length} new tool{needsReviewTools.length !== 1 ? "s" : ""} discovered that require policy
             decisions.
           </p>
@@ -172,15 +165,15 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
             {needsReviewTools.map((tool) => (
               <span
                 key={tool.tool_id}
-                className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-amber-200 rounded-md text-sm"
+                className="inline-flex items-center gap-2 px-3 py-1.5 bg-card border border-warning/20 rounded-md text-sm"
               >
-                <span className="font-mono text-amber-900 truncate max-w-[200px]" title={tool.tool_name}>
+                <span className="font-mono text-warning truncate max-w-[200px]" title={tool.tool_name}>
                   {tool.tool_name}
                 </span>
                 <button
                   type="button"
                   onClick={() => scrollToToolRow(tool.tool_id)}
-                  className="text-amber-700 hover:text-amber-900 font-medium text-xs whitespace-nowrap"
+                  className="text-warning hover:text-warning/80 font-medium text-xs whitespace-nowrap"
                 >
                   Review
                 </button>
@@ -191,7 +184,10 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
       )}
 
       {query.isError && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-sm text-sm text-red-700" role="alert">
+        <div
+          className="mb-4 p-3 bg-destructive/10 border border-destructive/20 rounded-sm text-sm text-destructive"
+          role="alert"
+        >
           {toMessage(query.error, "Failed to load tools")}
         </div>
       )}

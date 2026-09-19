@@ -1,27 +1,27 @@
 import os
-from typing import Any, Optional, Union
+from typing import Any, Final
 
 import httpx
 
 
 def init_rds_client(
-    aws_access_key_id: Optional[str] = None,
-    aws_secret_access_key: Optional[str] = None,
-    aws_region_name: Optional[str] = None,
-    aws_session_name: Optional[str] = None,
-    aws_profile_name: Optional[str] = None,
-    aws_role_name: Optional[str] = None,
-    aws_web_identity_token: Optional[str] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    aws_access_key_id: str | None = None,
+    aws_secret_access_key: str | None = None,
+    aws_region_name: str | None = None,
+    aws_session_name: str | None = None,
+    aws_profile_name: str | None = None,
+    aws_role_name: str | None = None,
+    aws_web_identity_token: str | None = None,
+    timeout: float | httpx.Timeout | None = None,
 ):
     from litellm.secret_managers.main import get_secret
 
     # check for custom AWS_REGION_NAME and use it if not passed to init_bedrock_client
-    litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
-    standard_aws_region_name = get_secret("AWS_REGION", None)
+    litellm_aws_region_name: Final = get_secret("AWS_REGION_NAME", None)
+    standard_aws_region_name: Final = get_secret("AWS_REGION", None)
     ## CHECK IS  'os.environ/' passed in
     # Define the list of parameters to check
-    params_to_check = [
+    params_to_check: Final = [
         aws_access_key_id,
         aws_secret_access_key,
         aws_region_name,
@@ -34,7 +34,7 @@ def init_rds_client(
     # Iterate over parameters and update if needed
     for i, param in enumerate(params_to_check):
         if param and param.startswith("os.environ/"):
-            params_to_check[i] = get_secret(param)  # type: ignore
+            params_to_check[i] = get_secret(param)
     # Assign updated values back to parameters
     (
         aws_access_key_id,
@@ -62,13 +62,11 @@ def init_rds_client(
     import boto3
 
     if isinstance(timeout, float):
-        config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)  # type: ignore
+        config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)
     elif isinstance(timeout, httpx.Timeout):
-        config = boto3.session.Config(  # type: ignore
-            connect_timeout=timeout.connect, read_timeout=timeout.read
-        )
+        config = boto3.session.Config(connect_timeout=timeout.connect, read_timeout=timeout.read)
     else:
-        config = boto3.session.Config()  # type: ignore
+        config = boto3.session.Config()
 
     ### CHECK STS ###
     if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
@@ -153,7 +151,7 @@ def init_rds_client(
     return client
 
 
-def generate_iam_auth_token(db_host, db_port, db_user, client: Optional[Any] = None) -> str:
+def generate_iam_auth_token(db_host, db_port, db_user, client: Any | None = None) -> str:
     from urllib.parse import quote
 
     if client is None:
@@ -169,7 +167,7 @@ def generate_iam_auth_token(db_host, db_port, db_user, client: Optional[Any] = N
     else:
         boto_client = client
 
-    token = boto_client.generate_db_auth_token(DBHostname=db_host, Port=db_port, DBUsername=db_user)
-    cleaned_token = quote(token, safe="")
+    token: Final = boto_client.generate_db_auth_token(DBHostname=db_host, Port=db_port, DBUsername=db_user)
+    cleaned_token: Final = quote(token, safe="")
 
     return cleaned_token

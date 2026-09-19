@@ -8,10 +8,11 @@ import type { components } from "@/lib/http/schema";
 // Kept hand-written: the backend types `source` as Dict[str, str], so the generated type is a
 // loose string map; this discriminant union is what the parser and display helpers rely on.
 export interface PluginSource {
-  source: "github" | "url" | "git-subdir";
+  source: "github" | "url" | "git-subdir" | "archive";
   repo?: string; // Format: "org/repo" for GitHub
   url?: string; // Full URL for other sources
   path?: string; // Subdirectory path for git-subdir
+  sha256?: string;
 }
 
 export type PluginAuthor = components["schemas"]["PluginAuthor"];

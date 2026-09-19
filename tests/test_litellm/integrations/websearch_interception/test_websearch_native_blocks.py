@@ -10,6 +10,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.exceptions import (
+    APIConnectionError,
+    AuthenticationError,
+    BadRequestError,
+    RateLimitError,
+    Timeout,
+)
 from litellm.integrations.websearch_interception.handler import (
     WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY,
     WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY,
@@ -26,6 +33,10 @@ from litellm.llms.base_llm.search.transformation import SearchResponse, SearchRe
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
+)
+from litellm.types.integrations.websearch_interception import (
+    SearchFailed,
+    SearchSucceeded,
 )
 
 
@@ -46,6 +57,10 @@ def _make_search_response() -> SearchResponse:
             ),
         ]
     )
+
+
+def _succeeded_outcome() -> SearchSucceeded:
+    return SearchSucceeded(text="Title: LiteLLM Docs\nURL: https://docs.litellm.ai/", response=_make_search_response())
 
 
 class TestIsAnthropicNativeWebSearchTool:
@@ -134,6 +149,30 @@ class TestBuildWebSearchToolResultBlock:
         assert first["title"] == "LiteLLM Docs"
         assert first["page_age"] == "2025-01-15"
         assert first["encrypted_content"] == ""
+        assert first["snippet"] == "Unified interface for LLMs."
+
+    def test_snippet_carried_for_every_result(self):
+        # The snippet is the only field carrying page text. Losing it leaves the
+        # client and the model with nothing to answer from, forcing a fetch per
+        # result.
+        block = WebSearchTransformation.build_web_search_tool_result_block(
+            tool_use_id="toolu_abc",
+            search_response=_make_search_response(),
+        )
+        assert [r["snippet"] for r in block["content"]] == [
+            "Unified interface for LLMs.",
+            "Pay-per-use pricing model.",
+        ]
+
+    def test_missing_snippet_degrades_to_empty_string(self):
+        response = SearchResponse(
+            results=[SearchResult(title="T", url="https://x/", snippet="")]
+        )
+        block = WebSearchTransformation.build_web_search_tool_result_block(
+            tool_use_id="toolu_abc",
+            search_response=response,
+        )
+        assert block["content"][0]["snippet"] == ""
 
     def test_handles_none_search_response(self):
         block = WebSearchTransformation.build_web_search_tool_result_block(
@@ -203,12 +242,10 @@ class TestBuildPlanAttachesBlocks:
             messages=[{"role": "user", "content": "hi"}],
             max_tokens=1024,
         )
-        structured = [_make_search_response()]
-
         with patch.object(
             logger,
             "_build_anthropic_request_patch",
-            new=AsyncMock(return_value=(patch_obj, structured)),
+            new=AsyncMock(return_value=(patch_obj, (_succeeded_outcome(),))),
         ):
             plan = await logger.async_build_agentic_loop_plan(
                 tools={"tool_calls": tool_calls, "thinking_blocks": []},
@@ -223,11 +260,15 @@ class TestBuildPlanAttachesBlocks:
             )
 
         blocks = plan.metadata.get(WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY)
-        assert isinstance(blocks, list)
-        assert len(blocks) == 1
-        assert blocks[0]["type"] == "web_search_tool_result"
-        assert blocks[0]["tool_use_id"] == "toolu_one"
-        assert blocks[0]["content"][0]["url"] == "https://docs.litellm.ai/"
+        assert isinstance(blocks, tuple)
+        assert [b["type"] for b in blocks] == [
+            "server_tool_use",
+            "web_search_tool_result",
+        ]
+        assert blocks[0]["id"].startswith("srvtoolu_")
+        assert blocks[0]["input"] == {"query": "what is litellm"}
+        assert blocks[1]["tool_use_id"] == blocks[0]["id"]
+        assert blocks[1]["content"][0]["url"] == "https://docs.litellm.ai/"
 
     @pytest.mark.asyncio
     async def test_metadata_does_not_carry_blocks_when_flag_absent(self):
@@ -249,7 +290,7 @@ class TestBuildPlanAttachesBlocks:
         with patch.object(
             logger,
             "_build_anthropic_request_patch",
-            new=AsyncMock(return_value=(patch_obj, [_make_search_response()])),
+            new=AsyncMock(return_value=(patch_obj, (_succeeded_outcome(),))),
         ):
             plan = await logger.async_build_agentic_loop_plan(
                 tools={"tool_calls": tool_calls, "thinking_blocks": []},
@@ -264,6 +305,145 @@ class TestBuildPlanAttachesBlocks:
             )
 
         assert WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY not in plan.metadata
+
+
+class TestFailedSearchOutcome:
+    """A search that raises becomes a ``web_search_tool_result_error`` block, coded by exception type."""
+
+    @pytest.mark.parametrize(
+        ("error", "expected_code"),
+        [
+            (RateLimitError("slow down", llm_provider="tavily", model="tavily"), "too_many_requests"),
+            (BadRequestError("bad query", model="tavily", llm_provider="tavily"), "invalid_tool_input"),
+            (AuthenticationError("401 Unauthorized", llm_provider="tavily", model="tavily"), "unavailable"),
+            (APIConnectionError("connection refused", llm_provider="tavily", model="tavily"), "unavailable"),
+            (Timeout("timed out", model="tavily", llm_provider="tavily"), "unavailable"),
+            (RuntimeError("boom"), "unavailable"),
+        ],
+    )
+    def test_error_block_carries_the_mapped_error_code(self, error, expected_code):
+        outcome = WebSearchTransformation.search_outcome(error)
+
+        assert outcome == SearchFailed(error_code=expected_code, message=str(error))
+        assert WebSearchTransformation.build_web_search_outcome_block("srvtoolu_x", outcome) == {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_x",
+            "content": {"type": "web_search_tool_result_error", "error_code": expected_code},
+        }
+        assert WebSearchTransformation.search_outcome_text(outcome) == f"Search failed: {error}"
+
+    def test_succeeded_outcome_still_yields_result_items(self):
+        outcome = WebSearchTransformation.search_outcome(("Title: x", _make_search_response()))
+
+        assert outcome == SearchSucceeded(text="Title: x", response=_make_search_response())
+        block = WebSearchTransformation.build_web_search_outcome_block("srvtoolu_x", outcome)
+        assert [item["type"] for item in block["content"]] == ["web_search_result", "web_search_result"]
+        assert block["content"][0]["url"] == "https://docs.litellm.ai/"
+        assert WebSearchTransformation.search_outcome_text(outcome) == "Title: x"
+
+    @pytest.mark.asyncio
+    async def test_all_failed_iteration_terminates_when_native_blocks_are_emitted(self):
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+        tool_calls = [
+            {"id": "toolu_one", "type": "tool_use", "name": "litellm_web_search", "input": {"query": "q1"}},
+            {"id": "toolu_two", "type": "tool_use", "name": "litellm_web_search", "input": {"query": "q2"}},
+        ]
+
+        with patch.object(
+            logger,
+            "_execute_search",
+            side_effect=AuthenticationError("401 Unauthorized", llm_provider="tavily", model="tavily"),
+        ):
+            plan = await logger.async_build_agentic_loop_plan(
+                tools={"tool_calls": tool_calls, "thinking_blocks": []},
+                model="bedrock/claude",
+                messages=[{"role": "user", "content": "hi"}],
+                response=MagicMock(),
+                anthropic_messages_provider_config=None,
+                anthropic_messages_optional_request_params={},
+                logging_obj=MagicMock(model_call_details={}),
+                stream=False,
+                kwargs={WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
+            )
+
+        assert plan.run_agentic_loop is False
+        assert plan.terminate is True
+        assert plan.stop_reason == "web_search_failed"
+        blocks = plan.metadata[WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY]
+        assert [b["type"] for b in blocks] == [
+            "server_tool_use",
+            "web_search_tool_result",
+            "server_tool_use",
+            "web_search_tool_result",
+        ]
+        assert blocks[1]["tool_use_id"] == blocks[0]["id"]
+        assert blocks[1]["content"] == {"type": "web_search_tool_result_error", "error_code": "unavailable"}
+        assert blocks[3]["tool_use_id"] == blocks[2]["id"]
+        assert blocks[3]["content"] == {"type": "web_search_tool_result_error", "error_code": "unavailable"}
+
+    @pytest.mark.asyncio
+    async def test_all_failed_iteration_keeps_the_follow_up_without_native_blocks(self):
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+        tool_calls = [
+            {"id": "toolu_one", "type": "tool_use", "name": "litellm_web_search", "input": {"query": "q1"}},
+        ]
+
+        with patch.object(
+            logger,
+            "_execute_search",
+            side_effect=AuthenticationError("401 Unauthorized", llm_provider="tavily", model="tavily"),
+        ):
+            plan = await logger.async_build_agentic_loop_plan(
+                tools={"tool_calls": tool_calls, "thinking_blocks": []},
+                model="bedrock/claude",
+                messages=[{"role": "user", "content": "hi"}],
+                response=MagicMock(),
+                anthropic_messages_provider_config=None,
+                anthropic_messages_optional_request_params={},
+                logging_obj=MagicMock(model_call_details={}),
+                stream=False,
+                kwargs={},
+            )
+
+        assert plan.run_agentic_loop is True
+        assert plan.terminate is False
+        assert plan.request_patch is not None
+        tool_results = plan.request_patch.messages[-1]["content"]
+        assert "Search failed: litellm.AuthenticationError: 401 Unauthorized" in tool_results[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_mixed_iteration_keeps_the_follow_up_and_pairs_each_block(self):
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+        tool_calls = [
+            {"id": "toolu_one", "type": "tool_use", "name": "litellm_web_search", "input": {"query": "fails"}},
+            {"id": "toolu_two", "type": "tool_use", "name": "litellm_web_search", "input": {"query": "works"}},
+        ]
+
+        async def search(query, kwargs=None, rich=None):
+            if query == "fails":
+                raise RateLimitError("slow down", llm_provider="tavily", model="tavily")
+            return ("Title: x", _make_search_response())
+
+        with patch.object(logger, "_execute_search", side_effect=search):
+            plan = await logger.async_build_agentic_loop_plan(
+                tools={"tool_calls": tool_calls, "thinking_blocks": []},
+                model="bedrock/claude",
+                messages=[{"role": "user", "content": "hi"}],
+                response=MagicMock(),
+                anthropic_messages_provider_config=None,
+                anthropic_messages_optional_request_params={},
+                logging_obj=MagicMock(model_call_details={}),
+                stream=False,
+                kwargs={WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
+            )
+
+        assert plan.run_agentic_loop is True
+        assert plan.terminate is False
+        blocks = plan.metadata[WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY]
+        assert blocks[0]["input"] == {"query": "fails"}
+        assert blocks[1]["content"] == {"type": "web_search_tool_result_error", "error_code": "too_many_requests"}
+        assert blocks[2]["input"] == {"query": "works"}
+        assert blocks[3]["content"][0]["url"] == "https://docs.litellm.ai/"
 
 
 class TestPostHookInjectsBlocks:
@@ -409,13 +589,17 @@ class TestShortCircuitEmitsNativeBlocks:
         assert block_types == ["text"]
 
     @pytest.mark.asyncio
-    async def test_native_short_circuit_failure_still_emits_blocks(self):
-        """Search failure on native path: emit blocks with empty results +
-        the legacy text-error block, so the client gets a well-formed
-        response instead of a malformed half-shape."""
+    async def test_native_short_circuit_failure_emits_the_error_block(self):
+        """Search failure on native path: the tool result carries Anthropic's
+        error object (rendered as "Web search error: <code>" by the client)
+        next to the legacy text-error block."""
         logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
 
-        with patch.object(logger, "_execute_search", side_effect=RuntimeError("boom")):
+        with patch.object(
+            logger,
+            "_execute_search",
+            side_effect=RateLimitError("slow down", llm_provider="tavily", model="tavily"),
+        ):
             result = await logger.try_short_circuit_search(
                 model="github_copilot/claude-sonnet-4",
                 messages=[{"role": "user", "content": "search query"}],
@@ -427,9 +611,10 @@ class TestShortCircuitEmitsNativeBlocks:
         block_types = [b["type"] for b in result["content"]]
         assert block_types == ["server_tool_use", "web_search_tool_result", "text"]
         tool_result = result["content"][1]
-        assert tool_result["content"] == []
+        assert tool_result["tool_use_id"] == result["content"][0]["id"]
+        assert tool_result["content"] == {"type": "web_search_tool_result_error", "error_code": "too_many_requests"}
         text_block = result["content"][2]
-        assert "Search failed" in text_block["text"]
+        assert text_block["text"] == "Search failed: litellm.RateLimitError: slow down"
 
 
 class TestLegacyPathMatchesNewPath:
@@ -461,7 +646,7 @@ class TestLegacyPathMatchesNewPath:
             patch.object(
                 logger,
                 "_build_anthropic_request_patch",
-                new=AsyncMock(return_value=(patch_obj, [_make_search_response()])),
+                new=AsyncMock(return_value=(patch_obj, (_succeeded_outcome(),))),
             ),
             patch(
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
@@ -479,6 +664,9 @@ class TestLegacyPathMatchesNewPath:
                 kwargs={WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
             )
 
-        assert out["content"][0]["type"] == "web_search_tool_result"
-        assert out["content"][0]["tool_use_id"] == "toolu_legacy"
-        assert out["content"][1]["type"] == "text"
+        assert [b["type"] for b in out["content"]] == [
+            "server_tool_use",
+            "web_search_tool_result",
+            "text",
+        ]
+        assert out["content"][1]["tool_use_id"] == out["content"][0]["id"]

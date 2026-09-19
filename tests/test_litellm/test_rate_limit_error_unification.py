@@ -221,28 +221,6 @@ class TestProxyHookCategoryWiring:
     """End-to-end check that every proxy-side rate limiter raises the unified
     class with a sensible category, not a bare HTTPException."""
 
-    def test_max_budget_limiter_raises_proxy_rate_limit_error(self):
-        from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
-
-        limiter = _PROXY_MaxBudgetLimiter()
-        # The simplest deterministic path: directly raise from the conditional
-        # branch by calling into the helper's exception construction. We
-        # round-trip through the public class to assert the shape.
-        with pytest.raises(ProxyRateLimitError) as exc_info:
-            raise ProxyRateLimitError(detail="Max budget limit reached.")
-        assert exc_info.value.status_code == 429
-        assert exc_info.value.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
-        # And it's also a RateLimitError + HTTPException (the unification).
-        assert isinstance(exc_info.value, RateLimitError)
-        assert isinstance(exc_info.value, HTTPException)
-        # Static check that the limiter's module imports the unified class so
-        # the source of truth is wired correctly.
-        from litellm.proxy.hooks import max_budget_limiter
-
-        assert hasattr(max_budget_limiter, "ProxyRateLimitError")
-        assert max_budget_limiter.ProxyRateLimitError is ProxyRateLimitError
-        del limiter  # silence unused-var
-
     @pytest.mark.parametrize(
         "module_path",
         [
@@ -251,7 +229,6 @@ class TestProxyHookCategoryWiring:
             "litellm.proxy.hooks.dynamic_rate_limiter",
             "litellm.proxy.hooks.dynamic_rate_limiter_v3",
             "litellm.proxy.hooks.batch_rate_limiter",
-            "litellm.proxy.hooks.max_budget_limiter",
             "litellm.proxy.hooks.max_budget_per_session_limiter",
             "litellm.proxy.hooks.max_iterations_limiter",
         ],
@@ -541,44 +518,6 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         assert e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
         assert isinstance(e, RateLimitError)
         assert isinstance(e, HTTPException)
-
-    @pytest.mark.asyncio
-    async def test_max_budget_limiter_raises_proxy_rate_limit_error(self):
-        """
-        Drive `_PROXY_MaxBudgetLimiter` past the user budget and assert it
-        raises the unified class. Mocks `get_current_spend` so we don't need
-        the proxy DB.
-        """
-        from unittest.mock import patch
-
-        from litellm.caching.caching import DualCache
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.hooks.max_budget_limiter import (
-            _PROXY_MaxBudgetLimiter,
-        )
-
-        handler = _PROXY_MaxBudgetLimiter()
-        user_api_key_dict = UserAPIKeyAuth(
-            api_key="sk-test-budget",
-            user_id="user-budget-1",
-            user_max_budget=1.0,
-            user_spend=2.0,
-        )
-        with patch(
-            "litellm.proxy.proxy_server.get_current_spend",
-            return_value=5.0,
-        ):
-            with pytest.raises(ProxyRateLimitError) as exc_info:
-                await handler.async_pre_call_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    cache=DualCache(),
-                    data={},
-                    call_type="completion",
-                )
-        e = exc_info.value
-        assert e.status_code == 429
-        assert e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
-        assert "max budget" in str(e.detail).lower()
 
     @pytest.mark.asyncio
     async def test_dynamic_rate_limiter_v1_raises_proxy_rate_limit_error(self):
@@ -881,7 +820,6 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-test-v3"),
                 priority="default",
                 saturation=0.99,
-                data={},
             )
         e = exc_info.value
         assert e.status_code == 429
@@ -1156,14 +1094,6 @@ class TestProxyHooksWireTypeCorrectly:
     rate-limit failures by cause (RPM vs TPM vs concurrent vs budget vs
     max-iterations) without grepping the error message.
     """
-
-    def test_max_budget_limiter_emits_budget_type(self):
-        e = ProxyRateLimitError(
-            detail="Max budget limit reached.",
-            rate_limit_type=RateLimitType.BUDGET,
-        )
-        assert e.category == "litellm_rate_limit"
-        assert e.rate_limit_type == "budget"
 
     def test_max_iterations_limiter_emits_max_iterations_type(self):
         e = ProxyRateLimitError(

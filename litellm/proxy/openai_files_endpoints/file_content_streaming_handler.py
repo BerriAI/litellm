@@ -1,10 +1,11 @@
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional, Tuple, cast
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from fastapi.responses import StreamingResponse
 
 import litellm
 from litellm.files.types import FileContentProvider, FileContentStreamingResult
-from litellm.types.utils import OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS
+from litellm.types.utils import FILE_CONTENT_STREAMING_PROVIDERS
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -17,11 +18,11 @@ class FileContentStreamingHandler:
         *,
         custom_llm_provider: str,
         file_id: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         should_route: bool,
-        original_file_id: Optional[str],
-        credentials: Optional[Dict[str, Any]],
-    ) -> Tuple[str, str, Dict[str, Any]]:
+        original_file_id: str | None,
+        credentials: dict[str, Any] | None,
+    ) -> tuple[str, str, dict[str, Any]]:
         """
         Resolve the provider, file ID, and request payload to use for streaming.
 
@@ -42,9 +43,10 @@ class FileContentStreamingHandler:
                 data=resolved_streaming_data,
                 credentials=credentials,
                 file_id=original_file_id,
+                include_internal_credentials=True,
             )
             resolved_streaming_data.pop("model", None)
-            resolved_streaming_provider = cast(str, credentials["custom_llm_provider"])
+            resolved_streaming_provider: Final = cast(str, credentials["custom_llm_provider"])
             resolved_custom_llm_provider = resolved_streaming_provider
             resolved_file_id = cast(str, resolved_streaming_data["file_id"])
         else:
@@ -63,14 +65,14 @@ class FileContentStreamingHandler:
         *,
         custom_llm_provider: str,
     ) -> bool:
-        return custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS
+        return custom_llm_provider in FILE_CONTENT_STREAMING_PROVIDERS
 
     @staticmethod
     async def stream_file_content_with_logging(
         stream_iterator: AsyncIterator[bytes],
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
-        data: Dict[str, Any],
+        data: dict[str, Any],
     ):
         try:
             async for chunk in stream_iterator:
@@ -87,14 +89,14 @@ class FileContentStreamingHandler:
             raise
         finally:
             if hasattr(stream_iterator, "aclose"):
-                await stream_iterator.aclose()  # type: ignore[attr-defined]
+                await stream_iterator.aclose()
 
     @staticmethod
     async def get_streaming_file_content_response(
         *,
         custom_llm_provider: str,
         file_id: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
         version: str,
@@ -103,7 +105,7 @@ class FileContentStreamingHandler:
             ProxyBaseLLMRequestProcessing,
         )
 
-        stream_result = cast(
+        stream_result: Final = cast(
             FileContentStreamingResult,
             await litellm.afile_content(
                 **{
@@ -111,16 +113,16 @@ class FileContentStreamingHandler:
                     "file_id": file_id,
                     "stream": True,
                     **data,
-                }  # type: ignore
+                }
             ),
         )
 
-        stream_iterator = cast(
+        stream_iterator: Final = cast(
             AsyncIterator[bytes],
             stream_result.stream_iterator,
         )
-        hidden_params = getattr(stream_iterator, "_hidden_params", {}) or {}
-        response_headers = {
+        hidden_params: Final = getattr(stream_iterator, "_hidden_params", {}) or {}
+        response_headers: Final = {
             **stream_result.headers,
             **ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,

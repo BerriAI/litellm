@@ -3,14 +3,9 @@ Unit tests for StandardLoggingPayloadSetup
 """
 
 import json
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 from datetime import datetime as dt_object
 import time
 import pytest
@@ -293,7 +288,7 @@ def test_cleanup_timestamps():
     assert all(isinstance(x, float) for x in result)
 
     # Test invalid input
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="start_time is required, got=invalid of type <class 'str'>"):
         StandardLoggingPayloadSetup.cleanup_timestamps(
             "invalid", end_float, completion_float
         )
@@ -471,8 +466,8 @@ def test_get_final_response_obj():
         litellm.turn_off_message_logging = False
 
 
-def test_get_standard_logging_payload_trace_id():
-    """Test _get_standard_logging_payload_trace_id with different input scenarios"""
+def testget_standard_logging_payload_trace_id():
+    """Test get_standard_logging_payload_trace_id with different input scenarios"""
     # Test case 1: When litellm_trace_id is provided in litellm_params
     from unittest.mock import MagicMock
 
@@ -482,71 +477,169 @@ def test_get_standard_logging_payload_trace_id():
 
     # Test when litellm_trace_id is in litellm_params
     litellm_params = {"litellm_trace_id": "dynamic-trace-id"}
-    result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+    result = StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
         logging_obj=mock_logging_obj, litellm_params=litellm_params
     )
     assert result == "dynamic-trace-id"
 
     # Test case 2: When litellm_trace_id is not provided in litellm_params
     litellm_params = {}
-    result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+    result = StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
         logging_obj=mock_logging_obj, litellm_params=litellm_params
     )
     assert result == "default-trace-id"
 
     # Test case 3: When litellm_params is None
-    result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+    result = StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
         logging_obj=mock_logging_obj, litellm_params={}
     )
     assert result == "default-trace-id"
 
     # Test case 4: When litellm_trace_id in params is not a string
     litellm_params = {"litellm_trace_id": 12345}
-    result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+    result = StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
         logging_obj=mock_logging_obj, litellm_params=litellm_params
     )
     assert result == "12345"
     assert isinstance(result, str)
 
 
+def testget_standard_logging_payload_trace_id_prioritizes_trace_id_when_flag_on(monkeypatch):
+    """With request_correlation_in_logs on, an explicit litellm_trace_id wins over litellm_session_id."""
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_trace_id = "default-trace-id"
+
+    litellm_params = {"litellm_trace_id": "the-trace-id", "litellm_session_id": "the-session-id"}
+    result = StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
+        logging_obj=mock_logging_obj, litellm_params=litellm_params
+    )
+    assert result == "the-trace-id"
+
+
+def testget_standard_logging_payload_trace_id_prioritizes_session_id_when_flag_off(monkeypatch):
+    """With request_correlation_in_logs off (default), legacy behavior is preserved:
+    litellm_session_id still wins over litellm_trace_id."""
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_trace_id = "default-trace-id"
+
+    litellm_params = {"litellm_trace_id": "the-trace-id", "litellm_session_id": "the-session-id"}
+    result = StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
+        logging_obj=mock_logging_obj, litellm_params=litellm_params
+    )
+    assert result == "the-session-id"
+
+
+def testget_standard_logging_payload_session_id_when_flag_on(monkeypatch):
+    """Test get_standard_logging_payload_session_id with different input scenarios, flag enabled"""
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_session_id = ""
+
+    # Test case 1: litellm_session_id provided directly in litellm_params
+    litellm_params = {"litellm_session_id": "dynamic-session-id"}
+    result = StandardLoggingPayloadSetup.get_standard_logging_payload_session_id(
+        logging_obj=mock_logging_obj, litellm_params=litellm_params
+    )
+    assert result == "dynamic-session-id"
+
+    # Test case 2: falls back to metadata.session_id when not in litellm_params directly
+    litellm_params = {"metadata": {"session_id": "metadata-session-id"}}
+    result = StandardLoggingPayloadSetup.get_standard_logging_payload_session_id(
+        logging_obj=mock_logging_obj, litellm_params=litellm_params
+    )
+    assert result == "metadata-session-id"
+
+    # Test case 3: falls back to logging_obj.litellm_session_id when nothing else is set
+    mock_logging_obj.litellm_session_id = "obj-session-id"
+    result = StandardLoggingPayloadSetup.get_standard_logging_payload_session_id(
+        logging_obj=mock_logging_obj, litellm_params={}
+    )
+    assert result == "obj-session-id"
+
+    # Test case 4: empty string when no session id was supplied anywhere
+    mock_logging_obj.litellm_session_id = ""
+    result = StandardLoggingPayloadSetup.get_standard_logging_payload_session_id(
+        logging_obj=mock_logging_obj, litellm_params={}
+    )
+    assert result == ""
+
+    # Test case 5: non-string session id in params is coerced to str
+    litellm_params = {"litellm_session_id": 98765}
+    result = StandardLoggingPayloadSetup.get_standard_logging_payload_session_id(
+        logging_obj=mock_logging_obj, litellm_params=litellm_params
+    )
+    assert result == "98765"
+    assert isinstance(result, str)
+
+    # Test case 6: trace_id and session_id are independent - passing only a trace id
+    # must not populate session_id
+    litellm_params = {"litellm_trace_id": "some-trace-id"}
+    result = StandardLoggingPayloadSetup.get_standard_logging_payload_session_id(
+        logging_obj=mock_logging_obj, litellm_params=litellm_params
+    )
+    assert result == ""
+
+
+def testget_standard_logging_payload_session_id_empty_when_flag_off(monkeypatch):
+    """When request_correlation_in_logs is off (default), session_id is always empty,
+    even if litellm_session_id was explicitly supplied - preserves the pre-existing
+    StandardLoggingPayload shape for callers who haven't opted in."""
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_session_id = "obj-session-id"
+
+    litellm_params = {"litellm_session_id": "dynamic-session-id"}
+    result = StandardLoggingPayloadSetup.get_standard_logging_payload_session_id(
+        logging_obj=mock_logging_obj, litellm_params=litellm_params
+    )
+    assert result == ""
+
+
 def test_truncate_standard_logging_payload():
     """
-    1. original messages, response, and error_str should NOT BE MODIFIED, since these are from kwargs
-    2. the `messages`, `response`, and `error_str` in new standard_logging_payload should be truncated
+    1. the payload passed in is never modified, since every callback of the request shares it
+    2. the `messages`, `response`, and `error_str` in the returned payload are truncated
     """
     _custom_logger = CustomLogger()
     standard_logging_payload: StandardLoggingPayload = (
         create_standard_logging_payload_with_long_content()
     )
     original_messages = standard_logging_payload["messages"]
-    len_original_messages = len(str(original_messages))
     original_response = standard_logging_payload["response"]
-    len_original_response = len(str(original_response))
     original_error_str = standard_logging_payload["error_str"]
-    len_original_error_str = len(str(original_error_str))
 
-    _custom_logger.truncate_standard_logging_payload_content(standard_logging_payload)
-
-    # Original messages, response, and error_str should NOT BE MODIFIED
-    assert standard_logging_payload["messages"] != original_messages
-    assert standard_logging_payload["response"] != original_response
-    assert standard_logging_payload["error_str"] != original_error_str
-    assert len_original_messages == len(str(original_messages))
-    assert len_original_response == len(str(original_response))
-    assert len_original_error_str == len(str(original_error_str))
-
-    print(
-        "logged standard_logging_payload",
-        json.dumps(standard_logging_payload, indent=2),
+    truncated = _custom_logger.truncate_standard_logging_payload_content(
+        standard_logging_payload
     )
 
-    # Logged messages, response, and error_str should be truncated
-    # assert len of messages is less than 10_500
-    assert len(str(standard_logging_payload["messages"])) < 10_500
-    # assert len of response is less than 10_500
-    assert len(str(standard_logging_payload["response"])) < 10_500
-    # assert len of error_str is less than 10_500
-    assert len(str(standard_logging_payload["error_str"])) < 10_500
+    assert standard_logging_payload["messages"] is original_messages
+    assert standard_logging_payload["response"] is original_response
+    assert standard_logging_payload["error_str"] is original_error_str
+
+    assert truncated["messages"] != original_messages
+    assert truncated["response"] != original_response
+    assert truncated["error_str"] != original_error_str
+    assert len(str(truncated["messages"])) < 10_500
+    assert len(str(truncated["response"])) < 10_500
+    assert len(str(truncated["error_str"])) < 10_500
+
+
+def test_truncate_standard_logging_payload_keeps_a_partial_payload_intact():
+    """A payload built with only some of its fields comes back with exactly those keys and values"""
+    _custom_logger = CustomLogger()
+    partial_payload = StandardLoggingPayload(request_tags=["tag"], metadata=StandardLoggingMetadata())
+
+    assert _custom_logger.truncate_standard_logging_payload_content(partial_payload) == partial_payload
 
 
 def test_strip_trailing_slash():

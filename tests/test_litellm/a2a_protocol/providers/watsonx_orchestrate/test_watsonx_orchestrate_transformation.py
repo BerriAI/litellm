@@ -1,14 +1,11 @@
 import asyncio
 import json
-import os
-import sys
 import time
 from pathlib import Path
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
 from litellm.a2a_protocol.providers.watsonx_orchestrate import handler as wxo_handler

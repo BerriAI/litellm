@@ -2,6 +2,12 @@ import pytest
 from unittest.mock import Mock, patch
 
 
+def _rendered_log_message(call):
+    message = str(call.args[0])
+    values = call.args[1:]
+    return message % values if values else message
+
+
 def create_mock_router(
     fallbacks=None, context_window_fallbacks=None, content_policy_fallbacks=None
 ):
@@ -150,7 +156,7 @@ def test_invalid_fallback_type_returns_empty_list():
         )
 
         assert result == []
-        mock_logger.warning.assert_called_once_with("Unknown fallback_type: invalid")
+        mock_logger.warning.assert_called_once_with("Unknown fallback_type: %s", "invalid")
 
 
 def test_exception_handling_returns_empty_list():
@@ -171,7 +177,7 @@ def test_exception_handling_returns_empty_list():
 
             assert result == []
             mock_logger.error.assert_called_once()
-            error_call_args = mock_logger.error.call_args[0][0]
+            error_call_args = _rendered_log_message(mock_logger.error.call_args)
             assert (
                 "Error getting fallbacks for model claude-4-sonnet" in error_call_args
             )

@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from coverage_registry.collector import (
+    collect_markers,
     compute_coverage,
     render,
     render_json,
@@ -59,6 +60,27 @@ def test_orphan_marker_is_reported_not_counted() -> None:
     report = compute_coverage(cells, frozenset({"llm.a", "llm.ghost"}))
     assert report.covered == 1
     assert report.orphan_markers == ("llm.ghost",)
+
+
+def test_cell_claimed_only_by_a_skipped_test_is_uncovered() -> None:
+    cells = (_llm("llm.a", Tier.P0), _llm("llm.b", Tier.P0))
+    report = compute_coverage(
+        cells, frozenset({"llm.a"}), skipped_only=frozenset({"llm.b"})
+    )
+    assert (report.covered, report.p0_covered) == (1, 1)
+    assert report.p0_gaps == ("llm.b",)
+    assert report.skipped_markers == ("llm.b",)
+    assert "only by skipped tests" in render(report)
+    assert '"skipped_markers": [\n    "llm.b"\n  ]' in render_json(report)
+    assert "litellm_e2e_coverage_skipped_markers 1" in render_prometheus(report)
+
+
+def test_skipped_marker_outside_the_registry_is_still_an_orphan() -> None:
+    report = compute_coverage(
+        (_llm("llm.a", Tier.P0),), frozenset(), skipped_only=frozenset({"llm.ghost"})
+    )
+    assert report.orphan_markers == ("llm.ghost",)
+    assert report.skipped_markers == ()
 
 
 def test_logging_and_guardrail_roll_up_into_one_module() -> None:
@@ -173,6 +195,81 @@ def test_loki_render_exposes_exact_stdout_lines_for_loki() -> None:
     assert all(
         " " not in line.split("module=", 1)[1].split(" ", 1)[0] for line in lines[1:]
     )
+
+
+_MARKED_TESTS = '''
+import pytest
+
+
+@pytest.mark.covers("llm.runs")
+def test_runs() -> None:
+    pass
+
+
+@pytest.mark.skip(reason="stage red: product gap")
+@pytest.mark.covers("llm.skipped")
+def test_skipped() -> None:
+    pass
+
+
+@pytest.mark.skipif(True, reason="credentials absent in this environment")
+@pytest.mark.covers("llm.skipif_true")
+def test_skipif_true() -> None:
+    pass
+
+
+@pytest.mark.skipif(False, reason="credentials present in this environment")
+@pytest.mark.covers("llm.skipif_false")
+def test_skipif_false() -> None:
+    pass
+
+
+@pytest.mark.skipif("True")
+@pytest.mark.covers("llm.skipif_string")
+def test_skipif_string_condition() -> None:
+    pass
+
+
+@pytest.mark.covers("llm.shared")
+def test_shared_cell_runs() -> None:
+    pass
+
+
+@pytest.mark.skip(reason="stage red: product gap")
+@pytest.mark.covers("llm.shared")
+def test_shared_cell_skipped() -> None:
+    pass
+'''
+
+_MODULE_LEVEL_SKIP = '''
+import pytest
+
+pytestmark = pytest.mark.skipif(True, reason="whole module needs a session fixture")
+
+
+@pytest.mark.covers("llm.module_skipped")
+def test_module_level_skip() -> None:
+    pass
+'''
+
+
+def test_collection_counts_only_markers_on_tests_that_would_run(
+    tmp_path: Path,
+) -> None:
+    """The collect-only pass is the numerator, so a test pytest would skip must not
+    contribute its cell. A cell stays covered as long as one runnable test claims it."""
+    (tmp_path / "test_marked.py").write_text(_MARKED_TESTS)
+    (tmp_path / "test_module_skip.py").write_text(_MODULE_LEVEL_SKIP)
+
+    markers = collect_markers(tmp_path)
+
+    assert markers.covered == frozenset(
+        {"llm.runs", "llm.skipif_false", "llm.shared"}
+    )
+    assert markers.skipped_only == frozenset(
+        {"llm.skipped", "llm.skipif_true", "llm.skipif_string", "llm.module_skipped"}
+    )
+    assert markers.collection_errors == ()
 
 
 def test_real_registry_loads_and_ids_are_unique() -> None:

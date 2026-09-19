@@ -11,7 +11,7 @@ Each entrypoint is `@client`-decorated, so every operation is logged the same
 way `litellm.asearch` is.
 """
 
-from typing import Union
+from typing import Final
 
 import litellm
 from litellm.llms.base_llm.sandbox.transformation import (
@@ -23,13 +23,13 @@ from litellm.types.utils import SandboxProviders
 from litellm.utils import ProviderConfigManager, client
 
 __all__ = [
-    "acreate_sandbox",
-    "arun_code",
-    "adelete_sandbox",
     "acode_interpreter_tool",
+    "acreate_sandbox",
+    "adelete_sandbox",
+    "arun_code",
 ]
 
-_LITELLM_INTERNAL_KWARGS = {
+_LITELLM_INTERNAL_KWARGS: Final = {
     "litellm_logging_obj",
     "litellm_call_id",
     "litellm_trace_id",
@@ -38,7 +38,7 @@ _LITELLM_INTERNAL_KWARGS = {
 
 
 def _get_config(provider: str) -> BaseSandboxConfig:
-    config = ProviderConfigManager.get_provider_sandbox_config(SandboxProviders(provider))
+    config: Final = ProviderConfigManager.get_provider_sandbox_config(SandboxProviders(provider))
     if config is None:
         raise ValueError(f"Code execution is not supported for provider: {provider}")
     return config
@@ -49,7 +49,7 @@ def _forward_kwargs(kwargs: dict) -> dict:
 
 
 def _update_logging(kwargs: dict, provider: str, operation: str) -> None:
-    logging_obj = kwargs.get("litellm_logging_obj")
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
     if logging_obj is None:
         return
     logging_obj.update_from_kwargs(
@@ -85,7 +85,7 @@ async def acreate_sandbox(
 @client
 async def arun_code(
     provider: str,
-    container: Union[ContainerHandle, str],
+    container: ContainerHandle | str,
     code: str,
     api_key: str | None = None,
     **kwargs,
@@ -102,7 +102,7 @@ async def arun_code(
 @client
 async def adelete_sandbox(
     provider: str,
-    container: Union[ContainerHandle, str],
+    container: ContainerHandle | str,
     api_key: str | None = None,
     api_base: str | None = None,
     **kwargs,
@@ -127,10 +127,10 @@ async def acode_interpreter_tool(
     **kwargs,
 ) -> CodeExecutionResult:
     _update_logging(kwargs, provider, "code_interpreter_tool")
-    config = _get_config(provider)
-    forwarded = _forward_kwargs(kwargs)
+    config: Final = _get_config(provider)
+    forwarded: Final = _forward_kwargs(kwargs)
 
-    container = await config.acreate_sandbox(
+    container: Final = await config.acreate_sandbox(
         template=template,
         timeout=timeout,
         api_key=api_key,
@@ -143,4 +143,4 @@ async def acode_interpreter_tool(
         try:
             await config.adelete_sandbox(container=container, api_key=api_key, api_base=api_base, **forwarded)
         except Exception as e:
-            litellm._logging.verbose_logger.debug(f"sandbox: failed to delete ephemeral container: {e}")
+            litellm._logging.verbose_logger.debug("sandbox: failed to delete ephemeral container: %s", e)

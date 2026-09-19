@@ -5,15 +5,14 @@ All Bedrock HTTP calls are mocked; no real AWS calls are made.
 """
 
 import json
+import asyncio
 import logging
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import httpx
 from fastapi import HTTPException
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm.exceptions import ModifyResponseException
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
@@ -24,6 +23,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrailResponse,
 )
 from litellm.types.utils import Choices, Message, ModelResponse
+from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
 CONTENT_FILTER_CHECKS = {"contentFilter": {"categories": [{"category": "VIOLENCE"}]}}
 
@@ -56,7 +56,7 @@ def _patched(guardrail: BedrockGuardrail, http_response):
 
 
 def test_init_rejects_both_identifier_and_checks():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Bedrock guardrail accepts either'):
         BedrockGuardrail(guardrailIdentifier="gid", checks=CONTENT_FILTER_CHECKS)
 
 
@@ -304,7 +304,7 @@ async def test_truncated_pii_ignored_when_pii_check_not_configured():
 
 @pytest.mark.asyncio
 async def test_checks_with_guardrail_version_rejected():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Bedrock guardrail accepts either'):
         BedrockGuardrail(checks=CONTENT_FILTER_CHECKS, guardrailVersion="DRAFT")
 
 
@@ -836,3 +836,61 @@ async def test_many_blocks_scanned_at_request_level_and_can_block():
     sent_texts = [c["text"] for m in body_messages for c in m["content"]]
     assert sent_texts == [f"b{i}" for i in range(25)]
     assert all(len(m["content"]) <= 10 for m in body_messages)
+
+
+@pytest.mark.asyncio
+async def test_checks_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
+    """Same bearer-token rule as ApplyGuardrail: the guardrail's AWS profile does
+    not exist, yet the InvokeGuardrailChecks call still goes out on the bearer
+    token and its verdict is enforced."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+    g = BedrockGuardrail(
+        checks=CONTENT_FILTER_CHECKS,
+        content_filter_threshold=0.5,
+        aws_profile_name="litellm-no-such-aws-profile",
+    )
+    payload = {"results": {"contentFilter": {"results": [{"category": "VIOLENCE", "severityScore": 0.8}]}}}
+    post = AsyncMock(return_value=_mock_http_response(200, payload))
+
+    with patch.object(g.async_handler, "post", new=post):
+        with pytest.raises(HTTPException) as exc:
+            await g.make_bedrock_api_request(
+                source="INPUT",
+                messages=[{"role": "user", "content": "hi"}],
+                request_data={"messages": []},
+            )
+
+    assert exc.value.detail["bedrock_guardrail_checks"] == [
+        {"check": "contentFilter", "category": "VIOLENCE", "severityScore": 0.8}
+    ]
+    assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"
+
+
+@pytest.mark.asyncio
+async def test_invoke_guardrail_checks_signs_off_the_event_loop(monkeypatch):
+    """Regression for issue #40165: the checks request is signed with SigV4, and botocore refreshes
+    expiring credentials inside that signing with a blocking HTTP call, so it must run on a worker
+    thread to keep the loop serving other requests."""
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS, content_filter_threshold=0.5)
+    probe = EventLoopProbe()
+    allowed = httpx.Response(
+        200,
+        json={"results": {"contentFilter": {"results": [{"category": "VIOLENCE", "severityScore": 0.1}]}}},
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com"),
+    )
+
+    with (
+        patch.object(g, "_load_credentials", return_value=(probe.credentials(), "us-east-1")),
+        patch.object(g.async_handler, "post", new=AsyncMock(return_value=allowed)),
+    ):
+        release = asyncio.create_task(probe.release_refresh_from_the_loop())
+        response = await g.make_bedrock_api_request(
+            source="INPUT",
+            messages=[{"role": "user", "content": "hello"}],
+            request_data={"messages": []},
+        )
+        await release
+
+    assert response == BedrockGuardrailResponse()
+    assert probe.served_during_refresh is True

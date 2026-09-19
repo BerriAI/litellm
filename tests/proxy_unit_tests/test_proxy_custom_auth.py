@@ -1,18 +1,13 @@
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 
 import pytest
@@ -49,51 +44,40 @@ def client():
 
 
 def test_custom_auth(client):
-    try:
-        # Your test data
-        test_data = {
-            "model": "openai-model",
-            "messages": [
-                {"role": "user", "content": "hi"},
-            ],
-            "max_tokens": 10,
-        }
-        # Your bearer token
-        token = os.getenv("PROXY_MASTER_KEY")
-        print(f"token: {token}")
-        headers = {"Authorization": f"Bearer {token}"}
-        response = client.post("/chat/completions", json=test_data, headers=headers)
-        pytest.fail("LiteLLM Proxy test failed. This request should have been rejected")
-    except Exception as e:
-        print(vars(e))
-        print("got an exception")
-        assert e.code == "401"
-        assert e.message == "Authentication Error, Failed custom auth"
-        pass
+    # Your test data
+    test_data = {
+        "model": "openai-model",
+        "messages": [
+            {"role": "user", "content": "hi"},
+        ],
+        "max_tokens": 10,
+    }
+    # Your bearer token
+    token = os.getenv("PROXY_MASTER_KEY")
+    print(f"token: {token}")
+    headers = {"Authorization": f"Bearer {token}"}
+    with pytest.raises(Exception, match="Authentication Error, Failed custom auth") as exc_info:
+        client.post("/chat/completions", json=test_data, headers=headers)
+    assert exc_info.value.code == "401"
 
 
 def test_custom_auth_bearer(client):
-    try:
-        # Your test data
-        test_data = {
-            "model": "openai-model",
-            "messages": [
-                {"role": "user", "content": "hi"},
-            ],
-            "max_tokens": 10,
-        }
-        # Your bearer token
-        token = os.getenv("PROXY_MASTER_KEY")
+    # Your test data
+    test_data = {
+        "model": "openai-model",
+        "messages": [
+            {"role": "user", "content": "hi"},
+        ],
+        "max_tokens": 10,
+    }
+    # Your bearer token
+    token = os.getenv("PROXY_MASTER_KEY")
 
-        headers = {"Authorization": f"WITHOUT BEAR Er  {token}"}
-        response = client.post("/chat/completions", json=test_data, headers=headers)
-        pytest.fail("LiteLLM Proxy test failed. This request should have been rejected")
-    except Exception as e:
-        print(vars(e))
-        print("got an exception")
-        assert e.code == "401"
-        assert (
-            e.message
-            == "Authentication Error, CustomAuth - Malformed API Key passed in. Ensure Key has `Bearer` prefix"
-        )
-        pass
+    headers = {"Authorization": f"WITHOUT BEAR Er  {token}"}
+    with pytest.raises(Exception, match="CustomAuth - Malformed API Key passed in") as exc_info:
+        client.post("/chat/completions", json=test_data, headers=headers)
+    assert exc_info.value.code == "401"
+    assert (
+        exc_info.value.message
+        == "Authentication Error, CustomAuth - Malformed API Key passed in. Ensure Key has `Bearer` prefix"
+    )

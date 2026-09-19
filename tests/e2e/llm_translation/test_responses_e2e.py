@@ -11,10 +11,11 @@ import json
 from typing import cast
 
 import pytest
-from pydantic import BaseModel, ValidationError
-
-from e2e_config import require_env, unique_marker
-from e2e_http import require_successful_call
+from e2e_config import unique_marker
+from e2e_http import (
+    assert_client_error,
+    require_successful_call,
+)
 from endpoints_client import (
     EndpointsClient,
     FunctionParameterProperty,
@@ -26,8 +27,16 @@ from endpoints_client import (
 )
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from pydantic import BaseModel, ValidationError
 
 pytestmark = pytest.mark.e2e
+
+
+class _OptionalResponsesBody(BaseModel):
+    model: str | None = None
+    input: str | None = None
+    max_output_tokens: int | None = None
+
 
 BEDROCK_CONVERSE_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
@@ -255,7 +264,6 @@ class TestResponses:
     def test_responses_bedrock_returns_completion(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
-        require_env("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
         model = f"e2e-responses-{unique_marker()}"
         model_id = endpoints_client.create_model(model, _bedrock_params())
         resources.defer(lambda: endpoints_client.delete_model(model_id))
@@ -270,7 +278,6 @@ class TestResponses:
     def test_responses_bedrock_returns_function_call(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
-        require_env("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
         model = f"e2e-responses-{unique_marker()}"
         model_id = endpoints_client.create_model(model, _bedrock_params())
         resources.defer(lambda: endpoints_client.delete_model(model_id))
@@ -288,6 +295,54 @@ class TestResponses:
         arguments = WeatherArguments.model_validate(raw_arguments)
         assert arguments.location, f"function call arguments missing location: {function_call.arguments}"
 
+    @pytest.mark.skip(reason="stage red: product gap, /v1/responses 500s (aresponses TypeError) on missing input instead of 400")
+    @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
+    def test_missing_input_returns_error(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-responses-val-{unique_marker()}"
+        model_id = endpoints_client.create_model(
+            model,
+            LiteLLMParamsBody(model="openai/gpt-4o-mini", api_key="os.environ/OPENAI_API_KEY"),
+        )
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+        result = endpoints_client.proxy.transport.send(
+            "/v1/responses",
+            headers=endpoints_client.proxy.transport.bearer(key),
+            json=_OptionalResponsesBody(model=model),
+        )
+        assert_client_error(result, "responses missing input")
+
+    @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
+    def test_missing_model_returns_client_error(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        key = resources.key()
+        result = endpoints_client.proxy.transport.send(
+            "/v1/responses",
+            headers=endpoints_client.proxy.transport.bearer(key),
+            json=_OptionalResponsesBody(input="ping"),
+        )
+        assert_client_error(result, "responses missing model")
+
+    @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
+    def test_empty_input_returns_client_error(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-responses-val-{unique_marker()}"
+        model_id = endpoints_client.create_model(
+            model,
+            LiteLLMParamsBody(model="openai/gpt-4o-mini", api_key="os.environ/OPENAI_API_KEY"),
+        )
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+        result = endpoints_client.proxy.transport.send(
+            "/v1/responses",
+            headers=endpoints_client.proxy.transport.bearer(key),
+            json=_OptionalResponsesBody(model=model, input=""),
+        )
+        assert_client_error(result, "responses empty input")
 
 def _parse_stream_event(
     event: str,

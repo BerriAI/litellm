@@ -6,13 +6,10 @@ litellm.aimage_generation() are forwarded to the OpenAI API client as
 extra_headers in the images.generate() call.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.openai.openai import OpenAIChatCompletion
 
@@ -150,6 +147,58 @@ class TestImageGenerationExtraHeaders:
 
         _, kwargs = mock_openai_client.images.generate.call_args
         assert "extra_headers" not in kwargs
+
+    @pytest.mark.parametrize("is_async", [False, True])
+    @pytest.mark.asyncio
+    async def test_caller_headers_never_reach_the_logged_request_body(
+        self, openai_chat_completions, mock_logging_obj, is_async
+    ):
+        """The body handed to pre_call is also what telemetry reads at close time, so
+        merging caller headers into that same dict would publish a customer's auth
+        header as a span attribute. The upstream call still gets them."""
+        mock_image_data = MagicMock()
+        mock_image_data.model_dump.return_value = {
+            "created": 1700000000,
+            "data": [{"url": "https://example.com/image.png"}],
+        }
+
+        mock_openai_client = MagicMock()
+        mock_openai_client.api_key = "test-key"
+        mock_openai_client._base_url._uri_reference = "https://api.openai.com"
+
+        test_headers = {"cf-aig-authorization": "Bearer custom-token"}
+
+        if is_async:
+            mock_openai_client.images.generate = AsyncMock(return_value=mock_image_data)
+            await openai_chat_completions.aimage_generation(
+                prompt="A white cat",
+                data={"model": "dall-e-3", "prompt": "A white cat"},
+                model_response=MagicMock(),
+                timeout=60.0,
+                logging_obj=mock_logging_obj,
+                api_key="test-key",
+                headers=test_headers,
+                client=mock_openai_client,
+            )
+        else:
+            mock_openai_client.images.generate.return_value = mock_image_data
+            openai_chat_completions.image_generation(
+                model="dall-e-3",
+                prompt="A white cat",
+                timeout=60.0,
+                optional_params={},
+                logging_obj=mock_logging_obj,
+                api_key="test-key",
+                headers=test_headers,
+                client=mock_openai_client,
+            )
+
+        logged_body = mock_logging_obj.pre_call.call_args[1]["additional_args"][
+            "complete_input_dict"
+        ]
+        assert "extra_headers" not in logged_body
+        _, kwargs = mock_openai_client.images.generate.call_args
+        assert kwargs.get("extra_headers") == test_headers
 
     def test_sync_image_generation_forwards_headers_to_async(
         self, openai_chat_completions, mock_logging_obj

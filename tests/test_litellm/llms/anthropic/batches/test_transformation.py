@@ -14,15 +14,12 @@ otherwise read process env / secret managers - mocking them keeps the URL/header
 assertions deterministic without touching production transform logic.
 """
 
-import os
-import sys
 import time
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
 from litellm.types.utils import LiteLLMBatch, LlmProviders
@@ -619,7 +616,6 @@ def test_transform_response_reraises_unexpected_error(config):
 # automatically. See base_batches_config_test.py.
 # --------------------------------------------------------------------------- #
 
-from litellm.types.utils import LlmProviders  # noqa: E402
 from tests.test_litellm.llms.base_llm.batches.base_batches_config_test import (  # noqa: E402
     BatchesConfigContractTests,
 )

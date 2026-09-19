@@ -2,7 +2,10 @@ package litellm
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -58,6 +61,18 @@ func handleAPIResponse(resp *http.Response, reqBody interface{}, client *Client)
 	}
 
 	return &modelResp, nil
+}
+
+// hashedKeyToken normalizes a raw sk- API key to its SHA-256 token hash, the
+// identifier the proxy stores and accepts, so the plaintext key never lands
+// in request URLs, resource IDs, or proxy access logs. Values that are
+// already hashed pass through unchanged.
+func hashedKeyToken(key string) string {
+	if !strings.HasPrefix(key, "sk-") {
+		return key
+	}
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])
 }
 
 // MakeRequest is a helper function to make HTTP requests
@@ -188,6 +203,23 @@ func isCredentialNotFoundError(errResp ErrorResponse) bool {
 	return false
 }
 
+var errCredentialConflict = errors.New("credential_conflict")
+
+func isLegacyCredentialConflictError(errResp ErrorResponse) bool {
+	isConflict := func(msg string) bool {
+		return strings.Contains(msg, "Unique constraint failed") && strings.Contains(msg, "credential_name")
+	}
+	if msg, ok := errResp.Error.Message.(string); ok && isConflict(msg) {
+		return true
+	}
+	if msgMap, ok := errResp.Error.Message.(map[string]interface{}); ok {
+		if errStr, ok := msgMap["error"].(string); ok && isConflict(errStr) {
+			return true
+		}
+	}
+	return isConflict(errResp.Detail.Error)
+}
+
 // handleCredentialAPIResponse handles API responses specifically for credential operations
 func handleCredentialAPIResponse(resp *http.Response, result interface{}, client *Client) error {
 	bodyBytes, err := io.ReadAll(resp.Body)
@@ -199,11 +231,18 @@ func handleCredentialAPIResponse(resp *http.Response, result interface{}, client
 		return fmt.Errorf("credential_not_found")
 	}
 
+	if resp.StatusCode == http.StatusConflict {
+		return errCredentialConflict
+	}
+
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
 			if isCredentialNotFoundError(errResp) {
 				return fmt.Errorf("credential_not_found")
+			}
+			if isLegacyCredentialConflictError(errResp) {
+				return errCredentialConflict
 			}
 		}
 		return fmt.Errorf("API request failed: Status: %s, Response: %s",
