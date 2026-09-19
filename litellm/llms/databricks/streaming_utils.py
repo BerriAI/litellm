@@ -1,6 +1,8 @@
 import json
 from typing import Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm import verbose_logger
 from litellm.types.llms.openai import (
@@ -9,6 +11,31 @@ from litellm.types.llms.openai import (
     ChatCompletionUsageBlock,
 )
 from litellm.types.utils import GenericStreamingChunk, Usage
+
+_TOKEN_DETAIL_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _as_detail_dict(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    return _TOKEN_DETAIL_ADAPTER.validate_python(value)
+
+
+def _usage_to_chat_completion_block(usage: Usage | None) -> ChatCompletionUsageBlock | None:
+    if usage is None:
+        return None
+    dumped: Final = usage.model_dump()
+    prompt_tokens: Final = usage.prompt_tokens or 0
+    completion_tokens: Final = usage.completion_tokens or 0
+    total_tokens: Final = usage.total_tokens or 0
+    prompt_tokens_details: Final = _as_detail_dict(dumped.get("prompt_tokens_details"))
+    completion_tokens_details: Final = _as_detail_dict(dumped.get("completion_tokens_details"))
+    # fmt: off
+    return ChatCompletionUsageBlock(
+        prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_tokens=total_tokens,
+        prompt_tokens_details=prompt_tokens_details, completion_tokens_details=completion_tokens_details,
+    )
+    # fmt: on
 
 
 class ModelResponseIterator:
@@ -23,27 +50,18 @@ class ModelResponseIterator:
             tool_use: ChatCompletionToolCallChunk | None = None
             is_finished = False
             finish_reason = ""
-            usage: ChatCompletionUsageBlock | None = None
+            usage: Final = _usage_to_chat_completion_block(getattr(processed_chunk, "usage", None))
 
             # Usage-only final chunk (OpenAI ``stream_options.include_usage``)
             # arrives with an empty ``choices`` list — return usage without
             # indexing ``choices[0]``.
             if len(processed_chunk.choices) == 0:
-                final_usage: Final = getattr(processed_chunk, "usage", None)
                 return GenericStreamingChunk(
                     text="",
                     tool_use=None,
                     is_finished=False,
                     finish_reason="",
-                    usage=(
-                        ChatCompletionUsageBlock(
-                            prompt_tokens=final_usage.prompt_tokens or 0,
-                            completion_tokens=final_usage.completion_tokens or 0,
-                            total_tokens=final_usage.total_tokens or 0,
-                        )
-                        if final_usage is not None
-                        else None
-                    ),
+                    usage=usage,
                     index=0,
                 )
 
@@ -69,14 +87,6 @@ class ModelResponseIterator:
             if processed_chunk.choices[0].finish_reason is not None:
                 is_finished = True
                 finish_reason = processed_chunk.choices[0].finish_reason
-
-            usage_chunk: Final[Usage | None] = getattr(processed_chunk, "usage", None)
-            if usage_chunk is not None:
-                usage = ChatCompletionUsageBlock(
-                    prompt_tokens=usage_chunk.prompt_tokens,
-                    completion_tokens=usage_chunk.completion_tokens,
-                    total_tokens=usage_chunk.total_tokens,
-                )
 
             return GenericStreamingChunk(
                 text=text,
