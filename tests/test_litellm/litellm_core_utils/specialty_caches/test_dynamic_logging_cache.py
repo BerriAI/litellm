@@ -47,23 +47,28 @@ class TestLangfuseInMemoryCache:
             assert litellm.initialized_langfuse_clients == initial_count - 1
 
     @patch("litellm.initialized_langfuse_clients", 3)
-    def test_evicted_logger_keeps_its_export_channel_and_api_client_alive(self):
-        """Export channels are shared per credential set and outlive the logger, so eviction only
-        releases the initialized-client slot: prompts still resolve and the channel still flushes."""
+    def test_evicted_logger_releases_its_hold_on_the_shared_export_channel(self):
+        """Export channels are shared per credential set: eviction gives this logger's hold back
+        while a sibling logger keeps exporting, and the channel is retired once the last hold goes."""
         from litellm.integrations.langfuse.langfuse import LangFuseLogger
-        from litellm.integrations.langfuse.langfuse_sdk import DiscardingSpanExporter, build_langfuse_tracing
+        from litellm.integrations.langfuse.langfuse_sdk import acquire_langfuse_tracing, release_langfuse_tracing
+
+        def acquire():
+            return acquire_langfuse_tracing(
+                public_key="pk-eviction-test",
+                secret_key="sk",
+                base_url="http://127.0.0.1:1",
+                environment=None,
+                release=None,
+                flush_interval=1.0,
+                mock_mode=True,
+            )
 
         logger = LangFuseLogger.__new__(LangFuseLogger)
         logger.api_client = MagicMock()
         logger.api_client.get_prompt.return_value = "prompt-after-eviction"
-        logger.tracing = build_langfuse_tracing(
-            exporter=DiscardingSpanExporter(),
-            environment=None,
-            release=None,
-            sample_rate=1.0,
-            flush_at=512,
-            flush_interval_millis=1000,
-        )
+        logger.tracing = acquire()
+        sibling = acquire()
         self.cache.cache_dict["test_key"] = logger
         self.cache.ttl_dict["test_key"] = time.time() + 100
 
@@ -71,6 +76,9 @@ class TestLangfuseInMemoryCache:
 
         assert litellm.initialized_langfuse_clients == 2
         assert logger.api_client.get_prompt("greeting") == "prompt-after-eviction"
-        with logger.tracing.tracer.start_as_current_span("still-open"):
+        with sibling.tracer.start_as_current_span("still-open"):
             pass
-        assert logger.tracing.flush(1000) is True
+        assert sibling.flush(1000) is True
+
+        release_langfuse_tracing(sibling, grace_seconds=0.0)
+        assert acquire() is not logger.tracing, "eviction did not release the evicted logger's hold"

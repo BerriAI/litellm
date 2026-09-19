@@ -23,8 +23,8 @@ class LangfuseInMemoryCache(InMemoryCache):
 
     The counter is a soft budget: loggers built concurrently for one credential set before the
     first lands in the cache each take a slot, and only the cached one gives it back on expiry.
-    Export channels are shared per credential set and outlive the logger, so nothing else is
-    torn down here (https://github.com/BerriAI/litellm/issues/11169).
+    The logger's ``stop()`` below hands its shared export channel back
+    (https://github.com/BerriAI/litellm/issues/11169).
     """
 
     def _remove_key(self, key: str) -> None:

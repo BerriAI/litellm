@@ -6,7 +6,7 @@ import threading
 from base64 import b64encode
 from collections.abc import Iterable, Mapping, Sequence
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from hashlib import sha256
 from importlib.metadata import version
@@ -49,6 +49,7 @@ __all__ = (
     "configured_sample_rate",
     "flush_langfuse_tracing",
     "observation_attributes",
+    "release_langfuse_tracing",
     "resolve_observation_id",
     "resolve_trace_id",
     "start_child_span",
@@ -62,6 +63,7 @@ _OBSERVATION_ID_PATTERN: Final = re.compile(r"^(?=.*[1-9a-f])[0-9a-f]{16}$")
 _TRACER_NAME: Final = "langfuse-sdk"
 _MAX_QUEUE_SIZE: Final = 100_000
 _DEFAULT_FLUSH_AT: Final = 512
+_CHANNEL_RETIRE_GRACE_SECONDS: Final = 60.0
 _SPAN_LIMITS: Final = SpanLimits(
     max_attributes=SpanLimits.UNSET,
     max_events=128,
@@ -561,6 +563,9 @@ class LangfuseTracing:
     def flush(self, timeout_millis: int = 30_000) -> bool:
         return self.provider.force_flush(timeout_millis)
 
+    def shutdown(self) -> None:
+        self.provider.shutdown()
+
 
 @dataclass(frozen=True, slots=True)
 class _TracingKey:
@@ -575,10 +580,14 @@ class _TracingKey:
     mock_mode: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _Lease:
+    tracing: LangfuseTracing
+    holders: int
+
+
 _TRACING_LOCK: Final = threading.Lock()
-_TRACING: Final[
-    dict[_TracingKey, LangfuseTracing]
-] = {}  # mutable-ok: process-wide channel cache, guarded by _TRACING_LOCK
+_TRACING: Final[dict[_TracingKey, _Lease]] = {}  # mutable-ok: process-wide channel cache, guarded by _TRACING_LOCK
 
 
 def acquire_langfuse_tracing(
@@ -593,8 +602,8 @@ def acquire_langfuse_tracing(
 ) -> LangfuseTracing:
     """One export channel per credential set, shared by every logger built for it.
 
-    Channels live for the process: a provider owns a batch export thread, and tearing one down
-    while another logger for the same credentials still exports through it would drop its spans.
+    A provider owns a batch export thread, so a channel lives while any logger holds it and is
+    retired through ``release_langfuse_tracing`` once the last holder lets go.
     """
     key: Final = _TracingKey(
         public_key=public_key,
@@ -610,7 +619,8 @@ def acquire_langfuse_tracing(
     with _TRACING_LOCK:
         cached: Final = _TRACING.get(key)
         if cached is not None:
-            return cached
+            _TRACING[key] = replace(cached, holders=cached.holders + 1)
+            return cached.tracing
         created: Final = build_langfuse_tracing(
             exporter=DiscardingSpanExporter()
             if mock_mode
@@ -621,8 +631,42 @@ def acquire_langfuse_tracing(
             flush_at=key.flush_at,
             flush_interval_millis=key.flush_interval_millis,
         )
-        _TRACING[key] = created
+        _TRACING[key] = _Lease(tracing=created, holders=1)
         return created
+
+
+def release_langfuse_tracing(tracing: LangfuseTracing, *, grace_seconds: float = _CHANNEL_RETIRE_GRACE_SECONDS) -> None:
+    """Let go of one logger's hold on its channel; a channel nobody holds is retired ``grace_seconds`` later.
+
+    The grace covers a callback that fetched its logger from the cache just before the entry expired,
+    and a logger rebuilt for the same credentials in the meantime picks the channel back up instead.
+    """
+    with _TRACING_LOCK:
+        held: Final = next(((key, lease) for key, lease in _TRACING.items() if lease.tracing is tracing), None)
+        if held is None:
+            return
+        key, lease = held
+        if lease.holders <= 0:
+            return
+        _TRACING[key] = replace(lease, holders=lease.holders - 1)
+        if lease.holders > 1:
+            return
+    if grace_seconds <= 0:
+        _retire_if_unheld(key, tracing)
+        return
+    retire: Final = threading.Timer(grace_seconds, _retire_if_unheld, args=(key, tracing))
+    retire.name = "langfuse-retire"
+    retire.daemon = True
+    retire.start()
+
+
+def _retire_if_unheld(key: _TracingKey, tracing: LangfuseTracing) -> None:
+    with _TRACING_LOCK:
+        lease: Final = _TRACING.get(key)
+        if lease is None or lease.tracing is not tracing or lease.holders > 0:
+            return
+        del _TRACING[key]
+    tracing.shutdown()
 
 
 class _FlushWorker(threading.Thread):
@@ -645,7 +689,7 @@ def flush_langfuse_tracing(timeout_millis: int = 30_000) -> bool:
     finish in the background rather than pushing the deadline out for the channels after it.
     """
     with _TRACING_LOCK:
-        channels: Final = tuple(_TRACING.values())
+        channels: Final = tuple(lease.tracing for lease in _TRACING.values())
     workers: Final = tuple(_FlushWorker(channel, timeout_millis) for channel in channels)
     deadline: Final = monotonic() + timeout_millis / 1000
     for worker in workers:

@@ -6,7 +6,7 @@ import traceback
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from functools import lru_cache
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
 
@@ -278,13 +278,13 @@ class LangFuseLogger:
         allow_env_credentials: bool = True,
     ):
         try:
-            from litellm.integrations.langfuse.langfuse_sdk import acquire_langfuse_tracing
-        except Exception as e:
+            self.langfuse_sdk_version: str = installed_langfuse_version()
+        except PackageNotFoundError as e:
             raise Exception(
-                f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\n{traceback.format_exc()}\033[0m"
-            )
-        self.langfuse_sdk_version: str = installed_langfuse_version()
+                f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\033[0m"
+            ) from e
         raise_if_unsupported_langfuse_version(self.langfuse_sdk_version)
+        from litellm.integrations.langfuse.langfuse_sdk import acquire_langfuse_tracing
 
         self.public_key, self.secret_key, self.langfuse_host = resolve_langfuse_credentials(
             langfuse_public_key=langfuse_public_key,
@@ -361,6 +361,12 @@ class LangFuseLogger:
     def flush(self) -> None:
         """Push every queued observation to Langfuse before the process goes away."""
         self.tracing.flush()
+
+    def stop(self) -> None:
+        """Give the export channel back; ``DynamicLoggingCache`` calls this when a per-key logger expires."""
+        from litellm.integrations.langfuse.langfuse_sdk import release_langfuse_tracing
+
+        release_langfuse_tracing(self.tracing)
 
     @staticmethod
     def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict[str, object]:

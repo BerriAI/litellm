@@ -39,6 +39,7 @@ from litellm.integrations.langfuse.langfuse_sdk import (
     configured_sample_rate,
     flush_langfuse_tracing,
     observation_attributes,
+    release_langfuse_tracing,
     resolve_observation_id,
     resolve_trace_id,
     start_child_span,
@@ -662,6 +663,78 @@ def test_same_credentials_share_one_channel():
 )
 def test_changed_credentials_or_settings_get_their_own_channel(override):
     assert _acquire() is not _acquire(**override)
+
+
+class _RecordsShutdown(InMemorySpanExporter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.shutdowns = 0
+
+    def shutdown(self) -> None:
+        self.shutdowns += 1
+        super().shutdown()
+
+
+def _acquire_recorded(monkeypatch: pytest.MonkeyPatch, public_key: str) -> tuple[LangfuseTracing, _RecordsShutdown]:
+    exporter = _RecordsShutdown()
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk._build_span_exporter", lambda **_: exporter)
+    return _acquire(public_key=public_key, mock_mode=False, flush_interval=600.0), exporter
+
+
+def test_channel_is_retired_only_after_its_last_holder_releases_it(monkeypatch: pytest.MonkeyPatch):
+    """Two loggers on one credential set share the channel: the first release must leave it
+    exporting for the second, and the last release must shut the batch thread down and drop
+    the registry entry so the next logger gets a fresh channel instead of a dead one."""
+    first, exporter = _acquire_recorded(monkeypatch, "pk-lease-test")
+    second = _acquire(public_key="pk-lease-test", mock_mode=False, flush_interval=600.0)
+    assert second is first
+
+    release_langfuse_tracing(first, grace_seconds=0.0)
+    second.tracer.start_span("generation").end()
+    assert exporter.shutdowns == 0
+    assert flush_langfuse_tracing() is True
+    assert len(exporter.get_finished_spans()) == 1
+
+    release_langfuse_tracing(second, grace_seconds=0.0)
+    assert exporter.shutdowns == 1
+    assert _acquire(public_key="pk-lease-test", mock_mode=False, flush_interval=600.0) is not first
+
+
+def test_release_flushes_the_queued_spans_before_the_channel_goes_away(monkeypatch: pytest.MonkeyPatch):
+    tracing, exporter = _acquire_recorded(monkeypatch, "pk-lease-flush-test")
+    tracing.tracer.start_span("generation").end()
+
+    release_langfuse_tracing(tracing, grace_seconds=0.0)
+
+    assert len(exporter.get_finished_spans()) == 1
+
+
+def test_channel_reacquired_within_the_grace_is_kept(monkeypatch: pytest.MonkeyPatch):
+    """A logger rebuilt for the same credentials right after the old one expired, and a callback
+    that fetched the old logger just before expiry, both keep exporting through the same channel."""
+    tracing, exporter = _acquire_recorded(monkeypatch, "pk-lease-grace-test")
+
+    release_langfuse_tracing(tracing, grace_seconds=0.2)
+    assert _acquire(public_key="pk-lease-grace-test", mock_mode=False, flush_interval=600.0) is tracing
+
+    threading.Event().wait(0.5)
+    tracing.tracer.start_span("generation").end()
+    assert exporter.shutdowns == 0
+    assert flush_langfuse_tracing() is True
+    assert len(exporter.get_finished_spans()) == 1
+
+
+def test_release_of_a_channel_the_registry_never_handed_out_is_a_no_op():
+    exporter = InMemorySpanExporter()
+    tracing = build_langfuse_tracing(
+        exporter=exporter, environment=None, release=None, sample_rate=1.0, flush_interval_millis=10
+    )
+
+    release_langfuse_tracing(tracing, grace_seconds=0.0)
+    tracing.tracer.start_span("generation").end()
+
+    assert tracing.flush() is True
+    assert len(exporter.get_finished_spans()) == 1
 
 
 def test_flush_langfuse_tracing_exports_the_queued_spans_of_every_channel(monkeypatch: pytest.MonkeyPatch):

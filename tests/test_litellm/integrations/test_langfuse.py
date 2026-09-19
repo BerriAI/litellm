@@ -2166,6 +2166,60 @@ def test_version_gate_rejects_v5_prereleases():
         langfuse_module.raise_if_unsupported_langfuse_version("5.0.0")
 
 
+def test_old_sdk_fails_with_the_upgrade_message_before_the_otel_module_is_imported(monkeypatch):
+    """On a v2 install `langfuse_sdk` itself fails to import, so the version gate must run first
+    or the caller is told the package is missing when it only needs upgrading."""
+    import sys
+
+    monkeypatch.setattr(langfuse_module, "installed_langfuse_version", lambda: "2.59.7")
+    monkeypatch.setitem(sys.modules, "litellm.integrations.langfuse.langfuse_sdk", None)
+
+    with pytest.raises(ImportError) as raised:
+        _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-old-sdk")
+
+    assert "2.59.7" in str(raised.value)
+    assert "langfuse_otel" in str(raised.value)
+    assert "not installed" not in str(raised.value)
+
+
+def test_missing_sdk_is_reported_as_not_installed(monkeypatch):
+    from importlib.metadata import PackageNotFoundError
+
+    def not_installed() -> str:
+        raise PackageNotFoundError("langfuse")
+
+    monkeypatch.setattr(langfuse_module, "installed_langfuse_version", not_installed)
+
+    with pytest.raises(Exception, match="Langfuse not installed"):
+        _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-no-sdk")
+
+
+def test_stopped_logger_hands_its_export_channel_back(monkeypatch):
+    """`DynamicLoggingCache` calls `stop()` on expiry; the channel must be retired once every
+    logger that held it has stopped, or each credential rotation leaks a batch export thread."""
+    from litellm.integrations.langfuse.langfuse_sdk import acquire_langfuse_tracing, release_langfuse_tracing
+
+    logger = _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-stop-releases")
+
+    def acquire_same_credentials():
+        return acquire_langfuse_tracing(
+            public_key="pk-stop-releases",
+            secret_key="sk-lit5228",
+            base_url=_UNREACHABLE_HOST,
+            environment=logger.langfuse_environment,
+            release=logger.langfuse_release,
+            flush_interval=logger.langfuse_flush_interval,
+            mock_mode=False,
+        )
+
+    logger.stop()
+    reacquired = acquire_same_credentials()
+    assert reacquired is logger.tracing, "the channel stays up while another logger still holds it"
+
+    release_langfuse_tracing(reacquired, grace_seconds=0.0)
+    assert acquire_same_credentials() is not logger.tracing, "stop() did not give the logger's hold back"
+
+
 def test_int_steering_values_reach_langfuse_as_strings():
     """Langfuse models user, session and version as strings; v2's pydantic coerced ints for the caller."""
     rig = _steering_logger()
