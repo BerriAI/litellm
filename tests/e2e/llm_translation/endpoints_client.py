@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from e2e_config import SLOW_PROVIDER_TIMEOUT_SECONDS
-from e2e_http import BinaryStream, Result, StreamingResponse
+from e2e_http import BinaryStream, NoBody, Result, StreamingResponse
 from models import CacheControl, ChatMessage, LiteLLMParamsBody, RichMessage, TextBlock
 from proxy_client import ProxyClient
 from pydantic import BaseModel
@@ -26,6 +26,8 @@ __all__ = [
     "TextBlock",
     "TranscriptionForm",
     "TranscriptionResult",
+    "VideoObject",
+    "VideoRequest",
 ]
 
 
@@ -125,6 +127,13 @@ class ImageRequest(BaseModel):
     prompt: str
     n: int = 1
     size: str = "1024x1024"
+
+
+class VideoRequest(BaseModel):
+    model: str
+    prompt: str
+    seconds: str = "4"
+    size: str = "1280x720"
 
 
 class ImageEditForm(BaseModel):
@@ -265,6 +274,12 @@ class ImageItem(BaseModel):
 
 class ImagesResult(BaseModel):
     data: list[ImageItem] = []
+
+
+class VideoObject(BaseModel):
+    id: str
+    status: str
+    model: str | None = None
 
 
 class TranscriptionResult(BaseModel):
@@ -438,6 +453,25 @@ class EndpointsClient:
     def images(self, key: str, model: str, prompt: str) -> StreamingResponse:
         return self._send(
             "/v1/images/generations", key, ImageRequest(model=model, prompt=prompt)
+        )
+
+    def videos(self, key: str, model: str, prompt: str) -> StreamingResponse:
+        return self._send(
+            "/v1/videos", key, VideoRequest(model=model, prompt=prompt)
+        )
+
+    def video_status(self, key: str, video_id: str) -> Result[VideoObject]:
+        return self.proxy.transport.get(
+            f"/v1/videos/{video_id}",
+            headers=self.proxy.transport.bearer(key),
+            params=NoBody(),
+            response_type=VideoObject,
+        )
+
+    def video_content(self, key: str, video_id: str) -> StreamingResponse:
+        return self.proxy.transport.download(
+            f"/v1/videos/{video_id}/content",
+            headers=self.proxy.transport.bearer(key),
         )
 
     def image_edit(
