@@ -3,6 +3,7 @@ import json
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from itertools import pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, runtime_checkable
@@ -12,7 +13,7 @@ from openai.types.batch import Errors
 from openai.types.batch_error import BatchError
 from openai.types.batch_request_counts import BatchRequestCounts
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, TypedDict, assert_never
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -25,6 +26,7 @@ from litellm.llms.base_llm.files.storage_backend_factory import get_storage_back
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.models.managed_files import LiteLLM_ManagedFileTable
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.openai_files_endpoints.common_utils import (
     LITELLM_EXECUTED_BATCH_ID_PREFIX,
@@ -44,12 +46,26 @@ if TYPE_CHECKING:
 
 BatchEndpoint: TypeAlias = Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses"]
 BatchStatus: TypeAlias = Literal["in_progress", "finalizing", "completed", "failed", "cancelling", "cancelled"]
-
 TERMINAL_BATCH_STATUSES: Final[frozenset[str]] = frozenset({"completed", "failed", "cancelled", "expired"})
+_STOP_STATUSES: Final[frozenset[str]] = TERMINAL_BATCH_STATUSES | frozenset({"cancelling"})
 _BATCH_ENDPOINT_ADAPTER: Final[TypeAdapter[BatchEndpoint]] = TypeAdapter(BatchEndpoint)
 _CANCEL_POLL_SECONDS: Final = 1.0
+_HEARTBEAT_SECONDS: Final = 30.0
+_STALE_AFTER_SECONDS: Final = 180.0
 _FILES_API_PROBE_TIMEOUT_SECONDS: Final = 5.0
 _COMPLETION_WINDOW_SECONDS: Final = 24 * 60 * 60
+_RUNNER_LOST_MESSAGE: Final = "the proxy replica running this batch stopped before it finished; resubmit the batch"
+_ROUTER_METHODS: Final[Mapping[BatchEndpoint, str]] = MappingProxyType(
+    {
+        "/v1/chat/completions": "acompletion",
+        "/v1/completions": "atext_completion",
+        "/v1/embeddings": "aembedding",
+        "/v1/responses": "aresponses",
+    }
+)
+_CANCELLING_TRANSITIONS: Final[Mapping[BatchStatus, BatchStatus]] = MappingProxyType(
+    {"completed": "cancelled", "in_progress": "cancelling", "finalizing": "cancelling"}
+)
 LITELLM_EXECUTED_BATCH_UPLOAD_GUIDANCE: Final = (
     "upload it through POST /v1/files with purpose=batch and either the x-litellm-model header or the "
     "target_model_names form field naming the model, so LiteLLM keeps the file and runs the batch itself"
@@ -165,20 +181,6 @@ class _RouterCall(Protocol):
     def __call__(self, **params: object) -> Awaitable[object]: ...  # kwargs-ok: the request body is passed as keywords
 
 
-def _router_method_name(endpoint: BatchEndpoint) -> str:
-    match endpoint:
-        case "/v1/chat/completions":
-            return "acompletion"
-        case "/v1/completions":
-            return "atext_completion"
-        case "/v1/embeddings":
-            return "aembedding"
-        case "/v1/responses":
-            return "aresponses"
-        case _:
-            assert_never(endpoint)
-
-
 def litellm_executed_provider_of(credentials: Mapping[str, object]) -> str | None:
     explicit_provider: Final = credentials.get("custom_llm_provider")
     provider: Final = (
@@ -197,12 +199,20 @@ class FilesApiProbe(Protocol):
     async def __call__(self, api_base: str, api_key: str | None) -> bool: ...
 
 
+class BodyRejection(Protocol):
+    def __call__(self, body: Mapping[str, object], /) -> str | None: ...
+
+
 async def upstream_lacks_files_api(api_base: str, api_key: str | None, http_client: _HttpGetter | None = None) -> bool:
     client: Final = http_client or get_async_httpx_client(llm_provider=LlmProviders.HOSTED_VLLM)
     try:
         response: Final = await client.get(
             f"{api_base.rstrip('/')}/files",
-            headers={"Authorization": f"Bearer {api_key}"} if api_key else None,
+            headers=(
+                {"Authorization": f"Bearer {api_key}"}  # mutable-ok: AsyncHTTPHandler.get wants a plain dict
+                if api_key
+                else None
+            ),
             timeout=_FILES_API_PROBE_TIMEOUT_SECONDS,
         )
     except httpx.HTTPError:
@@ -266,7 +276,13 @@ def _validation_reason(error: ValidationError) -> str:
     )
 
 
-def _parse_line(line_number: int, raw: bytes, endpoint: BatchEndpoint) -> BatchInputLine | InvalidBatchInput:
+def _accept_every_body(_body: Mapping[str, object]) -> str | None:
+    return None
+
+
+def _parse_line(
+    line_number: int, raw: bytes, endpoint: BatchEndpoint, reject_body: BodyRejection
+) -> BatchInputLine | InvalidBatchInput:
     try:
         line: Final = BatchInputLine.model_validate_json(raw)
     except ValidationError as e:
@@ -275,14 +291,19 @@ def _parse_line(line_number: int, raw: bytes, endpoint: BatchEndpoint) -> BatchI
         return InvalidBatchInput(line_number, f"url {line.url!r} does not match the batch endpoint {endpoint!r}")
     if line.body.get("stream"):
         return InvalidBatchInput(line_number, "streaming requests are not supported in a batch")
+    rejection: Final = reject_body(line.body)
+    if rejection is not None:
+        return InvalidBatchInput(line_number, rejection)
     return line
 
 
-def parse_batch_input(content: bytes, endpoint: BatchEndpoint) -> tuple[BatchInputLine, ...] | InvalidBatchInput:
+def parse_batch_input(
+    content: bytes, endpoint: BatchEndpoint, reject_body: BodyRejection = _accept_every_body
+) -> tuple[BatchInputLine, ...] | InvalidBatchInput:
     raw_lines: Final = tuple((number, raw) for number, raw in enumerate(content.splitlines(), start=1) if raw.strip())
     if not raw_lines:
         return InvalidBatchInput(None, "the input file has no requests")
-    parsed: Final = tuple(_parse_line(number, raw, endpoint) for number, raw in raw_lines)
+    parsed: Final = tuple(_parse_line(number, raw, endpoint, reject_body) for number, raw in raw_lines)
     first_invalid: Final = next((item for item in parsed if isinstance(item, InvalidBatchInput)), None)
     if first_invalid is not None:
         return first_invalid
@@ -345,37 +366,35 @@ def _dump(response: object) -> Mapping[str, object]:
 def _resolve_transition(current_status: str, requested: BatchStatus) -> BatchStatus:
     if current_status != "cancelling":
         return requested
-    match requested:
-        case "completed":
-            return "cancelled"
-        case "in_progress" | "finalizing":
-            return "cancelling"
-        case "failed" | "cancelling" | "cancelled":
-            return requested
-        case _:
-            assert_never(requested)
+    return _CANCELLING_TRANSITIONS.get(requested, requested)
+
+
+def executed_batch_runner_lost(status: str, updated_at: datetime) -> bool:
+    if status in TERMINAL_BATCH_STATUSES:
+        return False
+    return (datetime.now(timezone.utc) - updated_at).total_seconds() > _STALE_AFTER_SECONDS
 
 
 def _llm_batch_id_of(unified_batch_id: str) -> str:
     return get_batch_id_from_unified_batch_id(convert_b64_uid_to_unified_uid(unified_batch_id))
 
 
-class _CancelWatch:
+class _StopWatch:
     def __init__(self, load_status: Callable[[], Awaitable[str | None]], interval_seconds: float) -> None:
         self._load_status = load_status
         self._interval_seconds = interval_seconds
         self._checked_at = float("-inf")
-        self._cancelling = False
+        self._stopped = False
 
-    async def cancelling(self) -> bool:
-        if self._cancelling:
+    async def stopped(self) -> bool:
+        if self._stopped:
             return True
         now: Final = time.monotonic()
         if now - self._checked_at < self._interval_seconds:
             return False
         self._checked_at = now
-        self._cancelling = await self._load_status() == "cancelling"
-        return self._cancelling
+        self._stopped = await self._load_status() in _STOP_STATUSES
+        return self._stopped
 
 
 class LiteLLMExecutedBatchRunner:
@@ -385,7 +404,9 @@ class LiteLLMExecutedBatchRunner:
         prisma_client: PrismaClient,
         managed_files: ManagedBatchStore,
         proxy_logging_obj: ProxyLogging,
+        general_settings: Mapping[str, object],
         concurrency: int = LITELLM_EXECUTED_BATCH_CONCURRENCY,
+        heartbeat_seconds: float = _HEARTBEAT_SECONDS,
         storage_backend_factory: _StorageBackendFactory = get_storage_backend,
         upload_result_file: _ResultFileUploader = StorageBackendFileService.upload_file_to_storage_backend,
     ) -> None:
@@ -393,7 +414,9 @@ class LiteLLMExecutedBatchRunner:
         self.prisma_client = prisma_client
         self.managed_files = managed_files
         self.proxy_logging_obj = proxy_logging_obj
+        self.general_settings = general_settings
         self.concurrency = concurrency
+        self.heartbeat_seconds = heartbeat_seconds
         self.storage_backend_factory = storage_backend_factory
         self.upload_result_file = upload_result_file
 
@@ -408,7 +431,7 @@ class LiteLLMExecutedBatchRunner:
     ) -> LiteLLMBatch:
         endpoint: Final = _validate_endpoint(create_request.get("endpoint"))
         content: Final = await self._download_input(unified_input_file_id, user_api_key_dict)
-        parsed: Final = parse_batch_input(content, endpoint)
+        parsed: Final = parse_batch_input(content, endpoint, self._body_rejection(model))
         if isinstance(parsed, InvalidBatchInput):
             raise batch_error(400, f"Invalid batch input file: {parsed.describe()}")
         llm_batch_id: Final = f"{LITELLM_EXECUTED_BATCH_ID_PREFIX}{uuid_module.uuid4().hex}"
@@ -468,6 +491,30 @@ class LiteLLMExecutedBatchRunner:
         await self._store(cancelling, user_api_key_dict)
         return cancelling
 
+    async def fail_abandoned(self, batch: LiteLLMBatch, user_api_key_dict: UserAPIKeyAuth) -> LiteLLMBatch:
+        error: Final = BatchError(message=_RUNNER_LOST_MESSAGE, code="runner_lost")
+        errors: Final = Errors(data=[error], object="list")  # mutable-ok: Errors.data is typed as a list
+        failed: Final = batch.model_copy(
+            update=MappingProxyType({"status": "failed", "failed_at": int(time.time()), "errors": errors})
+        )
+        await self._store(failed, user_api_key_dict)
+        return failed
+
+    def _body_rejection(self, model: str) -> BodyRejection:
+        def reject(body: Mapping[str, object]) -> str | None:
+            try:
+                is_request_body_safe(
+                    request_body=dict(body),  # mutable-ok: is_request_body_safe takes a dict
+                    general_settings=dict(self.general_settings),  # mutable-ok: is_request_body_safe takes a dict
+                    llm_router=self.llm_router,
+                    model=model,
+                )
+            except ValueError as e:
+                return str(e)
+            return None
+
+        return reject
+
     async def _download_input(self, unified_input_file_id: str, user_api_key_dict: UserAPIKeyAuth) -> bytes:
         stored: Final = await self.managed_files.get_unified_file_id(
             unified_input_file_id, litellm_parent_otel_span=user_api_key_dict.parent_otel_span
@@ -485,6 +532,7 @@ class LiteLLMExecutedBatchRunner:
             raise batch_error(400, str(e))
 
     async def _run(self, run: _BatchRun) -> None:
+        heartbeat: Final = asyncio.create_task(self._heartbeat(run))
         try:
             await self._execute(run)
         except Exception as e:  # noqa: BLE001  # whatever fails, the batch must end up marked failed
@@ -497,14 +545,31 @@ class LiteLLMExecutedBatchRunner:
                 verbose_proxy_logger.exception(
                     "LiteLLM-executed batch %s could not be marked failed: %s", run.unified_batch_id, advance_error
                 )
+        finally:
+            heartbeat.cancel()
+
+    async def _heartbeat(self, run: _BatchRun) -> None:
+        while True:
+            await asyncio.sleep(self.heartbeat_seconds)
+            try:
+                await self._touch(run)
+            except Exception as e:  # noqa: BLE001  # a missed beat is logged and the next one retries
+                verbose_proxy_logger.warning("LiteLLM-executed batch %s heartbeat failed: %s", run.unified_batch_id, e)
+
+    async def _touch(self, run: _BatchRun) -> None:
+        await ManagedObjectRepository(self.prisma_client).table.update_many(
+            where={"unified_object_id": run.unified_batch_id},  # mutable-ok: Prisma filter
+            data={"updated_by": run.user_api_key_dict.user_id},  # mutable-ok: Prisma payload
+        )
 
     async def _execute(self, run: _BatchRun) -> None:
         await self._advance(run, "in_progress")
-        watch: Final = _CancelWatch(lambda: self._load_status(run.unified_batch_id), _CANCEL_POLL_SECONDS)
+        watch: Final = _StopWatch(lambda: self._load_status(run.unified_batch_id), _CANCEL_POLL_SECONDS)
         semaphore: Final = asyncio.Semaphore(self.concurrency)
         results: Final = await asyncio.gather(*(self._run_row(run, line, watch, semaphore) for line in run.lines))
         outcomes: Final = tuple(outcome for outcome in results if outcome is not None)
-        await self._advance(run, "finalizing")
+        if await self._advance(run, "finalizing") is None:
+            return
         succeeded: Final = tuple(outcome for outcome in outcomes if outcome.succeeded)
         failed: Final = tuple(outcome for outcome in outcomes if not outcome.succeeded)
         output_file_id: Final = await self._upload_results(run, "output", succeeded)
@@ -519,10 +584,10 @@ class LiteLLMExecutedBatchRunner:
         )
 
     async def _run_row(
-        self, run: _BatchRun, line: BatchInputLine, watch: _CancelWatch, semaphore: asyncio.Semaphore
+        self, run: _BatchRun, line: BatchInputLine, watch: _StopWatch, semaphore: asyncio.Semaphore
     ) -> RowOutcome | None:
         async with semaphore:
-            if await watch.cancelling():
+            if await watch.stopped():
                 return None
             try:
                 body: Final = await self._dispatch(run, line)
@@ -537,7 +602,7 @@ class LiteLLMExecutedBatchRunner:
         return _dump(await self._router_call(run.endpoint)(**params))
 
     def _router_call(self, endpoint: BatchEndpoint) -> _RouterCall:
-        method: Final[object] = getattr(self.llm_router, _router_method_name(endpoint), None)
+        method: Final[object] = getattr(self.llm_router, _ROUTER_METHODS[endpoint], None)
         if not isinstance(method, _RouterCall):
             raise TypeError(f"the router has no callable for {endpoint}")
         return method
@@ -574,15 +639,20 @@ class LiteLLMExecutedBatchRunner:
         )
         return file_object.id
 
-    async def _advance(self, run: _BatchRun, requested: BatchStatus, fields: Mapping[str, object] = _NO_FIELDS) -> None:
+    async def _advance(
+        self, run: _BatchRun, requested: BatchStatus, fields: Mapping[str, object] = _NO_FIELDS
+    ) -> BatchStatus | None:
         current: Final = await self._load_batch(run.unified_batch_id)
         if current is None:
             raise RuntimeError(f"Batch {run.unified_batch_id} is no longer stored")
+        if current.status in TERMINAL_BATCH_STATUSES:
+            return None
         status: Final = _resolve_transition(current.status, requested)
         updated: Final = current.model_copy(
             update=MappingProxyType({**fields, "status": status, f"{status}_at": int(time.time())})
         )
         await self._store(updated, run.user_api_key_dict)
+        return status
 
     async def _store(self, batch: LiteLLMBatch, user_api_key_dict: UserAPIKeyAuth) -> None:
         await self.managed_files.store_unified_object_id(

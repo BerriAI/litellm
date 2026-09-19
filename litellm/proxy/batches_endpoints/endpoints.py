@@ -7,8 +7,9 @@
 import asyncio
 import os
 from collections.abc import Mapping
+from datetime import datetime
 from types import MappingProxyType
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 from pydantic import TypeAdapter
@@ -24,6 +25,7 @@ from litellm.proxy.batches_endpoints.litellm_executed_batches import (
     LiteLLMExecutedBatchRunner,
     ManagedBatchStore,
     batch_error,
+    executed_batch_runner_lost,
     litellm_executed_provider_for,
     resolve_litellm_executed_provider,
 )
@@ -61,11 +63,14 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import request_tags_from_metadata
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
-from litellm.proxy.utils import ProxyLogging, handle_exception_on_proxy, is_known_model
+from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy, is_known_model
 from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 from litellm.types.utils import LiteLLMBatch
+
+if TYPE_CHECKING:
+    from prisma.models import LiteLLM_ManagedObjectTable
 
 router: Final = APIRouter()
 _METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
@@ -79,7 +84,7 @@ def _request_tags(data: Mapping[str, object]) -> tuple[str, ...] | None:
 
 
 def _litellm_executed_batch_runner(llm_router: Router, proxy_logging_obj: ProxyLogging) -> LiteLLMExecutedBatchRunner:
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import general_settings, prisma_client
 
     managed_files: Final = proxy_logging_obj.get_proxy_hook("managed_files")
     if prisma_client is None or not isinstance(managed_files, ManagedBatchStore):
@@ -92,7 +97,34 @@ def _litellm_executed_batch_runner(llm_router: Router, proxy_logging_obj: ProxyL
         prisma_client=prisma_client,
         managed_files=managed_files,
         proxy_logging_obj=proxy_logging_obj,
+        general_settings=general_settings,
     )
+
+
+async def _batch_from_database(
+    batch_id: str,
+    unified_batch_id: str | Literal[False],
+    executed_batch: bool,
+    managed_files_obj: object,
+    prisma_client: PrismaClient | None,
+    llm_router: Router | None,
+    proxy_logging_obj: ProxyLogging,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> tuple["LiteLLM_ManagedObjectTable | None", LiteLLMBatch | None]:
+    row, batch = await get_batch_from_database(
+        batch_id=batch_id,
+        unified_batch_id=unified_batch_id,
+        managed_files_obj=managed_files_obj,
+        prisma_client=prisma_client,
+        verbose_proxy_logger=verbose_proxy_logger,
+    )
+    updated_at: Final[object] = getattr(row, "updated_at", None)
+    if not executed_batch or batch is None or llm_router is None or not isinstance(updated_at, datetime):
+        return row, batch
+    if not executed_batch_runner_lost(batch.status, updated_at):
+        return row, batch
+    runner: Final = _litellm_executed_batch_runner(llm_router, proxy_logging_obj)
+    return row, await runner.fail_abandoned(batch, user_api_key_dict)
 
 
 async def _raise_when_input_file_must_be_managed(model: str, credentials: Mapping[str, object]) -> None:
@@ -548,15 +580,18 @@ async def retrieve_batch(
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
         from litellm.proxy.proxy_server import prisma_client
 
-        db_batch_object, response = await get_batch_from_database(
+        executed_batch: Final = isinstance(unified_batch_id, str) and is_litellm_executed_batch(unified_batch_id)
+        db_batch_object, response = await _batch_from_database(
             batch_id=batch_id,
             unified_batch_id=unified_batch_id,
+            executed_batch=executed_batch,
             managed_files_obj=managed_files_obj,
             prisma_client=prisma_client,
-            verbose_proxy_logger=verbose_proxy_logger,
+            llm_router=llm_router,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=user_api_key_dict,
         )
 
-        executed_batch: Final = isinstance(unified_batch_id, str) and is_litellm_executed_batch(unified_batch_id)
         if executed_batch and response is None:
             raise batch_error(404, f"No batch found with id '{batch_id}'.")
 
