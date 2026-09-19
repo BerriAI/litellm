@@ -145,6 +145,7 @@ from litellm.router_utils.auto_router_tuning_baseline import (
     snapshot_tuning_baselines,
     tuning_limit_violation,
 )
+from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     ModelResponse,
@@ -153,7 +154,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TokenCountResponse,
 )
-from litellm.utils import load_credentials_from_list
+from litellm.utils import cost_map_omits_token_price, load_credentials_from_list
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -261,6 +262,7 @@ from litellm.constants import (
     APSCHEDULER_MISFIRE_GRACE_TIME,
     APSCHEDULER_REPLACE_EXISTING,
     CLI_SSO_SESSION_TTL_SECONDS,
+    DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
@@ -308,6 +310,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.proxy._experimental.mcp_server.byok_credential_cache import byok_credential_cache
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
@@ -329,6 +332,12 @@ from litellm.proxy.auth.fallback_budget import router_fallback_budget_check
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, LicenseCheck
+from litellm.proxy.auth.login_throttle import (
+    LoginThrottle,
+    declared_proxy_ranges,
+    warn_login_counters_are_per_worker,
+    warn_source_login_limit_is_off,
+)
 from litellm.proxy.auth.model_checks import (
     expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,
@@ -429,6 +438,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     get_management_object_ttl,
     model_access_group_cache_key,
     model_access_group_spend_counter_key,
+    project_cache_key,
+    project_spend_counter_key,
     tag_cache_key,
 )
 from litellm.proxy.config_resolvers import SettingsStore, resolve_fields
@@ -680,6 +691,9 @@ from litellm.proxy.route_priority import hot_routes_first
 from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
+from litellm.proxy.spend_tracking.daily_global_spend_rollup import (
+    run_scheduled_daily_global_spend_reconcile,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     PendingSpendIncrement,
     active_spend_counter_batch,
@@ -780,6 +794,7 @@ from litellm.types.router import (
     ClassifierPlugin,
     DeploymentTypedDict,
     RouterGeneralSettings,
+    RoutingGroup,
     RoutingPlugin,
     SearchToolTypedDict,
     updateDeployment,
@@ -825,6 +840,7 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import (
     FileResponse,
+    HTMLResponse,
     JSONResponse,
     ORJSONResponse,
     RedirectResponse,
@@ -2822,6 +2838,7 @@ async def increment_spend_counters(
     tags: list[str] | None = None,
     request_started_at: datetime | None = None,
     model_access_groups: Sequence[str] | None = None,
+    project_id: str | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -2843,6 +2860,7 @@ async def increment_spend_counters(
             end_user_id=end_user_id,
             tags=tags,
             model_access_groups=model_access_groups,
+            project_id=project_id,
         ),
     ):
         await _increment_spend_counters_batched(
@@ -2856,6 +2874,7 @@ async def increment_spend_counters(
             tags=tags,
             request_started_at=request_started_at,
             model_access_groups=model_access_groups,
+            project_id=project_id,
         )
 
 
@@ -2870,6 +2889,7 @@ async def _increment_spend_counters_batched(
     tags: list[str] | None,
     request_started_at: datetime | None,
     model_access_groups: Sequence[str] | None,
+    project_id: str | None = None,
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET."""
     reserved_counter_keys: Final = await _reconcile_budget_reservation_for_counter_update(
@@ -3070,6 +3090,13 @@ async def _increment_spend_counters_batched(
             )
             if org_id is not None
             else None,
+            _prepare_project_spend_increment(
+                project_id=project_id,
+                response_cost=cost,
+                reserved_counter_keys=reserved_counter_keys,
+            )
+            if project_id is not None
+            else None,
         )
         if coro is not None
     )
@@ -3216,6 +3243,23 @@ async def _prepare_org_spend_increment(
     pending: Final = await _prepare_unreserved_spend_counter_increment(
         counter_key=f"spend:org:{org_id}",
         source_cache_key=[f"org_id:{org_id}:with_budget", f"org_id:{org_id}"],
+        increment=response_cost,
+        reserved_counter_keys=reserved_counter_keys,
+    )
+    return (pending,) if pending is not None else ()
+
+
+async def _prepare_project_spend_increment(
+    project_id: str | None,
+    response_cost: float,
+    reserved_counter_keys: set[str],
+) -> tuple[PendingSpendIncrement, ...]:
+    if project_id is None:
+        return ()
+
+    pending: Final = await _prepare_unreserved_spend_counter_increment(
+        counter_key=project_spend_counter_key(project_id),
+        source_cache_key=project_cache_key(project_id),
         increment=response_cost,
         reserved_counter_keys=reserved_counter_keys,
     )
@@ -6048,6 +6092,12 @@ class ProxyConfig:
         general_settings = config.get("general_settings", {})
         if general_settings is None:
             general_settings = {}
+
+        if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:
+            warn_login_counters_are_per_worker(os.getenv("NUM_WORKERS", "1"))
+        if declared_proxy_ranges(general_settings) is None:
+            warn_source_login_limit_is_off()
+
         _bg_hc_model_groups: Final = parse_background_health_check_model_groups(general_settings)
         _enable_hc_routing = False
         _hc_staleness = None
@@ -6869,9 +6919,7 @@ class ProxyConfig:
         self._add_callbacks_from_db_config(config_data)
 
         # router settings
-        await self._add_router_settings_from_db_config(
-            config_data=config_data, llm_router=llm_router, prisma_client=prisma_client
-        )
+        await self._add_router_settings_from_db_config(llm_router=llm_router, prisma_client=prisma_client)
 
         return still_desired_ids
 
@@ -7079,13 +7127,11 @@ class ProxyConfig:
 
     async def _add_router_settings_from_db_config(
         self,
-        config_data: Mapping[str, object],
         llm_router: Router | None,
         prisma_client: PrismaClient | None,
     ) -> None:
         if llm_router is None or prisma_client is None:
             return
-        self.router_settings.load_yaml(_as_settings_mapping(config_data.get("router_settings")))
         db_router_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
             where={"param_name": "router_settings"}
         )
@@ -7097,7 +7143,21 @@ class ProxyConfig:
         self.router_settings.apply_db_row("router_settings", db_values)
         combined_router_settings: Final = self.router_settings.resolved()
         if combined_router_settings:
-            llm_router.update_settings(**combined_router_settings)
+            self._apply_router_settings(llm_router, combined_router_settings)
+
+    @staticmethod
+    def _apply_router_settings(llm_router: Router, router_settings: Mapping[str, object]) -> None:
+        llm_router.update_settings(**{k: v for k, v in router_settings.items() if k != "routing_groups"})
+        if "routing_groups" not in router_settings:
+            return
+        try:
+            llm_router.update_settings(routing_groups=router_settings["routing_groups"])
+        except (TypeError, ValueError) as invalid_groups:
+            verbose_proxy_logger.error(
+                "Ignoring invalid router_settings.routing_groups from config/DB, all other router settings still "
+                "apply. Fix the routing groups in the Admin UI to load them: %s",
+                invalid_groups,
+            )
 
     async def _reschedule_spend_log_cleanup_job(self):
         """
@@ -7521,7 +7581,7 @@ class ProxyConfig:
         subscriber: Final = AuthCacheInvalidationSubscriber(
             redis_cache=redis_cache,
             user_api_key_cache=user_api_key_cache,
-            additional_in_memory_caches=(spend_counter_cache.in_memory_cache,),
+            additional_in_memory_caches=(spend_counter_cache.in_memory_cache, byok_credential_cache),
         )
         self.auth_cache_invalidation_subscriber = subscriber
         subscriber.start()
@@ -9987,6 +10047,12 @@ class ProxyStartupEvent:
 
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
+        cls._initialize_daily_global_spend_reconcile_job(
+            scheduler=scheduler,
+            proxy_logging_obj=proxy_logging_obj,
+            prisma_client=prisma_client,
+        )
+
         ### PTU DAILY ROLLUP ###
         from litellm.proxy.spend_tracking.ptu_feature_flag import (
             is_ptu_cost_attribution_enabled,
@@ -10327,6 +10393,39 @@ class ProxyStartupEvent:
                 "Expired UI session key cleanup disabled (set "
                 "LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED=true to enable)"
             )
+
+    @classmethod
+    def _initialize_daily_global_spend_reconcile_job(
+        cls,
+        scheduler: AsyncIOScheduler,
+        proxy_logging_obj: ProxyLogging,
+        prisma_client: PrismaClient,
+    ) -> None:
+        async def alert(message: str) -> None:
+            await proxy_logging_obj.alerting_handler(
+                message=message,
+                level="High",
+                alert_type=AlertType.failed_tracking_spend,
+            )
+
+        async def reconcile() -> None:
+            await run_scheduled_daily_global_spend_reconcile(
+                prisma_client,
+                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
+                alert=alert,
+            )
+
+        scheduler.add_job(
+            reconcile,
+            "cron",
+            hour=0,
+            minute=30,
+            timezone="UTC",
+            id=DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID,
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
+        )
 
     @classmethod
     async def _initialize_slack_alerting_jobs(
@@ -13602,9 +13701,10 @@ def _enrich_model_info_with_litellm_data(
     discovered_model_info: Final = (
         llm_router.get_discovered_model_info(model_info.get("id")) if llm_router is not None else MappingProxyType({})
     )
+    unpriced: Final = cost_map_omits_token_price(model_info.get("id"), litellm_model_info.get("key"))
     for k, v in MappingProxyType({**litellm_model_info, **discovered_model_info}).items():
         if k not in model_info or (model_info[k] is None and k in discovered_model_info):
-            model_info[k] = v
+            model_info[k] = None if unpriced and k in ("input_cost_per_token", "output_cost_per_token") else v
     model["model_info"] = model_info
     # don't return the api key / vertex credentials
     # don't return the llm credentials
@@ -15040,45 +15140,7 @@ def _translate_model_name_for_response(model: dict) -> dict:
 
 
 def _get_proxy_model_info(model: dict) -> dict:
-    # provided model_info in config.yaml
-    model_info: Final = model.get("model_info", {})
-
-    # read litellm model_prices_and_context_window.json to get the following:
-    # input_cost_per_token, output_cost_per_token, max_tokens
-    litellm_model_info = get_litellm_model_info(model=model)
-
-    # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
-    if litellm_model_info == {}:
-        # use litellm_param model_name to get model_info
-        litellm_params = model.get("litellm_params", {})
-        litellm_model = litellm_params.get("model", None)
-        try:
-            litellm_model_info = litellm.get_model_info(model=litellm_model)
-        except Exception:
-            litellm_model_info = {}
-    # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
-    if litellm_model_info == {}:
-        # use litellm_param model_name to get model_info
-        litellm_params = model.get("litellm_params", {})
-        litellm_model = litellm_params.get("model", None)
-        split_model: Final = litellm_model.split("/")
-        if len(split_model) > 0:
-            litellm_model = split_model[-1]
-        try:
-            litellm_model_info = litellm.get_model_info(model=litellm_model, custom_llm_provider=split_model[0])
-        except Exception:
-            litellm_model_info = {}
-    discovered_model_info: Final = (
-        llm_router.get_discovered_model_info(model_info.get("id")) if llm_router is not None else MappingProxyType({})
-    )
-    for k, v in MappingProxyType({**litellm_model_info, **discovered_model_info}).items():
-        if k not in model_info or (model_info[k] is None and k in discovered_model_info):
-            model_info[k] = v
-    model["model_info"] = model_info
-    # don't return the llm credentials
-    model = remove_sensitive_info_from_deployment(deployment_dict=model, excluded_keys={"litellm_credential_name"})
-
-    return _translate_model_name_for_response(model)
+    return _translate_model_name_for_response(_enrich_model_info_with_litellm_data(model=model, llm_router=llm_router))
 
 
 def _model_info_json_response(data: Sequence[Mapping[str, object]] | Mapping[str, object]) -> Response:
@@ -15885,8 +15947,6 @@ async def fallback_login(request: Request):
     else:
         redirect_url += "/sso/callback"
 
-    from fastapi.responses import HTMLResponse
-
     hide_default_credentials_hint: Final = should_hide_default_credentials_hint(general_settings)
     return HTMLResponse(
         content=build_ui_login_form(
@@ -15908,13 +15968,27 @@ async def login(request: Request):
     password: Final = str(form.get("password"))
 
     # Authenticate user and get login result
-    login_result: Final = await authenticate_user(
-        username=username,
-        password=password,
-        master_key=master_key,
-        prisma_client=prisma_client,
-        general_settings=general_settings,
-    )
+    try:
+        login_result: Final = await authenticate_user(
+            username=username,
+            password=password,
+            master_key=master_key,
+            prisma_client=prisma_client,
+            throttle=LoginThrottle.from_request(request, general_settings, redis_usage_cache),
+            general_settings=general_settings,
+        )
+    except ProxyException as exc:
+        if int(exc.code) != status.HTTP_429_TOO_MANY_REQUESTS:
+            raise
+        retry_after: Final = exc.headers.get("Retry-After", "30")
+        return HTMLResponse(
+            content=(
+                "<html><body><h1>Too many sign-in attempts</h1>"
+                f"<p>Try again in about {retry_after} seconds</p></body></html>"
+            ),
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            headers=exc.headers,
+        )
 
     # Create UI token object
     returned_ui_token_object: Final = create_ui_token_object(
@@ -15993,6 +16067,7 @@ async def login_v2(request: Request):
             password=password,
             master_key=master_key,
             prisma_client=prisma_client,
+            throttle=LoginThrottle.from_request(request, general_settings, redis_usage_cache),
             general_settings=general_settings,
         )
 
@@ -16064,6 +16139,7 @@ async def login_v3(request: Request):
             password=password,
             master_key=master_key,
             prisma_client=prisma_client,
+            throttle=LoginThrottle.from_request(request, general_settings, redis_usage_cache),
             general_settings=general_settings,
         )
 
@@ -16940,9 +17016,57 @@ async def update_config(
                         )
                     },
                 )
+            try:
+                parse_routing_groups(
+                    TypeAdapter(list[RoutingGroup] | None).validate_python(raw_router_settings.get("routing_groups"))
+                )
+            except (ValidationError, ValueError) as invalid_groups:
+                raise HTTPException(status_code=400, detail={"error": str(invalid_groups)})
 
         if prisma_client is None:
             raise Exception("No DB Connected")
+
+        requested_general_settings: Final[Mapping[str, JsonValue]] = (
+            config_info.general_settings.model_dump(exclude_none=True, exclude_unset=True)
+            if config_info.general_settings is not None
+            else {}
+        )
+        raw_litellm_settings: Final[Mapping[str, JsonValue]] = _CONFIG_SECTION_VALUES.validate_python(
+            config_info.litellm_settings if config_info.litellm_settings is not None else {}
+        )
+        incoming_success_callback: Final = raw_litellm_settings.get("success_callback")
+        updated_litellm_settings: Final[Mapping[str, JsonValue]] = _CONFIG_SECTION_VALUES.validate_python(
+            {
+                **raw_litellm_settings,
+                **(
+                    {"success_callback": normalize_callback_names(incoming_success_callback)}
+                    if isinstance(incoming_success_callback, list)
+                    else {}
+                ),
+            }
+        )
+        typed_router_settings: Final[Mapping[str, JsonValue]] = (
+            config_info.router_settings.model_dump(exclude_none=True, exclude_unset=True)
+            if config_info.router_settings is not None
+            else {}
+        )
+        router_settings_updates: Final[Mapping[str, JsonValue]] = {
+            **typed_router_settings,
+            **(
+                {
+                    key: value
+                    for key, value in raw_router_settings.items()
+                    if key not in typed_router_settings and value is not None
+                }
+                if isinstance(raw_router_settings, dict)
+                else {}
+            ),
+        }
+        proxy_config.reject_config_owned_writes(
+            section_name="general_settings", changed_keys=requested_general_settings
+        )
+        proxy_config.reject_config_owned_writes(section_name="litellm_settings", changed_keys=raw_litellm_settings)
+        proxy_config.reject_config_owned_writes(section_name="router_settings", changed_keys=router_settings_updates)
 
         async def _read_section(param_name: str) -> dict:
             row: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
@@ -16970,8 +17094,7 @@ async def update_config(
         if config_info.general_settings is not None:
             existing = await _read_section("general_settings")
             before_general_settings: Final = copy.deepcopy(existing)
-            updates: Mapping[str, JsonValue] = config_info.general_settings.dict(exclude_none=True)
-            for k, v in updates.items():
+            for k, v in requested_general_settings.items():
                 if k == "alert_to_webhook_url":
                     if "alerting" not in existing:
                         existing["alerting"] = ["slack"]
@@ -17014,15 +17137,9 @@ async def update_config(
         if config_info.litellm_settings is not None:
             existing = await _read_section("litellm_settings")
             before_litellm_settings: Final = copy.deepcopy(existing)
-            updated_litellm_settings: Final = dict(config_info.litellm_settings)
-
-            incoming_cb = updated_litellm_settings.get("success_callback")
-            if isinstance(incoming_cb, list):
-                updated_litellm_settings["success_callback"] = normalize_callback_names(incoming_cb)
-
             merged: Final = {**existing, **updated_litellm_settings}
 
-            incoming_cb = updated_litellm_settings.get("success_callback")
+            incoming_cb: Final = updated_litellm_settings.get("success_callback")
             existing_cb: Final = existing.get("success_callback")
             if isinstance(incoming_cb, list):
                 if isinstance(existing_cb, list):
@@ -17045,15 +17162,6 @@ async def update_config(
         if isinstance(raw_router_settings, dict):
             existing = await _read_section("router_settings")
             before_router_settings: Final = copy.deepcopy(existing)
-            typed_router_settings: Final = (
-                config_info.router_settings.dict(exclude_none=True) if config_info.router_settings is not None else {}
-            )
-            raw_router_settings_without_none: Final = {
-                key: value
-                for key, value in raw_router_settings.items()
-                if key not in typed_router_settings and value is not None
-            }
-            router_settings_updates: Final = {**typed_router_settings, **raw_router_settings_without_none}
             new_router_settings: Final = {**existing, **router_settings_updates}
             await _upsert_section("router_settings", new_router_settings)
             asyncio.create_task(
@@ -17128,6 +17236,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "disable_auto_add_proxy_admin_to_teams": "Boolean",
         "apply_user_budget_to_team_keys": "Boolean",
         "user_api_key_cache_max_size": "Integer",
+        "transcribe_media_buckets": "List",
     }
 )
 

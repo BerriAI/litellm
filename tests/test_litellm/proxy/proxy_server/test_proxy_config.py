@@ -3399,9 +3399,8 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
     fake_prisma.db.litellm_config.find_first = AsyncMock(
         return_value=SimpleNamespace(param_value={"timeout": 30, "retries": 2, "fallbacks": []})
     )
-    config_data = {"router_settings": {"timeout": 10}}
+    pc.router_settings.load_yaml({"timeout": 10})
     await pc._add_router_settings_from_db_config(
-        config_data=config_data,
         llm_router=fake_router,
         prisma_client=fake_prisma,
     )
@@ -3421,7 +3420,7 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
 async def test_ProxyConfig__add_router_settings_from_db_config_none_router_noop():
     pc = ProxyConfig()
     # No router and no prisma — should silently return.
-    await pc._add_router_settings_from_db_config(config_data={}, llm_router=None, prisma_client=None)
+    await pc._add_router_settings_from_db_config(llm_router=None, prisma_client=None)
     # Error-style: bad call signature raises.
     with pytest.raises(TypeError):
         await pc._add_router_settings_from_db_config()  # type: ignore[call-arg]
@@ -3744,6 +3743,27 @@ async def test_ProxyConfig__update_general_settings_yaml_allowed_file_extensions
     from litellm.proxy import proxy_server as ps
 
     assert ps.general_settings.get("allowed_file_extensions") == [".pdf"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_applies_db_transcribe_media_buckets(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    pc = ProxyConfig()
+    await pc._update_general_settings({"transcribe_media_buckets": ["team-audio"]})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("transcribe_media_buckets") == ["team-audio"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_yaml_transcribe_media_buckets_wins_over_db(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"transcribe_media_buckets": ["yaml-audio"]})
+    pc = ProxyConfig()
+    pc._yaml_general_settings_keys = {"transcribe_media_buckets"}
+    await pc._update_general_settings({"transcribe_media_buckets": ["team-audio"]})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("transcribe_media_buckets") == ["yaml-audio"]
 
 
 @pytest.mark.asyncio

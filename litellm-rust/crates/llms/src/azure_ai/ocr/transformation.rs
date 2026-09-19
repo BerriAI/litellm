@@ -142,12 +142,17 @@ impl AzureAiOcrConfig {
             super::common_utils::validate_destination(connection, connection.extra_headers_source)?;
             return Ok(connection.extra_headers.clone());
         }
-        let key = nonblank(connection.api_key.clone())
-            .map(|value| Sourced::new(value, connection.api_key_source))
-            .or_else(|| {
-                nonblank(self.get_api_key_env_var().and_then(env_lookup))
-                    .map(|value| Sourced::new(value, InputSource::Environment))
-            });
+        let key = nonblank(
+            connection
+                .api_key
+                .as_ref()
+                .map(|key| key.expose().to_string()),
+        )
+        .map(|value| Sourced::new(value, connection.api_key_source))
+        .or_else(|| {
+            nonblank(self.get_api_key_env_var().and_then(env_lookup))
+                .map(|value| Sourced::new(value, InputSource::Environment))
+        });
         if let Some(key) = key {
             super::common_utils::validate_destination(connection, key.source())?;
             return Ok(bearer_headers(connection, key.value()));
@@ -196,7 +201,7 @@ mod tests {
     #[fixture]
     fn connection() -> OcrConnection {
         OcrConnection {
-            api_key: Some("request-key".into()),
+            api_key: Some(litellm_auth::SecretValue::new("request-key")),
             api_base: Some("https://example.com".into()),
             ..Default::default()
         }
@@ -288,7 +293,7 @@ mod tests {
     #[tokio::test]
     async fn request_endpoint_accepts_request_owned_key() {
         let connection = OcrConnection {
-            api_key: Some("request-key".into()),
+            api_key: Some(litellm_auth::SecretValue::new("request-key")),
             api_key_source: InputSource::Request,
             api_base: Some("https://request.example".into()),
             api_base_source: InputSource::Request,

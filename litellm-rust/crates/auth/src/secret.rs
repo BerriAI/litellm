@@ -1,6 +1,8 @@
+use serde::Deserialize;
 use veil::Redact;
 
-#[derive(Redact, Clone)]
+#[derive(Redact, Clone, Deserialize)]
+#[serde(transparent)]
 pub struct SecretValue(#[redact(with = "[REDACTED]")] String);
 
 impl SecretValue {
