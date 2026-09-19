@@ -1446,13 +1446,6 @@ def _flattenable_web_search_tool_result(block: object) -> _ReplayedWebSearchTool
     """
     The parsed block when it is a ``web_search_tool_result`` carrying no
     ``encrypted_content``, else None for anything Anthropic itself issued.
-
-    An empty ``content`` list is flattenable too. It is what the interceptor emits
-    when a search legitimately returns nothing, and it carries neither evidence to
-    preserve nor an ``encrypted_content`` to respect, so leaving it in place only
-    buys the 400 this whole function exists to avoid. The same goes for the
-    ``web_search_tool_result_error`` object the interceptor emits when a search
-    raises: it never carries ``encrypted_content``, so it is flattened as well.
     """
     try:
         parsed: Final = _WEB_SEARCH_TOOL_RESULT_ADAPTER.validate_python(block)
