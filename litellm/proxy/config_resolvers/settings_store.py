@@ -17,6 +17,14 @@ from litellm.proxy.config_resolvers.settings_rules import (
     rule_for,
 )
 
+
+class ConfigOwnedKeyError(RuntimeError):
+    def __init__(self, section: Section, key: str) -> None:
+        super().__init__(f"{section}.{key} is set in the config file and cannot be changed at runtime")
+        self.section: Final = section
+        self.key: Final = key
+
+
 _EMPTY_VALUES: Final[Mapping[str, JsonValue]] = MappingProxyType({})
 _EMPTY_ROWS: Final[Mapping[DbRow, Mapping[str, JsonValue]]] = MappingProxyType({})
 
@@ -72,8 +80,8 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         return resolved.value
 
     def __setitem__(self, key: str, value: JsonValue) -> None:
-        if self.owned_by_config(key):
-            return
+        if self.owned_by_config(key) and value != self.get(key):
+            raise ConfigOwnedKeyError(self._section, key)
         self._runtime_values = MappingProxyType({**self._runtime_values, key: value})
         self._deleted_runtime_keys = self._deleted_runtime_keys - frozenset((key,))
 
@@ -81,7 +89,7 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         if key not in self:
             raise KeyError(key)
         if self.owned_by_config(key):
-            return
+            raise ConfigOwnedKeyError(self._section, key)
         self._runtime_values = MappingProxyType(
             {key_: value for key_, value in self._runtime_values.items() if key_ != key}
         )
