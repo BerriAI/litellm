@@ -72,6 +72,7 @@ struct PythonHttpSettings<'py> {
     force_ipv4: bool,
     http2: bool,
     aiohttp_trust_env: bool,
+    disable_aiohttp_trust_env: bool,
     disable_aiohttp_transport: bool,
     user_agent: String,
 }
@@ -92,6 +93,7 @@ fn settings(value: &Bound<'_, PyAny>) -> PyResult<HttpSettings> {
         httpx_transport: python.disable_aiohttp_transport,
         user_agent: Some(python.user_agent),
         trust_proxy_env: python.aiohttp_trust_env,
+        ignore_proxy_env: python.disable_aiohttp_trust_env,
         ..HttpSettings::default()
     })
 }
@@ -133,6 +135,7 @@ defaults = dict(
     force_ipv4=False,
     http2=False,
     aiohttp_trust_env=False,
+    disable_aiohttp_trust_env=False,
     disable_aiohttp_transport=False,
     user_agent='litellm/test',
 )
@@ -177,6 +180,7 @@ ssl_ecdh_curve='X25519',
 force_ipv4=True,
 http2=True,
 aiohttp_trust_env=True,
+disable_aiohttp_trust_env=True,
 disable_aiohttp_transport=True,
 user_agent='litellm/9.9.9',
 ",
@@ -194,6 +198,7 @@ user_agent='litellm/9.9.9',
                     httpx_transport: true,
                     user_agent: Some("litellm/9.9.9".into()),
                     trust_proxy_env: true,
+                    ignore_proxy_env: true,
                     ..HttpSettings::default()
                 }
             );
@@ -295,11 +300,15 @@ user_agent='litellm/9.9.9',
     #[rstest]
     #[case::asynchronous(true, false)]
     #[case::synchronous(false, true)]
-    fn synchronous_calls_honor_environment_proxies_like_httpx(
+    fn synchronous_calls_honor_environment_proxies_even_when_aiohttp_opts_out(
         #[case] asynchronous: bool,
         #[case] expected: bool,
     ) {
-        let settings = for_call(HttpSettings::default(), None, asynchronous);
+        let opted_out = HttpSettings {
+            ignore_proxy_env: true,
+            ..HttpSettings::default()
+        };
+        let settings = for_call(opted_out, None, asynchronous);
         let config = HttpClientConfig::resolve(&settings).unwrap();
         assert_eq!(config.trust_proxy_env, expected);
     }
