@@ -12,6 +12,7 @@ import pytest
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
+import litellm
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     LitellmUserRoles,
@@ -485,6 +486,54 @@ async def test_jev_test_routing_enforces_key_budget_before_provider_invocation(
     assert response.routed_model == "cheap-model"
     assert response.routing_decision["cause"] == "jev_classifier"
     assert response.routing_decision["classifier_model"] == "typesafe/jev-test"
+    client.evaluate.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "max_budget, spend, denied",
+    ((0.0, 0.0, True), (1.0, 2.0, True), (1.0, 0.5, False), (None, 2.0, False)),
+)
+@pytest.mark.asyncio
+async def test_jev_test_routing_hard_blocks_exhausted_throttle_enabled_keys(
+    monkeypatch: pytest.MonkeyPatch, max_budget: float | None, spend: float, denied: bool
+) -> None:
+    client: Final = AsyncMock(spec=JevClassifierClient)
+    client.evaluate.return_value = JevSystemOneResponse(
+        model="jev-test",
+        answers={
+            "tier": JevChoiceAnswer(type="choice", choice="SIMPLE", probabilities={"SIMPLE": 1.0}, confidence=1.0)
+        },
+    )
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.1)
+    monkeypatch.setattr(proxy_server, "llm_router", _router())
+    monkeypatch.setattr(auto_router_endpoints, "ComplexityRouter", partial(ComplexityRouter, jev_client=client))
+    actor: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-jev-throttle-test",
+        user_id="admin",
+        models=["cheap-model", "typesafe/jev-test"],
+        max_budget=max_budget,
+        spend=spend,
+        rpm_limit=100,
+        metadata={"throttle_on_budget_exceeded": True},
+    )
+    request: Final = _request(
+        "what is 2+2",
+        classifier_type="jev",
+        jev_classifier_config={"model": "jev-test"},
+    )
+    if denied:
+        with pytest.raises(ProxyException) as exc_info:
+            await preview_auto_router_routing(http_request=ROUTING_HTTP_REQUEST, data=request, user_api_key_dict=actor)
+        assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+        assert exc_info.value.code == "400"
+        client.evaluate.assert_not_called()
+        return
+
+    response: Final = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST, data=request, user_api_key_dict=actor
+    )
+    assert response.routing_decision["cause"] == "jev_classifier"
     client.evaluate.assert_awaited_once()
 
 
