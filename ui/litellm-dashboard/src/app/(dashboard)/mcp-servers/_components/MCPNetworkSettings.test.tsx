@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import MCPNetworkSettings from "./MCPNetworkSettings";
@@ -26,12 +26,20 @@ const renderSettings = () => render(<MCPNetworkSettings accessToken="tok" />);
 const ANTIGRAVITY = { alias: "Antigravity CLI", value: "antigravity-cli" };
 const CODEX = { alias: "Codex", value: "codex-mcp-client" };
 
+const clientCard = (alias: string) => screen.getByRole("button", { name: new RegExp(`^${alias}`) });
+
+const fillClientDialog = async (alias: string, value: string) => {
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Alias" }), { target: { value: alias } });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Value" }), { target: { value } });
+  return dialog;
+};
+
 const addClient = async (alias: string, value: string) => {
   await userEvent.click(screen.getByRole("button", { name: "Add client" }));
-  const aliases = screen.getAllByRole("textbox", { name: /^Client \d+ alias$/ });
-  const values = screen.getAllByRole("textbox", { name: /^Client \d+ value$/ });
-  fireEvent.change(aliases[aliases.length - 1], { target: { value: alias } });
-  fireEvent.change(values[values.length - 1], { target: { value } });
+  const dialog = await fillClientDialog(alias, value);
+  await userEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 };
 
 describe("MCPNetworkSettings", () => {
@@ -139,7 +147,7 @@ describe("MCPNetworkSettings", () => {
     expect(updateConfigFieldSetting).not.toHaveBeenCalled();
   });
 
-  it("labels the section Allowed Clients and renders each stored client as an alias and value row", async () => {
+  it("labels the section Allowed Clients and renders each stored client as a card showing alias and value", async () => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([
       { field_name: "mcp_allowed_clients", field_value: [ANTIGRAVITY, CODEX] },
     ]);
@@ -148,10 +156,24 @@ describe("MCPNetworkSettings", () => {
 
     expect(await screen.findByText("Allowed Clients")).toBeVisible();
     expect(screen.queryByText(/Allowed Client IDs/)).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Client 1 alias" })).toHaveValue("Antigravity CLI");
-    expect(screen.getByRole("textbox", { name: "Client 1 value" })).toHaveValue("antigravity-cli");
-    expect(screen.getByRole("textbox", { name: "Client 2 alias" })).toHaveValue("Codex");
-    expect(screen.getByRole("textbox", { name: "Client 2 value" })).toHaveValue("codex-mcp-client");
+    expect(screen.queryByText(/Allowed Client Applications/)).not.toBeInTheDocument();
+    expect(clientCard("Antigravity CLI")).toHaveTextContent("antigravity-cli");
+    expect(clientCard("Codex")).toHaveTextContent("codex-mcp-client");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("opens an edit dialog when a client card is clicked, prefilled with that client's alias and value", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      { field_name: "mcp_allowed_clients", field_value: [ANTIGRAVITY, CODEX] },
+    ]);
+
+    renderSettings();
+    await screen.findByText("Allowed Clients");
+    await userEvent.click(clientCard("Codex"));
+
+    const dialog = await screen.findByRole("dialog", { name: "Edit client" });
+    expect(within(dialog).getByRole("textbox", { name: "Alias" })).toHaveValue("Codex");
+    expect(within(dialog).getByRole("textbox", { name: "Value" })).toHaveValue("codex-mcp-client");
   });
 
   it("warns that a stored allowlist in the old plain-string shape denies every client and lets Save remove it", async () => {
@@ -162,7 +184,7 @@ describe("MCPNetworkSettings", () => {
     renderSettings();
 
     expect(await screen.findByText(/stored allowlist is not a list of alias and value pairs/)).toBeVisible();
-    expect(screen.queryByRole("textbox", { name: "Client 1 value" })).not.toBeInTheDocument();
+    expect(screen.queryByText("antigravity-cli")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
 
@@ -203,15 +225,22 @@ describe("MCPNetworkSettings", () => {
     expect(deleteConfigFieldSetting).not.toHaveBeenCalledWith("tok", "mcp_allowed_clients");
   });
 
-  it("edits a stored client's value in place and saves the new value", async () => {
+  it("edits a stored client's value through its dialog and saves the new value", async () => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([
       { field_name: "mcp_allowed_clients", field_value: [ANTIGRAVITY] },
     ]);
 
     renderSettings();
-    fireEvent.change(await screen.findByRole("textbox", { name: "Client 1 value" }), {
-      target: { value: "0oa1b2c3d4e5f6g7h8i9" },
+    await screen.findByText("Allowed Clients");
+    await userEvent.click(clientCard("Antigravity CLI"));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Value" }), {
+      target: { value: " 0oa1b2c3d4e5f6g7h8i9 " },
     });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(clientCard("Antigravity CLI")).toHaveTextContent("0oa1b2c3d4e5f6g7h8i9");
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
 
     await waitFor(() =>
@@ -221,22 +250,37 @@ describe("MCPNetworkSettings", () => {
     );
   });
 
-  it("refuses to save a client that has an alias but no value, and reports why", async () => {
+  it("keeps a stored client untouched when its dialog is cancelled", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      { field_name: "mcp_allowed_clients", field_value: [ANTIGRAVITY] },
+    ]);
+
+    renderSettings();
+    await screen.findByText("Allowed Clients");
+    await userEvent.click(clientCard("Antigravity CLI"));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Value" }), { target: { value: "changed" } });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(clientCard("Antigravity CLI")).toHaveTextContent("antigravity-cli");
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("MCP network settings saved"));
+    expect(updateConfigFieldSetting).not.toHaveBeenCalled();
+  });
+
+  it("will not add a client that has an alias but no value", async () => {
     renderSettings();
     await screen.findByText("Allowed Clients");
 
-    await addClient("Antigravity CLI", "");
-    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Add client" }));
+    const dialog = await fillClientDialog("Antigravity CLI", "   ");
 
-    await waitFor(() =>
-      expect(toast.fromError).toHaveBeenCalledWith(new Error("Every allowed client needs both an alias and a value")),
-    );
-    expect(updateConfigFieldSetting).not.toHaveBeenCalled();
-    expect(deleteConfigFieldSetting).not.toHaveBeenCalled();
-    expect(toast.success).not.toHaveBeenCalled();
+    expect(within(dialog).getByRole("button", { name: "Add" })).toBeDisabled();
   });
 
-  it("drops rows left completely blank instead of saving or failing on them", async () => {
+  it("adds nothing when the add dialog is cancelled", async () => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([
       { field_name: "mcp_allowed_clients", field_value: [ANTIGRAVITY] },
     ]);
@@ -244,6 +288,11 @@ describe("MCPNetworkSettings", () => {
     renderSettings();
     await screen.findByText("Allowed Clients");
     await userEvent.click(screen.getByRole("button", { name: "Add client" }));
+    const dialog = await fillClientDialog("Codex", "codex-mcp-client");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.queryByText("Codex")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith("MCP network settings saved"));
@@ -260,13 +309,17 @@ describe("MCPNetworkSettings", () => {
     ]);
 
     renderSettings();
-    await userEvent.click(await screen.findByRole("button", { name: "Remove client Claude Code" }));
+    await screen.findByText("Allowed Clients");
+    await userEvent.click(clientCard("Claude Code"));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Remove client" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.queryByText("claude-code")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
 
     await waitFor(() =>
       expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", [ANTIGRAVITY, CODEX]),
     );
-    expect(screen.queryByDisplayValue("claude-code")).not.toBeInTheDocument();
   });
 
   it("removes a client and clears the setting when the list becomes empty", async () => {
@@ -275,9 +328,12 @@ describe("MCPNetworkSettings", () => {
     ]);
 
     renderSettings();
-    await userEvent.click(await screen.findByRole("button", { name: "Remove client Claude Code" }));
+    await screen.findByText("Allowed Clients");
+    await userEvent.click(clientCard("Claude Code"));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Remove client" }));
 
-    expect(screen.queryByDisplayValue("claude-code")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.queryByText("claude-code")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
 
@@ -304,7 +360,7 @@ describe("MCPNetworkSettings", () => {
 
     renderSettings();
 
-    await screen.findByText("Allowed Client Applications");
+    await screen.findByText("Allowed Clients");
     expect(screen.queryByText(/every client is denied/)).not.toBeInTheDocument();
   });
 

@@ -1,9 +1,18 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useId } from "react";
 import { Save, Plus, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { DeprecationBanner } from "@/components/DeprecationBanner";
 import { toast } from "@/lib/toast";
@@ -36,6 +45,10 @@ interface AllowedClientRow extends AllowedClient {
   readonly key: string;
 }
 
+interface ClientDraft extends AllowedClient {
+  readonly key: string | null;
+}
+
 const isAllowedClient = (entry: unknown): entry is AllowedClient => {
   if (typeof entry !== "object" || entry === null) return false;
   const { alias, value } = entry as Partial<Record<keyof AllowedClient, unknown>>;
@@ -58,14 +71,10 @@ const parseStoredClients = (fieldValue: unknown): StoredAllowlist => {
 };
 
 let nextRowKey = 0;
-const newRow = (client: AllowedClient = { alias: "", value: "" }): AllowedClientRow => ({
-  ...client,
-  key: `client-${nextRowKey++}`,
-});
+const newRow = (client: AllowedClient): AllowedClientRow => ({ ...client, key: `client-${nextRowKey++}` });
 
 const trimClient = ({ alias, value }: AllowedClient): AllowedClient => ({ alias: alias.trim(), value: value.trim() });
 
-const isBlank = ({ alias, value }: AllowedClient) => alias === "" && value === "";
 const isIncomplete = ({ alias, value }: AllowedClient) => alias === "" || value === "";
 
 const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((value, i) => value === b[i]);
@@ -90,6 +99,67 @@ const clientsUnchangedSinceLoad = (value: AllowedClient[], stored: StoredAllowli
 const headerUnchangedSinceLoad = (value: string, stored: string | null) =>
   stored === null ? value === "" : value !== "" && value === stored;
 
+interface AllowedClientDialogProps {
+  readonly draft: ClientDraft | null;
+  readonly onChange: (draft: ClientDraft) => void;
+  readonly onCommit: () => void;
+  readonly onRemove: () => void;
+  readonly onClose: () => void;
+}
+
+const AllowedClientDialog: React.FC<AllowedClientDialogProps> = ({ draft, onChange, onCommit, onRemove, onClose }) => {
+  const aliasId = useId();
+  const valueId = useId();
+  if (draft === null) return null;
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{draft.key === null ? "Add client" : "Edit client"}</DialogTitle>
+          <DialogDescription>
+            The alias is the name shown in the dashboard and gateway logs. The value is the exact JWT claim or header
+            value that identifies the client, such as the OAuth client ID your identity provider issues.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4">
+          <div className="grid gap-2">
+            <Label htmlFor={aliasId}>Alias</Label>
+            <Input
+              id={aliasId}
+              value={draft.alias}
+              placeholder="e.g. Coding CLI"
+              onChange={(e) => onChange({ ...draft, alias: e.target.value })}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor={valueId}>Value</Label>
+            <Input
+              id={valueId}
+              value={draft.value}
+              placeholder="e.g. 0oa1b2c3d4e5f6g7h8i9"
+              className="font-mono"
+              onChange={(e) => onChange({ ...draft, value: e.target.value })}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          {draft.key !== null && (
+            <Button type="button" variant="destructive" className="sm:mr-auto" onClick={onRemove}>
+              Remove client
+            </Button>
+          )}
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="button" disabled={isIncomplete(trimClient(draft))} onClick={onCommit}>
+            {draft.key === null ? "Add" : "Done"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
 const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -101,6 +171,7 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
   const [storedClientIdHeader, setStoredClientIdHeader] = useState<string | null>(null);
   const [currentIp, setCurrentIp] = useState<string | null>(null);
   const [rangeDraft, setRangeDraft] = useState("");
+  const [clientDraft, setClientDraft] = useState<ClientDraft | null>(null);
 
   useEffect(() => {
     loadSettings();
@@ -154,10 +225,7 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
   };
 
   const persistAllowedClients = async (token: string) => {
-    const clients = allowedClients.map(trimClient).filter((client) => !isBlank(client));
-    if (clients.some(isIncomplete)) {
-      throw new Error("Every allowed client needs both an alias and a value");
-    }
+    const clients = allowedClients.map(({ alias, value }) => ({ alias, value }));
     if (clientsUnchangedSinceLoad(clients, storedClients)) return;
     if (clients.length > 0) {
       await updateConfigFieldSetting(token, "mcp_allowed_clients", clients);
@@ -218,10 +286,22 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
     setRangeDraft("");
   };
 
-  const updateClient = (key: string, patch: Partial<AllowedClient>) =>
-    setAllowedClients(allowedClients.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+  const commitClientDraft = () => {
+    if (clientDraft === null) return;
+    const client = trimClient(clientDraft);
+    setAllowedClients(
+      clientDraft.key === null
+        ? [...allowedClients, newRow(client)]
+        : allowedClients.map((row) => (row.key === clientDraft.key ? { ...row, ...client } : row)),
+    );
+    setClientDraft(null);
+  };
 
-  const removeClient = (key: string) => setAllowedClients(allowedClients.filter((row) => row.key !== key));
+  const removeDraftedClient = () => {
+    if (clientDraft === null) return;
+    setAllowedClients(allowedClients.filter((row) => row.key !== clientDraft.key));
+    setClientDraft(null);
+  };
 
   if (loading) {
     return (
@@ -307,7 +387,7 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
       </Card>
 
       <div>
-        <p className="text-lg font-semibold">Allowed Client Applications</p>
+        <p className="text-lg font-semibold">Allowed Clients</p>
         <p className="mt-1 text-sm text-muted-foreground">
           Only the MCP client applications listed here can use the gateway. Leave empty to allow every client. A client
           that authenticates with a JWT is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field in
@@ -317,9 +397,6 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
       </div>
 
       <Card className="p-6">
-        <div className="mb-2 flex items-center">
-          <p className="text-sm font-medium">Allowed Clients</p>
-        </div>
         {storedAllowlistIsMalformed && (
           <p className="mb-2 text-sm text-destructive">
             The stored allowlist is not a list of alias and value pairs, so every client is denied. Add the clients you
@@ -333,35 +410,17 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
           </p>
         )}
         {allowedClients.length > 0 && (
-          <div className="mb-2 grid grid-cols-[1fr_1fr_auto] items-center gap-2">
-            <p className="text-xs text-muted-foreground">Alias</p>
-            <p className="text-xs text-muted-foreground">Value</p>
-            <span />
-            {allowedClients.map((row, index) => (
-              <React.Fragment key={row.key}>
-                <Input
-                  aria-label={`Client ${index + 1} alias`}
-                  value={row.alias}
-                  placeholder="e.g. Coding CLI"
-                  onChange={(e) => updateClient(row.key, { alias: e.target.value })}
-                />
-                <Input
-                  aria-label={`Client ${index + 1} value`}
-                  value={row.value}
-                  placeholder="e.g. 0oa1b2c3d4e5f6g7h8i9"
-                  className="font-mono"
-                  onChange={(e) => updateClient(row.key, { value: e.target.value })}
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Remove client ${row.alias.trim() || index + 1}`}
-                  onClick={() => removeClient(row.key)}
-                >
-                  <X className="size-4" />
-                </Button>
-              </React.Fragment>
+          <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {allowedClients.map((row) => (
+              <button
+                key={row.key}
+                type="button"
+                className="flex min-w-0 flex-col items-start gap-1 rounded-lg border border-border bg-background p-3 text-left hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                onClick={() => setClientDraft(row)}
+              >
+                <span className="w-full truncate text-sm font-medium">{row.alias}</span>
+                <span className="w-full truncate font-mono text-xs text-muted-foreground">{row.value}</span>
+              </button>
             ))}
           </div>
         )}
@@ -369,16 +428,14 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
           type="button"
           variant="outline"
           size="sm"
-          onClick={() => setAllowedClients([...allowedClients, newRow()])}
+          onClick={() => setClientDraft({ key: null, alias: "", value: "" })}
         >
           <Plus />
           Add client
         </Button>
         <p className="mt-2 text-xs text-muted-foreground">
-          The alias is the name shown here and in gateway logs. The value is the exact JWT claim or header value that
-          identifies the client, such as the OAuth client ID your identity provider issues. Leave the list empty to
-          allow every client. Every MCP request from an unlisted client, or from one with no resolvable identity, gets a
-          403.
+          Click a client to edit or remove it. Leave the list empty to allow every client. Every MCP request from an
+          unlisted client, or from one with no resolvable identity, gets a 403.
         </p>
 
         <div className="mt-6 mb-2 flex items-center">
@@ -403,6 +460,14 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
           Save
         </Button>
       </div>
+
+      <AllowedClientDialog
+        draft={clientDraft}
+        onChange={setClientDraft}
+        onCommit={commitClientDraft}
+        onRemove={removeDraftedClient}
+        onClose={() => setClientDraft(null)}
+      />
     </div>
   );
 };
