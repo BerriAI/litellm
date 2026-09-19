@@ -2,6 +2,8 @@ import asyncio
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -20,6 +22,7 @@ from litellm.proxy.batches_endpoints.litellm_executed_batches import (
     InvalidBatchInput,
     LiteLLMExecutedBatchRunner,
     _resolve_transition,
+    executed_batch_runner_lost,
     litellm_executed_provider_for,
     litellm_executed_provider_of,
     parse_batch_input,
@@ -174,9 +177,14 @@ class RealIdManagedBatchStore(FakeManagedBatchStore):
 class FakeManagedObjectTable:
     def __init__(self, objects: Mapping[str, StoredObject]) -> None:
         self.objects = objects
+        self.touches: list[tuple[str, str | None]] = []
 
     async def find_first(self, where: Mapping[str, str]) -> StoredObject | None:
         return self.objects.get(where["unified_object_id"])
+
+    async def update_many(self, where: Mapping[str, str], data: Mapping[str, str | None]) -> int:
+        self.touches.append((where["unified_object_id"], data["updated_by"]))
+        return 1
 
 
 class FakeDb:
@@ -202,6 +210,9 @@ class FakeRouter:
 
     def get_model_ids(self, model_name: str) -> list[str]:
         return [DEPLOYMENT_ID] if model_name == BATCH_MODEL else []
+
+    def get_model_group_info(self, model_group: str) -> None:
+        return None
 
 
 class FakeStorageBackend:
@@ -317,6 +328,8 @@ def make_runner(
     upload_error: Exception | None = None,
     storage_error: ValueError | None = None,
     store_factory: Callable[[Mapping[str, LiteLLM_ManagedFileTable]], FakeManagedBatchStore] = FakeManagedBatchStore,
+    general_settings: Mapping[str, object] = MappingProxyType({}),
+    heartbeat_seconds: float = 30.0,
 ) -> Harness:
     store = store_factory({INPUT_FILE_ID: managed_input_file()} if files is None else files)
     router = FakeRouter()
@@ -332,7 +345,9 @@ def make_runner(
         prisma_client=cast("PrismaClient", prisma),
         managed_files=store,
         proxy_logging_obj=MagicMock(spec=ProxyLogging),
+        general_settings=general_settings,
         concurrency=concurrency,
+        heartbeat_seconds=heartbeat_seconds,
         storage_backend_factory=storage_factory,
         upload_result_file=uploads,
     )
@@ -411,6 +426,27 @@ def test_resolve_transition_keeps_the_requested_status_unless_cancelling(current
 )
 def test_resolve_transition_from_cancelling(requested: BatchStatus, expected: BatchStatus) -> None:
     assert _resolve_transition("cancelling", requested) == expected
+
+
+@pytest.mark.parametrize(
+    ("status", "age_seconds", "lost"),
+    [
+        ("validating", 200, True),
+        ("in_progress", 200, True),
+        ("in_progress", 100, False),
+        ("finalizing", 200, True),
+        ("cancelling", 200, True),
+        ("completed", 200, False),
+        ("failed", 200, False),
+        ("cancelled", 200, False),
+        ("expired", 200, False),
+    ],
+)
+def test_executed_batch_runner_lost_only_for_a_stale_non_terminal_batch(
+    status: str, age_seconds: int, lost: bool
+) -> None:
+    updated_at = datetime.now(timezone.utc) - timedelta(seconds=age_seconds)
+    assert executed_batch_runner_lost(status, updated_at) is lost
 
 
 @pytest.mark.parametrize(
@@ -684,6 +720,91 @@ async def test_create_surfaces_a_storage_backend_error_as_a_400() -> None:
     assert raised.value.code == "400"
     assert raised.value.message == "Unknown storage backend 's3'"
     assert harness.store.calls == []
+
+
+CREDENTIAL_ROWS: Final = jsonl(chat_row("row-1", "hi 1"), chat_row("row-2", "hi 2", api_base="https://evil.example"))
+
+
+async def test_create_rejects_a_row_carrying_client_side_credentials() -> None:
+    harness = make_runner(content=CREDENTIAL_ROWS)
+    with pytest.raises(ProxyException) as raised:
+        await harness.create()
+    assert raised.value.code == "400"
+    assert raised.value.message.startswith("Invalid batch input file: line 2")
+    assert "api_base" in raised.value.message
+    assert "allow_client_side_credentials" in raised.value.message
+    assert harness.store.calls == []
+    assert harness.router.acompletion.await_count == 0
+
+
+async def test_create_forwards_row_credentials_when_the_admin_opted_in() -> None:
+    harness = make_runner(
+        content=CREDENTIAL_ROWS, general_settings=MappingProxyType({"allow_client_side_credentials": True})
+    )
+    _, finished = await harness.create_and_finish()
+
+    assert finished.status == "completed"
+    assert finished.request_counts == BatchRequestCounts(completed=2, failed=0, total=2)
+    by_content = {call.kwargs["messages"][0]["content"]: call.kwargs for call in harness.router.acompletion.await_args_list}
+    assert by_content["hi 2"]["api_base"] == "https://evil.example"
+    assert "api_base" not in by_content["hi 1"]
+
+
+async def test_running_batch_touches_its_row_until_it_finishes() -> None:
+    harness = make_runner(heartbeat_seconds=0.01)
+
+    async def slow_dispatch(**_: object) -> ModelResponse:
+        await asyncio.sleep(0.05)
+        return chat_response("slow")
+
+    harness.router.acompletion.side_effect = slow_dispatch
+    created, finished = await harness.create_and_finish()
+
+    touches = harness.prisma.db.litellm_managedobjecttable.touches
+    assert finished.status == "completed"
+    assert touches
+    assert set(touches) == {(created.id, "user-1")}
+    assert [call.status for call in harness.store.calls] == ["validating", "in_progress", "finalizing", "completed"]
+    beats_at_finish = len(touches)
+    await asyncio.sleep(0.05)
+    assert len(touches) == beats_at_finish
+
+
+async def test_fail_abandoned_marks_the_batch_failed_with_the_runner_lost_error() -> None:
+    harness = make_runner()
+    batch = seeded_batch(harness.store, "in_progress")
+
+    failed = await harness.runner.fail_abandoned(batch, harness.user)
+
+    assert failed.status == "failed"
+    assert failed.failed_at is not None
+    assert failed.errors is not None
+    assert [(error.message, error.code) for error in failed.errors.data or []] == [
+        (litellm_executed_batches._RUNNER_LOST_MESSAGE, "runner_lost")
+    ]
+    assert harness.store.batch(batch.id).status == "failed"
+    assert [(call.status, call.create_if_missing) for call in harness.store.calls] == [("failed", False)]
+
+
+async def test_running_batch_stops_and_writes_nothing_once_a_retriever_marked_it_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm_executed_batches, "_CANCEL_POLL_SECONDS", 0.0)
+    rows = jsonl(chat_row("row-1", "hi 1"), chat_row("row-2", "hi 2"), chat_row("row-3", "hi 3"))
+    harness = make_runner(content=rows, concurrency=1)
+
+    def dispatch(metadata: Mapping[str, object], **_: object) -> ModelResponse:
+        running = harness.store.batch(str(metadata["batch_id"]))
+        harness.store.write(running.model_copy(update={"status": "failed"}))
+        return chat_response("hi 1")
+
+    harness.router.acompletion.side_effect = dispatch
+    _, finished = await harness.create_and_finish()
+
+    assert harness.router.acompletion.await_count == 1
+    assert finished.status == "failed"
+    assert [call.status for call in harness.store.calls] == ["validating", "in_progress"]
+    assert harness.uploads.calls == []
 
 
 @pytest.mark.parametrize(

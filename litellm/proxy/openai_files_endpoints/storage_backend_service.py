@@ -12,6 +12,7 @@ from typing import Any, Final, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid as uuid_module
+from litellm.llms.base_llm.files.storage_backend import BaseFileStorageBackend
 from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -105,8 +106,9 @@ class StorageBackendFileService:
             storage_url=storage_url,
         )
 
-        # Store in managed files if target_model_names provided
-        if target_model_names:
+        if not target_model_names:
+            return file_object
+        try:
             await StorageBackendFileService._store_in_managed_files(
                 file_object=file_object,
                 file_data=file_data,
@@ -116,8 +118,24 @@ class StorageBackendFileService:
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_dict=user_api_key_dict,
             )
-
+        except Exception:
+            await StorageBackendFileService._discard_orphaned_content(storage_backend, storage_url, target_storage)
+            raise
         return file_object
+
+    @staticmethod
+    async def _discard_orphaned_content(
+        storage_backend: BaseFileStorageBackend, storage_url: str, target_storage: str
+    ) -> None:
+        try:
+            await storage_backend.delete_file(storage_url)
+        except Exception as e:  # noqa: BLE001  # the metadata failure is what surfaces; a failed cleanup is only logged
+            verbose_proxy_logger.warning(
+                "Could not delete orphaned content at %s on %s after its metadata write failed: %s",
+                storage_url,
+                target_storage,
+                e,
+            )
 
     @staticmethod
     def _create_file_object_with_storage_metadata(

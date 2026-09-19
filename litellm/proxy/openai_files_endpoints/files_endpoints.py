@@ -118,31 +118,29 @@ async def _litellm_executed_batch_input_model(
     executed: Final = tuple(
         candidate for candidate, provider in zip(candidates, providers, strict=True) if provider is not None
     )
-    match executed:
-        case ():
-            return None
-        case _ if purpose != "batch":
-            raise ProxyException(
-                message=(
-                    f"The server behind {', '.join(executed)} has no Files API, so LiteLLM keeps only batch input "
-                    f"files for it and runs the batch itself: upload with purpose=batch; got purpose={purpose}"
-                ),
-                type="invalid_request_error",
-                param="purpose",
-                code=400,
-            )
-        case (only,) if len(candidates) == 1:
-            return only
-        case _:
-            raise ProxyException(
-                message=(
-                    f"LiteLLM runs batches for {', '.join(executed)} itself and keeps their input files, so a batch "
-                    f"input file can target only that one model; got target_model_names={', '.join(candidates)}"
-                ),
-                type="invalid_request_error",
-                param="target_model_names",
-                code=400,
-            )
+    if not executed:
+        return None
+    if purpose != "batch":
+        raise ProxyException(
+            message=(
+                f"The server behind {', '.join(executed)} has no Files API, so LiteLLM keeps only batch input "
+                f"files for it and runs the batch itself: upload with purpose=batch; got purpose={purpose}"
+            ),
+            type="invalid_request_error",
+            param="purpose",
+            code=400,
+        )
+    if len(candidates) == 1:
+        return executed[0]
+    raise ProxyException(
+        message=(
+            f"LiteLLM runs batches for {', '.join(executed)} itself and keeps their input files, so a batch "
+            f"input file can target only that one model; got target_model_names={', '.join(candidates)}"
+        ),
+        type="invalid_request_error",
+        param="target_model_names",
+        code=400,
+    )
 
 
 _MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)

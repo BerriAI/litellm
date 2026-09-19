@@ -34,6 +34,7 @@ import json
 import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1722,6 +1723,7 @@ async def test_retrieve__db_non_terminal_state_syncs_with_provider(retrieve_harn
 async def test_retrieve__executed_batch_served_from_db_in_every_status(retrieve_harness, status):
     db_response = make_batch(id="litellm-executed-batch", status=status)
     db_batch_object = MagicMock()
+    db_batch_object.updated_at = datetime.now(timezone.utc)
     retrieve_harness.get_batch_from_db.return_value = (db_batch_object, db_response)
 
     resp = await call_retrieve(retrieve_harness, EXECUTED_BATCH_B64)
@@ -1732,6 +1734,41 @@ async def test_retrieve__executed_batch_served_from_db_in_every_status(retrieve_
     retrieve_harness.update_batch_in_db.assert_not_called()
     retrieve_harness.ensure_managed_files.assert_called_once()
     assert retrieve_harness.ensure_managed_files.call_args.kwargs["unified_batch_id"] == EXECUTED_BATCH_ID
+
+
+@pytest.mark.asyncio
+async def test_retrieve__executed_batch_abandoned_by_its_runner_is_served_failed(retrieve_harness, executed_runner):
+    runner, _ = executed_runner
+    failed = make_batch(id="litellm-executed-batch", status="failed")
+    runner.fail_abandoned = AsyncMock(return_value=failed)
+    db_response = make_batch(id="litellm-executed-batch", status="in_progress")
+    db_batch_object = MagicMock()
+    db_batch_object.updated_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+    retrieve_harness.get_batch_from_db.return_value = (db_batch_object, db_response)
+    user = UserAPIKeyAuth(api_key="sk-test", user_id="user-1")
+
+    resp = await call_retrieve(retrieve_harness, EXECUTED_BATCH_B64, user=user)
+
+    assert resp is failed
+    runner.fail_abandoned.assert_awaited_once_with(db_response, user)
+    retrieve_harness.litellm_aretrieve.assert_not_called()
+    retrieve_harness.router_aretrieve.assert_not_called()
+    retrieve_harness.ensure_managed_files.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_retrieve__executed_batch_with_a_fresh_heartbeat_is_left_running(retrieve_harness, executed_runner):
+    runner, _ = executed_runner
+    runner.fail_abandoned = AsyncMock()
+    db_response = make_batch(id="litellm-executed-batch", status="in_progress")
+    db_batch_object = MagicMock()
+    db_batch_object.updated_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+    retrieve_harness.get_batch_from_db.return_value = (db_batch_object, db_response)
+
+    resp = await call_retrieve(retrieve_harness, EXECUTED_BATCH_B64)
+
+    assert resp is db_response
+    runner.fail_abandoned.assert_not_awaited()
 
 
 @pytest.mark.asyncio
