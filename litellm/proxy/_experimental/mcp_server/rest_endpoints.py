@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import anyio
 import httpx
+import httpx2
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ValidationError
 from starlette.datastructures import Headers
@@ -120,20 +121,29 @@ def _known_connection_error_message(exc: BaseException, url: str | None, timeout
             f"within {timeout_seconds:.0f}s. Check that the LiteLLM proxy can reach this URL "
             "from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
         )
-    if isinstance(exc, httpx.LocalProtocolError):
+    if isinstance(exc, (httpx.LocalProtocolError, httpx2.LocalProtocolError)):
         return (
             "Failed to connect to MCP server: a request header is malformed. "
             "Check static headers for leading/trailing spaces or illegal characters."
         )
-    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx2.ConnectError, httpx2.ConnectTimeout)):
         return (
             "Failed to connect to MCP server: the server is unreachable. Check the URL and that the server is running."
         )
-    if isinstance(exc, httpx.TimeoutException):
+    if isinstance(exc, (httpx.TimeoutException, httpx2.TimeoutException)):
         return "Failed to connect to MCP server: the connection timed out."
-    if isinstance(exc, httpx.HTTPStatusError):
+    if isinstance(exc, (httpx.HTTPStatusError, httpx2.HTTPStatusError)):
         return f"Failed to connect to MCP server: it returned HTTP {exc.response.status_code}."
-    if isinstance(exc, (httpx.NetworkError, httpx.RemoteProtocolError, ConnectionError)):
+    if isinstance(
+        exc,
+        (
+            httpx.NetworkError,
+            httpx.RemoteProtocolError,
+            httpx2.NetworkError,
+            httpx2.RemoteProtocolError,
+            ConnectionError,
+        ),
+    ):
         return (
             "Failed to connect to MCP server: the connection was interrupted. "
             "Check the server and network connection, then retry."
@@ -148,7 +158,18 @@ def _known_connection_error_message(exc: BaseException, url: str | None, timeout
             "Failed to connect to MCP server: the endpoint returned invalid JSON or an invalid MCP response. "
             "Check the MCP endpoint URL and the server's protocol implementation."
         )
-    if MCP_AVAILABLE and isinstance(exc, McpError):
+    if MCP_AVAILABLE and isinstance(exc, MCPError):
+        if exc.error.message.startswith("Unexpected content type:"):
+            return (
+                "Failed to connect to MCP server: the endpoint returned an unsupported content type. "
+                "Check that the URL is an MCP endpoint, not a web page, and matches the selected transport."
+            )
+        if exc.error.code == -32700 or exc.error.message.startswith("Failed to parse"):
+            return (
+                f"Failed to connect to MCP server: the endpoint returned invalid JSON or an invalid MCP response "
+                f"(JSON-RPC code {exc.error.code}). "
+                "Check the MCP endpoint URL and the server's protocol implementation."
+            )
         if exc.error.code == -32000 and exc.error.message == "Connection closed":
             return (
                 "Failed to connect to MCP server: the connection was closed before the request completed. "
@@ -168,7 +189,7 @@ def _known_connection_error_message(exc: BaseException, url: str | None, timeout
 
 
 if MCP_AVAILABLE:
-    from mcp.shared.exceptions import McpError
+    from mcp.shared.exceptions import MCPError
     from mcp.types import Prompt, Resource, ResourceTemplate
     from mcp.types import Tool as MCPTool
 
@@ -550,7 +571,7 @@ if MCP_AVAILABLE:
             ListMCPToolsRestAPIResponseObject(
                 name=tool.name,
                 description=tool.description,
-                inputSchema=tool.inputSchema,
+                inputSchema=tool.input_schema,
                 mcp_info=enriched_mcp_info,
             )
             for tool in tools
@@ -1617,7 +1638,7 @@ if MCP_AVAILABLE:
             effective_timeout: Final = (
                 min(request.timeout if request.timeout is not None else MCP_CLIENT_TIMEOUT, timeout_seconds)
                 if any(
-                    isinstance(cause, McpError) and as_mcp_read_timeout(cause) is not None
+                    isinstance(cause, MCPError) and as_mcp_read_timeout(cause) is not None
                     for cause in iter_exception_tree(e)
                 )
                 else timeout_seconds
@@ -1768,7 +1789,7 @@ if MCP_AVAILABLE:
                     "message": f"Timed out listing tools after {listing_deadline} seconds. "
                     "The MCP server may be responding slowly or paginating excessively.",
                 }
-            model_dumped_tools: Final[list[dict]] = [tool.model_dump() for tool in list_tools_result]
+            model_dumped_tools: Final[list[dict]] = [tool.model_dump(by_alias=True) for tool in list_tools_result]
             return {
                 "tools": model_dumped_tools,
                 "error": None,

@@ -34,6 +34,7 @@ from urllib.parse import ParseResult, urlparse
 
 import anyio
 import httpx
+import httpx2
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
@@ -194,8 +195,7 @@ from litellm.types.mcp_server.mcp_server_manager import (
 from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
-    from mcp.client.session import ClientSession
-    from mcp.shared.context import RequestContext
+    from mcp.client.session import ClientRequestContext
     from mcp.types import CreateMessageRequestParams
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1297,8 +1297,8 @@ def _passthrough_token_from_mcp_auth_header(
     return None
 
 
-async def _materialize_auth_headers(auth: httpx.Auth | None) -> dict[str, str] | None:
-    """Extract the header a resolved ``httpx.Auth`` would set, as a plain dict, or None.
+async def _materialize_auth_headers(auth: httpx2.Auth | None) -> dict[str, str] | None:
+    """Extract the header a resolved ``httpx2.Auth`` would set, as a plain dict, or None.
 
     OpenAPI tool closures egress through ``AsyncHTTPHandler`` methods that accept headers but no
     ``auth``, so a resolved credential must be materialized into a header value. Driving one step
@@ -1313,7 +1313,7 @@ async def _materialize_auth_headers(auth: httpx.Auth | None) -> dict[str, str] |
     header_name: Final = getattr(auth, "header_name", None)
     if not isinstance(header_name, str) or not header_name:
         return None
-    probe: Final = httpx.Request("GET", "http://localhost/")
+    probe: Final = httpx2.Request("GET", "http://localhost/")
     flow: Final = auth.async_auth_flow(probe)
     try:
         first_request: Final = await flow.__anext__()
@@ -1618,7 +1618,7 @@ def _create_sampling_callback(user_api_key_auth: UserAPIKeyAuth | None = None):
         return None
 
     async def _sampling_callback(
-        context: "RequestContext[ClientSession, object]",
+        context: "ClientRequestContext",
         params: "CreateMessageRequestParams",
     ):
         import litellm
@@ -4043,7 +4043,7 @@ class MCPServerManager:
         subject_token: str | None,
         user_api_key_auth: UserAPIKeyAuth | None,
         extra_headers: dict[str, str] | None,
-    ) -> tuple[httpx.Auth | None, dict[str, str] | None]:
+    ) -> tuple[httpx2.Auth | None, dict[str, str] | None]:
         """Resolve a v2-owned server's upstream credential into ``(resolved_auth, extra_headers)``.
 
         On a missing/rejected per-user credential this raises the mode's discovery challenge
@@ -5589,7 +5589,7 @@ class MCPServerManager:
             verbose_logger.error(error_msg)
             return CallToolResult(
                 content=[TextContent(type="text", text=error_msg)],
-                isError=True,
+                is_error=True,
             )
 
         try:
@@ -5600,7 +5600,7 @@ class MCPServerManager:
             # Convert the handler result (string response) to CallToolResult format
             result: Final = CallToolResult(
                 content=[TextContent(type="text", text=str(handler_result))],
-                isError=False,
+                is_error=False,
             )
 
             return result
@@ -5616,7 +5616,7 @@ class MCPServerManager:
             verbose_logger.error(error_msg)
             return CallToolResult(
                 content=[TextContent(type="text", text=error_msg)],
-                isError=True,
+                is_error=True,
             )
 
     async def pre_call_tool_check(

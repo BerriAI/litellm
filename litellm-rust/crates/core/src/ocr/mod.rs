@@ -9,6 +9,10 @@ pub mod types;
 pub mod wire;
 
 #[cfg(test)]
+#[path = "../../tests/aws_textract_ocr.rs"]
+mod aws_textract_tests;
+
+#[cfg(test)]
 #[path = "../../tests/azure_ai_ocr.rs"]
 mod azure_ai_tests;
 #[cfg(test)]

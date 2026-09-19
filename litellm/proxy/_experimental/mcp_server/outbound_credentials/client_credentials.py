@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from typing import Annotated, Final, Literal
 
 import httpx
+import httpx2
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
@@ -337,7 +338,7 @@ def _identity_key(config: ClientCredentialsConfig) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
-class ClientCredentialsBearerAuth(httpx.Auth):
+class ClientCredentialsBearerAuth(httpx2.Auth):
     """Bearer auth that retries an upstream 401 exactly once with a freshly minted token.
 
     The initial token was already resolved (so config/IdP failures surfaced as typed errors
@@ -356,7 +357,7 @@ class ClientCredentialsBearerAuth(httpx.Auth):
         self._access_token = SecretStr(access_token)
         self._refetch = refetch
 
-    async def async_auth_flow(self, request: httpx.Request) -> AsyncGenerator[httpx.Request, httpx.Response]:
+    async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
         token: Final = self._access_token.get_secret_value()
         name, value = self._carrier.header(token)
         request.headers[name] = value
@@ -371,5 +372,5 @@ class ClientCredentialsBearerAuth(httpx.Auth):
         request.headers[fresh_name] = fresh_value
         yield request
 
-    def sync_auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
-        raise RuntimeError("ClientCredentialsBearerAuth only supports async httpx clients")
+    def sync_auth_flow(self, request: httpx2.Request) -> Generator[httpx2.Request, httpx2.Response, None]:
+        raise RuntimeError("ClientCredentialsBearerAuth only supports async httpx2 clients")

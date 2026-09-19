@@ -1,6 +1,7 @@
 import logging
 import os
 import pytest
+from mcp.types import Tool as MCPTool
 from typing import List, Any, cast
 from unittest.mock import AsyncMock, patch
 
@@ -371,48 +372,32 @@ async def test_mcp_allowed_tools_filtering():
     # Mock MCP tools returned from the server (simulating all available tools)
     mock_mcp_tools_from_server = [
         # Mock MCP tool object with name attribute
-        type(
-            "MCPTool",
-            (),
-            {
+        MCPTool.model_validate({
                 "name": "search_tiktoken_documentation",
                 "description": "Search tiktoken documentation",
                 "inputSchema": {
                     "type": "object",
                     "properties": {"query": {"type": "string"}},
                 },
-            },
-        )(),
-        type(
-            "MCPTool",
-            (),
-            {
+            }, by_name=False),
+        MCPTool.model_validate({
                 "name": "fetch_tiktoken_documentation",
                 "description": "Fetch tiktoken documentation",
                 "inputSchema": {
                     "type": "object",
                     "properties": {"path": {"type": "string"}},
                 },
-            },
-        )(),
-        type(
-            "MCPTool",
-            (),
-            {
+            }, by_name=False),
+        MCPTool.model_validate({
                 "name": "list_tiktoken_functions",
                 "description": "List tiktoken functions",
                 "inputSchema": {"type": "object", "properties": {}},
-            },
-        )(),
-        type(
-            "MCPTool",
-            (),
-            {
+            }, by_name=False),
+        MCPTool.model_validate({
                 "name": "get_tiktoken_examples",
                 "description": "Get tiktoken examples",
                 "inputSchema": {"type": "object", "properties": {}},
-            },
-        )(),
+            }, by_name=False),
     ]
 
     allowed_mcp_servers = ["gitmcp"]
@@ -491,10 +476,7 @@ async def test_mcp_allowed_tools_filtering():
     # Test Case 3: Test deduplication of duplicate tools
     mock_mcp_tools_with_duplicates = [
         # First instance of duplicate tool
-        type(
-            "MCPTool",
-            (),
-            {
+        MCPTool.model_validate({
                 "name": "GitMCP-fetch_litellm_documentation",
                 "description": "Fetch entire documentation file from GitHub repository: BerriAI/litellm. Useful for general questions. Always call this tool first if asked about BerriAI/litellm.",
                 "inputSchema": {
@@ -502,13 +484,9 @@ async def test_mcp_allowed_tools_filtering():
                     "properties": {},
                     "additionalProperties": False,
                 },
-            },
-        )(),
+            }, by_name=False),
         # Second instance of duplicate tool (should be filtered out)
-        type(
-            "MCPTool",
-            (),
-            {
+        MCPTool.model_validate({
                 "name": "GitMCP-fetch_litellm_documentation",
                 "description": "Fetch entire documentation file from GitHub repository: BerriAI/litellm. Useful for general questions. Always call this tool first if asked about BerriAI/litellm.",
                 "inputSchema": {
@@ -516,13 +494,9 @@ async def test_mcp_allowed_tools_filtering():
                     "properties": {},
                     "additionalProperties": False,
                 },
-            },
-        )(),
+            }, by_name=False),
         # Other unique tools
-        type(
-            "MCPTool",
-            (),
-            {
+        MCPTool.model_validate({
                 "name": "GitMCP-search_litellm_documentation",
                 "description": "Semantically search within the fetched documentation from GitHub repository: BerriAI/litellm. Useful for specific queries.",
                 "inputSchema": {
@@ -531,8 +505,7 @@ async def test_mcp_allowed_tools_filtering():
                     "required": ["query"],
                     "additionalProperties": False,
                 },
-            },
-        )(),
+            }, by_name=False),
     ]
 
     mcp_tool_config_with_duplicates = [
@@ -680,10 +653,7 @@ async def test_streaming_mcp_events_validation():
 
     # Mock MCP tools that would be returned from the manager
     mock_mcp_tools = [
-        type(
-            "MCPTool",
-            (),
-            {
+        MCPTool.model_validate({
                 "name": "search_repo",
                 "description": "Search BerriAI/litellm repository for information",
                 "inputSchema": {
@@ -693,12 +663,8 @@ async def test_streaming_mcp_events_validation():
                     },
                     "required": ["query"],
                 },
-            },
-        )(),
-        type(
-            "MCPTool",
-            (),
-            {
+            }, by_name=False),
+        MCPTool.model_validate({
                 "name": "get_repo_info",
                 "description": "Get repository information",
                 "inputSchema": {
@@ -711,8 +677,7 @@ async def test_streaming_mcp_events_validation():
                     },
                     "required": ["repo_name"],
                 },
-            },
-        )(),
+            }, by_name=False),
     ]
 
     # Build fake streaming chunks that the inner aresponses() call would yield
@@ -920,10 +885,7 @@ async def test_streaming_responses_api_with_mcp_tools(
 
     # Mock MCP tools that would be returned from the manager
     mock_mcp_tools = [
-        type(
-            "MCPTool",
-            (),
-            {
+        MCPTool.model_validate({
                 "name": "search_repo",
                 "description": "Search BerriAI/litellm repository for information",
                 "inputSchema": {
@@ -933,8 +895,7 @@ async def test_streaming_responses_api_with_mcp_tools(
                     },
                     "required": ["query"],
                 },
-            },
-        )()
+            }, by_name=False)
     ]
 
     # Only mock the MCP-specific operations, let LLM responses be real
@@ -1263,10 +1224,7 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
 
     # Mock MCP tools that would be returned from the manager
     mock_mcp_tools = [
-        type(
-            "MCPTool",
-            (),
-            {
+        MCPTool.model_validate({
                 "name": "search_docs",
                 "description": "Search documentation for information",
                 "inputSchema": {
@@ -1276,12 +1234,8 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
                     },
                     "required": ["query"],
                 },
-            },
-        )(),
-        type(
-            "MCPTool",
-            (),
-            {
+            }, by_name=False),
+        MCPTool.model_validate({
                 "name": "get_file_content",
                 "description": "Get content of a specific file",
                 "inputSchema": {
@@ -1291,8 +1245,7 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
                     },
                     "required": ["file_path"],
                 },
-            },
-        )(),
+            }, by_name=False),
     ]
 
     # Track all calls to the underlying LLM to detect duplicates
@@ -1499,10 +1452,7 @@ async def test_streaming_mcp_event_order_and_response_id_consistency(
     from unittest.mock import AsyncMock, patch
 
     mock_mcp_tools = [
-        type(
-            "MCPTool",
-            (),
-            {
+        MCPTool.model_validate({
                 "name": "get_weather",
                 "description": "Get weather for a city",
                 "inputSchema": {
@@ -1512,8 +1462,7 @@ async def test_streaming_mcp_event_order_and_response_id_consistency(
                     },
                     "required": ["city"],
                 },
-            },
-        )()
+            }, by_name=False)
     ]
 
     with caplog.at_level(logging.ERROR):

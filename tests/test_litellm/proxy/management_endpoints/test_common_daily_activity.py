@@ -643,6 +643,24 @@ def test_key_metadata_includes_recovered_user_email():
     assert meta.user_email == "alice@example.com"
 
 
+def test_key_metadata_includes_user_id_without_user_email():
+    from litellm.proxy.management_endpoints.common_daily_activity import _key_metadata
+
+    meta = _key_metadata(
+        {
+            "dirty-key": {
+                "key_alias": "batch-worker",
+                "team_id": "team-1",
+                "user_id": "user-123",
+            }
+        },
+        "dirty-key",
+    )
+
+    assert meta.user_id == "user-123"
+    assert meta.user_email is None
+
+
 def test_update_breakdown_metrics_includes_user_email():
     from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
     from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
@@ -911,6 +929,67 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     assert key_data.metadata.team_id == "69cd4b77-b095-4489-8c46-4f2f31d840a2"
     assert key_data.metadata.user_id == "deleted-key-owner"
     assert key_data.metrics.spend == 10.0
+
+
+@pytest.mark.asyncio
+async def test_aggregated_activity_flags_only_keys_that_key_info_can_still_resolve():
+    """/key/info reads the active key table only, so deleted and never-stored (session) keys must not claim to exist."""
+    mock_prisma = MagicMock()
+    base = {
+        "date": "2024-01-01",
+        "endpoint": "/v1/chat/completions",
+        "model": None,
+        "model_group": None,
+        "custom_llm_provider": None,
+        "mcp_namespaced_tool_name": None,
+        "group_level": 30,
+        "distinct_api_keys": 1,
+        "spend": 1.0,
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "compression_saved_tokens": 0,
+        "compression_savings_spend": 0.0,
+        "prompt_caching_savings_spend": 0.0,
+        "gateway_injected_caching_savings_spend": 0.0,
+        "autorouter_savings_spend": 0.0,
+        "total_response_time_ms": 0,
+        "timed_requests": 0,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+    }
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[{**base, "api_key": key} for key in ("active-key", "deleted-key", "session-key")]
+    )
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[SimpleNamespace(token="active-key", key_alias="active", team_id=None, user_id="owner")]
+    )
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
+        return_value=[SimpleNamespace(token="deleted-key", key_alias="deleted", team_id=None, user_id="owner")]
+    )
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+    )
+
+    key_breakdown = result.results[0].breakdown.endpoints["/v1/chat/completions"].api_key_breakdown
+    assert {key: data.metadata.key_exists for key, data in key_breakdown.items()} == {
+        "active-key": True,
+        "deleted-key": False,
+        "session-key": False,
+    }
+    assert key_breakdown["deleted-key"].metadata.key_alias == "deleted"
 
 
 def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_group="gpt-4"):

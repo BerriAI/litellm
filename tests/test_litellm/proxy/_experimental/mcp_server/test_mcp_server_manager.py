@@ -1,5 +1,6 @@
 import importlib
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -22,7 +23,10 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerLi
 # Add the parent directory to the path so we can import litellm
 
 
+import contextlib
+
 import httpx
+import httpx2
 from mcp import ReadResourceResult, Resource
 from mcp.types import (
     CallToolResult,
@@ -79,6 +83,8 @@ def _reload_mcp_manager_module():
     if server_module is not None and hasattr(server_module, "global_mcp_server_manager"):
         server_module.global_mcp_server_manager = reloaded.global_mcp_server_manager
     return reloaded
+
+
 
 
 @pytest.fixture(autouse=True)
@@ -416,10 +422,10 @@ class TestMCPServerManager:
         assert "gateway-client" in dump
         assert "https://org-idp.example/oauth2/token" in dump
 
-    async def test_load_servers_from_config_warns_on_invalid_alias(self, caplog):
+    async def test_load_servers_from_config_warns_on_invalid_alias(self, config_only_mcp_manager_factory, caplog):
         """Invalid aliases from config should emit warnings during load."""
 
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         config = {
             "validserver": {
                 "alias": "bad/name",
@@ -434,10 +440,10 @@ class TestMCPServerManager:
         assert any("invalid alias 'bad/name'" in message for message in caplog.messages)
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_accepts_valid_alias(self, caplog):
+    async def test_load_servers_from_config_accepts_valid_alias(self, config_only_mcp_manager_factory, caplog):
         """Valid aliases should be accepted and populate the registry."""
 
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         config = {
             "validserver": {
                 "alias": "friendly_alias",
@@ -1207,8 +1213,8 @@ class TestMCPServerManager:
         assert server.scopes == ["read"]
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_non_oauth2_needs_no_flow(self):
-        manager = MCPServerManager()
+    async def test_load_servers_from_config_non_oauth2_needs_no_flow(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
         config = {
             "apiserver": {
                 "url": "https://example.com/mcp",
@@ -1254,10 +1260,10 @@ class TestMCPServerManager:
         assert not any("oauth2_id_jag" in message for message in caplog.messages)
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_does_not_warn_for_api_key_with_google_sso(self, monkeypatch, caplog):
+    async def test_load_servers_from_config_does_not_warn_for_api_key_with_google_sso(self, config_only_mcp_manager_factory, monkeypatch, caplog):
         self._clear_sso_env(monkeypatch)
         monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-cid")
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         config = {
             "api_key_server": {
                 "url": "https://example.com/mcp",
@@ -1394,9 +1400,9 @@ class TestMCPServerManager:
         assert server.is_dcr_bridge is False
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_coerces_cost_string_to_float(self):
+    async def test_load_servers_from_config_coerces_cost_string_to_float(self, config_only_mcp_manager_factory):
         """YAML 1.1 parses `7e-05` as a string; ingest must coerce it to float."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         config = {
             "google_maps": {
                 "url": "https://example.com/mcp",
@@ -1420,9 +1426,9 @@ class TestMCPServerManager:
         assert isinstance(cost_info["tool_name_to_cost_per_query"]["geocode"], float)
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_sets_token_endpoint_auth_method(self):
+    async def test_load_servers_from_config_sets_token_endpoint_auth_method(self, config_only_mcp_manager_factory):
         """token_endpoint_auth_method from config is carried onto the MCPServer (LIT-4091)."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         config = {
             "basic_provider": {
                 "url": "https://example.com/mcp",
@@ -1899,7 +1905,7 @@ class TestMCPServerManager:
         with patch.object(_mgr_mod, "verbose_logger") as mock_log:
             result = await self._run_call_regular(manager, server)
 
-        assert result.isError is True
+        assert result.is_error is True
         # A genuine non-auth failure keeps operator visibility at warning level, since call_tool's
         # raise_on_error demoted the client-layer error log to debug.
         assert mock_log.warning.called
@@ -1933,7 +1939,7 @@ class TestMCPServerManager:
             proxy_logging_obj=None,
         )
 
-        assert result.isError is False
+        assert result.is_error is False
         assert mock_client.call_tool.call_args.kwargs.get("raise_on_error") is not True
 
     def _token_exchange_server(self, server_id: str) -> "MCPServer":
@@ -6228,17 +6234,17 @@ class TestMCPServerManager:
         tool1 = MagicMock()
         tool1.name = "allowed_tool_1"
         tool1.description = "This tool is allowed"
-        tool1.inputSchema = {}
+        tool1.input_schema = {}
 
         tool2 = MagicMock()
         tool2.name = "blocked_tool"
         tool2.description = "This tool is not allowed"
-        tool2.inputSchema = {}
+        tool2.input_schema = {}
 
         tool3 = MagicMock()
         tool3.name = "allowed_tool_2"
         tool3.description = "This tool is also allowed"
-        tool3.inputSchema = {}
+        tool3.input_schema = {}
 
         # Mock the global_mcp_server_manager._get_tools_from_server
         from litellm.proxy._experimental.mcp_server import rest_endpoints
@@ -6278,17 +6284,17 @@ class TestMCPServerManager:
         tool1 = MagicMock()
         tool1.name = "tool_1"
         tool1.description = "Tool 1"
-        tool1.inputSchema = {}
+        tool1.input_schema = {}
 
         tool2 = MagicMock()
         tool2.name = "tool_2"
         tool2.description = "Tool 2"
-        tool2.inputSchema = {}
+        tool2.input_schema = {}
 
         tool3 = MagicMock()
         tool3.name = "tool_3"
         tool3.description = "Tool 3"
-        tool3.inputSchema = {}
+        tool3.input_schema = {}
 
         # Mock the global_mcp_server_manager._get_tools_from_server
         from litellm.proxy._experimental.mcp_server import rest_endpoints
@@ -6328,12 +6334,12 @@ class TestMCPServerManager:
         tool1 = MagicMock()
         tool1.name = "tool_1"
         tool1.description = "Tool 1"
-        tool1.inputSchema = {}
+        tool1.input_schema = {}
 
         tool2 = MagicMock()
         tool2.name = "tool_2"
         tool2.description = "Tool 2"
-        tool2.inputSchema = {}
+        tool2.input_schema = {}
 
         # Mock the global_mcp_server_manager._get_tools_from_server
         from litellm.proxy._experimental.mcp_server import rest_endpoints
@@ -6673,7 +6679,7 @@ class TestMCPServerManager:
             # Return a mock CallToolResult
             result = MagicMock(spec=CallToolResult)
             result.content = [{"type": "text", "text": "Tool executed successfully"}]
-            result.isError = False
+            result.is_error = False
             return result
 
         mock_client.call_tool.side_effect = mock_call_tool
@@ -6704,7 +6710,7 @@ class TestMCPServerManager:
 
         # Verify the result
         assert result is not None
-        assert result.isError is False
+        assert result.is_error is False
         assert len(result.content) > 0
 
         # Verify the MCP client call was awaited exactly once
@@ -8022,9 +8028,9 @@ class TestMCPServerTimestamps:
         assert client.timeout == 0.0
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_preserves_timeout(self):
+    async def test_load_servers_from_config_preserves_timeout(self, config_only_mcp_manager_factory):
         """timeout from proxy config is loaded into MCPServer."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         config = {
             "my_server": {
                 "url": "https://example.com/mcp",
@@ -8437,9 +8443,9 @@ class TestMCPServerManagerUpstreamInstructionsCache:
         assert manager._upstream_initialize_instructions_by_server_id.get("srv") is None
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_clears_cache(self):
+    async def test_load_servers_from_config_clears_cache(self, config_only_mcp_manager_factory):
         """Reloading config clears any previously cached upstream instructions."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         manager._upstream_initialize_instructions_by_server_id["old"] = "stale"
         await manager.load_servers_from_config(
             mcp_servers_config={
@@ -8452,9 +8458,9 @@ class TestMCPServerManagerUpstreamInstructionsCache:
         assert manager._upstream_initialize_instructions_by_server_id.get("old") is None
 
     @pytest.mark.asyncio
-    async def test_load_servers_reads_instructions_from_config(self):
+    async def test_load_servers_reads_instructions_from_config(self, config_only_mcp_manager_factory):
         """instructions field from YAML config is persisted on the MCPServer."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         await manager.load_servers_from_config(
             mcp_servers_config={
                 "srv_a": {
@@ -10124,7 +10130,7 @@ class TestOBOCallToolRetry:
             user_api_key_auth=None,
         )
 
-        assert result.isError is True
+        assert result.is_error is True
         manager._cred_provider.invalidate_credentials.assert_not_awaited()
         manager._create_mcp_client.assert_not_awaited()
         assert first.attempts == 1
@@ -10149,7 +10155,7 @@ class TestOBOCallToolRetry:
             user_api_key_auth=None,
         )
 
-        assert result.isError is True
+        assert result.is_error is True
         manager._create_mcp_client.assert_awaited_once()
         assert first.attempts == 1 and retry.attempts == 1
 
@@ -10228,7 +10234,7 @@ class TestOBOConcurrencyLimit:
 
         assert peak_while_blocked == max_concurrent
         assert inflight["current"] == 0
-        assert all(result.isError is False for result in results)
+        assert all(result.is_error is False for result in results)
 
 
 class TestOBOEndpointDiscovery:
@@ -11354,7 +11360,7 @@ class TestOpenAPIRegistryKeyMatchesRegistration:
 
         result = await self._call(server, registered_key, "list_pets")
 
-        assert result.isError is False
+        assert result.is_error is False
         assert result.content[0].text == "dispatched"
 
     @pytest.mark.asyncio
@@ -11371,7 +11377,7 @@ class TestOpenAPIRegistryKeyMatchesRegistration:
 
         result = await self._call(server, registered_key, "read_wiki_contents")
 
-        assert result.isError is False
+        assert result.is_error is False
         assert result.content[0].text == "dispatched"
 
     @pytest.mark.asyncio
@@ -11394,7 +11400,7 @@ class TestOpenAPIRegistryKeyMatchesRegistration:
 
         result = await self._call(server, registered_key, "petstore-list_pets")
 
-        assert result.isError is False
+        assert result.is_error is False
         assert result.content[0].text == "dispatched"
 
     @pytest.mark.asyncio
@@ -11417,7 +11423,7 @@ class TestOpenAPIRegistryKeyMatchesRegistration:
 
             result = await self._call(server, registered_key, "list_pets")
 
-        assert result.isError is False
+        assert result.is_error is False
         assert result.content[0].text == "dispatched"
 
     @pytest.mark.asyncio
@@ -11434,7 +11440,7 @@ class TestOpenAPIRegistryKeyMatchesRegistration:
 
         result = await self._call(server, "petstore-list_pets", "delete_pet")
 
-        assert result.isError is True
+        assert result.is_error is True
         assert "not found in registry" in result.content[0].text
 
 
@@ -11931,7 +11937,7 @@ class TestOpenApiHandlerRelaysUpstreamAuth:
         with patch.object(global_mcp_tool_registry, "get_tool", return_value=tool):
             result = await manager._call_openapi_tool_handler(self._server(), "list_reports", {})
 
-        assert result.isError is True
+        assert result.is_error is True
         assert "upstream returned HTTP 503" in result.content[0].text
 
 
@@ -11949,9 +11955,9 @@ class TestConfigServerIdPinning:
         }
 
     @pytest.mark.asyncio
-    async def test_derived_id_churns_when_connection_fields_change(self):
+    async def test_derived_id_churns_when_connection_fields_change(self, config_only_mcp_manager_factory):
         """The behavior the pin exists to escape: editing the url mints a brand-new id."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
 
         await manager.load_servers_from_config(self._config())
         before = next(iter(manager.config_mcp_servers))
@@ -11963,8 +11969,8 @@ class TestConfigServerIdPinning:
         assert before != after
 
     @pytest.mark.asyncio
-    async def test_pinned_id_survives_url_transport_auth_and_alias_edits(self):
-        manager = MCPServerManager()
+    async def test_pinned_id_survives_url_transport_auth_and_alias_edits(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
 
         await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
         assert list(manager.config_mcp_servers) == ["docs-prod-1"]
@@ -11985,8 +11991,8 @@ class TestConfigServerIdPinning:
         assert manager.config_mcp_servers["docs-prod-1"].url == "https://prod.example.com/mcp"
 
     @pytest.mark.asyncio
-    async def test_absent_server_id_keeps_the_derived_hash(self):
-        manager = MCPServerManager()
+    async def test_absent_server_id_keeps_the_derived_hash(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
 
         await manager.load_servers_from_config(self._config())
 
@@ -12001,15 +12007,15 @@ class TestConfigServerIdPinning:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("bad_value", ["", "   ", 123, True, ["docs-prod-1"]])
-    async def test_blank_or_non_string_server_id_is_rejected(self, bad_value: Any):
-        manager = MCPServerManager()
+    async def test_blank_or_non_string_server_id_is_rejected(self, config_only_mcp_manager_factory, bad_value: Any):
+        manager = config_only_mcp_manager_factory()
 
         with pytest.raises(ValueError, match="server_id must be a non-empty string"):
             await manager.load_servers_from_config(self._config(server_id=bad_value))
 
     @pytest.mark.asyncio
-    async def test_two_servers_pinning_the_same_id_are_rejected(self):
-        manager = MCPServerManager()
+    async def test_two_servers_pinning_the_same_id_are_rejected(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
         config: Dict[str, Any] = {
             "docs_server": {"url": "https://a.example.com/mcp", "server_id": "shared-id"},
             "wiki_server": {"url": "https://b.example.com/mcp", "server_id": "shared-id"},
@@ -12019,9 +12025,9 @@ class TestConfigServerIdPinning:
             await manager.load_servers_from_config(config)
 
     @pytest.mark.asyncio
-    async def test_pinned_id_colliding_with_a_derived_id_is_rejected(self):
+    async def test_pinned_id_colliding_with_a_derived_id_is_rejected(self, config_only_mcp_manager_factory):
         """A pin that lands on another entry's derived hash collides just as hard."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         derived = manager._generate_stable_server_id(
             server_name="docs_server",
             url="https://a.example.com/mcp",
@@ -12038,14 +12044,14 @@ class TestConfigServerIdPinning:
             await manager.load_servers_from_config(config)
 
     @pytest.mark.asyncio
-    async def test_pinned_id_colliding_with_a_db_backed_server_is_rejected(self):
+    async def test_pinned_id_colliding_with_a_db_backed_server_is_rejected(self, config_only_mcp_manager_factory):
         """get_registry() is ``config | registry``, so the db row would hide the config server.
 
         The registry is seeded by hand because on a real startup the config loads before the
         database does, so this check only fires on a later reload. The startup ordering is covered
         by ``test_db_row_arriving_on_a_pinned_config_id_warns``; the warning there is not redundant.
         """
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         manager.registry["db-uuid-1"] = MCPServer(
             server_id="db-uuid-1",
             name="db_server",
@@ -12057,9 +12063,9 @@ class TestConfigServerIdPinning:
             await manager.load_servers_from_config(self._config(server_id="db-uuid-1"))
 
     @pytest.mark.asyncio
-    async def test_derived_id_matching_a_db_backed_server_is_not_rejected(self):
+    async def test_derived_id_matching_a_db_backed_server_is_not_rejected(self, config_only_mcp_manager_factory):
         """Only a pinned id is an authoring error; a hash collision must not fail startup."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         derived = manager._generate_stable_server_id(
             server_name="docs_server",
             url="https://example.com/mcp",
@@ -12079,8 +12085,8 @@ class TestConfigServerIdPinning:
         assert derived in manager.config_mcp_servers
 
     @pytest.mark.asyncio
-    async def test_pinned_id_is_stripped_of_surrounding_whitespace(self):
-        manager = MCPServerManager()
+    async def test_pinned_id_is_stripped_of_surrounding_whitespace(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
 
         await manager.load_servers_from_config(self._config(server_id="  docs-prod-1  "))
 
@@ -12120,9 +12126,9 @@ class TestConfigServerIdPinning:
             await manager.reload_servers_from_database()
 
     @pytest.mark.asyncio
-    async def test_db_row_arriving_on_a_pinned_config_id_warns(self, caplog):
+    async def test_db_row_arriving_on_a_pinned_config_id_warns(self, config_only_mcp_manager_factory, caplog):
         """The db row loads after config on startup, so the config server is hidden then, not at load."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
@@ -12132,8 +12138,8 @@ class TestConfigServerIdPinning:
         assert manager.get_registry()["docs-prod-1"].url == "https://db.example.com/mcp"
 
     @pytest.mark.asyncio
-    async def test_db_row_with_a_distinct_id_does_not_warn(self, caplog):
-        manager = MCPServerManager()
+    async def test_db_row_with_a_distinct_id_does_not_warn(self, config_only_mcp_manager_factory, caplog):
+        manager = config_only_mcp_manager_factory()
         await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
@@ -12143,9 +12149,9 @@ class TestConfigServerIdPinning:
         assert set(manager.get_registry()) == {"docs-prod-1", "db-uuid-1"}
 
     @pytest.mark.asyncio
-    async def test_pinned_id_matching_another_entrys_server_name_is_rejected(self):
+    async def test_pinned_id_matching_another_entrys_server_name_is_rejected(self, config_only_mcp_manager_factory):
         """expand_permission_list resolves against registry keys first, so this steals the grants."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
 
         with pytest.raises(ValueError, match="server_name or alias of MCP server 'wiki_server'"):
             await manager.load_servers_from_config(
@@ -12160,8 +12166,8 @@ class TestConfigServerIdPinning:
             )
 
     @pytest.mark.asyncio
-    async def test_pinned_id_matching_another_entrys_alias_is_rejected(self):
-        manager = MCPServerManager()
+    async def test_pinned_id_matching_another_entrys_alias_is_rejected(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
 
         with pytest.raises(ValueError, match="server_name or alias of MCP server 'wiki_server'"):
             await manager.load_servers_from_config(
@@ -12180,17 +12186,17 @@ class TestConfigServerIdPinning:
             )
 
     @pytest.mark.asyncio
-    async def test_pinning_a_servers_own_name_is_allowed(self):
+    async def test_pinning_a_servers_own_name_is_allowed(self, config_only_mcp_manager_factory):
         """The most natural pin an operator writes; it resolves to the same server either way."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
 
         await manager.load_servers_from_config(self._config(server_id="docs_server"))
 
         assert list(manager.config_mcp_servers) == ["docs_server"]
 
     @pytest.mark.asyncio
-    async def test_pinning_a_servers_own_alias_is_allowed(self):
-        manager = MCPServerManager()
+    async def test_pinning_a_servers_own_alias_is_allowed(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
 
         await manager.load_servers_from_config(self._config(alias="docs", server_id="docs"))
 
@@ -12198,9 +12204,9 @@ class TestConfigServerIdPinning:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("aliasing_entry_first", [True, False])
-    async def test_pinning_own_name_that_is_another_entrys_alias_is_rejected(self, aliasing_entry_first: bool):
+    async def test_pinning_own_name_that_is_another_entrys_alias_is_rejected(self, config_only_mcp_manager_factory, aliasing_entry_first: bool):
         """A grant naming 'docs_server' reaches both servers unpinned; the pin would narrow it to one."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         wiki = (
             "wiki_server",
             {"alias": "docs_server", "url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
@@ -12214,8 +12220,8 @@ class TestConfigServerIdPinning:
             await manager.load_servers_from_config(dict((wiki, docs) if aliasing_entry_first else (docs, wiki)))
 
     @pytest.mark.asyncio
-    async def test_pinning_own_name_that_is_another_entrys_mapped_alias_is_rejected(self):
-        manager = MCPServerManager()
+    async def test_pinning_own_name_that_is_another_entrys_mapped_alias_is_rejected(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
 
         with pytest.raises(ValueError, match="server_name or alias of MCP server 'wiki_server'"):
             await manager.load_servers_from_config(
@@ -12231,9 +12237,9 @@ class TestConfigServerIdPinning:
             )
 
     @pytest.mark.asyncio
-    async def test_pinning_own_alias_shared_with_a_later_entry_is_rejected(self):
+    async def test_pinning_own_alias_shared_with_a_later_entry_is_rejected(self, config_only_mcp_manager_factory):
         """Nothing rejects duplicate aliases, so the first entry's pin would answer the second's grants."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
 
         with pytest.raises(ValueError, match="server_name or alias of MCP server 'docs_server'"):
             await manager.load_servers_from_config(
@@ -12253,9 +12259,9 @@ class TestConfigServerIdPinning:
             )
 
     @pytest.mark.asyncio
-    async def test_own_name_pin_resolves_grants_like_the_unpinned_name(self):
+    async def test_own_name_pin_resolves_grants_like_the_unpinned_name(self, config_only_mcp_manager_factory):
         """The negative control: a sole-owner self-pin must keep loading and answer the same grants."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
 
         await manager.load_servers_from_config(
             {
@@ -12273,9 +12279,9 @@ class TestConfigServerIdPinning:
         assert manager.expand_permission_list(["wiki"]) == [wiki_id]
 
     @pytest.mark.asyncio
-    async def test_derived_id_is_not_checked_against_names(self):
+    async def test_derived_id_is_not_checked_against_names(self, config_only_mcp_manager_factory):
         """Unpinned configs must keep loading; only a pinned id can be an authoring error."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
 
         await manager.load_servers_from_config(
             {
@@ -12287,9 +12293,9 @@ class TestConfigServerIdPinning:
         assert len(manager.config_mcp_servers) == 2
 
     @pytest.mark.asyncio
-    async def test_shadow_warning_is_not_repeated_on_every_reload(self, caplog):
+    async def test_shadow_warning_is_not_repeated_on_every_reload(self, config_only_mcp_manager_factory, caplog):
         """reload_servers_from_database runs on the config-reload timer; one warning, not one a tick."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
@@ -12302,8 +12308,8 @@ class TestConfigServerIdPinning:
         assert second_round == first_round
 
     @pytest.mark.asyncio
-    async def test_shadow_warning_fires_again_when_the_shadowed_set_changes(self, caplog):
-        manager = MCPServerManager()
+    async def test_shadow_warning_fires_again_when_the_shadowed_set_changes(self, config_only_mcp_manager_factory, caplog):
+        manager = config_only_mcp_manager_factory()
         await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
@@ -12314,9 +12320,9 @@ class TestConfigServerIdPinning:
         assert len([m for m in caplog.messages if "database entry takes precedence" in m]) == 2
 
     @pytest.mark.asyncio
-    async def test_pinned_id_matching_a_mapped_alias_is_rejected(self):
+    async def test_pinned_id_matching_a_mapped_alias_is_rejected(self, config_only_mcp_manager_factory):
         """An alias can also arrive from litellm_settings.mcp_aliases; it is reserved just the same."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
 
         with pytest.raises(ValueError, match="server_name or alias of MCP server 'wiki_server'"):
             await manager.load_servers_from_config(
@@ -12332,8 +12338,8 @@ class TestConfigServerIdPinning:
             )
 
     @pytest.mark.asyncio
-    async def test_pinning_a_servers_own_mapped_alias_is_allowed(self):
-        manager = MCPServerManager()
+    async def test_pinning_a_servers_own_mapped_alias_is_allowed(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
 
         await manager.load_servers_from_config(
             self._config(server_id="docs"),
@@ -12343,9 +12349,9 @@ class TestConfigServerIdPinning:
         assert list(manager.config_mcp_servers) == ["docs"]
 
     @pytest.mark.asyncio
-    async def test_mapped_alias_for_an_unknown_server_reserves_nothing(self):
+    async def test_mapped_alias_for_an_unknown_server_reserves_nothing(self, config_only_mcp_manager_factory):
         """A dangling mcp_aliases entry is never applied, so it must not fail an unrelated pin."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
 
         await manager.load_servers_from_config(
             self._config(server_id="wiki"),
@@ -12355,9 +12361,9 @@ class TestConfigServerIdPinning:
         assert list(manager.config_mcp_servers) == ["wiki"]
 
     @pytest.mark.asyncio
-    async def test_config_id_that_is_a_db_server_name_warns(self, caplog):
+    async def test_config_id_that_is_a_db_server_name_warns(self, config_only_mcp_manager_factory, caplog):
         """The mirror of the shadow case: here the config entry captures the db server's grants."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         await manager.load_servers_from_config(self._config(server_id="db_server"))
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
@@ -12366,8 +12372,8 @@ class TestConfigServerIdPinning:
         assert any("db_server" in m and "name or alias of a database-backed" in m for m in caplog.messages)
 
     @pytest.mark.asyncio
-    async def test_capture_warning_is_not_repeated_on_every_reload(self, caplog):
-        manager = MCPServerManager()
+    async def test_capture_warning_is_not_repeated_on_every_reload(self, config_only_mcp_manager_factory, caplog):
+        manager = config_only_mcp_manager_factory()
         await manager.load_servers_from_config(self._config(server_id="db_server"))
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
@@ -12377,8 +12383,8 @@ class TestConfigServerIdPinning:
         assert len([m for m in caplog.messages if "name or alias of a database-backed" in m]) == 1
 
     @pytest.mark.asyncio
-    async def test_config_id_unrelated_to_db_names_does_not_warn(self, caplog):
-        manager = MCPServerManager()
+    async def test_config_id_unrelated_to_db_names_does_not_warn(self, config_only_mcp_manager_factory, caplog):
+        manager = config_only_mcp_manager_factory()
         await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
@@ -12387,9 +12393,9 @@ class TestConfigServerIdPinning:
         assert all("name or alias of a database-backed" not in m for m in caplog.messages)
 
     @pytest.mark.asyncio
-    async def test_mapped_alias_for_a_server_with_its_own_alias_reserves_nothing(self):
+    async def test_mapped_alias_for_a_server_with_its_own_alias_reserves_nothing(self, config_only_mcp_manager_factory):
         """load_servers_from_config ignores the mapping when the entry sets alias, so it is free."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
 
         await manager.load_servers_from_config(
             {
@@ -12411,9 +12417,9 @@ class TestConfigServerIdPinning:
         assert len(manager.config_mcp_servers) == 2
 
     @pytest.mark.asyncio
-    async def test_only_the_first_mapped_alias_for_a_server_is_reserved(self):
+    async def test_only_the_first_mapped_alias_for_a_server_is_reserved(self, config_only_mcp_manager_factory):
         """Only the first mapping is applied, so pinning the second one must still load."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
 
         await manager.load_servers_from_config(
             {
@@ -12430,15 +12436,15 @@ class TestConfigServerIdPinning:
         assert "wiki_two" in manager.config_mcp_servers
 
     @pytest.mark.asyncio
-    async def test_invalid_name_is_reported_before_any_entry_body_is_read(self):
+    async def test_invalid_name_is_reported_before_any_entry_body_is_read(self, config_only_mcp_manager_factory):
         """The identifier index walks every entry up front, so a bad name must still fail on the name."""
         with pytest.raises(Exception, match="Server name cannot contain"):
-            await MCPServerManager().load_servers_from_config({"my-server": None})
+            await config_only_mcp_manager_factory().load_servers_from_config({"my-server": None})
 
     @pytest.mark.asyncio
-    async def test_a_shadowing_db_server_reports_only_the_shadow_warning(self, caplog):
+    async def test_a_shadowing_db_server_reports_only_the_shadow_warning(self, config_only_mcp_manager_factory, caplog):
         """The db row wins the id outright, so the capture message would contradict the shadow one."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         await manager.load_servers_from_config(self._config(server_id="db_server"))
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
@@ -12449,9 +12455,9 @@ class TestConfigServerIdPinning:
         assert manager.get_registry()["db_server"].url == "https://db.example.com/mcp"
 
     @pytest.mark.asyncio
-    async def test_an_explicitly_blank_alias_still_blocks_the_mapping(self):
+    async def test_an_explicitly_blank_alias_still_blocks_the_mapping(self, config_only_mcp_manager_factory):
         """The loader only consults mcp_aliases when the key is absent, so a blank alias frees it."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
 
         await manager.load_servers_from_config(
             {
@@ -12473,9 +12479,9 @@ class TestConfigServerIdPinning:
         assert manager.config_mcp_servers["wiki"].url == "https://example.com/mcp"
 
     @pytest.mark.asyncio
-    async def test_a_row_that_shadows_one_id_still_reports_capturing_another(self, caplog):
+    async def test_a_row_that_shadows_one_id_still_reports_capturing_another(self, config_only_mcp_manager_factory, caplog):
         """Skipping is per identifier, not per row, so the second collision is not lost."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         await manager.load_servers_from_config(
             {
                 "docs_server": {
@@ -12845,21 +12851,25 @@ async def test_pre_call_tool_check_honors_guardrail_attached_to_key(monkeypatch,
         ("none", {"Authorization": "Bearer injected"}, "extra-headers", "Bearer injected"),
     ],
 )
-async def test_debug_resolution_matches_final_header_conflict_winner(
+async def test_debug_resolution_matches_final_header_conflict_winner(_mcp_request_ctx,
     config: Literal["stored", "static", "none"],
     extra_headers: dict[str, str] | None,
     expected_source: str,
     expected_authorization: str | None,
 ) -> None:
-    from mcp.server.lowlevel.server import request_ctx
-    from mcp.shared.context import RequestContext
+    from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
     from starlette.requests import Request
     from pydantic import SecretStr
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import MCPAuthenticatedUser
     from litellm.proxy._experimental.mcp_server.mcp_debug import MCP_AUTH_DIAGNOSTICS_SCOPE_KEY, MCPAuthDiagnostics
     from litellm.proxy._experimental.mcp_server.outbound_credentials import (
-        ApiKeyConfig, AuthorizationCodeConfig, NoneConfig, ServerSpec, SharedKey, UpstreamCredentialProvider,
+        ApiKeyConfig,
+        AuthorizationCodeConfig,
+        NoneConfig,
+        ServerSpec,
+        SharedKey,
+        UpstreamCredentialProvider,
     )
     from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -12875,10 +12885,11 @@ async def test_debug_resolution_matches_final_header_conflict_winner(
     store = Store()
     context = MCPAuthenticatedUser(UserAPIKeyAuth(user_id="alice"))
     diagnostics = MCPAuthDiagnostics()
-    token = request_ctx.set(RequestContext(
-        request_id=1, meta=None, session=MagicMock(), lifespan_context=None,
-        request=Request({"type": "http", MCP_AUTH_DIAGNOSTICS_SCOPE_KEY: diagnostics}),
-    ))
+    token = active_mcp_request_ctx_var.set(
+        _mcp_request_ctx(
+            request=Request({"type": "http", MCP_AUTH_DIAGNOSTICS_SCOPE_KEY: diagnostics}),
+        )
+    )
     selected = {
         "stored": AuthorizationCodeConfig(),
         "static": ApiKeyConfig(key_source=SharedKey(value=SecretStr("static-token"))),
@@ -12887,7 +12898,10 @@ async def test_debug_resolution_matches_final_header_conflict_winner(
     try:
         auth, remaining = await MCPServerManager()._resolve_v2_auth(
             server=MCPServer(
-                server_id="s", name="s", transport="http", url="https://up.example/mcp",
+                server_id="s",
+                name="s",
+                transport="http",
+                url="https://up.example/mcp",
                 static_headers={"Authorization": "Bearer configured"},
             ),
             spec=ServerSpec(server_id="s", resource="https://up.example/mcp", config=selected),
@@ -12903,31 +12917,37 @@ async def test_debug_resolution_matches_final_header_conflict_winner(
         assert request.headers.get("Authorization") == expected_authorization
         assert store.calls == (1 if config == "stored" else 0)
     finally:
-        request_ctx.reset(token)
+        active_mcp_request_ctx_var.reset(token)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transport", ["http", "stdio"])
-async def test_debug_reports_legacy_signing_and_non_http_transport(transport: Literal["http", "stdio"]) -> None:
-    from mcp.server.lowlevel.server import request_ctx
-    from mcp.shared.context import RequestContext
+async def test_debug_reports_legacy_signing_and_non_http_transport(_mcp_request_ctx, transport: Literal["http", "stdio"]) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
     from starlette.requests import Request
 
     from litellm.proxy._experimental.mcp_server.mcp_debug import MCP_AUTH_DIAGNOSTICS_SCOPE_KEY, MCPAuthDiagnostics
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     diagnostics = MCPAuthDiagnostics()
-    token = request_ctx.set(RequestContext(
-        request_id=1, meta=None, session=MagicMock(), lifespan_context=None,
-        request=Request({"type": "http", MCP_AUTH_DIAGNOSTICS_SCOPE_KEY: diagnostics}),
-    ))
+    token = active_mcp_request_ctx_var.set(
+        _mcp_request_ctx(
+            request=Request({"type": "http", MCP_AUTH_DIAGNOSTICS_SCOPE_KEY: diagnostics}),
+        )
+    )
     try:
         server = MCPServer(
-            server_id="signed", name="signed", transport=transport,
-            url="https://up.example/mcp", auth_type="aws_sigv4",
-            aws_access_key_id="AKIDEXAMPLE", aws_secret_access_key="test-signing-secret",
-            aws_region_name="us-east-1", aws_service_name="execute-api",
-            command="python", args=["-c", "pass"],
+            server_id="signed",
+            name="signed",
+            transport=transport,
+            url="https://up.example/mcp",
+            auth_type="aws_sigv4",
+            aws_access_key_id="AKIDEXAMPLE",
+            aws_secret_access_key="test-signing-secret",
+            aws_region_name="us-east-1",
+            aws_service_name="execute-api",
+            command="python",
+            args=["-c", "pass"],
         )
         client = await MCPServerManager()._create_mcp_client(server)
         if transport == "stdio":
@@ -12939,7 +12959,7 @@ async def test_debug_reports_legacy_signing_and_non_http_transport(transport: Li
             assert request.headers["Authorization"].startswith("AWS4-HMAC-SHA256 ")
             assert "Credential=AKIDEXAMPLE/" in request.headers["Authorization"]
     finally:
-        request_ctx.reset(token)
+        active_mcp_request_ctx_var.reset(token)
 
 
 @pytest.mark.asyncio
@@ -13184,6 +13204,32 @@ class _DiscoveryClock:
         return self.now
 
 
+from pydantic import TypeAdapter
+from mcp.types import JSONRPCMessage
+
+_JSONRPC_ADAPTER = TypeAdapter(JSONRPCMessage)
+
+
+@contextlib.contextmanager
+def _mcp_upstream(respond):
+    """Drive the SDK's streamable-HTTP transport off an httpx2 MockTransport; respx only sees httpx."""
+    from litellm.experimental_mcp_client.client import MCPClient
+
+    def make_client(self, *args, **kwargs):
+        return httpx2.AsyncClient(
+            transport=httpx2.MockTransport(respond),
+            headers=kwargs.get("headers"),
+            auth=kwargs.get("auth") or self._resolved_auth or self._aws_auth,
+        )
+
+    with (
+        patch.object(  # test-quality-ok: respx cannot intercept httpx2; inject MockTransport through the client factory
+            MCPClient, "_create_httpx_client_factory", lambda self: functools.partial(make_client, self)
+        )
+    ):
+        yield
+
+
 class _DiscoveryUpstream:
     def __init__(self) -> None:
         self.requests: tuple[tuple[str, str], ...] = ()
@@ -13192,37 +13238,47 @@ class _DiscoveryUpstream:
         self.release = asyncio.Event()
         self.release.set()
 
-    async def respond(self, request: httpx.Request) -> httpx.Response:
-        from mcp.types import JSONRPCMessage, JSONRPCRequest
+    async def respond(self, request: httpx2.Request) -> httpx2.Response:
+        from mcp.types import JSONRPCRequest
 
         if request.method == "DELETE":
-            return httpx.Response(200)
-        payload: Final = JSONRPCMessage.model_validate_json(request.content).root
+            return httpx2.Response(200)
+        payload: Final = _JSONRPC_ADAPTER.validate_json(request.content)
         if not isinstance(payload, JSONRPCRequest):
-            return httpx.Response(202)
+            return httpx2.Response(202)
         self.requests = (*self.requests, (payload.method, request.headers.get("authorization", "")))
         if payload.method == "initialize":
-            return httpx.Response(200, json={
-                "jsonrpc": "2.0", "id": payload.id,
-                "result": {"protocolVersion": "2025-03-26", "serverInfo": {"name": "discovery", "version": "1"},
-                           "capabilities": {} if self.outcome == "unsupported" else {"prompts": {}, "resources": {}}},
-            })
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": "2025-03-26",
+                        "serverInfo": {"name": "discovery", "version": "1"},
+                        "capabilities": {} if self.outcome == "unsupported" else {"prompts": {}, "resources": {}},
+                    },
+                },
+            )
         self.entered.set()
         await self.release.wait()
         if self.outcome == "failure":
-            return httpx.Response(503)
+            return httpx2.Response(503)
         if self.outcome == "cancelled":
             raise asyncio.CancelledError()
         if self.outcome == "rejected":
-            return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload.id,
-                                           "error": {"code": -32601, "message": "Unsupported"}})
+            return httpx2.Response(
+                200, json={"jsonrpc": "2.0", "id": payload.id, "error": {"code": -32601, "message": "Unsupported"}}
+            )
         result: Final = {
             "prompts/list": {"prompts": [{"name": "example", "description": "original"}]},
             "resources/list": {"resources": [{"name": "example", "uri": "test://example", "description": "original"}]},
-            "resources/templates/list": {"resourceTemplates": [{"name": "example", "uriTemplate": "test://{name}", "description": "original"}]},
+            "resources/templates/list": {
+                "resourceTemplates": [{"name": "example", "uriTemplate": "test://{name}", "description": "original"}]
+            },
             "tools/list": {"tools": []},
         }[payload.method]
-        return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
 
     @property
     def initializes(self) -> int:
@@ -13241,11 +13297,13 @@ async def test_discovery_cache_reuses_raw_results_and_expires(kind: str) -> None
     clock: Final = _DiscoveryClock()
     manager: Final = MCPServerManager(discovery_clock=clock)
     upstream: Final = _DiscoveryUpstream()
-    operation: Final = {"prompts": manager.get_prompts_from_server, "resources": manager.get_resources_from_server,
-                       "templates": manager.get_resource_templates_from_server}[kind]
+    operation: Final = {
+        "prompts": manager.get_prompts_from_server,
+        "resources": manager.get_resources_from_server,
+        "templates": manager.get_resource_templates_from_server,
+    }[kind]
     server: Final = _discovery_server()
-    with respx.mock(base_url="https://discovery.example") as router:
-        router.route().mock(side_effect=upstream.respond)
+    with _mcp_upstream(upstream.respond):
         first: Final = await operation(server, None)
         assert len(first) == 1
         assert first[0].name == "discovery-example"
@@ -13271,10 +13329,12 @@ async def test_discovery_cache_empty_results_and_failures(kind: str, outcome: st
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
     upstream.outcome = outcome
-    operation: Final = {"prompts": manager.get_prompts_from_server, "resources": manager.get_resources_from_server,
-                       "templates": manager.get_resource_templates_from_server}[kind]
-    with respx.mock(base_url="https://discovery.example") as router:
-        router.route().mock(side_effect=upstream.respond)
+    operation: Final = {
+        "prompts": manager.get_prompts_from_server,
+        "resources": manager.get_resources_from_server,
+        "templates": manager.get_resource_templates_from_server,
+    }[kind]
+    with _mcp_upstream(upstream.respond):
         assert await operation(_discovery_server(), None) == []
         assert await operation(_discovery_server(), None) == []
         assert upstream.initializes == (2 if outcome == "failure" else 1)
@@ -13293,15 +13353,25 @@ async def test_discovery_cache_isolates_forwarded_credentials_and_shares_static_
     server: Final = _discovery_server()
     first_user: Final = UserAPIKeyAuth(user_id="first")
     second_user: Final = UserAPIKeyAuth(user_id="second")
-    with respx.mock(base_url="https://discovery.example") as router:
-        router.route().mock(side_effect=upstream.respond)
+    with _mcp_upstream(upstream.respond):
         for user in (first_user, second_user):
             assert len(await manager.get_prompts_from_server(server, user)) == 1
         assert upstream.initializes == 1
         for credential in ("first-secret", "second-secret", "first-secret"):
-            assert len(await manager.get_prompts_from_server(server, first_user, extra_headers={"Authorization": credential})) == 1
+            assert (
+                len(
+                    await manager.get_prompts_from_server(
+                        server, first_user, extra_headers={"Authorization": credential}
+                    )
+                )
+                == 1
+            )
         assert upstream.initializes == 3
-        assert {auth for method, auth in upstream.requests if method == "prompts/list"} == {"", "first-secret", "second-secret"}
+        assert {auth for method, auth in upstream.requests if method == "prompts/list"} == {
+            "",
+            "first-secret",
+            "second-secret",
+        }
 
 
 @pytest.mark.asyncio
@@ -13311,9 +13381,10 @@ async def test_discovery_cache_coalesces_and_survives_waiter_cancellation() -> N
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
     upstream.release.clear()
-    with respx.mock(base_url="https://discovery.example") as router:
-        router.route().mock(side_effect=upstream.respond)
-        tasks: Final = tuple(asyncio.create_task(manager.get_prompts_from_server(_discovery_server(), None)) for _ in range(10))
+    with _mcp_upstream(upstream.respond):
+        tasks: Final = tuple(
+            asyncio.create_task(manager.get_prompts_from_server(_discovery_server(), None)) for _ in range(10)
+        )
         await asyncio.wait_for(upstream.entered.wait(), timeout=5)
         tasks[0].cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -13334,8 +13405,7 @@ async def test_discovery_cache_invalidation_during_fetch_does_not_repopulate_old
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
     upstream.release.clear()
-    with respx.mock(base_url="https://discovery.example") as router:
-        router.route().mock(side_effect=upstream.respond)
+    with _mcp_upstream(upstream.respond):
         task: Final = asyncio.create_task(manager.get_prompts_from_server(_discovery_server(), None))
         await asyncio.wait_for(upstream.entered.wait(), timeout=5)
         manager._invalidate_discovery_lists("discovery")
@@ -13355,8 +13425,7 @@ async def test_discovery_cache_can_be_disabled(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("LITELLM_MCP_DISCOVERY_CACHE_TTL", "0")
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
-    with respx.mock(base_url="https://discovery.example") as router:
-        router.route().mock(side_effect=upstream.respond)
+    with _mcp_upstream(upstream.respond):
         assert len(await manager.get_prompts_from_server(_discovery_server(), None)) == 1
         assert len(await manager.get_prompts_from_server(_discovery_server(), None)) == 1
         assert upstream.initializes == 2
@@ -13480,32 +13549,41 @@ async def test_discovery_cache_tracks_resolved_credentials_across_workers() -> N
     source: Final = CredentialSource()
     managers: Final = (MCPServerManager(cred_provider=source), MCPServerManager(cred_provider=source))
     server: Final = MCPServer(
-        server_id="discovery", name="discovery", url="https://discovery.example/mcp", transport=MCPTransport.http,
-        auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code", client_id="discovery-client",
-        authorization_url="https://discovery.example/authorize", token_url="https://discovery.example/token",
+        server_id="discovery",
+        name="discovery",
+        url="https://discovery.example/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        client_id="discovery-client",
+        authorization_url="https://discovery.example/authorize",
+        token_url="https://discovery.example/token",
     )
     user: Final = UserAPIKeyAuth(user_id="same-user", api_key="same-key")
     upstream: Final = _DiscoveryUpstream()
 
-    async def respond(request: httpx.Request) -> httpx.Response:
+    async def respond(request: httpx2.Request) -> httpx2.Response:
         response: Final = await upstream.respond(request)
         if '"prompts/list"' not in request.content.decode():
             return response
-        from mcp.types import JSONRPCMessage, JSONRPCRequest
+        from mcp.types import JSONRPCRequest
 
-        payload: Final = JSONRPCMessage.model_validate_json(request.content).root
+        payload: Final = _JSONRPC_ADAPTER.validate_json(request.content)
         assert isinstance(payload, JSONRPCRequest)
         name: Final = {"Bearer token-a": "account-a", "Bearer token-b": "account-b"}[request.headers["authorization"]]
-        return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {"prompts": [{"name": name}]}})
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {"prompts": [{"name": name}]}})
 
-    with respx.mock(base_url="https://discovery.example") as router:
-        router.route().mock(side_effect=respond)
+    with _mcp_upstream(respond):
         for manager in managers:
-            assert [item.name for item in await manager.get_prompts_from_server(server, user)] == ["discovery-account-a"]
+            assert [item.name for item in await manager.get_prompts_from_server(server, user)] == [
+                "discovery-account-a"
+            ]
         assert upstream.initializes == 2
         source.token = "token-b"
         for manager in managers:
-            assert [item.name for item in await manager.get_prompts_from_server(server, user)] == ["discovery-account-b"]
+            assert [item.name for item in await manager.get_prompts_from_server(server, user)] == [
+                "discovery-account-b"
+            ]
         assert upstream.initializes == 4
         source.token = None
         for manager in managers:
@@ -13532,14 +13610,19 @@ async def test_discovery_resolves_stored_oauth_for_the_requesting_user() -> None
     store: Final = TokenStore()
     manager: Final = MCPServerManager(per_user_oauth_token_store=store)
     server: Final = MCPServer(
-        server_id="discovery", name="discovery", url="https://discovery.example/mcp", transport=MCPTransport.http,
-        auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code", client_id="discovery-client",
-        authorization_url="https://discovery.example/authorize", token_url="https://discovery.example/token",
+        server_id="discovery",
+        name="discovery",
+        url="https://discovery.example/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        client_id="discovery-client",
+        authorization_url="https://discovery.example/authorize",
+        token_url="https://discovery.example/token",
     )
     user: Final = UserAPIKeyAuth(user_id="requesting-user")
     upstream: Final = _DiscoveryUpstream()
-    with respx.mock(base_url="https://discovery.example") as router:
-        router.route().mock(side_effect=upstream.respond)
+    with _mcp_upstream(upstream.respond):
         assert len(await manager.get_prompts_from_server(server, user)) == 1
         assert len(await manager.get_prompts_from_server(server, user)) == 1
     assert store.calls == (("requesting-user", "discovery"), ("requesting-user", "discovery"))
@@ -13641,7 +13724,7 @@ class TestProtectedCredentialPreparation:
             if dispatch == "managed"
             else await _handle_local_mcp_tool(add_server_prefix_to_name("echo", get_server_prefix(server)), {})
         )
-        assert result.isError is True
+        assert result.is_error is True
         assert "requires a usable upstream credential" in result.content[0].text
         assert destination.call_count == 0
 
@@ -14072,5 +14155,5 @@ async def test_request_selected_during_guardrail_runs_concurrently_with_tool(mon
     ), timeout=5)
     assert tool_started.is_set()
     assert guardrail_started.is_set() is selected
-    assert result.isError is False
+    assert result.is_error is False
     assert result.content[0].text == "executed"

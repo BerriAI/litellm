@@ -269,3 +269,17 @@ class TestBuildSyntheticMcpRequest:
                 )
 
         assert request.headers.get("x-user-email") == "alice@corp.example"
+
+
+@pytest.mark.parametrize("field", ["structuredContent", "structured_content"])
+def test_structured_content_redaction_updates_shared_dictionary(field):
+    from litellm.proxy._experimental.mcp_server.utils import (
+        mcp_tool_result_structured_content,
+        set_mcp_tool_result_structured_content,
+    )
+
+    result = {field: {"secret": "sensitive"}, "content": []}
+    logging_reference = result
+    assert set_mcp_tool_result_structured_content(result, {"secret": "[REDACTED]"}) is True
+    assert mcp_tool_result_structured_content(logging_reference) == {"secret": "[REDACTED]"}
+    assert set(result) == {field, "content"}

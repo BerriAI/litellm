@@ -3247,6 +3247,17 @@
               ],
               "title": "Key Alias"
             },
+            "key_exists": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key Exists"
+            },
             "team_id": {
               "anyOf": [
                 {
@@ -5234,6 +5245,12 @@
         }
       }
     }
+  },
+  "claude_code_gateway": {
+    "components": {
+      "schemas": {}
+    },
+    "paths": {}
   },
   "claude_code_marketplace": {
     "components": {
@@ -11149,7 +11166,6 @@
                   "type": "null"
                 }
               ],
-              "default": "v1",
               "description": "API version for Javelin service",
               "title": "Api Version"
             },
@@ -21805,7 +21821,7 @@
     "components": {
       "schemas": {
         "Annotations": {
-          "additionalProperties": true,
+          "description": "Optional annotations the client can use to inform how objects are used or displayed.",
           "properties": {
             "audience": {
               "anyOf": [
@@ -21824,6 +21840,17 @@
                 }
               ],
               "title": "Audience"
+            },
+            "lastModified": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lastmodified"
             },
             "priority": {
               "anyOf": [
@@ -21856,8 +21883,7 @@
           "type": "object"
         },
         "Icon": {
-          "additionalProperties": true,
-          "description": "An icon for display in user interfaces.",
+          "description": "An optionally-sized icon for display in a user interface (2025-11-25+).",
           "properties": {
             "mimeType": {
               "anyOf": [
@@ -21887,6 +21913,21 @@
             "src": {
               "title": "Src",
               "type": "string"
+            },
+            "theme": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "light",
+                    "dark"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Theme"
             }
           },
           "required": [
@@ -21936,7 +21977,6 @@
           "type": "object"
         },
         "MCPCatalogPrompt": {
-          "additionalProperties": true,
           "description": "An MCP server's prompt as the upstream reports it. Subclassed only so the OpenAPI\ncomponent gets a name distinct from the prompt-management ``Prompt`` request model.",
           "properties": {
             "_meta": {
@@ -22824,8 +22864,7 @@
           "type": "object"
         },
         "PromptArgument": {
-          "additionalProperties": true,
-          "description": "An argument for a prompt template.",
+          "description": "Describes an argument that a prompt can accept.",
           "properties": {
             "description": {
               "anyOf": [
@@ -22852,6 +22891,17 @@
                 }
               ],
               "title": "Required"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Title"
             }
           },
           "required": [
@@ -22861,7 +22911,6 @@
           "type": "object"
         },
         "Resource": {
-          "additionalProperties": true,
           "description": "A known resource that the server is capable of reading.",
           "properties": {
             "_meta": {
@@ -22949,8 +22998,6 @@
               "title": "Title"
             },
             "uri": {
-              "format": "uri",
-              "minLength": 1,
               "title": "Uri",
               "type": "string"
             }
@@ -22963,7 +23010,6 @@
           "type": "object"
         },
         "ResourceTemplate": {
-          "additionalProperties": true,
           "description": "A template description for resources available on the server.",
           "properties": {
             "_meta": {
@@ -24201,6 +24247,17 @@
               ],
               "title": "Refresh Token"
             },
+            "requested_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Requested Token Type"
+            },
             "resource": {
               "anyOf": [
                 {
@@ -24222,6 +24279,28 @@
                 }
               ],
               "title": "Scope"
+            },
+            "subject_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token"
+            },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
             }
           },
           "required": [
@@ -24275,6 +24354,17 @@
               ],
               "title": "Refresh Token"
             },
+            "requested_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Requested Token Type"
+            },
             "resource": {
               "anyOf": [
                 {
@@ -24296,6 +24386,28 @@
                 }
               ],
               "title": "Scope"
+            },
+            "subject_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token"
+            },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
             }
           },
           "required": [
@@ -32074,7 +32186,7 @@
     "components": {
       "schemas": {
         "Annotations": {
-          "additionalProperties": true,
+          "description": "Optional annotations the client can use to inform how objects are used or displayed.",
           "properties": {
             "audience": {
               "anyOf": [
@@ -32093,6 +32205,17 @@
                 }
               ],
               "title": "Audience"
+            },
+            "lastModified": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lastmodified"
             },
             "priority": {
               "anyOf": [
@@ -32125,8 +32248,7 @@
           "type": "object"
         },
         "Icon": {
-          "additionalProperties": true,
-          "description": "An icon for display in user interfaces.",
+          "description": "An optionally-sized icon for display in a user interface (2025-11-25+).",
           "properties": {
             "mimeType": {
               "anyOf": [
@@ -32156,6 +32278,21 @@
             "src": {
               "title": "Src",
               "type": "string"
+            },
+            "theme": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "light",
+                    "dark"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Theme"
             }
           },
           "required": [
@@ -32205,7 +32342,6 @@
           "type": "object"
         },
         "MCPCatalogPrompt": {
-          "additionalProperties": true,
           "description": "An MCP server's prompt as the upstream reports it. Subclassed only so the OpenAPI\ncomponent gets a name distinct from the prompt-management ``Prompt`` request model.",
           "properties": {
             "_meta": {
@@ -33093,8 +33229,7 @@
           "type": "object"
         },
         "PromptArgument": {
-          "additionalProperties": true,
-          "description": "An argument for a prompt template.",
+          "description": "Describes an argument that a prompt can accept.",
           "properties": {
             "description": {
               "anyOf": [
@@ -33121,6 +33256,17 @@
                 }
               ],
               "title": "Required"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Title"
             }
           },
           "required": [
@@ -33130,7 +33276,6 @@
           "type": "object"
         },
         "Resource": {
-          "additionalProperties": true,
           "description": "A known resource that the server is capable of reading.",
           "properties": {
             "_meta": {
@@ -33218,8 +33363,6 @@
               "title": "Title"
             },
             "uri": {
-              "format": "uri",
-              "minLength": 1,
               "title": "Uri",
               "type": "string"
             }
@@ -33232,7 +33375,6 @@
           "type": "object"
         },
         "ResourceTemplate": {
-          "additionalProperties": true,
           "description": "A template description for resources available on the server.",
           "properties": {
             "_meta": {

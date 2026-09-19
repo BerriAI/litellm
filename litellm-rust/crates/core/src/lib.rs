@@ -4,6 +4,7 @@ pub mod constants;
 pub mod error;
 pub mod messages;
 pub mod ocr;
+mod outbound;
 pub mod responses;
 
 pub use error::Error;
