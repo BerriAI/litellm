@@ -1,5 +1,6 @@
 import asyncio
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from itertools import chain, repeat
 
 import pytest
 
@@ -12,29 +13,36 @@ WORKSPACE_URL = "https://dbc-a1b2c3d4-e5f6.cloud.databricks.com"
 SERVER_ENDPOINT = "https://1234567890123456.zerobus.us-west-2.cloud.databricks.com"
 
 
+Row = Mapping[str, object]
+
+
 class FakeIngestClient:
-    """Records the rows each flush would have written."""
+    """Records the rows each flush would have written; outcomes are served in order and the last one repeats."""
 
-    def __init__(self, outcomes: Sequence[ZerobusIngestFailure | None] = (None,)) -> None:
-        self.outcomes = list(outcomes)  # mutable-ok: outcomes are consumed by popping
-        self.batches: list[tuple[Mapping[str, object], ...]] = []
-        self.on_insert: Callable[[], None] | None = None
+    def __init__(
+        self,
+        outcomes: Sequence[ZerobusIngestFailure | None] = (None,),
+        on_insert: Callable[[], None] | None = None,
+    ) -> None:
+        self.outcomes: Iterator[ZerobusIngestFailure | None] = chain(outcomes[:-1], repeat(outcomes[-1]))
+        self.on_insert = on_insert
+        self.batches: tuple[tuple[Row, ...], ...] = ()
 
-    async def insert(self, rows: Sequence[Mapping[str, object]]) -> ZerobusIngestFailure | None:
+    async def insert(self, rows: Sequence[Row]) -> ZerobusIngestFailure | None:
         if self.on_insert is not None:
             self.on_insert()
-        self.batches.append(tuple(rows))
-        return self.outcomes.pop(0) if len(self.outcomes) > 1 else self.outcomes[0]
+        self.batches = (*self.batches, tuple(rows))
+        return next(self.outcomes)
 
-    def ids(self) -> list[object]:
-        return [row["id"] for batch in self.batches for row in batch]
-
-
-def _logger(client: FakeIngestClient, **params) -> ZerobusLogger:
-    return ZerobusLogger(params=ZerobusInitParams(**params), client=client)
+    def ids(self) -> tuple[object, ...]:
+        return tuple(row["id"] for batch in self.batches for row in batch)
 
 
-def _event(request_id: str, **payload) -> dict:
+def _logger(client: FakeIngestClient, **params: object) -> ZerobusLogger:
+    return ZerobusLogger(params=ZerobusInitParams.model_validate(params), client=client)
+
+
+def _event(request_id: str, **payload: object) -> dict[str, object]:
     return {
         "standard_logging_object": {
             "id": request_id,
@@ -64,7 +72,7 @@ async def test_a_full_batch_is_written_as_one_insert_of_table_rows():
 
     await _settle(logger)
     assert len(client.batches) == 1
-    assert client.ids() == ["a", "b", "c"]
+    assert client.ids() == ("a", "b", "c")
     assert client.batches[0][0]["model"] == "gpt-4o"
     assert logger.log_queue == []
 
@@ -76,7 +84,7 @@ async def test_rows_are_held_until_the_batch_is_full():
 
     await logger.async_log_success_event(_event("a"), None, None, None)
 
-    assert client.batches == []
+    assert client.batches == ()
     assert len(logger.log_queue) == 1
 
 
@@ -88,7 +96,7 @@ async def test_failed_requests_are_written_too():
     await logger.async_log_failure_event(_event("failed", status="failure", error_str="boom"), None, None, None)
 
     await _settle(logger)
-    assert client.ids() == ["failed"]
+    assert client.ids() == ("failed",)
     assert client.batches[0][0]["status"] == "failure"
     assert client.batches[0][0]["error_str"] == "boom"
 
@@ -100,7 +108,7 @@ async def test_an_event_without_a_standard_payload_is_skipped():
 
     await logger.async_log_success_event({"kwargs": "but no payload"}, None, None, None)
 
-    assert client.batches == []
+    assert client.batches == ()
     assert logger.log_queue == []
 
 
@@ -147,14 +155,44 @@ async def test_a_row_that_arrives_mid_flush_is_kept_for_the_next_one():
     await logger.async_log_success_event(_event("first"), None, None, None)
 
     await _settle(logger)
-    assert client.ids() == ["first"]
+    assert client.ids() == ("first",)
     assert [row["id"] for row in logger.log_queue] == ["late"]
+
+
+@pytest.mark.asyncio
+async def test_the_queue_cap_holds_while_an_insert_is_in_flight():
+    """A slow insert must not let the queue grow past max_queue_size, nor disturb the in-flight head."""
+    insert_started = asyncio.Event()
+    finish_insert = asyncio.Event()
+
+    class SlowClient:
+        batches: tuple[tuple[Row, ...], ...] = ()
+
+        async def insert(self, rows: Sequence[Row]) -> None:
+            insert_started.set()
+            await finish_insert.wait()
+            self.batches = (*self.batches, tuple(rows))
+
+    client = SlowClient()
+    logger = ZerobusLogger(params=ZerobusInitParams(batch_size=2), client=client)
+    logger.max_queue_size = 3
+
+    for request_id in ("a", "b"):
+        await logger.async_log_success_event(_event(request_id), None, None, None)
+    await insert_started.wait()
+    for request_id in ("c", "d", "e"):
+        await logger.async_log_success_event(_event(request_id), None, None, None)
+    finish_insert.set()
+    await _settle(logger)
+
+    assert [[row["id"] for row in batch] for batch in client.batches] == [["a", "b"]]
+    assert [row["id"] for row in logger.log_queue] == ["c"]
 
 
 @pytest.mark.asyncio
 async def test_a_client_error_does_not_break_the_request_path():
     class ExplodingClient:
-        async def insert(self, rows):
+        async def insert(self, rows: Sequence[Row]) -> None:
             raise RuntimeError("bug")
 
     logger = ZerobusLogger(params=ZerobusInitParams(batch_size=1), client=ExplodingClient())
@@ -326,3 +364,29 @@ def test_the_client_is_kept_while_the_connection_is_unchanged_and_rebuilt_when_i
     assert unchanged is first
     assert rebuilt is not first
     assert rebuilt.connection.table_name == "main.litellm.traces_v2"
+
+
+def test_callbacks_zerobus_builds_one_logger_and_reuses_it(monkeypatch):
+    """`litellm_settings.callbacks: ["zerobus"]` goes through litellm_logging, which must hand back one instance."""
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    monkeypatch.setenv("ZEROBUS_WORKSPACE_URL", WORKSPACE_URL)
+    monkeypatch.setenv("ZEROBUS_SERVER_ENDPOINT", SERVER_ENDPOINT)
+    monkeypatch.setenv("ZEROBUS_CLIENT_ID", "sp-id")
+    monkeypatch.setenv("ZEROBUS_CLIENT_SECRET", "sp-secret")
+    monkeypatch.setenv("ZEROBUS_TABLE_NAME", "main.litellm.traces")
+    monkeypatch.setattr(litellm, "zerobus_params", None)
+    monkeypatch.setattr(logging_module, "_in_memory_loggers", [])
+
+    assert logging_module.get_custom_logger_compatible_class("zerobus") is None
+
+    first = logging_module._init_custom_logger_compatible_class(
+        logging_integration="zerobus", internal_usage_cache=None, llm_router=None, custom_logger_init_args={}
+    )
+    second = logging_module._init_custom_logger_compatible_class(
+        logging_integration="zerobus", internal_usage_cache=None, llm_router=None, custom_logger_init_args={}
+    )
+
+    assert isinstance(first, ZerobusLogger)
+    assert second is first
+    assert logging_module.get_custom_logger_compatible_class("zerobus") is first

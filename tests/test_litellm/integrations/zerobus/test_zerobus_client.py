@@ -1,6 +1,8 @@
 import base64
 import json
-from collections.abc import Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from itertools import chain, repeat
 
 import httpx
 import pytest
@@ -27,33 +29,53 @@ def _accepted() -> httpx.Response:
     return httpx.Response(200, text="{}")
 
 
-class FakeHTTPClient:
-    """
-    Stands in for AsyncHTTPHandler, including its habit of raising on error statuses.
+@dataclass(frozen=True, slots=True)
+class TokenCall:
+    url: str
+    data: Mapping[str, str]
+    headers: Mapping[str, str]
 
-    Results are consumed in order, and the last one repeats.
-    """
+
+@dataclass(frozen=True, slots=True)
+class InsertCall:
+    url: str
+    content: bytes
+    headers: Mapping[str, str]
+
+
+def _results(results: Sequence[httpx.Response | Exception]) -> Iterator[httpx.Response | Exception]:
+    """Results are served in order, and the last one repeats."""
+    return chain(results[:-1], repeat(results[-1]))
+
+
+class FakeHTTPClient:
+    """Stands in for AsyncHTTPHandler, including its habit of raising on error statuses."""
 
     def __init__(
         self,
-        token: Sequence[httpx.Response | Exception] | None = None,
-        insert: Sequence[httpx.Response | Exception] | None = None,
+        token: Sequence[httpx.Response | Exception] = (),
+        insert: Sequence[httpx.Response | Exception] = (),
     ) -> None:
-        self.token_results = list(token) if token else [_token()]  # mutable-ok: results are consumed by popping
-        self.insert_results = list(insert) if insert else [_accepted()]  # mutable-ok: results are consumed by popping
-        self.token_calls: list[dict] = []
-        self.insert_calls: list[dict] = []
+        self.token_results = _results(token or (_token(),))
+        self.insert_results = _results(insert or (_accepted(),))
+        self.token_calls: tuple[TokenCall, ...] = ()
+        self.insert_calls: tuple[InsertCall, ...] = ()
 
-    async def post(self, url, data=None, content=None, headers=None, **_):
+    async def post(
+        self,
+        url: str,
+        data: Mapping[str, str] | None = None,
+        content: bytes | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> httpx.Response:
         if url.endswith("/oidc/v1/token"):
-            self.token_calls.append({"url": url, "data": data, "headers": headers or {}})
-            return _next_result(self.token_results, url)
-        self.insert_calls.append({"url": url, "content": content, "headers": headers or {}})
-        return _next_result(self.insert_results, url)
+            self.token_calls = (*self.token_calls, TokenCall(url, data or {}, headers or {}))
+            return _raise_like_the_handler(next(self.token_results), url)
+        self.insert_calls = (*self.insert_calls, InsertCall(url, content or b"", headers or {}))
+        return _raise_like_the_handler(next(self.insert_results), url)
 
 
-def _next_result(results: list, url: str) -> httpx.Response:
-    result = results.pop(0) if len(results) > 1 else results[0]
+def _raise_like_the_handler(result: httpx.Response | Exception, url: str) -> httpx.Response:
     if isinstance(result, Exception):
         raise result
     if result.status_code >= 300:
@@ -85,12 +107,14 @@ async def test_rows_are_posted_as_one_json_list_to_the_table_insert_endpoint():
 
     assert outcome is None
     (call,) = http_client.insert_calls
-    assert call["url"] == (
+    # Insert endpoint per the Zerobus Ingest docs, read 2026-09-19:
+    # https://docs.databricks.com/aws/en/ingestion/lakeflow-connect/zerobus-ingest
+    assert call.url == (
         "https://1234567890123456.zerobus.us-west-2.cloud.databricks.com/zerobus/v1/tables/main.litellm.traces/insert"
     )
-    assert json.loads(call["content"]) == [{"id": "a", "model": "gpt-4o"}, {"id": "b", "model": "gpt-4o"}]
-    assert call["headers"]["Content-Type"] == "application/json"
-    assert call["headers"]["Authorization"] == "Bearer tok-1"
+    assert json.loads(call.content) == [{"id": "a", "model": "gpt-4o"}, {"id": "b", "model": "gpt-4o"}]
+    assert call.headers["Content-Type"] == "application/json"
+    assert call.headers["Authorization"] == "Bearer tok-1"
 
 
 @pytest.mark.asyncio
@@ -101,11 +125,13 @@ async def test_the_token_is_minted_for_the_zerobus_resource_with_the_table_privi
     await _client(http_client).insert(ROWS)
 
     (call,) = http_client.token_calls
-    assert call["url"] == "https://dbc-a1b2c3d4-e5f6.cloud.databricks.com/oidc/v1/token"
-    assert call["data"]["grant_type"] == "client_credentials"
-    assert call["data"]["scope"] == "all-apis"
-    assert call["data"]["resource"] == "api://databricks/workspaces/1234567890123456/zerobusDirectWriteApi"
-    details = json.loads(call["data"]["authorization_details"])
+    # Token form per the Zerobus Ingest docs (REST API authentication), read 2026-09-19:
+    # https://docs.databricks.com/aws/en/ingestion/lakeflow-connect/zerobus-ingest
+    assert call.url == "https://dbc-a1b2c3d4-e5f6.cloud.databricks.com/oidc/v1/token"
+    assert call.data["grant_type"] == "client_credentials"
+    assert call.data["scope"] == "all-apis"
+    assert call.data["resource"] == "api://databricks/workspaces/1234567890123456/zerobusDirectWriteApi"
+    details = json.loads(call.data["authorization_details"])
     assert [(d["object_type"], d["object_full_path"], d["privileges"]) for d in details] == [
         ("CATALOG", "main", ["USE CATALOG"]),
         ("SCHEMA", "main.litellm", ["USE SCHEMA"]),
@@ -120,7 +146,7 @@ async def test_the_service_principal_authenticates_with_http_basic():
 
     await _client(http_client).insert(ROWS)
 
-    scheme, credentials = http_client.token_calls[0]["headers"]["Authorization"].split(" ")
+    scheme, credentials = http_client.token_calls[0].headers["Authorization"].split(" ")
     assert scheme == "Basic"
     assert base64.b64decode(credentials).decode() == "sp-client-id:sp-client-secret"
 
@@ -138,7 +164,7 @@ async def test_the_token_is_reused_across_inserts_until_it_nears_expiry():
     await client.insert(ROWS)
 
     assert len(http_client.token_calls) == 2
-    assert [call["headers"]["Authorization"] for call in http_client.insert_calls] == [
+    assert [call.headers["Authorization"] for call in http_client.insert_calls] == [
         "Bearer tok-1",
         "Bearer tok-1",
         "Bearer tok-2",
@@ -158,7 +184,7 @@ async def test_a_401_discards_the_token_so_the_next_insert_mints_a_fresh_one():
 
     assert first == ZerobusIngestFailure(detail="insert returned 401, token discarded", retryable=True)
     assert second is None
-    assert http_client.insert_calls[1]["headers"]["Authorization"] == "Bearer tok-2"
+    assert http_client.insert_calls[1].headers["Authorization"] == "Bearer tok-2"
 
 
 @pytest.mark.asyncio
@@ -199,7 +225,7 @@ async def test_bad_credentials_fail_the_insert_without_posting_rows():
     outcome = await _client(http_client).insert(ROWS)
 
     assert outcome == ZerobusIngestFailure(detail="token request returned 401: invalid_client", retryable=False)
-    assert http_client.insert_calls == []
+    assert http_client.insert_calls == ()
 
 
 @pytest.mark.asyncio

@@ -1,9 +1,4 @@
-"""
-Databricks Zerobus logging integration.
-
-Buffers one ``TRACE_TABLE_COLUMNS`` row per request and writes each flush to a Unity
-Catalog Delta table through the Zerobus Ingest REST API.
-"""
+"""Databricks Zerobus logging integration."""
 
 import asyncio
 from collections.abc import Mapping
@@ -90,8 +85,6 @@ def connection_for(params: ZerobusInitParams) -> ZerobusConnection:
 
 
 class ZerobusLogger(CustomBatchLogger):
-    """Batching callback that writes LiteLLM request logs to a Databricks Delta table."""
-
     preserve_events_added_during_flush = True
 
     def __init__(
@@ -182,6 +175,10 @@ class ZerobusLogger(CustomBatchLogger):
                 verbose_logger.debug("zerobus: event carried no standard_logging_object, skipping")
                 return
 
+            if self._flushing and len(self.log_queue) >= self.max_queue_size:
+                verbose_logger.warning("zerobus: queue at %s rows during a flush, dropped a row", self.max_queue_size)
+                return
+
             self.log_queue.append(trace_row(payload))
             self._drop_overflow()
             if len(self.log_queue) >= self.batch_size:
@@ -202,6 +199,7 @@ class ZerobusLogger(CustomBatchLogger):
         return payload
 
     def _drop_overflow(self) -> None:
+        """Trim the oldest rows, except mid flush when the in-flight batch is the head of the queue."""
         if self._flushing:
             return
         overflow: Final = len(self.log_queue) - self.max_queue_size
@@ -220,13 +218,7 @@ class ZerobusLogger(CustomBatchLogger):
             self._flushing = False
 
     async def async_send_batch(self) -> None:
-        """
-        Write everything queued as one insert.
-
-        A retryable failure propagates so ``CustomBatchLogger`` keeps the rows for the next
-        flush. A failure Zerobus would repeat, a schema mismatch for one, drops the batch,
-        since holding it would block every row queued behind it.
-        """
+        """A retryable failure propagates so the rows are kept; a permanent one drops them so the queue moves on."""
         rows: Final = tuple(self.log_queue)
         if not rows:
             return
