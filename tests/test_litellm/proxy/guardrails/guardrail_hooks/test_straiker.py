@@ -2211,3 +2211,75 @@ async def test_v3_derived_session_reads_the_text_of_a_turn_that_opens_with_an_im
     assert dent == dent_again
     assert dent != windshield
     assert text_first == dent
+
+
+@pytest.mark.asyncio
+async def test_v3_a_token_prompt_is_relayed_as_sent_when_no_tokenizer_can_decode_it(monkeypatch):
+    """The text-davinci-003 tokenizer is fetched on first use. Where that fetch fails, the
+    token ids are relayed untouched rather than screening a rendering the model never saw."""
+    import tiktoken
+
+    def unavailable(model):
+        raise RuntimeError(f"no tokenizer for {model}")
+
+    monkeypatch.setattr(tiktoken, "encoding_for_model", unavailable)
+    g = _make_guardrail(api_key=V3_KEY)
+    g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]},
+        request_data=_completion_call([464, 3290]),
+        input_type="request",
+        logging_obj=_logging_obj(),
+    )
+    payload = _posted_payload(g)
+    assert payload["prompt"] == [464, 3290]
+    assert "messages" not in payload
+
+
+@pytest.mark.asyncio
+async def test_v3_derived_session_seeds_on_the_preamble_alone_when_the_first_turn_has_no_text():
+    async def session_for(messages):
+        g = _make_guardrail(api_key=V3_KEY)
+        g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+        data = _v3_request_data(messages=messages, metadata={"user_api_key_end_user_id": "alice.chen@example.com"})
+        data["proxy_server_request"] = {"headers": {}}
+        await g.apply_guardrail(
+            inputs={"texts": ["x"]}, request_data=data, input_type="request", logging_obj=_logging_obj()
+        )
+        return _posted_payload(g)["session_id"]
+
+    system = {"role": "system", "content": "You are the claims assistant."}
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+    no_content = await session_for([system, {"role": "user", "content": None}])
+    image_only = await session_for([system, {"role": "user", "content": [image]}])
+    with_text = await session_for(
+        [system, {"role": "user", "content": [image, {"type": "text", "text": "Assess the dent"}]}]
+    )
+    assert no_content == image_only and no_content.startswith("litellm-")
+    assert with_text != no_content
+
+
+@pytest.mark.asyncio
+async def test_v3_responses_api_conversations_seed_on_instructions_and_the_first_input_turn():
+    async def session_for(instructions, first_turn):
+        g = _make_guardrail(api_key=V3_KEY)
+        g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+        data = _v3_request_data(
+            instructions=instructions,
+            input=[{"role": "user", "content": first_turn}],
+            metadata={"user_api_key_end_user_id": "alice.chen@example.com"},
+        )
+        data.pop("messages")
+        data["proxy_server_request"] = {"headers": {}}
+        await g.apply_guardrail(
+            inputs={"texts": ["x"]}, request_data=data, input_type="request", logging_obj=_logging_obj()
+        )
+        return _posted_payload(g)["session_id"]
+
+    refund = await session_for("You are the refunds assistant.", "Refund order 12345")
+    refund_again = await session_for("You are the refunds assistant.", "Refund order 12345")
+    cancel = await session_for("You are the refunds assistant.", "Cancel my subscription")
+    billing = await session_for("You are the billing assistant.", "Refund order 12345")
+    assert refund == refund_again and refund.startswith("litellm-")
+    assert refund != cancel
+    assert refund != billing
