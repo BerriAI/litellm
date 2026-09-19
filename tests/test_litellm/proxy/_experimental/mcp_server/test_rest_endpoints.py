@@ -2482,6 +2482,8 @@ class TestListPromptsAndResourcesRestAPI:
         assert [str(resource.uri) for resource in result.resources] == ["demo://readme"]
         assert result.resources[0].mime_type == "text/markdown"
         assert [template.uri_template for template in result.resource_templates] == ["demo://users/{user_id}/profile"]
+        assert result.model_dump(by_alias=True)["resources"][0]["mimeType"] == "text/markdown"
+        assert result.model_dump(by_alias=True)["resource_templates"][0]["uriTemplate"] == "demo://users/{user_id}/profile"
         for upstream in (get_resources, get_templates):
             upstream.assert_awaited_once()
             assert upstream.await_args.args[0] is server
