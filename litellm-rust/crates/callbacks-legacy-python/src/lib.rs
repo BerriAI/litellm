@@ -13,9 +13,9 @@ mod adapter;
 mod call;
 mod callbacks;
 mod deferred;
-mod legacy_python;
 mod logger;
 mod preparation;
+mod python;
 #[cfg(test)]
 #[path = "../tests/support.rs"]
 mod test_support;
