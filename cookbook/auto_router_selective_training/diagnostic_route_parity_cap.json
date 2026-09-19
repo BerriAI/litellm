@@ -1,0 +1,8 @@
+{
+  "classifier": "cap",
+  "profiles": 12,
+  "classifier_decisions_verified": 500,
+  "direct_sol_decisions_verified": 1000,
+  "matches_frozen_routes": true,
+  "inputs": "Frozen forecasts and route plans only; no grades or outcome-based selection"
+}

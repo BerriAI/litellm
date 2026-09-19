@@ -1,0 +1,1039 @@
+model_list:
+- model_name: router-judge
+  litellm_params:
+    model: openai/openai/gpt-5.6-luna
+    api_base: os.environ/ROI_GATEWAY_BASE_URL
+    api_key: os.environ/ROI_GATEWAY_API_KEY
+    reasoning_effort: low
+- model_name: gpt-5.6-luna
+  litellm_params:
+    model: openai/openai/gpt-5.6-luna
+    api_base: os.environ/ROI_GATEWAY_BASE_URL
+    api_key: os.environ/ROI_GATEWAY_API_KEY
+    reasoning_effort: high
+- model_name: gpt-5.6-sol
+  litellm_params:
+    model: openai/openai/gpt-5.6-sol
+    api_base: os.environ/ROI_GATEWAY_BASE_URL
+    api_key: os.environ/ROI_GATEWAY_API_KEY
+    reasoning_effort: high
+- model_name: selective-v3-diagnostic-empirical-upfront-benefit-per-dollar
+  litellm_params:
+    model: openai/openai/gpt-5.6-sol
+    api_base: os.environ/ROI_GATEWAY_BASE_URL
+    api_key: os.environ/ROI_GATEWAY_API_KEY
+    reasoning_effort: high
+- model_name: selective-v3-diagnostic-empirical-upfront-paired
+  litellm_params:
+    model: openai/openai/gpt-5.6-sol
+    api_base: os.environ/ROI_GATEWAY_BASE_URL
+    api_key: os.environ/ROI_GATEWAY_API_KEY
+    reasoning_effort: high
+- model_name: selective-v3-diagnostic-empirical-upfront-per-model
+  litellm_params:
+    model: openai/openai/gpt-5.6-sol
+    api_base: os.environ/ROI_GATEWAY_BASE_URL
+    api_key: os.environ/ROI_GATEWAY_API_KEY
+    reasoning_effort: high
+- model_name: selective-v3-diagnostic-empirical-upfront-raw
+  litellm_params:
+    model: openai/openai/gpt-5.6-sol
+    api_base: os.environ/ROI_GATEWAY_BASE_URL
+    api_key: os.environ/ROI_GATEWAY_API_KEY
+    reasoning_effort: high
+- model_name: selective-v3-diagnostic-empirical-upfront-rescue
+  litellm_params:
+    model: openai/openai/gpt-5.6-sol
+    api_base: os.environ/ROI_GATEWAY_BASE_URL
+    api_key: os.environ/ROI_GATEWAY_API_KEY
+    reasoning_effort: high
+- model_name: selective-v3-diagnostic-empirical-upfront-scalar-calibration
+  litellm_params:
+    model: openai/openai/gpt-5.6-sol
+    api_base: os.environ/ROI_GATEWAY_BASE_URL
+    api_key: os.environ/ROI_GATEWAY_API_KEY
+    reasoning_effort: high
+- model_name: selective-v3-diagnostic-original-upfront-benefit-per-dollar
+  litellm_params:
+    model: auto_router/complexity_router
+    complexity_router_config:
+      classifier_type: capability
+      classifier_llm_config: &id001
+        model: router-judge
+        timeout_ms: 30000
+        reasoning_effort: low
+      tiers: &id002
+        SIMPLE:
+        - gpt-5.6-luna
+        REASONING:
+        - gpt-5.6-sol
+      adaptive: false
+      route_housekeeping_to_cheapest_tier: false
+      escalation_keywords: &id003 []
+      plan_mode_min_tier: null
+      enable_context_window_escalation: false
+      return_raw_model_name: true
+      max_tokens_from_tier_model: false
+      capability_classifier_config:
+        efficient_tier: SIMPLE
+        capable_tier: REASONING
+        base_threshold: 0.5
+        threshold_step: 0.1
+        max_output_tokens: 2048
+        response_format: json_schema
+        forecast_context: '
+
+
+          Configured efficient model: GPT-5.6 Luna. Execution conditions: One fresh attempt at high reasoning effort,
+          maximum 8192 completion tokens per response. Hidden tests, reference solutions and previous model attempts
+          are unavailable. mini-swe-agent 2.0.0 with a Linux shell, local inspection, edits and tests; 150 model
+          calls and USD 5 inference limit. The solver container has no external network. Each shell command has
+          a 90-second time limit. Python testbed environment is activated for every shell command. The repository
+          exposes only the supplied base snapshot, with no future Git objects.'
+        selective_policy:
+          version: selective-v3-cap_original_upfront_benefit_per_dollar_C0.1
+          feature_schema: cap-v1
+          target: benefit_per_dollar
+          threshold: 1.0
+          heads:
+          - features:
+            - boundary:supported
+            - boundary:uncertain
+            - boundary:unmatched
+            - boundary:unsupported
+            - concept:algorithm
+            - concept:async
+            - concept:compatibility
+            - concept:compile
+            - concept:concurrent
+            - concept:constraint
+            - concept:database
+            - concept:dynamic programming
+            - concept:edge case
+            - concept:floating
+            - concept:graph
+            - concept:memory
+            - concept:migration
+            - concept:numerical
+            - concept:optimiz
+            - concept:parser
+            - concept:race
+            - concept:recursive
+            - concept:regex
+            - concept:security
+            - concept:serialization
+            - concept:sorting
+            - concept:type
+            - concept:unicode
+            - crux_log_length
+            - invalid_forecast
+            - p_e
+            - rule:LIM-2
+            - rule:SUP-1
+            - rule:SUP-2
+            - rule:SUP-3
+            - rule:SUP-4
+            - rule:UNC-1
+            - rule:none
+            coefficients:
+            - - -0.1767681652460999
+              - 0.02877354484173244
+              - 0.10659008079971836
+              - -0.030527149725526545
+              - 0.23414103385993515
+              - 0.0
+              - 0.018202414880330316
+              - -0.011019623695053476
+              - 0.0
+              - -0.10118337109431084
+              - 0.038208044956039834
+              - -0.04702132790665884
+              - -0.09030635954997401
+              - 0.0
+              - 0.030979552047298672
+              - 0.13913920054596274
+              - -0.0739366406934031
+              - -0.010962548281833717
+              - -0.049027919502138355
+              - 0.0
+              - 0.0
+              - -0.011807203826183605
+              - -0.010989846320939623
+              - 0.0
+              - -0.014716772741182054
+              - -0.01627393097370553
+              - -0.08471299488344784
+              - 0.0
+              - -0.020159123258340357
+              - 0.07009883602505414
+              - -0.14545566549271416
+              - -0.030527149725526545
+              - -0.1688485882654967
+              - 0.06435797278172084
+              - 0.0037026295389549877
+              - -0.07598017930127929
+              - 0.02877354484173244
+              - 0.10659008079971836
+            - - -0.027859978315814386
+              - -0.02459252681431919
+              - -0.022252963656293916
+              - 0.08561788959396356
+              - 0.055801804593904235
+              - 0.0
+              - -0.0397973008214815
+              - -0.005245954082223471
+              - 0.0
+              - 0.15897551887962966
+              - -0.029604352913396314
+              - 0.06354072915609019
+              - 0.04524604312527011
+              - 0.0
+              - 0.15735806553956913
+              - 0.13415067572349437
+              - -0.035859349772830985
+              - -0.005225670480855976
+              - 0.06739257892109402
+              - 0.0
+              - 0.0
+              - -0.005625043614130146
+              - -0.005236669772959836
+              - 0.0
+              - -0.0059280585858562645
+              - -0.009763560803867468
+              - -0.036809874479332816
+              - 0.0
+              - 0.019637434884951885
+              - -0.009626474295478209
+              - -0.06386414538912849
+              - 0.08561788959396356
+              - -0.11884605406925425
+              - -0.09092993901294942
+              - -0.020560810620947525
+              - 0.20247682538733705
+              - -0.02459252681431919
+              - -0.022252963656293916
+            - - 0.029982044655855862
+              - -0.011860907420656082
+              - -0.009315542991465158
+              - -0.0046479470679353044
+              - 0.03520357879481666
+              - 0.0
+              - -0.01765057864400261
+              - -0.0027879982876127863
+              - 0.0
+              - -0.05133724744019795
+              - -0.013770483161105195
+              - -0.012549010080374215
+              - -0.02421425000062912
+              - 0.0
+              - -0.013902372945343982
+              - -0.024376126876396922
+              - -0.017089588471840975
+              - -0.0027824853573186446
+              - -0.012854696785699378
+              - 0.0
+              - 0.0
+              - 0.09646050597210147
+              - -0.002785425187711253
+              - 0.0
+              - -0.003147346816240169
+              - -0.003944836484546493
+              - 0.07755253265123771
+              - 0.0
+              - 0.0050269052176629084
+              - -0.004262467698167546
+              - 0.029493057689561966
+              - -0.0046479470679353044
+              - -0.06998807294464644
+              - -0.04831230012734578
+              - 0.17307835276407077
+              - -0.02479593503622261
+              - -0.011860907420656082
+              - -0.009315542991465158
+            - - 0.1746460989060585
+              - 0.00767988939324284
+              - -0.07502157415195929
+              - -0.05044279280050169
+              - -0.32514641724865606
+              - 0.0
+              - 0.03924546458515378
+              - 0.01905357606488973
+              - 0.0
+              - -0.006454900345120861
+              - 0.0051667911184616845
+              - -0.003970391169057157
+              - 0.06927456642533297
+              - 0.0
+              - -0.17443524464152377
+              - -0.24891374939306019
+              - 0.1268855789380751
+              - 0.01897070412000834
+              - -0.005509962633256305
+              - 0.0
+              - 0.0
+              - -0.07902825853178774
+              - 0.0190119412816107
+              - 0.0
+              - 0.023792178143278473
+              - 0.029982328262119478
+              - 0.04397033671154287
+              - 0.0
+              - -0.004505216844274199
+              - -0.05620989403140839
+              - 0.17982675319227978
+              - -0.05044279280050169
+              - 0.3576827152793971
+              - 0.07488426635857434
+              - -0.15622017168207833
+              - -0.10170071104983508
+              - 0.00767988939324284
+              - -0.07502157415195929
+            intercept:
+            - 0.5379449023753986
+            - -0.506960743221055
+            - -1.331241070427816
+            - 1.3002569112734732
+            classes:
+            - 0
+            - 1
+            - 2
+            - 3
+          costs:
+          - features:
+            - boundary:supported
+            - boundary:uncertain
+            - boundary:unmatched
+            - boundary:unsupported
+            - concept:algorithm
+            - concept:async
+            - concept:compatibility
+            - concept:compile
+            - concept:concurrent
+            - concept:constraint
+            - concept:database
+            - concept:dynamic programming
+            - concept:edge case
+            - concept:floating
+            - concept:graph
+            - concept:memory
+            - concept:migration
+            - concept:numerical
+            - concept:optimiz
+            - concept:parser
+            - concept:race
+            - concept:recursive
+            - concept:regex
+            - concept:security
+            - concept:serialization
+            - concept:sorting
+            - concept:type
+            - concept:unicode
+            - crux_log_length
+            - invalid_forecast
+            - p_e
+            - rule:LIM-2
+            - rule:SUP-1
+            - rule:SUP-2
+            - rule:SUP-3
+            - rule:SUP-4
+            - rule:UNC-1
+            - rule:none
+            coefficients:
+            - - -0.04965261785550316
+              - -0.2459047741024026
+              - 0.08759247424302537
+              - 0.11738007004040747
+              - 0.4831784350260193
+              - 0.0
+              - 0.6882635638795763
+              - 0.1922929896706031
+              - 0.0
+              - 0.39571411108069043
+              - 0.45833811700721977
+              - 0.08527807370267583
+              - -0.22497261430605556
+              - 0.0
+              - 0.2518529521074101
+              - 0.43976439842262716
+              - 0.3721607370469995
+              - -0.08409917385061212
+              - 0.053302634659918795
+              - 0.0
+              - 0.0
+              - 0.0024298841026034156
+              - 0.009632204996623947
+              - 0.0
+              - 0.12321058040896347
+              - -0.10581081818781815
+              - 0.33104540767752844
+              - 0.0
+              - 0.2534288186214307
+              - 0.09058484767447048
+              - -1.2187972936803473
+              - 0.11738007004040749
+              - -1.3614944492513184
+              - 1.1426470161756375
+              - -0.18166043381750696
+              - 0.35085524903769494
+              - -0.2459047741024026
+              - 0.08759247424302556
+            intercept:
+            - -5.601743520208185
+            classes: []
+          - features:
+            - boundary:supported
+            - boundary:uncertain
+            - boundary:unmatched
+            - boundary:unsupported
+            - concept:algorithm
+            - concept:async
+            - concept:compatibility
+            - concept:compile
+            - concept:concurrent
+            - concept:constraint
+            - concept:database
+            - concept:dynamic programming
+            - concept:edge case
+            - concept:floating
+            - concept:graph
+            - concept:memory
+            - concept:migration
+            - concept:numerical
+            - concept:optimiz
+            - concept:parser
+            - concept:race
+            - concept:recursive
+            - concept:regex
+            - concept:security
+            - concept:serialization
+            - concept:sorting
+            - concept:type
+            - concept:unicode
+            - crux_log_length
+            - invalid_forecast
+            - p_e
+            - rule:LIM-2
+            - rule:SUP-1
+            - rule:SUP-2
+            - rule:SUP-3
+            - rule:SUP-4
+            - rule:UNC-1
+            - rule:none
+            coefficients:
+            - - -0.14370206409085445
+              - -0.2582599785717936
+              - 0.1348385340008133
+              - 0.15752873379698826
+              - 0.21058610759965804
+              - 0.0
+              - 0.7368885271730833
+              - 0.12623648118715391
+              - 0.0
+              - 0.28441685807965794
+              - 0.5614180249075192
+              - 0.129628140502579
+              - -0.19408984711940563
+              - 0.0
+              - 0.2767326211915383
+              - 0.4285308549492766
+              - 0.48429508794220627
+              - -0.136654099758107
+              - 0.12740630805885006
+              - 0.0
+              - 0.0
+              - 0.034058785961740744
+              - 0.061119888902963056
+              - 0.0
+              - 0.15346063076970676
+              - -0.12997397666366456
+              - 0.4601607644150722
+              - 0.0
+              - 0.2580371419288464
+              - 0.10959477486484456
+              - -1.1911393240203096
+              - 0.15752873379698834
+              - -1.3986112920945515
+              - 1.2416531371574995
+              - -0.24565608753531648
+              - 0.2589121783815236
+              - -0.2582599785717936
+              - 0.13483853400081328
+            intercept:
+            - -2.9940831786860134
+            classes: []
+- model_name: selective-v3-diagnostic-original-upfront-paired
+  litellm_params:
+    model: auto_router/complexity_router
+    complexity_router_config:
+      classifier_type: capability
+      classifier_llm_config: *id001
+      tiers: *id002
+      adaptive: false
+      route_housekeeping_to_cheapest_tier: false
+      escalation_keywords: *id003
+      plan_mode_min_tier: null
+      enable_context_window_escalation: false
+      return_raw_model_name: true
+      max_tokens_from_tier_model: false
+      capability_classifier_config:
+        efficient_tier: SIMPLE
+        capable_tier: REASONING
+        base_threshold: 0.5
+        threshold_step: 0.1
+        max_output_tokens: 2048
+        response_format: json_schema
+        forecast_context: '
+
+
+          Configured efficient model: GPT-5.6 Luna. Execution conditions: One fresh attempt at high reasoning effort,
+          maximum 8192 completion tokens per response. Hidden tests, reference solutions and previous model attempts
+          are unavailable. mini-swe-agent 2.0.0 with a Linux shell, local inspection, edits and tests; 150 model
+          calls and USD 5 inference limit. The solver container has no external network. Each shell command has
+          a 90-second time limit. Python testbed environment is activated for every shell command. The repository
+          exposes only the supplied base snapshot, with no future Git objects.'
+        selective_policy:
+          version: selective-v3-cap_original_upfront_paired_C1.0
+          feature_schema: cap-v1
+          target: paired
+          threshold: -0.02
+          heads:
+          - features:
+            - boundary:supported
+            - boundary:uncertain
+            - boundary:unmatched
+            - boundary:unsupported
+            - concept:algorithm
+            - concept:async
+            - concept:compatibility
+            - concept:compile
+            - concept:concurrent
+            - concept:constraint
+            - concept:database
+            - concept:dynamic programming
+            - concept:edge case
+            - concept:floating
+            - concept:graph
+            - concept:memory
+            - concept:migration
+            - concept:numerical
+            - concept:optimiz
+            - concept:parser
+            - concept:race
+            - concept:recursive
+            - concept:regex
+            - concept:security
+            - concept:serialization
+            - concept:sorting
+            - concept:type
+            - concept:unicode
+            - crux_log_length
+            - invalid_forecast
+            - p_e
+            - rule:LIM-2
+            - rule:SUP-1
+            - rule:SUP-2
+            - rule:SUP-3
+            - rule:SUP-4
+            - rule:UNC-1
+            - rule:none
+            coefficients:
+            - - -0.3955674048824473
+              - 0.0616281348775755
+              - 0.2981607247898595
+              - -0.3355617657254001
+              - 0.5329792190313212
+              - 0.0
+              - 0.1175223744456289
+              - -0.07697043950520532
+              - 0.0
+              - -0.37115293766248836
+              - 0.33698797708316874
+              - -0.24633915606257273
+              - -0.467759043531735
+              - 0.0
+              - 0.09698358745946443
+              - 0.4813273768431897
+              - -0.3951423431638647
+              - -0.07591477977319307
+              - -0.3143820902115363
+              - 0.0
+              - 0.0
+              - -0.13842914824387625
+              - -0.07642283017256135
+              - 0.0
+              - -0.081877014411567
+              - -0.11564956780984491
+              - -0.5585745560014025
+              - 0.0
+              - -0.08933217601214605
+              - 0.3585706998962963
+              - -0.4246782984367582
+              - -0.3355617657254001
+              - -0.27152265831115285
+              - 0.3922773998859621
+              - -0.22567145439567407
+              - -0.29065069206158306
+              - 0.0616281348775755
+              - 0.2981607247898595
+            - - -0.13406663251504033
+              - -0.1443440221931093
+              - -0.1258741407993354
+              - 0.5002198712599136
+              - 0.16097430742223806
+              - 0.0
+              - -0.24038897298009856
+              - -0.030447071488912042
+              - 0.0
+              - 0.7040991778208353
+              - -0.17837837656131295
+              - 0.32917498225482
+              - 0.41743263792112006
+              - 0.0
+              - 0.9141046970634862
+              - 0.7019603450556134
+              - -0.1589702533194864
+              - -0.030025600239865703
+              - 0.4722751056091468
+              - 0.0
+              - 0.0
+              - -0.05697942569874292
+              - -0.03027277555942192
+              - 0.0
+              - -0.01575839742708064
+              - -0.07688907782396906
+              - -0.20063791042066542
+              - 0.0
+              - 0.12301837601163207
+              - -0.07646942267958441
+              - -0.3175929098116259
+              - 0.5002198712599136
+              - -0.057981246454363415
+              - -0.3759068264919495
+              - -0.1404401714638399
+              - 0.440261611895113
+              - -0.1443440221931093
+              - -0.1258741407993354
+            - - 0.1525744921121628
+              - -0.07636170969833779
+              - -0.032625446475763126
+              - -0.026391810182838087
+              - 0.047533291910184565
+              - 0.0
+              - -0.11710105059369146
+              - -0.01717687235287784
+              - 0.0
+              - -0.4264045297748088
+              - -0.09666231680726918
+              - -0.09352086780936683
+              - -0.19776407005940255
+              - 0.0
+              - -0.13263932473611537
+              - -0.21488174648364666
+              - -0.09117385151921338
+              - -0.01713777009881932
+              - -0.1386521979353504
+              - 0.0
+              - 0.0
+              - 0.9134282946154525
+              - -0.017166951633483616
+              - 0.0
+              - -0.011233182252150649
+              - -0.03379466520556474
+              - 0.6205977232820381
+              - 0.0
+              - 0.028394990188727515
+              - -0.024347578524412907
+              - 0.2447720171036558
+              - -0.026391810182838087
+              - -0.2322134541640913
+              - -0.2900969920960529
+              - 0.6939901048291044
+              - -0.019105166456797742
+              - -0.07636170969833779
+              - -0.032625446475763126
+            - - 0.3770595452853251
+              - 0.15907759701387192
+              - -0.13966113751476128
+              - -0.1382662953516753
+              - -0.7414868183637439
+              - 0.0
+              - 0.23996764912816113
+              - 0.12459438334699517
+              - 0.0
+              - 0.09345828961646206
+              - -0.06194728371458664
+              - 0.010685041617119502
+              - 0.24809047567001763
+              - 0.0
+              - -0.8784489597868348
+              - -0.9684059754151564
+              - 0.6452864480025642
+              - 0.12307815011187809
+              - -0.01924081746226003
+              - 0.0
+              - 0.0
+              - -0.7180197206728332
+              - 0.12386255736546689
+              - 0.0
+              - 0.10886859409079828
+              - 0.22633331083937874
+              - 0.13861474314002975
+              - 0.0
+              - -0.0620811901882129
+              - -0.2577536986922989
+              - 0.4974991911447293
+              - -0.1382662953516753
+              - 0.5617173589296081
+              - 0.2737264187020401
+              - -0.3278784789695902
+              - -0.13050575337673204
+              - 0.15907759701387192
+              - -0.13966113751476128
+            intercept:
+            - 1.1991751536819724
+            - -0.45938280235109064
+            - -1.6509909086580719
+            - 0.9111985573271895
+            classes:
+            - 0
+            - 1
+            - 2
+            - 3
+          costs: []
+- model_name: selective-v3-diagnostic-original-upfront-per-model
+  litellm_params:
+    model: auto_router/complexity_router
+    complexity_router_config:
+      classifier_type: capability
+      classifier_llm_config: *id001
+      tiers: *id002
+      adaptive: false
+      route_housekeeping_to_cheapest_tier: false
+      escalation_keywords: *id003
+      plan_mode_min_tier: null
+      enable_context_window_escalation: false
+      return_raw_model_name: true
+      max_tokens_from_tier_model: false
+      capability_classifier_config:
+        efficient_tier: SIMPLE
+        capable_tier: REASONING
+        base_threshold: 0.5
+        threshold_step: 0.1
+        max_output_tokens: 2048
+        response_format: json_schema
+        forecast_context: '
+
+
+          Configured efficient model: GPT-5.6 Luna. Execution conditions: One fresh attempt at high reasoning effort,
+          maximum 8192 completion tokens per response. Hidden tests, reference solutions and previous model attempts
+          are unavailable. mini-swe-agent 2.0.0 with a Linux shell, local inspection, edits and tests; 150 model
+          calls and USD 5 inference limit. The solver container has no external network. Each shell command has
+          a 90-second time limit. Python testbed environment is activated for every shell command. The repository
+          exposes only the supplied base snapshot, with no future Git objects.'
+        selective_policy:
+          version: selective-v3-cap_original_upfront_per_model_C1.0
+          feature_schema: cap-v1
+          target: per_model
+          threshold: -0.05
+          heads:
+          - features:
+            - boundary:supported
+            - boundary:uncertain
+            - boundary:unmatched
+            - boundary:unsupported
+            - concept:algorithm
+            - concept:async
+            - concept:compatibility
+            - concept:compile
+            - concept:concurrent
+            - concept:constraint
+            - concept:database
+            - concept:dynamic programming
+            - concept:edge case
+            - concept:floating
+            - concept:graph
+            - concept:memory
+            - concept:migration
+            - concept:numerical
+            - concept:optimiz
+            - concept:parser
+            - concept:race
+            - concept:recursive
+            - concept:regex
+            - concept:security
+            - concept:serialization
+            - concept:sorting
+            - concept:type
+            - concept:unicode
+            - crux_log_length
+            - invalid_forecast
+            - p_e
+            - rule:LIM-2
+            - rule:SUP-1
+            - rule:SUP-2
+            - rule:SUP-3
+            - rule:SUP-4
+            - rule:UNC-1
+            - rule:none
+            coefficients:
+            - - 0.6678867275628401
+              - 0.0882760658488817
+              - -0.24804977923435628
+              - -0.16853968339417372
+              - -0.9982869526710179
+              - 0.0
+              - 0.15176890820836017
+              - 0.12421686021604339
+              - 0.0
+              - -0.1877122041537045
+              - -0.17345261777860604
+              - -0.06808495335811504
+              - 0.1711184125074402
+              - 0.0
+              - -1.11345214579619
+              - -1.3119849065703186
+              - 0.6837984438723784
+              - 0.12246015668436544
+              - -0.1462952818624178
+              - 0.0
+              - 0.0
+              - 0.1233273326502714
+              - 0.12335799501261945
+              - 0.0
+              - 0.131553605907813
+              - 0.2157180522805198
+              - 0.7256110127559643
+              - 0.0
+              - -0.016024372650851156
+              - -0.3466058361637053
+              - 0.872792448231372
+              - -0.16853968339417372
+              - 0.6841900959452311
+              - 0.006846621236467015
+              - 0.05538294507598277
+              - -0.07853293469484168
+              - 0.0882760658488817
+              - -0.24804977923435628
+            intercept:
+            - -0.32494291111318785
+            classes:
+            - 0
+            - 1
+          - features:
+            - boundary:supported
+            - boundary:uncertain
+            - boundary:unmatched
+            - boundary:unsupported
+            - concept:algorithm
+            - concept:async
+            - concept:compatibility
+            - concept:compile
+            - concept:concurrent
+            - concept:constraint
+            - concept:database
+            - concept:dynamic programming
+            - concept:edge case
+            - concept:floating
+            - concept:graph
+            - concept:memory
+            - concept:migration
+            - concept:numerical
+            - concept:optimiz
+            - concept:parser
+            - concept:race
+            - concept:recursive
+            - concept:regex
+            - concept:security
+            - concept:serialization
+            - concept:sorting
+            - concept:type
+            - concept:unicode
+            - crux_log_length
+            - invalid_forecast
+            - p_e
+            - rule:LIM-2
+            - rule:SUP-1
+            - rule:SUP-2
+            - rule:SUP-3
+            - rule:SUP-4
+            - rule:UNC-1
+            - rule:none
+            coefficients:
+            - - 0.5139043843342973
+              - 0.0045408535512407875
+              - -0.3891391333226511
+              - 0.3398566052304649
+              - -0.885207190836448
+              - 0.0
+              - 0.027076050784400698
+              - 0.10433704646313852
+              - 0.0
+              - 0.6792337590704156
+              - -0.2174409718559377
+              - 0.3116611199136675
+              - 0.691009824584417
+              - 0.0
+              - -0.1005249410998523
+              - -0.5385039785742652
+              - 0.653401150351699
+              - 0.10365107994536306
+              - 0.431096528776983
+              - 0.0
+              - 0.0
+              - -0.7776863116282781
+              - 0.10393049619530179
+              - 0.0
+              - 0.12491597569456268
+              - 0.17167977113608834
+              - 0.11399449819432547
+              - 0.0
+              - 0.10149861763490069
+              - -0.45124656304411337
+              - 0.43575942897171066
+              - 0.3398566052304649
+              - 0.7865912935264086
+              - -0.026134642361221858
+              - -0.3867970030705796
+              - 0.14024473623969028
+              - 0.0045408535512407875
+              - -0.3891391333226511
+            intercept:
+            - 0.2659362940353339
+            classes:
+            - 0
+            - 1
+          costs: []
+- model_name: selective-v3-diagnostic-original-upfront-raw
+  litellm_params:
+    model: openai/openai/gpt-5.6-sol
+    api_base: os.environ/ROI_GATEWAY_BASE_URL
+    api_key: os.environ/ROI_GATEWAY_API_KEY
+    reasoning_effort: high
+- model_name: selective-v3-diagnostic-original-upfront-rescue
+  litellm_params:
+    model: auto_router/complexity_router
+    complexity_router_config:
+      classifier_type: capability
+      classifier_llm_config: *id001
+      tiers: *id002
+      adaptive: false
+      route_housekeeping_to_cheapest_tier: false
+      escalation_keywords: *id003
+      plan_mode_min_tier: null
+      enable_context_window_escalation: false
+      return_raw_model_name: true
+      max_tokens_from_tier_model: false
+      capability_classifier_config:
+        efficient_tier: SIMPLE
+        capable_tier: REASONING
+        base_threshold: 0.5
+        threshold_step: 0.1
+        max_output_tokens: 2048
+        response_format: json_schema
+        forecast_context: '
+
+
+          Configured efficient model: GPT-5.6 Luna. Execution conditions: One fresh attempt at high reasoning effort,
+          maximum 8192 completion tokens per response. Hidden tests, reference solutions and previous model attempts
+          are unavailable. mini-swe-agent 2.0.0 with a Linux shell, local inspection, edits and tests; 150 model
+          calls and USD 5 inference limit. The solver container has no external network. Each shell command has
+          a 90-second time limit. Python testbed environment is activated for every shell command. The repository
+          exposes only the supplied base snapshot, with no future Git objects.'
+        selective_policy:
+          version: selective-v3-cap_original_upfront_rescue_C1.0
+          feature_schema: cap-v1
+          target: rescue
+          threshold: 0.03
+          heads:
+          - features:
+            - boundary:supported
+            - boundary:uncertain
+            - boundary:unmatched
+            - boundary:unsupported
+            - concept:algorithm
+            - concept:async
+            - concept:compatibility
+            - concept:compile
+            - concept:concurrent
+            - concept:constraint
+            - concept:database
+            - concept:dynamic programming
+            - concept:edge case
+            - concept:floating
+            - concept:graph
+            - concept:memory
+            - concept:migration
+            - concept:numerical
+            - concept:optimiz
+            - concept:parser
+            - concept:race
+            - concept:recursive
+            - concept:regex
+            - concept:security
+            - concept:serialization
+            - concept:sorting
+            - concept:type
+            - concept:unicode
+            - crux_log_length
+            - invalid_forecast
+            - p_e
+            - rule:LIM-2
+            - rule:SUP-1
+            - rule:SUP-2
+            - rule:SUP-3
+            - rule:SUP-4
+            - rule:UNC-1
+            - rule:none
+            coefficients:
+            - - -0.15234682646138994
+              - -0.15243110903894233
+              - -0.22244280870997196
+              - 0.6065487973765946
+              - 0.29959963982695587
+              - 0.0
+              - -0.2820130274098335
+              - -0.03820535828566732
+              - 0.0
+              - 0.7309484083567842
+              - -0.19926164477445732
+              - 0.33870194651909186
+              - 0.3523594664419272
+              - 0.0
+              - 1.1245911866158211
+              - 0.8422927281869426
+              - -0.24322175470605514
+              - -0.03789287932209387
+              - 0.48454139987531236
+              - 0.0
+              - 0.0
+              - -0.038036209120708236
+              - -0.03808026047394308
+              - 0.0
+              - -0.028749991673756338
+              - -0.09072153145616992
+              - -0.22463290263176258
+              - 0.0
+              - 0.12801541266597727
+              - -0.07989213480742066
+              - -0.3865853614025563
+              - 0.6065487973765946
+              - -0.356008062651823
+              - -0.471522460392306
+              - 0.05852780454594062
+              - 0.6166558920367993
+              - -0.15243110903894233
+              - -0.22244280870997196
+            intercept:
+            - -2.3743258127308398
+            classes:
+            - 0
+            - 1
+          costs: []
+- model_name: selective-v3-diagnostic-original-upfront-scalar-calibration
+  litellm_params:
+    model: openai/openai/gpt-5.6-sol
+    api_base: os.environ/ROI_GATEWAY_BASE_URL
+    api_key: os.environ/ROI_GATEWAY_API_KEY
+    reasoning_effort: high
+general_settings:
+  master_key: os.environ/ROI_LOCAL_MASTER_KEY

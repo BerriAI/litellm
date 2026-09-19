@@ -11,6 +11,8 @@ from typing import Final, Literal, NamedTuple, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, TypeAdapter, model_validator
 
+from .selective_policy import SelectiveDecision
+
 CapabilityBoundary: TypeAlias = Literal["supported", "uncertain", "unsupported", "unmatched"]
 CapabilityRule: TypeAlias = Literal[
     "SUP-1",
@@ -147,8 +149,11 @@ class CapabilityClassifierForecast(NamedTuple):
     threshold: float
     p_solve: float
     calibration_version: str | None
+    selective_decision: SelectiveDecision | None = None
 
     def meets_routing_threshold(self) -> bool:
+        if self.selective_decision is not None:
+            return self.selective_decision.use_efficient
         return self.p_solve >= self.threshold or abs(self.threshold - self.p_solve) <= float_info.epsilon
 
 
@@ -191,12 +196,46 @@ def capability_classifier_response_format(
     )
 
 
-def capability_classifier_system_prompt(mode: Literal["json_schema", "json_object"]) -> str:
+def capability_classifier_system_prompt(
+    mode: Literal["json_schema", "json_object"],
+    *,
+    card: str | None = None,
+    empirical: bool = False,
+    supplement: str | None = None,
+    forecast_context: str | None = None,
+) -> str:
+    prefix: Final = CAPABILITY_CLASSIFIER_SYSTEM_PROMPT.split("# Efficient-agent capability card")[0]
+    evidence_prefix: Final = (
+        prefix.replace(
+            "The capability card is qualitative evidence, not a measured prior.",
+            "Only explicitly supplied training counts are measured evidence; preserve their scope and uncertainty.",
+        )
+        if empirical
+        else prefix
+    )
+    prompt: Final = (
+        evidence_prefix
+        + "# Efficient-agent capability card\n\n"
+        + card
+        + "\n\n# Output"
+        + CAPABILITY_CLASSIFIER_SYSTEM_PROMPT.split("# Output")[1]
+        if card is not None
+        else CAPABILITY_CLASSIFIER_SYSTEM_PROMPT
+    )
+    supplied_prompt: Final = (
+        prompt.replace(
+            "The capability card is qualitative evidence, not a measured prior.",
+            "The base capability card is qualitative evidence; the empirical supplement contains measured training evidence.",
+        )
+        + supplement
+        if supplement is not None
+        else prompt
+    ) + (forecast_context or "")
     if mode == "json_schema":
-        return CAPABILITY_CLASSIFIER_SYSTEM_PROMPT
+        return supplied_prompt
     wrapper: Final = _RESPONSE_FORMAT_ADAPTER.validate_python(capability_classifier_response_format()["json_schema"])
     return (
-        CAPABILITY_CLASSIFIER_SYSTEM_PROMPT
+        supplied_prompt
         + "\n\nReturn exactly one JSON object matching this JSON Schema:\n"
         + json.dumps(wrapper["schema"], indent=2, sort_keys=True)
     )
