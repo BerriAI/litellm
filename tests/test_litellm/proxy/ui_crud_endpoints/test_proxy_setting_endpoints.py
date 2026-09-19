@@ -3263,6 +3263,38 @@ class TestWebSearchInterceptionSettingsEndpoints:
         assert resp.status_code == 200, resp.text
         assert resp.json()["values"]["enabled"] is True
 
+    def test_get_flags_a_pod_that_has_not_applied_the_stored_setting(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import litellm
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        monkeypatch.setattr(litellm, "callbacks", [])
+        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {"enabled": True}
+
+        resp = client.get("/get/websearch_interception_settings")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["values"]["enabled"] is True
+        assert resp.json()["active_on_this_pod"] is False
+
+    def test_get_reports_the_pod_as_active_once_the_callback_is_registered(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import litellm
+        from litellm.integrations.websearch_interception.handler import (
+            WebSearchInterceptionLogger,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(search_tool_name="running")])
+        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {"enabled": True}
+
+        resp = client.get("/get/websearch_interception_settings")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["active_on_this_pod"] is True
+
     def test_get_reports_no_database_instead_of_empty_settings(self, mock_proxy_config, mock_auth, monkeypatch):
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
 
