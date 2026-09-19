@@ -31,16 +31,21 @@ class ProviderDefaults:
     enable_azure_ad_token_refresh: bool | None
 
 
+@dataclass(frozen=True, slots=True)
+class SecretManager:
+    readable: bool
+
+
 def warn(message: str) -> None:
     from litellm._logging import verbose_logger
 
     verbose_logger.warning("%s", message)
 
 
-def secret(name: str) -> str | None:
-    from litellm.secret_managers.main import get_secret_str
+def secret_manager() -> SecretManager:
+    from litellm.secret_managers.main import _should_read_secret_from_secret_manager
 
-    return get_secret_str(name)
+    return SecretManager(readable=_should_read_secret_from_secret_manager())
 
 
 def provider_defaults() -> ProviderDefaults:

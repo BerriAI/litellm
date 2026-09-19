@@ -19,5 +19,8 @@
     "vertex_project",
     "vertex_location",
     "enable_azure_ad_token_refresh"
+  ],
+  "secret_manager": [
+    "readable"
   ]
 }
