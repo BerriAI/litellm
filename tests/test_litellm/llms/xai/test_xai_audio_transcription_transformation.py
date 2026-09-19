@@ -92,7 +92,7 @@ def test_validate_environment_sets_bearer_header():
 def test_validate_environment_requires_key(monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     monkeypatch.setattr(litellm, "xai_key", None)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="xAI API key is required"):
         CONFIG.validate_environment(
             headers={},
             model="grok-voice-transcribe-2.0",
