@@ -221,3 +221,48 @@ def test_warm_credential_removal_rejects_without_upstream_traffic(gateway: Gatew
         control_names = tool_names(gateway, control_key, control_id)
         control = call_tool(gateway, control_key, control_id, control_names["multiply"], {"a": 3, "b": 5})
         assert control.status_code == 200 and control.json()["content"][0]["text"] == "15", control.text
+
+
+@pytest.mark.covers("other.mcp.permissions.same_url_servers_enforce_discovery_and_execution")
+def test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution(gateway: Gateway) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        allowed: Final = register_mcp(scenario, peer, "allowed" + uuid.uuid4().hex)
+        forbidden: Final = register_mcp(scenario, peer, "forbidden" + uuid.uuid4().hex)
+        caller: Final = scenario.key(object_permission={"mcp_servers": [allowed], "mcp_tool_search_enabled": True})
+        control: Final = scenario.key(object_permission={"mcp_servers": [forbidden], "mcp_tool_search_enabled": True})
+        allowed_names: Final = tool_names(gateway, caller, allowed)
+        forbidden_names: Final = tool_names(gateway, control, forbidden)
+        catalog: Final = gateway.request("GET", "/mcp-rest/tools/list", key=caller)
+        assert catalog.status_code == 200, catalog.text
+        assert {tool["mcp_info"]["server_id"] for tool in catalog.json()["tools"]} == {allowed}
+        assert {tool["name"] for tool in catalog.json()["tools"]} == set(allowed_names.values())
+        for virtual in (False, True):
+            for server_id, names, key, expected in (
+                (allowed, allowed_names, caller, 200),
+                (forbidden, forbidden_names, caller, 403),
+                (forbidden, forbidden_names, control, 200),
+            ):
+                peer.drain()
+                response: Final = gateway.request(
+                    "POST",
+                    "/mcp-rest/tools/call",
+                    {
+                        "server_id": server_id,
+                        "name": "mcp_tool_call" if virtual else names["add"],
+                        "arguments": (
+                            {"tool_name": names["add"], "arguments": {"a": 3, "b": 5}} if virtual else {"a": 3, "b": 5}
+                        ),
+                    },
+                    key=key,
+                )
+                assert response.status_code == expected, response.text
+                calls: Final = tuple(item for item in peer.drain() if item["body"].get("method") == "tools/call")
+                if expected == 403:
+                    assert "access" in response.text.lower(), response.text
+                    assert calls == (), "a denied server must not execute through either route"
+                else:
+                    assert response.json()["isError"] is False, response.text
+                    assert response.json()["content"][0]["text"] == "8", response.text
+                    assert len(calls) == 1
+                    assert calls[0]["body"]["params"]["name"] == "add"
+                    assert calls[0]["body"]["params"]["arguments"] == {"a": 3, "b": 5}
