@@ -43,8 +43,15 @@ class CostMapEntry(BaseModel):
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
     output_cost_per_reasoning_token: float | None = None
     input_cost_per_audio_token: float | None = None
+    input_cost_per_second: float | None = None
+    output_cost_per_second: float | None = None
+    input_cost_per_character: float | None = None
+    output_cost_per_character: float | None = None
+    input_cost_per_image: float | None = None
+    output_cost_per_image: float | None = None
     output_cost_per_audio_token: float | None = None
     input_cost_per_image_token: float | None = None
+    output_cost_per_image_token: float | None = None
     input_cost_per_video_token: float | None = None
     input_cost_per_token_above_200k_tokens: float | None = None
     output_cost_per_token_above_200k_tokens: float | None = None
@@ -64,6 +71,22 @@ class Deployment(BaseModel):
 
     model: str | None = None
     base_model: str | None = None
+
+
+class WavUpload(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["wav"]
+    seconds: float
+
+
+class PngUpload(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["png"]
+
+
+Upload: TypeAlias = Annotated[WavUpload | PngUpload, Field(discriminator="kind")]
 
 
 class JsonResponse(BaseModel):
@@ -95,8 +118,15 @@ class EventStreamResponse(BaseModel):
     events: tuple[EventStreamEvent, ...]
 
 
+class BinaryResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    content_type: Literal["audio/mpeg"]
+    length: int
+
+
 StoredResponse: TypeAlias = Annotated[
-    JsonResponse | SseResponse | EventStreamResponse,
+    JsonResponse | SseResponse | EventStreamResponse | BinaryResponse,
     Field(discriminator="content_type"),
 ]
 
@@ -157,8 +187,13 @@ class CostTrackingTestCase(BaseModel):
         "/v1/rerank",
         "/v1/completions",
         "/v1/moderations",
+        "/v1/audio/transcriptions",
+        "/v1/audio/speech",
+        "/v1/images/generations",
+        "/v1/images/edits",
     ] = "/v1/chat/completions"
     deployment: Deployment | None = None
+    upload: Upload | None = None
     request: dict[str, JsonValue]
     response: StoredResponse
     expected: Expected
@@ -172,7 +207,8 @@ class CostTrackingTestCase(BaseModel):
         provider: Final = self.rates.litellm_provider
         prefix: Final = (
             "openai"
-            if provider == "openai" and self.rates.mode == "chat"
+            if provider == "openai"
+            and self.rates.mode in {"chat", "audio_transcription", "audio_speech", "image_generation"}
             else "openai/responses"
             if provider == "openai"
             else _PROVIDER_PREFIXES.get(provider)
@@ -206,8 +242,11 @@ class _CasesFile(BaseModel):
 _PROVIDER_PREFIXES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "anthropic": "anthropic",
+        "bedrock": "bedrock",
         "bedrock_converse": "bedrock/converse",
+        "deepgram": "deepgram",
         "vertex_ai-language-models": "vertex_ai",
+        "vertex_ai-image-models": "vertex_ai",
         "gemini": "",
         "together_ai": "",
         "fireworks_ai": "",
@@ -217,6 +256,13 @@ _PROVIDER_PREFIXES: Final[Mapping[str, str]] = MappingProxyType(
 _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
     {
         "anthropic": MappingProxyType({}),
+        "bedrock": MappingProxyType(
+            {
+                "aws_access_key_id": "AKIASCRIPTEDPROVIDER",
+                "aws_secret_access_key": "scripted-secret",
+                "aws_region_name": "us-east-1",
+            }
+        ),
         "bedrock_converse": MappingProxyType(
             {
                 "aws_access_key_id": "AKIASCRIPTEDPROVIDER",
@@ -224,7 +270,11 @@ _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
                 "aws_region_name": "us-east-1",
             }
         ),
+        "deepgram": MappingProxyType({}),
         "vertex_ai-language-models": MappingProxyType(
+            {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
+        ),
+        "vertex_ai-image-models": MappingProxyType(
             {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
         ),
         "gemini": MappingProxyType({}),
