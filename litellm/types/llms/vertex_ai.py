@@ -2,6 +2,8 @@ from enum import Enum
 from typing import Any, Final, Literal, Protocol
 
 from typing_extensions import (
+    NotRequired,
+    ReadOnly,
     Required,
     TypedDict,
 )
@@ -567,9 +569,27 @@ class MultimodalPredictions(TypedDict):
     predictions: list[MultimodalPrediction]
 
 
+class VertexAICachedContentUsageMetadata(TypedDict):
+    totalTokenCount: ReadOnly[int]
+
+
 class VertexAICachedContentResponseObject(TypedDict):
-    name: str
-    model: str
+    name: ReadOnly[str]
+    model: ReadOnly[str]
+    usageMetadata: NotRequired[ReadOnly[VertexAICachedContentUsageMetadata]]
+    createTime: NotRequired[ReadOnly[str]]
+    expireTime: NotRequired[ReadOnly[str]]
+
+
+class VertexAICachedContentCreation(TypedDict):
+    name: ReadOnly[str]
+    model: ReadOnly[str]
+    total_token_count: ReadOnly[int]
+    create_time: ReadOnly[str | None]
+    expire_time: ReadOnly[str | None]
+
+
+VERTEX_AI_CACHED_CONTENT_KEY: Final = "vertex_ai_cached_content"
 
 
 class TaskTypeEnum(Enum):
