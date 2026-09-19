@@ -9443,7 +9443,7 @@ class TestScopedSessionAdmission:
         assert forged.mcp_session_resource_server_id is None
 
 
-def _jwt_grants(claims, *mappings):
+def _jwt_grants(claims, *mappings, scope_jwt_field="scope"):
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth, ScopeMapping
     from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
@@ -9453,7 +9453,9 @@ def _jwt_grants(claims, *mappings):
         prisma_client=None,
         user_api_key_cache=DualCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(
-            enforce_scope_based_access=True, scope_mappings=[ScopeMapping(**m) for m in mappings]
+            enforce_scope_based_access=True,
+            scope_jwt_field=scope_jwt_field,
+            scope_mappings=[ScopeMapping(**m) for m in mappings],
         )
         if mappings
         else LiteLLM_JWTAuth(),
@@ -9465,6 +9467,14 @@ def _jwt_auth(scope, *mappings, **fields):
     claims = {"sub": "oidc-sub", "scope": scope}
     return UserAPIKeyAuth(
         user_id="oidc-sub", jwt_claims=claims, jwt_scope_mcp_grants=_jwt_grants(claims, *mappings), **fields
+    )
+
+
+def _custom_claim_jwt_auth(claims, *mappings, scope_jwt_field="realm_access.roles"):
+    return UserAPIKeyAuth(
+        user_id="oidc-sub",
+        jwt_claims=claims,
+        jwt_scope_mcp_grants=_jwt_grants(claims, *mappings, scope_jwt_field=scope_jwt_field),
     )
 
 
@@ -9553,6 +9563,36 @@ class TestJwtScopeMcpGrants:
         access = await MCPRequestHandler.get_mcp_server_access(_jwt_auth(scope, _ALPHA_SCOPE, _BETA_ADD_SCOPE))
         assert access.server_ids == ()
 
+    async def test_custom_claim_path_grants_server_and_tool_to_caller_with_no_key_or_team_row(self):
+        claims = {
+            "sub": "oidc-sub",
+            "scope": "openid",
+            "realm_access": {"roles": ["offline_access", "litellm.mcp.alpha", "litellm.mcp.beta_add"]},
+        }
+        auth = _custom_claim_jwt_auth(claims, _ALPHA_SCOPE, _BETA_ADD_SCOPE)
+        servers = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        alpha_tools = await MCPRequestHandler.get_allowed_tools_for_server("math_alpha", auth)
+        beta_tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
+        can_multiply = await MCPRequestHandler.is_tool_allowed_for_server("multiply", "math_beta", auth)
+        assert (auth.api_key, auth.team_id) == (None, None)
+        assert sorted(servers) == ["math_alpha", "math_beta"]
+        assert (alpha_tools, beta_tools, can_multiply) == (None, ["add"], False)
+
+    @pytest.mark.parametrize(
+        "claims",
+        [
+            {"sub": "oidc-sub", "scope": "litellm.mcp.alpha"},
+            {"sub": "oidc-sub", "realm_access": {"roles": ["offline_access"]}},
+            {"sub": "oidc-sub", "realm_access": {}},
+            {"sub": "oidc-sub", "realm_access": {"roles": {"litellm.mcp.alpha": True}}},
+            {"sub": "oidc-sub", "realm_access": ["litellm.mcp.alpha"]},
+        ],
+        ids=["literal scope claim ignored", "unmatched", "path missing", "malformed leaf", "non-object parent"],
+    )
+    async def test_custom_claim_path_fails_closed(self, claims):
+        access = await MCPRequestHandler.get_mcp_server_access(_custom_claim_jwt_auth(claims, _ALPHA_SCOPE))
+        assert access.server_ids == ()
+
     async def test_missing_scope_claim_grants_nothing(self):
         claims = {"sub": "oidc-sub"}
         auth = UserAPIKeyAuth(
@@ -9620,6 +9660,116 @@ class TestJwtScopeMcpGrants:
         )
         tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
         assert sorted(tools) == ["add", "multiply"], "scope tool grants union with the caller's own key grants"
+
+    async def test_key_whole_server_grant_is_not_narrowed_by_scope_tool_allowlist(self):
+        auth = _jwt_auth(
+            "litellm.mcp.beta_add",
+            _BETA_ADD_SCOPE,
+            api_key="sk-h",
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-key", mcp_servers=["math_beta"]),
+        )
+        tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
+        can_multiply = await MCPRequestHandler.is_tool_allowed_for_server("multiply", "math_beta", auth)
+        assert tools is None, "grants are additive: a key's whole-server grant keeps every tool"
+        assert can_multiply is True
+
+    async def test_scope_whole_server_grant_is_not_narrowed_by_key_tool_allowlist(self):
+        auth = _jwt_auth(
+            "litellm.mcp.beta",
+            _BETA_ALL_SCOPE,
+            api_key="sk-h",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-key",
+                mcp_servers=["math_beta"],
+                mcp_tool_permissions={"math_beta": ["multiply"]},
+            ),
+        )
+        tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
+        can_add = await MCPRequestHandler.is_tool_allowed_for_server("add", "math_beta", auth)
+        assert tools is None, "grants are additive: a whole-server scope keeps every tool"
+        assert can_add is True
+
+    async def test_key_whole_server_grant_through_access_group_is_not_narrowed_by_scope_tool_allowlist(self):
+        auth = _jwt_auth(
+            "litellm.mcp.beta_add",
+            _BETA_ADD_SCOPE,
+            api_key="sk-h",
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-key", mcp_access_groups=["grp"]),
+        )
+        with patch.object(  # test-quality-ok: stub the DB access-group loader, same seam as the key/team tests above
+            MCPRequestHandler,
+            "_get_mcp_servers_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=["math_beta"],
+        ):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
+        assert tools is None, "a key's access-group grant is a whole-server grant like a direct one"
+
+    async def test_key_grant_on_another_server_does_not_widen_a_scope_tool_allowlist(self):
+        auth = _jwt_auth(
+            "litellm.mcp.beta_add",
+            _BETA_ADD_SCOPE,
+            api_key="sk-h",
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-key", mcp_servers=["math_alpha"]),
+        )
+        tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
+        can_multiply = await MCPRequestHandler.is_tool_allowed_for_server("multiply", "math_beta", auth)
+        assert tools == ["add"], "only a key grant on the same server can lift a scope's tool allowlist"
+        assert can_multiply is False
+
+    async def test_unrestricted_key_keeps_every_tool_when_no_scope_mentions_the_server(self):
+        auth = _jwt_auth("litellm.mcp.alpha", _ALPHA_SCOPE, api_key="sk-h")
+        assert await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth) is None
+
+    async def test_team_inherited_tool_allowlist_survives_scopes_that_never_mention_the_server(self):
+        auth = _jwt_auth("litellm.mcp.alpha", _ALPHA_SCOPE, api_key="sk-h", team_id="team-a")
+        with patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-ceiling path, as above
+            MCPRequestHandler,
+            "_get_team_object_permission",
+            AsyncMock(
+                return_value=LiteLLM_ObjectPermissionTable(
+                    object_permission_id="op-team",
+                    mcp_servers=["math_beta"],
+                    mcp_tool_permissions={"math_beta": ["add"]},
+                )
+            ),
+        ):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
+        assert tools == ["add"], "a key with no grant of its own inherits the team allowlist, never an empty one"
+
+    @pytest.mark.parametrize(
+        ("scope", "mapping", "key_tool_permissions"),
+        [
+            ("litellm.mcp.beta_add", _BETA_ADD_SCOPE, None),
+            ("litellm.mcp.beta", _BETA_ALL_SCOPE, {"math_beta": ["multiply"]}),
+        ],
+        ids=["key whole server + scope tools", "key tools + scope whole server"],
+    )
+    async def test_team_tool_ceiling_still_caps_additive_key_and_scope_grants(
+        self, scope, mapping, key_tool_permissions
+    ):
+        auth = _jwt_auth(
+            scope,
+            mapping,
+            api_key="sk-h",
+            team_id="team-a",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-key", mcp_servers=["math_beta"], mcp_tool_permissions=key_tool_permissions
+            ),
+        )
+        with patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-ceiling path, as above
+            MCPRequestHandler,
+            "_get_team_object_permission",
+            AsyncMock(
+                return_value=LiteLLM_ObjectPermissionTable(
+                    object_permission_id="op-team", mcp_tool_permissions={"math_beta": ["add"]}
+                )
+            ),
+        ):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
+            can_multiply = await MCPRequestHandler.is_tool_allowed_for_server("multiply", "math_beta", auth)
+        assert tools == ["add"], "the team tool allowlist caps the additive key and scope grants"
+        assert can_multiply is False
 
     async def test_scope_tool_allowlist_narrows_its_own_server_grant(self):
         auth = _jwt_auth(

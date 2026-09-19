@@ -2094,13 +2094,13 @@ class MCPRequestHandler:
                 else None
             )
 
-            scope_tools: Final = await MCPRequestHandler._get_jwt_scope_tools_for_server(server_id, user_api_key_auth)
-
-            key_tools: Final = (
-                list(set(key_direct_tools or []) | set(key_toolset_tools or []) | set(scope_tools or []))
-                if key_direct_tools is not None or key_toolset_tools is not None or scope_tools is not None
-                else None
+            key_own_grant: Final = await MCPRequestHandler._key_tool_grant_for_server(
+                key_obj_perm, server_id, MCPRequestHandler._union_tool_grants(key_direct_tools, key_toolset_tools)
             )
+            scope_grants: Final = await MCPRequestHandler._jwt_scope_tool_grants_for_server(
+                server_id, user_api_key_auth
+            )
+            key_tools: Final = MCPRequestHandler._merge_additive_tool_grants((*key_own_grant, *scope_grants))
             team_direct_tools: Final = (
                 global_mcp_server_manager.expand_tool_permissions(team_obj_perm.mcp_tool_permissions).get(server_id)
                 if team_obj_perm
@@ -2341,12 +2341,12 @@ class MCPRequestHandler:
         return list({server for group in (*granted_servers, *tool_perm_servers) for server in group})
 
     @staticmethod
-    async def _get_jwt_scope_tools_for_server(
+    async def _jwt_scope_tool_grants_for_server(
         server_id: str,
         user_api_key_auth: UserAPIKeyAuth | None,
-    ) -> list[str] | None:
-        """None when no matched scope restricts this server's tools: either no scope grants it at all, or
-        some scope grants the whole server. A scope's tool allowlist only narrows its own server grant."""
+    ) -> tuple[Sequence[str] | None, ...]:
+        """One entry per matched scope that grants ``server_id``: its tool allowlist, or ``None`` when it
+        grants the whole server. A scope's tool allowlist only narrows its own server grant."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
@@ -2356,14 +2356,46 @@ class MCPRequestHandler:
             global_mcp_server_manager.expand_tool_permissions(p.mcp_tool_permissions).get(server_id)
             for p in scope_obj_perms
         )
-        unrestricted: Final = [
-            tools is None and server_id in await MCPRequestHandler._expand_scope_grant_servers(p)
-            for p, tools in zip(scope_obj_perms, tool_grants, strict=True)
-        ]
-        if any(unrestricted):
+        granted_servers: Final = [await MCPRequestHandler._expand_scope_grant_servers(p) for p in scope_obj_perms]
+        return tuple(
+            tools
+            for tools, servers in zip(tool_grants, granted_servers, strict=True)
+            if tools is not None or server_id in servers
+        )
+
+    @staticmethod
+    async def _key_tool_grant_for_server(
+        key_obj_perm: LiteLLM_ObjectPermissionBase | None,
+        server_id: str,
+        key_own_tools: Sequence[str] | None,
+    ) -> tuple[Sequence[str] | None, ...]:
+        """The key's own grant on ``server_id``: its tool allowlist, ``None`` when the key names the
+        server without restricting its tools, and no entry when the key never names the server."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        if key_own_tools is not None:
+            return (key_own_tools,)
+        if key_obj_perm is None:
+            return ()
+        direct_servers: Final = global_mcp_server_manager.expand_permission_list(key_obj_perm.mcp_servers or [])
+        access_group_servers: Final = (
+            await MCPRequestHandler._get_mcp_servers_from_access_groups(key_obj_perm.mcp_access_groups)
+            if key_obj_perm.mcp_access_groups
+            else ()
+        )
+        return (None,) if server_id in (*direct_servers, *access_group_servers) else ()
+
+    @staticmethod
+    def _merge_additive_tool_grants(
+        grants: Sequence[Sequence[str] | None],
+    ) -> list[str] | None:
+        """Union of independent grants on one server; any whole-server grant (``None``) keeps every
+        tool, and no grant at all places no restriction from this level."""
+        if not grants or any(tools is None for tools in grants):
             return None
-        restricted: Final = tuple(tools for tools in tool_grants if tools is not None)
-        return sorted({tool for tools in restricted for tool in tools}) if restricted else None
+        return sorted({tool for tools in grants if tools is not None for tool in tools})
 
     @staticmethod
     async def _get_allowed_mcp_servers_for_key(

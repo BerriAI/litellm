@@ -717,17 +717,15 @@ class JWTHandler:
         return org_alias
 
     def get_scopes(self, token: dict) -> list[str]:
-        try:
-            if isinstance(token["scope"], str):
-                # Assuming the scopes are stored in 'scope' claim and are space-separated
-                scopes = token["scope"].split()
-            elif isinstance(token["scope"], list):
-                scopes = token["scope"]
-            else:
-                raise Exception(f"Unmapped scope type - {type(token['scope'])}. Supported types - list, str.")
-        except KeyError:
-            scopes = []
-        return scopes
+        claim_path: Final = self.litellm_jwtauth.scope_jwt_field
+        raw_scopes: Final = get_nested_value(data=token, key_path=claim_path)
+        if raw_scopes is None:
+            return []
+        if isinstance(raw_scopes, str):
+            return raw_scopes.split()
+        if isinstance(raw_scopes, list):
+            return raw_scopes
+        raise Exception(f"Unmapped scope type at '{claim_path}' - {type(raw_scopes)}. Supported types - list, str.")
 
     async def _resolve_jwks_url(self, url: str) -> str:
         """

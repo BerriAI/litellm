@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import re
 import time
 from collections.abc import Mapping, Sequence
@@ -6978,7 +6979,9 @@ def test_resolve_agent_id_ignores_claim_when_field_not_configured():
     assert resolved is None
 
 
-def _entra_signed_app_token(monkeypatch, azp: str, scope: str) -> tuple[JWTHandler, str]:
+def _entra_signed_app_token(
+    monkeypatch, azp: str, scope: str, extra_claims: dict[str, object] | None = None
+) -> tuple[JWTHandler, str]:
     """A JWTHandler that verifies RS256 tokens against a pre-cached JWKS, plus a signed Entra-style app token."""
     jwks_url = "https://login.microsoftonline.test/discovery/v2.0/keys"
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
@@ -6997,7 +7000,7 @@ def _entra_signed_app_token(monkeypatch, azp: str, scope: str) -> tuple[JWTHandl
         issuer="https://login.microsoftonline.test/lit7664-tenant/v2.0",
         audience="api://litellm",
         kid="entra-kid",
-        extra_claims={"sub": "sp-object-id-1234", "azp": azp, "scope": scope},
+        extra_claims={"sub": "sp-object-id-1234", "azp": azp, "scope": scope, **(extra_claims or {})},
     )
     return jwt_handler, token
 
@@ -7181,6 +7184,121 @@ def test_mcp_grants_from_claims_without_scope_mappings_is_empty():
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
 
     assert JWTAuthManager.mcp_grants_from_claims(jwt_handler, {"sub": "s", "scope": "litellm.mcp.alpha"}) == ()
+
+
+_ALPHA_GRANT = (LiteLLM_ObjectPermissionBase(mcp_servers=["math_alpha"]),)
+
+
+@pytest.mark.parametrize(
+    ("claims", "expected"),
+    [
+        ({"sub": "s", "realm_access": {"roles": ["offline_access", "litellm.mcp.alpha"]}}, _ALPHA_GRANT),
+        ({"sub": "s", "realm_access": {"roles": "openid litellm.mcp.alpha"}}, _ALPHA_GRANT),
+        ({"sub": "s", "scope": "litellm.mcp.alpha"}, ()),
+        ({"sub": "s", "realm_access": {}}, ()),
+        ({"sub": "s", "realm_access": {"roles": {"name": "litellm.mcp.alpha"}}}, ()),
+        ({"sub": "s", "realm_access": "litellm.mcp.alpha"}, ()),
+    ],
+    ids=[
+        "nested list",
+        "nested string",
+        "literal scope claim is ignored once a custom path is set",
+        "path missing",
+        "malformed leaf",
+        "path through a non-object",
+    ],
+)
+def test_mcp_grants_from_custom_scope_claim_path(claims, expected):
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        scope_jwt_field="realm_access.roles", enforce_scope_based_access=True, scope_mappings=list(_MCP_SCOPE_MAPPINGS)
+    )
+
+    assert JWTAuthManager.mcp_grants_from_claims(jwt_handler, claims) == expected
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_grants_mcp_from_custom_claim_without_key_or_team_row(monkeypatch):
+    """A JWT whose only MCP entitlement lives under a custom claim path is admitted with that grant on the
+    standard path, with no key row, team row, or team claim involved."""
+    jwt_handler, token = _entra_signed_app_token(
+        monkeypatch,
+        azp="2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21",
+        scope="openid",
+        extra_claims={"realm_access": {"roles": ["litellm.mcp.alpha"]}},
+    )
+    jwt_handler.bind_agent_lookup(_entra_agent_registry())
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        agent_id_jwt_field="azp",
+        scope_jwt_field="realm_access.roles",
+        enforce_scope_based_access=True,
+        scope_mappings=list(_MCP_SCOPE_MAPPINGS),
+    )
+
+    result = await JWTAuthManager.auth_builder(
+        api_key=token,
+        jwt_handler=jwt_handler,
+        request_data={},
+        general_settings={"enforce_rbac": False},
+        route="/mcp/",
+        prisma_client=None,
+        user_api_key_cache=None,
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+    )
+    user_auth = JWTAuthManager.user_api_key_auth_from_result(result)
+
+    assert (user_auth.team_id, user_auth.api_key) == (None, None)
+    assert user_auth.jwt_scope_mcp_grants == _ALPHA_GRANT
+
+
+@pytest.mark.parametrize(
+    ("scope_jwt_field", "token", "expected"),
+    [
+        ("scope", {"sub": "s", "scope": "a b"}, ["a", "b"]),
+        ("scope", {"sub": "s"}, []),
+        ("realm_access.roles", {"sub": "s", "realm_access": {"roles": ["a"]}}, ["a"]),
+        ("realm_access.roles", {"sub": "s", "scope": "a"}, []),
+        ("realm_access.roles", {"sub": "s", "realm_access": "a"}, []),
+    ],
+    ids=["default split", "default missing", "nested list", "nested missing", "nested through non-object"],
+)
+def test_get_scopes_reads_configured_claim_path(scope_jwt_field: str, token: dict, expected: list[str]):
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(scope_jwt_field=scope_jwt_field)
+
+    assert jwt_handler.get_scopes(token=token) == expected
+
+
+@pytest.mark.parametrize("raw", [{"a": True}, 7], ids=["mapping", "int"])
+def test_get_scopes_rejects_values_that_are_neither_string_nor_list(raw):
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(scope_jwt_field="realm_access.roles")
+
+    with pytest.raises(Exception, match=r"realm_access\.roles"):
+        jwt_handler.get_scopes(token={"sub": "s", "realm_access": {"roles": raw}})
+
+
+@pytest.mark.parametrize(
+    ("requested_model", "expect_denied"),
+    [("gpt-5.6", False), ("gpt-5.6-mini", True)],
+    ids=["model in custom-claim scope", "model outside custom-claim scope"],
+)
+def test_custom_scope_claim_path_feeds_model_scope_checks(requested_model: str, expect_denied: bool):
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        scope_jwt_field="realm_access.roles", enforce_scope_based_access=True, scope_mappings=list(_MCP_SCOPE_MAPPINGS)
+    )
+    scopes = jwt_handler.get_scopes(token={"sub": "s", "realm_access": {"roles": ["litellm.api.consumer"]}})
+
+    assert scopes == ["litellm.api.consumer"]
+    with pytest.raises(ModelAccessDeniedHTTPException) if expect_denied else contextlib.nullcontext():
+        JWTAuthManager.check_scope_based_access(
+            scope_mappings=list(_MCP_SCOPE_MAPPINGS),
+            scopes=scopes,
+            request_data={"model": requested_model},
+            general_settings={},
+        )
 
 
 @pytest.mark.asyncio

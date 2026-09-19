@@ -5139,6 +5139,14 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     role_mappings: list[RoleMapping] | None = None
     object_id_jwt_field: str | None = None  # can be either user / team, inferred from the role mapping
     scope_mappings: list[ScopeMapping] | None = None
+    scope_jwt_field: str = Field(
+        default="scope",
+        description=(
+            "The claim that holds the token's scopes, as a space-separated string or a list of strings. Supports "
+            "dot notation (e.g. 'realm_access.roles'). Feeds scope_mappings (models and MCP grants) and the "
+            "admin_jwt_scope check."
+        ),
+    )
     enforce_scope_based_access: bool = False
     enforce_team_based_model_access: bool = False
     custom_validate: Callable[..., Literal[True]] | None = None
