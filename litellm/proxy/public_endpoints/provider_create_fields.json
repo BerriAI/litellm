@@ -3341,7 +3341,7 @@
   },
   {
     "provider": "Voyage",
-    "provider_display_name": "Voyage AI",
+    "provider_display_name": "VoyageAI by MongoDB",
     "litellm_provider": "voyage",
     "credential_fields": [
       {
