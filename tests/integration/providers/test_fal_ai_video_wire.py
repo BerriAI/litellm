@@ -1,5 +1,4 @@
 import json
-import sys
 import uuid
 from typing import Final
 
@@ -58,8 +57,6 @@ def test_fal_video_create_status_and_content_follow_queue_wire_contract(gateway:
         assert isinstance(video_id, str) and video_id
         status: Final = gateway.get(f"/v1/videos/{video_id}")
         assert status["status"] == "completed"
-        status_id_matches_created_id: Final = status["id"] == video_id
-        sys.stdout.write(f"status_id_matches_created_id={status_id_matches_created_id}\n")
         content: Final = gateway.request("GET", f"/v1/videos/{video_id}/content")
         assert content.status_code == 200, content.text
         assert content.headers["content-type"].startswith("video/mp4")
