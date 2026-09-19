@@ -26,10 +26,11 @@ union (see `result.py`), not `expression.Result`.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Annotated, Final, Literal
 
+import httpx
 from expression import case, tag, tagged_union
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from typing_extensions import assert_never
@@ -44,6 +45,29 @@ from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
     normalize_upstream_header_name,
 )
+
+
+class AuthResolution(str, Enum):
+    no_auth = "no-auth"
+    stored_user_token = "stored-user-token"
+    static_token = "static-token"
+    per_request_header = "per-request-header"
+    oauth2_passthrough = "oauth2-passthrough"
+    client_credentials = "m2m-client-credentials"
+    token_exchange = "token-exchange"
+    id_jag = "id-jag"
+    aws_sigv4 = "aws-sigv4"
+    extra_headers = "extra-headers"
+    not_applicable = "not-applicable"
+    unresolved = "unresolved"
+    failed = "resolution-failed"
+    multiple = "multiple"
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedCredential:
+    auth: httpx.Auth = field(repr=False)
+    source: AuthResolution
 
 
 class AuthSpecKind(str, Enum):
@@ -95,6 +119,7 @@ class CredError:
     tag: Literal[
         "unauthorized",
         "misconfigured",
+        "url_credentials_not_allowed",
         "upstream_unavailable",
         "unsupported_mode",
         "precondition_required",
@@ -103,6 +128,7 @@ class CredError:
 
     unauthorized: Unauthorized = case()  # no usable credential for this (subject, server) -> 401 challenge
     misconfigured: str = case()  # the declared mode is missing required config -> 5xx (operator)
+    url_credentials_not_allowed: None = case()
     upstream_unavailable: str = case()  # the IdP / token endpoint could not be reached -> 503
     unsupported_mode: str = case()  # a raw mode string did not parse into AuthSpecKind (boundary)
     precondition_required: str = case()  # a required per-user value (e.g. an env var) has not been provided -> 412
@@ -130,6 +156,10 @@ class CredError:
         return CredError(misconfigured=detail)
 
     @staticmethod
+    def of_url_credentials_not_allowed() -> CredError:
+        return CredError(url_credentials_not_allowed=None)
+
+    @staticmethod
     def of_upstream_unavailable(detail: str) -> CredError:
         return CredError(upstream_unavailable=detail)
 
@@ -154,6 +184,12 @@ class CredError:
                 return f"unauthorized: {self.unauthorized.detail}"
             case "misconfigured":
                 return f"misconfigured: {self.misconfigured}"
+            case "url_credentials_not_allowed":
+                return (
+                    "misconfigured: auth_type none cannot be used with credentials embedded in the upstream URL; "
+                    "remove them from the URL and configure Basic Auth with auth_type: basic and "
+                    "auth_value: username:password"
+                )
             case "upstream_unavailable":
                 return f"upstream unavailable: {self.upstream_unavailable}"
             case "unsupported_mode":

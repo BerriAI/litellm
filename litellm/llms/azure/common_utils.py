@@ -14,6 +14,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.common_utils import BaseOpenAILLM
 from litellm.secret_managers.get_azure_ad_token_provider import (
@@ -582,7 +583,8 @@ class BaseAzureLLM(BaseOpenAILLM):
         if scope is None:
             scope = "https://cognitiveservices.azure.com/.default"
 
-        max_retries: Final = litellm_params.get("max_retries")
+        configured_max_retries: Final = litellm_params.get("max_retries")
+        max_retries: Final = DEFAULT_MAX_RETRIES if configured_max_retries is None else configured_max_retries
         timeout: Final = litellm_params.get("timeout")
         if not api_key and azure_ad_token_provider is None and tenant_id and client_id and client_secret:
             verbose_logger.debug("Using Azure AD Token Provider from Entra ID for Azure Auth")
@@ -642,8 +644,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         else:
             azure_client_params["http_client"] = self._get_sync_http_client()
 
-        if max_retries is not None:
-            azure_client_params["max_retries"] = max_retries
+        azure_client_params["max_retries"] = max_retries
         if timeout is not None:
             azure_client_params["timeout"] = timeout
 

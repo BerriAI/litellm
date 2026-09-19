@@ -31,6 +31,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.common_utils.reset_budget_job import _model_access_group_counter_key
 from litellm.proxy.common_utils.user_api_key_cache import (
+    NO_TEAM_MEMBERSHIP_SENTINEL,
     UserApiKeyCache,
     model_access_group_registry_cache_key,
     model_access_group_spend_counter_key,
@@ -94,6 +95,11 @@ async def _cache(
                 litellm_budget_table=LiteLLM_BudgetTable(allowed_models=list(member_allowed_models)),
             ),
             model_type=LiteLLM_TeamMembership,
+        )
+    else:
+        await cache.async_set_cache(
+            key=team_membership_reservation_cache_key(user_id=USER_ID, team_id=TEAM_ID),
+            value=NO_TEAM_MEMBERSHIP_SENTINEL,
         )
     if org_models:
         await cache.async_set_cache(
@@ -314,9 +320,7 @@ class _RecordingPrismaClient:
     def __init__(self, *rows: _MagBudgetRow) -> None:
         self.rows = {row.access_group_name: row for row in rows}
         self.batches: list[list[str]] = []
-        self.db = SimpleNamespace(
-            litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=self._find_many)
-        )
+        self.db = SimpleNamespace(litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=self._find_many))
 
     async def _find_many(self, **kwargs):
         requested = list(kwargs["where"]["access_group_name"]["in"])
@@ -345,7 +349,9 @@ async def _enforce(
     read, seen = _spend_reader(spend_by_counter_key or {})
     # The check takes its client and cache as arguments, injected just below. get_current_spend is the
     # one collaborator it reaches by a lazy `from litellm.proxy.proxy_server import`, with no parameter.
-    with patch("litellm.proxy.proxy_server.get_current_spend", read):  # test-quality-ok: get_current_spend is lazily imported inside _model_access_group_max_budget_check and has no injection point
+    with patch(  # test-quality-ok: get_current_spend is lazily imported inside the budget check
+        "litellm.proxy.proxy_server.get_current_spend", read
+    ):
         await _model_access_group_max_budget_check(
             matched_model_access_groups=matched,
             prisma_client=prisma_client if prisma_client is not None else _RecordingPrismaClient(*rows),
@@ -491,9 +497,7 @@ async def test_a_second_request_serves_the_budget_row_from_cache():
 async def test_a_database_error_does_not_block_the_request():
     class _FailingPrismaClient:
         def __init__(self) -> None:
-            self.db = SimpleNamespace(
-                litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=self._boom)
-            )
+            self.db = SimpleNamespace(litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=self._boom))
 
         async def _boom(self, **kwargs):
             raise RuntimeError("database unavailable")
@@ -507,11 +511,15 @@ async def _common_checks_with_over_budget_group(*, skip_budget_checks: bool) -> 
     read, _ = _spend_reader({MODEL_ACCESS_GROUP_COUNTER_KEY: 99.0})
 
     with (
-        # common_checks resolves all three off the proxy_server module at call time; its signature
-        # has no client, cache or spend-reader parameter to pass them through instead.
-        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),  # test-quality-ok: common_checks lazily imports prisma_client from proxy_server and takes no client parameter
-        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: common_checks lazily imports user_api_key_cache from proxy_server and takes no cache parameter
-        patch("litellm.proxy.proxy_server.get_current_spend", read),  # test-quality-ok: get_current_spend is lazily imported inside the budget check and has no injection point
+        patch(  # test-quality-ok: common_checks lazily imports prisma_client from proxy_server
+            "litellm.proxy.proxy_server.prisma_client", prisma_client
+        ),
+        patch(  # test-quality-ok: common_checks lazily imports user_api_key_cache from proxy_server
+            "litellm.proxy.proxy_server.user_api_key_cache", cache
+        ),
+        patch(  # test-quality-ok: get_current_spend is lazily imported inside the budget check
+            "litellm.proxy.proxy_server.get_current_spend", read
+        ),
     ):
         return await common_checks(
             request_body={"model": "gpt-4o", "messages": []},
@@ -524,7 +532,9 @@ async def _common_checks_with_over_budget_group(*, skip_budget_checks: bool) -> 
             llm_router=Router(model_list=MODEL_LIST),
             proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
             valid_token=UserAPIKeyAuth(api_key="hashed", models=["tier-a"], user_id=USER_ID),
-            request=SimpleNamespace(method="POST", headers={}, query_params={}, url=SimpleNamespace(path="/v1/chat/completions")),
+            request=SimpleNamespace(
+                method="POST", headers={}, query_params={}, url=SimpleNamespace(path="/v1/chat/completions")
+            ),
             skip_budget_checks=skip_budget_checks,
         )
 

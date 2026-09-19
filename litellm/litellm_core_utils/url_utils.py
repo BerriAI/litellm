@@ -19,6 +19,7 @@ Admins can opt out via two ``litellm`` globals (wired from proxy config):
   check but still resolve DNS and still rewrite HTTP to the resolved IP.
 """
 
+import asyncio
 import socket
 from ipaddress import ip_address, ip_network
 from typing import Any, Final, Protocol
@@ -471,7 +472,7 @@ async def async_safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response
     kwargs.pop("follow_redirects", None)
     headers_view: Final[_CallerHeadersView] = {"headers": kwargs.pop("headers", {})}
     for _ in range(_MAX_REDIRECTS):
-        validated_url, original_host = validate_url(url)
+        validated_url, original_host = await asyncio.to_thread(validate_url, url)
         response = await fetcher.get(
             validated_url,
             headers={**headers_view["headers"], "Host": original_host},

@@ -1,5 +1,8 @@
+import asyncio
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final, Literal
+from urllib.parse import urlparse
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
@@ -8,6 +11,24 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
 AzureAIApiKeyHeader = Literal["Authorization", "api-key", "Api-Key", "Ocp-Apim-Subscription-Key"]
+AZURE_OPENAI_V1_HOST_SUFFIXES: Final = (".services.ai.azure.com", ".openai.azure.com")
+
+
+def is_foundry_model_inference_base(api_base: str) -> bool:
+    parsed: Final = urlparse(api_base)
+    host: Final = parsed.hostname
+    if host is None or not host.endswith(".services.ai.azure.com"):
+        return False
+    return "/openai/deployments" not in parsed.path
+
+
+def is_azure_openai_v1_host(api_base: str | None) -> bool:
+    host: Final = urlparse(api_base).hostname if api_base else None
+    return host is not None and host.endswith(AZURE_OPENAI_V1_HOST_SUFFIXES)
+
+
+def api_key_header_for_base(api_base: str | None) -> AzureAIApiKeyHeader:
+    return "api-key" if is_azure_openai_v1_host(api_base) else "Authorization"
 
 
 def get_azure_ai_entra_token(litellm_params: Mapping[str, object] | None = None) -> str | None:
@@ -23,6 +44,70 @@ def get_azure_ai_entra_token(litellm_params: Mapping[str, object] | None = None)
     params = GenericLiteLLMParams.model_validate(litellm_params) if litellm_params else GenericLiteLLMParams()
 
     return get_azure_ad_token(params)
+
+
+AZURE_AI_AGENTS_SCOPE: Final = "https://ai.azure.com/.default"
+AZURE_ENTRA_CREDENTIAL_PARAM_KEYS: Final = frozenset({"azure_ad_token", "client_secret", "azure_password"})
+AZURE_ENTRA_LITELLM_PARAM_KEYS: Final = AZURE_ENTRA_CREDENTIAL_PARAM_KEYS | frozenset(
+    {"tenant_id", "client_id", "azure_username", "azure_scope"}
+)
+AZURE_ENTRA_CREDENTIAL_HELP: Final = (
+    "Set `tenant_id` + `client_id` + `client_secret`, `azure_ad_token` (an `oidc/` token also needs "
+    "`tenant_id` + `client_id`), or `client_id` + `azure_username` + `azure_password` in the agent's `litellm_params`"
+)
+
+
+def has_azure_entra_params(litellm_params: Mapping[str, object] | None) -> bool:
+    if not litellm_params:
+        return False
+    return any(litellm_params.get(key) for key in AZURE_ENTRA_CREDENTIAL_PARAM_KEYS)
+
+
+def _resolve_config_secret(value: object) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    return get_secret_str(value) if value.startswith("os.environ/") else value
+
+
+def get_azure_ai_agent_entra_token(litellm_params: Mapping[str, object]) -> str:
+    """Mints the Entra bearer from the agent's own litellm_params, never from process-wide AZURE_* env vars."""
+    from litellm.llms.azure.common_utils import (
+        get_azure_ad_token_from_entra_id,
+        get_azure_ad_token_from_oidc,
+        get_azure_ad_token_from_username_password,
+    )
+
+    resolved: Final = MappingProxyType(
+        {key: _resolve_config_secret(litellm_params.get(key)) for key in AZURE_ENTRA_LITELLM_PARAM_KEYS}
+    )
+    scope: Final = resolved["azure_scope"] or AZURE_AI_AGENTS_SCOPE
+    tenant_id: Final = resolved["tenant_id"]
+    client_id: Final = resolved["client_id"]
+    client_secret: Final = resolved["client_secret"]
+    azure_username: Final = resolved["azure_username"]
+    azure_password: Final = resolved["azure_password"]
+    azure_ad_token: Final = resolved["azure_ad_token"]
+    if tenant_id and client_id and client_secret:
+        return get_azure_ad_token_from_entra_id(
+            tenant_id=tenant_id, client_id=client_id, client_secret=client_secret, scope=scope
+        )()
+    if client_id and azure_username and azure_password:
+        return get_azure_ad_token_from_username_password(
+            client_id=client_id, azure_username=azure_username, azure_password=azure_password, scope=scope
+        )()
+    federated: Final = azure_ad_token is not None and azure_ad_token.startswith("oidc/")
+    if azure_ad_token and federated and tenant_id and client_id:
+        return get_azure_ad_token_from_oidc(
+            azure_ad_token=azure_ad_token, azure_client_id=client_id, azure_tenant_id=tenant_id, scope=scope
+        )
+    if azure_ad_token and not federated:
+        return azure_ad_token
+    raise ValueError(f"Azure AI agent Entra ID credentials did not resolve to a token. {AZURE_ENTRA_CREDENTIAL_HELP}")
+
+
+async def resolve_azure_ai_agent_auth_header(litellm_params: Mapping[str, object]) -> Mapping[str, str]:
+    token: Final = await asyncio.to_thread(get_azure_ai_agent_entra_token, litellm_params)
+    return MappingProxyType({"Authorization": f"Bearer {token}"})
 
 
 def get_azure_ai_auth_headers(
@@ -52,6 +137,17 @@ def get_azure_ai_auth_headers(
 
 
 AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: Final = "azure_model_router_selected_model"
+
+
+def azure_ai_supports_native_responses(model: str | None, api_base: str | None) -> bool:
+    resolved_base: Final = AzureFoundryModelInfo.get_api_base(api_base)
+    if resolved_base is not None and not is_azure_openai_v1_host(resolved_base):
+        return False
+    if model is None:
+        return True
+    if "claude" in model.lower():
+        return False
+    return AzureFoundryModelInfo.get_azure_ai_route(model) == "default"
 
 
 class AzureFoundryModelInfo(BaseLLMModelInfo):
@@ -128,10 +224,13 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
     def get_api_key(api_key: str | None = None) -> str | None:
         return api_key or litellm.api_key or get_secret_str("AZURE_AI_API_KEY")
 
+    @staticmethod
+    def get_api_version(api_version: str | None = None) -> str | None:
+        return api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
+
     @property
-    def api_version(self, api_version: str | None = None) -> str | None:
-        api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
-        return api_version
+    def api_version(self) -> str | None:
+        return AzureFoundryModelInfo.get_api_version()
 
     def get_token_counter(self) -> BaseTokenCounter | None:
         """

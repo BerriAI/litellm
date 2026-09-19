@@ -29,14 +29,17 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
-    convert_bedrock_invoke_output_format_to_inline_schema,
+    BedrockError,
+    apply_bedrock_invoke_structured_output,
+    bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
-    pop_bedrock_invoke_output_config_format,
+    strip_unsupported_bedrock_invoke_output_config_keys,
+    tools_without_eager_input_streaming,
 )
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -44,6 +47,7 @@ from litellm.llms.bedrock.request_metadata import (
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
+    ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
 )
 from litellm.types.llms.bedrock import BedrockInvokeAnthropicMessagesRequest
@@ -51,7 +55,6 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 from litellm.types.utils import GenericStreamingChunk as GChunk
-from litellm.utils import _supports_factory
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -79,6 +82,14 @@ class AmazonAnthropicClaudeMessagesConfig(
         return "bedrock"
 
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: base passes response headers as a dict
+    ) -> BedrockError:
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
@@ -378,9 +389,10 @@ class AmazonAnthropicClaudeMessagesConfig(
         """
         Check if the model supports tool search on Bedrock.
 
-        The model map's ``supports_tool_search`` flag is authoritative when
-        ``model`` resolves to an entry that sets it; the name patterns below
-        cover ids the map cannot resolve (ARNs, unlisted regional variants).
+        The model map's ``supports_tool_search`` flag is authoritative: an exact
+        entry, or the ``claude-tool-search`` fallback rule (Claude 4.5 and newer)
+        for ids the map cannot resolve (ARNs, unlisted regional variants) and for
+        mapped entries that carry no opinion.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
 
@@ -390,46 +402,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         Returns:
             True if the model supports tool search on Bedrock
         """
-        catalog: Final = AnthropicModelInfo._get_provider_resolved_capability(model, "supports_tool_search", "bedrock")
-        if catalog is not None:
-            return catalog
-
-        model_lower: Final = model.lower()
-
-        supported_patterns: Final = [
-            # Opus 4.5
-            "opus-4.5",
-            "opus_4.5",
-            "opus-4-5",
-            "opus_4_5",
-            # Sonnet 4.5
-            "sonnet-4.5",
-            "sonnet_4.5",
-            "sonnet-4-5",
-            "sonnet_4_5",
-            # Opus 4.6
-            "opus-4.6",
-            "opus_4.6",
-            "opus-4-6",
-            "opus_4_6",
-            # sonnet 4.6
-            "sonnet-4.6",
-            "sonnet_4.6",
-            "sonnet-4-6",
-            "sonnet_4_6",
-            # Opus 4.7
-            "opus-4.7",
-            "opus_4.7",
-            "opus-4-7",
-            "opus_4_7",
-            # Haiku 4.5
-            "haiku-4.5",
-            "haiku_4.5",
-            "haiku-4-5",
-            "haiku_4_5",
-        ]
-
-        return any(pattern in model_lower for pattern in supported_patterns)
+        return bedrock_supports_tool_search(model)
 
     def _get_tool_search_beta_header_for_bedrock(
         self,
@@ -445,7 +418,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         Bedrock requires a different beta header for tool search than the
         Anthropic API when tool search is used without programmatic tool
         calling or input examples: `tool-search-tool-2025-10-19`, and only on
-        the models listed in `_supports_tool_search_on_bedrock`.
+        the models the model map flags as `supports_tool_search`
+        (`_supports_tool_search_on_bedrock`).
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
 
@@ -552,6 +526,9 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         if injected_thinking_for_clear_thinking:
             beta_set.add("interleaved-thinking-2025-05-14")
+
+        if anthropic_model_info.is_eager_input_streaming_used(tools):
+            beta_set.add(ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER)
 
         self._filter_context_management_for_bedrock_invoke(
             anthropic_messages_request=anthropic_messages_request,
@@ -708,52 +685,25 @@ class AmazonAnthropicClaudeMessagesConfig(
         # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it for older models)
         self._remove_ttl_from_cache_control(anthropic_messages_request=anthropic_messages_request, model=model)
 
-        # 5. Convert structured-output params to inline schema.
-        # Bedrock Invoke doesn't support top-level `output_format`; its
-        # accepted `output_config` subset is also narrower than Anthropic's, so
-        # consume the newer `output_config.format` shape here instead of
-        # forwarding it as an unknown nested key.
+        # 5. Route structured-output params (`output_format` /
+        # `output_config.format`) to native enforcement or the inline-schema
+        # fallback, then strip `output_config` keys the model does not accept.
+        # Ref: https://github.com/BerriAI/litellm/issues/22797
         existing_output_config: Final = anthropic_messages_request.get("output_config")
         if isinstance(existing_output_config, dict):
             anthropic_messages_request["output_config"] = dict(existing_output_config)
-        output_format: Final = anthropic_messages_request.pop("output_format", None)
-        output_config_format: Final = pop_bedrock_invoke_output_config_format(anthropic_messages_request)
-        if output_format:
-            convert_bedrock_invoke_output_format_to_inline_schema(
-                output_format=output_format,
-                request_body=anthropic_messages_request,
-            )
-        elif output_config_format:
-            convert_bedrock_invoke_output_format_to_inline_schema(
-                output_format=output_config_format,
-                request_body=anthropic_messages_request,
-            )
+        apply_bedrock_invoke_structured_output(
+            model=model,
+            request_body=anthropic_messages_request,
+        )
         normalize_bedrock_opus_output_config_effort(
             model=model,
             output_config=anthropic_messages_request.get("output_config"),
         )
-
-        # 5a. Bedrock Invoke supports output_config (effort) for Claude 4.6+ models,
-        # but older models do not — strip it to avoid request rejection.
-        # Ref: https://github.com/BerriAI/litellm/issues/22797
-        if not (
-            _supports_factory(
-                model=model,
-                custom_llm_provider="bedrock",
-                key="supports_output_config",
-            )
-            or AnthropicConfig._model_supports_effort_param(model, "bedrock")
-        ):
-            if anthropic_messages_request.pop("output_config", None) is not None:
-                verbose_logger.warning(
-                    "Bedrock Invoke: stripping unsupported `output_config` for "
-                    "model=%s — neither `supports_output_config` nor any "
-                    "`supports_*_reasoning_effort` flag is set in "
-                    "model_prices_and_context_window.json. Add the capability "
-                    "flag to the model JSON entry if this model accepts "
-                    "`output_config`.",
-                    model,
-                )
+        strip_unsupported_bedrock_invoke_output_config_keys(
+            model=model,
+            request_body=anthropic_messages_request,
+        )
 
         # 5b. Hoist `custom.defer_loading` then drop `custom` (Bedrock doesn't support it)
         # Ref: https://github.com/BerriAI/litellm/issues/22847
@@ -774,9 +724,15 @@ class AmazonAnthropicClaudeMessagesConfig(
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
 
+        outbound_tools: Final = tools_without_eager_input_streaming(anthropic_messages_request)
+        if outbound_tools is not None:
+            anthropic_messages_request["tools"] = outbound_tools
+
+        remaining_output_config: Final = anthropic_messages_request.get("output_config")
         if (
             litellm.drop_params is True
-            and "output_config" in anthropic_messages_request
+            and isinstance(remaining_output_config, dict)
+            and any(key != "format" for key in remaining_output_config)
             and not AnthropicConfig._model_supports_effort_param(model, "bedrock")
         ):
             verbose_logger.warning(

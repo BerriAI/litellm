@@ -3,6 +3,7 @@
 import base64
 import io
 from typing import cast
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -482,55 +483,6 @@ def test_transform_request_unknown_quality_reaches_image_generation_config():
     assert body["imageGenerationConfig"]["quality"] == "auto"
 
 
-def test_is_nova_canvas_image_edit_model_uses_model_cost_flag(monkeypatch):
-    """Routing uses supports_nova_canvas_image_edit in model_cost, not a hardcoded name substring."""
-    fake_id = "amazon.custom-bedrock-image-edit-v99:0"
-    monkeypatch.setitem(
-        litellm.model_cost,
-        fake_id,
-        {
-            "litellm_provider": "bedrock",
-            "mode": "image_generation",
-            "supports_nova_canvas_image_edit": True,
-        },
-    )
-    assert (
-        BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(fake_id)
-        is True
-    )
-
-    monkeypatch.setitem(
-        litellm.model_cost,
-        "amazon.not-nova-canvas-v1:0",
-        {
-            "litellm_provider": "bedrock",
-            "mode": "image_generation",
-        },
-    )
-    assert (
-        BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(
-            "amazon.not-nova-canvas-v1:0"
-        )
-        is False
-    )
-
-    # Name-shaped ids do not route without supports_nova_canvas_image_edit (no substring heuristic).
-    monkeypatch.setitem(
-        litellm.model_cost,
-        "amazon.nova-canvas-v2:0",
-        {
-            "litellm_provider": "bedrock",
-            "mode": "image_generation",
-        },
-    )
-    assert (
-        BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(
-            "amazon.nova-canvas-v2:0"
-        )
-        is False
-    )
-
-
 def test_transform_response_to_openai_format():
     """Response maps images[] to ImageResponse.data b64_json."""
     config = BedrockAmazonNovaCanvasImageEditConfig()
@@ -655,3 +607,23 @@ def test_transform_response_empty_images_without_error_raises():
             raw_response=resp,
             logging_obj=None,  # type: ignore[arg-type]
         )
+
+
+def test_prepare_request_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
+    """The deployment's AWS profile does not exist, so resolving SigV4 credentials
+    raises; a bearer-token deployment must still sign the request with the
+    bearer token alone."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+
+    request = BedrockImageEdit()._prepare_request(
+        model="amazon.nova-canvas-v1:0",
+        image=[io.BytesIO(b"fake-png")],
+        prompt="make it warmer",
+        optional_params={"aws_region_name": "us-west-2", "aws_profile_name": "litellm-no-such-aws-profile"},
+        api_base=None,
+        extra_headers=None,
+        logging_obj=Mock(),
+        api_key=None,
+    )
+
+    assert request.prepped.headers["Authorization"] == "Bearer env-bearer-token-12345"

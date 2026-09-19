@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
@@ -5,12 +7,16 @@ from httpx._models import Headers, Response
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_tool_reference_parts_from_tool_messages,
+    flatten_combinators_and_drop_non_python_regex_patterns,
     hoist_images_from_tool_messages,
+    system_messages_first,
+    tool_with_sanitized_parameters,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.openai.chat.gpt_5_transformation import GPT_REASONING_SERIES_MARKERS
 from litellm.types.llms.azure import (
     API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT,
     API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT,
@@ -30,6 +36,22 @@ if TYPE_CHECKING:
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+
+_NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def sanitized_tools_update(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    tools: Final = optional_params.get("tools")
+    if not isinstance(tools, list):
+        return _NO_TOOLS_UPDATE
+    sanitized: Final = [  # mutable-ok: request tools are a JSON list
+        tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns)
+        if isinstance(tool, dict)
+        else tool
+        for tool in tools
+    ]
+    return MappingProxyType({"tools": sanitized})
 
 
 class AzureOpenAIConfig(BaseConfig):
@@ -123,7 +145,7 @@ class AzureOpenAIConfig(BaseConfig):
         name family needs the rename, including the ``gpt-5-chat*`` models that are excluded from
         the reasoning path by https://github.com/BerriAI/litellm/issues/13781.
         """
-        return "gpt-5" in model or "gpt5_series" in model
+        return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) or "gpt5_series" in model
 
     def _is_response_format_supported_model(self, model: str) -> bool:
         """
@@ -255,12 +277,14 @@ class AzureOpenAIConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(messages)
+        ordered_messages: Final = system_messages_first(messages) if litellm.openai_system_messages_first else messages
+        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(ordered_messages)
         azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(stripped_messages))
         return {
             "model": model,
             "messages": azure_messages,
             **optional_params,
+            **sanitized_tools_update(optional_params),
         }
 
     def transform_response(

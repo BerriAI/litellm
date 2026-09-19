@@ -7,7 +7,9 @@ login endpoints (e.g., /login and /v2/login).
 
 import os
 import secrets
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Final, Literal, cast
 
 import jwt
@@ -24,6 +26,8 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
+from litellm.proxy.auth.login_throttle import LoginAttempt, LoginThrottle
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -40,6 +44,11 @@ from litellm.proxy.utils import (
 from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.ui_sso import ReturnedUITokenObject
+
+INVALID_UI_CREDENTIALS_MESSAGE: Final = (
+    "Invalid credentials used to access UI. Check 'UI_USERNAME' and 'UI_PASSWORD', or the password set for your user"
+)
+INVALID_USER_PASSWORD_MESSAGE: Final = "Invalid credentials used to access UI. Check the password set for your user"
 
 
 async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -> None:
@@ -82,6 +91,44 @@ def get_ui_credentials(master_key: str | None) -> tuple[str, str]:
     return ui_username, ui_password
 
 
+def _matches_env_credentials(username: str, password: str, master_key: str | None) -> bool:
+    ui_username, ui_password = get_ui_credentials(master_key)
+    return secrets.compare_digest(username.encode("utf-8"), ui_username.encode("utf-8")) and secrets.compare_digest(
+        password.encode("utf-8"), ui_password.encode("utf-8")
+    )
+
+
+def _admin_credentials_match(
+    username: str, password: str, master_key: str, general_settings: Mapping[str, object]
+) -> bool:
+    return general_settings.get("disable_env_credential_login") is not True and _matches_env_credentials(
+        username, password, master_key
+    )
+
+
+def _invalid_credentials_message(general_settings: Mapping[str, object]) -> str:
+    """One rejection message for unknown usernames and wrong passwords alike, so neither can be enumerated."""
+    if is_env_credential_login_enabled(general_settings):
+        return INVALID_UI_CREDENTIALS_MESSAGE
+    return INVALID_USER_PASSWORD_MESSAGE
+
+
+def is_env_credential_login_enabled(general_settings: Mapping[str, object]) -> bool:
+    """Whether a login with UI_USERNAME/UI_PASSWORD (or the master-key fallback) can succeed.
+
+    Two settings can turn it off: `disable_env_credential_login` unconditionally, and
+    `disable_password_login_when_sso_enabled` as a side effect, since its gate rejects
+    every username/password login before the env comparison runs. Feeds both the
+    `authenticate_user` gate and the Admin UI warning banner, so the banner never nags
+    about a login path that is already unreachable.
+    """
+    if general_settings.get("disable_env_credential_login") is True:
+        return False
+    if general_settings.get("disable_password_login_when_sso_enabled") is True and is_sso_provider_fully_configured():
+        return False
+    return True
+
+
 class LoginResult:
     """Result object containing authentication data from login."""
 
@@ -111,6 +158,8 @@ async def authenticate_user(
     password: str,
     master_key: str | None,
     prisma_client: PrismaClient | None,
+    throttle: LoginThrottle,
+    general_settings: Mapping[str, object] = MappingProxyType({}),
 ) -> LoginResult:
     """
     Authenticate a user and generate an API key for UI access.
@@ -124,13 +173,44 @@ async def authenticate_user(
         password: Password from the login form
         master_key: Master key for the proxy (required)
         prisma_client: Prisma database client (optional)
+        throttle: Failed sign-in accounting for this request's source address
+        general_settings: Proxy general_settings, checked for
+            `disable_password_login_when_sso_enabled` and
+            `disable_env_credential_login`
 
     Returns:
         LoginResult: Object containing authentication data
 
     Raises:
-        ProxyException: If authentication fails or required configuration is missing
+        ProxyException: If authentication fails or required configuration is missing,
+            or if username/password login is disabled while SSO is configured
+
+    Recovery: an admin locked out of the UI by
+    `disable_password_login_when_sso_enabled`, or by the failed sign-in block in
+    `throttle`, can still administer the proxy over the API with the master key
+    (Authorization: Bearer <master_key>), which never goes through this function.
+    No credential, the env admin credentials and the master key included, is
+    exempt from the block. To restore UI username/password login, unset the
+    setting in config.yaml (or the DB-persisted general_settings) and restart the
+    proxy; this is a deliberate, auditable config change rather than a hidden
+    bypass.
+
+    The gate below requires the SSO provider to be FULLY configured (every
+    companion secret/endpoint an actual sign-in needs), not merely that a
+    client id is present, so an incomplete SSO setup can never disable the
+    only working login path.
     """
+    if general_settings.get("disable_password_login_when_sso_enabled") is True and is_sso_provider_fully_configured():
+        raise ProxyException(
+            message=(
+                "Username/password login is disabled because SSO is configured "
+                "and 'disable_password_login_when_sso_enabled' is set. Sign in via SSO."
+            ),
+            type=ProxyErrorTypes.auth_error,
+            param="disable_password_login_when_sso_enabled",
+            code=403,
+        )
+
     if master_key is None:
         raise ProxyException(
             message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
@@ -139,8 +219,19 @@ async def authenticate_user(
             code=500,
         )
 
-    ui_username, ui_password = get_ui_credentials(master_key)
+    attempt: Final = await throttle.attempt(username)
+    return await _sign_in(username, password, master_key, prisma_client, attempt, general_settings)
 
+
+async def _sign_in(
+    username: str,
+    password: str,
+    master_key: str,
+    prisma_client: PrismaClient | None,
+    attempt: LoginAttempt,
+    general_settings: Mapping[str, object],
+) -> LoginResult:
+    admin_credentials_match: Final = _admin_credentials_match(username, password, master_key, general_settings)
     # Check if we can find the `username` in the db. On the UI, users can enter username=their email
     _user_row: LiteLLM_UserTable | None = None
     user_role: (
@@ -166,20 +257,13 @@ async def authenticate_user(
     - Login with UI_USERNAME and UI_PASSWORD
     - Login with Invite Link `user_email` and `password` combination
     """
-    if secrets.compare_digest(username.encode("utf-8"), ui_username.encode("utf-8")) and secrets.compare_digest(
-        password.encode("utf-8"), ui_password.encode("utf-8")
-    ):
+    if admin_credentials_match:
         # Non SSO -> If user is using UI_USERNAME and UI_PASSWORD they are Proxy admin
         user_role = LitellmUserRoles.PROXY_ADMIN
         user_id = LITELLM_PROXY_ADMIN_NAME
 
         # we want the key created to have PROXY_ADMIN_PERMISSIONS
-        key_user_id = LITELLM_PROXY_ADMIN_NAME
-        if (
-            os.getenv("PROXY_ADMIN_ID", None) is not None and os.environ["PROXY_ADMIN_ID"] == user_id
-        ) or user_id == LITELLM_PROXY_ADMIN_NAME:
-            # checks if user is admin
-            key_user_id = os.getenv("PROXY_ADMIN_ID", LITELLM_PROXY_ADMIN_NAME)
+        key_user_id: Final = os.getenv("PROXY_ADMIN_ID", LITELLM_PROXY_ADMIN_NAME)
 
         # Admin is Authe'd in - generate key for the UI to access Proxy
 
@@ -196,6 +280,7 @@ async def authenticate_user(
 
         if os.getenv("DATABASE_URL") is not None:
             response = await generate_key_helper_fn(
+                llm_router=None,
                 request_type="key",
                 **{
                     "user_role": LitellmUserRoles.PROXY_ADMIN,
@@ -240,6 +325,8 @@ async def authenticate_user(
 
             key = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(user_info)
 
+        await attempt.succeeded()
+
         return LoginResult(
             user_id=user_id,
             key=key,
@@ -271,6 +358,7 @@ async def authenticate_user(
             await _rehash_password_if_needed(_user_row.user_id, password, _password)
             if os.getenv("DATABASE_URL") is not None:
                 response = await generate_key_helper_fn(
+                    llm_router=None,
                     request_type="key",
                     **{
                         "user_role": user_role,
@@ -294,6 +382,8 @@ async def authenticate_user(
 
             key = response["token"]
 
+            await attempt.succeeded()
+
             return LoginResult(
                 user_id=user_id,
                 key=key,
@@ -302,15 +392,17 @@ async def authenticate_user(
                 login_method="username_password",
             )
         else:
+            await attempt.failed()
             raise ProxyException(
-                message=f"Invalid credentials used to access UI.\nNot valid credentials for {username}",
+                message=_invalid_credentials_message(general_settings),
                 type=ProxyErrorTypes.auth_error,
                 param="invalid_credentials",
                 code=401,
             )
     else:
+        await attempt.failed()
         raise ProxyException(
-            message="Invalid credentials used to access UI.\nCheck 'UI_USERNAME', 'UI_PASSWORD' in .env file",
+            message=_invalid_credentials_message(general_settings),
             type=ProxyErrorTypes.auth_error,
             param="invalid_credentials",
             code=401,

@@ -12,6 +12,12 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class DashScopeChatConfig(OpenAIGPTConfig):
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base class contract returns a list
+        return [  # mutable-ok: base class contract returns a list
+            *super().get_supported_openai_params(model=model),
+            "reasoning_effort",
+        ]
+
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,
@@ -54,6 +60,9 @@ class DashScopeChatConfig(OpenAIGPTConfig):
         dynamic_api_key: Final = api_key or get_secret_str("DASHSCOPE_API_KEY")
         return api_base, dynamic_api_key
 
+    def _resolve_chat_api_base(self, api_base: str | None) -> str:
+        return api_base or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
     def get_complete_url(
         self,
         api_base: str | None,
@@ -66,10 +75,7 @@ class DashScopeChatConfig(OpenAIGPTConfig):
         """
         If api_base is not provided, use the default DashScope /chat/completions endpoint.
         """
-        if not api_base:
-            api_base = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-
-        if not api_base.endswith("/chat/completions"):
-            api_base = f"{api_base}/chat/completions"
-
-        return api_base
+        resolved_api_base: Final = self._resolve_chat_api_base(api_base)
+        if resolved_api_base.endswith("/chat/completions"):
+            return resolved_api_base
+        return f"{resolved_api_base}/chat/completions"

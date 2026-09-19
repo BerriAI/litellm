@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import openai from "openai";
 import { makeOpenAIChatCompletionRequest } from "./chat_completion";
 import type { TokenUsage } from "../chat_ui/ResponseMetrics";
 
@@ -20,7 +21,9 @@ const mockClient = {
 
 vi.mock("openai", () => ({
   default: {
-    OpenAI: vi.fn(() => mockClient),
+    OpenAI: vi.fn(function () {
+      return mockClient;
+    }),
   },
 }));
 
@@ -466,6 +469,18 @@ describe("chat_completion prompt cache usage", () => {
     expect(usageData).not.toHaveProperty("cacheReadTokens");
     expect(usageData).not.toHaveProperty("cacheCreationTokens");
   });
+
+  it("omits cost when the provider reports a non-numeric value", async () => {
+    const usageData = await captureUsage({ cost: "not-a-number" });
+
+    expect(usageData).toEqual(expect.not.objectContaining({ cost: expect.anything() }));
+  });
+
+  it("omits cost when the provider reports a blank value", async () => {
+    const usageData = await captureUsage({ cost: "  " });
+
+    expect(usageData).toEqual(expect.not.objectContaining({ cost: expect.anything() }));
+  });
 });
 
 describe("chat_completion response cache", () => {
@@ -599,5 +614,49 @@ describe("chat_completion response cache", () => {
     );
 
     expect(onUsageData).toHaveBeenCalledWith(expect.not.objectContaining({ servedFromResponseCache: true }));
+  });
+});
+
+describe("chat_completion custom headers", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("sends custom headers alongside the tags header on the OpenAI client", async () => {
+    mockCreate.mockReturnValueOnce(nonStreamingResponse({ choices: [{ message: { content: "Hi" } }] }));
+
+    await makeOpenAIChatCompletionRequest(
+      [{ role: "user", content: "Hello" }],
+      vi.fn(),
+      "gpt-4",
+      "test-token",
+      ["team-a"],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      { "anthropic-beta": "context-1m-2025-08-07", "x-litellm-tags": "overridden" },
+    );
+
+    expect(vi.mocked(openai.OpenAI).mock.calls[0][0]).toMatchObject({
+      defaultHeaders: { "anthropic-beta": "context-1m-2025-08-07", "x-litellm-tags": "overridden" },
+    });
   });
 });

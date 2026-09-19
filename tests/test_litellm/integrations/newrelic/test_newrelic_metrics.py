@@ -24,6 +24,8 @@ from litellm.types.integrations.newrelic import (
     NEWRELIC_METRIC_PROMPT_TOKENS,
     NEWRELIC_METRIC_REQUEST_DURATION_MS,
     NEWRELIC_METRIC_REQUESTS,
+    NEWRELIC_METRIC_TEAM_MAX_BUDGET,
+    NEWRELIC_METRIC_TEAM_REMAINING_BUDGET,
     NEWRELIC_METRIC_TOTAL_TOKENS,
     NewRelicMetricRecord,
 )
@@ -40,6 +42,8 @@ def _record(
     completion_tokens=20,
     total_tokens=30,
     duration_ms=100.0,
+    team_max_budget=None,
+    team_spend=None,
 ) -> NewRelicMetricRecord:
     return NewRelicMetricRecord(
         team_id=team_id,
@@ -53,12 +57,28 @@ def _record(
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
         duration_ms=duration_ms,
+        team_max_budget=team_max_budget,
+        team_spend=team_spend,
     )
 
 
-def _standard_logging_object(team_id="team-a", response_cost=0.25) -> dict:
+def _standard_logging_object(
+    team_id="team-a", response_cost=0.25, team_max_budget: float | None = None, team_spend: float | None = None
+) -> dict:
+    budget_metadata = {
+        key: value
+        for key, value in (
+            ("user_api_key_team_max_budget", team_max_budget),
+            ("user_api_key_team_spend", team_spend),
+        )
+        if value is not None
+    }
     return {
-        "metadata": {"user_api_key_team_id": team_id, "user_api_key_team_alias": f"{team_id}-alias"},
+        "metadata": {
+            "user_api_key_team_id": team_id,
+            "user_api_key_team_alias": f"{team_id}-alias",
+            **budget_metadata,
+        },
         "model_group": "gpt-4o-group",
         "model": "gpt-4o",
         "custom_llm_provider": "openai",
@@ -202,6 +222,74 @@ class TestBuildMetricPayload:
         assert "team_id" not in attributes
         assert "team_alias" not in attributes
         assert "model_group" not in attributes
+
+
+class TestTeamBudgetGauges:
+    def test_latest_record_per_team_drives_one_gauge_pair(self):
+        records = (
+            _record(team_id="team-a", model="gpt-4o", response_cost=0.5, team_max_budget=100.0, team_spend=10.0),
+            _record(team_id="team-a", model="claude-4", response_cost=2.0, team_max_budget=100.0, team_spend=10.5),
+            _record(team_id="team-b", response_cost=1.0, team_max_budget=None, team_spend=3.0),
+            _record(team_id="", team_alias="", response_cost=1.0, team_max_budget=50.0, team_spend=1.0),
+        )
+        payload = build_metric_payload(records, window_start=1_000.0, now=1_005.0)
+
+        max_budget_gauges = _metrics_by_name(payload, NEWRELIC_METRIC_TEAM_MAX_BUDGET)
+        remaining_gauges = _metrics_by_name(payload, NEWRELIC_METRIC_TEAM_REMAINING_BUDGET)
+        assert [(m["type"], m["value"], m["attributes"]) for m in max_budget_gauges] == [
+            ("gauge", 100.0, {"team_id": "team-a", "team_alias": "team-a-alias"})
+        ]
+        assert [(m["type"], m["attributes"]) for m in remaining_gauges] == [
+            ("gauge", {"team_id": "team-a", "team_alias": "team-a-alias"})
+        ]
+        assert remaining_gauges[0]["value"] == pytest.approx(100.0 - 10.5 - 2.0)
+        assert len(_metrics_by_name(payload, NEWRELIC_METRIC_COST_USD)) == 4
+
+    def test_missing_team_spend_counts_only_this_request(self):
+        payload = build_metric_payload(
+            (_record(response_cost=0.25, team_max_budget=10.0, team_spend=None),), window_start=1_000.0, now=1_005.0
+        )
+
+        assert _metrics_by_name(payload, NEWRELIC_METRIC_TEAM_REMAINING_BUDGET)[0]["value"] == pytest.approx(9.75)
+
+    @pytest.mark.asyncio
+    async def test_budget_gauges_reach_the_metric_api_from_standard_logging_metadata(self):
+        logger = _make_logger()
+        logger.async_client.post = AsyncMock(return_value=_response(202))
+        slo = _standard_logging_object(response_cost=0.25, team_max_budget=20.0, team_spend=4.5)
+
+        await logger.async_log_success_event(
+            kwargs={"standard_logging_object": slo}, response_obj={}, start_time=None, end_time=None
+        )
+        await logger.flush_queue()
+
+        body = json.loads(gzip.decompress(logger.async_client.post.await_args.kwargs["data"]).decode("utf-8"))
+        by_name = {m["name"]: m for m in body[0]["metrics"]}
+        assert by_name[NEWRELIC_METRIC_TEAM_MAX_BUDGET] == {
+            "name": NEWRELIC_METRIC_TEAM_MAX_BUDGET,
+            "type": "gauge",
+            "value": 20.0,
+            "attributes": {"team_id": "team-a", "team_alias": "team-a-alias"},
+        }
+        assert by_name[NEWRELIC_METRIC_TEAM_REMAINING_BUDGET]["type"] == "gauge"
+        assert by_name[NEWRELIC_METRIC_TEAM_REMAINING_BUDGET]["value"] == pytest.approx(15.25)
+        assert by_name[NEWRELIC_METRIC_COST_USD]["value"] == 0.25
+
+    @pytest.mark.asyncio
+    async def test_no_budget_metadata_sends_no_gauges(self):
+        logger = _make_logger()
+        logger.async_client.post = AsyncMock(return_value=_response(202))
+
+        await logger.async_log_success_event(
+            kwargs={"standard_logging_object": _standard_logging_object()},
+            response_obj={},
+            start_time=None,
+            end_time=None,
+        )
+        await logger.flush_queue()
+
+        body = json.loads(gzip.decompress(logger.async_client.post.await_args.kwargs["data"]).decode("utf-8"))
+        assert {m["type"] for m in body[0]["metrics"]} == {"count", "summary"}
 
 
 class TestQueueAndFlush:

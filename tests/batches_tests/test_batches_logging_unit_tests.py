@@ -144,18 +144,20 @@ def test_get_batch_job_total_usage_from_file_content(sample_file_content_dict):
 @pytest.mark.asyncio
 async def test_batch_cost_calculator(sample_file_content_dict):
     """
-    mock litellm.completion_cost to return 0.5
+    mock batch_cost_calculator to return (0.3, 0.2) per line
 
     we know sample_file_content_dict has 2 successful responses
 
-    so we expect the cost to be 0.5 * 2 = 1.0
+    so we expect the cost to be (0.3 + 0.2) * 2 = 1.0, split 0.6 / 0.4
     """
-    with patch("litellm.completion_cost", return_value=0.5):
+    with patch("litellm.cost_calculator.batch_cost_calculator", return_value=(0.3, 0.2)):
         result = _aggregate_batch_cost_usage_models(
             entries=sample_file_content_dict,
             custom_llm_provider="openai",
         )
-        assert result.cost == 1.0  # 0.5 * 2 successful responses
+        assert result.cost == pytest.approx(1.0)  # (0.3 + 0.2) * 2 successful responses
+        assert result.prompt_cost == pytest.approx(0.6)
+        assert result.completion_cost == pytest.approx(0.4)
 
 
 def test_get_response_from_batch_job_output_file(sample_file_content_dict):
@@ -400,6 +402,56 @@ async def test_batch_retrieve_cost_tracking_with_explicit_cost_data():
         assert mock_batch._hidden_params["response_cost"] == explicit_cost
         assert mock_batch._hidden_params["batch_models"] == explicit_models
         assert mock_batch.usage == explicit_usage
+
+
+@pytest.mark.asyncio
+async def test_batch_retrieve_explicit_cost_split_sets_cost_breakdown():
+    """The poller passes the batch's prompt/completion cost split so the spend row's
+    cost_breakdown carries real input/output costs; without it the UI's Cost Breakdown
+    card renders blank for every batch. Regression for the split being dropped."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import CallTypes, LiteLLMBatch
+
+    mock_batch = LiteLLMBatch(
+        id="batch-breakdown-1",
+        object="batch",
+        endpoint="/v1/chat/completions",
+        errors=None,
+        input_file_id="file-input-1",
+        completion_window="24h",
+        status="completed",
+        output_file_id="file-output-1",
+        created_at=1234567890,
+    )
+    mock_batch._hidden_params = {}
+
+    logging_obj = Logging(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type=CallTypes.aretrieve_batch.value,
+        litellm_call_id="test-call-breakdown",
+        function_id="test-function",
+        start_time=time.time(),
+        dynamic_success_callbacks=[],
+    )
+    logging_obj.custom_llm_provider = "openai"
+
+    await logging_obj.async_success_handler(
+        result=mock_batch,
+        start_time=time.time(),
+        end_time=time.time() + 1,
+        batch_cost=0.10,
+        batch_usage=litellm.Usage(prompt_tokens=200, completion_tokens=100, total_tokens=300),
+        batch_models=["gpt-5-mini"],
+        batch_prompt_cost=0.06,
+        batch_completion_cost=0.04,
+    )
+
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["input_cost"] == 0.06
+    assert logging_obj.cost_breakdown["output_cost"] == 0.04
+    assert logging_obj.cost_breakdown["total_cost"] == 0.10
 
 
 @pytest.mark.asyncio

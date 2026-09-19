@@ -45,6 +45,10 @@ from litellm.types.router import (
 from litellm.types.utils import Usage
 
 
+async def _passthrough_row(update_data):
+    return update_data
+
+
 def test_model_info_accepts_valid_ptu_fields():
     info = ModelInfo(
         id="x",
@@ -385,6 +389,7 @@ class TestTeamModelUpdateValidatesBeforeWriting:
             patch_data=patch_data,
             user_api_key_dict=MagicMock(),
             prisma_client=MagicMock(),
+            write_row=_passthrough_row,
         )
         return result, touched
 
@@ -914,6 +919,7 @@ class TestPtuDeploymentsAreNotBilledPerToken:
                     patch_data=patch,
                     user_api_key_dict=UserAPIKeyAuth(user_id="a", user_role=LitellmUserRoles.PROXY_ADMIN),
                     prisma_client=MagicMock(),
+                    write_row=_passthrough_row,
                 )
 
         assert exc.value.status_code == 400

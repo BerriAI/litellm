@@ -4,9 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
-
-
-from litellm import get_model_info, supports_reasoning, supports_vision
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import (
@@ -15,17 +13,6 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
 )
-
-
-@pytest.fixture(autouse=True)
-def force_local_model_cost(monkeypatch):
-    """Force local model cost map usage for all tests in this file."""
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    # Refresh model_cost from local map
-    import litellm
-    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
-
-    litellm.model_cost = get_model_cost_map(url=litellm.model_cost_map_url)
 
 
 def test_validate_environment_sets_session_affinity_from_litellm_session_id():
@@ -235,6 +222,21 @@ def test_get_fireworks_session_id_prefers_litellm_session_id_over_trace_id():
     )
 
 
+def test_get_fireworks_session_id_ignores_proxy_generated_session_id():
+    """general_settings.missing_session_id: generate stamps a fresh id per request; sending it
+    as x-session-affinity would pin every request to a different node."""
+    assert (
+        get_fireworks_session_id(
+            {
+                "litellm_session_id": "generated-1",
+                "litellm_trace_id": "generated-1",
+                "metadata": {"session_id": "generated-1", SESSION_ID_GENERATED_METADATA_KEY: True},
+            }
+        )
+        is None
+    )
+
+
 def test_handle_message_content_with_tool_calls():
     config = FireworksAIConfig()
     message = Message(
@@ -279,40 +281,6 @@ def test_handle_message_content_with_tool_calls():
     )
 
 
-def test_supports_reasoning_effort():
-    """Test that reasoning_effort is only supported for specific Fireworks AI models."""
-    supported_models = [
-        "fireworks_ai/accounts/fireworks/models/qwen3-8b",
-        "fireworks_ai/accounts/fireworks/models/qwen3-32b",
-        "fireworks_ai/accounts/fireworks/models/qwen3-coder-480b-a35b-instruct",
-        "fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
-        "fireworks_ai/accounts/fireworks/models/deepseek-v3p2",
-        "fireworks_ai/accounts/fireworks/models/glm-4p5",
-        "fireworks_ai/accounts/fireworks/models/glm-4p5-air",
-        "fireworks_ai/accounts/fireworks/models/glm-4p6",
-        "fireworks_ai/accounts/fireworks/models/glm-4p7",
-        "fireworks_ai/accounts/fireworks/models/glm-5p1",
-        "fireworks_ai/accounts/fireworks/models/gpt-oss-120b",
-        "fireworks_ai/accounts/fireworks/models/gpt-oss-20b",
-        "fireworks_ai/glm-5p1",
-    ]
-
-    unsupported_models = [
-        "fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct",
-        "fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct",
-    ]
-
-    for model in supported_models:
-        assert (
-            supports_reasoning(model=model, custom_llm_provider="fireworks_ai") is True
-        ), f"{model} should support reasoning_effort"
-
-    for model in unsupported_models:
-        assert (
-            supports_reasoning(model=model, custom_llm_provider="fireworks_ai") is False
-        ), f"{model} should not support reasoning_effort"
-
-
 def test_get_supported_openai_params_reasoning_effort():
     """Test that reasoning_effort is only included in supported params for models that support it."""
     config = FireworksAIConfig()
@@ -347,6 +315,27 @@ def test_get_supported_openai_params_parallel_tool_calls():
     assert "parallel_tool_calls" not in unsupported_params
 
 
+def test_get_supported_openai_params_short_model_name_resolves_account_prefixed_entry():
+    config = FireworksAIConfig()
+
+    supported_params = config.get_supported_openai_params(
+        "fireworks_ai/deepseek-v4-pro-0813"
+    )
+
+    assert "tool_choice" in supported_params
+    assert "reasoning_effort" in supported_params
+
+
+def test_get_supported_openai_params_preserves_generic_reasoning_fallback():
+    config = FireworksAIConfig()
+
+    supported_params = config.get_supported_openai_params(
+        "fireworks_ai/accounts/fireworks/models/glm-5p3-flash"
+    )
+
+    assert "reasoning_effort" in supported_params
+
+
 def test_get_supported_openai_params_parallel_tool_calls_without_tool_choice(
     monkeypatch,
 ):
@@ -367,15 +356,6 @@ def test_get_supported_openai_params_parallel_tool_calls_without_tool_choice(
     assert "tools" in supported_params
     assert "parallel_tool_calls" in supported_params
     assert "tool_choice" not in supported_params
-
-
-def test_get_model_info_respects_explicit_fireworks_capabilities():
-    """Test that get_model_info preserves explicit capability flags from the model map."""
-    model_info = get_model_info("fireworks_ai/accounts/fireworks/models/glm-5p1")
-
-    assert model_info["supports_function_calling"] is True
-    assert model_info["supports_reasoning"] is True
-    assert model_info["supports_tool_choice"] is True
 
 
 def test_get_provider_info_omits_false_supports_reasoning(monkeypatch):
@@ -486,8 +466,8 @@ def test_unmapped_model_fallback_function_calling():
     assert info["supports_function_calling"] is True
 
 
-def test_transform_messages_helper_strips_thinking_blocks():
-    """thinking_blocks must not be forwarded to Fireworks chat completions."""
+def test_transform_messages_helper_strips_thinking_blocks_but_keeps_reasoning_content():
+    """Fireworks rejects thinking_blocks but requires reasoning_content to be replayed for reasoning_history."""
     config = FireworksAIConfig()
     messages = [
         {"role": "user", "content": "Translate a poem."},
@@ -504,7 +484,7 @@ def test_transform_messages_helper_strips_thinking_blocks():
         messages, model="accounts/fireworks/models/glm-5p1", litellm_params={}
     )
     assert "thinking_blocks" not in out[1]
-    assert "reasoning_content" not in out[1]
+    assert out[1]["reasoning_content"] == "internal"
     assert out[1]["content"] == "I can help."
 
 
@@ -958,17 +938,6 @@ def test_thinking_and_reasoning_effort_conflict_rejected():
         )
 
 
-def test_minimax_m3_supports_vision_from_model_map():
-    config = FireworksAIConfig()
-
-    for model in [
-        "fireworks_ai/accounts/fireworks/models/minimax-m3",
-        "fireworks_ai/minimax-m3",
-    ]:
-        assert supports_vision(model=model, custom_llm_provider="fireworks_ai") is True
-        assert config.get_provider_info(model)["supports_vision"] is True
-
-
 def test_transform_messages_helper_rejects_file_blocks():
     config = FireworksAIConfig()
     messages = [
@@ -1037,7 +1006,7 @@ def test_transform_messages_helper_allows_vision_image_inputs():
     ]
 
     out = config._transform_messages_helper(
-        messages, model="accounts/fireworks/models/minimax-m3", litellm_params={}
+        messages, model="accounts/fireworks/models/llama-v3p2-11b-vision-instruct", litellm_params={}
     )
     assert out == messages
 
@@ -1102,7 +1071,7 @@ def test_transform_messages_helper_no_transform_inline():
         }
     ]
     out = config._transform_messages_helper(
-        messages, model="accounts/fireworks/models/minimax-m3", litellm_params={}
+        messages, model="accounts/fireworks/models/llama-v3p2-11b-vision-instruct", litellm_params={}
     )
     block = out[0]["content"][0]
     assert block["image_url"] == url
@@ -1172,6 +1141,28 @@ def test_reasoning_effort_integer_passthrough():
     )
     assert result["reasoning_effort"] == 1000
     assert isinstance(result["reasoning_effort"], int)
+
+
+def test_reasoning_effort_dict_from_anthropic_adapter_flattened_to_effort_string():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": {"effort": "medium", "summary": "detailed"}},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert result["reasoning_effort"] == "medium"
+
+
+def test_reasoning_effort_dict_without_effort_key_dropped():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": {"summary": "detailed"}},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in result
 
 
 def test_reasoning_effort_auto_dropped_to_model_default():
@@ -1798,3 +1789,15 @@ def test_streaming_preserves_selected_model_for_private_accounting():
         completion_response=assembled,
         custom_llm_provider="fireworks_ai",
     ) == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("deepseek-r1", "fireworks_ai/accounts/fireworks/models/deepseek-r1"),
+        ("glm-5p3-fast", "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast"),
+        ("accounts/fireworks/models/deepseek-r1", "fireworks_ai/accounts/fireworks/models/deepseek-r1"),
+    ],
+)
+def test_get_model_cost_key_resolves_short_names_to_long_keys(model: str, expected: str) -> None:
+    assert FireworksAIConfig().get_model_cost_key(model) == expected

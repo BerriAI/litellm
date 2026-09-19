@@ -204,6 +204,9 @@ class Error:
 
     TYPE: Final = "error.type"
     MESSAGE: Final = "error.message"
+    # The same text under the bare key the semconv-ai / Traceloop vocabulary uses
+    # (see ``LegacyMapper``), so anything reading or redacting error text covers both.
+    MESSAGE_LEGACY: Final = "error"
 
 
 class LiteLLMError:
@@ -295,6 +298,7 @@ class LiteLLM:
     # ``litellm_params.model``), distinct from the user-facing ``gen_ai.request.model``.
     PROVIDER_MODEL: Final = "litellm.provider.model"
     REQUEST_STREAMING: Final = "litellm.request.streaming"
+    REQUEST_ROUTE: Final = "litellm.request.route"
     TOOLS_DECLARED: Final = "litellm.request.tools.declared"
     GUARDRAIL_NAME: Final = "litellm.guardrail.name"
     GUARDRAIL_MODE: Final = "litellm.guardrail.mode"

@@ -9,7 +9,7 @@ import {
 import { Check, ChevronsUpDown, LayoutGrid } from "lucide-react";
 import { usePluginMode } from "@/contexts/PluginModeContext";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
-import { migratedHref } from "@/utils/migratedPages";
+import { uiHref } from "@/utils/uiHref";
 
 const GATEWAY = "ai-gateway";
 const CHAT = "chat";
@@ -28,7 +28,7 @@ export default function ViewSwitcher() {
 
   const chatEnabled = Boolean(uiSettings?.values?.enable_chat_ui);
 
-  const chatHref = migratedHref(CHAT);
+  const chatHref = uiHref(CHAT);
   const normalizedPathname = (pathname ?? "").replace(/\/+$/, "");
   const isChatRoute = chatEnabled && (normalizedPathname === chatHref || normalizedPathname.startsWith(`${chatHref}/`));
 
@@ -44,7 +44,7 @@ export default function ViewSwitcher() {
     // The chat route lives outside the dashboard SPA shell that reacts to `mode`,
     // so switching modes from there needs a real navigation, not just state.
     if (isChatRoute) {
-      window.location.assign(migratedHref(""));
+      window.location.assign(uiHref(""));
     }
   };
 
@@ -57,7 +57,7 @@ export default function ViewSwitcher() {
             {isChatRoute && <Check className="size-4 text-info" />}
           </div>
         ),
-        onClick: () => window.location.assign(migratedHref(CHAT)),
+        onClick: () => window.location.assign(uiHref(CHAT)),
       }
     : {
         key: CHAT,

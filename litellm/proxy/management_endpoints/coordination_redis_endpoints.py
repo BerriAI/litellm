@@ -140,7 +140,7 @@ def _merge_over_saved(
 def _validated_params(settings: Mapping[str, object]) -> CoordinationRedisParams:
     """Validate settings the way startup does: resolve env refs, then require a connection target."""
     try:
-        params: Final = CoordinationRedisParams(**_resolve_env_refs(settings))
+        params: Final = CoordinationRedisParams.model_validate(_resolve_env_refs(settings))
     except ValidationError as e:
         invalid_fields: Final = sorted({str(error["loc"][0]) for error in e.errors() if error["loc"]})
         raise HTTPException(
@@ -198,7 +198,7 @@ async def _current_coordination_redis_settings() -> dict[str, object] | None:
 
     config_state: Final = _SETTINGS_ADAPTER.validate_python(proxy_config.get_config_state())
     general_settings: Final = config_state.get(_GENERAL_SETTINGS_PARAM_NAME)
-    if not isinstance(general_settings, dict):
+    if not isinstance(general_settings, Mapping):
         return None
     from_file: Final = general_settings.get(_COORDINATION_REDIS_KEY)
     if isinstance(from_file, dict):

@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta
 from typing import NoReturn
 from unittest.mock import MagicMock, patch
 
@@ -11,7 +12,10 @@ from litellm.router_utils.fallback_event_handlers import (
     AttemptedFallbackTargets,
     _trigger_cooldown_for_failed_deployment,
     fallback_attempt_key,
+    clear_pre_routing_selection,
     get_fallback_model_group,
+    get_pre_routing_selection,
+    record_pre_routing_selection,
     run_async_fallback,
 )
 
@@ -23,6 +27,7 @@ class StreamingWrapper:
 
 class FakeRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def log_retry(self, kwargs, e):
         return kwargs
@@ -33,6 +38,7 @@ class FakeRouter:
 
 class AlwaysFailRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def log_retry(self, kwargs, e):
         return kwargs
@@ -97,6 +103,7 @@ async def test_run_async_fallback_raises_when_all_fallbacks_fail():
 
 class RecordingRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def __init__(self):
         self.received_kwargs = None
@@ -158,6 +165,7 @@ async def test_run_async_fallback_skips_original_model_group():
 
 class AttemptRecordingRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def __init__(self):
         self.attempted_model_groups = []
@@ -467,6 +475,8 @@ class AccessCheckedRouter(AttemptRecordingRouter):
         self.allowed_models = allowed_models
         self.access_checks = []
 
+    fallback_budget_check = None
+
     async def fallback_access_check(self, *, model, request_kwargs, llm_router):
         self.access_checks.append((model, request_kwargs["metadata"]["user_api_key"], llm_router is self))
         return model in self.allowed_models
@@ -538,6 +548,7 @@ async def test_run_async_fallback_does_not_consult_access_check_for_same_model_g
 
 class RecordingFailRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def __init__(self):
         self.attempted_models = []
@@ -609,6 +620,27 @@ async def test_run_async_fallback_forwards_attempted_model_groups_to_nested_call
     assert router.received_kwargs["attempted_targets"].keys == frozenset(
         {"earlier-model", "primary-model", "fallback-model"}
     )
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_can_target_the_requested_group_when_a_pre_router_replaced_it():
+    """The requested group was never called when a pre-router selected a tier, so a
+    tier fallback may legitimately target that originally requested group."""
+    router = RecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["requested-model"],
+        original_model_group="requested-model",
+        original_exception=RuntimeError("selected tier failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="requested-model",
+        metadata={"pre_routing_selected_model": "selected-tier"},
+    )
+
+    assert router.received_kwargs["model"] == "requested-model"
+    assert router.received_kwargs["attempted_targets"].keys == frozenset({"selected-tier", "requested-model"})
 
 
 @pytest.mark.asyncio
@@ -931,7 +963,11 @@ class TestTriggerCooldownForFailedDeployment:
         """The proxy's x-litellm-timeout header lets a caller set an arbitrarily short
         timeout, which litellm.Timeout reports as status 408 regardless of the
         deployment's actual health. Without this guard, a caller could force a 408 on
-        every deployment in the fallback chain from a single request."""
+        every deployment in the fallback chain from a single request.
+
+        The failure logger never stamps end_time for a fallback hop (has_logged_async_failure
+        is already set), so model_call_details still carries the previous hop's end_time, which
+        predates this hop's api_call_start_time. The guard must not trust it."""
         mock_router = MagicMock()
         mock_router.cooldown_time = 60.0
         mock_router.get_model_info.return_value = None
@@ -949,10 +985,60 @@ class TestTriggerCooldownForFailedDeployment:
                 litellm_router=mock_router,
                 kwargs={"client_side_timeout": True},
                 exception=exc,
+                model_call_details={
+                    "litellm_params": {"client_side_timeout": True, "timeout": 0.5},
+                    "api_call_start_time": datetime.now() - timedelta(seconds=1),
+                    "end_time": datetime.now() - timedelta(seconds=5),
+                },
             )
 
             mock_set_cooldown.assert_not_called()
             mock_increment.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_still_cools_down_provider_408_before_caller_deadline(self):
+        """client_side_timeout only records that the caller configured a timeout. A 408
+        that comes back before that deadline was raised by the provider itself, so it is
+        a real health signal and must still cool the deployment down."""
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+            get_deployment_failures_for_current_minute,
+        )
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "fallback-model",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                    "model_info": {"id": "fallback-deployment"},
+                }
+            ],
+            allowed_fails=0,
+            cooldown_time=60,
+            num_retries=0,
+        )
+        exc = litellm.Timeout(message="timeout", model="gpt-5.6", llm_provider="openai")
+        exc.failed_deployment_id = "fallback-deployment"
+        started = datetime.now()
+
+        _trigger_cooldown_for_failed_deployment(
+            litellm_router=router,
+            kwargs={"client_side_timeout": True},
+            exception=exc,
+            model_call_details={
+                "litellm_params": {"client_side_timeout": True, "timeout": 30},
+                "api_call_start_time": started,
+                "end_time": started + timedelta(seconds=1),
+            },
+        )
+
+        assert (
+            get_deployment_failures_for_current_minute(
+                litellm_router_instance=router, deployment_id="fallback-deployment"
+            )
+            == 1
+        )
+        active = router.cooldown_cache.get_active_cooldowns(model_ids=["fallback-deployment"], parent_otel_span=None)
+        assert [entry[0] for entry in active] == ["fallback-deployment"]
 
     def test_still_cools_down_408_without_client_side_timeout_flag(self):
         """The client-side-timeout guard is scoped to caller-supplied timeouts only: a
@@ -974,6 +1060,7 @@ class TestTriggerCooldownForFailedDeployment:
 class TestRunAsyncFallbackTriggersCooldown:
     class RouterWithLoggingKwarg:
         fallback_access_check = None
+        fallback_budget_check = None
 
         def __init__(self):
             self.cooldown_time = 60.0
@@ -1090,3 +1177,141 @@ async def test_run_async_fallback_preserves_original_model_group_on_nested_fallb
     metadata = router.received_kwargs["metadata"]
     assert metadata["attempted_fallbacks"] == 2
     assert metadata["original_model_group"] == "primary-model"
+
+
+class TestPreRoutingSelectionCarriesToFallbacks:
+    """#38832: a complexity/auto router picks a tier behind the router name, but fallback
+    lookup kept using the router name, so the tier's configured chain never ran."""
+
+    def test_selection_is_recorded_in_the_metadata_bucket(self):
+        kwargs = {"model": "smart-router", "metadata": {}}
+        record_pre_routing_selection(kwargs, "tier1")
+        assert kwargs["metadata"]["pre_routing_selected_model"] == "tier1"
+        assert get_pre_routing_selection(kwargs) == "tier1"
+
+    def test_selection_is_recorded_in_the_litellm_metadata_bucket(self):
+        kwargs = {"model": "smart-router", "litellm_metadata": {}}
+        record_pre_routing_selection(kwargs, "tier2")
+        assert get_pre_routing_selection(kwargs) == "tier2"
+
+    def test_a_bucket_survives_the_kwargs_copy_that_fallbacks_run_on(self):
+        """The bucket is shared by reference, which is the whole reason this works."""
+        outer = {"model": "smart-router", "metadata": {}}
+        inner = {**outer}
+        record_pre_routing_selection(inner, "tier1")
+        assert get_pre_routing_selection(outer) == "tier1"
+
+    def test_no_selection_reads_as_none(self):
+        assert get_pre_routing_selection({"model": "smart-router", "metadata": {}}) is None
+        assert get_pre_routing_selection({"model": "smart-router"}) is None
+
+    def test_missing_kwargs_is_a_no_op(self):
+        """A caller with no kwargs must not raise, and must not leak the selection anywhere."""
+        record_pre_routing_selection(None, "tier1")
+
+        assert get_pre_routing_selection({}) is None
+
+    def test_a_non_dict_bucket_is_ignored(self):
+        kwargs = {"model": "smart-router", "metadata": "not-a-dict"}
+        record_pre_routing_selection(kwargs, "tier1")
+        assert get_pre_routing_selection(kwargs) is None
+
+    def test_fallbacks_resolve_against_the_selected_tier(self):
+        """The lookup the router performs, keyed on the tier rather than the router name."""
+        fallbacks = [{"tier1": ["backup-a", "backup-b"]}, {"tier2": ["backup-c"]}]
+        assert get_fallback_model_group(fallbacks=fallbacks, model_group="tier1")[0] == ["backup-a", "backup-b"]
+        assert get_fallback_model_group(fallbacks=fallbacks, model_group="smart-router")[0] is None
+
+
+class TestPreRoutingSelectionIsPerHop:
+    """#38832 review: the buckets also carry whatever the caller sent, and a fallback hop
+    inherits the previous hop's tier, so a hop must start without a selection."""
+
+    def test_a_caller_supplied_selection_is_dropped(self):
+        kwargs = {"model": "plain", "metadata": {"pre_routing_selected_model": "tier1"}}
+
+        clear_pre_routing_selection(kwargs)
+
+        assert get_pre_routing_selection(kwargs) is None
+        assert "pre_routing_selected_model" not in kwargs["metadata"]
+
+    def test_both_buckets_are_cleared(self):
+        kwargs = {
+            "metadata": {"pre_routing_selected_model": "tier1"},
+            "litellm_metadata": {"pre_routing_selected_model": "tier2"},
+        }
+
+        clear_pre_routing_selection(kwargs)
+
+        assert get_pre_routing_selection(kwargs) is None
+
+    def test_the_rest_of_the_bucket_is_left_alone(self):
+        kwargs = {"metadata": {"pre_routing_selected_model": "tier1", "tags": ["a"]}}
+
+        clear_pre_routing_selection(kwargs)
+
+        assert kwargs["metadata"] == {"tags": ["a"]}
+
+    def test_clearing_is_a_no_op_without_a_usable_bucket(self):
+        kwargs = {"model": "plain", "metadata": "not-a-dict"}
+
+        clear_pre_routing_selection(None)
+        clear_pre_routing_selection(kwargs)
+
+        assert kwargs == {"model": "plain", "metadata": "not-a-dict"}
+
+    def test_a_selection_recorded_after_clearing_is_kept(self):
+        """Clearing runs before routing, so the hook's own write must survive it."""
+        kwargs = {"model": "smart-router", "metadata": {"pre_routing_selected_model": "stale"}}
+
+        clear_pre_routing_selection(kwargs)
+        record_pre_routing_selection(kwargs, "tier1")
+
+        assert get_pre_routing_selection(kwargs) == "tier1"
+
+
+class TestOrderedFallbackLookupGroups:
+    def test_tier_first_then_requested_group_deduped(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            PRE_ROUTING_SELECTED_MODEL_KEY,
+            fallback_lookup_groups,
+        )
+
+        kwargs = {"litellm_metadata": {PRE_ROUTING_SELECTED_MODEL_KEY: "tier1"}}
+        assert fallback_lookup_groups(kwargs, "smart-router") == ("tier1", "smart-router")
+        assert fallback_lookup_groups(kwargs, "tier1") == ("tier1",)
+        assert fallback_lookup_groups({}, "smart-router") == ("smart-router",)
+        assert fallback_lookup_groups({}, None) == ()
+
+    def test_session_remap_keeps_the_bound_router_between_tier_and_requested_group(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            PRE_ROUTING_SELECTED_MODEL_KEY,
+            fallback_lookup_groups,
+        )
+
+        kwargs = {
+            "litellm_metadata": {
+                PRE_ROUTING_SELECTED_MODEL_KEY: "tier1",
+                "model_group": "smart-router",
+            }
+        }
+
+        assert fallback_lookup_groups(kwargs, "requested-model") == (
+            "tier1",
+            "smart-router",
+            "requested-model",
+        )
+        assert fallback_lookup_groups({"metadata": {"model_group": []}}, "requested-model") == (
+            "requested-model",
+        )
+
+    def test_first_resolving_group_wins_and_generic_idx_survives_a_miss(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            get_fallback_model_group_for_lookup_groups,
+        )
+
+        fallbacks = [{"tier1": ["backup-a"]}, {"smart-router": ["backup-b"]}, {"*": ["backup-c"]}]
+        assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier1", "smart-router")) == (["backup-a"], None)
+        assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "smart-router")) == (["backup-b"], None)
+        assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "no-such")) == (["backup-c"], 2)
+        assert get_fallback_model_group_for_lookup_groups([{"tier1": ["backup-a"]}], ("no", "nope")) == (None, None)

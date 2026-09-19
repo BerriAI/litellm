@@ -207,13 +207,16 @@ async def completions(request: Request) -> Response:
 
 async def embeddings(request: Request) -> Response:
     body = await _parse_body(request)
+    model = _requested_model(body)
+    if model == _SLOW_MODEL:
+        await asyncio.sleep(_SLOW_RESPONSE_SECONDS)
     raw_input = body.get("input", "")
     count = len(raw_input) if isinstance(raw_input, list) else 1
     return JSONResponse(
         {
             "object": "list",
             "data": [{"object": "embedding", "index": i, "embedding": [0.0] * 1536} for i in range(max(count, 1))],
-            "model": _requested_model(body),
+            "model": model,
             "usage": {"prompt_tokens": 5, "total_tokens": 5},
         }
     )

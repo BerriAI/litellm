@@ -12,6 +12,7 @@ import openai
 import pytest
 
 import litellm
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 
 @pytest.mark.parametrize(
@@ -216,13 +217,16 @@ def test_timeout_streaming():
     litellm.set_verbose = False
     try:
         response = litellm.completion(
-            model="gpt-3.5-turbo",
+            model="openai/slow-endpoint",
             messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
-            timeout=0.0001,
+            api_base=FAKE_OPENAI_API_BASE,
+            api_key="fake-key",
+            timeout=0.5,
             stream=True,
         )
         for chunk in response:
             print(chunk)
+        pytest.fail("Did not raise error `openai.APITimeoutError`. The stream completed instead")
     except openai.APITimeoutError as e:
         print(
             "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e

@@ -5,6 +5,8 @@ import { renderWithProviders } from "../../../tests/test-utils";
 import DeletedKeysPage from "./DeletedKeysPage";
 import { useDeletedKeys, DeletedKeyResponse } from "@/app/(dashboard)/hooks/keys/useKeys";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useDeletedKeys: vi.fn(),
 }));
@@ -20,6 +22,7 @@ const mockDeletedKey: DeletedKeyResponse = {
   key_name: "test-key",
   key_alias: "Test Key Alias",
   spend: 5.5,
+  total_spend: 5.5,
   max_budget: 100,
   expires: "2024-12-31T23:59:59Z",
   models: ["gpt-3.5-turbo"],

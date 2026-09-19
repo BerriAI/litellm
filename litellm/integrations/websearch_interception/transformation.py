@@ -5,11 +5,21 @@ Transforms between Anthropic/OpenAI tool_use format and LiteLLM search format.
 """
 
 import json
+from collections.abc import Sequence
 from typing import Any, Final
+
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
+from litellm.exceptions import BadRequestError, RateLimitError
 from litellm.llms.base_llm.search.transformation import SearchResponse
+from litellm.types.integrations.websearch_interception import (
+    SearchFailed,
+    SearchOutcome,
+    SearchSucceeded,
+    WebSearchToolResultErrorCode,
+)
 
 
 class WebSearchTransformation:
@@ -24,7 +34,7 @@ class WebSearchTransformation:
 
     @staticmethod
     def transform_request(
-        response: Any,
+        response: object,
         stream: bool,
         response_format: str = "anthropic",
     ) -> tuple[bool, list[dict]]:
@@ -66,7 +76,7 @@ class WebSearchTransformation:
 
     @staticmethod
     def _detect_from_responses_response(
-        response: Any,
+        response: object,
     ) -> tuple[bool, list[dict]]:
         """Parse a Responses API response for ``litellm_web_search`` function calls.
 
@@ -280,7 +290,7 @@ class WebSearchTransformation:
     @staticmethod
     def transform_response(
         tool_calls: list[dict],
-        search_results: list[str],
+        search_results: Sequence[str],
         response_format: str = "anthropic",
         thinking_blocks: list[dict] | None = None,
     ) -> tuple[dict, dict | list[dict]]:
@@ -314,7 +324,7 @@ class WebSearchTransformation:
     @staticmethod
     def _transform_response_anthropic(
         tool_calls: list[dict],
-        search_results: list[str],
+        search_results: Sequence[str],
         thinking_blocks: list[dict] | None = None,
     ) -> tuple[dict, dict]:
         """Transform to Anthropic format (single user message with tool_result blocks)"""
@@ -364,7 +374,7 @@ class WebSearchTransformation:
     @staticmethod
     def _transform_response_openai(
         tool_calls: list[dict],
-        search_results: list[str],
+        search_results: Sequence[str],
     ) -> tuple[dict, list[dict]]:
         """Transform to OpenAI format (assistant with tool_calls, separate tool messages)"""
         # Build assistant message with tool_calls
@@ -399,7 +409,7 @@ class WebSearchTransformation:
     def build_web_search_tool_result_block(
         tool_use_id: str,
         search_response: SearchResponse | None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Build an Anthropic-native ``web_search_tool_result`` content block.
 
@@ -433,7 +443,7 @@ class WebSearchTransformation:
                 emitted with an empty result list (signals "search ran, no
                 results" rather than "search did not run").
         """
-        items: Final[list[dict[str, Any]]] = []
+        items: Final[list[dict[str, object]]] = []
         if search_response is not None:
             results: Final = getattr(search_response, "results", None) or []
             for r in results:
@@ -455,6 +465,67 @@ class WebSearchTransformation:
             "tool_use_id": tool_use_id,
             "content": items,
         }
+
+    @staticmethod
+    def build_web_search_tool_result_error_block(
+        tool_use_id: str,
+        error_code: WebSearchToolResultErrorCode,
+    ) -> dict[str, object]:
+        return {
+            "type": "web_search_tool_result",
+            "tool_use_id": tool_use_id,
+            "content": {"type": "web_search_tool_result_error", "error_code": error_code},
+        }
+
+    @staticmethod
+    def build_web_search_outcome_block(tool_use_id: str, outcome: SearchOutcome) -> dict[str, object]:
+        match outcome:
+            case SearchSucceeded(response=response):
+                return WebSearchTransformation.build_web_search_tool_result_block(
+                    tool_use_id=tool_use_id,
+                    search_response=response,
+                )
+            case SearchFailed(error_code=error_code):
+                return WebSearchTransformation.build_web_search_tool_result_error_block(
+                    tool_use_id=tool_use_id,
+                    error_code=error_code,
+                )
+            case _:
+                assert_never(outcome)
+
+    @staticmethod
+    def search_error_code(error: BaseException) -> WebSearchToolResultErrorCode:
+        match error:
+            case RateLimitError():
+                return "too_many_requests"
+            case BadRequestError():
+                return "invalid_tool_input"
+            case _:
+                return "unavailable"
+
+    @staticmethod
+    def search_outcome(result: object) -> SearchOutcome:
+        match result:
+            case BaseException():
+                verbose_logger.error("WebSearchInterception: Search failed with error: %s", result)
+                return SearchFailed(error_code=WebSearchTransformation.search_error_code(result), message=str(result))
+            case (str() as text, SearchResponse() as response):
+                return SearchSucceeded(text=text, response=response)
+            case (str() as text, None):
+                return SearchSucceeded(text=text, response=None)
+            case _:
+                verbose_logger.debug("WebSearchInterception: Unexpected search result type %s", type(result))
+                return SearchSucceeded(text=str(result), response=None)
+
+    @staticmethod
+    def search_outcome_text(outcome: SearchOutcome) -> str:
+        match outcome:
+            case SearchSucceeded(text=text):
+                return text
+            case SearchFailed(message=message):
+                return f"Search failed: {message}"
+            case _:
+                assert_never(outcome)
 
     @staticmethod
     def format_search_response(result: SearchResponse) -> str:

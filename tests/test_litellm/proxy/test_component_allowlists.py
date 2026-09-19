@@ -196,6 +196,20 @@ def test_gateway_drops_ui_and_swagger_mounts():
             f"Mount {path} must not be served by the gateway"
 
 
+def test_gateway_keeps_memory_summary_and_trims_the_other_debug_routes():
+    """The gateway serves /debug/memory/summary, since the RSS that matters is the
+    serving worker's and the memory regression e2e test reads it on every gateway
+    replica; the heavier and mutating /debug/memory routes stay on the backend."""
+    debug_memory_routes = {
+        getattr(r, "path"): r for r in app.router.routes if str(getattr(r, "path", "")).startswith("/debug/memory/")
+    }
+    assert {"/debug/memory/summary", "/debug/memory/details", "/debug/memory/gc/configure"} <= set(debug_memory_routes)
+    assert _is_gateway_route(debug_memory_routes["/debug/memory/summary"]), \
+        "/debug/memory/summary must survive the gateway route trim"
+    for path in ("/debug/memory/details", "/debug/memory/gc/configure"):
+        assert not _is_gateway_route(debug_memory_routes[path]), f"{path} must not be served by the gateway"
+
+
 def test_every_app_mount_is_assigned_to_a_component():
     """Every Mount on the proxy app must be consciously assigned to a component.
 

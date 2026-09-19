@@ -745,13 +745,25 @@ class OCIStreamWrapper(CustomStreamWrapper):
         # single-event case (terminal chunk carries the only copy of the text).
         self._cohere_text_emitted = False
 
-    def chunk_creator(self, chunk: Any) -> ModelResponseStream:
+    def _emit_chunk(self, parsed: ModelResponseStream) -> ModelResponseStream:
+        for choice in parsed.choices:
+            if getattr(choice.delta, "tool_calls", None):
+                self.tool_call = True
+            if choice.finish_reason is not None:
+                self.received_finish_reason = choice.finish_reason
+                self.sent_last_chunk = True
+        return self.model_response_creator(chunk={"choices": parsed.choices})
+
+    def chunk_creator(self, chunk: Any) -> ModelResponseStream | None:
         if not isinstance(chunk, str):
             raise ValueError(f"Chunk is not a string: {chunk}")
         if not chunk.startswith("data:"):
             raise ValueError(f"Chunk does not start with 'data:': {chunk}")
+        payload: Final = chunk[5:].strip()
+        if payload == "[DONE]":
+            return None
         try:
-            dict_chunk: Final = json.loads(chunk[5:])
+            dict_chunk: Final = json.loads(payload)
         except json.JSONDecodeError as e:
             raise OCIError(
                 status_code=500,
@@ -774,8 +786,8 @@ class OCIStreamWrapper(CustomStreamWrapper):
                     if getattr(choice.delta, "content", None):
                         self._cohere_text_emitted = True
                         break
-            return result
-        return handle_generic_stream_chunk(dict_chunk)
+            return self._emit_chunk(result)
+        return self._emit_chunk(handle_generic_stream_chunk(dict_chunk))
 
 
 __all__ = [

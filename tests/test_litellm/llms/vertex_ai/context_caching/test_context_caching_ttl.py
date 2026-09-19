@@ -1,44 +1,79 @@
 import pytest
 from litellm.llms.vertex_ai.context_caching.transformation import (
+    _normalize_ttl_to_seconds,
     extract_ttl_from_cached_messages,
-    _is_valid_ttl_format,
     transform_openai_messages_to_gemini_context_caching,
 )
 
 
-class TestTTLValidation:
-    """Test TTL format validation"""
+class TestTTLNormalization:
+    @pytest.mark.parametrize(
+        "ttl, expected",
+        [
+            ("3600s", "3600s"),
+            ("1s", "1s"),
+            ("1.5s", "1.5s"),
+            ("0.1s", "0.1s"),
+            ("123.456s", "123.456s"),
+            ("1.3333333333333333s", "1.333333333s"),
+            ("5m", "300s"),
+            ("90m", "5400s"),
+            ("1h", "3600s"),
+            ("0.5h", "1800s"),
+            ("48h", "172800s"),
+            ("61320000h", "220752000000s"),
+        ],
+    )
+    def test_normalizes_supported_units_to_seconds(self, ttl, expected):
+        assert _normalize_ttl_to_seconds(ttl) == expected
 
-    def test_valid_ttl_formats(self):
-        """Test various valid TTL formats"""
-        valid_ttls = ["3600s", "1s", "7200s", "1.5s", "0.1s", "86400s", "123.456s"]
-
-        for ttl in valid_ttls:
-            assert _is_valid_ttl_format(ttl), f"TTL {ttl} should be valid"
-
-    def test_invalid_ttl_formats(self):
-        """Test various invalid TTL formats"""
-        invalid_ttls = [
-            "3600",  # missing 's'
-            "s",  # missing number
-            "-1s",  # negative number
-            "0s",  # zero
-            "3600m",  # wrong unit
-            "abc.s",  # invalid number
-            "",  # empty string
-            "3600.s",  # invalid decimal
-            "3600 s",  # space
-            "3600ss",  # extra 's'
-            None,  # None
-            123,  # not a string
-        ]
-
-        for ttl in invalid_ttls:
-            assert not _is_valid_ttl_format(ttl), f"TTL {ttl} should be invalid"
+    @pytest.mark.parametrize(
+        "ttl",
+        [
+            "3600",
+            "s",
+            "-1s",
+            "0s",
+            "0m",
+            "0h",
+            "5d",
+            "abc.s",
+            "",
+            "3600.s",
+            "3600 s",
+            "3600ss",
+            "1 h",
+            "0.0000000001s",
+            "251700000000s",
+            "69920000h",
+            "9" * 400 + "h",
+            None,
+            123,
+        ],
+    )
+    def test_rejects_unparseable_ttl(self, ttl):
+        assert _normalize_ttl_to_seconds(ttl) is None
 
 
 class TestTTLExtraction:
     """Test TTL extraction from cached messages"""
+
+    @pytest.mark.parametrize("ttl, expected", [("1h", "3600s"), ("5m", "300s")])
+    def test_extract_ttl_normalizes_anthropic_units(self, ttl, expected):
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "cached",
+                        "cache_control": {"type": "ephemeral", "ttl": ttl},
+                    }
+                ],
+            }
+        ]
+
+        assert extract_ttl_from_cached_messages(messages) == expected
 
     def test_extract_ttl_from_single_message(self):
         """Test extracting TTL from a single cached message"""
