@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 import httpx
 import pytest
+from opentelemetry.trace import Span
 
 import litellm
 
@@ -38,6 +39,9 @@ from litellm.proxy.auth.handle_jwt import (
     NoMatchingJWTPublicKeyError,
 )
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.router import Router
 from litellm.types.agents import AgentResponse
 
 
@@ -289,6 +293,81 @@ async def test_find_team_with_model_access_uses_request_method_for_passthrough_a
 
     assert exc_info.value.status_code == 403
     assert "allowed_passthrough_routes" in exc_info.value.detail
+
+
+def test_get_all_team_ids_preserves_claim_order():
+    handler = JWTHandler()
+    handler.litellm_jwtauth = LiteLLM_JWTAuth(team_ids_jwt_field="groups")
+
+    team_ids = JWTAuthManager.get_all_team_ids(
+        handler,
+        {"groups": ["team-b", "team-a", "team-b", "team-c"]},
+    )
+
+    assert team_ids == ("team-b", "team-a", "team-c")
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_preserves_team_claim_order():
+    handler = JWTHandler()
+    handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    async def mock_team_lookup(
+        *,
+        team_id: str,
+        prisma_client: PrismaClient | None,
+        user_api_key_cache: UserApiKeyCache,
+        parent_otel_span: Span | None,
+        proxy_logging_obj: ProxyLogging,
+    ) -> LiteLLM_TeamTable:
+        return LiteLLM_TeamTable(team_id=team_id, models=["gpt-4"])
+
+    async def mock_model_access_check(
+        *,
+        model: str,
+        team_object: LiteLLM_TeamTable,
+        llm_router: Router | None,
+        team_model_aliases: dict[str, str] | None,
+    ) -> bool:
+        return True
+
+    def mock_route_check(
+        *,
+        user_role: LitellmUserRoles,
+        user_route: str,
+        litellm_proxy_roles: LiteLLM_JWTAuth,
+    ) -> bool:
+        return True
+
+    first_team_id, _ = await JWTAuthManager.find_team_with_model_access(
+        team_ids=("team-b", "team-a"),
+        requested_model="gpt-4",
+        route="/chat/completions",
+        jwt_handler=handler,
+        prisma_client=None,
+        user_api_key_cache=MagicMock(),
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
+        team_lookup=mock_team_lookup,
+        model_access_check=mock_model_access_check,
+        route_check=mock_route_check,
+    )
+    reversed_team_id, _ = await JWTAuthManager.find_team_with_model_access(
+        team_ids=("team-a", "team-b"),
+        requested_model="gpt-4",
+        route="/chat/completions",
+        jwt_handler=handler,
+        prisma_client=None,
+        user_api_key_cache=MagicMock(),
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
+        team_lookup=mock_team_lookup,
+        model_access_check=mock_model_access_check,
+        route_check=mock_route_check,
+    )
+
+    assert first_team_id == "team-b"
+    assert reversed_team_id == "team-a"
 
 
 @pytest.mark.asyncio
