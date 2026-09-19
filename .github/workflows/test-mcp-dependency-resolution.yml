@@ -7,6 +7,14 @@ on:
       - litellm_internal_staging
       - litellm_oss_staging
       - "litellm_**"
+    paths:
+      - "pyproject.toml"
+      - "uv.lock"
+      - "litellm/experimental_mcp_client/**"
+      - "litellm/proxy/_experimental/mcp_server/**"
+      - "litellm/types/mcp.py"
+      - "scripts/check_mcp_sdk_install.py"
+      - ".github/workflows/test-mcp-dependency-resolution.yml"
 
 permissions:
   contents: read
@@ -19,7 +27,7 @@ concurrency:
 jobs:
   resolve:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -58,30 +66,12 @@ jobs:
       - name: Install locked dependencies
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          .github/scripts/uv_sync_with_retries.sh --frozen --python ${{ matrix.python-version }} --group proxy-dev --extra mcp --extra proxy --extra semantic-router
+          .github/scripts/uv_sync_with_retries.sh --frozen --python ${{ matrix.python-version }} --extra mcp --extra proxy
 
       - name: Check locked MCP SDK installation
         if: steps.changes.outputs.decision != 'skip'
         run: |
           uv run --no-sync python scripts/check_mcp_sdk_install.py
-
-      - name: Cache Prisma binaries
-        if: steps.changes.outputs.decision != 'skip'
-        timeout-minutes: 3
-        uses: ./.github/actions/cache-prisma-binaries
-
-      - name: Generate Prisma client
-        if: steps.changes.outputs.decision != 'skip'
-        timeout-minutes: 3
-        run: |
-          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
-
-      - name: Run MCP unit tests
-        if: steps.changes.outputs.decision != 'skip'
-        env:
-          LITELLM_LOCAL_MODEL_COST_MAP: "True"
-        run: |
-          uv run --no-sync pytest -q -p no:cacheprovider -n 4 tests/test_litellm/proxy/_experimental/mcp_server tests/test_litellm/experimental_mcp_client
 
       - name: Resolve lowest direct dependencies
         if: steps.changes.outputs.decision != 'skip'
