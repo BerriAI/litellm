@@ -196,6 +196,36 @@ def test_langfuse_mapper_keeps_chat_output_when_no_embedding_summary():
     assert json.loads(attrs["langfuse.observation.output"]) == [{"role": "assistant", "content": "Sunny."}]
 
 
+def test_langfuse_mapper_renders_a_responses_api_call_from_the_standard_logging_payload():
+    payload = {
+        "call_type": "aresponses",
+        "custom_llm_provider": "openai",
+        "model": "gpt-5.4-nano",
+        "messages": [{"role": "user", "content": "weather in sf?"}],
+        "response": {
+            "id": "resp_1",
+            "status": "completed",
+            "output": [
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Checking."}]},
+                {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city": "sf"}'},
+            ],
+        },
+    }
+    data = LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True)
+    attrs = LangfuseMapper().map(data)
+
+    assert json.loads(attrs["langfuse.observation.output"]) == [
+        {
+            "role": "assistant",
+            "content": "Checking.",
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "sf"}'}}
+            ],
+        }
+    ]
+    assert attrs["langfuse.observation.type"] == "generation"
+
+
 # --------------------------------------------------------------------------- #
 #  Weave
 # --------------------------------------------------------------------------- #
