@@ -4526,3 +4526,37 @@ async def test_add_deployment_syncs_ui_settings_even_when_the_model_reconcile_fa
     await config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=MagicMock())
 
     assert general_settings["allow_agents_for_team_admins"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allowed_ips_yaml", "expected_error"),
+    [
+        ("", None),
+        ("  allowed_ips: []\n", "allowed_ips is an Enterprise Feature"),
+        ("  allowed_ips:\n    - 127.0.0.1\n", "allowed_ips is an Enterprise Feature"),
+    ],
+)
+async def test_ProxyConfig_load_config_enterprise_gate_covers_every_declared_allowlist(
+    tmp_path, monkeypatch, allowed_ips_yaml, expected_error
+):
+    """An empty allowed_ips is still an allowlist, the one that denies everything, so a
+    non-premium proxy must be refused it just like a populated one. Only an absent
+    setting means the feature is unused."""
+    config_file = tmp_path / "allowed_ips.yaml"
+    config_file.write_text("model_list: []\nlitellm_settings: {}\ngeneral_settings:\n  master_key: null\n" + allowed_ips_yaml)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    try:
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+        raised = None
+    except ValueError as exc:
+        raised = str(exc)
+
+    if expected_error is None:
+        assert raised is None
+    else:
+        assert raised is not None and expected_error in raised

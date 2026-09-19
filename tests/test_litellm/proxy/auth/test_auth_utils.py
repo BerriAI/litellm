@@ -3918,3 +3918,78 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
             )
             is True
         )
+
+
+class TestAllowedIpsEmptyListDeniesEveryAddress:
+    """An empty allowlist is an allowlist that matches nothing, so it denies every
+    address. That is only safe because the delete endpoint no longer produces one by
+    accident when its last entry is removed; see the tests over delete_allowed_ip."""
+
+    @staticmethod
+    def _request(client_host: str) -> Request:
+        return Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "headers": [],
+                "client": (client_host, 51234),
+            }
+        )
+
+    async def _status_for(self, monkeypatch, general_settings: dict, client_host: str) -> int:
+        from fastapi import HTTPException
+
+        import litellm.proxy.proxy_server as proxy_server_module
+        from litellm.proxy.auth.auth_utils import pre_db_read_auth_checks
+
+        monkeypatch.setattr(proxy_server_module, "general_settings", general_settings)
+        try:
+            await pre_db_read_auth_checks(
+                request=self._request(client_host),
+                request_data={"model": "gpt-4o"},
+                route="/v1/chat/completions",
+            )
+        except HTTPException as exc:
+            return exc.status_code
+        return 200
+
+    @pytest.mark.asyncio
+    async def test_an_empty_allowlist_denies_every_address(self, monkeypatch):
+        status_code = await self._status_for(
+            monkeypatch,
+            general_settings={"allowed_ips": []},
+            client_host="203.0.113.9",
+        )
+
+        assert status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_an_unset_allowlist_allows_every_address(self, monkeypatch):
+        status_code = await self._status_for(
+            monkeypatch,
+            general_settings={"allowed_ips": None},
+            client_host="203.0.113.9",
+        )
+
+        assert status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_unlisted_ip_is_rejected_when_allowlist_is_populated(self, monkeypatch):
+        status_code = await self._status_for(
+            monkeypatch,
+            general_settings={"allowed_ips": ["198.51.100.4"]},
+            client_host="203.0.113.9",
+        )
+
+        assert status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_listed_ip_is_allowed_when_allowlist_is_populated(self, monkeypatch):
+        status_code = await self._status_for(
+            monkeypatch,
+            general_settings={"allowed_ips": ["203.0.113.9"]},
+            client_host="203.0.113.9",
+        )
+
+        assert status_code == 200

@@ -93,9 +93,13 @@ def _check_valid_ip(
     use_x_forwarded_for: bool | None = False,
 ) -> tuple[bool, str | None]:
     """
-    Returns if ip is allowed or not
+    Returns if ip is allowed or not.
+
+    Unset means no allowlist. An empty list is an allowlist that matches
+    nothing, so it denies every address; only the delete endpoint is stopped
+    from producing one by accident.
     """
-    if allowed_ips is None:  # if not set, assume true
+    if allowed_ips is None:
         return True, None
 
     # if general_settings.get("use_x_forwarded_for") is True then use x-forwarded-for

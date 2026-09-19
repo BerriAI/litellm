@@ -569,11 +569,14 @@ async def delete_allowed_ip(
     )
 
     _allowed_ips: Final[list] = general_settings.get("allowed_ips", [])
-    if ip_address.ip in _allowed_ips:
-        _allowed_ips.remove(ip_address.ip)
-        general_settings["allowed_ips"] = _allowed_ips
-    else:
+    if ip_address.ip not in _allowed_ips:
         raise HTTPException(status_code=404, detail="IP address not found")
+
+    remaining_ips: Final = [ip for ip in _allowed_ips if ip != ip_address.ip]
+    if remaining_ips:
+        general_settings["allowed_ips"] = remaining_ips
+    else:
+        general_settings.pop("allowed_ips", None)
 
     # Load existing config
     config: Final = await proxy_config.get_config()
@@ -581,12 +584,12 @@ async def delete_allowed_ip(
     if "general_settings" not in config:
         config["general_settings"] = {}
 
-    if "allowed_ips" not in config["general_settings"]:
-        config["general_settings"]["allowed_ips"] = []
-
-    before_allowed_ips: Final = list(config["general_settings"]["allowed_ips"])
-    if ip_address.ip in config["general_settings"]["allowed_ips"]:
-        config["general_settings"]["allowed_ips"].remove(ip_address.ip)
+    before_allowed_ips: Final = list(config["general_settings"].get("allowed_ips", []))
+    after_allowed_ips: Final = [ip for ip in before_allowed_ips if ip != ip_address.ip]
+    if after_allowed_ips:
+        config["general_settings"]["allowed_ips"] = after_allowed_ips
+    else:
+        config["general_settings"].pop("allowed_ips", None)
 
     await proxy_config.save_config(new_config=config)
 
@@ -595,7 +598,7 @@ async def delete_allowed_ip(
             param_name="general_settings",
             action="deleted",
             before_value={"allowed_ips": before_allowed_ips},
-            after_value={"allowed_ips": config["general_settings"]["allowed_ips"]},
+            after_value={"allowed_ips": after_allowed_ips},
             user_api_key_dict=user_api_key_dict,
         )
     )

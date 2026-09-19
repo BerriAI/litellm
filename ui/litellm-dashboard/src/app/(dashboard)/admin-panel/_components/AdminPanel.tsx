@@ -154,7 +154,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
         await deleteAllowedIP(accessToken, ipToDelete);
         // Fetch the updated list of IPs
         const updatedIPs = await getAllowedIPs(accessToken);
-        setAllowedIPs(updatedIPs.length > 0 ? updatedIPs : [all_ip_address_allowed]);
+        setAllowedIPs(updatedIPs && updatedIPs.length > 0 ? updatedIPs : [all_ip_address_allowed]);
         toast.success("IP address deleted successfully");
       } catch (error) {
         console.error("Error deleting IP:", error);
