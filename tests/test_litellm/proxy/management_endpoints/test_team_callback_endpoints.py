@@ -1538,6 +1538,12 @@ async def test_proxy_admin_still_told_the_team_is_unknown():
         ({"langsmith_api_key": "k"}, [{"dd_api_key": "k"}], False),
         # variables that configure no backend carry nothing to redirect
         ({"turn_off_message_logging": "true"}, [{"langfuse_secret_key": "sk"}], False),
+        # the span scope picks what the family exports, not where to, so a second
+        # entry may set either legal value next to the family's credentials
+        ({"langfuse_span_scope": "llm_only"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], False),
+        ({"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_span_scope": "full"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_span_scope": "llm_only"}], False),
+        # the scope on the stored entry must not shield a redirect riding next to it
+        ({"langfuse_host": "http://attacker.invalid", "langfuse_span_scope": "llm_only"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_span_scope": "llm_only"}], True),
         # the same integration registered for a second event: identical values
         # flatten to the identical dict, so there is nothing to redirect
         ({"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], False),

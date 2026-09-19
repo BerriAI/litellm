@@ -12,6 +12,7 @@ from typing import Final
 _NEWRELIC_CALLBACK: Final = "newrelic"
 _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
 _LANGFUSE_OTEL_CALLBACK: Final = "langfuse_otel"
+_LANGFUSE_SPAN_SCOPE_VAR: Final = "langfuse_span_scope"
 
 
 def callback_config_error(callback_name: str | None, callback_vars: Mapping[str, str] | None) -> str | None:
@@ -48,11 +49,13 @@ def _langfuse_environment_error(callback_vars: Mapping[str, str]) -> str | None:
 
 
 def _langfuse_span_scope_error(callback_name: str | None, callback_vars: Mapping[str, str]) -> str | None:
-    value: Final = callback_vars.get("langfuse_span_scope")
+    value: Final = callback_vars.get(_LANGFUSE_SPAN_SCOPE_VAR)
     if value is None:
         return None
     if callback_name != _LANGFUSE_OTEL_CALLBACK:
-        return f"langfuse_span_scope applies to the {_LANGFUSE_OTEL_CALLBACK} callback only, not {callback_name!r}"
+        return (
+            f"{_LANGFUSE_SPAN_SCOPE_VAR} applies to the {_LANGFUSE_OTEL_CALLBACK} callback only, not {callback_name!r}"
+        )
     from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
         validate_langfuse_span_scope_value,
     )
@@ -83,13 +86,18 @@ _VAR_FAMILIES: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 
+_FAMILY_OPTION_VARS: Final[frozenset[str]] = frozenset({_LANGFUSE_SPAN_SCOPE_VAR})
+
 
 def _family_of(var: str) -> str | None:
     """The credential family ``var`` configures, or ``None`` if it configures none.
 
     ``turn_off_message_logging`` and friends belong to no backend, so they carry
-    no credentials anyone could redirect.
+    no credentials anyone could redirect. ``langfuse_span_scope`` shares the Langfuse
+    prefix but is a fixed enum choosing what the family exports, not where to.
     """
+    if var in _FAMILY_OPTION_VARS:
+        return None
     return next((family for prefix, family in _VAR_FAMILIES.items() if var.startswith(prefix)), None)
 
 

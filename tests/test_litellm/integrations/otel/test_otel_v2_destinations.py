@@ -1819,6 +1819,35 @@ class TestSpanScope:
         with pytest.raises(ValueError, match="langfuse_span_scope"):
             OpenTelemetryV2Config(langfuse_span_scope="everything")
 
+    @pytest.mark.parametrize("spelling", ["LLM_ONLY", "Llm_Only", " llm_only\n"])
+    def test_the_env_var_is_read_case_and_whitespace_insensitively(self, monkeypatch, spelling):
+        """A misspelt env var would otherwise fail validation inside the logger builder,
+        which swallows the error and leaves the proxy up with OTel v2 silently off."""
+        monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_SPAN_SCOPE", spelling)
+
+        assert OpenTelemetryV2Config().langfuse_span_scope == "llm_only"
+
+    def test_the_operator_scope_does_not_reach_a_tenants_routed_provider(self, monkeypatch):
+        """The routed clone carries the tenant's credentials on the operator's Langfuse
+        exporter. The operator's ``llm_only`` is a choice about the operator's account,
+        so the clone must export the full tree, as the field's contract promises."""
+        tenant = InMemorySpanExporter()
+        monkeypatch.setattr(otel_providers, "_exporter_from_spec", lambda _spec: tenant)
+        config = OpenTelemetryV2Config(
+            langfuse_span_scope="llm_only",
+            exporters=[ExporterSpec(kind="otlp_http", endpoint="http://op.local", owner=ExporterOwner.LANGFUSE_OTEL)],
+        )
+        cache = TenantTracerCache(config, "langfuse_otel", "litellm")
+        route = cache.route_for(
+            get_tracer(TracerProvider(), "litellm"), {"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}
+        )
+        assert route.provider is not None
+
+        request_tree(route.provider)
+        route.provider.force_flush()
+
+        assert names(tenant) == REQUEST_TREE
+
     def test_a_team_callback_var_becomes_the_destinations_scope(self, monkeypatch, allow_test_hosts):
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
         is_otel_v2_enabled.cache_clear()

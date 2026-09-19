@@ -255,6 +255,13 @@ class OpenTelemetryV2Config(BaseSettings):
             return value.lower()
         return value
 
+    @field_validator("langfuse_span_scope", mode="before")
+    @classmethod
+    def _normalize_langfuse_span_scope(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
     @field_validator(
         "baggage_promoted_keys",
         "baggage_metadata_keys",
