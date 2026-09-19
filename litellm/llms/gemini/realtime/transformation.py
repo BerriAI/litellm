@@ -52,6 +52,7 @@ from litellm.types.llms.vertex_ai import (
     GeminiResponseModalities,
     HttpxBlobType,
     HttpxContentType,
+    TranslationConfig,
 )
 from litellm.types.realtime import (
     ALL_DELTA_TYPES,
@@ -96,6 +97,31 @@ def _gemini_live_speech_config(voice: object) -> Mapping[str, object] | None:
         )
         return None
     return VertexGeminiConfig()._map_audio_params({"voice": voice})
+
+
+class _TranslationGenerationConfig(TypedDict, total=False):
+    translationConfig: ReadOnly[TranslationConfig]
+
+
+def _translation_generation_config(value: object) -> _TranslationGenerationConfig:
+    empty: Final[_TranslationGenerationConfig] = {}
+    if not isinstance(value, Mapping):
+        return empty
+    target: Final = value.get("target_language_code", value.get("targetLanguageCode"))
+    if not isinstance(target, str) or not target:
+        verbose_logger.warning(
+            "Gemini Realtime: translation_config without target_language_code dropped; "
+            "live-translate models stream silence without one."
+        )
+        return empty
+    echo: Final = value.get("echo_target_language", value.get("echoTargetLanguage"))
+    if isinstance(echo, bool):
+        with_echo: Final[_TranslationGenerationConfig] = {
+            "translationConfig": TranslationConfig(targetLanguageCode=target, echoTargetLanguage=echo)
+        }
+        return with_echo
+    config: Final[_TranslationGenerationConfig] = {"translationConfig": TranslationConfig(targetLanguageCode=target)}
+    return config
 
 
 class _GeminiLiveSetupEnvelope(TypedDict, total=False):
@@ -308,6 +334,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             "input_audio_transcription",
             "turn_detection",
             "voice",
+            "translation_config",
         ]
 
     def map_openai_params(self, optional_params: dict, non_default_params: dict) -> dict:
@@ -356,6 +383,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 speech_config = _gemini_live_speech_config(value)
                 if speech_config:
                     optional_params["generationConfig"]["speechConfig"] = speech_config
+        optional_params["generationConfig"].update(
+            _translation_generation_config(non_default_params.get("translation_config"))
+        )
         if len(optional_params["generationConfig"]) == 0:
             optional_params.pop("generationConfig")
         return optional_params
