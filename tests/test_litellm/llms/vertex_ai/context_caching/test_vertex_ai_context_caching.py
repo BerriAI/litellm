@@ -1396,14 +1396,15 @@ class TestContextCachingEndpoints:
         # Restart the patcher so teardown_method can stop it cleanly
         self._token_check_patcher.start()
 
-    @pytest.mark.parametrize("model", ["gemini-2.5-flash", "gemini-2.5-pro"])
-    def test_check_and_create_cache_skips_between_default_and_gemini_2_5_minimum(
-        self, model, local_model_cost_map
+    def test_check_and_create_cache_skips_between_default_and_gemini_2_5_pro_minimum(
+        self, local_model_cost_map
     ):
-        """Gemini 2.5 Flash and Pro need 2048 cached tokens, twice the provider-agnostic default.
+        """Gemini 2.5 Pro needs 2048 cached tokens, twice the provider-agnostic default.
 
-        Content between the two used to reach Google's cachedContents endpoint and 400.
+        Content between the two used to reach Google's cachedContents endpoint and 400
+        with "Cached content is too small".
         """
+        model = "gemini-2.5-pro"
         self._token_check_patcher.stop()
 
         cached_messages = [
