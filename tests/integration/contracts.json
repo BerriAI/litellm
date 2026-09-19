@@ -92,6 +92,12 @@
     "tests/integration/pricing/test_price_precedence.py::test_same_upstream_aliases_keep_distinct_prices_after_reload": [
       "quota_management.spend_tracking.alias_prices.remain_independent_on_reload"
     ],
+    "tests/integration/pricing/test_off_peak_pricing.py::test_open_off_peak_window_bills_off_peak_rates": [
+      "quota_management.spend_tracking.off_peak_pricing.open_window_bills_off_peak_rates"
+    ],
+    "tests/integration/pricing/test_off_peak_pricing.py::test_closed_off_peak_window_bills_standard_rates": [
+      "quota_management.spend_tracking.off_peak_pricing.closed_window_bills_standard_rates"
+    ],
     "tests/integration/spend/test_cache_and_quota.py::test_generated_cache_sequences_preserve_content_usage_and_zero_hit_cost": [
       "quota_management.response_cache.generated_sequences_preserve_content_and_accounting"
     ],
