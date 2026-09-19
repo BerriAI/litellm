@@ -40,6 +40,14 @@ from litellm.llms.custom_httpx.http_handler import (
 _PROJECT_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 
 
+def without_openai_project(data: Mapping[str, object], provider: str) -> Mapping[str, object]:
+    if provider != "openai":
+        return data
+    return {  # mutable-ok: proxy request copy receives provider credentials before dispatch
+        key: value for key, value in data.items() if key != "project"
+    }
+
+
 def with_openai_project_header(
     data: Mapping[str, object],
     provider: str,
@@ -63,9 +71,9 @@ def with_openai_project_header(
         or header_project
         or query_project
     )
-    request_data: Final = MappingProxyType({key: value for key, value in data.items() if key != "project"})
+    request_data: Final = without_openai_project(data, provider)
     if not project:
-        return dict(request_data)  # mutable-ok: file endpoint hooks consume dict request payloads
+        return request_data
     return {  # mutable-ok: file endpoint hooks consume dict request payloads
         **request_data,
         "extra_headers": MappingProxyType(
