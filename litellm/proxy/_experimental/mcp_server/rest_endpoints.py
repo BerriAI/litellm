@@ -1094,6 +1094,7 @@ if MCP_AVAILABLE:
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> _CatalogServerContext:
+        reject_disallowed_mcp_client(request.headers, user_api_key_dict)
         acting_auth: Final = await acting_user_auth(user_api_key_dict)
         _, canonical_server_id = await _resolve_allowed_mcp_servers_with_ip_filter(request, acting_auth, server_id)
         server: Final = global_mcp_server_manager.get_mcp_server_by_id(canonical_server_id)

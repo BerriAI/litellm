@@ -3998,6 +3998,69 @@ class TestMCPServerManager:
         assert exc_info.value.www_authenticate == challenge
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("manager_method", "client_method"),
+        [
+            ("get_prompts_from_server", "list_prompts"),
+            ("get_resources_from_server", "list_resources"),
+            ("get_resource_templates_from_server", "list_resource_templates"),
+        ],
+    )
+    async def test_catalog_fetch_prepares_upstream_headers_like_tools(self, manager_method, client_method, monkeypatch):
+        """Prompt and resource listings must reach the upstream with the same credentials the tools
+        listing sends: ``${NAME}`` static headers interpolated from the server's env vars and the
+        MCPJWTSigner token injected when nothing else carries an Authorization."""
+        import jwt
+
+        import litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer as jwt_signer_module
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import MCPJWTSigner
+
+        monkeypatch.setattr(jwt_signer_module, "_mcp_jwt_signer_instance", None)
+        MCPJWTSigner(
+            guardrail_name="catalog-jwt-signer",
+            event_hook="pre_mcp_call",
+            default_on=True,
+            issuer="https://litellm.example.com",
+            audience="mcp",
+        )
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-1",
+            name="alias-server",
+            alias="alias-server",
+            server_name="alias-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            static_headers={"X-Tenant": "${TENANT}"},
+            env_vars=[{"name": "TENANT", "value": "acme", "scope": "global"}],
+        )
+        mock_client = AsyncMock()
+        setattr(mock_client, client_method, AsyncMock(return_value=[]))
+        mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
+        upstream_headers: list[dict[str, str] | None] = []
+
+        async def create_client(**kwargs):
+            upstream_headers.append(kwargs["extra_headers"])
+            return mock_client
+
+        with patch.object(manager, "_create_mcp_client", create_client):
+            await getattr(manager, manager_method)(
+                server,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="alice"),
+                extra_headers={"X-Caller": "dashboard"},
+            )
+
+        assert len(upstream_headers) == 1
+        sent = upstream_headers[0]
+        assert sent is not None
+        assert sent["X-Caller"] == "dashboard"
+        assert sent["X-Tenant"] == "acme"
+        claims = jwt.decode(sent["Authorization"].removeprefix("Bearer "), options={"verify_signature": False})
+        assert claims["sub"] == "alice"
+        assert claims["scope"] == "mcp:tools/list"
+
+    @pytest.mark.asyncio
     async def test_read_resource_from_server_success(self):
         manager = MCPServerManager()
 

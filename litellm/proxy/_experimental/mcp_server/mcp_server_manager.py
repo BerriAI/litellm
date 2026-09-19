@@ -4389,56 +4389,13 @@ class MCPServerManager:
         client = None
 
         try:
-            # Tool *listing* must not be blocked by missing per-user env vars —
-            # the server's tools should still appear so the client connects. The
-            # friendly "missing vars" error is raised only on the tool-*call*
-            # path (see _call_regular_mcp_tool).
-            resolved_static_headers: Final = await self._resolve_static_headers_with_env_vars(
-                server, user_api_key_auth, raise_on_missing=False
+            list_headers: Final = await self._resolve_list_headers(
+                server,
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                extra_headers=extra_headers,
+                raw_headers=raw_headers,
             )
-            if resolved_static_headers:
-                if extra_headers is None:
-                    extra_headers = {}
-                extra_headers.update(resolved_static_headers)
-
-            # MCPJWTSigner: inject signed JWT for tools/list (list path skips pre_call_hook).
-            # Skip entirely when the signer is not configured (avoid an unnecessary
-            # dict copy on every list call), when the server has its own static
-            # Authorization header, when a per-user mcp_auth_header has already
-            # been resolved, or when the caller already supplied an Authorization
-            # entry in extra_headers (e.g. a per-user OAuth token resolved
-            # upstream) — admin-configured static auth and per-user OAuth must
-            # take precedence so the signer doesn't silently overwrite e.g. an
-            # upstream API key or a user's OAuth token (MCPClient._get_auth_headers
-            # applies extra_headers after writing Authorization from auth_value, so
-            # an injected JWT would otherwise clobber the per-user token).
-            if user_api_key_auth is not None and not server.spec_path:
-                from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
-                    get_mcp_jwt_signer,
-                    inject_mcp_jwt_headers_for_upstream,
-                )
-
-                static_headers: Final = server.static_headers or {}
-                has_static_authorization: Final = any(
-                    isinstance(k, str) and k.lower() == "authorization" for k in static_headers
-                )
-                has_extra_authorization: Final = bool(extra_headers) and any(
-                    isinstance(k, str) and k.lower() == "authorization" for k in (extra_headers or {})
-                )
-
-                if (
-                    get_mcp_jwt_signer() is not None
-                    and not has_static_authorization
-                    and not mcp_auth_header
-                    and not has_extra_authorization
-                ):
-                    extra_headers = await inject_mcp_jwt_headers_for_upstream(
-                        user_api_key_dict=user_api_key_auth,
-                        extra_headers=extra_headers,
-                        raw_headers=raw_headers,
-                        for_list_tools=True,
-                    )
-
             stdio_env: Final = self._build_stdio_env(server, raw_headers)
 
             # token_exchange (OBO) discovery needs the caller's token too: list it with the user's own
@@ -4453,7 +4410,7 @@ class MCPServerManager:
             client = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
-                extra_headers=extra_headers,
+                extra_headers=list_headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
                 user_api_key_auth=user_api_key_auth,
@@ -4491,6 +4448,52 @@ class MCPServerManager:
 
         except Exception as e:
             _raise_single_server_list_failure(e, server, "tools")
+
+    async def _resolve_list_headers(
+        self,
+        server: MCPServer,
+        *,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        mcp_auth_header: str | dict[str, str] | None,
+        extra_headers: dict[str, str] | None,
+        raw_headers: dict[str, str] | None,
+    ) -> dict[str, str] | None:
+        """Listing stays best-effort on missing per-user env vars, and the JWT signer never overrides an
+        Authorization already supplied by static headers, a per-user auth header, or extra_headers."""
+        resolved_static_headers: Final = await self._resolve_static_headers_with_env_vars(
+            server, user_api_key_auth, raise_on_missing=False
+        )
+        headers: Final = (
+            dict(
+                chain(
+                    extra_headers.items() if extra_headers else (),
+                    resolved_static_headers.items() if resolved_static_headers else (),
+                )
+            )
+            or None
+        )
+        if user_api_key_auth is None or server.spec_path:
+            return headers
+
+        from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
+            get_mcp_jwt_signer,
+            inject_mcp_jwt_headers_for_upstream,
+        )
+
+        has_static_authorization: Final = any(
+            isinstance(k, str) and k.lower() == "authorization" for k in (server.static_headers or {})
+        )
+        has_extra_authorization: Final = any(
+            isinstance(k, str) and k.lower() == "authorization" for k in (extra_headers or {})
+        )
+        if get_mcp_jwt_signer() is None or has_static_authorization or mcp_auth_header or has_extra_authorization:
+            return headers
+        return await inject_mcp_jwt_headers_for_upstream(
+            user_api_key_dict=user_api_key_auth,
+            extra_headers=headers,
+            raw_headers=raw_headers,
+            for_list_tools=True,
+        )
 
     def _invalidate_discovery_lists(self, server_id: str) -> None:
         self._prompt_discovery_cache.invalidate(server_id)
@@ -4538,14 +4541,12 @@ class MCPServerManager:
         raise_on_error: bool = False,
     ) -> list[Prompt]:
         try:
-            headers: Final = (
-                dict(
-                    chain(
-                        extra_headers.items() if extra_headers else (),
-                        server.static_headers.items() if server.static_headers else (),
-                    )
-                )
-                or None
+            headers: Final = await self._resolve_list_headers(
+                server,
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                extra_headers=extra_headers,
+                raw_headers=raw_headers,
             )
             stdio_env: Final = self._build_stdio_env(server, raw_headers)
             subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
@@ -4584,14 +4585,12 @@ class MCPServerManager:
         raise_on_error: bool = False,
     ) -> list[Resource]:
         try:
-            headers: Final = (
-                dict(
-                    chain(
-                        extra_headers.items() if extra_headers else (),
-                        server.static_headers.items() if server.static_headers else (),
-                    )
-                )
-                or None
+            headers: Final = await self._resolve_list_headers(
+                server,
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                extra_headers=extra_headers,
+                raw_headers=raw_headers,
             )
             stdio_env: Final = self._build_stdio_env(server, raw_headers)
             subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
@@ -4630,14 +4629,12 @@ class MCPServerManager:
         raise_on_error: bool = False,
     ) -> list[ResourceTemplate]:
         try:
-            headers: Final = (
-                dict(
-                    chain(
-                        extra_headers.items() if extra_headers else (),
-                        server.static_headers.items() if server.static_headers else (),
-                    )
-                )
-                or None
+            headers: Final = await self._resolve_list_headers(
+                server,
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                extra_headers=extra_headers,
+                raw_headers=raw_headers,
             )
             stdio_env: Final = self._build_stdio_env(server, raw_headers)
             subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)

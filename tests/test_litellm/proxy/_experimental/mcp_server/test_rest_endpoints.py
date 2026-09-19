@@ -4653,3 +4653,51 @@ class TestClientAllowlistOnRestRoutes:
         assert denied.value.detail["error"] == "Forbidden"
         assert "'claude-code'" in denied.value.detail["details"]
         acting.assert_not_awaited()
+
+    @pytest.mark.parametrize("route_name", ("list_prompts_rest_api", "list_resources_rest_api"))
+    @pytest.mark.parametrize(
+        ("caller", "headers", "expected_fragment"),
+        (
+            (UserAPIKeyAuth(jwt_claims={"azp": "claude-code"}), {"x-mcp-client": "antigravity-cli"}, "'claude-code'"),
+            (UserAPIKeyAuth(), {}, "no 'x-mcp-client' header"),
+        ),
+    )
+    async def test_catalog_routes_reject_unlisted_clients_before_resolving_servers(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        route_name: str,
+        caller: UserAPIKeyAuth,
+        headers: dict[str, str],
+        expected_fragment: str,
+    ) -> None:
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", _CLIENT_ALLOWLIST_SETTINGS, raising=False)
+        acting: Final = AsyncMock()
+        monkeypatch.setattr(rest_endpoints, "acting_user_auth", acting, raising=False)
+        request: Final = _build_request(headers, path=f"/mcp-rest/{route_name}", method="GET")
+
+        with pytest.raises(HTTPException) as denied:
+            await getattr(rest_endpoints, route_name)(request, server_id="server-1", user_api_key_dict=caller)
+
+        assert denied.value.status_code == 403
+        assert denied.value.detail["error"] == "Forbidden"
+        assert expected_fragment in denied.value.detail["details"]
+        assert "mcp_allowed_clients" in denied.value.detail["details"]
+        acting.assert_not_awaited()
+
+    @pytest.mark.parametrize("route_name", ("list_prompts_rest_api", "list_resources_rest_api"))
+    async def test_catalog_routes_admit_listed_clients(self, monkeypatch: pytest.MonkeyPatch, route_name: str) -> None:
+        catalog_suite: Final = TestListPromptsAndResourcesRestAPI()
+        server: Final = catalog_suite._stub_server()
+        catalog_suite._grant(monkeypatch, server, allowed=[server.server_id])
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", _CLIENT_ALLOWLIST_SETTINGS, raising=False)
+        for method in ("get_prompts_from_server", "get_resources_from_server", "get_resource_templates_from_server"):
+            monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, method, AsyncMock(return_value=[]))
+        request: Final = _build_request(
+            {"x-mcp-client": "antigravity-cli"}, path=f"/mcp-rest/{route_name}", method="GET"
+        )
+
+        result: Final = await getattr(rest_endpoints, route_name)(
+            request, server_id=server.server_id, user_api_key_dict=UserAPIKeyAuth()
+        )
+
+        assert result.model_dump() in ({"prompts": []}, {"resources": [], "resource_templates": []})
