@@ -48905,7 +48905,8 @@
         "mode": "audio_transcription",
         "source": "https://cloud.google.com/speech-to-text/pricing",
         "supported_endpoints": [
-            "/v1/audio/transcriptions"
+            "/v1/audio/transcriptions",
+            "/v1/realtime"
         ]
     },
     "vertex_ai/claude-3-5-haiku": {
