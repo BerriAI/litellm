@@ -2028,23 +2028,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-callbacks"
-version = "0.1.0"
-dependencies = [
- "rstest",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "litellm-callbacks-legacy"
 version = "0.1.0"
 dependencies = [
- "litellm-callbacks",
+ "litellm-auth",
+ "litellm-host",
  "litellm-host-python",
+ "proptest",
  "pyo3",
  "rstest",
  "serde_json",
+ "strum",
 ]
 
 [[package]]
@@ -2057,8 +2051,8 @@ dependencies = [
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-auth-gcp",
- "litellm-callbacks",
  "litellm-core-utils",
+ "litellm-host",
  "litellm-http",
  "litellm-llms",
  "litellm-types",
@@ -2113,11 +2107,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-host"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth",
+ "rstest",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "litellm-host-python"
 version = "0.1.0"
 dependencies = [
  "futures-util",
- "litellm-callbacks",
+ "litellm-host",
  "pyo3",
  "pyo3-async-runtimes",
  "pythonize",
@@ -2151,9 +2155,9 @@ dependencies = [
  "litellm-auth-aws",
  "litellm-auth-azure",
  "litellm-auth-gcp",
- "litellm-callbacks",
  "litellm-core-utils",
  "litellm-framing",
+ "litellm-host",
  "litellm-http",
  "litellm-types",
  "reqwest 0.12.28",
@@ -2614,6 +2618,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "proptest"
+version = "1.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b45fcc2344c680f5025fe57779faef368840d0bd1f42f216291f0dc4ace4744"
+dependencies = [
+ "bit-set",
+ "bit-vec",
+ "bitflags",
+ "num-traits",
+ "rand 0.9.5",
+ "rand_chacha 0.9.0",
+ "rand_xorshift",
+ "regex-syntax",
+ "rusty-fork",
+ "tempfile",
+ "unarray",
+]
+
+[[package]]
 name = "pyo3"
 version = "0.29.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2693,6 +2716,12 @@ dependencies = [
  "pyo3",
  "serde",
 ]
+
+[[package]]
+name = "quick-error"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
 
 [[package]]
 name = "quinn"
@@ -2855,6 +2884,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
 dependencies = [
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "rand_xorshift"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
+dependencies = [
+ "rand_core 0.9.5",
 ]
 
 [[package]]
@@ -3255,6 +3293,18 @@ name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
+
+[[package]]
+name = "rusty-fork"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc6bf79ff24e648f6da1f8d1f011e9cac26491b619e6b9280f2b47f1774e6ee2"
+dependencies = [
+ "fnv",
+ "quick-error",
+ "tempfile",
+ "wait-timeout",
+]
 
 [[package]]
 name = "ryu"
@@ -4112,6 +4162,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "unarray"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
+
+[[package]]
 name = "unicase"
 version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4223,6 +4279,15 @@ name = "vsimd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
+
+[[package]]
+name = "wait-timeout"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09ac3b126d3914f9849036f826e054cbabdc8519970b8998ddaf3b5bd3c65f11"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "walkdir"

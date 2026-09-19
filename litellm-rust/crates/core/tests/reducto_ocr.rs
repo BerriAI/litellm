@@ -1,4 +1,4 @@
-use litellm_callbacks::event::{CallEvent, WireRequest};
+use litellm_host::event::{CallEvent, MachineEvent, WireRequest};
 use litellm_llms::base_llm::ocr::{error::Error, transformation::OcrDocument};
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -139,7 +139,7 @@ async fn response_received_stays_after_reducto_upload_and_parse() {
     let request_count = seen.clone();
     let host = LocalOcrHost::new(wire_request("reducto/parse-v3", &base, json!({}))).with_observer(
         move |event| {
-            if let CallEvent::ResponseReceived { raw } = event {
+            if let CallEvent::Machine(MachineEvent::ResponseReceived { raw }) = event {
                 assert_eq!(request_count.lock().unwrap().len(), 2);
                 assert_eq!(raw.body, r#"{"result":{"chunks":[]}}"#);
             }
@@ -351,7 +351,7 @@ async fn guardrail_rewrites_document_before_upload() {
 }
 
 mod transformation {
-    use litellm_callbacks::event::{CallEvent, WireRequest};
+    use litellm_host::event::{CallEvent, MachineEvent, WireRequest};
     use litellm_llms::{
         base_llm::ocr::transformation::{BaseOcrConfig, OcrConnection, OcrRequestContext},
         reducto::ocr::transformation::*,
@@ -506,7 +506,7 @@ mod transformation {
         let request_count = seen.clone();
         let host = LocalOcrHost::new(wire_request("reducto/parse-v3", &base, json!({})))
             .with_observer(move |event| {
-                if let CallEvent::ResponseReceived { raw } = event {
+                if let CallEvent::Machine(MachineEvent::ResponseReceived { raw }) = event {
                     assert_eq!(request_count.lock().unwrap().len(), 2);
                     assert_eq!(raw.body, r#"{"result":{"chunks":[]}}"#);
                 }

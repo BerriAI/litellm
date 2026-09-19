@@ -20,6 +20,7 @@ use crate::{errors::RustBridgeDeclined, http};
 const SURFACE: LegacySurface = LegacySurface {
     call_type: "ocr",
     input_description: "OCR document processing",
+    stream: None,
 };
 
 const ASYNC_SURFACE: LegacySurface = LegacySurface {

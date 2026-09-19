@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
-use litellm_callbacks::event::{Passthrough, WireRequest};
+use litellm_host::event::WireRequest;
 use litellm_llms::{
     base_llm::ocr::{error::Error, transformation::LiteLLMOcrResponse},
     custom_httpx::llm_http_handler::{CallHooks, OcrClient},
@@ -23,11 +23,7 @@ use crate::ocr::{
 pub(crate) struct NoHooks;
 
 impl CallHooks<Error> for NoHooks {
-    fn before_send(
-        &self,
-        wire: WireRequest,
-        _passthrough_fields: Passthrough,
-    ) -> BoxFuture<'_, Result<WireRequest, Error>> {
+    fn before_send(&self, wire: WireRequest) -> BoxFuture<'_, Result<WireRequest, Error>> {
         Box::pin(async move { Ok(wire) })
     }
 
@@ -49,7 +45,7 @@ pub(crate) async fn perform_ocr(request: LiteLLMOcrRequest) -> Result<LiteLLMOcr
 }
 
 pub(crate) async fn perform_ocr_with(host: LocalOcrHost) -> Result<LiteLLMOcrResponse, Error> {
-    litellm_callbacks::run::run(ocr_machine(ocr_client()), &host).await
+    litellm_host::run::run(ocr_machine(ocr_client()), &host).await
 }
 
 pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> LiteLLMOcrRequest {
@@ -70,7 +66,7 @@ pub(crate) fn wire_request_with_document(
     decode_request(OcrWireRequest {
         model: model.into(),
         document,
-        api_key: Some("test-key".into()),
+        api_key: Some(litellm_auth::SecretValue::new("test-key")),
         api_base: Some(base.into()),
         custom_llm_provider: None,
         extra_headers: None,

@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, future::Future, time::Duration};
 
-use litellm_auth::{InputSource, Sourced, TokenProviderHandle};
+use litellm_auth::{InputSource, SecretValue, Sourced, TokenProviderHandle};
 use litellm_core_utils::{
     call_arguments::CallArguments,
     serde_compat::{FiniteF64, LaxI64},
@@ -89,21 +89,22 @@ pub enum OcrResponseFormat {
 
 #[derive(Clone, Default)]
 pub struct OcrCredentialInputs {
-    pub api_key: Option<Sourced<String>>,
-    pub dynamic_api_key: Option<Sourced<String>>,
+    pub api_key: Option<Sourced<SecretValue>>,
+    pub dynamic_api_key: Option<Sourced<SecretValue>>,
     pub api_base: Option<Sourced<String>>,
     pub dynamic_api_base: Option<Sourced<String>>,
 }
 
 impl OcrCredentialInputs {
     pub fn new(
-        api_key: Option<String>,
+        api_key: Option<SecretValue>,
         api_key_source: InputSource,
         api_base: Option<String>,
         api_base_source: InputSource,
     ) -> Self {
         Self {
-            api_key: nonblank(api_key).map(|value| Sourced::new(value, api_key_source)),
+            api_key: nonblank(api_key.as_ref().map(|key| key.expose().to_string()))
+                .map(|value| Sourced::new(SecretValue::new(value), api_key_source)),
             dynamic_api_key: None,
             api_base: nonblank(api_base).map(|value| Sourced::new(value, api_base_source)),
             dynamic_api_base: None,
@@ -158,7 +159,7 @@ fn nonblank(value: Option<String>) -> Option<String> {
 
 #[derive(Clone)]
 pub struct OcrConnection {
-    pub api_key: Option<String>,
+    pub api_key: Option<SecretValue>,
     pub api_key_source: InputSource,
     pub api_base: Option<String>,
     pub api_base_source: InputSource,
@@ -208,7 +209,7 @@ impl Default for OcrConnection {
 
 #[derive(Clone, Default)]
 pub struct ResolvedOcrCredentials {
-    pub api_key: Option<Sourced<String>>,
+    pub api_key: Option<Sourced<SecretValue>>,
     pub api_base: Option<Sourced<String>>,
 }
 
@@ -427,7 +428,7 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         ResolvedOcrCredentials {
             api_key: inputs
                 .dynamic_api_key
-                .filter(|value| !value.value().is_empty())
+                .filter(|value| !value.value().expose().is_empty())
                 .or(inputs.api_key),
             api_base: inputs
                 .dynamic_api_base

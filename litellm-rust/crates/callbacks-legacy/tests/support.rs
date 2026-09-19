@@ -5,64 +5,94 @@ use pyo3::types::{PyDict, PyTuple};
 
 use crate::{LegacyLogging, LegacySurface, PublicCall};
 
-/// Stand-ins for every litellm function the legacy contract calls. Tests share one
-/// interpreter and run concurrently, so each stub is installed idempotently and forwards to
-/// the per-test `StubLogger` it is handed (directly, or as `kwargs['logger']`).
+/// The parameters of every `legacy_callbacks` function, as the real module declares them.
+/// `tests/test_litellm/rust_bridge/test_legacy_callbacks.py` pins this file to the Python
+/// signatures, and [`namespace`] binds every fake call against it.
+pub(crate) const PYTHON_CONTRACT: &str = include_str!("../python_contract.json");
+
+/// Stand-ins for `legacy_callbacks`, the only Python module the crate calls. Tests
+/// share one interpreter and run concurrently, so each fake is installed idempotently and
+/// forwards to the per-test `StubLogger` it is handed (directly, or as `kwargs['logger']`).
+/// Every fake is bound against the contract first, so a call the real module would reject
+/// fails here too.
 const STUBS: &CStr = c"
 import contextvars
+import inspect
+import json
 import sys
+import traceback
 import types
 
-for name in (
-    'litellm',
-    'litellm.utils',
-    'litellm.types',
-    'litellm.types.utils',
-    'litellm._internal_context',
-    'litellm.litellm_core_utils',
-    'litellm.litellm_core_utils.logging_worker',
-    'litellm.litellm_core_utils.litellm_logging',
-    'litellm.rust_bridge',
-    'litellm.rust_bridge.legacy_callbacks',
-):
+for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.legacy_callbacks'):
     sys.modules.setdefault(name, types.ModuleType(name))
 
 legacy = sys.modules['litellm.rust_bridge.legacy_callbacks']
-legacy.setup = lambda call_type, args, kwargs, start, asynchronous: types.SimpleNamespace(
-    logger=kwargs['logger_factory'](kwargs) if 'logger_factory' in kwargs else kwargs['logger'],
-    kwargs=kwargs,
-    bridge_owned=True,
-)
-legacy.deployment_callbacks_needed = lambda: True
-legacy.check_limits = lambda arguments: arguments['logger'].check_limits(arguments)
-legacy.callbacks_needed = lambda logger, phase: logger.needed.get(phase, True)
-legacy.success_bookkeeping = lambda logger, response, start, end, asynchronous: logger.record(
-    'success_bookkeeping', asynchronous
-)
-legacy.failure_bookkeeping = lambda logger, error, start, end, asynchronous: logger.record(
-    'failure_bookkeeping', asynchronous
-)
-legacy.finalize = lambda response, logger, kwargs, start, end: logger.record('finalize', response)
+CONTRACT = json.loads(python_contract)
 
-utils = sys.modules['litellm.utils']
-utils.async_pre_call_deployment_hook = lambda kwargs, call_type: kwargs['logger'].hook(
-    'pre', kwargs, call_type
-)
-utils.async_post_call_success_deployment_hook = lambda kwargs, response, call_type: kwargs[
-    'logger'
-].hook('success', response, call_type)
-utils.async_post_call_failure_deployment_hook = lambda kwargs, error, call_type: kwargs[
-    'logger'
-].hook('failure', error, call_type)
-utils._restore_correlation_context_if_supported = lambda logger: logger.record('restore', None)
 
-internal = sys.modules['litellm._internal_context']
-if not hasattr(internal, 'is_internal_call'):
-    internal.is_internal_call = contextvars.ContextVar('is_internal_call', default=False)
+def contracted(name, fake):
+    signature = inspect.Signature(
+        [inspect.Parameter(parameter, inspect.Parameter.POSITIONAL_OR_KEYWORD) for parameter in CONTRACT[name]]
+    )
 
-sys.modules['litellm.types.utils'].CustomPricingLiteLLMParams = type(
-    'CustomPricingLiteLLMParams', (), {'model_fields': {'ocr_cost_per_page': None}}
-)
+    def checked(*args, **kwargs):
+        signature.bind(*args, **kwargs)
+        return fake(*args, **kwargs)
+
+    return checked
+
+
+if not hasattr(legacy, 'is_internal'):
+    legacy.is_internal = contextvars.ContextVar('is_internal_call', default=False)
+
+FAKES = {
+    'setup': lambda call_type, args, kwargs, start, asynchronous: types.SimpleNamespace(
+        logger=kwargs['logger_factory'](kwargs) if 'logger_factory' in kwargs else kwargs['logger'],
+        kwargs=kwargs,
+    ),
+    'check_limits': lambda arguments: arguments['logger'].check_limits(arguments),
+    'finalize': lambda response, logger, kwargs, start, end: logger.record('finalize', response),
+    'update_logging': lambda logger, kwargs, model, optional_params, litellm_params, provider: logger.update_from_kwargs(
+        kwargs=kwargs,
+        model=model,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        custom_llm_provider=provider,
+    ),
+    'pre_call': lambda logger, input, api_key, additional_args: logger.pre_call(input, api_key, additional_args),
+    'post_call': lambda logger, original_response, api_key, additional_args: logger.post_call(
+        original_response, api_key, additional_args
+    ),
+    'defers_async_logging': lambda logger: bool(getattr(logger, '_defer_async_logging', False)),
+    'defer_success': lambda logger, pending: setattr(logger, '_native_pending_logging', pending),
+    'sync_success_for_async_call': lambda logger, response, start, end: logger.handle_sync_success_callbacks_for_async_calls(
+        response, start, end
+    ),
+    'failure_handler': lambda logger, error, start, end, asynchronous: (
+        logger.async_failure_handler if asynchronous else logger.failure_handler
+    )(error, ''.join(traceback.format_exception(error)), start, end),
+    'submit_success': lambda logger, response, start, end: logger.record('submit', (response, start, end)),
+    'async_success_handler': lambda logger, response, start, end: logger.async_success_handler(response, start, end),
+    'enqueue_logging': lambda coroutine: coroutine.enqueue(),
+    'restore_context': lambda logger: logger.record('restore', None),
+    'custom_pricing_fields': lambda: ('ocr_cost_per_page',),
+    'is_internal_call': lambda: legacy.is_internal.get(),
+    'credential_list': lambda: [],
+    'warn_unknown_credential': lambda name, loaded: None,
+    'before_deployment_call': lambda kwargs, call_type: kwargs['logger'].hook('pre', kwargs, call_type),
+    'after_deployment_success': lambda kwargs, response, call_type: kwargs['logger'].hook(
+        'success', response, call_type
+    ),
+    'after_deployment_failure': lambda kwargs, error, call_type: kwargs['logger'].hook('failure', error, call_type),
+    'stream_opened': lambda logger: logger.record('stream_opened', None),
+    'stream_success': lambda logger, request_body, chunks, start, end, first_chunk: logger.record(
+        'stream_success', list(chunks)
+    ),
+    'stream_failure': lambda logger, request_body, chunks, error: logger.record('stream_failure', error),
+}
+assert FAKES.keys() == CONTRACT.keys(), sorted(FAKES.keys() ^ CONTRACT.keys())
+for name, fake in FAKES.items():
+    setattr(legacy, name, contracted(name, fake))
 
 
 unraisable = sys.modules.setdefault(
@@ -75,20 +105,6 @@ if not hasattr(unraisable, 'events'):
 
 def unraisable_from(owner):
     return [error for source, error in unraisable.events if source is owner]
-
-
-class Worker:
-    def ensure_initialized_and_enqueue(self, coroutine):
-        return coroutine.enqueue()
-
-
-class Executor:
-    def submit(self, run, handler, *args):
-        handler.__self__.record('submit', args)
-
-
-sys.modules['litellm.litellm_core_utils.logging_worker'].GLOBAL_LOGGING_WORKER = Worker()
-sys.modules['litellm.litellm_core_utils.litellm_logging'].executor = Executor()
 
 
 class StubCoroutine:
@@ -106,7 +122,6 @@ class StubCoroutine:
 class StubLogger:
     def __init__(self):
         self.calls = []
-        self.needed = {}
         self.hooks = {}
         self.on_enqueue = lambda coroutine: None
 
@@ -147,6 +162,7 @@ logger = StubLogger()
 /// A namespace with the stubs, `StubLogger` and a fresh `logger`, after `script` ran in it.
 pub(crate) fn namespace<'py>(py: Python<'py>, script: &CStr) -> Bound<'py, PyDict> {
     let locals = PyDict::new(py);
+    locals.set_item("python_contract", PYTHON_CONTRACT).unwrap();
     py.run(STUBS, Some(&locals), Some(&locals)).unwrap();
     py.run(script, Some(&locals), Some(&locals)).unwrap();
     locals
@@ -181,6 +197,7 @@ pub(crate) fn legacy_call(
         LegacySurface {
             call_type: "test",
             input_description: "test input",
+            stream: None,
         },
         call,
         asynchronous,
