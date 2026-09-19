@@ -89,7 +89,6 @@ from models import (
     TeamDeleteBody,
     TeamNewBody,
     TeamNewResponse,
-    TeamUpdateBody,
     ToolsetCreateBody,
     ToolsetRow,
     ToolsetUpdateBody,
@@ -871,16 +870,6 @@ class ProxyClient:
                 response_type=TeamNewResponse,
             )
         ).team_id
-
-    def update_team(self, body: TeamUpdateBody) -> None:
-        unwrap(
-            self.transport.post(
-                "/team/update",
-                headers=self.transport.master,
-                json=body,
-                response_type=NoBody,
-            )
-        )
 
     def delete_team(self, team_id: str) -> None:
         result = self.transport.post(
