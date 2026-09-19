@@ -3,7 +3,8 @@ Mistral Files API. Reference: https://docs.mistral.ai/api/#tag/files
 
 Mistral's file objects already carry the OpenAI field names (id, bytes, created_at,
 filename, purpose), so this config is URL routing, auth, and a purpose mapping:
-Mistral only accepts ``fine-tune``, ``batch`` and ``ocr`` as upload purposes.
+Mistral only accepts ``fine-tune``, ``batch`` and ``ocr`` as upload purposes, while files
+other Mistral products created read back with purposes outside that set and map onto ``user_data``.
 """
 
 import time
@@ -34,9 +35,10 @@ from ..common_utils import get_mistral_api_base, get_mistral_auth_headers, mistr
 
 MistralFilePurpose: TypeAlias = Literal["fine-tune", "batch", "ocr"]
 
-_OPENAI_PURPOSE_BY_MISTRAL: Final[Mapping[MistralFilePurpose, OpenAIFilesPurpose]] = MappingProxyType(
+_OPENAI_PURPOSE_BY_MISTRAL: Final[Mapping[str, OpenAIFilesPurpose]] = MappingProxyType(
     {"fine-tune": "fine-tune", "batch": "batch", "ocr": "user_data"}
 )
+_OPENAI_PURPOSE_FOR_UNMAPPED: Final[OpenAIFilesPurpose] = "user_data"
 _MISTRAL_PURPOSE_BY_OPENAI: Final[Mapping[str, MistralFilePurpose]] = MappingProxyType(
     {"fine-tune": "fine-tune", "batch": "batch", "ocr": "ocr", "user_data": "ocr"}
 )
@@ -59,7 +61,7 @@ class MistralFile(BaseModel):
     bytes: int = 0
     created_at: int | None = None
     filename: str = ""
-    purpose: MistralFilePurpose = "batch"
+    purpose: str = "batch"
     expires_at: int | None = None
 
 
@@ -89,8 +91,8 @@ def _to_openai_file_object(file: MistralFile) -> OpenAIFileObject:
     )
 
 
-def _to_openai_purpose(purpose: MistralFilePurpose) -> OpenAIFilesPurpose:
-    return _OPENAI_PURPOSE_BY_MISTRAL[purpose]
+def _to_openai_purpose(purpose: str) -> OpenAIFilesPurpose:
+    return _OPENAI_PURPOSE_BY_MISTRAL.get(purpose, _OPENAI_PURPOSE_FOR_UNMAPPED)
 
 
 def _to_mistral_purpose(purpose: str) -> MistralFilePurpose:
