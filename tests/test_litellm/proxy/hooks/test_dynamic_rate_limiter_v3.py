@@ -2028,7 +2028,7 @@ async def test_fairness_reserves_estimated_tokens_pre_call_and_reconciles_to_act
             "messages": [{"role": "user", "content": "summarize the fairness design in one paragraph"}],
             "max_tokens": 200,
         }
-        estimate = handler.v3_limiter._estimate_tokens_for_request(
+        estimate = handler.v3_limiter.estimate_tokens_for_request(
             data, model=model, min_configured_tpm_limit=100_000, call_type="completion"
         )
         before_priority = await _priority_tokens(handler, dual_cache, model, "prod")

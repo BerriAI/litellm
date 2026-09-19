@@ -15,10 +15,12 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.litellm_logging import (
-    _init_custom_logger_compatible_class,
+    _init_custom_logger_compatible_class,  # pyright: ignore[reportPrivateUsage]  # only constructor the callback registry offers
     get_custom_logger_compatible_class,
 )
-from litellm.proxy.hooks.dynamic_rate_limiter_v3 import _PROXY_DynamicRateLimitHandlerV3
+from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
+    _PROXY_DynamicRateLimitHandlerV3,  # pyright: ignore[reportPrivateUsage]  # registry class carries a leading underscore
+)
 from litellm.router import Router
 from litellm.types.proxy.fairness import FairnessSettings
 from litellm.types.utils import PriorityReservationSettings

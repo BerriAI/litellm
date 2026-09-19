@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -51,8 +53,10 @@ class FairnessSettings(BaseModel):
                 return workload_class.max_queue_wait_seconds
         return self.default_max_queue_wait_seconds
 
-    def reserved_shares(self) -> dict[str, float]:
-        return {workload_class.name: workload_class.reserved_share for workload_class in self.workload_classes}
+    def reserved_shares(self) -> Mapping[str, float]:
+        return MappingProxyType(
+            {workload_class.name: workload_class.reserved_share for workload_class in self.workload_classes}
+        )
 
 
 class FairnessSettingsResponse(BaseModel):

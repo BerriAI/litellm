@@ -509,7 +509,7 @@ skill_search_embedding_model: Optional[str] = None
 # Old format: { "displayName": "url" } (for backward compatibility)
 public_model_groups_links: Dict[str, Union[str, Dict[str, Any]]] = {}
 #### REQUEST PRIORITIZATION #######
-priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
+priority_reservation: Optional[Mapping[str, Union[float, "PriorityReservationDict"]]] = None
 # priority_reservation_settings is lazy-loaded via __getattr__
 # Only declare for type checking - at runtime __getattr__ handles it
 if TYPE_CHECKING:

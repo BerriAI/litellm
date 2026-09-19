@@ -38,8 +38,8 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitResponse,
     RateLimitStatus,
     RequestRateLimiterStash,
-    _call_id_from_callback_kwargs,
     _PROXY_MaxParallelRequestsHandler_v3,
+    call_id_from_callback_kwargs,
     claim_request_stash_for_data,
     get_or_create_request_stash,
     get_request_stash_for_call,
@@ -92,11 +92,18 @@ class _AdmissionPlan:
 
     @property
     def token_scopes(self) -> frozenset[tuple[str, str]]:
-        return frozenset(
-            (descriptor["key"], descriptor["value"])
-            for descriptor in (*self.enforced, *self.tracking_only)
-            if (descriptor.get("rate_limit") or {}).get("tokens_per_unit") is not None
-        )
+        return _token_scopes(*self.enforced, *self.tracking_only)
+
+
+def _tracks_tokens(descriptor: RateLimitDescriptor) -> bool:
+    rate_limit: Final = descriptor.get("rate_limit")
+    return rate_limit is not None and rate_limit.get("tokens_per_unit") is not None
+
+
+def _token_scopes(*descriptors: RateLimitDescriptor) -> frozenset[tuple[str, str]]:
+    return frozenset(
+        (descriptor["key"], descriptor["value"]) for descriptor in descriptors if _tracks_tokens(descriptor)
+    )
 
 
 def _counter_value(raw: object) -> float:
@@ -489,7 +496,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         priority: str | None,
         saturation: float,
-        data: dict[str, object],
+        data: Mapping[str, object],
         call_type: CallTypesLiteral,
     ) -> _AdmissionPlan:
         should_enforce_priority: Final = saturation >= _get_priority_settings().saturation_threshold
@@ -504,7 +511,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         fairness: Final = self._fairness_settings()
         reserve_tokens: Final = fairness is not None and fairness.enabled and model_group_info.tpm is not None
         estimated_tokens: Final = (
-            self.v3_limiter._estimate_tokens_for_request(
+            self.v3_limiter.estimate_tokens_for_request(
                 data, model=model, min_configured_tpm_limit=model_group_info.tpm, call_type=call_type
             )
             if reserve_tokens
@@ -525,10 +532,12 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         plan: _AdmissionPlan,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> RateLimitResponse:
-        increment: Final[dict[Literal["requests", "tokens"], int]] = {"requests": 1, "tokens": plan.estimated_tokens}
+        increment: Final[Mapping[Literal["requests", "tokens"], int]] = MappingProxyType(
+            {"requests": 1, "tokens": plan.estimated_tokens}
+        )
         atomic_response: Final = await self.v3_limiter.atomic_check_and_increment_by_n(
-            descriptors=list(plan.enforced),
-            increments=[increment for _ in plan.enforced],
+            descriptors=plan.enforced,
+            increments=tuple(increment for _ in plan.enforced),
             parent_otel_span=user_api_key_dict.parent_otel_span,
         )
         verbose_proxy_logger.debug("Atomic check+increment response: %s", atomic_response)
@@ -536,7 +545,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return atomic_response
 
         tracking_response: Final = await self.v3_limiter.should_rate_limit(
-            descriptors=list(plan.tracking_only),
+            descriptors=plan.tracking_only,
             parent_otel_span=user_api_key_dict.parent_otel_span,
             read_only=False,
         )
@@ -561,15 +570,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         stash.dynamic_token_scopes = plan.token_scopes
         stash.dynamic_reservation_windows = response.get("reservation_windows", frozenset())
         stash.dynamic_reservation_settled = False
-        tracked_scopes: Final = frozenset(
-            (descriptor["key"], descriptor["value"])
-            for descriptor in plan.tracking_only
-            if (descriptor.get("rate_limit") or {}).get("tokens_per_unit") is not None
-        )
+        tracked_scopes: Final = _token_scopes(*plan.tracking_only)
         if not tracked_scopes:
             return
         await self.v3_limiter.async_increment_tokens_with_ttl_preservation(
-            pipeline_operations=self.v3_limiter._build_reservation_aware_tpm_ops(
+            pipeline_operations=self.v3_limiter.build_reservation_aware_tpm_ops(
                 targets=sorted(tracked_scopes),
                 reserved_scopes=frozenset(),
                 actual_tokens=plan.estimated_tokens,
@@ -588,7 +593,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return False
         stash.dynamic_reservation_settled = True
         await self.v3_limiter.async_increment_reservation_aware_tokens(
-            pipeline_operations=self.v3_limiter._build_project_reservation_ops(
+            pipeline_operations=self.v3_limiter.build_project_reservation_ops(
                 targets=sorted(stash.dynamic_token_scopes),
                 reserved_scopes=stash.dynamic_token_scopes,
                 actual_tokens=actual_tokens,
@@ -603,8 +608,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         normalized: Final = self._normalize_priority_weights(model_group_info)
         return MappingProxyType(
             {
-                **{name: max(weight, 0.01) for name, weight in normalized.items()},
-                DEFAULT_POOL_NAME: max(fairness.default_reserved_share, 0.01),
+                name: max(weight, 0.01)
+                for name, weight in (*normalized.items(), (DEFAULT_POOL_NAME, fairness.default_reserved_share))
             }
         )
 
@@ -619,14 +624,16 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     ) -> None:
         resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(model)
         descriptor_key: Final = status["descriptor_key"]
-        headers: Final = {
-            "retry-after": str(self.v3_limiter.window_size),
-            "rate_limit_type": str(status["rate_limit_type"]),
-            "x-litellm-priority": priority or DEFAULT_POOL_NAME,
-            "x-litellm-saturation": f"{saturation:.2%}",
-            "x-litellm-fairness-reason": "capacity_exhausted",
-            "x-litellm-queue-wait-seconds": f"{waited_seconds:.3f}",
-        }
+        headers: Final = MappingProxyType(
+            {
+                "retry-after": str(self.v3_limiter.window_size),
+                "rate_limit_type": str(status["rate_limit_type"]),
+                "x-litellm-priority": priority or DEFAULT_POOL_NAME,
+                "x-litellm-saturation": f"{saturation:.2%}",
+                "x-litellm-fairness-reason": "capacity_exhausted",
+                "x-litellm-queue-wait-seconds": f"{waited_seconds:.3f}",
+            }
+        )
         limits: Final = (
             f"Rate limit type: {status['rate_limit_type']}, "
             f"Model TPM: {model_group_info.tpm if model_group_info.tpm is not None else 'not configured'}, "
@@ -646,7 +653,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             else "Rate limit exceeded"
         )
         raise ProxyRateLimitError(
-            detail={"error": error, "fairness_reason": "capacity_exhausted", "queue_wait_seconds": waited_seconds},
+            detail={  # mutable-ok: one-shot HTTPException detail payload, never mutated after construction
+                "error": error,
+                "fairness_reason": "capacity_exhausted",
+                "queue_wait_seconds": waited_seconds,
+            },
             headers=headers,
             rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
             model=resolved_model,
@@ -664,19 +675,21 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     ) -> None:
         resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(model)
         raise ProxyRateLimitError(
-            detail={
+            detail={  # mutable-ok: one-shot HTTPException detail payload, never mutated after construction
                 "error": f"Request for {model} could not be admitted within {max_wait_seconds:.1f}s ({reason}). "
                 f"Priority: {priority or DEFAULT_POOL_NAME}, waited {waited_seconds:.1f}s",
                 "fairness_reason": reason,
                 "queue_wait_seconds": waited_seconds,
             },
-            headers={
-                "retry-after": str(self.v3_limiter.window_size),
-                "rate_limit_type": str(status["rate_limit_type"]),
-                "x-litellm-priority": priority or DEFAULT_POOL_NAME,
-                "x-litellm-fairness-reason": reason,
-                "x-litellm-queue-wait-seconds": f"{waited_seconds:.3f}",
-            },
+            headers=MappingProxyType(
+                {
+                    "retry-after": str(self.v3_limiter.window_size),
+                    "rate_limit_type": str(status["rate_limit_type"]),
+                    "x-litellm-priority": priority or DEFAULT_POOL_NAME,
+                    "x-litellm-fairness-reason": reason,
+                    "x-litellm-queue-wait-seconds": f"{waited_seconds:.3f}",
+                }
+            ),
             rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
             model=resolved_model,
             llm_provider=llm_provider,
@@ -705,7 +718,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         data: dict[str, object] | None = None,
         call_type: CallTypesLiteral = "completion",
     ) -> None:
-        request: Final[dict[str, object]] = data if data is not None else {}
+        request: Final[Mapping[str, object]] = data if data is not None else MappingProxyType({})
         plan: Final = self._build_admission_plan(
             model, model_group_info, user_api_key_dict, priority, saturation, request, call_type
         )
@@ -933,7 +946,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     elif rate_limit_type == "total":
                         total_tokens = _usage.total_tokens
 
-            stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
+            stash: Final = get_request_stash_for_call(call_id_from_callback_kwargs(kwargs))
             if stash is not None and await self._settle_reservation(stash, total_tokens, litellm_parent_otel_span):
                 return
 
@@ -1010,7 +1023,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         start_time: datetime | float,
         end_time: datetime | float,
     ) -> None:
-        stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
+        stash: Final = get_request_stash_for_call(call_id_from_callback_kwargs(kwargs))
         if stash is None:
             return
         try:
@@ -1029,8 +1042,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
     async def _model_fairness_status(self, model: str, info: ModelGroupInfo) -> ModelFairnessStatus:
         fairness: Final = self._fairness_settings()
-        reservation: Final = litellm.priority_reservation or {}
-        class_names: Final = (*reservation, DEFAULT_POOL_NAME)
+        reserved_names: Final = tuple(litellm.priority_reservation or ())
+        class_names: Final = (*reserved_names, DEFAULT_POOL_NAME)
         weights: Final = self._normalize_priority_weights(info)
         default_share: Final = _get_priority_settings().default_priority
         depths: Final = self.fair_queue.depths(model)
@@ -1039,7 +1052,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             self.v3_limiter.create_rate_limit_keys(key=key, value=value, rate_limit_type=rate_limit_type)
             for key, value in (
                 ("model_saturation_check", model),
-                *(("priority_model", f"{model}:{name}") for name in reservation),
+                *(("priority_model", f"{model}:{name}") for name in reserved_names),
                 ("priority_model", f"{model}:default_pool"),
             )
             for rate_limit_type in ("requests", "tokens")

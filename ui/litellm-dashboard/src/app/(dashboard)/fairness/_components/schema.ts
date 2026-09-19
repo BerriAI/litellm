@@ -29,7 +29,7 @@ const numberString = (
 const percentString = numberString(0, 100, "Enter a percentage between 0 and 100");
 const queueWaitString = numberString(0, MAX_QUEUE_WAIT_SECONDS, `Enter 0 to ${MAX_QUEUE_WAIT_SECONDS} seconds`);
 
-const workloadClassSchema = z.object({
+const workloadClassShape = {
   name: z
     .string()
     .trim()
@@ -40,7 +40,9 @@ const workloadClassSchema = z.object({
   reserved_share: percentString,
   max_queue_wait_seconds: queueWaitString,
   description: z.string().trim().max(256, "Keep the description under 256 characters"),
-});
+};
+
+const workloadClassSchema = z.object(workloadClassShape);
 
 export type WorkloadClassFormValues = z.input<typeof workloadClassSchema>;
 
@@ -51,39 +53,39 @@ export const EMPTY_WORKLOAD_CLASS: WorkloadClassFormValues = {
   description: "",
 };
 
-export const fairnessSettingsSchema = z
-  .object({
-    enabled: z.boolean(),
-    workload_classes: z.array(workloadClassSchema),
-    default_reserved_share: percentString,
-    default_max_queue_wait_seconds: queueWaitString,
-    saturation_threshold: percentString,
-    saturation_check_cache_ttl: numberString(0, 3600, "Enter 0 to 3600 seconds", { integer: true }),
-    max_queue_depth_per_class: numberString(1, 100_000, "Enter 1 to 100000 requests", { integer: true }),
-    queue_poll_interval_seconds: numberString(0, 5, "Enter more than 0 and at most 5 seconds", { exclusiveMin: true }),
-  })
-  .superRefine((values, ctx) => {
-    values.workload_classes.forEach((workloadClass, index) => {
-      const firstIndex = values.workload_classes.findIndex((other) => other.name === workloadClass.name);
-      if (workloadClass.name !== "" && firstIndex < index) {
-        ctx.addIssue({
-          code: "custom",
-          message: "This class name is already used",
-          path: ["workload_classes", index, "name"],
-        });
-      }
-    });
-    const totalShare =
-      values.workload_classes.reduce((sum, workloadClass) => sum + Number(workloadClass.reserved_share), 0) +
-      Number(values.default_reserved_share);
-    if (totalShare > 100) {
+const fairnessSettingsShape = {
+  enabled: z.boolean(),
+  workload_classes: z.array(workloadClassSchema),
+  default_reserved_share: percentString,
+  default_max_queue_wait_seconds: queueWaitString,
+  saturation_threshold: percentString,
+  saturation_check_cache_ttl: numberString(0, 3600, "Enter 0 to 3600 seconds", { integer: true }),
+  max_queue_depth_per_class: numberString(1, 100_000, "Enter 1 to 100000 requests", { integer: true }),
+  queue_poll_interval_seconds: numberString(0, 5, "Enter more than 0 and at most 5 seconds", { exclusiveMin: true }),
+};
+
+export const fairnessSettingsSchema = z.object(fairnessSettingsShape).superRefine((values, ctx) => {
+  values.workload_classes.forEach((workloadClass, index) => {
+    const firstIndex = values.workload_classes.findIndex((other) => other.name === workloadClass.name);
+    if (workloadClass.name !== "" && firstIndex < index) {
       ctx.addIssue({
         code: "custom",
-        message: `Reserved shares add up to ${Math.round(totalShare)}%. Keep the total at or below 100%`,
-        path: ["default_reserved_share"],
+        message: "This class name is already used",
+        path: ["workload_classes", index, "name"],
       });
     }
   });
+  const totalShare =
+    values.workload_classes.reduce((sum, workloadClass) => sum + Number(workloadClass.reserved_share), 0) +
+    Number(values.default_reserved_share);
+  if (totalShare > 100) {
+    ctx.addIssue({
+      code: "custom",
+      message: `Reserved shares add up to ${Math.round(totalShare)}%. Keep the total at or below 100%`,
+      path: ["default_reserved_share"],
+    });
+  }
+});
 
 export type FairnessSettingsFormValues = z.input<typeof fairnessSettingsSchema>;
 export type FairnessSettingsSubmitValues = z.output<typeof fairnessSettingsSchema>;

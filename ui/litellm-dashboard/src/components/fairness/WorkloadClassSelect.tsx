@@ -21,13 +21,14 @@ const fetchWorkloadClassNames = async (): Promise<readonly string[]> => {
 
 export const useWorkloadClassNames = (fetchNames: () => Promise<readonly string[]> = fetchWorkloadClassNames) => {
   const { userRole } = useAuthorized();
-  return useQuery({
+  const queryOptions = {
     queryKey: WORKLOAD_CLASS_QUERY_KEY,
     queryFn: fetchNames,
     enabled: all_admin_roles.includes(userRole),
     staleTime: 60_000,
     retry: false,
-  });
+  };
+  return useQuery(queryOptions);
 };
 
 export const useShowWorkloadClass = (current: string | undefined): boolean => {

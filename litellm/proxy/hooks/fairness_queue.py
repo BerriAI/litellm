@@ -1,5 +1,4 @@
 import asyncio
-import heapq
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -23,27 +22,31 @@ class ClassQueueState:
     pass_value: float
 
 
+_ClassQueue = tuple[tuple[float, str], ...]
+
+
 @dataclass(slots=True)
 class _ModelQueues:
-    queues: dict[str, list[tuple[float, str]]] = field(default_factory=dict)
+    queues: dict[str, _ClassQueue] = field(default_factory=dict)
     passes: dict[str, float] = field(default_factory=dict)
     virtual_time: float = 0.0
 
 
 class InMemoryFairQueueStore:
     def __init__(self) -> None:
-        self._models: dict[str, _ModelQueues] = {}
+        self._models: dict[str, _ModelQueues] = {}  # mutable-ok: live queue registry, rewritten per enqueue/remove
 
     def _model(self, model: str) -> _ModelQueues:
         return self._models.setdefault(model, _ModelQueues())
 
     def enqueue(self, ticket: QueueTicket, enqueued_at: float) -> int:
         state: Final = self._model(ticket.model)
-        queue: Final = state.queues.setdefault(ticket.class_name, [])
+        queue: Final = state.queues.get(ticket.class_name, ())
         if not queue:
             state.passes[ticket.class_name] = max(state.passes.get(ticket.class_name, 0.0), state.virtual_time)
-        heapq.heappush(queue, (enqueued_at, ticket.request_id))
-        return len(queue)
+        updated: Final = tuple(sorted((*queue, (enqueued_at, ticket.request_id))))
+        state.queues[ticket.class_name] = updated
+        return len(updated)
 
     def remove(self, ticket: QueueTicket) -> None:
         state: Final = self._models.get(ticket.model)
@@ -52,9 +55,7 @@ class InMemoryFairQueueStore:
         queue: Final = state.queues.get(ticket.class_name)
         if queue is None:
             return
-        remaining: Final = [entry for entry in queue if entry[1] != ticket.request_id]
-        heapq.heapify(remaining)
-        state.queues[ticket.class_name] = remaining
+        state.queues[ticket.class_name] = tuple(entry for entry in queue if entry[1] != ticket.request_id)
 
     def snapshot(self, model: str, class_names: Sequence[str]) -> Mapping[str, ClassQueueState]:
         state: Final = self._model(model)

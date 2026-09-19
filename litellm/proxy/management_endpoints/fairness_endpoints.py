@@ -7,7 +7,9 @@ GET /fairness/status   - Live per-model saturation, per-class usage, queue depth
 """
 
 import asyncio
-from typing import Final
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -27,7 +29,10 @@ from litellm.types.proxy.fairness import (
     FairnessStatusResponse,
 )
 
-router: Final = APIRouter(tags=["fairness"])
+router: Final = APIRouter(tags=["fairness"])  # mutable-ok: fastapi types tags as list[str | Enum]
+
+_AuthedUser = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
+_EMPTY_SECTION: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _effective_settings() -> FairnessSettings:
@@ -37,7 +42,10 @@ def _effective_settings() -> FairnessSettings:
 
 def _enforce_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(status_code=403, detail={"error": "Only proxy admins can manage fairness settings"})
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins can manage fairness settings"},  # mutable-ok: one-shot error payload
+        )
 
 
 def _enforce_admin_view(user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -45,22 +53,24 @@ def _enforce_admin_view(user_api_key_dict: UserAPIKeyAuth) -> None:
         _enforce_proxy_admin(user_api_key_dict)
 
 
-@router.get("/fairness/settings", dependencies=[Depends(user_api_key_auth)], response_model=FairnessSettingsResponse)
-async def get_fairness_settings(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> FairnessSettingsResponse:
+def _litellm_settings_section(config: Mapping[str, object]) -> Mapping[str, object]:
+    section: Final = config.get("litellm_settings")
+    return section if isinstance(section, Mapping) else _EMPTY_SECTION
+
+
+@router.get("/fairness/settings", dependencies=(Depends(user_api_key_auth),), response_model=FairnessSettingsResponse)
+async def get_fairness_settings(user_api_key_dict: _AuthedUser) -> FairnessSettingsResponse:
     from litellm.proxy.proxy_server import proxy_config
 
     _enforce_admin_view(user_api_key_dict)
     config: Final = await proxy_config.get_config()
-    persisted: Final = parse_fairness_settings(config.get("litellm_settings", {}).get(FAIRNESS_SETTINGS_KEY))
+    persisted: Final = parse_fairness_settings(_litellm_settings_section(config).get(FAIRNESS_SETTINGS_KEY))
     return FairnessSettingsResponse(settings=_effective_settings(), persisted=persisted is not None)
 
 
-@router.put("/fairness/settings", dependencies=[Depends(user_api_key_auth)], response_model=FairnessSettingsResponse)
+@router.put("/fairness/settings", dependencies=(Depends(user_api_key_auth),), response_model=FairnessSettingsResponse)
 async def update_fairness_settings(
-    settings: FairnessSettings,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    settings: FairnessSettings, user_api_key_dict: _AuthedUser
 ) -> FairnessSettingsResponse:
     from litellm.proxy.proxy_server import (
         create_config_audit_log,
@@ -74,14 +84,24 @@ async def update_fairness_settings(
     if store_model_in_db is not True:
         raise HTTPException(
             status_code=500,
-            detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
+            detail={  # mutable-ok: one-shot error payload
+                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
+            },
         )
     serialized: Final = settings.model_dump(mode="json")
     config: Final = await proxy_config.get_config()
-    litellm_settings: Final = config.setdefault("litellm_settings", {})
+    litellm_settings: Final = _litellm_settings_section(config)
     before_value: Final = litellm_settings.get(FAIRNESS_SETTINGS_KEY)
-    litellm_settings[FAIRNESS_SETTINGS_KEY] = serialized
-    await proxy_config.save_config(new_config=config)
+    new_config: Final[Mapping[str, object]] = MappingProxyType(
+        {
+            **config,
+            "litellm_settings": {  # mutable-ok: save_config deep-copies each section and mappingproxy is not copyable
+                **litellm_settings,
+                FAIRNESS_SETTINGS_KEY: serialized,
+            },
+        }
+    )
+    await proxy_config.save_config(new_config=new_config)
     apply_fairness_settings(
         settings,
         internal_usage_cache=proxy_logging_obj.internal_usage_cache.dual_cache,
@@ -99,10 +119,8 @@ async def update_fairness_settings(
     return FairnessSettingsResponse(settings=settings, persisted=True)
 
 
-@router.get("/fairness/status", dependencies=[Depends(user_api_key_auth)], response_model=FairnessStatusResponse)
-async def get_fairness_status(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> FairnessStatusResponse:
+@router.get("/fairness/status", dependencies=(Depends(user_api_key_auth),), response_model=FairnessStatusResponse)
+async def get_fairness_status(user_api_key_dict: _AuthedUser) -> FairnessStatusResponse:
     from litellm.proxy.proxy_server import llm_router
 
     _enforce_admin_view(user_api_key_dict)
