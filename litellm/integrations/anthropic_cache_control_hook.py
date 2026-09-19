@@ -209,14 +209,12 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # Create a deep copy of messages to avoid modifying the original list
         processed_messages = copy.deepcopy(messages)
 
-        # Separate message-level and non-message-level injection points
-        message_points: Final[list[CacheControlMessageInjectionPoint]] = []
-        remaining_points: Final[list[CacheControlInjectionPoint]] = []
-        for point in injection_points:
-            if point.get("location") == "message":
-                message_points.append(cast(CacheControlMessageInjectionPoint, point))
-            else:
-                remaining_points.append(point)
+        message_points: Final = tuple(
+            cast(CacheControlMessageInjectionPoint, point)
+            for point in injection_points
+            if point.get("location") == "message"
+        )
+        remaining_points: Final = tuple(point for point in injection_points if point.get("location") != "message")
 
         stamped_dialect: Final = injection_points[0].get("_litellm_openai_dialect")
         openai_dialect: Final = (
@@ -243,10 +241,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             else tuple(message_points)
         )
         stamped_external: Final = injection_points[0].get(EXTERNAL_BREAKPOINTS_STAMP)
+        external_breakpoints: Final = stamped_external if isinstance(stamped_external, int) else 0
         reserved_blocks: Final = AnthropicCacheControlHook._blocks_reserved_outside_messages(
-            remaining_points,
-            stamped_external if isinstance(stamped_external, int) else 0,
-            openai_dialect,
+            remaining_points, external_breakpoints, openai_dialect
         )
         breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(processed_messages)
         processed_messages = self._apply_message_injections(
@@ -266,7 +263,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # `instructions`, which is only a system message once the bridge builds one. A later
         # pass re-applies them safely: a target that already carries a mark is skipped and
         # the census counts every mark on the wire, litellm's own included.
-        carried_points: Final[Sequence[CacheControlInjectionPoint]] = (*remaining_points, *carried_message_points)
+        carried_points: Final[Sequence[CacheControlInjectionPoint]] = (
+            *AnthropicCacheControlHook._points_with_a_slot_left(
+                remaining_points,
+                AnthropicCacheControlHook.count_request_cache_breakpoints(processed_messages) + external_breakpoints,
+                openai_dialect,
+            ),
+            *carried_message_points,
+        )
         if carried_points:
             non_default_params["cache_control_injection_points"] = list(carried_points)
 
@@ -330,6 +334,16 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             return 0
         tool_config_blocks: Final = 1 if any(p.get("location") == "tool_config" for p in remaining_points) else 0
         return external_breakpoints + tool_config_blocks
+
+    @staticmethod
+    def _points_with_a_slot_left(
+        remaining_points: Sequence[CacheControlInjectionPoint], breakpoints_on_wire: int, openai_dialect: bool
+    ) -> tuple[CacheControlInjectionPoint, ...]:
+        """A ``tool_config`` point becomes a cachePoint the Bedrock converse transform never
+        counts against the cap, so it is forwarded only while the wire still has a slot."""
+        if openai_dialect or breakpoints_on_wire < MAX_CACHE_CONTROL_BLOCKS:
+            return tuple(remaining_points)
+        return tuple(point for point in remaining_points if point.get("location") != "tool_config")
 
     @staticmethod
     def _apply_message_injections(
@@ -529,19 +543,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         processed_messages: list[dict] = copy.deepcopy(messages)
         processed_system = copy.deepcopy(system) if system is not None else None
 
-        message_points: Final[list[CacheControlMessageInjectionPoint]] = []
-        system_points: Final[list[CacheControlMessageInjectionPoint]] = []
-        remaining_points: Final[list[CacheControlInjectionPoint]] = []
-
-        for point in injection_points:
-            if point.get("location") == "message":
-                msg_point = cast(CacheControlMessageInjectionPoint, point)
-                if msg_point.get("role") == "system":
-                    system_points.append(msg_point)
-                else:
-                    message_points.append(msg_point)
-            else:
-                remaining_points.append(point)
+        role_points: Final = tuple(
+            cast(CacheControlMessageInjectionPoint, point)
+            for point in injection_points
+            if point.get("location") == "message"
+        )
+        system_points: Final = tuple(point for point in role_points if point.get("role") == "system")
+        message_points: Final = tuple(point for point in role_points if point.get("role") != "system")
+        remaining_points: Final = tuple(point for point in injection_points if point.get("location") != "message")
 
         reserved_blocks: Final = AnthropicCacheControlHook._blocks_reserved_outside_messages(
             remaining_points, external_breakpoints, openai_dialect
@@ -581,8 +590,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             max_blocks=max_blocks - system_blocks,
             openai_dialect=openai_dialect,
         )
+        forwarded_points: Final = AnthropicCacheControlHook._points_with_a_slot_left(
+            remaining_points,
+            AnthropicCacheControlHook.count_request_cache_breakpoints(processed_messages, processed_system)
+            + external_breakpoints,
+            openai_dialect,
+        )
 
-        return processed_messages, processed_system, remaining_points
+        return processed_messages, processed_system, list(forwarded_points)
 
     @staticmethod
     def _default_control() -> ChatCompletionCachedContent:

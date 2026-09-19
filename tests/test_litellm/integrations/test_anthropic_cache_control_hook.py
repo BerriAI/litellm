@@ -1335,22 +1335,95 @@ async def test_cache_control_hook_bedrock_payload_caps_with_tool_config_point(mo
             )
 
             request_body = json.loads(mock_post.call_args.kwargs["data"])
-
-            cache_points = sum(
-                1 for block in request_body.get("system", []) if isinstance(block, dict) and "cachePoint" in block
-            )
-            for msg in request_body.get("messages", []):
-                content = msg.get("content", [])
-                if isinstance(content, list):
-                    cache_points += sum(1 for block in content if isinstance(block, dict) and "cachePoint" in block)
-            for tool in request_body.get("toolConfig", {}).get("tools", []):
-                if isinstance(tool, dict) and "cachePoint" in tool:
-                    cache_points += 1
+            cache_points = _count_converse_cache_points(request_body)
 
             assert cache_points <= 4, (
                 f"Bedrock payload exceeded Anthropic's 4 cache_control block limit "
                 f"when mixing message and tool_config injection: found {cache_points}"
             )
+
+
+def _count_converse_cache_points(request_body: dict) -> int:
+    system_points = sum(
+        1 for block in request_body.get("system", []) if isinstance(block, dict) and "cachePoint" in block
+    )
+    message_points = sum(
+        1
+        for msg in request_body.get("messages", [])
+        if isinstance(msg.get("content"), list)
+        for block in msg["content"]
+        if isinstance(block, dict) and "cachePoint" in block
+    )
+    tool_points = sum(
+        1
+        for tool in request_body.get("toolConfig", {}).get("tools", [])
+        if isinstance(tool, dict) and "cachePoint" in tool
+    )
+    return system_points + message_points + tool_points
+
+
+@pytest.mark.asyncio
+async def test_cache_control_hook_bedrock_tool_config_point_stands_down_when_client_marks_fill_the_cap(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The client's own four marks fill the cap, so the configured tool_config point must
+    not land as a fifth cachePoint in the converse payload."""
+    with patch.dict(
+        os.environ,
+        {
+            "AWS_ACCESS_KEY_ID": "fake_access_key_id",
+            "AWS_SECRET_ACCESS_KEY": "fake_secret_access_key",
+            "AWS_REGION_NAME": "us-east-1",
+        },
+    ):
+        monkeypatch.setattr(litellm, "callbacks", [AnthropicCacheControlHook()])
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "output": {"message": {"role": "assistant", "content": "ok"}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 100, "outputTokens": 4, "totalTokens": 104},
+        }
+        mock_response.status_code = 200
+
+        client = AsyncHTTPHandler()
+        with patch.object(client, "post", return_value=mock_response) as mock_post:
+            marked = {"type": "ephemeral"}
+            messages = [
+                {"role": "system", "content": [{"type": "text", "text": "sys", "cache_control": marked}]},
+                *(
+                    {"role": "user", "content": [{"type": "text", "text": f"turn {i}", "cache_control": marked}]}
+                    for i in range(3)
+                ),
+                {"role": "user", "content": "What is the weather?"},
+            ]
+
+            await litellm.acompletion(
+                model="bedrock/us.anthropic.claude-opus-4-6-v1:0",
+                messages=messages,
+                max_tokens=32,
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "Get weather for a location",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"location": {"type": "string"}},
+                                "required": ["location"],
+                            },
+                        },
+                    }
+                ],
+                cache_control_injection_points=[{"location": "tool_config"}],
+                client=client,
+            )
+
+            request_body = json.loads(mock_post.call_args.kwargs["data"])
+
+            assert _count_converse_cache_points(request_body) == 4
+            assert not any("cachePoint" in tool for tool in request_body["toolConfig"]["tools"])
 
 
 class TestApplyToAnthropicMessagesRequest:
@@ -2091,6 +2164,7 @@ class TestConfiguredInjectionPointsSurviveClientMarks:
 
     CONFIGURED = [{"location": "message", "role": "system"}]
     TAIL_POINT = [{"location": "message", "index": -1}]
+    TOOL_CONFIG_POINT = [{"location": "tool_config"}]
     EPHEMERAL = {"type": "ephemeral"}
 
     CLEAN_MESSAGES: List[AllMessageValues] = [
@@ -2219,6 +2293,22 @@ class TestConfiguredInjectionPointsSurviveClientMarks:
         self._seed(params, copy.deepcopy(messages), tools=[tool])
         processed = self._chat(params, copy.deepcopy(messages))
         assert _count_cache_control(processed) == 4
+
+    @pytest.mark.parametrize("marked_turns,forwarded", [(3, ["tool_config"]), (4, [])], ids=["slot_left", "cap_full"])
+    def test_chat_forwards_tool_config_point_only_while_a_slot_is_left(self, marked_turns, forwarded):
+        """A forwarded tool_config point becomes a Bedrock cachePoint unconditionally, so
+        it stands down once the client's own marks fill the cap."""
+        messages = [{"role": "system", "content": "sys"}, *self._marked_user_turns(marked_turns)]
+        params = {"cache_control_injection_points": copy.deepcopy(self.TOOL_CONFIG_POINT)}
+        self._seed(params, copy.deepcopy(messages), tools=[self.UNMARKED_TOOL])
+        self._chat(params, copy.deepcopy(messages))
+        assert [p["location"] for p in params.get("cache_control_injection_points", [])] == forwarded
+
+    @pytest.mark.parametrize("marked_turns,forwarded", [(3, ["tool_config"]), (4, [])], ids=["slot_left", "cap_full"])
+    def test_v1_messages_forwards_tool_config_point_only_while_a_slot_is_left(self, marked_turns, forwarded):
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.TOOL_CONFIG_POINT)}
+        self._inject(self._marked_user_turns(marked_turns), kwargs, tools=[self.UNMARKED_V1_TOOL])
+        assert [p["location"] for p in kwargs.get("cache_control_injection_points", [])] == forwarded
 
     @pytest.mark.parametrize("marked_turns,injected", [(2, 1), (3, 0)])
     def test_chat_root_cache_control_reserves_a_slot(self, marked_turns, injected):
