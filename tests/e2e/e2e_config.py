@@ -52,7 +52,7 @@ CHEAP_OPENAI_MODEL = os.environ.get("E2E_CHEAP_OPENAI_MODEL", "gpt-5.5")
 
 LINEAR_MCP_URL = os.environ.get("E2E_LINEAR_MCP_URL", "https://mcp.linear.app/mcp")
 LINEAR_STORAGE_STATE = os.environ.get("E2E_LINEAR_STORAGE_STATE", "")
-LINEAR_READONLY_TOOL: Final = "list_teams"  # Linear MCP tool name as listed by tools/list on mcp.linear.app when PR #33787 landed
+LINEAR_READONLY_TOOL: Final = "list_teams"  # as listed by tools/list on mcp.linear.app when PR #33787 landed
 
 # Jaeger query API of the compose stack's OTEL trace destination (the `jaeger`
 # service in docker-compose.yml maps it to host 16686). Trace-completeness tests
