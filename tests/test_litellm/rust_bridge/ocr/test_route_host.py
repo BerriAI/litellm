@@ -59,6 +59,17 @@ def test_map_failure_builds_public_error_from_upstream_status_and_headers() -> N
     assert public_error.llm_provider == "mistral"
 
 
+def test_map_failure_maps_upstream_401_to_authentication_error() -> None:
+    error: Final = RustUpstreamError(401, '{"message": "Unauthorized"}', ())
+
+    public_error: Final = map_failure(error, REQUEST, "mistral")
+
+    assert isinstance(public_error, litellm.AuthenticationError)
+    assert public_error.status_code == 401
+    assert public_error.response.text == '{"message": "Unauthorized"}'
+    assert public_error.__context__ is error
+
+
 def test_map_failure_leaves_non_upstream_errors_unwrapped() -> None:
     error: Final = RuntimeError("bridge exploded")
 

@@ -2,6 +2,7 @@ use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_l
 use litellm_llms::base_llm::anthropic_messages::transformation::{
     BaseAnthropicMessagesConfig, MessagesAuthStrategy,
 };
+use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
 use serde_json::{Map, Value};
 
 use super::{
@@ -37,10 +38,14 @@ pub(super) fn prepare_provider_request(
     let headers =
         validate_environment(config, request.extra_headers, request.api_key, &env_lookup)?;
 
-    let typed_request = serde_json::from_value(request.body).map_err(|err| {
-        Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
+    let typed_request: AnthropicMessagesRequest =
+        serde_json::from_value(request.body).map_err(|err| {
+            Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
+        })?;
+    let transformed = config.transform_anthropic_messages_request(AnthropicMessagesRequest {
+        model: model.clone(),
+        ..typed_request
     })?;
-    let transformed = config.transform_anthropic_messages_request(typed_request)?;
     let body = serde_json::to_value(transformed).map_err(|err| {
         Error::InvalidRequest(format!(
             "failed to serialize Anthropic messages request: {err}"

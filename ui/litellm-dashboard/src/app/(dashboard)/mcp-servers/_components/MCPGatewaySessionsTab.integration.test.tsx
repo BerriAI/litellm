@@ -1,13 +1,15 @@
 import React from "react";
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MCPGatewaySessionsTab, formatIdleSeconds } from "./MCPGatewaySessionsTab";
+import { MCPGatewaySessionsTab, describeTerminateResult, formatIdleSeconds } from "./MCPGatewaySessionsTab";
 import * as networking from "@/components/networking";
-import type { MCPGatewaySessionsResponse } from "@/components/mcp_tools/types";
+import type { MCPGatewaySessionsResponse, MCPGatewaySessionsTerminateResponse } from "@/components/mcp_tools/types";
 
 vi.mock("@/components/networking", () => ({
   fetchMCPGatewaySessions: vi.fn(),
+  terminateMCPGatewaySessions: vi.fn(),
 }));
 
 const REPORT: MCPGatewaySessionsResponse = {
@@ -64,11 +66,11 @@ const REPORT: MCPGatewaySessionsResponse = {
   ],
 };
 
-const renderTab = () => {
+const renderTab = ({ canTerminate = false }: { canTerminate?: boolean } = {}) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MCPGatewaySessionsTab accessToken="token" />
+      <MCPGatewaySessionsTab accessToken="token" canTerminate={canTerminate} />
     </QueryClientProvider>,
   );
 };
@@ -80,6 +82,17 @@ describe("formatIdleSeconds", () => {
     expect(formatIdleSeconds(60)).toBe("1m");
     expect(formatIdleSeconds(75)).toBe("1m 15s");
     expect(formatIdleSeconds(-4)).toBe("0s");
+  });
+});
+
+describe("describeTerminateResult", () => {
+  it("pluralizes the session count and names the worker", () => {
+    expect(describeTerminateResult({ worker_pid: 9, terminated_sessions: 1, sessions: [] })).toBe(
+      "Disconnected 1 session on worker pid 9.",
+    );
+    expect(describeTerminateResult({ worker_pid: 9, terminated_sessions: 0, sessions: [] })).toBe(
+      "Disconnected 0 sessions on worker pid 9.",
+    );
   });
 });
 
@@ -134,5 +147,74 @@ describe("MCPGatewaySessionsTab", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Could not load live connections");
     expect(alert).toHaveTextContent("Admin access required");
+  });
+
+  it("hides every disconnect control from a read-only admin", async () => {
+    vi.mocked(networking.fetchMCPGatewaySessions).mockResolvedValue(REPORT);
+    renderTab({ canTerminate: false });
+
+    await screen.findByRole("region", { name: "Live sessions" });
+    expect(screen.queryByRole("button", { name: /^Disconnect/ })).not.toBeInTheDocument();
+  });
+
+  it("disconnects one session by its displayed prefix after confirmation and refetches", async () => {
+    const user = userEvent.setup();
+    const terminated: MCPGatewaySessionsTerminateResponse = {
+      worker_pid: 4242,
+      terminated_sessions: 1,
+      sessions: [REPORT.sessions[1]],
+    };
+    vi.mocked(networking.fetchMCPGatewaySessions).mockResolvedValue(REPORT);
+    vi.mocked(networking.terminateMCPGatewaySessions).mockResolvedValue(terminated);
+    renderTab({ canTerminate: true });
+
+    await user.click(await screen.findByRole("button", { name: "Disconnect session bbbb2222" }));
+    expect(networking.terminateMCPGatewaySessions).not.toHaveBeenCalled();
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("session bbbb2222");
+    await user.click(within(dialog).getByRole("button", { name: "Disconnect" }));
+
+    const status = await screen.findByText("Disconnected 1 session on worker pid 4242.", { exact: false });
+    expect(status).toBeInTheDocument();
+    expect(networking.terminateMCPGatewaySessions).toHaveBeenCalledWith("token", { session_id_prefix: "bbbb2222" });
+    expect(networking.fetchMCPGatewaySessions).toHaveBeenCalledTimes(2);
+  });
+
+  it("disconnects every session of a user from the by-user table", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.fetchMCPGatewaySessions).mockResolvedValue(REPORT);
+    vi.mocked(networking.terminateMCPGatewaySessions).mockResolvedValue({
+      worker_pid: 4242,
+      terminated_sessions: 2,
+      sessions: [REPORT.sessions[0], REPORT.sessions[1]],
+    });
+    renderTab({ canTerminate: true });
+
+    const byUser = await screen.findByRole("region", { name: "Sessions by user" });
+    expect(within(byUser).queryByRole("button", { name: /\(unknown\)/ })).not.toBeInTheDocument();
+    await user.click(within(byUser).getByRole("button", { name: "Disconnect all sessions for user alice" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("every live session opened by user alice");
+    await user.click(within(dialog).getByRole("button", { name: "Disconnect" }));
+
+    expect(await screen.findByText(/Disconnected 2 sessions on worker pid 4242\./)).toBeInTheDocument();
+    expect(networking.terminateMCPGatewaySessions).toHaveBeenCalledWith("token", { user_id: "alice" });
+  });
+
+  it("shows the API error when a disconnect is refused", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.fetchMCPGatewaySessions).mockResolvedValue(REPORT);
+    vi.mocked(networking.terminateMCPGatewaySessions).mockRejectedValue(
+      new Error("Proxy admin access required to terminate MCP gateway sessions."),
+    );
+    renderTab({ canTerminate: true });
+
+    await user.click(await screen.findByRole("button", { name: "Disconnect session aaaa1111" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Disconnect" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Could not disconnect");
+    expect(alert).toHaveTextContent("Proxy admin access required to terminate MCP gateway sessions.");
+    expect(screen.getByRole("region", { name: "Live sessions" })).toBeInTheDocument();
   });
 });

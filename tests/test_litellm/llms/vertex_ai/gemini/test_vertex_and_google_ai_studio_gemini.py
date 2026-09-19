@@ -2,7 +2,7 @@ import asyncio
 import json
 import re
 from copy import deepcopy
-from typing import Final, List, cast
+from typing import Final, List, cast, get_args
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -18,7 +18,7 @@ from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
-from litellm.types.llms.vertex_ai import UsageMetadata
+from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
 from litellm.utils import CustomStreamWrapper
 
@@ -940,6 +940,11 @@ def test_check_finish_reason():
         )
 
 
+def test_every_documented_gemini_finish_reason_has_an_explicit_mapping():
+    documented: Final = frozenset(get_args(GeminiFinishReason))
+    assert set(VertexGeminiConfig.get_finish_reason_mapping()) == documented
+
+
 def test_finish_reason_unspecified_and_malformed_function_call():
     """
     Test that FINISH_REASON_UNSPECIFIED and MALFORMED_FUNCTION_CALL
@@ -968,6 +973,12 @@ def test_finish_reason_unspecified_and_malformed_function_call():
     # Test new Gemini finish reasons
     assert finish_reason_mappings["TOO_MANY_TOOL_CALLS"] == "stop"
     assert finish_reason_mappings["MALFORMED_RESPONSE"] == "stop"
+    assert finish_reason_mappings["NO_IMAGE"] == "content_filter"
+    assert finish_reason_mappings["IMAGE_RECITATION"] == "content_filter"
+    assert finish_reason_mappings["IMAGE_OTHER"] == "content_filter"
+    assert finish_reason_mappings["ESCALATION"] == "content_filter"
+    assert finish_reason_mappings["UNEXPECTED_TOOL_CALL"] == "stop"
+    assert finish_reason_mappings["MISSING_THOUGHT_SIGNATURE"] == "stop"
 
 
 def test_vertex_ai_usage_metadata_response_token_count():
@@ -6074,3 +6085,210 @@ def test_prompt_blocked_chunk_keeps_served_model_version():
 
     assert streaming_chunk.model == "gemini-3.8-flash-001"
     assert streaming_chunk.choices[0].finish_reason == "content_filter"
+
+
+def test_gemini_candidate_with_finish_reason_no_content_chat_completion():
+    config = VertexGeminiConfig()
+    completion_response = {
+        "candidates": [
+            {
+                "finishReason": "NO_IMAGE",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 19,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 19,
+        },
+    }
+    model_response = ModelResponse()
+    logging_obj = MagicMock()
+    raw_response = MagicMock()
+    raw_response.headers = {}
+
+    resp = config._transform_google_generate_content_to_openai_model_response(
+        completion_response=completion_response,
+        model_response=model_response,
+        model="gemini-2.5-flash-image",
+        logging_obj=logging_obj,
+        raw_response=raw_response,
+    )
+    assert len(resp.choices) == 1
+    assert resp.choices[0].finish_reason == "content_filter"
+    assert resp.choices[0].message.content is None
+    assert resp.choices[0].provider_specific_fields["native_finish_reason"] == "NO_IMAGE"
+
+
+def test_gemini_candidate_with_finish_reason_no_content_anthropic_messages():
+    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
+
+    config = VertexGeminiConfig()
+    completion_response = {
+        "candidates": [
+            {
+                "finishReason": "NO_IMAGE",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 19,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 19,
+        },
+    }
+    resp = config._transform_google_generate_content_to_openai_model_response(
+        completion_response=completion_response,
+        model_response=ModelResponse(),
+        model="gemini-2.5-flash-image",
+        logging_obj=MagicMock(),
+        raw_response=MagicMock(headers={}),
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_resp = adapter.translate_openai_response_to_anthropic(
+        response=resp,
+        tool_name_mapping={},
+    )
+    assert anthropic_resp["stop_reason"] == "refusal"
+    assert anthropic_resp["content"] == []
+
+
+def test_gemini_candidate_with_finish_reason_no_content_responses_api():
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+
+    config = VertexGeminiConfig()
+    completion_response = {
+        "candidates": [
+            {
+                "finishReason": "NO_IMAGE",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 19,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 19,
+        },
+    }
+    resp = config._transform_google_generate_content_to_openai_model_response(
+        completion_response=completion_response,
+        model_response=ModelResponse(),
+        model="gemini-2.5-flash-image",
+        logging_obj=MagicMock(),
+        raw_response=MagicMock(headers={}),
+    )
+
+    responses_resp = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="Generate picture",
+        responses_api_request={},
+        chat_completion_response=resp,
+    )
+    assert responses_resp.status == "incomplete"
+    assert responses_resp.incomplete_details is not None
+    assert responses_resp.incomplete_details.reason == "content_filter"
+
+
+def test_gemini_candidate_other_finish_reasons_no_content():
+    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+
+    config = VertexGeminiConfig()
+    max_tokens_response = {
+        "candidates": [{"finishReason": "MAX_TOKENS", "index": 0}],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 50, "totalTokenCount": 60},
+    }
+    resp_length = config._transform_google_generate_content_to_openai_model_response(
+        completion_response=max_tokens_response,
+        model_response=ModelResponse(),
+        model="gemini-2.5-flash",
+        logging_obj=MagicMock(),
+        raw_response=MagicMock(headers={}),
+    )
+    assert len(resp_length.choices) == 1
+    assert resp_length.choices[0].finish_reason == "length"
+    assert resp_length.choices[0].provider_specific_fields["native_finish_reason"] == "MAX_TOKENS"
+
+    anthropic_length = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
+        response=resp_length,
+        tool_name_mapping={},
+    )
+    assert anthropic_length["stop_reason"] == "max_tokens"
+
+    responses_length = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="thinking request",
+        responses_api_request={},
+        chat_completion_response=resp_length,
+    )
+    assert responses_length.status == "incomplete"
+    assert responses_length.incomplete_details.reason == "max_output_tokens"
+
+
+def test_gemini_candidate_with_finish_reason_no_content_streaming_chunk():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    chunk: Final = {
+        "candidates": [{"finishReason": "NO_IMAGE", "index": 0}],
+        "usageMetadata": {"promptTokenCount": 19, "candidatesTokenCount": 0, "totalTokenCount": 19},
+    }
+    iterator: Final = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=MagicMock())
+
+    streaming_chunk: Final = iterator.chunk_parser(chunk)
+
+    assert len(streaming_chunk.choices) == 1
+    assert streaming_chunk.choices[0].finish_reason == "content_filter"
+    assert streaming_chunk.choices[0].delta.content is None
+    assert streaming_chunk.choices[0].delta.tool_calls is None
+
+
+def test_gemini_multi_candidate_messages_do_not_share_state():
+    config: Final = VertexGeminiConfig()
+    completion_response: Final = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {"text": "Let me check the weather.", "thought": True},
+                        {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}},
+                    ],
+                },
+                "finishReason": "STOP",
+                "index": 0,
+            },
+            {
+                "content": {"role": "model", "parts": [{"text": "It is sunny in Paris."}]},
+                "finishReason": "STOP",
+                "index": 1,
+            },
+        ],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 20, "totalTokenCount": 30},
+    }
+
+    resp: Final = config._transform_google_generate_content_to_openai_model_response(
+        completion_response=completion_response,
+        model_response=ModelResponse(),
+        model="gemini-2.5-flash",
+        logging_obj=MagicMock(),
+        raw_response=MagicMock(headers={}),
+    )
+
+    assert len(resp.choices) == 2
+    assert resp.choices[0].finish_reason == "tool_calls"
+    assert resp.choices[0].message.tool_calls[0].function.name == "get_weather"
+    assert resp.choices[0].message.reasoning_content == "Let me check the weather."
+    assert resp.choices[1].finish_reason == "stop"
+    assert resp.choices[1].message.content == "It is sunny in Paris."
+    assert resp.choices[1].message.tool_calls is None
+    assert getattr(resp.choices[1].message, "reasoning_content", None) is None
+    assert resp.choices[1].provider_specific_fields["native_finish_reason"] == "STOP"
