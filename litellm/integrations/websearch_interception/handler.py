@@ -1762,7 +1762,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         for tool_call in tool_calls:
             # Handle both Anthropic-style input and OpenAI-style function.arguments
             query = None
-            tool_args: dict | None = None  # mutable-ok: the tool call's own arguments dict
+            tool_args: dict[str, object] | None = None  # mutable-ok: the tool call's own arguments dict
             if "input" in tool_call and isinstance(tool_call["input"], dict):
                 tool_args = tool_call["input"]
                 query = tool_args.get("query")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Final, Generic, TypeVar
+from typing import Final, Generic, TypeAlias, TypeVar
 
 from litellm.rust_bridge import catalog, runtime
 from litellm.rust_bridge.bindings import NativeBinding
@@ -10,11 +10,11 @@ from litellm.rust_bridge.catalog import Context, Route, Rules
 from litellm.rust_bridge.configuration import Decision
 from litellm.rust_bridge.configuration import decision as rollout_decision
 
-RequestT = TypeVar("RequestT")
-NativeT = TypeVar("NativeT")
-ResultT = TypeVar("ResultT")
+RequestT: Final = TypeVar("RequestT")
+NativeT: Final = TypeVar("NativeT")
+ResultT: Final = TypeVar("ResultT")
 
-NativeHook = Callable[[RequestT, tuple[object, ...], Mapping[str, object]], ResultT]
+NativeHook: TypeAlias = Callable[[RequestT, tuple[object, ...], Mapping[str, object]], ResultT]
 
 
 def call_hook(

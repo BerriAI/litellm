@@ -2014,11 +2014,11 @@ def strip_encrypted_reasoning_from_messages(messages: object) -> None:
     """
     if not isinstance(messages, list):
         return
-    for content in _anthropic_content_lists(cast(list[object], messages)):  # cast-ok: untyped client json
+    for content in anthropic_content_lists(cast(list[object], messages)):  # cast-ok: untyped client json
         _strip_encrypted_reasoning_from_blocks(content)
 
 
-def _anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
+def anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
     return (
         cast(list[object], content)  # cast-ok: narrowed by isinstance
         for message in messages
