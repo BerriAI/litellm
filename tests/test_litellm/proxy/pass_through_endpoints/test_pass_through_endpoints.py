@@ -7,6 +7,7 @@ from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
 from io import BytesIO
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -6448,8 +6449,8 @@ async def test_chat_completion_pass_through_endpoint_answers_an_openai_typed_err
 async def test_chat_completion_pass_through_endpoint_keeps_the_raw_model_out_of_the_spend_log_error(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    raw_model = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
-    proxy_logging = MagicMock()
+    raw_model: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
+    proxy_logging: Final = MagicMock()
     proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
     proxy_logging.post_call_failure_hook = AsyncMock()
 
@@ -6462,7 +6463,7 @@ async def test_chat_completion_pass_through_endpoint_keeps_the_raw_model_out_of_
     monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
 
-    request = MagicMock(spec=Request)
+    request: Final = MagicMock(spec=Request)
     request.body = AsyncMock(
         return_value=json.dumps({"model": raw_model, "messages": [{"role": "user", "content": "hi"}]}).encode()
     )
@@ -6475,7 +6476,7 @@ async def test_chat_completion_pass_through_endpoint_keeps_the_raw_model_out_of_
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
         )
 
-    logged_exception = proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"]
+    logged_exception: Final = proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"]
     assert isinstance(logged_exception, ProxyModelNotFoundError)
     assert logged_exception.retryable_with_model_read_through is False
     assert logged_exception.spend_log_error_message.startswith("completion: ")

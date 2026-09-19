@@ -1,4 +1,5 @@
 from types import MappingProxyType
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,15 +14,17 @@ from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.utils import LiteLLMBatch
 
-_RAW_MODEL_WITH_PROMPT = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
+_RAW_MODEL_WITH_PROMPT: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
 
 
 def test_get_credentials_for_model_rejects_an_unknown_model_without_persisting_the_raw_model():
-    llm_router = MagicMock()
+    llm_router: Final = MagicMock()
     llm_router.get_deployment_credentials_with_provider.return_value = None
 
     with pytest.raises(ProxyModelNotFoundError) as raised:
-        get_credentials_for_model(llm_router=llm_router, model_id=_RAW_MODEL_WITH_PROMPT, operation_context="file upload")
+        get_credentials_for_model(
+            llm_router=llm_router, model_id=_RAW_MODEL_WITH_PROMPT, operation_context="file upload"
+        )
 
     assert (raised.value.status_code, handle_exception_on_proxy(raised.value).code) == (400, "400")
     assert _RAW_MODEL_WITH_PROMPT in raised.value.detail["error"]
