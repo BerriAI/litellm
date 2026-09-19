@@ -438,6 +438,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     get_management_object_ttl,
     model_access_group_cache_key,
     model_access_group_spend_counter_key,
+    project_cache_key,
+    project_spend_counter_key,
     tag_cache_key,
 )
 from litellm.proxy.config_resolvers import SettingsStore, resolve_fields
@@ -2836,6 +2838,7 @@ async def increment_spend_counters(
     tags: list[str] | None = None,
     request_started_at: datetime | None = None,
     model_access_groups: Sequence[str] | None = None,
+    project_id: str | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -2857,6 +2860,7 @@ async def increment_spend_counters(
             end_user_id=end_user_id,
             tags=tags,
             model_access_groups=model_access_groups,
+            project_id=project_id,
         ),
     ):
         await _increment_spend_counters_batched(
@@ -2870,6 +2874,7 @@ async def increment_spend_counters(
             tags=tags,
             request_started_at=request_started_at,
             model_access_groups=model_access_groups,
+            project_id=project_id,
         )
 
 
@@ -2884,6 +2889,7 @@ async def _increment_spend_counters_batched(
     tags: list[str] | None,
     request_started_at: datetime | None,
     model_access_groups: Sequence[str] | None,
+    project_id: str | None = None,
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET."""
     reserved_counter_keys: Final = await _reconcile_budget_reservation_for_counter_update(
@@ -3084,6 +3090,13 @@ async def _increment_spend_counters_batched(
             )
             if org_id is not None
             else None,
+            _prepare_project_spend_increment(
+                project_id=project_id,
+                response_cost=cost,
+                reserved_counter_keys=reserved_counter_keys,
+            )
+            if project_id is not None
+            else None,
         )
         if coro is not None
     )
@@ -3230,6 +3243,23 @@ async def _prepare_org_spend_increment(
     pending: Final = await _prepare_unreserved_spend_counter_increment(
         counter_key=f"spend:org:{org_id}",
         source_cache_key=[f"org_id:{org_id}:with_budget", f"org_id:{org_id}"],
+        increment=response_cost,
+        reserved_counter_keys=reserved_counter_keys,
+    )
+    return (pending,) if pending is not None else ()
+
+
+async def _prepare_project_spend_increment(
+    project_id: str | None,
+    response_cost: float,
+    reserved_counter_keys: set[str],
+) -> tuple[PendingSpendIncrement, ...]:
+    if project_id is None:
+        return ()
+
+    pending: Final = await _prepare_unreserved_spend_counter_increment(
+        counter_key=project_spend_counter_key(project_id),
+        source_cache_key=project_cache_key(project_id),
         increment=response_cost,
         reserved_counter_keys=reserved_counter_keys,
     )
