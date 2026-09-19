@@ -116,6 +116,52 @@ def _semantic_cache(**cache_kwargs):
     )
 
 
+@pytest.mark.parametrize("semantic", [False, True])
+def test_reasoning_forwarding_cache_scope_preserves_groups_namespace_and_tenant(semantic):
+    cache = _semantic_cache(namespace="reasoning-test") if semantic else Cache(type="local", namespace="reasoning-test")
+
+    def key(alias="first", tenant="tenant-a", namespace="reasoning-test", nested=False, forward=None, prompt="hi"):
+        return cache.get_cache_key(
+            model="hosted_vllm/reasoning-test",
+            messages=[{"role": "user", "content": prompt}],
+            metadata={"model_group": alias, "caching_groups": [("first", "second")], "user_api_key": tenant},
+            cache={"namespace": namespace},
+            **(
+                {"litellm_params": {"forward_reasoning_content": forward}}
+                if nested
+                else {"forward_reasoning_content": forward}
+            ),
+        )
+
+    default = key()
+    enabled = key(forward=True)
+    assert default == key(forward=False) == key(nested=True, forward=False)
+    assert enabled != default
+    assert enabled == key(nested=True, forward=True) == key(alias="second", forward=True)
+    assert enabled.startswith("reasoning-test:")
+    assert enabled != key(namespace="other-namespace", forward=True)
+    if semantic:
+        assert enabled != key(tenant="tenant-b", forward=True)
+        assert enabled == key(prompt="hello", forward=True)
+    else:
+        assert enabled != key(prompt="hello", forward=True)
+
+
+def test_reasoning_forwarding_cache_key_preserves_legacy_disabled_key_and_top_level_precedence():
+    cache = Cache(type="local", namespace="reasoning-cache-test")
+    request = {"model": "hosted_vllm/reasoning-test", "messages": [{"role": "user", "content": "hi"}]}
+    legacy = "reasoning-cache-test:fca1120c8360f4b9ca0cd9b52f981f290a6eec25a8c6256033a81edcc713618c"
+    assert cache.get_cache_key(**request) == legacy
+    assert cache.get_cache_key(**request, forward_reasoning_content=False) == legacy
+    assert (
+        cache.get_cache_key(
+            **request, forward_reasoning_content=False, litellm_params={"forward_reasoning_content": True}
+        )
+        == legacy
+    )
+    assert cache.get_cache_key(**request, litellm_params={"forward_reasoning_content": True}) != legacy
+
+
 @pytest.mark.parametrize(
     "cache_type",
     [LiteLLMCacheType.REDIS_SEMANTIC, LiteLLMCacheType.VALKEY_SEMANTIC],
@@ -278,3 +324,42 @@ def test_exact_cache_key_includes_anthropic_messages_params(anthropic_param):
     assert baseline != cache.get_cache_key(
         model="claude-sonnet-4-5", messages=messages, **anthropic_param
     )
+
+
+@pytest.mark.parametrize("semantic", [False, True])
+@pytest.mark.parametrize("provider", ["hosted_vllm", "openai"])
+def test_reasoning_field_cache_identity(semantic: bool, provider: str):
+    cache = _semantic_cache(namespace="history-field") if semantic else Cache(type="local", namespace="history-field")
+    request = {
+        "model": f"{provider}/reasoning-test",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"model_group": "first", "caching_groups": [("first", "second")], "user_api_key": "tenant-a"},
+    }
+    legacy = cache.get_cache_key(**request)
+    assert cache.get_cache_key(**request, reasoning_content_field="reasoning_content") == legacy
+    assert cache.get_cache_key(**request, litellm_params={"reasoning_content_field": "reasoning_content"}) == legacy
+    normalized = cache.get_cache_key(**request, reasoning_content_field="reasoning")
+    assert normalized != legacy
+    assert normalized == cache.get_cache_key(**request, litellm_params={"reasoning_content_field": "reasoning"})
+    assert normalized != cache.get_cache_key(
+        **request, reasoning_content_field="reasoning", forward_reasoning_content=True
+    )
+    assert (
+        cache.get_cache_key(
+            **request,
+            reasoning_content_field="reasoning_content",
+            litellm_params={"reasoning_content_field": "reasoning"},
+        )
+        == legacy
+    )
+    assert normalized == cache.get_cache_key(
+        **{**request, "metadata": {**request["metadata"], "model_group": "second"}}, reasoning_content_field="reasoning"
+    )
+    assert normalized != cache.get_cache_key(
+        **request, reasoning_content_field="reasoning", cache={"namespace": "other"}
+    )
+    if semantic:
+        assert normalized != cache.get_cache_key(
+            **{**request, "metadata": {**request["metadata"], "user_api_key": "tenant-b"}},
+            reasoning_content_field="reasoning",
+        )
