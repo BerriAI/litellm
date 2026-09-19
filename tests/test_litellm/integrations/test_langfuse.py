@@ -633,6 +633,24 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             assert child.context.trace_id == generation.context.trace_id
             assert "langfuse.trace.name" not in child.attributes
 
+    def test_generation_is_exported_when_a_child_span_fails(self):
+        """v2 buffered the generation in one call, so a bad guardrail entry could not lose it;
+        the OTel generation is open until ``end()`` and must still be ended when a child raises."""
+        self._drive_with_canary(
+            guardrail_information=[
+                {
+                    "guardrail_name": "pii-post",
+                    "guardrail_mode": "post_call",
+                    "start_time": "not-a-timestamp",
+                    "end_time": 1704110403.0,
+                }
+            ],
+        )
+
+        [generation] = [span for span in self.span_exporter.get_finished_spans() if span.name.startswith("litellm-")]
+        assert generation.attributes["langfuse.trace.name"] == "canary-trace"
+        assert self.exported_spans_named("guardrail") == []
+
     def test_caller_cannot_spoof_an_allowlisted_identity_field(self):
         """
         Request metadata never reaches the blob, so a caller naming user_api_key_alias
@@ -2218,6 +2236,35 @@ def test_stopped_logger_hands_its_export_channel_back(monkeypatch):
 
     release_langfuse_tracing(reacquired, grace_seconds=0.0)
     assert acquire_same_credentials() is not logger.tracing, "stop() did not give the logger's hold back"
+
+
+def test_logger_that_fails_to_build_takes_no_slot_and_no_channel(monkeypatch):
+    """Each failed retry for the same dynamic credentials would otherwise eat a client slot and a
+    holder on the channel, so fixing the configuration could not bring Langfuse logging back."""
+    from litellm.integrations.langfuse.langfuse_sdk import acquire_langfuse_tracing, release_langfuse_tracing
+
+    monkeypatch.setenv("LANGFUSE_TIMEOUT", "5.5")
+    probe = _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-failed-build")
+
+    def acquire_same_credentials():
+        return acquire_langfuse_tracing(
+            public_key="pk-failed-build",
+            secret_key="sk-lit5228",
+            base_url=_UNREACHABLE_HOST,
+            environment=probe.langfuse_environment,
+            release=probe.langfuse_release,
+            flush_interval=probe.langfuse_flush_interval,
+            mock_mode=False,
+        )
+
+    monkeypatch.setenv("LANGFUSE_TIMEOUT", "not-a-number")
+    with pytest.raises(ValueError, match="not-a-number"):
+        _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-failed-build")
+    assert litellm.initialized_langfuse_clients == 0
+
+    monkeypatch.setenv("LANGFUSE_TIMEOUT", "5.5")
+    release_langfuse_tracing(probe.tracing, grace_seconds=0.0)
+    assert acquire_same_credentials() is not probe.tracing, "the failed build left a holder on the channel"
 
 
 def test_int_steering_values_reach_langfuse_as_strings():

@@ -742,6 +742,9 @@ class _CachedPrompt:
     fetched_at: float
 
 
+_PromptKey = tuple[str, int | None, str | None]
+
+
 def _prompt_client(prompt: Prompt) -> PromptClient:
     return ChatPromptClient(prompt) if isinstance(prompt, Prompt_Chat) else TextPromptClient(prompt)
 
@@ -762,7 +765,8 @@ class LangfuseApiClient:
     def __init__(self, api: LangfuseAPI, *, prompt_cache_ttl_seconds: float) -> None:
         self.api: Final = api
         self.prompt_cache_ttl_seconds: Final = prompt_cache_ttl_seconds
-        self._prompts: Final[dict[str, _CachedPrompt]] = {}  # mutable-ok: per-client prompt cache, guarded by _lock
+        # mutable-ok: per-client prompt cache, guarded by _lock
+        self._prompts: Final[dict[_PromptKey, _CachedPrompt]] = {}
         self._lock: Final = threading.Lock()
 
     def auth_check(self) -> bool:
@@ -777,7 +781,7 @@ class LangfuseApiClient:
         return projects[0].id if projects else None
 
     def get_prompt(self, name: str, *, label: str | None = None, version: int | None = None) -> PromptClient:
-        key: Final = f"{name}:version:{version}" if version is not None else f"{name}:label:{label}"
+        key: Final[_PromptKey] = (name, version, label)
         with self._lock:
             cached: Final = self._prompts.get(key)
         if cached is not None and monotonic() - cached.fetched_at < self.prompt_cache_ttl_seconds:
@@ -815,7 +819,7 @@ def build_langfuse_client(
             x_langfuse_sdk_version=version("langfuse"),
             x_langfuse_public_key=public_key,
             httpx_client=httpx_client,
-            timeout=int(os.getenv("LANGFUSE_TIMEOUT", "5")),
+            timeout=float(os.getenv("LANGFUSE_TIMEOUT", "5")),
         ),
         prompt_cache_ttl_seconds=float(os.getenv("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS", "60")),
     )

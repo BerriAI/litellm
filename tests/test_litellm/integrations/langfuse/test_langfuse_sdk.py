@@ -29,6 +29,7 @@ from litellm.integrations.langfuse.langfuse import (
 )
 from litellm.integrations.langfuse.langfuse_sdk import (
     DiscardingSpanExporter,
+    LangfuseApiClient,
     LangfuseSpanExporter,
     LangfuseTracing,
     _build_span_exporter,
@@ -1067,3 +1068,40 @@ def test_export_endpoint_never_doubles_the_slash_or_leaves_the_configured_host(
     exporter = _build_span_exporter(public_key="pk", secret_key="sk", base_url=base_url)
 
     assert exporter.endpoint == expected
+
+
+class _RecordingPromptsApi:
+    """Answers ``prompts.get`` with a text prompt that names the label it was asked for."""
+
+    def __init__(self) -> None:
+        self.prompts = self
+        self.requests: list[tuple[str, int | None, str | None]] = []  # mutable-ok: test-side call log
+
+    def get(self, name: str, *, version: int | None, label: str | None):
+        from langfuse.api import Prompt_Text
+
+        self.requests.append((name, version, label))
+        return Prompt_Text(
+            name=name,
+            version=version or 1,
+            config={},
+            labels=[label or "production"],
+            tags=[],
+            prompt=f"label={label!r}",
+        )
+
+
+def test_prompt_cache_keeps_a_missing_label_apart_from_the_label_named_none():
+    """A prompt labelled ``"None"`` and the unlabelled default are different prompts in Langfuse
+    and must not answer each other's requests from the cache."""
+    api = _RecordingPromptsApi()
+    client = LangfuseApiClient(api, prompt_cache_ttl_seconds=60)  # pyright: ignore[reportArgumentType]  # duck-typed prompts API
+
+    unlabelled = client.get_prompt("greeting")
+    named_none = client.get_prompt("greeting", label="None")
+    cached_unlabelled = client.get_prompt("greeting")
+
+    assert unlabelled.prompt == "label=None"
+    assert named_none.prompt == "label='None'"
+    assert cached_unlabelled is unlabelled
+    assert api.requests == [("greeting", None, None), ("greeting", None, "None")]

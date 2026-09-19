@@ -284,7 +284,6 @@ class LangFuseLogger:
                 f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\033[0m"
             ) from e
         raise_if_unsupported_langfuse_version(self.langfuse_sdk_version)
-        from litellm.integrations.langfuse.langfuse_sdk import acquire_langfuse_tracing
 
         self.public_key, self.secret_key, self.langfuse_host = resolve_langfuse_credentials(
             langfuse_public_key=langfuse_public_key,
@@ -310,16 +309,9 @@ class LangFuseLogger:
             self.langfuse_client = self._http_handler.client
             self.is_mock_mode = False
 
-        self.api_client: LangfuseApiClient = self.safe_init_langfuse_client()
-        self.tracing: LangfuseTracing = acquire_langfuse_tracing(
-            public_key=str(self.public_key),
-            secret_key=str(self.secret_key),
-            base_url=self.langfuse_host,
-            environment=self.langfuse_environment,
-            release=self.langfuse_release,
-            flush_interval=self.langfuse_flush_interval,
-            mock_mode=self.is_mock_mode,
-        )
+        self.api_client: LangfuseApiClient
+        self.tracing: LangfuseTracing
+        self.api_client, self.tracing = self.safe_init_langfuse_client()
 
         # set the current langfuse project id in the environ
         # this is used by Alerting to link to the correct project
@@ -336,8 +328,8 @@ class LangFuseLogger:
 
         warn_if_upstream_langfuse_configured()
 
-    def safe_init_langfuse_client(self) -> LangfuseApiClient:
-        """Build the REST client while the process is under its logger budget.
+    def safe_init_langfuse_client(self) -> "tuple[LangfuseApiClient, LangfuseTracing]":
+        """Build the REST client and export channel while the process is under its logger budget.
 
         The budget dates from the SDK client, which started a consumer thread per instance and once
         pinned a CPU at 100% when many were built; it still bounds the number of per-key loggers.
@@ -346,17 +338,34 @@ class LangFuseLogger:
             raise Exception(
                 f"Max langfuse clients reached: {litellm.initialized_langfuse_clients} is greater than {MAX_LANGFUSE_INITIALIZED_CLIENTS}"
             )
-        from litellm.integrations.langfuse.langfuse_sdk import build_langfuse_client
-
-        api_client: Final = build_langfuse_client(
-            public_key=self.public_key,
-            secret_key=self.secret_key,
-            base_url=self.langfuse_host,
-            httpx_client=self.langfuse_client,
+        from litellm.integrations.langfuse.langfuse_sdk import (
+            acquire_langfuse_tracing,
+            build_langfuse_client,
+            release_langfuse_tracing,
         )
+
+        tracing: Final = acquire_langfuse_tracing(
+            public_key=str(self.public_key),
+            secret_key=str(self.secret_key),
+            base_url=self.langfuse_host,
+            environment=self.langfuse_environment,
+            release=self.langfuse_release,
+            flush_interval=self.langfuse_flush_interval,
+            mock_mode=self.is_mock_mode,
+        )
+        try:
+            api_client: Final = build_langfuse_client(
+                public_key=self.public_key,
+                secret_key=self.secret_key,
+                base_url=self.langfuse_host,
+                httpx_client=self.langfuse_client,
+            )
+        except Exception:
+            release_langfuse_tracing(tracing, grace_seconds=0.0)
+            raise
         litellm.initialized_langfuse_clients += 1
         verbose_logger.debug("Created langfuse client number %s", litellm.initialized_langfuse_clients)
-        return api_client
+        return api_client, tracing
 
     def flush(self) -> None:
         """Push every queued observation to Langfuse before the process goes away."""
@@ -916,11 +925,15 @@ class LangFuseLogger:
                 public=trace_public,
                 attributes=MappingProxyType({**generation_attributes, **trace_level_attributes}),
             )
-            log_provider_specific_information_as_span(tracing=self.tracing, parent=generation, enrichments=enrichments)
-            self._log_guardrail_information_as_span(
-                tracing=self.tracing, parent=generation, standard_logging_object=standard_logging_object
-            )
-            generation.end(end_time)
+            try:
+                log_provider_specific_information_as_span(
+                    tracing=self.tracing, parent=generation, enrichments=enrichments
+                )
+                self._log_guardrail_information_as_span(
+                    tracing=self.tracing, parent=generation, standard_logging_object=standard_logging_object
+                )
+            finally:
+                generation.end(end_time)
 
             # log_event_on_langfuse tuple-unpacks this and re-wraps it in the dict callers cache.
             # The observation id is the requested generation_id after resolve_observation_id.
