@@ -200,5 +200,11 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "topxai": {
+    "base_url": "https://ai.topxea.com/v1",
+    "api_key_env": "TOPXAI_API_KEY",
+    "api_base_env": "TOPXAI_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   }
 }
