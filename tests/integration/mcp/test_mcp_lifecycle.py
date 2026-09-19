@@ -1,3 +1,4 @@
+import json
 import uuid
 from contextlib import ExitStack
 from pathlib import Path
@@ -56,7 +57,7 @@ def test_tool_error_remains_error_and_healthy_sibling_returns_value(gateway: Gat
         failure: Final = call_tool(gateway, key, identity, names["fail"], {})
         assert failure.status_code == 200, failure.text
         assert failure.json()["isError"] is True
-        assert "synthetic tool failure" in failure.json()["content"][0]["text"]
+        assert failure.json()["content"][0]["text"] == "Error executing tool fail"
         healthy: Final = call_tool(gateway, key, identity, names["multiply"], {"a": 3, "b": 5})
         assert healthy.status_code == 200, healthy.text
         assert healthy.json()["isError"] is False
@@ -199,7 +200,11 @@ def test_warm_credential_removal_rejects_without_upstream_traffic(gateway: Gatew
                 else call_tool(gateway, key, identity, names["add"], {"a": 3, "b": 5})
             )
             assert rejected.status_code == 500, rejected.text
-            assert "requires a usable upstream credential" in rejected.text, rejected.text
+            if operation == "list":
+                assert rejected.json()["detail"]["error"] == "internal", rejected.text
+                assert "Failed to list tools from server" in rejected.json()["detail"]["message"], rejected.text
+            else:
+                assert "requires a usable upstream credential" in rejected.text, rejected.text
             assert peer.drain() == (), "missing static credential escaped to upstream"
         changed = gateway.request(
             "PUT",
@@ -223,46 +228,79 @@ def test_warm_credential_removal_rejects_without_upstream_traffic(gateway: Gatew
         assert control.status_code == 200 and control.json()["content"][0]["text"] == "15", control.text
 
 
+@pytest.mark.parametrize("authenticated", (False, True), ids=("anonymous", "bearer"))
 @pytest.mark.covers("other.mcp.permissions.same_url_servers_enforce_discovery_and_execution")
-def test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution(gateway: Gateway) -> None:
+def test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution(
+    gateway: Gateway, authenticated: bool
+) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
-        allowed: Final = register_mcp(scenario, peer, "allowed" + uuid.uuid4().hex)
-        forbidden: Final = register_mcp(scenario, peer, "forbidden" + uuid.uuid4().hex)
-        caller: Final = scenario.key(object_permission={"mcp_servers": [allowed], "mcp_tool_search_enabled": True})
-        control: Final = scenario.key(object_permission={"mcp_servers": [forbidden], "mcp_tool_search_enabled": True})
-        allowed_names: Final = tool_names(gateway, caller, allowed)
-        forbidden_names: Final = tool_names(gateway, control, forbidden)
-        catalog: Final = gateway.request("GET", "/mcp-rest/tools/list", key=caller)
-        assert catalog.status_code == 200, catalog.text
-        assert {tool["mcp_info"]["server_id"] for tool in catalog.json()["tools"]} == {allowed}
-        assert {tool["name"] for tool in catalog.json()["tools"]} == set(allowed_names.values())
+        aliases: Final = tuple("scope" + uuid.uuid4().hex for _ in range(2))
+        servers: Final = tuple(
+            register_mcp(
+                scenario,
+                peer,
+                alias,
+                auth_type="bearer_token" if authenticated else "none",
+                static_headers={
+                    "X-Integration-Server": alias,
+                    **({"Authorization": f"Bearer synthetic-{alias}"} if authenticated else {}),
+                },
+            )
+            for alias in aliases
+        )
         for virtual in (False, True):
-            for server_id, names, key, expected in (
-                (allowed, allowed_names, caller, 200),
-                (forbidden, forbidden_names, caller, 403),
-                (forbidden, forbidden_names, control, 200),
-            ):
+            keys: Final = tuple(
+                scenario.key(object_permission={"mcp_servers": [server], "mcp_tool_search_enabled": virtual})
+                for server in servers
+            )
+            for server, alias, key in zip(servers, aliases, keys):
+                catalog: Final = gateway.request("GET", "/mcp-rest/tools/list", key=key)
+                assert catalog.status_code == 200, catalog.text
+                if virtual:
+                    assert {tool["name"] for tool in catalog.json()["tools"]} == {
+                        "mcp_tool_search",
+                        "mcp_tool_call",
+                        "agent_search",
+                        "skill_search",
+                    }, catalog.text
+                    search: Final = gateway.request(
+                        "POST",
+                        "/mcp-rest/tools/call",
+                        {"name": "mcp_tool_search", "arguments": {"query": "add", "top_k": 10}},
+                        key=key,
+                    )
+                    assert search.status_code == 200 and search.json()["isError"] is False, search.text
+                    assert [tool["name"] for tool in json.loads(search.json()["content"][0]["text"])] == [
+                        f"{alias}-add"
+                    ], search.text
+                else:
+                    assert {tool["mcp_info"]["server_id"] for tool in catalog.json()["tools"]} == {server}
+                    assert {tool["name"] for tool in catalog.json()["tools"]} == {"add", "multiply", "fail"}
+            for server_index, caller_index in ((0, 0), (1, 0), (1, 1)):
                 peer.drain()
                 response: Final = gateway.request(
                     "POST",
                     "/mcp-rest/tools/call",
                     {
-                        "server_id": server_id,
-                        "name": "mcp_tool_call" if virtual else names["add"],
+                        "name": "mcp_tool_call" if virtual else "add",
+                        **({} if virtual else {"server_id": servers[server_index]}),
                         "arguments": (
-                            {"tool_name": names["add"], "arguments": {"a": 3, "b": 5}} if virtual else {"a": 3, "b": 5}
+                            {"tool_name": f"{aliases[server_index]}-add", "arguments": {"a": 3, "b": 5}}
+                            if virtual
+                            else {"a": 3, "b": 5}
                         ),
                     },
-                    key=key,
+                    key=keys[caller_index],
                 )
-                assert response.status_code == expected, response.text
-                calls: Final = tuple(item for item in peer.drain() if item["body"].get("method") == "tools/call")
-                if expected == 403:
-                    assert "access" in response.text.lower(), response.text
-                    assert calls == (), "a denied server must not execute through either route"
-                else:
-                    assert response.json()["isError"] is False, response.text
-                    assert response.json()["content"][0]["text"] == "8", response.text
-                    assert len(calls) == 1
-                    assert calls[0]["body"]["params"]["name"] == "add"
-                    assert calls[0]["body"]["params"]["arguments"] == {"a": 3, "b": 5}
+                observed: Final = peer.drain()
+                if server_index != caller_index:
+                    assert response.status_code == 403 and "not allowed" in response.text, response.text
+                    assert observed == (), "forbidden server reached the upstream"
+                    continue
+                assert response.status_code == 200 and response.json()["isError"] is False, response.text
+                assert response.json()["content"][0]["text"] == "8", response.text
+                calls: Final = tuple(item for item in observed if item["body"].get("method") == "tools/call")
+                assert len(calls) == 1
+                assert calls[0]["headers"][b"x-integration-server"] == aliases[server_index].encode()
+                expected_auth: Final = f"Bearer synthetic-{aliases[server_index]}".encode() if authenticated else None
+                assert all(item["headers"].get(b"authorization") == expected_auth for item in observed)
