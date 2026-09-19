@@ -491,6 +491,35 @@ describe("TopKeyView", () => {
     });
   });
 
+  it("should only look up keys that still exist in the database, from both the table and the chart", async () => {
+    mockKeyInfoV1Call.mockResolvedValue({ key: "info" });
+    mockTransformKeyInfo.mockReturnValue({ transformed: "data" } as unknown as KeyResponse);
+
+    const user = userEvent.setup();
+    const { container } = render(
+      <TopKeyView
+        {...baseProps}
+        topKeys={[
+          { api_key: "session-key", key_alias: null, user: "alice@example.com", key_exists: false, spend: 100 },
+          { api_key: "stored-key", key_alias: "Stored", user: null, key_exists: true, spend: 50 },
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "stored-key" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "session-key" })).not.toBeInTheDocument();
+    await user.click(screen.getByText("session-key"));
+
+    await user.click(screen.getByRole("button", { name: "Chart View" }));
+    const bars = container.querySelectorAll("path.recharts-rectangle");
+    expect(bars).toHaveLength(2);
+    bars.forEach((bar) => fireEvent.click(bar));
+
+    expect(await screen.findByText("Key Info View for stored-key")).toBeInTheDocument();
+    expect(mockKeyInfoV1Call).toHaveBeenCalledTimes(1);
+    expect(mockKeyInfoV1Call).toHaveBeenCalledWith("test-token", "stored-key");
+  });
+
   it("should close modal when close button is clicked", async () => {
     const mockKeyInfo = { key: "info" };
     const mockTransformedData = { transformed: "data" } as unknown as KeyResponse;
