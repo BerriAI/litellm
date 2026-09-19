@@ -54,14 +54,20 @@ def approx_equal(actual: float, expected: float) -> bool:
     return abs(actual - expected) <= max(1e-9, abs(expected) * 1e-2)
 
 
-def assert_total_is_sum_of_components(row: CostRow) -> None:
+def assert_total_is_sum_of_components(row: CostRow, context: str) -> None:
     breakdown: Final = row.breakdown
     total: Final = sum(
         cost or 0.0
         for cost in (breakdown.input_cost, breakdown.output_cost, breakdown.tool_usage_cost)
     )
-    assert breakdown.total_cost is not None and approx_equal(breakdown.total_cost, total)
-    assert row.spend is not None and approx_equal(row.spend, breakdown.total_cost)
+    assert breakdown.total_cost is not None and approx_equal(breakdown.total_cost, total), (
+        f"{context}: total_cost {breakdown.total_cost} != input_cost {breakdown.input_cost} "
+        f"+ output_cost {breakdown.output_cost} + tool_usage_cost {breakdown.tool_usage_cost} "
+        f"(sum {total})"
+    )
+    assert row.spend is not None and approx_equal(row.spend, breakdown.total_cost), (
+        f"{context}: row spend {row.spend} != breakdown total_cost {breakdown.total_cost}"
+    )
 
 
 def _row(value: Mapping[str, object]) -> CostRow | None:
