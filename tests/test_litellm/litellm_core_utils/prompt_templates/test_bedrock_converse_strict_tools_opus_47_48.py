@@ -67,12 +67,19 @@ _NON_STRICT_TOOL = [
         "bedrock/us.anthropic.claude-sonnet-5",
         "bedrock/eu.anthropic.claude-sonnet-5",
         "bedrock/jp.anthropic.claude-sonnet-5",
+        # Sonnet 4.6 fails with "The compiled grammar is too large" once ~20+ strict tools are sent
+        "anthropic.claude-sonnet-4-6",
+        "bedrock/global.anthropic.claude-sonnet-4-6",
+        "bedrock/us.anthropic.claude-sonnet-4-6",
+        "bedrock/eu.anthropic.claude-sonnet-4-6",
+        "bedrock/au.anthropic.claude-sonnet-4-6",
+        "bedrock/jp.anthropic.claude-sonnet-4-6",
     ],
 )
 def test_bedrock_tools_pt_strict_dropped_for_strict_unsupported_models(
     model_id: str,
 ) -> None:
-    """Opus 4.7/4.8, Sonnet 4 and Sonnet 5 reject toolSpec.strict and additionalProperties."""
+    """Opus 4.7/4.8, Sonnet 4, Sonnet 4.6 and Sonnet 5 reject toolSpec.strict and additionalProperties."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
     tool_spec = result[0]["toolSpec"]
     assert (
@@ -87,13 +94,12 @@ def test_bedrock_tools_pt_strict_dropped_for_strict_unsupported_models(
     "model_id",
     [
         "anthropic.claude-sonnet-4-5-20250929-v1:0",
-        "bedrock/us.anthropic.claude-sonnet-4-6",
         "bedrock/us.anthropic.claude-opus-4-6",
         "bedrock/us.anthropic.claude-opus-4-5",
     ],
 )
 def test_bedrock_tools_pt_strict_kept_for_other_anthropic(model_id: str) -> None:
-    """Sonnet 4.5/4.6 and Opus <=4.6 accept toolSpec.strict — keep forwarding it."""
+    """Sonnet 4.5 and Opus <=4.6 accept toolSpec.strict, keep forwarding it."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
     assert (
         result[0]["toolSpec"]["strict"] is True

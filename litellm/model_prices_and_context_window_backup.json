@@ -2524,6 +2524,7 @@
         "prompt_cache_min_tokens": 1024
     },
     "anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
@@ -2559,6 +2560,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "global.anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
@@ -2594,6 +2596,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "us.anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
@@ -2629,6 +2632,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "eu.anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
@@ -2663,6 +2667,7 @@
         "prompt_cache_min_tokens": 1024
     },
     "au.anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
@@ -2697,6 +2702,7 @@
         "prompt_cache_min_tokens": 1024
     },
     "jp.anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
