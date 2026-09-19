@@ -38,6 +38,7 @@ from typing import (
     Literal,
     Optional,
     Protocol,
+    TypeAlias,
     TypeVar,
     Union,
     cast,
@@ -266,6 +267,15 @@ class _ViewCountRow(TypedDict):
 
 class _RelTuplesRow(TypedDict):
     reltuples: ReadOnly[int]
+
+
+_VIEW_SETUP_POLL_INTERVAL_SECONDS: Final = 5.0
+_VIEW_SETUP_DEADLINE_SECONDS: Final = 15 * 60.0
+_VIEW_SETUP_GATE_TABLE: Final = "LiteLLM_SpendLogs"
+_VIEW_SETUP_GATE_PROBE_ROWS: Final = TypeAdapter(tuple[Mapping[str, bool], ...])
+
+_ViewSetupOutcome: TypeAlias = Literal["ready", "timed_out"]
+_ViewSetupAttempt: TypeAlias = Literal["ready", "table_missing"] | Exception
 
 
 class _EndUserBatchTable(Protocol):
@@ -4284,6 +4294,7 @@ class PrismaClient:
             self.db = writer_wrapper  # Client to connect to Prisma db
         self._db_reconnect_lock = asyncio.Lock()
         self._db_health_watchdog_task: asyncio.Task | None = None
+        self._view_setup_task: asyncio.Task[_ViewSetupOutcome] | None = None
         self._db_last_reconnect_attempt_ts: float = 0.0
         self._db_reconnect_cooldown_seconds: int = max(1, int(os.getenv("PRISMA_RECONNECT_COOLDOWN_SECONDS", "15")))
         self._db_read_only_recreate_ts: float = 0.0
@@ -6329,6 +6340,78 @@ class PrismaClient:
             pass
         self._db_health_watchdog_task = None
         verbose_proxy_logger.info("Stopped Prisma DB health watchdog")
+
+    def start_view_setup_task(self) -> None:
+        if self._view_setup_task is not None:
+            return
+        self._view_setup_task = asyncio.create_task(self._run_view_setup())
+
+    async def stop_view_setup_task(self) -> None:
+        if self._view_setup_task is None:
+            return
+        self._view_setup_task.cancel()
+        try:
+            await self._view_setup_task
+        except asyncio.CancelledError:
+            pass
+        self._view_setup_task = None
+
+    async def _run_view_setup(
+        self,
+        poll_interval_seconds: float = _VIEW_SETUP_POLL_INTERVAL_SECONDS,
+        deadline_seconds: float = _VIEW_SETUP_DEADLINE_SECONDS,
+    ) -> _ViewSetupOutcome:
+        deadline: Final = time.monotonic() + deadline_seconds
+        while True:
+            if (attempt := await self._attempt_view_setup()) == "ready":
+                return "ready"
+            if time.monotonic() >= deadline:
+                self._log_view_setup_timeout(attempt, deadline_seconds)
+                return "timed_out"
+            await asyncio.sleep(poll_interval_seconds)
+
+    async def _attempt_view_setup(self) -> _ViewSetupAttempt:
+        try:
+            if not await self._view_setup_gate_table_present():
+                verbose_proxy_logger.debug(
+                    "Waiting for table %s before creating the spend views", self._view_setup_gate_table()
+                )
+                return "table_missing"
+            await self.check_view_exists()
+            await self._set_spend_logs_row_count_in_proxy_state()
+            return "ready"
+        except Exception as e:
+            verbose_proxy_logger.warning("Spend view setup attempt failed, retrying until the schema settles: %s", e)
+            return e
+
+    def _log_view_setup_timeout(
+        self, last_attempt: Literal["table_missing"] | Exception, deadline_seconds: float
+    ) -> None:
+        if isinstance(last_attempt, Exception):
+            verbose_proxy_logger.error(
+                "Gave up creating the spend views after %ss; the last attempt failed with: %s. "
+                "Fix that error and restart the proxy.",
+                deadline_seconds,
+                last_attempt,
+            )
+            return
+        verbose_proxy_logger.error(
+            "Gave up creating the spend views: table %s did not appear within %ss. "
+            "Run the database migrations against this database and restart the proxy.",
+            self._view_setup_gate_table(),
+            deadline_seconds,
+        )
+
+    async def _view_setup_gate_table_present(self) -> bool:
+        rows: Final = _VIEW_SETUP_GATE_PROBE_ROWS.validate_python(
+            await self.db.query_raw("SELECT to_regclass($1) IS NOT NULL AS present", self._view_setup_gate_table())
+        )
+        return rows[0]["present"]
+
+    @staticmethod
+    def _view_setup_gate_table() -> str:
+        pg_schema: Final = os.getenv("DATABASE_SCHEMA", "public")
+        return f'"{pg_schema}"."{_VIEW_SETUP_GATE_TABLE}"'
 
     async def _db_health_watchdog_loop(self) -> None:
         while True:

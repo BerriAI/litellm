@@ -1464,6 +1464,12 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
 
+    if prisma_client is not None and hasattr(prisma_client, "stop_view_setup_task"):
+        try:
+            await prisma_client.stop_view_setup_task()
+        except Exception as e:
+            verbose_proxy_logger.error("Error stopping the spend view setup task: %s", e)
+
     await _drain_spend_event_producer_on_shutdown()
 
     await flush_spend_counters_on_shutdown()
@@ -10635,14 +10641,7 @@ class ProxyStartupEvent:
             if hasattr(prisma_client, "db") and hasattr(prisma_client.db, "start_token_refresh_task"):
                 await prisma_client.db.start_token_refresh_task()
 
-            ## Add necessary views to proxy ##
-            asyncio.create_task(
-                prisma_client.check_view_exists()
-            )  # check if all necessary views exist. Don't block execution
-
-            asyncio.create_task(
-                prisma_client._set_spend_logs_row_count_in_proxy_state()
-            )  # set the spend logs row count in proxy state. Don't block execution
+            prisma_client.start_view_setup_task()
 
             if hasattr(prisma_client, "start_db_health_watchdog_task"):
                 await prisma_client.start_db_health_watchdog_task()
