@@ -342,6 +342,29 @@ def test_openai_compatible_400_with_bare_429_in_body_maps_to_bad_request():
     assert excinfo.value.llm_provider == "deepinfra"
 
 
+def test_dashscope_data_inspection_failure_maps_to_content_policy_violation():
+    error_message = (
+        '{"error":{"message":"InternalError.Algo.DataInspectionFailed: '
+        'Input text data may contain inappropriate content.",'
+        '"type":"invalid_request_error","code":"invalid_request_error"}}'
+    )
+    original_exception = OpenAIError(
+        status_code=400,
+        message=error_message,
+        headers={},
+    )
+
+    with pytest.raises(litellm.ContentPolicyViolationError) as excinfo:
+        exception_type(
+            model="dashscope/qwen-plus",
+            original_exception=original_exception,
+            custom_llm_provider="dashscope",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.llm_provider == "dashscope"
+
+
 def test_openai_compatible_429_still_maps_to_rate_limit():
     """A real 429 still maps to RateLimitError."""
     original_exception = OpenAIError(
