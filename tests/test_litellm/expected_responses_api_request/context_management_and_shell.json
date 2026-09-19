@@ -1,6 +1,11 @@
 {
   "model": "gpt-4o",
-  "input": "List files in /mnt/data and run python --version.",
+  "input": [
+    {
+      "role": "user",
+      "content": "List files in /mnt/data and run python --version."
+    }
+  ],
   "context_management": [
     {
       "type": "compaction",

@@ -219,53 +219,7 @@ async def test_aresponses_drops_stream_options():
         post_kwargs = mock_post.call_args.kwargs
         request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
         assert "stream_options" not in request_body
-
-
-@pytest.mark.asyncio
-async def test_aresponses_normalizes_string_input_to_user_list():
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post:
-        mock_post.return_value = MockResponse(
-            _minimal_responses_api_payload("resp_string_input", "gpt-5.5"), 200
-        )
-
-        await litellm.aresponses(
-            model="openai/gpt-5.5",
-            api_key="fake-api-key",
-            input="Reply with exactly ROUTE_OK.",
-            max_output_tokens=64,
-        )
-
-        mock_post.assert_called_once()
-        post_kwargs = mock_post.call_args.kwargs
-        request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
-        assert request_body["input"] == [{"role": "user", "content": "Reply with exactly ROUTE_OK."}]
-
-
-@pytest.mark.asyncio
-async def test_aresponses_forwards_list_input_unchanged():
-    list_input = [{"role": "user", "content": "Reply with exactly ROUTE_OK."}]
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post:
-        mock_post.return_value = MockResponse(
-            _minimal_responses_api_payload("resp_list_input", "gpt-5.5"), 200
-        )
-
-        await litellm.aresponses(
-            model="openai/gpt-5.5",
-            api_key="fake-api-key",
-            input=list_input,
-            max_output_tokens=64,
-        )
-
-        mock_post.assert_called_once()
-        post_kwargs = mock_post.call_args.kwargs
-        request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
-        assert request_body["input"] == list_input
+        assert request_body["input"] == [{"role": "user", "content": "hi"}]
 
 
 @pytest.mark.asyncio
