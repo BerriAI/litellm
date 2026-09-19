@@ -6,7 +6,7 @@ import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import anyio
 import httpx2
@@ -18,12 +18,14 @@ from mcp.types import (
     CONNECTION_CLOSED,
     INTERNAL_ERROR,
     REQUEST_TIMEOUT,
+    CallToolRequestParams,
     CallToolResult,
     ErrorData,
     Implementation,
     InitializeResult,
     JSONRPCError,
     JSONRPCMessage,
+    JSONRPCRequest,
     JSONRPCResponse,
     LoggingMessageNotificationParams,
     ServerCapabilities,
@@ -61,8 +63,10 @@ class _MockTransportClient(MCPClient):
         super().__init__(**kwargs)
         self._respond = respond
 
-    def _create_transport_context(self):
-        http_client = httpx2.AsyncClient(transport=httpx2.MockTransport(self._respond))
+    def _create_transport_context(self) -> tuple[_TransportContext, httpx2.AsyncClient]:
+        http_client: Final = self._create_httpx_client_factory(transport=httpx2.MockTransport(self._respond))(
+            headers=self._get_auth_headers(), timeout=httpx2.Timeout(self.timeout)
+        )
         return streamable_http_client(self.server_url, http_client=http_client), http_client
 
 
@@ -1176,6 +1180,107 @@ def test_v1_static_headers_still_win_their_own_slot():
     headers = client._get_auth_headers()
     assert headers["esb-oauth"] == "Bearer minted"
     assert headers["Authorization"] == "Bearer static-upstream-mcp-token"
+
+
+@pytest.mark.asyncio
+async def test_sdk_same_origin_redirect_lists_and_calls_tools() -> None:
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/mcp":
+            return httpx2.Response(307, headers={"Location": "/final/mcp"})
+        assert request.url == "https://upstream.example.com/final/mcp"
+        assert request.headers["x-upstream-token"] == "Bearer synthetic-token"
+        if request.method != "POST":
+            return httpx2.Response(405)
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        match payload.method:
+            case "initialize":
+                return httpx2.Response(
+                    200,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": payload.id,
+                        "result": {
+                            "protocolVersion": LATEST_HANDSHAKE_VERSION,
+                            "capabilities": {"tools": {}},
+                            "serverInfo": {"name": "redirect-test", "version": "1"},
+                        },
+                    },
+                )
+            case "tools/list":
+                return httpx2.Response(
+                    200,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": payload.id,
+                        "result": {"tools": [{"name": "add", "inputSchema": {"type": "object"}}]},
+                    },
+                )
+            case "tools/call":
+                assert payload.params is not None
+                assert payload.params["name"] == "add"
+                assert payload.params["arguments"] == {"a": 2, "b": 3}
+                return httpx2.Response(
+                    200,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": payload.id,
+                        "result": {"content": [{"type": "text", "text": "5"}], "isError": False},
+                    },
+                )
+            case _:
+                pytest.fail(f"Unexpected MCP request: {payload.method}")
+
+    responder: Final = Mock(side_effect=respond)
+    client: Final = _MockTransportClient(
+        responder,
+        server_url="https://upstream.example.com/mcp",
+        auth_type=MCPAuth.bearer_token,
+        auth_value="synthetic-token",
+        auth_header_name="x-upstream-token",
+        timeout=5,
+    )
+    with anyio.fail_after(10):
+        tools: Final = await client.list_tools(raise_on_error=True)
+        result: Final = await client.call_tool(
+            CallToolRequestParams(name="add", arguments={"a": 2, "b": 3}), raise_on_error=True
+        )
+    assert [tool.name for tool in tools] == ["add"]
+    assert result.is_error is False
+    assert len(result.content) == 1
+    assert result.content[0].type == "text"
+    assert result.content[0].text == "5"
+    assert any(call.args[0].url.path == "/mcp" for call in responder.call_args_list)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("list", "call"))
+async def test_sdk_cross_origin_redirect_never_contacts_destination(operation: str) -> None:
+    responder: Final = Mock(
+        return_value=httpx2.Response(307, headers={"Location": "https://destination.example.com/mcp"})
+    )
+    client: Final = _MockTransportClient(
+        responder,
+        server_url="https://upstream.example.com/mcp",
+        auth_type=MCPAuth.bearer_token,
+        auth_value="synthetic-token",
+        auth_header_name="x-upstream-token",
+        timeout=5,
+    )
+    pending_operation: Final = (
+        client.list_tools(raise_on_error=True)
+        if operation == "list"
+        else client.call_tool(CallToolRequestParams(name="add", arguments={"a": 2, "b": 3}), raise_on_error=True)
+    )
+    with anyio.fail_after(10), pytest.raises(MCPError):
+        await pending_operation
+    assert responder.call_count == 1
+    request: Final = responder.call_args.args[0]
+    assert request.method == "POST"
+    assert request.url == "https://upstream.example.com/mcp"
+    assert request.headers["x-upstream-token"] == "Bearer synthetic-token"
+    assert all(call.args[0].url.host != "destination.example.com" for call in responder.call_args_list)
 
 
 @pytest.mark.asyncio
