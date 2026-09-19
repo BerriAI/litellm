@@ -64,6 +64,59 @@ fn deployment_pre_call_hook_runs_only_for_asynchronous_calls(#[case] asynchronou
 }
 
 #[test]
+fn failure_context_is_initialized_before_argument_preparation() {
+    Python::initialize();
+    Python::attach(|py| {
+        let locals = namespace(
+            py,
+            c"
+failure = RuntimeError('limit check failed')
+metadata = {'request': 'ocr-1'}
+
+class FailingLogger(StubLogger):
+    def update_from_kwargs(self, **update):
+        self.record('update', update)
+        self.update = update
+
+    def check_limits(self, arguments):
+        self.record('check_limits', arguments)
+        raise failure
+
+logger = FailingLogger()
+kwargs = {
+    'logger': logger,
+    'model': 'provider/model',
+    'metadata': metadata,
+    'litellm_call_id': 'call-1',
+}
+",
+        );
+        let mut logging = legacy_call(py, &locals, false);
+        let kwargs = local(&locals, "kwargs")
+            .cast_into::<PyDict>()
+            .unwrap()
+            .unbind();
+        let result = logging.begin(py, kwargs, 0.0);
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("argument preparation succeeded"),
+        };
+        assert!(error.value(py).is(local(&locals, "failure")));
+        run(
+            py,
+            &locals,
+            c"
+assert logger.names() == ['update', 'check_limits'], logger.calls
+assert logger.update['model'] == 'model', logger.update
+assert logger.update['custom_llm_provider'] == 'provider', logger.update
+assert logger.update['kwargs']['metadata'] is metadata, logger.update
+assert logger.update['litellm_params']['litellm_call_id'] == 'call-1', logger.update
+",
+        );
+    });
+}
+
+#[test]
 fn kwargs_returned_by_the_pre_call_hook_are_what_the_call_prepares() {
     Python::initialize();
     Python::attach(|py| {

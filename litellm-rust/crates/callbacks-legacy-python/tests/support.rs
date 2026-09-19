@@ -125,6 +125,9 @@ class StubLogger:
         self.hooks = {}
         self.on_enqueue = lambda coroutine: None
 
+    def update_from_kwargs(self, **update):
+        self.update = update
+
     def record(self, name, value):
         self.calls.append((name, value))
 
@@ -198,7 +201,6 @@ pub(crate) fn legacy_call(
             call_type: "test",
             input_description: "test input",
             stream: None,
-            updates_logging_before_preparation: false,
         },
         call,
         asynchronous,

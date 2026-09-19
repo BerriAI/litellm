@@ -25,7 +25,6 @@ const SURFACE: LegacyPythonSurface = LegacyPythonSurface {
     call_type: "ocr",
     input_description: "OCR document processing",
     stream: None,
-    updates_logging_before_preparation: true,
 };
 
 const ASYNC_SURFACE: LegacyPythonSurface = LegacyPythonSurface {

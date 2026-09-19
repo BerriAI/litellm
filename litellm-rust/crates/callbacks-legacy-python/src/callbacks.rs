@@ -230,10 +230,7 @@ impl LegacyCallbacks for PythonLogger {
 }
 
 impl PythonLogger {
-    /// `Logging.update_from_kwargs` with what the caller's arguments alone say, ahead of
-    /// provider preparation. Only the metadata keys are handed over, so no credential in
-    /// the keyword view reaches the logger unredacted.
-    pub(crate) fn update_before_preparation(
+    pub(crate) fn initialize_failure_context(
         &self,
         py: Python<'_>,
         kwargs: &Py<PyDict>,
