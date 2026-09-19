@@ -438,13 +438,17 @@ def _v3_request_body(request_data: Mapping[str, object]) -> Mapping[str, object]
     metadata subset the Straiker LiteLLM adapter reads.
     """
     identity: Final = _v3_identity_metadata(request_data)
-    as_chat: Final = _v3_text_completion_route(request_data) and "messages" not in request_data
+    turns: Final = (
+        _v3_prompt_as_messages(request_data.get("prompt"))
+        if _v3_text_completion_route(request_data) and "messages" not in request_data
+        else None
+    )
     provider: Final = (
         (key, _v3_without_credentials(value) if key in _V3_REDACTED_KEYS else value)
         for key, value in request_data.items()
-        if key in _V3_PROVIDER_BODY_KEYS and not (as_chat and key == "prompt")
+        if key in _V3_PROVIDER_BODY_KEYS and not (turns is not None and key == "prompt")
     )
-    prompt_turns: Final = (("messages", _v3_prompt_as_messages(request_data.get("prompt"))),) if as_chat else ()
+    prompt_turns: Final = (("messages", turns),) if turns is not None else ()
     return _frozen((*provider, *prompt_turns, *((("metadata", identity),) if identity else ())))
 
 
@@ -479,11 +483,53 @@ def _v3_text_completion_route(request_data: Mapping[str, object]) -> bool:
     return _v3_route_is(request_data, CallTypes.text_completion)
 
 
-def _v3_prompt_as_messages(prompt: object) -> tuple[Mapping[str, object], ...]:
-    prompts: Final = prompt if isinstance(prompt, (list, tuple)) else (prompt,)
-    return tuple(
-        _frozen((("role", "user"), ("content", str(text)))) for text in prompts if isinstance(text, (str, int, float))
+def _v3_is_token_list(value: object) -> bool:
+    return (
+        isinstance(value, (list, tuple))
+        and bool(value)
+        and all(isinstance(token, int) and not isinstance(token, bool) for token in value)
     )
+
+
+def _v3_decode_tokens(tokens: Iterable[object]) -> str | None:
+    ids: Final = [token for token in tokens if isinstance(token, int)]  # mutable-ok: tiktoken decodes a list
+    try:
+        import tiktoken
+
+        return tiktoken.encoding_for_model("text-davinci-003").decode(ids)
+    except Exception:  # noqa: BLE001  # no tokenizer available: the raw prompt is relayed instead
+        return None
+
+
+def _v3_prompt_texts(prompt: object) -> tuple[str, ...] | None:
+    """The text the model receives for a completions `prompt`, in the proxy's own terms.
+
+    LiteLLM accepts a string, a list of strings, a list of token ids, or a list of token-id
+    lists, and decodes token ids with the text-davinci-003 tokenizer before calling the model.
+    The same decoding here means Straiker screens what the model gets. None when the prompt
+    is a shape this cannot render, so the caller relays it untouched rather than screening
+    something else.
+    """
+    if isinstance(prompt, str):
+        return (prompt,)
+    if not isinstance(prompt, (list, tuple)) or not prompt:
+        return None
+    if all(isinstance(item, str) for item in prompt):
+        return tuple(str(item) for item in prompt)
+    if _v3_is_token_list(prompt):
+        decoded: Final = _v3_decode_tokens(prompt)
+        return (decoded,) if decoded is not None else None
+    if all(_v3_is_token_list(item) for item in prompt):
+        decoded_each: Final = tuple(_v3_decode_tokens(item) for item in prompt)
+        return None if any(text is None for text in decoded_each) else tuple(text or "" for text in decoded_each)
+    return None
+
+
+def _v3_prompt_as_messages(prompt: object) -> tuple[Mapping[str, object], ...] | None:
+    texts: Final = _v3_prompt_texts(prompt)
+    if texts is None:
+        return None
+    return tuple(_frozen((("role", "user"), ("content", text))) for text in texts)
 
 
 def _v3_answer(request_data: Mapping[str, object], model: str | None) -> Mapping[str, object] | None:
