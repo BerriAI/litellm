@@ -1,6 +1,6 @@
 # Experimental MCP Server Change Guidelines
 
-Read @../../../../CLAUDE.md and @CLAUDE.md before changing this package.
+Read @../../../../AGENTS.md before changing this package.
 
 This directory owns the proxy-hosted MCP server implementation. Keep changes
 inside the module that owns the behavior, and only reach outside this package
@@ -14,7 +14,6 @@ Respect the current package boundaries:
 ```text
 litellm/proxy/_experimental/mcp_server/
   AGENTS.md
-  CLAUDE.md
   server.py                  # ASGI/MCP route handling, sessions, tool calls   [PR7: 7-arm only — move BYOK/OAuth pre-fetch into resolver]
   mcp_server_manager.py      # upstream server registry, clients, tool routing  [PR7: _create_mcp_client swaps resolve_mcp_auth -> resolve_credentials]
   auth/
@@ -68,8 +67,10 @@ module materially harder to understand.
   auth, SSE, streamable HTTP, and stdio as separate flows. Do not collapse them
   behind a single generic branch unless tests prove every mode still behaves
   correctly.
-- Be especially careful with legacy `delegate_auth_to_upstream: true`. The local
-  `CLAUDE.md` explains its admitted replacement and public discovery contract.
+- Be especially careful with legacy `delegate_auth_to_upstream: true`. `auth_type: oauth2`
+  with `delegate_auth_to_upstream: true` is deprecated: LiteLLM admission is required
+  for matching MCP routes. Use `auth_type: oauth_delegate` for client-forwarded OAuth.
+  OAuth discovery endpoints stay public so clients can start the RFC 9728 flow.
 - Keep database-backed fields in sync across migrations, typed models under
   `litellm/types/mcp.py` or `litellm/types/mcp_server/`, config loading, this
   package, and dashboard state when the field is user-visible.

@@ -1,7 +1,9 @@
 mod credentials;
 mod diagnostics;
 mod errors;
+mod http;
 mod marshal;
+mod python_settings;
 mod routes;
 mod token_counter;
 

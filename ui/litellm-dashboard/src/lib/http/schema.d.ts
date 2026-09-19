@@ -24767,10 +24767,16 @@ export interface components {
             redirect_uri?: string;
             /** Refresh Token */
             refresh_token?: string | null;
+            /** Requested Token Type */
+            requested_token_type?: string | null;
             /** Resource */
             resource?: string | null;
             /** Scope */
             scope?: string | null;
+            /** Subject Token */
+            subject_token?: string | null;
+            /** Subject Token Type */
+            subject_token_type?: string | null;
         };
         /** Body_token_endpoint_token_post */
         Body_token_endpoint_token_post: {
@@ -24788,10 +24794,16 @@ export interface components {
             redirect_uri?: string;
             /** Refresh Token */
             refresh_token?: string | null;
+            /** Requested Token Type */
+            requested_token_type?: string | null;
             /** Resource */
             resource?: string | null;
             /** Scope */
             scope?: string | null;
+            /** Subject Token */
+            subject_token?: string | null;
+            /** Subject Token Type */
+            subject_token_type?: string | null;
         };
         /** Body_upload_logo_upload_logo_post */
         Body_upload_logo_upload_logo_post: {
@@ -26687,6 +26699,13 @@ export interface components {
              */
             cancel_on_disconnect?: boolean | null;
             /**
+             * Claude Code Gateway Managed Settings
+             * @description Claude Code managed-settings.json served verbatim at the gateway's /claude_code_gateway/managed/settings endpoint. When unset the endpoint returns 404 (no managed policy)
+             */
+            claude_code_gateway_managed_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Completion Model
              * @description proxy level default model for all chat completion calls
              */
@@ -26780,6 +26799,11 @@ export interface components {
              * @description If True, disables ownership enforcement on Responses API ids. Keys may then retrieve, cancel, delete, and chain from any response id, including ids belonging to another user or team and ids this proxy never issued. WARNING: this removes tenant isolation on /v1/responses
              */
             disable_responses_id_security?: boolean | null;
+            /**
+             * Enable Claude Code Gateway
+             * @description serve the Claude Code gateway protocol (https://code.claude.com/docs/en/claude-apps-gateway) under /claude_code_gateway: OAuth device-flow sign-in reusing proxy SSO, plus managed settings and OTLP telemetry ingestion. Off by default
+             */
+            enable_claude_code_gateway?: boolean | null;
             /**
              * Enable Openai Websocket Passthrough
              * @description Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.
