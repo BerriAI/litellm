@@ -117,3 +117,7 @@ export const getDeletedTeamsTableColumns = (): ColumnDef<DeletedTeam>[] => [
     },
   },
 ];
+
+export const DELETED_TEAMS_SORT_FIELDS: readonly string[] = getDeletedTeamsTableColumns().flatMap((column) =>
+  column.enableSorting && column.id ? [column.id] : [],
+);

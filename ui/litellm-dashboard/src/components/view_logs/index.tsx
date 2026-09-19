@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import useCan from "@/app/(dashboard)/hooks/useCan";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
 import AuditLogsPanel from "./AuditLogsPanel";
@@ -17,23 +18,37 @@ interface SpendLogsTableProps {
 
 type LogsTabId = "request logs" | "audit logs" | "deleted keys" | "deleted teams";
 
+const LOGS_TAB_SLUGS = ["request-logs", "audit-logs", "deleted-keys", "deleted-teams"] as const;
+type LogsTabSlug = (typeof LOGS_TAB_SLUGS)[number];
+
 interface LogsTab {
   id: LogsTabId;
+  slug: LogsTabSlug;
   label: string;
 }
 
-const REQUEST_LOGS_TAB: LogsTab = { id: "request logs", label: "Request Logs" };
-const AUDIT_LOGS_TAB: LogsTab = { id: "audit logs", label: "Audit Logs" };
-const DELETED_KEYS_TAB: LogsTab = { id: "deleted keys", label: "Deleted Keys" };
-const DELETED_TEAMS_TAB: LogsTab = { id: "deleted teams", label: "Deleted Teams" };
+const REQUEST_LOGS_TAB: LogsTab = { id: "request logs", slug: "request-logs", label: "Request Logs" };
+const AUDIT_LOGS_TAB: LogsTab = { id: "audit logs", slug: "audit-logs", label: "Audit Logs" };
+const DELETED_KEYS_TAB: LogsTab = { id: "deleted keys", slug: "deleted-keys", label: "Deleted Keys" };
+const DELETED_TEAMS_TAB: LogsTab = { id: "deleted teams", slug: "deleted-teams", label: "Deleted Teams" };
 
 const tabContentClassName = (tabId: LogsTabId): string =>
   tabId === REQUEST_LOGS_TAB.id ? "flex min-h-0 flex-1 flex-col" : "min-h-0 flex-1 overflow-y-auto";
 
 export default function SpendLogsTable({ accessToken, token, userRole, userID, premiumUser }: SpendLogsTableProps) {
-  const [activeTab, setActiveTab] = useState<LogsTabId>(REQUEST_LOGS_TAB.id);
   const canViewAuditLogs = useCan("viewAuditLogs");
   const canViewDeletedTeams = useCan("viewDeletedTeams");
+  const { isLoading: isOrgMembershipLoading } = useOrganizations();
+
+  const tabs: LogsTab[] = [
+    REQUEST_LOGS_TAB,
+    ...(canViewAuditLogs ? [AUDIT_LOGS_TAB] : []),
+    DELETED_KEYS_TAB,
+    ...(canViewDeletedTeams ? [DELETED_TEAMS_TAB] : []),
+  ];
+  const isRoleResolved = Boolean(userRole) && !isOrgMembershipLoading;
+  const visibleSlugs: readonly LogsTabSlug[] = isRoleResolved ? tabs.map((tab) => tab.slug) : LOGS_TAB_SLUGS;
+  const [activeSlug, setActiveSlug] = useUrlTab(visibleSlugs, REQUEST_LOGS_TAB.slug);
 
   if (!accessToken || !token || !userRole || !userID) {
     return (
@@ -43,15 +58,8 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     );
   }
 
-  const tabs: LogsTab[] = [
-    REQUEST_LOGS_TAB,
-    ...(canViewAuditLogs ? [AUDIT_LOGS_TAB] : []),
-    DELETED_KEYS_TAB,
-    ...(canViewDeletedTeams ? [DELETED_TEAMS_TAB] : []),
-  ];
-
-  const renderPanel = (tabId: LogsTabId) => {
-    switch (tabId) {
+  const renderPanel = (tab: LogsTab) => {
+    switch (tab.id) {
       case "request logs":
         return (
           <RequestLogsPanel
@@ -59,7 +67,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
             token={token}
             userRole={userRole}
             userID={userID}
-            isActive={activeTab === "request logs"}
+            isActive={activeSlug === tab.slug}
           />
         );
       case "audit logs":
@@ -69,7 +77,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
             userRole={userRole}
             token={token}
             accessToken={accessToken}
-            isActive={activeTab === "audit logs"}
+            isActive={activeSlug === tab.slug}
             premiumUser={premiumUser}
           />
         );
@@ -82,17 +90,21 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
 
   return (
     <div className="flex h-full w-full flex-col p-6">
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as LogsTabId)} className="min-h-0 flex-1">
+      <Tabs
+        value={activeSlug}
+        onValueChange={(value) => setActiveSlug(value as LogsTabSlug)}
+        className="min-h-0 flex-1"
+      >
         <TabsList variant="line">
           {tabs.map((tab) => (
-            <TabsTrigger key={tab.id} value={tab.id} className="flex-none">
+            <TabsTrigger key={tab.slug} value={tab.slug} className="flex-none">
               {tab.label}
             </TabsTrigger>
           ))}
         </TabsList>
         {tabs.map((tab) => (
-          <TabsContent key={tab.id} value={tab.id} keepMounted className={tabContentClassName(tab.id)}>
-            {renderPanel(tab.id)}
+          <TabsContent key={tab.slug} value={tab.slug} keepMounted className={tabContentClassName(tab.id)}>
+            {renderPanel(tab)}
           </TabsContent>
         ))}
       </Tabs>
