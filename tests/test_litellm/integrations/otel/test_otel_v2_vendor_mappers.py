@@ -218,6 +218,7 @@ def test_langfuse_mapper_renders_a_responses_api_call_from_the_standard_logging_
         {
             "role": "assistant",
             "content": "Checking.",
+            "refusal": None,
             "tool_calls": [
                 {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "sf"}'}}
             ],

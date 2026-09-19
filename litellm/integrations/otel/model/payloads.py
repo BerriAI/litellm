@@ -720,6 +720,7 @@ class _ToolCall(TypedDict):
 class _AssistantMessage(TypedDict):
     role: ReadOnly[str]
     content: ReadOnly[str | None]
+    refusal: ReadOnly[str | None]
     tool_calls: ReadOnly[tuple[_ToolCall, ...] | None]
 
 
@@ -735,13 +736,7 @@ def _responses_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
     """A Responses API ``output`` folded into one chat-shaped assistant choice."""
     items: Final = _dicts(response.get("output"))
     messages: Final = tuple(item for item in items if item.get("type") == "message")
-    content: Final = "".join(
-        text
-        for item in messages
-        for part in _dicts(item.get("content"))
-        if part.get("type") == "output_text"
-        if (text := as_str(part.get("text"))) is not None
-    )
+    parts: Final = tuple(part for item in messages for part in _dicts(item.get("content")))
     tool_calls: Final = tuple(
         _responses_tool_call(item) for item in items if item.get("type") in _RESPONSES_TOOL_CALL_TYPES
     )
@@ -749,11 +744,19 @@ def _responses_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
         return ()
     message: Final[_AssistantMessage] = {
         "role": next((role for item in messages if (role := as_str(item.get("role")))), "assistant"),
-        "content": content if messages else None,
+        "content": _responses_parts_text(parts, "output_text", "text"),
+        "refusal": _responses_parts_text(parts, "refusal", "refusal"),
         "tool_calls": tool_calls or None,
     }
     choice: Final[_Choice] = {"message": message, "finish_reason": _responses_finish_reason(response, bool(tool_calls))}
     return (choice,)
+
+
+def _responses_parts_text(parts: tuple[Mapping[str, object], ...], part_type: str, field: str) -> str | None:
+    texts: Final = tuple(
+        text for part in parts if part.get("type") == part_type if (text := as_str(part.get(field))) is not None
+    )
+    return "".join(texts) if texts else None
 
 
 def _responses_tool_call(item: Mapping[str, object]) -> _ToolCall:
