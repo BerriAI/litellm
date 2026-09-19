@@ -7537,3 +7537,66 @@ def test_eager_input_streaming_non_boolean_is_a_bad_request():
             "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             [_eager_openai_tool(eager_input_streaming="true")],
         )
+def test_anthropic_converse_default_max_tokens_from_cost_map(local_model_cost_map):
+    """Bedrock caps output at 4096 when maxTokens is omitted; fill the model max from the cost map instead."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        model="us.anthropic.claude-sonnet-5",
+        non_default_params={},
+        optional_params={},
+        drop_params=False,
+    )
+    assert optional_params["maxTokens"] == 128000
+
+    data = config._transform_request_helper(
+        model="us.anthropic.claude-sonnet-5",
+        system_content_blocks=[],
+        optional_params=optional_params,
+        messages=None,
+    )
+    assert data["inferenceConfig"]["maxTokens"] == 128000
+
+
+def test_anthropic_converse_explicit_max_tokens_still_wins(local_model_cost_map):
+    config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        model="us.anthropic.claude-sonnet-5",
+        non_default_params={"max_tokens": 111},
+        optional_params={},
+        drop_params=False,
+    )
+    assert optional_params["maxTokens"] == 111
+
+
+def test_anthropic_converse_default_max_tokens_strips_region_prefix(local_model_cost_map):
+    config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        model="eu.anthropic.claude-3-7-sonnet-20240620-v1:0",
+        non_default_params={},
+        optional_params={},
+        drop_params=False,
+    )
+    assert optional_params["maxTokens"] == 8192
+
+
+def test_non_anthropic_converse_gets_no_default_max_tokens(local_model_cost_map):
+    config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        model="us.meta.llama4-maverick-17b-instruct-v1:0",
+        non_default_params={},
+        optional_params={},
+        drop_params=False,
+    )
+    assert "maxTokens" not in optional_params
+
+
+def test_anthropic_converse_unknown_model_gets_no_default_max_tokens(local_model_cost_map):
+    config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        model="us.anthropic.not-a-real-model-v1:0",
+        non_default_params={},
+        optional_params={},
+        drop_params=False,
+    )
+    assert "maxTokens" not in optional_params
