@@ -18,6 +18,7 @@ use crate::base_llm::ocr::{
     document::InlineDocument,
     error::Error,
     handler::{CallHooks, OcrClient, read_json_response},
+    settings::OcrSettings,
     transformation::{
         BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES,
         OCR_POLL_RETRY_SECS, OcrConnection, OcrCredentialInputs, OcrDocument, OcrPage,
@@ -26,9 +27,7 @@ use crate::base_llm::ocr::{
     },
 };
 
-const AZURE_DI_API_VERSION: &str = "2024-11-30";
 const AZURE_DI_SUBSCRIPTION_HEADER: &str = "Ocp-Apim-Subscription-Key";
-const AZURE_DI_DEFAULT_DPI: i64 = 96;
 const AZURE_DI_DEFAULT_WIDTH: f64 = 8.5;
 const AZURE_DI_DEFAULT_HEIGHT: f64 = 11.0;
 
@@ -195,7 +194,15 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         let endpoint = nonblank(request.connection.api_base.clone())
             .or_else(|| nonblank(credential_env(AZURE_DI_ENDPOINT_ENV)))
             .ok_or_else(|| Error::Auth(litellm_auth::Error::ProviderAuthentication("Missing Azure Document Intelligence API Base - Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT or pass api_base".into())))?;
-        self.build_ocr_url(&endpoint, &request.model, optional_params)
+        self.build_ocr_url(
+            &endpoint,
+            &request.model,
+            optional_params,
+            &request
+                .connection
+                .settings
+                .document_intelligence_api_version,
+        )
     }
 
     fn transform_ocr_request(
@@ -214,12 +221,13 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         raw_response: &[u8],
         request_format: OcrResponseFormat,
     ) -> Result<LiteLLMOcrResponse, Error> {
-        decode_and_normalize_response(
-            model,
-            raw_response,
-            request_format,
-            transform_completed_response,
-        )
+        decode_and_normalize_response(model, raw_response, request_format, |model, response| {
+            transform_completed_response(
+                model,
+                response,
+                OcrSettings::default().document_intelligence_dpi,
+            )
+        })
     }
 
     async fn async_transform_ocr_response(
@@ -240,7 +248,11 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         .await?;
         Ok(LiteLLMOcrResponse {
             provider_native_response: decoded.native,
-            ..transform_completed_response(model, decoded.data)?
+            ..transform_completed_response(
+                model,
+                decoded.data,
+                context.connection.settings.document_intelligence_dpi,
+            )?
         })
     }
 }
@@ -353,6 +365,7 @@ fn build_request(document: OcrDocument) -> Result<DocumentIntelligenceRequest, E
 fn transform_completed_response(
     model: &str,
     response: AzureDocumentIntelligenceOperation,
+    dpi: i64,
 ) -> Result<LiteLLMOcrResponse, Error> {
     if response.status != Some(OperationStatus::Succeeded) {
         return Err(Error::OperationStatus(
@@ -366,7 +379,7 @@ fn transform_completed_response(
     let pages = result
         .pages
         .into_iter()
-        .map(transform_azure_page)
+        .map(|page| transform_azure_page(page, dpi))
         .collect::<Result<Vec<_>, _>>()?;
     let pages_processed = i64::try_from(pages.len()).map_err(|_| Error::NumericRange("pages"))?;
     Ok(LiteLLMOcrResponse {
@@ -381,7 +394,7 @@ fn transform_completed_response(
     })
 }
 
-fn transform_azure_page(page: AzureDocumentIntelligencePage) -> Result<OcrPage, Error> {
+fn transform_azure_page(page: AzureDocumentIntelligencePage, dpi: i64) -> Result<OcrPage, Error> {
     let index = page
         .page_number
         .unwrap_or(1)
@@ -391,6 +404,7 @@ fn transform_azure_page(page: AzureDocumentIntelligencePage) -> Result<OcrPage, 
         page.width.unwrap_or(AZURE_DI_DEFAULT_WIDTH),
         page.height.unwrap_or(AZURE_DI_DEFAULT_HEIGHT),
         page.unit.as_deref().unwrap_or("inch"),
+        dpi,
     )?;
     let markdown = page
         .lines
@@ -406,16 +420,17 @@ fn transform_azure_page(page: AzureDocumentIntelligencePage) -> Result<OcrPage, 
     })
 }
 
-fn convert_dimensions(width: f64, height: f64, unit: &str) -> Result<OcrPageDimensions, Error> {
-    let scale = if unit == "inch" {
-        AZURE_DI_DEFAULT_DPI as f64
-    } else {
-        1.0
-    };
+fn convert_dimensions(
+    width: f64,
+    height: f64,
+    unit: &str,
+    dpi: i64,
+) -> Result<OcrPageDimensions, Error> {
+    let scale = if unit == "inch" { dpi as f64 } else { 1.0 };
     Ok(OcrPageDimensions {
         width: Some(pixel_dimension(width, scale, "page.width")?),
         height: Some(pixel_dimension(height, scale, "page.height")?),
-        dpi: Some(AZURE_DI_DEFAULT_DPI),
+        dpi: Some(dpi),
     })
 }
 
@@ -475,7 +490,7 @@ async fn poll_operation(
     hooks: &dyn CallHooks<Error>,
 ) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, Error> {
     let deadline = Instant::now()
-        .checked_add(connection.poll_timeout)
+        .checked_add(connection.settings.poll_timeout)
         .ok_or(Error::PollTimeout)?;
 
     loop {
@@ -544,13 +559,14 @@ impl AzureDocumentIntelligenceOcrConfig {
         endpoint: &str,
         model: &str,
         params: &DocumentIntelligenceParams,
+        api_version: &str,
     ) -> Result<String, Error> {
         let model = format!("{}:analyze", model_id(model)?);
         ApiUrl::parse(endpoint)
             .and_then(|url| url.complete_path(&["documentintelligence", "documentModels", &model]))
             .map(|url| {
                 url.append_query_pairs(
-                    [("api-version", AZURE_DI_API_VERSION)]
+                    [("api-version", api_version)]
                         .into_iter()
                         .chain(params.pages.iter().map(|pages| ("pages", pages.as_str())))
                         .chain(

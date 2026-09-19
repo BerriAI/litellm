@@ -1,6 +1,7 @@
 use litellm_auth::{InputSource, SecretValue, Sourced};
-use litellm_llms::base_llm::ocr::transformation::{
-    OcrConnection, OcrCredentialInputs, PreparedOcrRequest, credential_env,
+use litellm_llms::base_llm::ocr::{
+    settings::OcrSettings,
+    transformation::{OcrConnection, OcrCredentialInputs, PreparedOcrRequest, credential_env},
 };
 
 use super::provider_config::OcrProvider;
@@ -9,6 +10,7 @@ use crate::ocr::types::{LiteLLMOcrRequest, ResolvedOcrRequest};
 pub(crate) fn prepare_request(
     request: ResolvedOcrRequest,
     caller_document: bool,
+    settings: &OcrSettings,
 ) -> PreparedOcrRequest {
     let credentials = request.credentials.clone();
     let api_base_env = match request.config.provider() {
@@ -51,7 +53,7 @@ pub(crate) fn prepare_request(
     PreparedOcrRequest {
         model,
         document,
-        connection: OcrConnection::new(resolved, transport),
+        connection: OcrConnection::new(resolved, transport, settings.clone()),
         caller_document,
         optional_params,
         input_sources,
@@ -61,7 +63,7 @@ pub(crate) fn prepare_request(
 
 #[cfg(test)]
 pub(crate) fn prepare_request_for_test(request: ResolvedOcrRequest) -> PreparedOcrRequest {
-    prepare_request(request, true)
+    prepare_request(request, true, &OcrSettings::default())
 }
 
 #[cfg(test)]

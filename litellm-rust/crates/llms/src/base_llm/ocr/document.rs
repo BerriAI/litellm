@@ -68,7 +68,7 @@ pub async fn inline_remote_document(
             url,
             DownloadPolicy {
                 timeout: connection.timeout,
-                max_bytes: connection.max_download_bytes,
+                max_bytes: connection.settings.max_download_bytes,
                 max_redirects: OCR_MAX_FETCH_REDIRECTS,
             },
         )

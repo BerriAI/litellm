@@ -9,7 +9,8 @@ use host::OcrRouteHost;
 use litellm_auth_gcp::VertexAuth;
 use litellm_callbacks_legacy::{LegacySurface, PublicCall, run_legacy_call};
 use litellm_core::ocr::route::ocr_machine;
-use litellm_llms::base_llm::ocr::handler::OcrClient;
+use litellm_core_utils::settings::ProcessEnvironment;
+use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use pyo3::{
     prelude::*,
     types::{PyDict, PyTuple},
@@ -43,6 +44,7 @@ fn run_ocr(
         &config,
         http::url_policy(py)?,
         VERTEX_AUTH.clone(),
+        OcrSettings::from_environment(&ProcessEnvironment),
     )
     .map_err(|error| RustBridgeDeclined::new_err(error.to_string()))?;
     run_legacy_call(
