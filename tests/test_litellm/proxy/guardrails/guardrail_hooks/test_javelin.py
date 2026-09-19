@@ -9,9 +9,6 @@ from litellm.types.guardrails import GuardrailEventHooks
 
 @pytest.mark.asyncio
 async def test_config_without_api_version_calls_javelin_v1():
-    """Javelin's v1 default no longer lives in the shared LitellmParams model (it
-    leaked into every other provider), so the Javelin initializer has to supply
-    it itself when the config omits api_version."""
     handler = InMemoryGuardrailHandler()
     registered = handler.initialize_guardrail(
         guardrail={
