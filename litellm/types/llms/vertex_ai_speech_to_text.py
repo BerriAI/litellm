@@ -93,6 +93,7 @@ class VertexSpeechStreamingTurnFinished(BaseModel):
 class VertexSpeechStreamingTurnDiscarded(BaseModel):
     model_config = ConfigDict(frozen=True)
     kind: Literal["turn_discarded"] = "turn_discarded"
+    billed_seconds: float
 
 
 VertexSpeechStreamingEventUnion = (

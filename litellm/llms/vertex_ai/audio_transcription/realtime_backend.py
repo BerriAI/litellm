@@ -45,7 +45,6 @@ _LINK_QUEUE_SIZE: Final = 64
 _CLOSE_REASON_MAX_CHARS: Final = 120
 _CONFIGURED_EVENT: Final = VertexSpeechStreamingConfigured().model_dump_json()
 _TURN_FINISHED_EVENT: Final = VertexSpeechStreamingTurnFinished().model_dump_json()
-_TURN_DISCARDED_EVENT: Final = VertexSpeechStreamingTurnDiscarded().model_dump_json()
 _COMMAND_ADAPTER: Final = TypeAdapter[VertexSpeechStreamingCommandUnion](VertexSpeechStreamingCommand)
 _TIMEDELTA_ADAPTER: Final = TypeAdapter(timedelta)
 _SPEECH_EVENTS: Final[MappingProxyType[str, Literal["begin", "end"]]] = MappingProxyType(
@@ -78,6 +77,20 @@ class _StreamFailure:
 @dataclass(frozen=True, slots=True)
 class _Closed:
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class _TurnResult:
+    turn: int
+    event: str
+
+
+@dataclass(frozen=True, slots=True)
+class _TurnDiscarded:
+    pass
+
+
+_OutboxItem = str | _TurnResult | _StreamFailure | _Closed
 
 
 def open_speech_client(target: SpeechStreamingTarget, access_token: str) -> SpeechStreamingClient:
@@ -146,10 +159,12 @@ class _RecognizeStream:
         request_type: "type[StreamingRecognizeRequest]",
         first_request: "StreamingRecognizeRequest",
         opened_at: float,
+        turn: int,
     ) -> None:
         self._client: Final = client
         self._request_type: Final = request_type
         self.opened_at: Final = opened_at
+        self.turn: Final = turn
         self._requests: Final[asyncio.Queue[StreamingRecognizeRequest | None]] = asyncio.Queue(
             maxsize=REQUEST_QUEUE_SIZE
         )
@@ -177,7 +192,7 @@ class _RecognizeStream:
         self._closed = True
         await self._client.transport.close()
 
-    async def relay(self, outbox: "asyncio.Queue[str | _StreamFailure | _Closed]", billed_before: float) -> float:
+    async def relay(self, outbox: asyncio.Queue[_OutboxItem], billed_before: float) -> float:
         if self._cancelled:
             await self.close()
             return 0.0
@@ -193,12 +208,14 @@ class _RecognizeStream:
             await self.close()
         return self.billed_seconds
 
-    async def _forward(self, outbox: "asyncio.Queue[str | _StreamFailure | _Closed]", billed_before: float) -> None:
+    async def _forward(self, outbox: asyncio.Queue[_OutboxItem], billed_before: float) -> None:
         try:
             responses: Final = await self._client.streaming_recognize(self._drain())
             async for response in responses:
                 self._note(response)
-                await outbox.put(_response_event(response, billed_before + self.billed_seconds))
+                await outbox.put(
+                    _TurnResult(turn=self.turn, event=_response_event(response, billed_before + self.billed_seconds))
+                )
         except Exception as e:  # noqa: BLE001  # task boundary: a swallowed failure would hang the client session
             verbose_logger.warning("Google Speech-to-Text streaming failed: %s", e)
             await outbox.put(_StreamFailure(reason=f"Google Speech-to-Text streaming failed: {e}"))
@@ -212,6 +229,9 @@ class _RecognizeStream:
     async def _drain(self) -> "AsyncIterator[StreamingRecognizeRequest]":
         while (request := await self._requests.get()) is not None:
             yield request
+
+
+_Link = _RecognizeStream | str | _TurnDiscarded
 
 
 class SpeechStreamingBackend:
@@ -229,11 +249,13 @@ class SpeechStreamingBackend:
         self._clock: Final = clock
         self._rotation_seconds: Final = rotation_seconds
         self._rotation_deadline_seconds: Final = rotation_deadline_seconds
-        self._outbox: Final[asyncio.Queue[str | _StreamFailure | _Closed]] = asyncio.Queue(maxsize=OUTBOX_SIZE)
-        self._links: Final[asyncio.Queue[_RecognizeStream | str]] = asyncio.Queue(maxsize=_LINK_QUEUE_SIZE)
+        self._outbox: Final[asyncio.Queue[_OutboxItem]] = asyncio.Queue(maxsize=OUTBOX_SIZE)
+        self._links: Final[asyncio.Queue[_Link]] = asyncio.Queue(maxsize=_LINK_QUEUE_SIZE)
         self._pump: asyncio.Task[None] | None = None
         self._config: StreamingRecognitionConfig | None = None
         self._turn: tuple[_RecognizeStream, ...] = ()
+        self._turn_index: int = 0
+        self._discarded_turns: frozenset[int] = frozenset()
         self._billed_before: float = 0.0
         self._closed: bool = False
 
@@ -267,9 +289,12 @@ class SpeechStreamingBackend:
                 assert_never(command)
 
     async def recv(self, decode: bool | None = None) -> str | bytes:
-        if self._closed and self._outbox.empty():
-            raise _normal_closure()
-        item: Final = await self._outbox.get()
+        while not (self._closed and self._outbox.empty()):
+            if (event := self._deliverable(await self._outbox.get())) is not None:
+                return event
+        raise _normal_closure()
+
+    def _deliverable(self, item: _OutboxItem) -> str | None:
         match item:
             case _StreamFailure():
                 raise ConnectionClosedError(
@@ -277,6 +302,8 @@ class SpeechStreamingBackend:
                 )
             case _Closed():
                 raise _normal_closure()
+            case _TurnResult():
+                return None if item.turn in self._discarded_turns else item.event
             case str():
                 return item
             case _:
@@ -301,7 +328,7 @@ class SpeechStreamingBackend:
             if isinstance(link, _RecognizeStream):
                 await link.close()
 
-    async def _link(self, item: _RecognizeStream | str) -> None:
+    async def _link(self, item: _Link) -> None:
         if self._pump is None:
             self._pump = asyncio.create_task(self._pump_links())
         await self._links.put(item)
@@ -310,12 +337,16 @@ class SpeechStreamingBackend:
         while True:
             await self._relay(await self._links.get())
 
-    async def _relay(self, link: _RecognizeStream | str) -> None:
+    async def _relay(self, link: _Link) -> None:
         match link:
             case str():
                 await self._outbox.put(link)
             case _RecognizeStream():
                 self._billed_before += await link.relay(self._outbox, self._billed_before)
+            case _TurnDiscarded():
+                await self._outbox.put(
+                    VertexSpeechStreamingTurnDiscarded(billed_seconds=self._billed_before).model_dump_json()
+                )
             case _:
                 assert_never(link)
 
@@ -351,6 +382,7 @@ class SpeechStreamingBackend:
             request_type=StreamingRecognizeRequest,
             first_request=StreamingRecognizeRequest(recognizer=self._target.recognizer, streaming_config=config),
             opened_at=self._clock(),
+            turn=self._turn_index,
         )
         await self._link(stream)
         return stream
@@ -358,6 +390,7 @@ class SpeechStreamingBackend:
     async def _finish_turn(self) -> None:
         turn: Final = self._turn
         self._turn = ()
+        self._turn_index += 1
         if turn:
             await turn[-1].half_close()
         await self._link(_TURN_FINISHED_EVENT)
@@ -365,6 +398,8 @@ class SpeechStreamingBackend:
     async def _discard_turn(self) -> None:
         turn: Final = self._turn
         self._turn = ()
+        self._discarded_turns |= {self._turn_index}
+        self._turn_index += 1
         for stream in turn:
             stream.cancel()
-        await self._link(_TURN_DISCARDED_EVENT)
+        await self._link(_TurnDiscarded())
