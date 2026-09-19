@@ -2,9 +2,9 @@
 the request/response cases from ``cases.json``, and the loaders both use.
 
 Two data files drive the suite; nothing in Python lists models or cases:
-- ``tests/e2e/cost_map.json`` is the proxy's ENTIRE model cost map
+- ``tests/integration/cost_calculation/cost_map.json`` is the proxy's ENTIRE model cost map
   (LITELLM_MODEL_COST_MAP_URL); every entry becomes a deployment under test.
-- ``tests/e2e/cost_calculation/cases.json`` is the case list plus the reviewed
+- ``tests/integration/cost_calculation/cases.json`` is the case list plus the reviewed
   goldens: each exact-spend case carries an ``expected`` cell per map key it
   runs against, each recount case carries its ``models`` list, so matrix
   membership and expected values are literal data read side by side.
@@ -27,9 +27,9 @@ from types import MappingProxyType
 from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
-from scripted_provider import Scenario, ScriptedOutput, ScriptedToolCall, ScriptedUsage, Wire
+from integration._support.scripted_provider import Scenario, ScriptedOutput, ScriptedToolCall, ScriptedUsage, Wire
 
-COST_MAP_PATH: Final = Path(__file__).resolve().parent.parent / "cost_map.json"
+COST_MAP_PATH: Final = Path(__file__).resolve().parent / "cost_map.json"
 CASES_PATH: Final = Path(__file__).resolve().parent / "cases.json"
 
 class SearchContextCostPerQuery(BaseModel):
@@ -506,7 +506,7 @@ VIDEO_INPUT_DATA_URL: Final = video_input_data_url()
 def matrix_data_errors() -> tuple[str, ...]:
     """Consistency findings for the data files, as human-readable strings.
 
-    Called at collection time by the e2e suite, so a map key named by a case
+    Called at collection time by the integration suite, so a map key named by a case
     but absent from cost_map.json fails the suite's collection loudly.
     """
     unknown_deployments: Final = sorted(

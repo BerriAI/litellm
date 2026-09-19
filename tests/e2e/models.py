@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal
 
 from e2e_http import PartialBody
 from pydantic import (
@@ -187,24 +187,12 @@ class ChatMetadata(BaseModel):
 
 class ImageUrl(BaseModel):
     url: str
-    detail: str | None = None
-
-
-class InputAudio(BaseModel):
-    data: str
-    format: str
-
-
-class FileObject(BaseModel):
-    file_data: str | None = None
-    file_id: str | None = None
-    format: str | None = None
 
 
 class TextContentPart(BaseModel):
     type: str = "text"
     text: str
-    cache_control: CacheControl | None = None
+    cache_control: "CacheControl | None" = None
 
 
 class ImageContentPart(BaseModel):
@@ -212,17 +200,7 @@ class ImageContentPart(BaseModel):
     image_url: ImageUrl
 
 
-class InputAudioContentPart(BaseModel):
-    type: str = "input_audio"
-    input_audio: InputAudio
-
-
-class FileContentPart(BaseModel):
-    type: str = "file"
-    file: FileObject
-
-
-ContentPart = TextContentPart | ImageContentPart | InputAudioContentPart | FileContentPart
+ContentPart = TextContentPart | ImageContentPart
 
 
 class ChatMessage(BaseModel):
@@ -304,38 +282,7 @@ class ChatToolResultTurn(BaseModel):
     content: str
 
 
-ChatTurn: TypeAlias = ChatMessage | ChatAssistantTurn | ChatToolResultTurn
-
-
-class HostedWebSearchTool(BaseModel):
-    """A provider-hosted web-search tool sent inside an OpenAI tools list
-    (Anthropic's ``web_search_20250305`` shape)."""
-
-    type: str
-    name: str
-    max_uses: int | None = None
-
-
-class GoogleSearchTool(BaseModel):
-    googleSearch: dict[str, object] = {}
-
-
-class GoogleMapsTool(BaseModel):
-    googleMaps: dict[str, object] = {}
-
-
-class FileSearchTool(BaseModel):
-    type: Literal["file_search"] = "file_search"
-    vector_store_ids: list[str]
-
-
-class WebSearchOptions(BaseModel):
-    search_context_size: Literal["low", "medium", "high"] | None = None
-
-
-class ChatAudio(BaseModel):
-    voice: str
-    format: str
+type ChatTurn = ChatMessage | ChatAssistantTurn | ChatToolResultTurn
 
 
 class ChatStreamOptions(BaseModel):
@@ -356,16 +303,10 @@ class ChatBody(BaseModel):
     thinking: ThinkingParam | None = None
     service_tier: str | None = None
     prompt_cache_key: str | None = None
-    tools: Sequence[
-        ChatTool | McpChatTool | HostedWebSearchTool | GoogleSearchTool | GoogleMapsTool | FileSearchTool
-    ] | None = None
+    tools: Sequence[ChatTool | McpChatTool] | None = None
     tool_choice: str | None = None
-    modalities: list[str] | None = None
-    audio: ChatAudio | None = None
-    web_search_options: WebSearchOptions | None = None
     guardrails: list[str] | None = None
     response_format: dict[str, object] | None = None
-    allowed_openai_params: list[str] | None = None
     chat_template_kwargs: dict[str, bool] | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
 
@@ -532,7 +473,7 @@ class AnthropicCustomTool(BaseModel):
     input_schema: ToolInputSchema
 
 
-AnthropicTool: TypeAlias = AnthropicToolSearchTool | AnthropicWebSearchTool | AnthropicCustomTool
+type AnthropicTool = AnthropicToolSearchTool | AnthropicWebSearchTool | AnthropicCustomTool
 
 
 class AnthropicContentBlock(BaseModel):
@@ -570,7 +511,7 @@ class AnthropicToolResultTurn(BaseModel):
     content: list[AnthropicToolResultBlock]
 
 
-AnthropicMessage: TypeAlias = ChatMessage | AnthropicAssistantTurn | AnthropicToolResultTurn
+type AnthropicMessage = ChatMessage | AnthropicAssistantTurn | AnthropicToolResultTurn
 
 
 class AnthropicToolChoice(BaseModel):
@@ -1061,7 +1002,6 @@ class ModelInfoBody(BaseModel):
     access_groups: list[str] | None = None
     team_id: str | None = None
     allowed_fails_policy: dict[str, int] | None = None
-    base_model: str | None = None
 
 
 class ModelNewBody(BaseModel):

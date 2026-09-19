@@ -2,6 +2,8 @@
 
 These tests exercise a running gateway, PostgreSQL and Redis with an owned local upstream. CircleCI owns this suite. Tests are grouped by behavior, with no automatic test retries or fallback to paid provider calls
 
+The `cost` group runs the scripted-provider cost matrix through a dedicated sidecar. The sidecar serves the test-owned cost map over loopback through `LITELLM_MODEL_COST_MAP_URL`; cost goldens are checked into the integration suite and must not be copied into the E2E coverage registry
+
 Use `tests/integration/run.py management`, `accounting`, `database`, `providers`, `extensions` or `sdk` to run a selected group. Set `INTEGRATION_PROXY_URL`, `INTEGRATION_UPSTREAM_URL`, `INTEGRATION_MASTER_KEY` and `DATABASE_URL` to an isolated test deployment. The runner selects the new domain directories explicitly; the legacy OCI and sandbox selections remain separate
 
 Management also requires `INTEGRATION_PEER_URL`, `REDIS_HOST` and `REDIS_PORT`. CircleCI starts two directly addressed proxy processes sharing only that job's stores. The test-only CLI wrapper supplies enterprise route entitlement, following the existing behavior suite's convention. It does not qualify license validation; run it with one worker and no reload

@@ -143,22 +143,6 @@ WEEKLY_ANOMALY_OPT_IN_ENV = "E2E_WEEKLY_ANOMALY"
 MANAGED_FILES_OPT_IN_ENV = "E2E_MANAGED_FILES_STACK"
 PROMPT_CACHING_OPT_IN_ENV = "E2E_PROMPT_CACHING_STACK"
 REDIS_CHAOS_OPT_IN_ENV = "E2E_REDIS_CHAOS"
-# The cost_calculation suite needs a proxy booted with LITELLM_MODEL_COST_MAP_URL
-# pointing at tests/e2e/cost_map.json (its whole map is test-owned rates) plus a
-# scripted-provider sidecar; deselected unless the opt-in env var is set.
-COST_MAP_OPT_IN_ENV = "E2E_COST_MAP_STACK"
-# Base URL of the proxy running the test cost map. Defaults to the shared proxy
-# so a local run only has to set the opt-in and boot the proxy accordingly.
-COST_MAP_PROXY_URL = os.environ.get("E2E_COST_MAP_PROXY_URL", PROXY_BASE_URL).rstrip("/")
-# Where the test runner reaches the scripted-provider sidecar's control API.
-SCRIPTED_PROVIDER_CONTROL_URL = os.environ.get(
-    "E2E_SCRIPTED_PROVIDER_CONTROL_URL", "http://127.0.0.1:9100"
-).rstrip("/")
-# The api_base root deployments register with: how the proxy (possibly in
-# another container) reaches the sidecar's provider wire.
-SCRIPTED_PROVIDER_PROXY_BASE = os.environ.get(
-    "E2E_SCRIPTED_PROVIDER_PROXY_BASE", SCRIPTED_PROVIDER_CONTROL_URL
-).rstrip("/")
 CLI_DETERMINISM_OPT_IN_ENV = "E2E_CLI_DETERMINISM"
 ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))
 ANOMALY_TURNS_PER_SESSION = int(os.environ.get("E2E_ANOMALY_TURNS_PER_SESSION", "6"))
