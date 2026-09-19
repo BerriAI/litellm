@@ -157,6 +157,25 @@ def cross_entry_family_error(
     )
 
 
+def conflicting_span_scope_error(
+    callback_vars: Mapping[str, str] | None,
+    stored_vars_by_entry: Sequence[Mapping[str, str]],
+) -> str | None:
+    """Reject a ``langfuse_span_scope`` another entry already sets differently; the entries flatten last-wins."""
+    incoming: Final = None if callback_vars is None else callback_vars.get(_LANGFUSE_SPAN_SCOPE_VAR)
+    if incoming is None:
+        return None
+    return next(
+        (
+            f"{_LANGFUSE_SPAN_SCOPE_VAR} is already set to {stored!r} by another callback entry. "
+            f"Every entry shares one scope: remove that entry or send the same value."
+            for entry in stored_vars_by_entry
+            if (stored := entry.get(_LANGFUSE_SPAN_SCOPE_VAR)) not in (None, incoming)
+        ),
+        None,
+    )
+
+
 def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str | None:
     """Validate every ``logging`` entry of a team/key metadata payload."""
     if not metadata:
@@ -164,23 +183,34 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
     entries: Final = metadata.get("logging")
     if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
         return None
+    entry_vars: Final = tuple(_entry_callback_vars(entry) for entry in entries)
     return next(
-        (error for error in (_logging_entry_error(entry) for entry in entries) if error is not None),
+        (
+            error
+            for error in (
+                *(_logging_entry_error(entry) for entry in entries),
+                *(conflicting_span_scope_error(entry_vars[i], entry_vars[:i]) for i in range(len(entry_vars))),
+            )
+            if error is not None
+        ),
         None,
     )
+
+
+def _entry_callback_vars(entry: object) -> Mapping[str, str]:
+    callback_vars: Final = entry.get("callback_vars") if isinstance(entry, Mapping) else None
+    if not isinstance(callback_vars, Mapping):
+        return MappingProxyType({})
+    return MappingProxyType({str(key): str(value) for key, value in callback_vars.items()})
 
 
 def _logging_entry_error(entry: object) -> str | None:
     if not isinstance(entry, Mapping):
         return None
     callback_name: Final = entry.get("callback_name")
-    callback_vars: Final = entry.get("callback_vars")
-    if not isinstance(callback_name, str) or not isinstance(callback_vars, Mapping):
+    if not isinstance(callback_name, str) or not isinstance(entry.get("callback_vars"), Mapping):
         return None
-    return callback_config_error(
-        callback_name,
-        MappingProxyType({str(key): str(value) for key, value in callback_vars.items()}),
-    )
+    return callback_config_error(callback_name, _entry_callback_vars(entry))
 
 
 def _newrelic_config_error(callback_vars: Mapping[str, str]) -> str | None:
