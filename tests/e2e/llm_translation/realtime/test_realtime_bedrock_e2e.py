@@ -25,7 +25,7 @@ from realtime_client import (
 
 pytestmark = pytest.mark.e2e
 
-NOVA_SONIC = "bedrock/amazon.nova-sonic-v1:0"
+NOVA_SONIC = "bedrock/amazon.nova-2-sonic-v1:0"
 
 
 class TestNovaSonicRealtime:
