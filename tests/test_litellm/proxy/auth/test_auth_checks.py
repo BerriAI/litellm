@@ -7572,7 +7572,7 @@ async def test_project_allowlist_enforced_when_key_models_empty():
     assert exc_info.value.code == "403"
 
 
-def _project_with_budget(spend: float, max_budget: float):
+def _project_with_budget(spend: float, max_budget: float | None):
     from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_ProjectTableCachedObj
 
     return LiteLLM_ProjectTableCachedObj(
@@ -7592,11 +7592,12 @@ def _project_with_budget(spend: float, max_budget: float):
         pytest.param(4.99, 0.0, 5.0, False, id="counter-under-budget-admits"),
         pytest.param(None, 5.0, 5.0, True, id="no-counter-falls-back-to-persisted-spend"),
         pytest.param(None, 0.0, 5.0, False, id="no-counter-and-no-persisted-spend-admits"),
-        pytest.param(12.5, 12.5, 0.0, False, id="zero-budget-is-unbudgeted"),
-        pytest.param(12.5, 12.5, -1.0, False, id="negative-budget-is-unbudgeted"),
+        pytest.param(None, 0.0, 0.0, True, id="zero-budget-blocks-before-any-spend"),
+        pytest.param(12.5, 12.5, 0.0, True, id="zero-budget-blocks-with-spend"),
+        pytest.param(12.5, 12.5, None, False, id="null-budget-is-unlimited"),
     ],
 )
-async def test_project_max_budget_check_blocks_only_when_live_spend_reaches_a_positive_budget(
+async def test_project_max_budget_check_blocks_when_live_spend_reaches_the_budget(
     counter_spend, db_spend, max_budget, blocks
 ):
     from litellm.caching.dual_cache import DualCache
@@ -7631,7 +7632,7 @@ async def test_project_max_budget_check_blocks_only_when_live_spend_reaches_a_po
 
     assert exc_info.value.entity_type == Litellm_EntityType.PROJECT.value
     assert exc_info.value.entity_id == "p-budget"
-    assert exc_info.value.current_cost == 5.0
+    assert exc_info.value.current_cost == (db_spend if counter_spend is None else counter_spend)
     proxy_logging_obj.budget_alerts.assert_awaited_once()
     assert proxy_logging_obj.budget_alerts.await_args.kwargs["type"] == "project_budget"
 
