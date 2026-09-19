@@ -367,6 +367,47 @@ def test_active_mistral_chat_rows_price_cache_reads_below_input(path: Path):
     assert drifted == []
 
 
+DEEPSEEK_PRICED_ROWS: Final = tuple(
+    f"{prefix}{name}"
+    for name in ("deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4-pro")
+    for prefix in ("", "deepseek/")
+)
+DEEPSEEK_OFF_PEAK_WINDOWS: Final = (
+    {"hours_utc": ["00:00-01:00", "04:00-06:00", "10:00-00:00"], "weekdays": [1, 2, 3, 4, 5]},
+    {"hours_utc": "00:00-00:00", "weekdays": [6, 7]},
+)
+DEEPSEEK_HALVED_RATES: Final = ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
+
+
+def deepseek_off_peak_drift(entry: Mapping[str, object]) -> str | None:
+    block: Final = entry.get("off_peak_pricing")
+    if not isinstance(block, dict):
+        return "no off_peak_pricing block"
+    if tuple(block.get("windows", ())) != DEEPSEEK_OFF_PEAK_WINDOWS:
+        return f"windows={block.get('windows')}"
+    halved: Final = {rate: block.get(rate) for rate in DEEPSEEK_HALVED_RATES}
+    expected: Final = {rate: float(str(entry[rate])) / 2 for rate in DEEPSEEK_HALVED_RATES}
+    mismatched: Final = {
+        rate for rate in DEEPSEEK_HALVED_RATES if halved[rate] != pytest.approx(expected[rate], rel=1e-9)
+    }
+    return f"off-peak rates {halved} are not half of the listed rates" if mismatched else None
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
+    """DeepSeek charges half its listed rate outside 01:00-04:00 and 06:00-10:00 UTC Monday to
+    Friday (api-docs.deepseek.com/quick_start/pricing, read 2026-09-19), so every row on that
+    pricing page carries an off_peak_pricing block with those windows and the halved rates."""
+    rows: Mapping[str, object] = json.loads(path.read_text())
+    drifted: Final = {
+        name: deepseek_off_peak_drift(entry)
+        for name in DEEPSEEK_PRICED_ROWS
+        if isinstance(entry := rows.get(name), dict) and deepseek_off_peak_drift(entry) is not None
+    }
+    assert drifted == {}
+    assert all(name in rows for name in DEEPSEEK_PRICED_ROWS)
+
+
 PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse"})
 MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY: Final = frozenset({"search", "evaluation"})
 VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST: Final = frozenset(

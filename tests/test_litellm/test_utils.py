@@ -952,6 +952,38 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_image_size": {"type": "boolean"},
                 "supports_native_structured_output": {"type": "boolean"},
                 "use_openai_responses_path": {"type": "boolean"},
+                "off_peak_pricing": {
+                    "type": "object",
+                    "properties": {
+                        "hours_utc": {
+                            "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        },
+                        "windows": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "hours_utc": {
+                                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                                    },
+                                    "weekdays": {
+                                        "type": "array",
+                                        "items": {"oneOf": [{"type": "integer"}, {"type": "string"}]},
+                                    },
+                                },
+                                "required": ["hours_utc"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "weekday_timezone": {"type": "string"},
+                        "input_cost_per_token": {"type": "number"},
+                        "output_cost_per_token": {"type": "number"},
+                        "output_cost_per_reasoning_token": {"type": "number"},
+                        "cache_read_input_token_cost": {"type": "number"},
+                        "cache_creation_input_token_cost": {"type": "number"},
+                    },
+                    "additionalProperties": False,
+                },
                 "tiered_pricing": {
                     "type": "array",
                     "items": {
