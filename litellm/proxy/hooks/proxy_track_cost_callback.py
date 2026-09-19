@@ -267,6 +267,7 @@ class _ProxyDBLogger(CustomLogger):
             start_time=actual_start_time,
             end_time=datetime.now(),
             org_id=user_api_key_dict.org_id,
+            project_id=user_api_key_dict.project_id,
         )
 
     @log_db_metrics
@@ -318,6 +319,11 @@ class _ProxyDBLogger(CustomLogger):
             user_id: Final = cast(str | None, metadata.get("user_api_key_user_id", None))
             team_id: Final = cast(str | None, metadata.get("user_api_key_team_id", None))
             org_id: Final = cast(str | None, metadata.get("user_api_key_org_id", None))
+            project_id: Final = (
+                project_id_value
+                if isinstance(project_id_value := metadata.get("user_api_key_project_id"), str)
+                else None
+            )
             key_alias: Final = cast(str | None, metadata.get("user_api_key_alias", None))
             end_user_max_budget: Final = metadata.get("user_api_end_user_max_budget", None)
             sl_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
@@ -368,6 +374,7 @@ class _ProxyDBLogger(CustomLogger):
                         budget_reservation=budget_reservation,
                         request_tags=tags,
                         model_access_groups=model_access_groups,
+                        project_id=project_id,
                     )
                     if not charged:
                         return
@@ -501,6 +508,8 @@ class _ProxyDBLogger(CustomLogger):
                     metadata["user_api_key_team_id"] = key_obj.team_id
                 if metadata.get("user_api_key_org_id") is None:
                     metadata["user_api_key_org_id"] = key_obj.org_id
+                if metadata.get("user_api_key_project_id") is None:
+                    metadata["user_api_key_project_id"] = key_obj.project_id
             except Exception:
                 verbose_proxy_logger.debug(
                     "Failed to enrich failure metadata with key info for api_key=%s",
@@ -651,7 +660,12 @@ async def _update_database_and_spend_counters(
     budget_reservation: dict | None,
     request_tags: list[str] | None = None,
     model_access_groups: Sequence[str] | None = None,
+    project_id: str | None = None,
 ) -> bool:
+    if budget_reservation is not None:
+        await _reconcile_budget_reservation_before_db_update(
+            budget_reservation=budget_reservation, response_cost=response_cost
+        )
     try:
         charged: Final = await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key,
@@ -664,6 +678,7 @@ async def _update_database_and_spend_counters(
             start_time=start_time,
             end_time=end_time,
             org_id=org_id,
+            project_id=project_id,
         )
     except Exception:
         if budget_reservation is not None:
@@ -694,6 +709,7 @@ async def _update_database_and_spend_counters(
             tags=request_tags,
             request_started_at=start_time,
             model_access_groups=model_access_groups,
+            project_id=project_id,
         )
     except Exception:
         if budget_reservation is not None:
@@ -707,6 +723,30 @@ async def _update_database_and_spend_counters(
                 budget_reservation["finalized"] = True
         raise
     return True
+
+
+async def _reconcile_budget_reservation_before_db_update(
+    budget_reservation: dict,  # mutable-ok: reconcile_budget_reservation stamps applied_adjustment on the caller's shared reservation dict
+    response_cost: float,
+) -> None:
+    from litellm.proxy.spend_tracking.budget_reservation import reconcile_budget_reservation
+
+    try:
+        await reconcile_budget_reservation(
+            budget_reservation=budget_reservation, actual_cost=response_cost, finalize=False
+        )
+    except Exception:  # noqa: BLE001  # a failed reconcile must not block the spend write; the counters are dropped instead
+        verbose_proxy_logger.warning(
+            "Failed to reconcile budget reservation before persisting spend; invalidating reserved counters"
+        )
+        try:
+            await _invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
+        except Exception:  # noqa: BLE001  # nothing left to try; the finalized stamp below keeps it from being reprocessed
+            verbose_proxy_logger.exception(
+                "Failed to invalidate budget reservation counters after pre-persist reconcile failed"
+            )
+        finally:
+            budget_reservation["finalized"] = True  # rebind-ok: the counter update reads the stamp off the shared dict
 
 
 async def _release_budget_reservation(budget_reservation: dict | None) -> None:

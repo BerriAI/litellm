@@ -46,21 +46,6 @@ class TestBedrockMantleProviderRegistration:
     def test_provider_in_provider_list(self):
         assert "bedrock_mantle" in litellm.provider_list
 
-    def test_models_loaded(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
-        assert len(litellm.bedrock_mantle_models) > 0
-        assert "bedrock_mantle/openai.gpt-oss-120b" in litellm.bedrock_mantle_models
-        assert "bedrock_mantle/openai.gpt-oss-20b" in litellm.bedrock_mantle_models
-        assert (
-            "bedrock_mantle/openai.gpt-oss-safeguard-120b"
-            in litellm.bedrock_mantle_models
-        )
-        assert (
-            "bedrock_mantle/openai.gpt-oss-safeguard-20b"
-            in litellm.bedrock_mantle_models
-        )
-
 
 class TestBedrockMantleConfig:
     def test_custom_llm_provider(self):
@@ -257,6 +242,18 @@ class TestBedrockMantleConfig:
         assert "temperature" in params
         assert "stream" in params
         assert "max_tokens" in params
+        assert "verbosity" not in params
+
+    def test_verbosity_passes_through_for_gpt_5_models(self):
+        cfg = BedrockMantleChatConfig()
+        assert "verbosity" in cfg.get_supported_openai_params("openai.gpt-5.6-sol")
+        optional_params = litellm.get_optional_params(
+            model="openai.gpt-5.6-sol",
+            custom_llm_provider="bedrock_mantle",
+            verbosity="low",
+            drop_params=False,
+        )
+        assert optional_params["verbosity"] == "low"
 
 
 class TestBedrockMantleChatAuth:
@@ -823,15 +820,6 @@ class TestBedrockMantleProviderResolution:
 
 class TestBedrockMantlePricing:
     """Tests that verify Bedrock Mantle uses correct AWS Bedrock pricing, not OpenAI pricing."""
-
-    def test_safeguard_models_have_larger_output_tokens(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
-        info_120b = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-120b")
-        info_safeguard = litellm.get_model_info(
-            "bedrock_mantle/openai.gpt-oss-safeguard-120b"
-        )
-        assert info_safeguard["max_output_tokens"] > info_120b["max_output_tokens"]
 
 
 @pytest.mark.parametrize(

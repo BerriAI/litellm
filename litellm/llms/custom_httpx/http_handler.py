@@ -7,6 +7,7 @@ import ssl
 import sys
 import threading
 import time
+import weakref
 from collections.abc import AsyncIterable, Callable, Iterable, Mapping
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from io import BytesIO
@@ -72,6 +73,12 @@ _RequestContent: TypeAlias = str | bytes | Iterable[bytes] | AsyncIterable[bytes
 _IPV4_LOCAL_ADDRESS: Final = "0.0.0.0"
 
 _HttpxTransportT = TypeVar("_HttpxTransportT", HTTPTransport, AsyncHTTPTransport)
+
+
+def http2_enabled() -> bool:
+    from litellm.secret_managers.main import str_to_bool
+
+    return litellm.http2 is True or str_to_bool(os.getenv("LITELLM_HTTP2", "False")) is True
 
 
 def _environment_proxy_mounts(
@@ -143,7 +150,11 @@ def get_default_headers() -> dict:
     if user_agent is not None:
         return {"User-Agent": user_agent}
 
-    return {"User-Agent": f"litellm/{version}"}
+    return {"User-Agent": default_user_agent()}
+
+
+def default_user_agent() -> str:
+    return f"litellm/{version}"
 
 
 # Initialize headers (User-Agent)
@@ -177,6 +188,33 @@ def _handler_may_close_client(client_refcount: int, owns_client: bool) -> bool:
     refcount at the call site, since binding the client to a parameter would inflate it.
     """
     return owns_client and client_refcount <= _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER
+
+
+def _drop_streaming_anchor(_handler: object) -> None:
+    """Release a handler anchored to a streaming response. See ``_anchor_handler_to``.
+
+    The work is the reference held until this point, so there is nothing to do here.
+    """
+
+
+def _anchor_handler_to(response: httpx.Response, handler: object) -> None:
+    """Keep the handler alive for as long as a streaming response can still read.
+
+    A body still arriving reads through the handler's connection pool, and closing
+    the client tears that pool down. The refcount ``_handler_may_close_client``
+    reads cannot see that body: the reference graph runs response -> stream ->
+    connection and stops there, so a client carrying one looks exactly like an
+    unreferenced client, and the finalizer closes it mid-body.
+
+    ``weakref.finalize`` holds the handler in its own registry rather than on the
+    response, which matters twice. The handler stays out of the response's
+    reference cycle, so it is finalized by refcount once the anchor drops and can
+    still schedule an async close, instead of being finalized inside a cyclic
+    collection that reaps its aiohttp session in the same pass. And a handler
+    serving several streams collects only once every one of them is done, because
+    each anchor holds it separately.
+    """
+    weakref.finalize(response, _drop_streaming_anchor, handler)
 
 
 def blocked_cookie_jar() -> CookieJar:
@@ -638,6 +676,7 @@ class AsyncHTTPHandler:
             headers=default_headers,
             cookies=blocked_cookie_jar(),
             follow_redirects=True,
+            http2=http2_enabled(),
         )
 
     async def close(self):
@@ -771,6 +810,8 @@ class AsyncHTTPHandler:
                 content=request_content,
             )
             response: Final = await self.client.send(req, stream=stream)
+            if stream:
+                _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
@@ -975,6 +1016,8 @@ class AsyncHTTPHandler:
                 content=request_content,
             )
             response: Final = await self.client.send(req, stream=stream)
+            if stream:
+                _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
@@ -1157,6 +1200,10 @@ class AsyncHTTPHandler:
 
         from litellm.secret_managers.main import str_to_bool
 
+        if http2_enabled():
+            verbose_logger.debug("LITELLM_HTTP2 enabled, using httpx transport (aiohttp has no HTTP/2 support)")
+            return False
+
         #########################################################
         # Check if user disabled aiohttp transport
         ########################################################
@@ -1287,7 +1334,7 @@ class AsyncHTTPHandler:
         - [Default] If force_ipv4 is False, it will return None
         """
         if litellm.force_ipv4:
-            return AsyncHTTPTransport(local_address=_IPV4_LOCAL_ADDRESS)
+            return AsyncHTTPTransport(local_address=_IPV4_LOCAL_ADDRESS, http2=http2_enabled())
         else:
             return None
 
@@ -1300,7 +1347,7 @@ class AsyncHTTPHandler:
         if not isinstance(transport, AsyncHTTPTransport):
             return None
         return _environment_proxy_mounts(
-            lambda proxy_url: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert)
+            lambda proxy_url: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=http2_enabled())
         )
 
 
@@ -1342,6 +1389,7 @@ class HTTPHandler:
             headers=default_headers,
             cookies=blocked_cookie_jar(),
             follow_redirects=True,
+            http2=http2_enabled(),
         )
 
     @property
@@ -1439,6 +1487,8 @@ class HTTPHandler:
                     content=request_content,
                 )
             response: Final = self.client.send(req, stream=stream)
+            if stream:
+                _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except httpx.TimeoutException:
@@ -1489,6 +1539,8 @@ class HTTPHandler:
                     content=request_content,
                 )
             response: Final = self.client.send(req, stream=stream)
+            if stream:
+                _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except httpx.TimeoutException:
@@ -1539,6 +1591,8 @@ class HTTPHandler:
                     content=request_content,
                 )
             response: Final = self.client.send(req, stream=stream)
+            if stream:
+                _anchor_handler_to(response, self)
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
@@ -1588,6 +1642,8 @@ class HTTPHandler:
                     content=request_content,
                 )
             response: Final = self.client.send(req, stream=stream)
+            if stream:
+                _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except httpx.TimeoutException:
@@ -1616,7 +1672,7 @@ class HTTPHandler:
         Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
         if litellm.force_ipv4:
-            return HTTPTransport(local_address=_IPV4_LOCAL_ADDRESS)
+            return HTTPTransport(local_address=_IPV4_LOCAL_ADDRESS, http2=http2_enabled())
         else:
             return getattr(litellm, "sync_transport", None)
 
@@ -1627,7 +1683,9 @@ class HTTPHandler:
     ) -> Mapping[str, HTTPTransport | None] | None:
         if not litellm.force_ipv4:
             return None
-        return _environment_proxy_mounts(lambda proxy_url: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert))
+        return _environment_proxy_mounts(
+            lambda proxy_url: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=http2_enabled())
+        )
 
 
 def get_async_httpx_client(
