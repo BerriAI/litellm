@@ -10,12 +10,8 @@ suite="${1:?integration suite required}"
 results="test-results/integration-${suite}"
 mkdir -p "$results"
 shard_timeout=11m
-if [ "$suite" = cost ]; then
-  shard_timeout=20m
-fi
 integration_identity="$(.venv/bin/python -c 'import uuid; print(uuid.uuid4().hex)')"
 upstream_pid=""
-scripted_provider_pid=""
 proxy_pid=""
 peer_pid=""
 launched_pid=""
@@ -27,9 +23,9 @@ cleanup() {
   original_status=$?
   trap - EXIT INT TERM
   sudo .venv/bin/python .circleci/scripts/stop_integration_processes.py \
-    "$integration_identity" "$(id -u)" "$proxy_pid" "$peer_pid" "$upstream_pid" "$scripted_provider_pid" \
+    "$integration_identity" "$(id -u)" "$proxy_pid" "$peer_pid" "$upstream_pid" \
     > "$results/process-cleanup.txt" 2>&1 || original_status=1
-  for owned_pid in "$peer_pid" "$proxy_pid" "$upstream_pid" "$scripted_provider_pid"; do
+  for owned_pid in "$peer_pid" "$proxy_pid" "$upstream_pid"; do
     if [ -n "$owned_pid" ]; then
       kill -- "-$owned_pid" 2>/dev/null || true
       for _ in {1..50}; do
@@ -74,7 +70,6 @@ export STORE_MODEL_IN_DB=True AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1
 export INTEGRATION_PROXY_URL=http://127.0.0.1:4000
 export INTEGRATION_PEER_URL=""
 export INTEGRATION_UPSTREAM_URL=http://127.0.0.1:8190
-export INTEGRATION_SCRIPTED_PROVIDER_URL=""
 export INTEGRATION_MASTER_KEY="$LITELLM_MASTER_KEY"
 export LITELLM_UI_PATH="$PWD/litellm/proxy/_experimental/out"
 if [ "$suite" = browser ]; then
@@ -115,18 +110,7 @@ setsid env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" INTEGRATION_RUN
   .venv/bin/python -m integration._support.upstream > "$results/upstream.log" 2>&1 &
 upstream_pid=$!
 if [ "$suite" = cost ]; then
-  export INTEGRATION_SCRIPTED_PROVIDER_URL=http://127.0.0.1:8191
-  setsid env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" INTEGRATION_RUN_ID="$integration_identity" \
-    .venv/bin/python -m integration._support.scripted_provider --port 8191 \
-    > "$results/scripted-provider.log" 2>&1 &
-  scripted_provider_pid=$!
-  for _ in {1..90}; do
-    if curl --noproxy '*' -fsS "$INTEGRATION_SCRIPTED_PROVIDER_URL/health" >/dev/null 2>&1; then
-      break
-    fi
-    sleep 1
-  done
-  curl --noproxy '*' -fsS "$INTEGRATION_SCRIPTED_PROVIDER_URL/health" >/dev/null
+  export INTEGRATION_WORKERS=8
 fi
 start_proxy() {
   local port="$1"
@@ -134,7 +118,7 @@ start_proxy() {
   local -a cost_map_env
   if [ "$suite" = cost ]; then
     cost_map_env=(
-      "LITELLM_MODEL_COST_MAP_URL=$INTEGRATION_SCRIPTED_PROVIDER_URL/_cost_map"
+      "LITELLM_MODEL_COST_MAP_URL=$INTEGRATION_UPSTREAM_URL/_cost_map"
       "MODEL_COST_MAP_MIN_MODEL_COUNT=1"
       "MODEL_COST_MAP_MAX_SHRINK_RATIO=0"
     )
@@ -190,7 +174,7 @@ timeout --signal=TERM --kill-after=20s "$shard_timeout" env -i PATH="$PATH" HOME
   DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
   INTEGRATION_PROXY_URL="$INTEGRATION_PROXY_URL" INTEGRATION_PEER_URL="$INTEGRATION_PEER_URL" \
   INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
-  INTEGRATION_SCRIPTED_PROVIDER_URL="$INTEGRATION_SCRIPTED_PROVIDER_URL" \
+  INTEGRATION_WORKERS="${INTEGRATION_WORKERS:-1}" \
   INTEGRATION_MASTER_KEY="$INTEGRATION_MASTER_KEY" LITELLM_MODE=PRODUCTION \
   INTEGRATION_SEED="$INTEGRATION_SEED" \
   INTEGRATION_ORDER_SEED="$INTEGRATION_ORDER_SEED" \
