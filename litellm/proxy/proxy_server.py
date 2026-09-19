@@ -13480,7 +13480,9 @@ def _add_team_models_to_all_models(
             for model_id in _granted_deployment_ids(
                 models=team_object.models, llm_router=llm_router, team_id=team_object.team_id
             ):
-                team_models.setdefault(model_id, set()).add(team_object.team_id)
+                team_models.setdefault(model_id, set()).add(  # mutable-ok: fills the dict[str, set[str]] accumulator
+                    team_object.team_id
+                )
     return team_models
 
 

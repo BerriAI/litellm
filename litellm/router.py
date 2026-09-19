@@ -12702,7 +12702,7 @@ class Router:
         model: str,
         healthy_deployments: Sequence[Mapping[str, object]],
         request_kwargs: Mapping[str, object] | None,
-    ) -> list[Mapping[str, object]]:
+    ) -> Sequence[Mapping[str, object]]:
         """
         Restrict candidate deployments to the deployment IDs granted on the key or team.
 
@@ -12711,7 +12711,7 @@ class Router:
         whose granted deployments are all unavailable yields no candidates rather than widening.
         """
         if not healthy_deployments or request_kwargs is None:
-            return list(healthy_deployments)
+            return healthy_deployments
         return self._restrict_deployments_to_caller_grants(
             model=model,
             deployments=healthy_deployments,
@@ -12723,12 +12723,12 @@ class Router:
         model: str,
         deployments: Sequence[Mapping[str, object]],
         user_api_key_auth: object,
-    ) -> list[Mapping[str, object]]:
+    ) -> Sequence[Mapping[str, object]]:
         if not deployments or not isinstance(user_api_key_auth, CallerModelGrants):
-            return list(deployments)
+            return deployments
 
         model_group_ids: Final = frozenset(self.get_model_ids(model_name=model))
-        key_grants: Final = self._grant_strings(user_api_key_auth.models) - {"all-team-models"}
+        key_grants: Final = self._grant_strings(user_api_key_auth.models) - frozenset({"all-team-models"})
         team_grants: Final = self._grant_strings(user_api_key_auth.team_models)
         key_scoped: Final = self._restrict_to_granted_deployment_ids(
             model=model, deployments=deployments, grants=key_grants, model_group_ids=model_group_ids
@@ -12760,13 +12760,13 @@ class Router:
         deployments: Sequence[Mapping[str, object]],
         grants: frozenset[str],
         model_group_ids: frozenset[str],
-    ) -> list[Mapping[str, object]]:
+    ) -> Sequence[Mapping[str, object]]:
         if model in grants or "*" in grants or "all-proxy-models" in grants:
-            return list(deployments)
+            return deployments
         granted_ids: Final = grants & model_group_ids
         if not granted_ids:
-            return list(deployments)
-        return [deployment for deployment in deployments if cls._deployment_ids((deployment,)) & granted_ids]
+            return deployments
+        return tuple(deployment for deployment in deployments if cls._deployment_ids((deployment,)) & granted_ids)
 
     async def async_get_healthy_deployments(
         self,

@@ -16938,7 +16938,7 @@ def test_deployment_id_grant_does_not_widen_when_granted_deployment_is_unavailab
             healthy_deployments=healthy_openai_only,
             request_kwargs={"metadata": {"user_api_key_auth": scoped_key}},
         )
-        == []
+        == ()
     )
 
 
@@ -17008,7 +17008,7 @@ def test_restrict_deployments_to_caller_grants_applies_key_then_team_scope():
         router._restrict_deployments_to_caller_grants(
             model="gpt-4", deployments=(), user_api_key_auth=UserAPIKeyAuth(api_key="k", models=["azure-gpt-4-id"])
         )
-        == []
+        == ()
     )
 
 
