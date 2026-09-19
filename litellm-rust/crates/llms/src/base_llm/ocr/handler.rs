@@ -5,7 +5,7 @@ use litellm_host::event::WireRequest;
 use litellm_http::{
     ClientVariant, HttpClientConfig, HttpClientPool,
     media::{MediaFetcher, UrlPolicy},
-    request::{HeaderPolicy, execute_http_request, with_headers},
+    outbound::{OutboundRequest, RequestSigner},
     transport,
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -117,8 +117,9 @@ pub async fn ocr<C: BaseOcrConfig>(
 ) -> Result<LiteLLMOcrResponse, Error> {
     let http = config.prepare_request(request, client, hooks).await?;
     let url = http.url().to_string();
-    let headers = request_headers(&http)?;
-    let response = execute_http_request(client.provider_http(), http)
+    let headers = http.headers().to_vec();
+    let response = http
+        .send(client.provider_http())
         .await
         .map_err(transport_error)?;
     if !response.status().is_success() {
@@ -151,21 +152,6 @@ pub async fn ocr<C: BaseOcrConfig>(
     config
         .async_transform_ocr_response(&request.model, response, context)
         .await
-}
-
-fn request_headers(request: &reqwest::Request) -> Result<Vec<(String, String)>, Error> {
-    request
-        .headers()
-        .iter()
-        .map(|(name, value)| {
-            value
-                .to_str()
-                .map(|value| (name.to_string(), value.to_string()))
-                .map_err(|_| Error::RequestField {
-                    path: "headers".into(),
-                })
-        })
-        .collect()
 }
 
 pub async fn read_json_response<T: DeserializeOwned>(
@@ -222,13 +208,13 @@ pub fn transport_error(error: reqwest::Error) -> Error {
 
 pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
     config: &C,
-    client: &OcrClient,
     request: &PreparedOcrRequest,
     url: &str,
     headers: &[(String, String)],
     body: B,
+    signer: Option<&dyn RequestSigner>,
     hooks: &dyn CallHooks<Error>,
-) -> Result<reqwest::Request, Error> {
+) -> Result<OutboundRequest, Error> {
     let composed = litellm_core_utils::call_arguments::compose_body(
         &request.optional_params,
         &body,
@@ -244,7 +230,17 @@ pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
         });
     }
     config.validate_request_body(&changed.body)?;
-    build_http_request(client, request, url, &changed.headers, &changed.body)
+    let timeout = Some(request.connection.timeout);
+    Ok(match signer {
+        Some(signer) => OutboundRequest::signed_json(
+            url.into(),
+            changed.headers,
+            &changed.body,
+            timeout,
+            signer,
+        ),
+        None => OutboundRequest::json(url.into(), changed.headers, &changed.body, timeout),
+    }?)
 }
 
 fn wire_request(url: &str, headers: &[(String, String)], body: Value) -> WireRequest {
@@ -255,22 +251,18 @@ fn wire_request(url: &str, headers: &[(String, String)], body: Value) -> WireReq
     }
 }
 
-pub fn build_http_request<B: Serialize>(
-    client: &OcrClient,
+pub fn build_http_request(
     request: &PreparedOcrRequest,
-    url: &str,
-    headers: &[(String, String)],
-    body: &B,
-) -> Result<reqwest::Request, Error> {
-    let builder = client
-        .provider_http()
-        .post(url)
-        .json(body)
-        .timeout(request.connection.timeout);
-    with_headers(builder, headers, HeaderPolicy::All)
-        .build()
-        .map_err(transport::Error::from)
-        .map_err(Error::from)
+    url: String,
+    headers: Vec<(String, String)>,
+    body: &impl Serialize,
+) -> Result<OutboundRequest, Error> {
+    Ok(OutboundRequest::json(
+        url,
+        headers,
+        body,
+        Some(request.connection.timeout),
+    )?)
 }
 
 pub async fn guardrail_document(

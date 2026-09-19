@@ -76,6 +76,12 @@ pub enum Error {
     Unsupported(&'static str),
     #[error("invalid provider: {0}")]
     InvalidProvider(String),
+    #[error("invalid model: {provider} has no model {model:?} - use one of: {}", supported.join(", "))]
+    InvalidModel {
+        provider: &'static str,
+        model: String,
+        supported: &'static [&'static str],
+    },
     #[error("invalid request: {0}")]
     InvalidRequest(String),
     #[error("invalid response: {0}")]
@@ -100,6 +106,8 @@ pub enum Error {
     Params(#[from] litellm_core_utils::params::Error),
     #[error(transparent)]
     Headers(#[from] litellm_http::request::HeaderError),
+    #[error(transparent)]
+    Http(#[from] litellm_http::Error),
 }
 
 impl From<litellm_host::machine::MachineFault> for Error {
@@ -153,8 +161,10 @@ impl Error {
                 | Self::DotModel
                 | Self::InvalidRequest(_)
                 | Self::InvalidProvider(_)
+                | Self::InvalidModel { .. }
                 | Self::Params(_)
                 | Self::Headers(_)
+                | Self::Http(_)
         )
     }
 
