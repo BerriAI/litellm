@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "call_id": "call-123",
+  "call_type": "ocr",
+  "seq": 3,
+  "event": {
+    "type": "call.succeeded",
+    "timing": {"start_time": 10.0, "end_time": 12.5, "duration": 2.5},
+    "streamed": false,
+    "response": {"id": "response"},
+    "response_error": null
+  }
+}
