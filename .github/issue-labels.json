@@ -54,5 +54,15 @@
     "template": { "color": "E99695", "description": "Required sections of the issue template are missing or empty" },
     "version": { "color": "E99695", "description": "No LiteLLM version anywhere in the issue" },
     "repro": { "color": "E99695", "description": "A bug with no command, output or screenshot to reproduce it" }
+  },
+  "dup": {
+    "clear": { "color": "0E8A16", "description": "The duplicate check ran and named no earlier issue as the original" }
+  },
+  "repro": {
+    "running": { "color": "1D76DB", "description": "Devin is reproducing this now; the lock that keeps a second run from starting" },
+    "success": { "color": "0E8A16", "description": "Devin reproduced it; the PR or Linear ticket is linked in a comment" },
+    "fail": { "color": "E99695", "description": "Devin could not reproduce it with what the issue provides" },
+    "blocked": { "color": "D93F0B", "description": "Devin needs something only a human can supply before it can reproduce this" },
+    "skip": { "color": "C5DEF5", "description": "A human opted this issue out of automatic reproduction" }
   }
 }

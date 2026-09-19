@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { candidateNumbers, duplicateTarget, type Comment, type GitHubApi, type Issue } from "./auto-close-duplicates";
 import {
+  CLEAR_LABEL,
   MIN_CONFIDENCE,
   flagIssue,
   flagTarget,
@@ -51,15 +52,15 @@ describe("parseVerdict", () => {
 });
 
 describe("flagTarget", () => {
-  test("flags at the gate and not one hundredth below it", () => {
+  test("flags at the gate and clears one hundredth below it", () => {
     expect(flagTarget(verdict({ confidence: MIN_CONFIDENCE }), 35)).toEqual({ kind: "target", original: 10 });
-    expect(flagTarget(verdict({ confidence: 0.94 }), 35).kind).toBe("skip");
+    expect(flagTarget(verdict({ confidence: 0.94 }), 35).kind).toBe("clear");
   });
 
-  test("never flags nothing, itself, or a newer issue", () => {
-    expect(flagTarget(verdict({ duplicate_of: null }), 35).kind).toBe("skip");
-    expect(flagTarget(verdict({ duplicate_of: 35 }), 35).kind).toBe("skip");
-    expect(flagTarget(verdict({ duplicate_of: 36 }), 35).kind).toBe("skip");
+  test("nothing, itself, or a newer issue all count as a clear result", () => {
+    expect(flagTarget(verdict({ duplicate_of: null }), 35).kind).toBe("clear");
+    expect(flagTarget(verdict({ duplicate_of: 35 }), 35).kind).toBe("clear");
+    expect(flagTarget(verdict({ duplicate_of: 36 }), 35).kind).toBe("clear");
   });
 });
 
@@ -163,10 +164,25 @@ describe("flagIssue", () => {
     expect(writes).toEqual([]);
   });
 
-  test("a verdict below the gate never touches the API", async () => {
+  test("a verdict naming no duplicate adds dup:clear and nothing else", async () => {
     const { api, writes } = fakeApi();
-    expect((await flagIssue(api, config, verdict({ confidence: 0.9 }))).kind).toBe("skip");
+    expect(await flagIssue(api, config, verdict({ duplicate_of: null }))).toEqual({ kind: "clear", reason: "no duplicate named" });
+    expect(writes).toEqual([`POST /repos/BerriAI/litellm/issues/35/labels {"labels":["${CLEAR_LABEL}"]}`]);
+  });
+
+  test("a verdict below the gate clears the issue too, and a dry run only reports it", async () => {
+    const real = fakeApi();
+    expect((await flagIssue(real.api, config, verdict({ confidence: 0.9 }))).kind).toBe("clear");
+    expect(real.writes).toEqual([`POST /repos/BerriAI/litellm/issues/35/labels {"labels":["${CLEAR_LABEL}"]}`]);
+
+    const { api, writes } = fakeApi();
+    expect((await flagIssue(api, { ...config, dryRun: true }, verdict({ confidence: 0.9 }))).kind).toBe("clear");
     expect(writes).toEqual([]);
+  });
+
+  test("a garbled verdict is a skip, never a clear", () => {
+    expect(parseVerdict("not json").kind).toBe("skip");
+    expect(CLEAR_LABEL).toBe("dup:clear");
   });
 
   test("an issue that already carries a notice is not flagged twice", async () => {
