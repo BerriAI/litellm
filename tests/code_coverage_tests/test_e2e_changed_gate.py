@@ -247,7 +247,7 @@ def test_oauth_failure_diagnostics_do_not_publish_private_payloads(tmp_path: Pat
     report: Final = tmp_path / "report.xml"
     ET.ElementTree(suite).write(report)
     result: Final = subprocess.run(
-        [sys.executable, str(GATE), str(report), SELECTED[0]], capture_output=True, text=True
+        [sys.executable, "-I", str(GATE), str(report), SELECTED[0]], capture_output=True, text=True
     )
     assert result.returncode == 1
     assert f"oauth_failure_phase: {phase}" in result.stdout
