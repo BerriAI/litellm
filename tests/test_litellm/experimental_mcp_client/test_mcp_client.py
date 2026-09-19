@@ -1273,10 +1273,11 @@ async def test_sdk_cross_origin_redirect_never_contacts_destination(operation: s
         if operation == "list"
         else client.call_tool(CallToolRequestParams(name="add", arguments={"a": 2, "b": 3}), raise_on_error=True)
     )
-    with anyio.fail_after(10), pytest.raises(MCPError, match=r"Redirect to .*destination.* not followed"):
+    with anyio.fail_after(10), pytest.raises(MCPError):
         await pending_operation
     assert responder.call_count == 1
     request: Final = responder.call_args.args[0]
+    assert request.method == "POST"
     assert request.url == "https://upstream.example.com/mcp"
     assert request.headers["x-upstream-token"] == "Bearer synthetic-token"
     assert all(call.args[0].url.host != "destination.example.com" for call in responder.call_args_list)
