@@ -150,7 +150,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
             api_key: inputs.api_key.and_then(|key| {
                 inputs
                     .dynamic_api_key
-                    .filter(|value| !value.value().is_empty())
+                    .filter(|value| !value.value().expose().is_empty())
                     .or(Some(key))
             }),
             api_base: inputs.api_base.and_then(|base| {
@@ -592,12 +592,17 @@ impl AzureDocumentIntelligenceOcrConfig {
             )?;
             return Ok(connection.extra_headers.clone());
         }
-        let key = nonblank(connection.api_key.clone())
-            .map(|value| Sourced::new(value, connection.api_key_source))
-            .or_else(|| {
-                nonblank(self.get_api_key_env_var().and_then(env_lookup))
-                    .map(|value| Sourced::new(value, InputSource::Environment))
-            });
+        let key = nonblank(
+            connection
+                .api_key
+                .as_ref()
+                .map(|key| key.expose().to_string()),
+        )
+        .map(|value| Sourced::new(value, connection.api_key_source))
+        .or_else(|| {
+            nonblank(self.get_api_key_env_var().and_then(env_lookup))
+                .map(|value| Sourced::new(value, InputSource::Environment))
+        });
         if let Some(key) = key {
             super::super::common_utils::validate_destination(connection, key.source())?;
             return Ok(
@@ -796,7 +801,7 @@ mod tests {
     #[tokio::test]
     async fn request_endpoint_accepts_request_owned_key() {
         let connection = OcrConnection {
-            api_key: Some("request-key".into()),
+            api_key: Some(litellm_auth::SecretValue::new("request-key")),
             api_key_source: InputSource::Request,
             api_base: Some("https://request.example".into()),
             api_base_source: InputSource::Request,

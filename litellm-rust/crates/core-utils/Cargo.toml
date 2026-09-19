@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+fancy-regex.workspace = true
 litellm-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -13,3 +14,6 @@ serde_path_to_error = "0.1"
 serde_with.workspace = true
 thiserror.workspace = true
 url.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true

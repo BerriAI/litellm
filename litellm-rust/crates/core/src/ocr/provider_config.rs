@@ -277,12 +277,18 @@ mod tests {
     #[test]
     fn connection_resolution_preserves_dynamic_precedence_and_input_sources() {
         let connection = OcrConfigKind::Mistral.resolve_connection_params(OcrCredentialInputs {
-            api_key: Some(Sourced::new("explicit-key".into(), InputSource::Deployment)),
+            api_key: Some(Sourced::new(
+                litellm_auth::SecretValue::new("explicit-key"),
+                InputSource::Deployment,
+            )),
             api_base: Some(Sourced::new(
                 "https://explicit.test".into(),
                 InputSource::Deployment,
             )),
-            dynamic_api_key: Some(Sourced::new("dynamic-key".into(), InputSource::Environment)),
+            dynamic_api_key: Some(Sourced::new(
+                litellm_auth::SecretValue::new("dynamic-key"),
+                InputSource::Environment,
+            )),
             dynamic_api_base: Some(Sourced::new(
                 "https://dynamic.test".into(),
                 InputSource::Request,
@@ -292,7 +298,7 @@ mod tests {
             connection
                 .api_key
                 .as_ref()
-                .map(|value| value.value().as_str()),
+                .map(|value| value.value().expose()),
             Some("dynamic-key")
         );
         assert_eq!(
@@ -318,22 +324,31 @@ mod tests {
     fn empty_or_missing_dynamic_credentials_preserve_explicit_values(
         #[case] dynamic_value: Option<&str>,
     ) {
-        let dynamic =
+        let dynamic_key = dynamic_value.map(|value| {
+            Sourced::new(
+                litellm_auth::SecretValue::new(value),
+                InputSource::Environment,
+            )
+        });
+        let dynamic_base =
             dynamic_value.map(|value| Sourced::new(value.into(), InputSource::Environment));
         let connection = OcrConfigKind::Mistral.resolve_connection_params(OcrCredentialInputs {
-            api_key: Some(Sourced::new("explicit-key".into(), InputSource::Deployment)),
+            api_key: Some(Sourced::new(
+                litellm_auth::SecretValue::new("explicit-key"),
+                InputSource::Deployment,
+            )),
             api_base: Some(Sourced::new(
                 "https://explicit.test".into(),
                 InputSource::Deployment,
             )),
-            dynamic_api_key: dynamic.clone(),
-            dynamic_api_base: dynamic,
+            dynamic_api_key: dynamic_key,
+            dynamic_api_base: dynamic_base,
         });
         assert_eq!(
             connection
                 .api_key
                 .as_ref()
-                .map(|value| value.value().as_str()),
+                .map(|value| value.value().expose()),
             Some("explicit-key")
         );
         assert_eq!(
@@ -356,11 +371,18 @@ mod tests {
     ) {
         let connection = OcrConfigKind::AzureDocumentIntelligence.resolve_connection_params(
             OcrCredentialInputs {
-                api_key: explicit_key
-                    .map(|value| Sourced::new(value.into(), InputSource::Deployment)),
+                api_key: explicit_key.map(|value| {
+                    Sourced::new(
+                        litellm_auth::SecretValue::new(value),
+                        InputSource::Deployment,
+                    )
+                }),
                 api_base: explicit_base
                     .map(|value| Sourced::new(value.into(), InputSource::Deployment)),
-                dynamic_api_key: Some(Sourced::new("dynamic-key".into(), InputSource::Environment)),
+                dynamic_api_key: Some(Sourced::new(
+                    litellm_auth::SecretValue::new("dynamic-key"),
+                    InputSource::Environment,
+                )),
                 dynamic_api_base: Some(Sourced::new(
                     "https://dynamic.test".into(),
                     InputSource::Deployment,
@@ -371,7 +393,7 @@ mod tests {
             connection
                 .api_key
                 .as_ref()
-                .map(|value| value.value().as_str()),
+                .map(|value| value.value().expose()),
             explicit_key.map(|_| "dynamic-key")
         );
         assert_eq!(

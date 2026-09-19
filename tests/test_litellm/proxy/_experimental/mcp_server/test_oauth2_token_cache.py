@@ -396,6 +396,34 @@ async def test_invalidate_clears_every_identity_for_a_server():
 
 
 @pytest.mark.asyncio
+async def test_per_user_token_delete_evicts_locally_and_broadcasts_to_peer_workers():
+    """Revoking a user's OAuth token must not leave peer workers serving it from their in-memory layer."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.oauth2_token_cache import MCPPerUserTokenCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    local_cache = UserApiKeyCache()
+    publish = AsyncMock()
+    token_cache = MCPPerUserTokenCache()
+    key = token_cache._cache_key("mallory", "srv-oauth")  # pyright: ignore[reportPrivateUsage]  # asserting the broadcast names the stored key
+    local_cache.in_memory_cache.set_cache(key, "encrypted-token")
+
+    with (
+        patch.object(  # test-quality-ok: the token cache reads the module-level user_api_key_cache singleton; the suite's only seam
+            proxy_server, "user_api_key_cache", local_cache
+        ),
+        patch(  # test-quality-ok: the redis publisher is module-level; asserting the broadcast without a redis
+            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+            new=publish,
+        ),
+    ):
+        await token_cache.delete("mallory", "srv-oauth")
+
+    assert local_cache.in_memory_cache.get_cache(key) is None
+    publish.assert_awaited_once_with(cache_key=key)
+
+
+@pytest.mark.asyncio
 async def test_m2m_mint_uses_admin_entered_token_url_when_issuer_yield_empties_resolved():
     """A pinned issuer empties the resolved token_url while configured_token_url keeps the
     admin-entered value; the client_credentials mint must POST there instead of raising."""

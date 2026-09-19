@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 
@@ -166,6 +167,54 @@ def test_settings_store_refuses_a_runtime_write_to_a_config_owned_key() -> None:
 
     assert store["max_parallel_requests"] == 3
     assert store.source("max_parallel_requests") == "config"
+
+
+@pytest.mark.timeout(10)
+def test_settings_store_clear_removes_every_key_the_config_file_does_not_own() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"master_key": "os.environ/MASTER_KEY"})
+    store.apply_db_row("general_settings", {"max_parallel_requests": 3, "alerting": ["slack"]})
+    store.apply_runtime_values({"master_key": "sk-resolved", "alerting": ["slack"]})
+    store["allow_requests_on_db_unavailable"] = True
+    del store["alerting"]
+
+    store.clear()
+
+    assert dict(store) == {"master_key": "sk-resolved"}
+    assert "alerting" not in store
+    with pytest.raises(KeyError):
+        store["max_parallel_requests"]
+
+
+@pytest.mark.timeout(10)
+def test_settings_store_clear_then_refill_matches_a_plain_dict() -> None:
+    refilled: Final[dict[str, JsonValue]] = {"alerting": ["email"], "max_parallel_requests": 11}
+    store: Final = SettingsStore("general_settings")
+    store.update({"max_parallel_requests": 3, "alerting": ["slack"]})
+
+    store.clear()
+    store.update(refilled)
+
+    assert dict(store) == refilled
+    assert tuple(store) == tuple(refilled)
+    assert len(store) == len(refilled)
+
+
+@pytest.mark.timeout(10)
+@pytest.mark.parametrize("clear", (False, True))
+def test_settings_store_survives_a_patch_dict_round_trip_when_the_config_file_owns_a_key(clear: bool) -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"master_key": "os.environ/MASTER_KEY"})
+    store.apply_db_row("general_settings", {"max_parallel_requests": 3})
+    store.apply_runtime_values({"master_key": "sk-resolved", "max_parallel_requests": 3})
+    before: Final = dict(store)
+
+    with patch.dict(store, {"allow_requests_on_db_unavailable": True}, clear=clear):
+        assert store["allow_requests_on_db_unavailable"] is True
+        assert store["master_key"] == "sk-resolved"
+        assert ("max_parallel_requests" in store) is not clear
+
+    assert dict(store) == before
 
 
 def test_settings_store_reports_the_config_owned_keys_a_write_would_change() -> None:

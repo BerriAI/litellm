@@ -3050,6 +3050,18 @@
         },
         "DailySpendMetadata": {
           "properties": {
+            "api_key_limit": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When set, api_keys and every api_key_breakdown list at most this many keys, ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.",
+              "title": "Api Key Limit"
+            },
             "has_more": {
               "default": false,
               "title": "Has More",
@@ -3059,6 +3071,18 @@
               "default": 1,
               "title": "Page",
               "type": "integer"
+            },
+            "total_api_keys": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key lists are truncated to the highest-spend keys.",
+              "title": "Total Api Keys"
             },
             "total_api_requests": {
               "default": 0,
@@ -7235,6 +7259,18 @@
               "description": "Certificate role name for TLS cert authentication",
               "title": "Vault Cert Role"
             },
+            "vault_login_namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Namespace for AppRole and TLS cert login (X-Vault-Namespace header); falls back to vault_namespace",
+              "title": "Vault Login Namespace"
+            },
             "vault_mount_name": {
               "anyOf": [
                 {
@@ -7256,7 +7292,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Vault namespace (for multi-tenant Vault, sent as X-Vault-Namespace header)",
+              "description": "Vault namespace used for both login and secret operations unless overridden below",
               "title": "Vault Namespace"
             },
             "vault_path_prefix": {
@@ -7270,6 +7306,18 @@
               ],
               "description": "Optional path prefix for secrets (e.g., myapp -> secret/data/myapp/{secret_name})",
               "title": "Vault Path Prefix"
+            },
+            "vault_secret_namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Namespace for secret reads and writes (URL path segment); falls back to vault_namespace",
+              "title": "Vault Secret Namespace"
             },
             "vault_token": {
               "anyOf": [
@@ -10006,7 +10054,7 @@
             },
             "unreachable_fallback": {
               "default": "fail_closed",
-              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
+              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
               "enum": [
                 "fail_closed",
                 "fail_open"
@@ -17133,6 +17181,228 @@
           ]
         }
       },
+      "/azure_speech/{endpoint}": {
+        "delete": {
+          "description": "Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.\n`POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`\nwith the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.\n\nThe body is forwarded byte for byte and the proxy injects its own\n`Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key\nand is never forwarded.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)",
+          "operationId": "azure_speech_proxy_route_azure_speech__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Speech Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.\n`POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`\nwith the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.\n\nThe body is forwarded byte for byte and the proxy injects its own\n`Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key\nand is never forwarded.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)",
+          "operationId": "azure_speech_proxy_route_azure_speech__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Speech Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.\n`POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`\nwith the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.\n\nThe body is forwarded byte for byte and the proxy injects its own\n`Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key\nand is never forwarded.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)",
+          "operationId": "azure_speech_proxy_route_azure_speech__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Speech Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.\n`POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`\nwith the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.\n\nThe body is forwarded byte for byte and the proxy injects its own\n`Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key\nand is never forwarded.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)",
+          "operationId": "azure_speech_proxy_route_azure_speech__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Speech Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.\n`POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`\nwith the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.\n\nThe body is forwarded byte for byte and the proxy injects its own\n`Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key\nand is never forwarded.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)",
+          "operationId": "azure_speech_proxy_route_azure_speech__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Speech Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
       "/bedrock/{endpoint}": {
         "delete": {
           "description": "This is the v1 passthrough for Bedrock.\nV2 is handled by the `/bedrock/v2` endpoint.\n[Docs](https://docs.litellm.ai/docs/pass_through/bedrock)",
@@ -20368,6 +20638,77 @@
             }
           ],
           "summary": "Openai Passthrough Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/transcribe": {
+        "post": {
+          "description": "AWS-SDK-shaped pass-through for Amazon Transcribe: point the SDK's `endpoint_url`\nat `/transcribe` and the operation is read from the `X-Amz-Target` header, per the\nAWS JSON 1.1 protocol.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/transcribe)",
+          "operationId": "transcribe_sdk_proxy_route_transcribe_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Transcribe Sdk Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/transcribe/{operation}": {
+        "post": {
+          "description": "Pass-through for the Amazon Transcribe API, e.g. `POST /transcribe/StartTranscriptionJob`.\n\nThe request body is forwarded to the AWS JSON 1.1 API and signed with SigV4 using the\nproxy's AWS credentials. Standard jobs are tagged with the calling key's owner so that\nonly that owner (or a proxy admin) can read or delete them, and keys other than proxy\nadmins may only read media from and write transcripts to the S3 buckets listed in\n`general_settings.transcribe_media_buckets`; account-wide operations\nsuch as ListTranscriptionJobs are limited to proxy admins. Streaming transcription\n(`transcribestreaming`) uses a separate HTTP/2 event-stream protocol and is not served\nby this route.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/transcribe)",
+          "operationId": "transcribe_proxy_route_transcribe__operation__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "operation",
+              "required": true,
+              "schema": {
+                "title": "Operation",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Transcribe Proxy Route",
           "tags": [
             "llm_passthrough"
           ]
@@ -27761,6 +28102,207 @@
           "title": "MCPEnvVarScope",
           "type": "string"
         },
+        "MCPGatewaySession": {
+          "description": "One live stateful Streamable HTTP session held by this proxy worker.",
+          "properties": {
+            "client_ip": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Ip"
+            },
+            "client_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Name"
+            },
+            "client_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Version"
+            },
+            "idle_seconds": {
+              "title": "Idle Seconds",
+              "type": "number"
+            },
+            "in_flight_requests": {
+              "title": "In Flight Requests",
+              "type": "integer"
+            },
+            "key_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key Alias"
+            },
+            "session_id_prefix": {
+              "title": "Session Id Prefix",
+              "type": "string"
+            },
+            "team_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Alias"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            },
+            "user_email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Email"
+            },
+            "user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            }
+          },
+          "required": [
+            "session_id_prefix",
+            "idle_seconds",
+            "in_flight_requests"
+          ],
+          "title": "MCPGatewaySession",
+          "type": "object"
+        },
+        "MCPGatewaySessionGroupCount": {
+          "properties": {
+            "count": {
+              "title": "Count",
+              "type": "integer"
+            },
+            "label": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Label"
+            }
+          },
+          "required": [
+            "count"
+          ],
+          "title": "MCPGatewaySessionGroupCount",
+          "type": "object"
+        },
+        "MCPGatewaySessionsResponse": {
+          "properties": {
+            "by_client": {
+              "items": {
+                "$ref": "#/components/schemas/MCPGatewaySessionGroupCount"
+              },
+              "title": "By Client",
+              "type": "array"
+            },
+            "by_user": {
+              "items": {
+                "$ref": "#/components/schemas/MCPGatewaySessionGroupCount"
+              },
+              "title": "By User",
+              "type": "array"
+            },
+            "sessions": {
+              "items": {
+                "$ref": "#/components/schemas/MCPGatewaySession"
+              },
+              "title": "Sessions",
+              "type": "array"
+            },
+            "total_sessions": {
+              "title": "Total Sessions",
+              "type": "integer"
+            },
+            "worker_pid": {
+              "title": "Worker Pid",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "worker_pid",
+            "total_sessions"
+          ],
+          "title": "MCPGatewaySessionsResponse",
+          "type": "object"
+        },
+        "MCPGatewaySessionsTerminateResponse": {
+          "description": "Stateful sessions an administrator force-closed on this proxy worker.",
+          "properties": {
+            "sessions": {
+              "items": {
+                "$ref": "#/components/schemas/MCPGatewaySession"
+              },
+              "title": "Sessions",
+              "type": "array"
+            },
+            "terminated_sessions": {
+              "title": "Terminated Sessions",
+              "type": "integer"
+            },
+            "worker_pid": {
+              "title": "Worker Pid",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "worker_pid",
+            "terminated_sessions"
+          ],
+          "title": "MCPGatewaySessionsTerminateResponse",
+          "type": "object"
+        },
         "MCPOAuthUserCredentialRequest": {
           "description": "Stores a user's OAuth2 token for an OpenAPI MCP server.",
           "properties": {
@@ -27855,6 +28397,56 @@
             "has_credential"
           ],
           "title": "MCPOAuthUserCredentialStatus",
+          "type": "object"
+        },
+        "MCPServerUserCredentialListItem": {
+          "description": "One user's stored credential for an MCP server, as an admin sees it. Never carries the secret.",
+          "properties": {
+            "connected_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connected At"
+            },
+            "credential_type": {
+              "enum": [
+                "oauth2",
+                "byok"
+              ],
+              "title": "Credential Type",
+              "type": "string"
+            },
+            "expires_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expires At"
+            },
+            "updated_at": {
+              "title": "Updated At",
+              "type": "string"
+            },
+            "user_id": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "user_id",
+            "credential_type",
+            "updated_at"
+          ],
+          "title": "MCPServerUserCredentialListItem",
           "type": "object"
         },
         "MCPSubmissionsSummary": {
@@ -30033,7 +30625,7 @@
       },
       "/v1/mcp/server/{server_id}/oauth-user-credential": {
         "delete": {
-          "description": "Revoke the calling user's stored OAuth2 token for an MCP server",
+          "description": "Revoke the calling user's stored OAuth2 token for an MCP server. A proxy admin may pass user_id to revoke another user's stored token.",
           "operationId": "delete_mcp_oauth_user_credential_v1_mcp_server__server_id__oauth_user_credential_delete",
           "parameters": [
             {
@@ -30043,6 +30635,23 @@
               "schema": {
                 "title": "Server Id",
                 "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "user_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "User Id"
               }
             }
           ],
@@ -30243,7 +30852,7 @@
       },
       "/v1/mcp/server/{server_id}/user-credential": {
         "delete": {
-          "description": "Delete the calling user's stored API key for a BYOK MCP server",
+          "description": "Delete the calling user's stored API key for a BYOK MCP server. A proxy admin may pass user_id to revoke another user's stored key.",
           "operationId": "delete_mcp_user_credential_v1_mcp_server__server_id__user_credential_delete",
           "parameters": [
             {
@@ -30253,6 +30862,23 @@
               "schema": {
                 "title": "Server Id",
                 "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "user_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "User Id"
               }
             }
           ],
@@ -30340,6 +30966,58 @@
             }
           ],
           "summary": "Store Mcp User Credential",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/server/{server_id}/user-credentials": {
+        "get": {
+          "description": "List every user's stored BYOK or OAuth2 credential for an MCP server (admin only, no secrets)",
+          "operationId": "list_mcp_server_user_credentials_v1_mcp_server__server_id__user_credentials_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "$ref": "#/components/schemas/MCPServerUserCredentialListItem"
+                    },
+                    "title": "Response List Mcp Server User Credentials V1 Mcp Server  Server Id  User Credentials Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Mcp Server User Credentials",
           "tags": [
             "mcp_management"
           ]
@@ -30490,6 +31168,104 @@
             }
           ],
           "summary": "Store Mcp User Env Vars",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/sessions": {
+        "delete": {
+          "description": "Force-close live stateful MCP gateway sessions on this proxy worker, selected by session id prefix and/or by the LiteLLM user that opened them (proxy admin only).",
+          "operationId": "delete_mcp_gateway_sessions_v1_mcp_sessions_delete",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "session_id_prefix",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "minLength": 8,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Session Id Prefix"
+              }
+            },
+            {
+              "in": "query",
+              "name": "user_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "User Id"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MCPGatewaySessionsTerminateResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Mcp Gateway Sessions",
+          "tags": [
+            "mcp_management"
+          ]
+        },
+        "get": {
+          "description": "Live stateful MCP gateway sessions on this proxy worker, grouped by AI client and by user.",
+          "operationId": "get_mcp_gateway_sessions_v1_mcp_sessions_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MCPGatewaySessionsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Mcp Gateway Sessions",
           "tags": [
             "mcp_management"
           ]
@@ -32668,6 +33444,10 @@
             "cache_control": {
               "$ref": "#/components/schemas/ChatCompletionCachedContent"
             },
+            "eager_input_streaming": {
+              "title": "Eager Input Streaming",
+              "type": "boolean"
+            },
             "function": {
               "$ref": "#/components/schemas/ChatCompletionToolParamFunctionChunk"
             },
@@ -32696,6 +33476,10 @@
             "description": {
               "title": "Description",
               "type": "string"
+            },
+            "eager_input_streaming": {
+              "title": "Eager Input Streaming",
+              "type": "boolean"
             },
             "name": {
               "title": "Name",
@@ -38311,6 +39095,7 @@
           "type": "object"
         },
         "SCIMMultiValuedAttribute": {
+          "additionalProperties": true,
           "properties": {
             "display": {
               "anyOf": [
@@ -38346,13 +39131,17 @@
               "title": "Type"
             },
             "value": {
-              "title": "Value",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Value"
             }
           },
-          "required": [
-            "value"
-          ],
           "title": "SCIMMultiValuedAttribute",
           "type": "object"
         },
