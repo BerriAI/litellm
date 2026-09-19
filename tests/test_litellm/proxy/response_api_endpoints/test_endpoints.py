@@ -639,6 +639,71 @@ class TestResponsesWSFirstFrameModelAuth:
         assert booked["request_data"]["model"] == "gpt-4o-mini"
 
     @pytest.mark.asyncio
+    async def test_endpoint_sends_an_error_frame_when_routing_rejects_the_connection(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            responses_websocket_endpoint,
+        )
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+        )
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
+        )
+        rejection = litellm.RateLimitError(
+            message="origin deployment is cooling down", model="gpt-4o-mini", llm_provider="openai"
+        )
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        user_api_key_dict = MagicMock()
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; what the endpoint tells the client is under test
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam that raises the affinity rejection
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                side_effect=rejection,
+            ),
+            patch(  # test-quality-ok: the failure hook is the proxy's only path to a failed spend log row
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                proxy_logging_obj,
+            ),
+        ):
+            await responses_websocket_endpoint(
+                websocket=ws,
+                model=None,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        frame = json.loads(ws.send_text.await_args.args[0])
+        assert frame["type"] == "error"
+        assert frame["status"] == 429
+        assert frame["error"]["type"] == "rate_limit_exceeded"
+        assert "cooling down" in frame["error"]["message"]
+        ws.close.assert_awaited_once_with(code=1011, reason="Internal server error")
+        booked = proxy_logging_obj.post_call_failure_hook.await_args.kwargs
+        assert booked["original_exception"] is rejection
+        assert booked["user_api_key_dict"] is user_api_key_dict
+        assert booked["request_data"]["model"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
     async def test_reruns_model_auth_for_first_frame_model(self):
         from starlette.requests import Request
 
