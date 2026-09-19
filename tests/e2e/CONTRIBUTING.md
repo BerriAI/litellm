@@ -281,9 +281,16 @@ aggregate client never injects a gateway header; the explicitly labeled JWT
 variant configures `x-litellm-api-key` for the first consent and reconnects with
 only its gateway JWT after restart
 
-`.github/workflows/test-mcp-oauth-e2e.yml` runs the four cases in the protected
-`e2e-changed` environment. Provision `E2E_LINEAR_STORAGE_STATE_B64` as a secret
-there and retain the existing E2E license/AWS role configuration. A missing or
+`.github/workflows/test-mcp-oauth-e2e.yml` automatically requests a run for
+same-repository pull requests changing MCP, gateway authentication/SSO, consent
+UI, dependencies or the relevant E2E harness/workflow paths. It retains manual
+`workflow_dispatch` for targeted verification. The four cases run in the
+protected `e2e-changed` environment after its normal deployment approval;
+reviewers should approve and inspect this separate OAuth check when it appears.
+Fork pull requests do not run this credentialed job; use a reviewed
+same-repository branch for their verification. The workflow's path-filtered
+check is not configured here as a globally required branch-protection check.
+Provision `E2E_LINEAR_STORAGE_STATE_B64` as a secret there and retain the existing E2E license/AWS role configuration. A missing or
 expired session fails the job; collection, deselection and skips are not passes.
 The generic changed-test job excludes this file because it requires an owned
 proxy and consent UI. No LLM call is needed

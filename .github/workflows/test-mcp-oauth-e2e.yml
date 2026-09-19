@@ -1,6 +1,26 @@
 name: MCP OAuth happy path
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/test-mcp-oauth-e2e.yml'
+      - '.github/e2e-stack/**'
+      - 'tests/e2e/*.py'
+      - 'tests/e2e/pytest.ini'
+      - 'tests/e2e/idp_realm.json'
+      - 'tests/e2e/mcp/**'
+      - 'litellm/experimental_mcp_client/**'
+      - 'litellm/proxy/_experimental/mcp_server/**'
+      - 'litellm/proxy/auth/**'
+      - 'litellm/proxy/management_endpoints/*sso*.py'
+      - 'litellm/proxy/management_endpoints/sso/**'
+      - 'litellm/proxy/common_utils/encrypt_decrypt_utils.py'
+      - 'litellm/proxy/proxy_server.py'
+      - 'litellm/proxy/schema.prisma'
+      - 'ui/litellm-dashboard/src/app/connect/**'
+      - 'ui/litellm-dashboard/src/app/mcp/oauth/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
   workflow_dispatch:
 
 permissions: {}
