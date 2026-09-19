@@ -80,11 +80,14 @@ from litellm.proxy._types import (
     TeamEditNone,
     TeamEditUnrestricted,
     TeamInfoMember,
+    TeamInfoMembership,
     TeamInfoResponseObject,
     TeamInfoResponseObjectTeamTable,
     TeamListResponseObject,
     TeamMemberAddRequest,
+    TeamMemberBudgetSource,
     TeamMemberDeleteRequest,
+    TeamMemberResetBudgetResponse,
     TeamMemberUpdateRequest,
     TeamMemberUpdateResponse,
     TeamModelAddRequest,
@@ -3954,6 +3957,99 @@ async def reset_team_member_spend_fn(
     }
 
 
+class _TeamMetadataView(BaseModel):
+    metadata: Mapping[str, object] | None = None
+
+
+def _team_default_budget_id(team: LiteLLM_TeamTable) -> str | None:
+    view: Final = _TeamMetadataView.model_validate(team, from_attributes=True)
+    raw: Final = view.metadata.get("team_member_budget_id") if view.metadata is not None else None
+    return raw if isinstance(raw, str) else None
+
+
+async def _existing_team_default_budget_id(team: LiteLLM_TeamTable, prisma_client: PrismaClient) -> str | None:
+    budget_id: Final = _team_default_budget_id(team)
+    if budget_id is None:
+        return None
+    row: Final = await _budget_db(prisma_client).find_unique(
+        where={"budget_id": budget_id},  # mutable-ok: prisma client requires a plain dict where= argument
+    )
+    return budget_id if row is not None else None
+
+
+def _member_budget_source(budget_id: str | None, team_default_budget_id: str | None) -> TeamMemberBudgetSource:
+    if budget_id is not None and budget_id != team_default_budget_id:
+        return "custom"
+    return "team_default" if team_default_budget_id is not None else "none"
+
+
+@router.post(
+    "/team/{team_id}/member/{user_id}/reset_budget",
+    tags=["team management"],  # mutable-ok: FastAPI's `tags` param is typed as list[str], not Sequence
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=TeamMemberResetBudgetResponse,
+)
+@management_endpoint_wrapper
+async def reset_team_member_budget_fn(
+    team_id: str,
+    user_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> TeamMemberResetBudgetResponse:
+    """
+    Put a team member back on the team's shared default member budget (`team_member_budget`).
+
+    Drops the member's own budget row link so team-wide changes made through /team/update
+    reach them again. Leaves the member with no budget when the team has no default. Spend is untouched.
+    """
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    if prisma_client is None:
+        _raise_reset_spend_error(status.HTTP_500_INTERNAL_SERVER_ERROR, "DB not connected. prisma_client is None")
+
+    team_obj: Final = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+        check_db_only=True,
+    )
+    await _verify_team_access(team_obj=team_obj, user_api_key_dict=user_api_key_dict)
+
+    membership_where: Final = {  # mutable-ok: prisma client requires a plain dict where= argument
+        "user_id_team_id": {"user_id": user_id, "team_id": team_id}  # mutable-ok: same prisma where= argument
+    }
+    membership_row: Final = await _team_membership_db(prisma_client).find_unique(where=membership_where)
+    if membership_row is None:
+        _raise_reset_spend_error(status.HTTP_404_NOT_FOUND, f"User {user_id} is not a member of team {team_id}.")
+
+    team_default_budget_id: Final = await _existing_team_default_budget_id(team_obj, prisma_client)
+    budget_link: Final = (
+        {
+            "connect": {"budget_id": team_default_budget_id}
+        }  # mutable-ok: prisma client requires a plain dict data= argument
+        if team_default_budget_id is not None
+        else {"disconnect": True}  # mutable-ok: same prisma data= argument
+    )
+    await _team_membership_db(prisma_client).update(
+        where=membership_where,
+        data={"litellm_budget_table": budget_link},  # mutable-ok: prisma client requires a plain dict data= argument
+    )
+    await invalidate_team_member_spend_state(
+        user_id=user_id,
+        team_id=team_id,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+    return TeamMemberResetBudgetResponse(
+        team_id=team_id,
+        user_id=user_id,
+        budget_id=team_default_budget_id,
+        previous_budget_id=membership_row.budget_id,
+        budget_source=_member_budget_source(team_default_budget_id, team_default_budget_id),
+    )
+
+
 def _create_results_from_response(
     members: list[Member],
     response: TeamAddMemberResponse,
@@ -4722,9 +4818,7 @@ async def team_info(
             _team_info = TeamInfoResponseObjectTeamTable()
 
         ## GET TEAM BUDGET (if exists) ##
-        team_member_budget_id: Final = (
-            _team_info.metadata.get("team_member_budget_id") if _team_info.metadata is not None else None
-        )
+        team_member_budget_id: Final = _team_default_budget_id(_team_info)
         if team_member_budget_id is not None:
             _team_info = await _add_team_member_budget_table(
                 team_member_budget_id=team_member_budget_id,
@@ -4757,7 +4851,17 @@ async def team_info(
             team_id=team_id,
             team_info=hydrated_team_info,
             keys=keys,
-            team_memberships=returned_tm,
+            team_memberships=tuple(
+                TeamInfoMembership.model_validate(
+                    MappingProxyType(
+                        {
+                            **tm.model_dump(),
+                            "budget_source": _member_budget_source(tm.budget_id, team_member_budget_id),
+                        }
+                    )
+                )
+                for tm in returned_tm
+            ),
         )
         return response_object
 
