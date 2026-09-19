@@ -1443,7 +1443,6 @@ class TestBedrockFilesEmbeddingTransformation:
         transformer, corrupting the modelInput.
         """
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
-
         from litellm.types.llms.bedrock import BedrockBatchRecordKind
 
         # Direct helper assertion
@@ -2030,6 +2029,77 @@ class TestBedrockFileContentTransformation:
         )
 
         assert url == self.EXPECTED_URL
+
+    def test_transform_retrieve_file_request_signs_ranged_s3_get(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import (
+            S3_SIGNED_REQUEST_HEADERS_PARAM,
+            BedrockFilesConfig,
+        )
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        litellm_params = self._litellm_params()
+
+        url, params = BedrockFilesConfig().transform_retrieve_file_request(
+            file_id=self.S3_URI,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert url == self.EXPECTED_URL
+        assert params == {}
+        signed_headers = litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]
+        assert signed_headers["Range"] == "bytes=0-0"
+        assert signed_headers["Authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE/")
+
+    def test_transform_retrieve_file_response_returns_file_metadata(self, monkeypatch):
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        file_id = self.S3_URI
+        litellm_params = {**self._litellm_params(), "_s3_retrieve_file_id": file_id}
+        raw_response = httpx.Response(
+            206,
+            headers={
+                "Content-Range": "bytes 0-0/4321",
+                "Last-Modified": "Wed, 16 Sep 2026 10:00:00 GMT",
+            },
+            request=httpx.Request("GET", self.EXPECTED_URL),
+        )
+
+        result = BedrockFilesConfig().transform_retrieve_file_response(
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+            litellm_params=litellm_params,
+        )
+
+        assert result.bytes == 4321
+        assert result.created_at == 1789552800
+        assert result.filename == "input.jsonl.out"
+        assert result.id == file_id
+        assert result.object == "file"
+        assert result.purpose == "batch_output"
+        assert result.status == "processed"
+
+    def test_transform_retrieve_file_response_raises_for_not_found(self):
+        import httpx
+
+        from litellm.llms.bedrock.common_utils import BedrockError
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        raw_response = httpx.Response(
+            404,
+            text="NoSuchKey",
+            request=httpx.Request("GET", self.EXPECTED_URL),
+        )
+        with pytest.raises(BedrockError) as error:
+            BedrockFilesConfig().transform_retrieve_file_response(
+                raw_response=raw_response,
+                logging_obj=MagicMock(),
+                litellm_params={},
+            )
+        assert error.value.status_code == 404
 
     def test_transform_file_content_request_rejects_foreign_bucket(self, monkeypatch):
         from litellm.llms.bedrock.common_utils import BedrockError
