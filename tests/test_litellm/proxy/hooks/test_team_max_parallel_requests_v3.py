@@ -1,12 +1,17 @@
-from collections.abc import Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
+from typing import cast
 from datetime import datetime
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    PARALLEL_ACQUIRE_SCRIPT,
+    PARALLEL_COUNT_SCRIPT,
+    PARALLEL_RELEASE_SCRIPT,
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     RequestRateLimiterStash,
     _PROXY_MaxParallelRequestsHandler_v3,
@@ -191,12 +196,30 @@ KEY_A_COUNTER_KEY = f"{{api_key:{KEY_A}}}:max_parallel_requests"
 
 
 class _FakeRedisGauges:
-    def __init__(self, reject_key: str | None = None, raise_on_key: str | None = None) -> None:
+    def __init__(
+        self,
+        reject_key: str | None = None,
+        raise_on_key: str | None = None,
+        raise_on_release_key: str | None = None,
+    ) -> None:
         self.reject_key = reject_key
         self.raise_on_key = raise_on_key
+        self.raise_on_release_key = raise_on_release_key
         self.acquire_calls: list[tuple[tuple[str, ...], tuple[object, ...]]] = []
         self.release_calls: list[tuple[tuple[str, ...], tuple[object, ...]]] = []
         self.count_calls: list[tuple[str, ...]] = []
+
+    def async_register_script(self, script: str) -> Callable[..., Awaitable[list[int]]]:
+        if script is PARALLEL_ACQUIRE_SCRIPT:
+            return self.acquire
+        if script is PARALLEL_RELEASE_SCRIPT:
+            return self.release
+        if script is PARALLEL_COUNT_SCRIPT:
+            return self.count
+        return self.unused
+
+    async def unused(self, keys: Sequence[str], args: Sequence[object]) -> list[int]:
+        raise AssertionError("only the parallel gauge scripts should run in these tests")
 
     async def acquire(self, keys: Sequence[str], args: Sequence[object]) -> list[int]:
         self.acquire_calls.append((tuple(keys), tuple(args)))
@@ -208,6 +231,8 @@ class _FakeRedisGauges:
 
     async def release(self, keys: Sequence[str], args: Sequence[object]) -> list[int]:
         self.release_calls.append((tuple(keys), tuple(args)))
+        if keys[0] == self.raise_on_release_key:
+            raise ConnectionError("connection reset")
         return [0]
 
     async def count(self, keys: Sequence[str], args: Sequence[object]) -> list[int]:
@@ -216,11 +241,8 @@ class _FakeRedisGauges:
 
 
 def _handler_with_fake_redis(fake: _FakeRedisGauges) -> tuple[_PROXY_MaxParallelRequestsHandler_v3, DualCache]:
-    handler, cache = _handler()
-    handler.parallel_acquire_script = fake.acquire
-    handler.parallel_release_script = fake.release
-    handler.parallel_count_script = fake.count
-    return handler, cache
+    cache = DualCache(redis_cache=cast(RedisCache, fake))
+    return _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache)), cache
 
 
 @pytest.mark.asyncio
@@ -284,3 +306,18 @@ async def test_read_only_count_uses_one_redis_call_per_key():
 
     assert response["overall_code"] == "OK"
     assert fake.count_calls == [(KEY_A_COUNTER_KEY,), (TEAM_COUNTER_KEY,)]
+
+
+@pytest.mark.asyncio
+async def test_release_failure_on_one_gauge_still_releases_the_other_in_redis():
+    fake = _FakeRedisGauges(raise_on_release_key=KEY_A_COUNTER_KEY)
+    handler, cache = _handler_with_fake_redis(fake)
+
+    stash = await _admit(handler, cache, _team_key("sk-a", team_max_parallel_requests=2, max_parallel_requests=3))
+    slot_id = stash.parallel_slot["slot_id"]
+
+    await handler.async_release_max_parallel_requests_on_disconnect(user_api_key_dict=UserAPIKeyAuth())
+
+    assert fake.release_calls == [((KEY_A_COUNTER_KEY,), (slot_id,)), ((TEAM_COUNTER_KEY,), (slot_id,))]
+    assert await _team_in_flight(handler, cache) == 0
+    assert handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=KEY_A_COUNTER_KEY)) == 0

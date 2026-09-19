@@ -1727,48 +1727,60 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         slot_id: str,
         parent_otel_span: Span | None,
     ) -> None:
-        if not counter_keys or not slot_id:
+        """
+        One release per key so a Redis failure on one gauge only degrades
+        that gauge to the in-memory mirror; the others are still released in
+        Redis instead of being stranded there until the slot TTL.
+        """
+        if not slot_id:
             return
-        if self.parallel_release_script is not None:
-            try:
-                for counter_key in counter_keys:
+        for counter_key in counter_keys:
+            if self.parallel_release_script is not None:
+                try:
                     await self._release_one_slot_in_redis(
                         release_script=self.parallel_release_script,
                         counter_key=counter_key,
                         slot_id=slot_id,
                         parent_otel_span=parent_otel_span,
                     )
-                return
-            except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the in-memory release, never a 500
-                log_redis_failure(
-                    verbose_proxy_logger,
-                    logging.WARNING,
-                    "parallel_release_script failed, falling back to in-memory release",
-                    e,
+                    continue
+                except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the in-memory release, never a 500
+                    log_redis_failure(
+                        verbose_proxy_logger,
+                        logging.WARNING,
+                        "parallel_release_script failed, falling back to in-memory release",
+                        e,
+                    )
+            async with self._check_and_increment_lock:
+                await self._release_one_slot_in_memory(
+                    counter_key=counter_key, slot_id=slot_id, parent_otel_span=parent_otel_span
                 )
 
-        async with self._check_and_increment_lock:
-            for counter_key in counter_keys:
-                raw_value: ParallelGaugeCacheValue | None = await self.internal_usage_cache.async_get_cache(
-                    key=counter_key,
-                    litellm_parent_otel_span=parent_otel_span,
-                    local_only=True,
-                )
-                if isinstance(raw_value, dict):
-                    if slot_id not in raw_value:
-                        continue
-                    new_value: dict[str, object] | int = {key: ts for key, ts in raw_value.items() if key != slot_id}
-                elif raw_value is None:
-                    continue
-                else:
-                    new_value = max(0, int(raw_value) - 1)
-                await self.internal_usage_cache.async_set_cache(
-                    key=counter_key,
-                    value=new_value,
-                    ttl=PARALLEL_REQUEST_SLOT_TTL_SECONDS,
-                    litellm_parent_otel_span=parent_otel_span,
-                    local_only=True,
-                )
+    async def _release_one_slot_in_memory(
+        self,
+        counter_key: str,
+        slot_id: str,
+        parent_otel_span: Span | None,
+    ) -> None:
+        raw_value: Final[ParallelGaugeCacheValue | None] = await self.internal_usage_cache.async_get_cache(
+            key=counter_key,
+            litellm_parent_otel_span=parent_otel_span,
+            local_only=True,
+        )
+        if raw_value is None or (isinstance(raw_value, dict) and slot_id not in raw_value):
+            return
+        new_value: Final[dict[str, object] | int] = (
+            {key: ts for key, ts in raw_value.items() if key != slot_id}
+            if isinstance(raw_value, dict)
+            else max(0, int(raw_value) - 1)
+        )
+        await self.internal_usage_cache.async_set_cache(
+            key=counter_key,
+            value=new_value,
+            ttl=PARALLEL_REQUEST_SLOT_TTL_SECONDS,
+            litellm_parent_otel_span=parent_otel_span,
+            local_only=True,
+        )
 
     async def _release_one_slot_in_redis(
         self,
