@@ -6,7 +6,6 @@ from typing import Final, Protocol
 
 import httpx
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -163,12 +162,11 @@ class PassThroughStreamingHandler:
             litellm_logging_obj=litellm_logging_obj,
         )
 
-        # Resolve once per stream rather than re-reading the global +
-        # re-branching on every chunk. ``include_cost_in_streaming_usage`` is
-        # set at config load and stable for the process, matching how the
-        # proxy-level streaming fast path resolves it.
         cost_injection_active: Final = (
-            bool(getattr(litellm, "include_cost_in_streaming_usage", False))
+            ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
+                request_body,
+                protocol_supports_stream_options=endpoint_type == EndpointType.OPENAI,
+            )
             and bool(model_name)
             and (
                 endpoint_type in (EndpointType.ANTHROPIC, EndpointType.OPENAI)
@@ -200,7 +198,10 @@ class PassThroughStreamingHandler:
                     )  # rebind-ok: SSE frame reassembly buffer across transport chunks
                     if complete_frames:
                         yield ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
-                            complete_frames, resolved_model_name, litellm_logging_obj
+                            complete_frames,
+                            resolved_model_name,
+                            litellm_logging_obj,
+                            enabled=True,
                         )
                 if pending:
                     yield pending
