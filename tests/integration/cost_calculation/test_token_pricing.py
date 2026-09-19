@@ -9,7 +9,7 @@ import pytest
 from pydantic import JsonValue
 
 from integration._support.client import JSON_OBJECT, Gateway
-from integration._support.scripted_wires import ScriptedUsage, Wire
+from integration._support.scripted_wires import WIRES, ScriptedUsage, Wire
 from integration.cost_calculation.conftest import (
     approx_equal,
     assert_total_is_sum_of_components,
@@ -50,12 +50,12 @@ _MATRIX: Final = tuple(
     for model in FRONTIER_MODELS
     for case in cases_for(model)
 )
-_CACHE_WIRES: Final = frozenset({"anthropic_messages", "bedrock_converse"})
-_WEB_SEARCH_OPTION_WIRES: Final = frozenset({"openai_chat", "azure_chat", "openai_responses"})
+_CACHE_SHAPES: Final = frozenset({"anthropic_messages", "bedrock_converse"})
+_WEB_SEARCH_OPTION_SHAPES: Final = frozenset({"openai_chat", "openai_responses"})
 
 
 def _cache_control(usage: ScriptedUsage, wire: Wire) -> dict[str, JsonValue] | None:
-    if wire not in _CACHE_WIRES:
+    if WIRES[wire].shape not in _CACHE_SHAPES:
         return None
     if not (usage.cache_read_tokens or usage.cache_write_5m_tokens or usage.cache_write_1h_tokens):
         return None
@@ -148,7 +148,7 @@ def _chat_body(model: FrontierModel, case: Case, model_name: str, marker: str) -
         **({"audio": {"voice": "alloy", "format": "pcm16"}} if case.audio_output else {}),
         **(
             {"web_search_options": {"search_context_size": case.web_search}}
-            if case.web_search is not None and model.wire in _WEB_SEARCH_OPTION_WIRES
+            if case.web_search is not None and WIRES[model.wire].shape in _WEB_SEARCH_OPTION_SHAPES
             else {}
         ),
         **({"tools": tools} if tools else {}),

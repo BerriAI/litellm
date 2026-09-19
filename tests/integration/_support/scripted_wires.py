@@ -34,100 +34,26 @@ import time
 import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, TypeAlias, assert_never
 from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
 
-Wire: TypeAlias = Literal[
+Wire: TypeAlias = str
+Shape: TypeAlias = Literal[
     "openai_chat",
     "openai_responses",
     "anthropic_messages",
     "gemini_generate",
-    "together_chat",
-    "fireworks_chat",
-    "azure_chat",
     "bedrock_converse",
-    "vertex_generate",
 ]
-
-WIRE_MOUNTS: Final[Mapping[str, str]] = MappingProxyType(
-    {
-        "openai_chat": "openai",
-        "openai_responses": "openai",
-        "anthropic_messages": "anthropic",
-        "gemini_generate": "gemini",
-        "together_chat": "together",
-        "fireworks_chat": "fireworks",
-        "azure_chat": "azure",
-        "bedrock_converse": "bedrock",
-        "vertex_generate": "vertex",
-    }
-)
-
 StreamUsage: TypeAlias = Literal["final_chunk", "absent"]
 ServiceTier: TypeAlias = Literal["flex", "priority"]
 TerminalKind: TypeAlias = Literal["completed", "incomplete", "unvalidated", "prompt_blocked"]
 
-# Which terminal variant each wire can represent.
-_TERMINAL_CAPS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
-    {
-        "openai_responses": frozenset({"incomplete", "unvalidated"}),
-        "gemini_generate": frozenset({"prompt_blocked"}),
-        "vertex_generate": frozenset({"prompt_blocked"}),
-    }
-)
-
-
 _BASE_USAGE_FIELDS: Final = frozenset({"fresh_input_tokens", "output_tokens"})
-_OPENAI_FAMILY_USAGE: Final = frozenset(
-    {
-        "cache_read_tokens",
-        "reasoning_tokens",
-        "audio_input_tokens",
-        "audio_output_tokens",
-        "web_search_calls",
-    }
-)
-_CACHE_WRITE_USAGE: Final = frozenset({"cache_write_5m_tokens", "cache_write_1h_tokens"})
-_GEMINI_USAGE: Final = frozenset(
-    {
-        "cache_read_tokens",
-        "reasoning_tokens",
-        "audio_input_tokens",
-        "audio_output_tokens",
-        "image_input_tokens",
-        "video_input_tokens",
-        "web_search_calls",
-        "google_maps_calls",
-    }
-)
-
-_USAGE_CAPS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
-    {
-        wire: usage
-        for wire, usage in (
-            ("openai_chat", _OPENAI_FAMILY_USAGE),
-            ("azure_chat", _OPENAI_FAMILY_USAGE),
-            ("together_chat", _OPENAI_FAMILY_USAGE),
-            ("fireworks_chat", _OPENAI_FAMILY_USAGE),
-            (
-                "openai_responses",
-                frozenset(
-                    {"cache_read_tokens", "reasoning_tokens", "web_search_calls", "file_search_calls"}
-                ),
-            ),
-            (
-                "anthropic_messages",
-                frozenset({"cache_read_tokens", "web_search_calls"}) | _CACHE_WRITE_USAGE,
-            ),
-            ("bedrock_converse", frozenset({"cache_read_tokens"}) | _CACHE_WRITE_USAGE),
-            ("gemini_generate", _GEMINI_USAGE),
-            ("vertex_generate", _GEMINI_USAGE),
-        )
-    }
-)
 
 
 class ScriptedToolCall(BaseModel):
@@ -164,6 +90,32 @@ class ScriptedUsage(BaseModel):
     web_search_calls: int = 0
     google_maps_calls: int = 0
     file_search_calls: int = 0
+
+
+class WireSpec(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    shape: Shape
+    mount: str
+    usage: frozenset[str]
+    terminals: frozenset[TerminalKind]
+
+
+def _load_wires() -> Mapping[str, WireSpec]:
+    adapter: Final = TypeAdapter(dict[str, WireSpec])
+    loaded: Final = adapter.validate_json((Path(__file__).resolve().with_name("wires.json")).read_bytes())
+    known_usage_fields: Final = frozenset(ScriptedUsage.model_fields) - _BASE_USAGE_FIELDS
+    unknown: Final = {
+        wire: sorted(spec.usage - known_usage_fields)
+        for wire, spec in loaded.items()
+        if spec.usage - known_usage_fields
+    }
+    if unknown:
+        raise ValueError(f"wires.json has unknown usage fields: {unknown}")
+    return MappingProxyType(loaded)
+
+
+WIRES: Final[Mapping[str, WireSpec]] = _load_wires()
 
 
 class ScriptedOutput(BaseModel):
@@ -205,9 +157,14 @@ class Scenario(BaseModel):
 
     @model_validator(mode="after")
     def _check_terminal_supported(self) -> Scenario:
+        spec: Final = WIRES.get(self.wire)
+        if spec is None:
+            raise ValueError(
+                f"unknown wire {self.wire}; known wires: {', '.join(sorted(WIRES))}"
+            )
         if (
             self.output.terminal != "completed"
-            and self.output.terminal not in _TERMINAL_CAPS.get(self.wire, frozenset())
+            and self.output.terminal not in spec.terminals
         ):
             raise ValueError(
                 f"wire {self.wire} cannot emit terminal={self.output.terminal}"
@@ -216,7 +173,7 @@ class Scenario(BaseModel):
             field
             for field in self.usage.model_fields_set
             if getattr(self.usage, field)
-            and field not in (_USAGE_CAPS.get(self.wire, frozenset()) | _BASE_USAGE_FIELDS)
+            and field not in (spec.usage | _BASE_USAGE_FIELDS)
         )
         if unsupported:
             raise ValueError(
@@ -230,7 +187,7 @@ class Scenario(BaseModel):
 
     @property
     def mount(self) -> str:
-        return WIRE_MOUNTS[self.wire]
+        return WIRES[self.wire].mount
 
 
 class ScenarioRegistered(BaseModel):
@@ -1266,33 +1223,32 @@ def _render(
         return RenderedResponse(
             200, "application/json", _json_bytes(_responses_body(scenario, requested_model))
         )
-    if scenario.wire == "bedrock_converse":
-        if stream:
-            return RenderedResponse(
-                200, "application/vnd.amazon.eventstream", _bedrock_eventstream(scenario)
-            )
-        return RenderedResponse(200, "application/json", _json_bytes(_bedrock_body(scenario)))
-    if scenario.wire == "vertex_generate":
-        if stream:
-            return RenderedResponse(200, "text/event-stream", _gemini_sse(scenario, requested_model))
-        return RenderedResponse(200, "application/json", _json_bytes(_gemini_body(scenario, requested_model)))
-    if scenario.wire == "anthropic_messages":
-        if stream:
-            return RenderedResponse(200, "text/event-stream", _anthropic_sse(scenario, requested_model))
-        return RenderedResponse(200, "application/json", _json_bytes(_anthropic_body(scenario, requested_model)))
-    if scenario.wire == "gemini_generate":
-        if stream:
-            return RenderedResponse(200, "text/event-stream", _gemini_sse(scenario, requested_model))
-        return RenderedResponse(200, "application/json", _json_bytes(_gemini_body(scenario, requested_model)))
-    if scenario.wire == "openai_responses":
-        if stream:
-            return RenderedResponse(200, "text/event-stream", _responses_sse(scenario, requested_model))
-        return RenderedResponse(200, "application/json", _json_bytes(_responses_body(scenario, requested_model)))
-    # openai_chat, together_chat, fireworks_chat and azure_chat share the
-    # OpenAI chat shape.
-    if stream:
-        return RenderedResponse(200, "text/event-stream", _openai_chat_sse(scenario, requested_model))
-    return RenderedResponse(200, "application/json", _json_bytes(_openai_chat_body(scenario, requested_model)))
+    shape: Final = WIRES[scenario.wire].shape
+    match shape:
+        case "bedrock_converse":
+            if stream:
+                return RenderedResponse(
+                    200, "application/vnd.amazon.eventstream", _bedrock_eventstream(scenario)
+                )
+            return RenderedResponse(200, "application/json", _json_bytes(_bedrock_body(scenario)))
+        case "gemini_generate":
+            if stream:
+                return RenderedResponse(200, "text/event-stream", _gemini_sse(scenario, requested_model))
+            return RenderedResponse(200, "application/json", _json_bytes(_gemini_body(scenario, requested_model)))
+        case "anthropic_messages":
+            if stream:
+                return RenderedResponse(200, "text/event-stream", _anthropic_sse(scenario, requested_model))
+            return RenderedResponse(200, "application/json", _json_bytes(_anthropic_body(scenario, requested_model)))
+        case "openai_responses":
+            if stream:
+                return RenderedResponse(200, "text/event-stream", _responses_sse(scenario, requested_model))
+            return RenderedResponse(200, "application/json", _json_bytes(_responses_body(scenario, requested_model)))
+        case "openai_chat":
+            if stream:
+                return RenderedResponse(200, "text/event-stream", _openai_chat_sse(scenario, requested_model))
+            return RenderedResponse(200, "application/json", _json_bytes(_openai_chat_body(scenario, requested_model)))
+        case _:
+            assert_never(shape)
 
 
 # ---------- registry + request routing ----------
