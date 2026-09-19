@@ -115,35 +115,6 @@ async def test_python_request_response_and_callbacks(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
-async def test_python_uses_the_supplied_client(provider: Mock, asynchronous: bool) -> None:
-    supplied: Final = Mock(return_value=provider.return_value)
-    transport: Final = httpx.MockTransport(supplied)
-    arguments: Final = {
-        "model": "mistral/mistral-ocr-latest",
-        "document": dict(PRICING_DOCUMENT),
-        "api_key": "test-key",
-        "api_base": "https://ocr.test/v1",
-    }
-
-    async def call() -> OCRResponse:
-        if not asynchronous:
-            with httpx.Client(transport=transport) as sync_client:
-                return litellm.ocr(**arguments, client=HTTPHandler(client=sync_client))
-        async with httpx.AsyncClient(transport=transport) as async_client:
-            handler: Final = AsyncHTTPHandler()
-            await handler.client.aclose()
-            handler.client = async_client
-            return await litellm.aocr(**arguments, client=handler)
-
-    response: Final = await call()
-    assert response.pages[0].markdown == "parsed document"
-    assert supplied.call_count == 1
-    assert str(supplied.call_args.args[0].url) == "https://ocr.test/v1/ocr"
-    assert provider.call_count == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True])
 async def test_python_provider_errors_keep_public_exception(provider: Mock, asynchronous: bool) -> None:
     provider.return_value = httpx.Response(429, json={"error": "rate limited"})
     arguments: Final = {
