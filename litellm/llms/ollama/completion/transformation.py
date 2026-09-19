@@ -322,10 +322,6 @@ class OllamaConfig(BaseConfig):
             reasoning_content = None
             thinking = response_json.get("thinking")
             if isinstance(thinking, str) and thinking:
-                # Ollama /api/generate returns the model's reasoning in a
-                # top-level `thinking` field on thinking models; mirror the
-                # chat transport's remap (ollama/chat/transformation.py) so
-                # reasoning survives and content is not silently emptied.
                 reasoning_content = thinking
                 if isinstance(response_text, str):
                     content = response_text

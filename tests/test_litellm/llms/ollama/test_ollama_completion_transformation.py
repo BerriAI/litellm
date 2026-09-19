@@ -415,10 +415,8 @@ class TestOllamaConfig:
         """Non-streaming /api/generate replies carry the model's reasoning in a
         top-level `thinking` field (mirrors message.thinking on /api/chat); it
         must be surfaced as reasoning_content instead of being dropped."""
-        # Initialize config
         config = OllamaConfig()
 
-        # Create mock response matching the real upstream shape from #41962
         raw_response = MagicMock()
         raw_response.json.return_value = {
             "model": "gpt-oss:120b",
@@ -429,17 +427,14 @@ class TestOllamaConfig:
             "eval_count": 36,
         }
 
-        # Create properly structured model response object
         model_response = ModelResponse(
             id="test_id",
             choices=[{"message": Message(content="")}],
         )
 
-        # Create mock encoding
         mock_encoding = MagicMock()
         mock_encoding.encode.return_value = [1, 2, 3]
 
-        # Transform response
         result = config.transform_response(
             model="gpt-oss:120b",
             raw_response=raw_response,
@@ -452,7 +447,6 @@ class TestOllamaConfig:
             encoding=mock_encoding,
         )
 
-        # Verify reasoning content is surfaced and content is kept
         assert (
             result.choices[0]["message"].reasoning_content
             == 'We need to reply with exactly "OK". No extra punctuation, whitespace? Probably just OK.'
@@ -463,7 +457,6 @@ class TestOllamaConfig:
     def test_transform_response_thinking_field_without_response(self):
         """A thinking-only turn (empty `response`) must not come back as an
         empty assistant message with the reasoning silently dropped."""
-        # Initialize config
         config = OllamaConfig()
 
         raw_response = MagicMock()
