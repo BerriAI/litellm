@@ -19,7 +19,7 @@ from litellm.types.llms.openai import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
-from ..authenticator import Authenticator
+from ..authenticator import Authenticator, get_cached_authenticator, get_chatgpt_auth_file
 from ..common_utils import (
     CHATGPT_API_BASE,
     GetAccessTokenError,
@@ -41,14 +41,19 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.CHATGPT
 
+    def _resolve_authenticator(self, litellm_params: GenericLiteLLMParams | None) -> Authenticator:
+        auth_file: Final = get_chatgpt_auth_file(litellm_params)
+        return get_cached_authenticator(auth_file) if auth_file else self.authenticator
+
     def validate_environment(
         self,
         headers: dict,
         model: str,
         litellm_params: GenericLiteLLMParams | None,
     ) -> dict:
+        authenticator: Final = self._resolve_authenticator(litellm_params)
         try:
-            access_token: Final = self.authenticator.get_access_token()
+            access_token: Final = authenticator.get_access_token()
         except GetAccessTokenError as e:
             raise AuthenticationError(
                 model=model,
@@ -56,7 +61,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 message=str(e),
             )
 
-        account_id: Final = self.authenticator.get_account_id()
+        account_id: Final = authenticator.get_account_id()
         session_id: Final = ensure_chatgpt_session_id(litellm_params)
         default_headers: Final = get_chatgpt_default_headers(access_token, account_id, session_id)
         return {**default_headers, **headers}
