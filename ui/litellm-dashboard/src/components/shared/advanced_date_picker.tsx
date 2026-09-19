@@ -169,36 +169,6 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
     return `${formatDateTime(from)} - ${formatDateTime(to)}`;
   }, []);
 
-  // CRITICAL: Apply the same date adjustment logic as the original component
-  const adjustDateRange = useCallback((newValue: DateRangePickerValue): DateRangePickerValue => {
-    if (!newValue.from) return newValue;
-
-    const adjustedValue = { ...newValue };
-    const adjustedStartTime = new Date(newValue.from);
-    let adjustedEndTime: Date;
-
-    if (newValue.to) {
-      adjustedEndTime = new Date(newValue.to);
-    } else {
-      adjustedEndTime = new Date(newValue.from);
-    }
-
-    const isSameDay = adjustedStartTime.toDateString() === adjustedEndTime.toDateString();
-
-    if (isSameDay) {
-      adjustedStartTime.setHours(0, 0, 0, 0);
-      adjustedEndTime.setHours(23, 59, 59, 999);
-    } else {
-      adjustedStartTime.setHours(0, 0, 0, 0);
-      adjustedEndTime.setHours(23, 59, 59, 999);
-    }
-
-    adjustedValue.from = adjustedStartTime;
-    adjustedValue.to = adjustedEndTime;
-
-    return adjustedValue;
-  }, []);
-
   const handleRelativeTimeSelect = (option: RelativeTimeOption) => {
     const { from, to } = option.getValue();
     const newValue = { from, to };
@@ -241,21 +211,10 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   }, [updateTempValueFromInputs]);
 
   const handleApply = () => {
-    if (tempValue.from && tempValue.to && validation.isValid) {
-      // First call with immediate value for UI responsiveness
-      onValueChange(tempValue);
-
-      // Then do the same background adjustment logic as the original component
-      requestIdleCallback(
-        () => {
-          const adjustedValue = adjustDateRange(tempValue);
-          onValueChange(adjustedValue);
-        },
-        { timeout: 100 },
-      );
-
-      setIsOpen(false);
-    }
+    const { from, to } = tempValue;
+    if (!from || !to || !validation.isValid) return;
+    onValueChange({ ...tempValue, from: moment(from).startOf("day").toDate(), to: moment(to).endOf("day").toDate() });
+    setIsOpen(false);
   };
 
   const handleCancel = () => {

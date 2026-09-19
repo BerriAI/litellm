@@ -20,6 +20,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import PaginationStatusAlerts from "@/components/shared/PaginationStatusAlerts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import React, { type ReactNode, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import UserDropdown from "@/components/common_components/UserDropdown";
@@ -38,10 +39,11 @@ import {
 } from "@/components/networking";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { usePaginatedDailyActivity } from "../../hooks/usePaginatedDailyActivity";
+import { type EntityUsageTab, useUsageUrlState } from "../../hooks/useUsageUrlState";
 import { EntityMetricWithMetadata } from "@/components/UsagePage/types";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import EndpointUsage from "../EndpointUsage/EndpointUsage";
-import ModelViewToggle, { ModelViewType } from "../ModelViewToggle";
+import ModelViewToggle from "../ModelViewToggle";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import TopModelView from "./TopModelView";
@@ -123,11 +125,18 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   isOrgAdmin = false,
 }) => {
   const { teams } = useTeams();
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
-  const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
-  const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
-  const [topAgentsLimit, setTopAgentsLimit] = useState<number>(5);
+  const {
+    filter: selectedTags,
+    setFilter: setSelectedTags,
+    modelView: modelViewType,
+    setModelView: setModelViewType,
+    topKeys: topKeysLimit,
+    setTopKeys: setTopKeysLimit,
+    topModels: topModelsLimit,
+    setTopModels: setTopModelsLimit,
+    topAgents: topAgentsLimit,
+    setTopAgents: setTopAgentsLimit,
+  } = useUsageUrlState();
   const [showCostBreakdown, setShowCostBreakdown] = useState(false);
 
   const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
@@ -642,7 +651,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     </div>
   );
 
-  const tabs: readonly { key: string; label: string; content: ReactNode }[] = [
+  const tabs: readonly { key: EntityUsageTab; label: string; content: ReactNode }[] = [
     { key: "cost", label: "Cost", content: costPanel },
     {
       key: "models",
@@ -657,7 +666,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       ),
     },
     ...(showAgentBreakdown
-      ? [{ key: "agents", label: "Agent Activity", content: <ActivityMetrics modelMetrics={agentMetrics} /> }]
+      ? [{ key: "agents" as const, label: "Agent Activity", content: <ActivityMetrics modelMetrics={agentMetrics} /> }]
       : []),
     {
       key: "keys",
@@ -672,6 +681,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     },
     { key: "endpoints", label: "Endpoint Activity", content: <EndpointUsage userSpendData={spendData} /> },
   ];
+  const [activeTab, setActiveTab] = useUrlTab(
+    tabs.map(({ key }) => key),
+    "cost",
+  );
 
   const spendFetchState = { coversRange, cancelled, failed, apiKeyTruncation };
 
@@ -708,7 +721,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         teams={teams || []}
         exportBlockedReason={getExportBlockedReason(spendFetchState)}
       />
-      <Tabs defaultValue={tabs[0].key}>
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="mt-1">
           {tabs.map(({ key, label }) => (
             <TabsTrigger key={key} value={key} className="flex-none px-3">

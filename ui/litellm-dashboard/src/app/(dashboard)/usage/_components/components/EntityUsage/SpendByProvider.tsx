@@ -7,7 +7,8 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import React, { useState } from "react";
+import { parseAsBoolean, useQueryStates } from "nuqs";
+import React from "react";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ChartLoader } from "@/components/shared/chart_loader";
 
@@ -63,9 +64,14 @@ const columns: ColumnDef<ProviderSpendData>[] = [
   },
 ];
 
+const PROVIDER_TOGGLE_PARSERS = {
+  zero_spend: parseAsBoolean.withDefault(false),
+  unknown: parseAsBoolean.withDefault(false),
+};
+
 const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChanging, providerSpend }) => {
-  const [includeZeroSpend, setIncludeZeroSpend] = useState(false);
-  const [includeUnknown, setIncludeUnknown] = useState(false);
+  const [{ zero_spend: includeZeroSpend, unknown: includeUnknown }, setToggles] =
+    useQueryStates(PROVIDER_TOGGLE_PARSERS);
 
   const filteredProviderSpend = providerSpend.filter((provider) => {
     const isUnknown = provider.provider?.toLowerCase() === "unknown";
@@ -91,7 +97,10 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
         <CardAction className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <label className="text-sm text-foreground">Show Zero Spend</label>
-            <Switch checked={includeZeroSpend} onCheckedChange={setIncludeZeroSpend} />
+            <Switch
+              checked={includeZeroSpend}
+              onCheckedChange={(checked: boolean) => void setToggles({ zero_spend: checked })}
+            />
           </div>
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1">
@@ -101,7 +110,10 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
                 <TooltipContent>Requests that failed to route to a provider</TooltipContent>
               </Tooltip>
             </div>
-            <Switch checked={includeUnknown} onCheckedChange={setIncludeUnknown} />
+            <Switch
+              checked={includeUnknown}
+              onCheckedChange={(checked: boolean) => void setToggles({ unknown: checked })}
+            />
           </div>
         </CardAction>
       </CardHeader>

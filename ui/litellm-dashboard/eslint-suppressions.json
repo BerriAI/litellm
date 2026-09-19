@@ -1136,11 +1136,8 @@
     "max-lines": {
       "count": 1
     },
-    "react-hooks/purity": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
-      "count": 3
+      "count": 2
     }
   },
   "src/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity.ts": {

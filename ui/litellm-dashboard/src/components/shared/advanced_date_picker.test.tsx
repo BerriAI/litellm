@@ -1,22 +1,8 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
+import moment from "moment";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import AdvancedDatePicker from "./advanced_date_picker";
-
-// Polyfill requestIdleCallback for test environment
-beforeAll(() => {
-  if (typeof window !== "undefined" && !window.requestIdleCallback) {
-    window.requestIdleCallback = (callback: any) => {
-      const start = Date.now();
-      return setTimeout(() => {
-        callback({
-          didTimeout: false,
-          timeRemaining: () => Math.max(0, 50 - (Date.now() - start)),
-        });
-      }, 1) as any;
-    };
-  }
-});
 
 describe("AdvancedDatePicker", () => {
   const mockOnValueChange = vi.fn();
@@ -153,16 +139,45 @@ describe("AdvancedDatePicker", () => {
     expect(screen.queryByText("Today")).not.toBeInTheDocument();
   });
 
-  it("should call onValueChange when Apply is clicked", async () => {
-    const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+  it("calls onValueChange exactly once, with the range snapped to whole days, when Apply is clicked", () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+      openDropdown(container);
+      fireEvent.change(screen.getByDisplayValue("2025-01-01"), { target: { value: "2025-01-10" } });
 
+      fireEvent.click(screen.getByText("Apply"));
+
+      expect(mockOnValueChange).toHaveBeenCalledTimes(1);
+      vi.runAllTimers();
+      expect(mockOnValueChange).toHaveBeenCalledTimes(1);
+      expect(mockOnValueChange).toHaveBeenCalledWith({
+        from: new Date(2025, 0, 10),
+        to: moment(defaultValue.to).endOf("day").toDate(),
+      });
+      expect(screen.queryByText("Today")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("snaps a parent-supplied range with times to whole days on Apply", () => {
+    const { container, rerender } = render(
+      <AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />,
+    );
+    const sameDaysWithTimes = {
+      from: moment(defaultValue.from).startOf("day").add(9, "hours").toDate(),
+      to: moment(defaultValue.to).startOf("day").add(17, "hours").toDate(),
+    };
+    rerender(<AdvancedDatePicker value={sameDaysWithTimes} onValueChange={mockOnValueChange} />);
     openDropdown(container);
 
-    const applyButton = screen.getByText("Apply");
-    fireEvent.click(applyButton);
+    fireEvent.click(screen.getByText("Apply"));
 
-    await waitFor(() => {
-      expect(mockOnValueChange).toHaveBeenCalled();
+    expect(mockOnValueChange).toHaveBeenCalledTimes(1);
+    expect(mockOnValueChange).toHaveBeenCalledWith({
+      from: moment(defaultValue.from).startOf("day").toDate(),
+      to: moment(defaultValue.to).endOf("day").toDate(),
     });
   });
 
