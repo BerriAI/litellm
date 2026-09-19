@@ -349,7 +349,9 @@ class WebSearchInterceptionLogger(CustomLogger):
                     "input": {"query": query},
                 }
             )
-            content.append(WebSearchTransformation.build_web_search_outcome_block(tool_use_id=tool_use_id, outcome=outcome))
+            content.append(
+                WebSearchTransformation.build_web_search_outcome_block(tool_use_id=tool_use_id, outcome=outcome)
+            )
         # Keep the text block so non-native short-circuit callers (Claude Code,
         # github_copilot, etc.) see the same payload they always have.
         content.append({"type": "text", "text": search_result_text})
@@ -953,7 +955,9 @@ class WebSearchInterceptionLogger(CustomLogger):
             isinstance(outcome, SearchFailed) for outcome in search_outcomes
         )
         if every_search_failed:
-            return AgenticLoopPlan(run_agentic_loop=False, terminate=True, stop_reason="web_search_failed", metadata=metadata)
+            return AgenticLoopPlan(
+                run_agentic_loop=False, terminate=True, stop_reason="web_search_failed", metadata=metadata
+            )
         return AgenticLoopPlan(run_agentic_loop=True, request_patch=request_patch, metadata=metadata)
 
     async def async_post_agentic_loop_response_hook(
@@ -1424,7 +1428,9 @@ class WebSearchInterceptionLogger(CustomLogger):
     async def _short_circuit_search_outcome(self, query: str, kwargs: Mapping[str, object] | None) -> SearchOutcome:
         try:
             result: Final = (
-                await self._execute_search(query) if kwargs is None else await self._execute_search(query, kwargs=kwargs)
+                await self._execute_search(query)
+                if kwargs is None
+                else await self._execute_search(query, kwargs=kwargs)
             )
         except Exception as e:
             return WebSearchTransformation.search_outcome(e)
