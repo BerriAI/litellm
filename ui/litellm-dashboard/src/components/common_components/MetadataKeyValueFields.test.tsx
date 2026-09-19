@@ -307,6 +307,28 @@ describe("MetadataKeyValueFields with a declared schema", () => {
     expect(screen.getByTestId("metadata-schema-label")).toBeInTheDocument();
   });
 
+  it("should keep duplicate keys in a free-form row", async () => {
+    const user = userEvent.setup();
+    const onFinish = vi.fn();
+    render(<Harness onFinish={onFinish} schemaFields={[{ key: "cost_center", label: "Cost Center" }]} />);
+
+    expect(await screen.findByTestId("metadata-schema-label")).toHaveTextContent("Cost Center");
+    await user.click(screen.getByRole("button", { name: /add key-value pair/i }));
+    fireEvent.change(screen.getByPlaceholderText("Key"), { target: { value: "cost_center" } });
+
+    expect(screen.getAllByPlaceholderText("Key")).toHaveLength(1);
+    expect(screen.getByPlaceholderText("Key")).toHaveValue("cost_center");
+    expect(screen.getAllByLabelText("Remove key-value pair")).toHaveLength(1);
+    expect(screen.getAllByTestId("metadata-schema-label")).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Duplicate key")).toBeInTheDocument();
+    });
+    expect(onFinish).not.toHaveBeenCalled();
+  });
+
   it("should show a skeleton instead of the editor while the schema is loading", () => {
     render(<Harness onFinish={vi.fn()} schemaLoading />);
 
