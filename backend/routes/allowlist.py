@@ -52,6 +52,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/coordination_redis/",
     "/cost_tracking",
     "/cost/",
+    "/fairness/",
     "/credentials",
     "/credential",
     "/provider/budgets",
