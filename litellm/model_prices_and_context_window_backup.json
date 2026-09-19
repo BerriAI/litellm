@@ -10820,6 +10820,25 @@
             "/v1/images/generations"
         ]
     },
+    "azure_ai/FLUX.2-flex": {
+        "input_cost_per_pixel": 5e-08,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "image_generation",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/black-forest-labs/",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
     "azure_ai/FW-DeepSeek-V3.2": {
         "deprecation_date": "2027-07-01",
         "cache_read_input_token_cost": 3.1e-07,
@@ -20832,6 +20851,96 @@
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
+        ]
+    },
+    "deepgram/streaming/nova-3": {
+        "input_cost_per_second": 8e-05,
+        "litellm_provider": "deepgram",
+        "metadata": {
+            "calculation": "$0.0048/60 seconds = $0.00008000 per second",
+            "note": "Nova-3 monolingual streaming, pay as you go",
+            "original_pricing_per_minute": 0.0048
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://deepgram.com/pricing",
+        "supported_endpoints": [
+            "/v1/listen"
+        ]
+    },
+    "deepgram/streaming/nova-3-multilingual": {
+        "input_cost_per_second": 9.667e-05,
+        "litellm_provider": "deepgram",
+        "metadata": {
+            "calculation": "$0.0058/60 seconds = $0.00009667 per second",
+            "note": "Nova-3 multilingual (language=multi) streaming, pay as you go",
+            "original_pricing_per_minute": 0.0058
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://deepgram.com/pricing",
+        "supported_endpoints": [
+            "/v1/listen"
+        ]
+    },
+    "deepgram/streaming/redact": {
+        "input_cost_per_second": 3.333e-05,
+        "litellm_provider": "deepgram",
+        "metadata": {
+            "calculation": "$0.0020/60 seconds = $0.00003333 per second",
+            "note": "Redaction add-on (redact query param), streaming, pay as you go",
+            "original_pricing_per_minute": 0.002
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://deepgram.com/pricing",
+        "supported_endpoints": [
+            "/v1/listen"
+        ]
+    },
+    "deepgram/streaming/keyterm": {
+        "input_cost_per_second": 2.167e-05,
+        "litellm_provider": "deepgram",
+        "metadata": {
+            "calculation": "$0.0013/60 seconds = $0.00002167 per second",
+            "note": "Keyterm Prompting add-on (keyterm query param), streaming, pay as you go",
+            "original_pricing_per_minute": 0.0013
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://deepgram.com/pricing",
+        "supported_endpoints": [
+            "/v1/listen"
+        ]
+    },
+    "deepgram/streaming/detect_entities": {
+        "input_cost_per_second": 2.833e-05,
+        "litellm_provider": "deepgram",
+        "metadata": {
+            "calculation": "$0.0017/60 seconds = $0.00002833 per second",
+            "note": "Entity Detection add-on (detect_entities query param), streaming, pay as you go",
+            "original_pricing_per_minute": 0.0017
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://deepgram.com/pricing",
+        "supported_endpoints": [
+            "/v1/listen"
+        ]
+    },
+    "deepgram/streaming/diarize": {
+        "input_cost_per_second": 3.333e-05,
+        "litellm_provider": "deepgram",
+        "metadata": {
+            "calculation": "$0.0020/60 seconds = $0.00003333 per second",
+            "note": "Speaker Diarization add-on (diarize / diarize_model query params), streaming, pay as you go",
+            "original_pricing_per_minute": 0.002
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://deepgram.com/pricing",
+        "supported_endpoints": [
+            "/v1/listen"
         ]
     },
     "deepgram/whisper": {
@@ -37078,6 +37187,10 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 7.5e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -37159,6 +37272,15 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+        ],
         "source": "https://docs.mistral.ai/models/zai-glm-5-2",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -37176,6 +37298,11 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
         "source": "https://docs.mistral.ai/models/zai-glm-5-3",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -37193,6 +37320,11 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
         "source": "https://docs.mistral.ai/models/zai-glm-5-3",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -37210,6 +37342,11 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
         "source": "https://docs.mistral.ai/models/zai-glm-5-3",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -37227,6 +37364,15 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+        ],
         "source": "https://docs.mistral.ai/models/zai-glm-5-2",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -37522,6 +37668,10 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 7.5e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -37582,6 +37732,10 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 7.5e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -37599,6 +37753,10 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 7.5e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -37632,6 +37790,10 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 7.5e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -37663,6 +37825,10 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://docs.mistral.ai/models/model-cards/mistral-small-4-0-26-03",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -50702,7 +50868,7 @@
     "vertex_ai/google/gemma-4-26b-a4b-it-maas": {
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai-openai_models",
-        "max_input_tokens": 256000,
+        "max_input_tokens": 262144,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
@@ -60008,6 +60174,10 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://docs.mistral.ai/models/model-cards/mistral-small-4-0-26-03",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -63333,6 +63503,10 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 7.5e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -63350,6 +63524,10 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 7.5e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -63367,6 +63545,10 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 7.5e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -63384,6 +63566,10 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://docs.mistral.ai/models/model-cards/mistral-small-4-0-26-03",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,

@@ -154,7 +154,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TokenCountResponse,
 )
-from litellm.utils import load_credentials_from_list
+from litellm.utils import cost_map_omits_token_price, load_credentials_from_list
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -262,6 +262,7 @@ from litellm.constants import (
     APSCHEDULER_MISFIRE_GRACE_TIME,
     APSCHEDULER_REPLACE_EXISTING,
     CLI_SSO_SESSION_TTL_SECONDS,
+    DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
@@ -688,6 +689,9 @@ from litellm.proxy.route_priority import hot_routes_first
 from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
+from litellm.proxy.spend_tracking.daily_global_spend_rollup import (
+    run_scheduled_daily_global_spend_reconcile,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     PendingSpendIncrement,
     active_spend_counter_batch,
@@ -10017,6 +10021,12 @@ class ProxyStartupEvent:
 
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
+        cls._initialize_daily_global_spend_reconcile_job(
+            scheduler=scheduler,
+            proxy_logging_obj=proxy_logging_obj,
+            prisma_client=prisma_client,
+        )
+
         ### PTU DAILY ROLLUP ###
         from litellm.proxy.spend_tracking.ptu_feature_flag import (
             is_ptu_cost_attribution_enabled,
@@ -10357,6 +10367,39 @@ class ProxyStartupEvent:
                 "Expired UI session key cleanup disabled (set "
                 "LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED=true to enable)"
             )
+
+    @classmethod
+    def _initialize_daily_global_spend_reconcile_job(
+        cls,
+        scheduler: AsyncIOScheduler,
+        proxy_logging_obj: ProxyLogging,
+        prisma_client: PrismaClient,
+    ) -> None:
+        async def alert(message: str) -> None:
+            await proxy_logging_obj.alerting_handler(
+                message=message,
+                level="High",
+                alert_type=AlertType.failed_tracking_spend,
+            )
+
+        async def reconcile() -> None:
+            await run_scheduled_daily_global_spend_reconcile(
+                prisma_client,
+                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
+                alert=alert,
+            )
+
+        scheduler.add_job(
+            reconcile,
+            "cron",
+            hour=0,
+            minute=30,
+            timezone="UTC",
+            id=DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID,
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
+        )
 
     @classmethod
     async def _initialize_slack_alerting_jobs(
@@ -13632,9 +13675,10 @@ def _enrich_model_info_with_litellm_data(
     discovered_model_info: Final = (
         llm_router.get_discovered_model_info(model_info.get("id")) if llm_router is not None else MappingProxyType({})
     )
+    unpriced: Final = cost_map_omits_token_price(model_info.get("id"), litellm_model_info.get("key"))
     for k, v in MappingProxyType({**litellm_model_info, **discovered_model_info}).items():
         if k not in model_info or (model_info[k] is None and k in discovered_model_info):
-            model_info[k] = v
+            model_info[k] = None if unpriced and k in ("input_cost_per_token", "output_cost_per_token") else v
     model["model_info"] = model_info
     # don't return the api key / vertex credentials
     # don't return the llm credentials
@@ -15070,45 +15114,7 @@ def _translate_model_name_for_response(model: dict) -> dict:
 
 
 def _get_proxy_model_info(model: dict) -> dict:
-    # provided model_info in config.yaml
-    model_info: Final = model.get("model_info", {})
-
-    # read litellm model_prices_and_context_window.json to get the following:
-    # input_cost_per_token, output_cost_per_token, max_tokens
-    litellm_model_info = get_litellm_model_info(model=model)
-
-    # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
-    if litellm_model_info == {}:
-        # use litellm_param model_name to get model_info
-        litellm_params = model.get("litellm_params", {})
-        litellm_model = litellm_params.get("model", None)
-        try:
-            litellm_model_info = litellm.get_model_info(model=litellm_model)
-        except Exception:
-            litellm_model_info = {}
-    # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
-    if litellm_model_info == {}:
-        # use litellm_param model_name to get model_info
-        litellm_params = model.get("litellm_params", {})
-        litellm_model = litellm_params.get("model", None)
-        split_model: Final = litellm_model.split("/")
-        if len(split_model) > 0:
-            litellm_model = split_model[-1]
-        try:
-            litellm_model_info = litellm.get_model_info(model=litellm_model, custom_llm_provider=split_model[0])
-        except Exception:
-            litellm_model_info = {}
-    discovered_model_info: Final = (
-        llm_router.get_discovered_model_info(model_info.get("id")) if llm_router is not None else MappingProxyType({})
-    )
-    for k, v in MappingProxyType({**litellm_model_info, **discovered_model_info}).items():
-        if k not in model_info or (model_info[k] is None and k in discovered_model_info):
-            model_info[k] = v
-    model["model_info"] = model_info
-    # don't return the llm credentials
-    model = remove_sensitive_info_from_deployment(deployment_dict=model, excluded_keys={"litellm_credential_name"})
-
-    return _translate_model_name_for_response(model)
+    return _translate_model_name_for_response(_enrich_model_info_with_litellm_data(model=model, llm_router=llm_router))
 
 
 def _model_info_json_response(data: Sequence[Mapping[str, object]] | Mapping[str, object]) -> Response:

@@ -54,6 +54,7 @@ if TYPE_CHECKING:
         PresidioGuardrailCallback,
         ResponsesBackendWebSocket,
         ResponsesClientWebSocket,
+        ResponsesWebSocketRequestDefaults,
     )
     from litellm.types.router import LiteLLM_Params
 
@@ -1781,6 +1782,7 @@ class ResponsesWebSocketStreaming:
         quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
         authorized_model: str | None = None,
         custom_llm_provider: str | None = None,
+        request_defaults: ResponsesWebSocketRequestDefaults | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -1799,6 +1801,7 @@ class ResponsesWebSocketStreaming:
         # Model name authorized at connection time; enforced on every
         # response.create frame to prevent deployment-substitution attacks.
         self.authorized_model: str | None = authorized_model
+        self.request_defaults: ResponsesWebSocketRequestDefaults | None = request_defaults
 
     def _should_store_event(self, event_obj: _MutableJsonObject) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
@@ -1994,12 +1997,23 @@ class ResponsesWebSocketStreaming:
             modified = True
         return modified
 
+    def _with_request_defaults(self, msg_obj: dict[str, object]) -> dict[str, object]:
+        if self.request_defaults is None:
+            return msg_obj
+        nested: Final = msg_obj.get("response")
+        if _is_json_object(nested):
+            return {**msg_obj, "response": self.request_defaults.merged_into(nested)}
+        return {**self.request_defaults.merged_into(msg_obj), "type": msg_obj["type"]}
+
     async def _mask_response_create(self, message: str) -> str:
         """
-        Enforce the authorized model and apply Presidio PII masking to a
-        ``response.create`` message before it is forwarded to the upstream
-        provider.
+        Merge deployment defaults, enforce the authorized model, and apply
+        Presidio PII masking to a ``response.create`` message before it is
+        forwarded to the upstream provider.
 
+        - Fills the deployment's ``litellm_params`` request defaults into the
+          frame the way the HTTP ``/v1/responses`` path does: client-set keys
+          win, ``extra_body`` entries override.
         - Overwrites any ``model`` field with the connection-authorized model
           to prevent deployment-substitution attacks (always applied).
         - Walks the ``input`` and ``instructions`` fields, calls ``check_pii``
@@ -2009,17 +2023,20 @@ class ResponsesWebSocketStreaming:
         Non-``response.create`` messages are returned unchanged.
         """
         try:
-            msg_obj: Final = _load_json_object(message)
+            parsed: Final = _load_json_object(message)
         except (json.JSONDecodeError, TypeError):
             return message
 
-        if msg_obj.get("type") != "response.create":
+        if parsed.get("type") != "response.create":
             return message
+
+        msg_obj: Final = self._with_request_defaults(parsed)
+        defaults_applied: Final = msg_obj != parsed
 
         # Always enforce the authorized model, even when PII masking is off.
         model_modified: Final = self._enforce_authorized_model(msg_obj)
         ids_restored: Final = _restore_wrapped_ids_in_response_create(msg_obj)
-        frame_modified: Final = model_modified or ids_restored
+        frame_modified: Final = model_modified or ids_restored or defaults_applied
 
         if not self.guardrail_callbacks:
             return json.dumps(msg_obj) if frame_modified else message
@@ -2712,8 +2729,7 @@ class ManagedResponsesWebSocketHandler:
         if "litellm_metadata" not in call_kwargs:
             call_kwargs["litellm_metadata"] = {}
         call_kwargs["litellm_metadata"]["proxy_server_request"] = proxy_server_request
-        call_kwargs.setdefault("litellm_params", {})
-        call_kwargs["litellm_params"]["proxy_server_request"] = proxy_server_request
+        call_kwargs["proxy_server_request"] = proxy_server_request
 
     async def _stream_and_forward(self, model: str, call_kwargs: dict[str, Any]) -> _MutableJsonObject | None:
         """
