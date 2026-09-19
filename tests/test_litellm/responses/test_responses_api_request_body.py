@@ -457,7 +457,7 @@ _ORIGINAL_WS_INPUT = [
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("nested", [False, True])
-async def test_aresponses_websocket_forwards_the_routed_input_in_the_first_frame(nested):  # test-quality-ok: the first frame handed to the relay is the only place the routed input is observable before the provider socket
+async def test_aresponses_websocket_forwards_the_routed_input_in_the_first_frame(nested: bool):  # test-quality-ok: the first frame handed to the relay is the only place the routed input is observable before the provider socket
     from unittest.mock import MagicMock
 
     from litellm.responses.main import _aresponses_websocket

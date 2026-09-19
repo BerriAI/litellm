@@ -1069,7 +1069,7 @@ async def test_arealtime_marks_litellm_params_async(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_aresponses_websocket_hands_back_the_provider_failure_without_a_success_log(monkeypatch):
+async def test_aresponses_websocket_hands_back_the_provider_failure_without_a_success_log(monkeypatch: pytest.MonkeyPatch):
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
     from litellm.responses.main import base_llm_http_handler
 

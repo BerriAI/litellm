@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Mapping
@@ -1585,10 +1586,8 @@ async def responses_websocket_endpoint(
             )
     except Exception as e:
         verbose_proxy_logger.exception("Responses WebSocket error")
-        try:
+        with contextlib.suppress(Exception):
             await websocket.send_text(_responses_ws_failure_frame(e))
-        except Exception:
-            pass
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
