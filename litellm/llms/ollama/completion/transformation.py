@@ -320,7 +320,12 @@ class OllamaConfig(BaseConfig):
             response_text = response_json.get("response", "")
             content = None
             reasoning_content = None
-            if response_text is not None and isinstance(response_text, str):
+            thinking = response_json.get("thinking")
+            if isinstance(thinking, str) and thinking:
+                reasoning_content = thinking
+                if isinstance(response_text, str):
+                    content = response_text
+            elif response_text is not None and isinstance(response_text, str):
                 reasoning_content, content = _parse_content_for_reasoning(response_text)
             else:
                 content = response_text
