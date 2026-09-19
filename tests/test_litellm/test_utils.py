@@ -3640,6 +3640,28 @@ class TestGetOptionalParamsTencent:
         assert isinstance(config, TencentAnthropicMessagesConfig)
         assert config.custom_llm_provider == "tencent"
 
+    def test_bedrock_mantle_claude_messages_config_routing(self):
+        import litellm
+        from litellm.llms.bedrock_mantle.messages.transformation import (
+            BedrockMantleAnthropicMessagesConfig,
+        )
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="anthropic.claude-sonnet-5",
+            provider=litellm.LlmProviders.BEDROCK_MANTLE,
+        )
+        assert isinstance(config, BedrockMantleAnthropicMessagesConfig)
+        assert config.custom_llm_provider == "bedrock_mantle"
+
+    def test_bedrock_mantle_openai_models_keep_the_messages_bridge(self):
+        import litellm
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="openai.gpt-5.6-sol",
+            provider=litellm.LlmProviders.BEDROCK_MANTLE,
+        )
+        assert config is None
+
 
 class TestValidateEnvironmentTencent:
     """Tests that validate_environment resolves TENCENT_API_KEY for the tencent provider."""

@@ -501,6 +501,7 @@ def anthropic_messages_handler(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
+    resolved_api_base: Final = dynamic_api_base if dynamic_api_base is not None else api_base
 
     # Store agentic loop params in logging object for agentic hooks
     # This provides original request context needed for follow-up calls
@@ -662,7 +663,7 @@ def anthropic_messages_handler(
         litellm_params=litellm_params,
         logging_obj=litellm_logging_obj,
         api_key=api_key,
-        api_base=api_base,
+        api_base=resolved_api_base,
         stream=stream,
         kwargs=kwargs,
     )
