@@ -4974,8 +4974,8 @@ async def test_add_router_settings_from_db_config_merge_logic():
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
     # Call the method under test
+    proxy_config.router_settings.load_yaml(config_data["router_settings"])
     await proxy_config._add_router_settings_from_db_config(
-        config_data=config_data,
         llm_router=mock_router,
         prisma_client=mock_prisma_client,
     )
@@ -5029,9 +5029,7 @@ async def test_invalid_db_routing_groups_do_not_abort_other_router_settings():
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
-    await ProxyConfig()._add_router_settings_from_db_config(
-        config_data={}, llm_router=router, prisma_client=mock_prisma_client
-    )
+    await ProxyConfig()._add_router_settings_from_db_config(llm_router=router, prisma_client=mock_prisma_client)
 
     assert router.num_retries == 7
     assert router._model_to_group == {"m1": "g1"}
@@ -5053,9 +5051,7 @@ async def test_valid_db_routing_groups_still_replace_router_groups():
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
-    await ProxyConfig()._add_router_settings_from_db_config(
-        config_data={}, llm_router=router, prisma_client=mock_prisma_client
-    )
+    await ProxyConfig()._add_router_settings_from_db_config(llm_router=router, prisma_client=mock_prisma_client)
 
     assert router.num_retries == 7
     assert router._model_to_group == {"m2": "g2"}
@@ -5098,8 +5094,8 @@ async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
+    proxy_config.router_settings.load_yaml(config_data["router_settings"])
     await proxy_config._add_router_settings_from_db_config(
-        config_data=config_data,
         llm_router=mock_router,
         prisma_client=mock_prisma_client,
     )
@@ -5135,8 +5131,8 @@ async def test_add_router_settings_from_db_config_empty_db_list_still_clears_unc
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
+    proxy_config.router_settings.load_yaml(config_data["router_settings"])
     await proxy_config._add_router_settings_from_db_config(
-        config_data=config_data,
         llm_router=mock_router,
         prisma_client=mock_prisma_client,
     )
@@ -5160,8 +5156,8 @@ async def test_add_router_settings_from_db_config_edge_cases():
     mock_router.update_settings = MagicMock()
 
     # Test Case 1: No router provided
+    proxy_config.router_settings.load_yaml({"test": "value"})
     await proxy_config._add_router_settings_from_db_config(
-        config_data={"router_settings": {"test": "value"}},
         llm_router=None,
         prisma_client=MagicMock(),
     )
@@ -5169,8 +5165,8 @@ async def test_add_router_settings_from_db_config_edge_cases():
     mock_router.update_settings.assert_not_called()
 
     # Test Case 2: No prisma client provided
+    proxy_config.router_settings.load_yaml({"test": "value"})
     await proxy_config._add_router_settings_from_db_config(
-        config_data={"router_settings": {"test": "value"}},
         llm_router=mock_router,
         prisma_client=None,
     )
@@ -5183,8 +5179,8 @@ async def test_add_router_settings_from_db_config_edge_cases():
 
     config_data = {"router_settings": {"routing_strategy": "usage-based"}}
 
+    proxy_config.router_settings.load_yaml(config_data["router_settings"])
     await proxy_config._add_router_settings_from_db_config(
-        config_data=config_data,
         llm_router=mock_router,
         prisma_client=mock_prisma_client,
     )
@@ -5198,8 +5194,8 @@ async def test_add_router_settings_from_db_config_edge_cases():
     mock_db_config.param_value = {"db_setting": "db_value"}
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
+    proxy_config.router_settings.load_yaml({})
     await proxy_config._add_router_settings_from_db_config(
-        config_data={},  # No router_settings in config
         llm_router=mock_router,
         prisma_client=mock_prisma_client,
     )
@@ -5211,9 +5207,8 @@ async def test_add_router_settings_from_db_config_edge_cases():
     # Test Case 5: Both config and DB router_settings are None/empty
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
 
-    await proxy_config._add_router_settings_from_db_config(
-        config_data={}, llm_router=mock_router, prisma_client=mock_prisma_client
-    )
+    proxy_config.router_settings.load_yaml({})
+    await proxy_config._add_router_settings_from_db_config(llm_router=mock_router, prisma_client=mock_prisma_client)
 
     # Should not call update_settings when no settings exist
     mock_router.update_settings.assert_not_called()
@@ -5225,8 +5220,8 @@ async def test_add_router_settings_from_db_config_edge_cases():
 
     config_data = {"router_settings": {"config_setting": "config_value"}}
 
+    proxy_config.router_settings.load_yaml(config_data["router_settings"])
     await proxy_config._add_router_settings_from_db_config(
-        config_data=config_data,
         llm_router=mock_router,
         prisma_client=mock_prisma_client,
     )
@@ -5275,8 +5270,8 @@ async def test_add_router_settings_shallow_merge_behavior():
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
 
+    proxy_config.router_settings.load_yaml(config_data["router_settings"])
     await proxy_config._add_router_settings_from_db_config(
-        config_data=config_data,
         llm_router=mock_router,
         prisma_client=mock_prisma_client,
     )
@@ -5296,6 +5291,36 @@ async def test_add_router_settings_shallow_merge_behavior():
 
     assert merged_settings["nested_setting"] == config_data["router_settings"]["nested_setting"]
     assert merged_settings["top_level"] == "config_top"
+
+
+@pytest.mark.asyncio
+async def test_router_settings_reload_keeps_db_values_writable(tmp_path, monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump({"model_list": [], "router_settings": {"disable_cooldowns": True}}))
+    db_row: Final = types.SimpleNamespace(param_value={"num_retries": 0})
+
+    async def read_config_row(_prisma_client, param_name):
+        return db_row if param_name == "router_settings" else None
+
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=db_row)
+    mock_router: Final = MagicMock()
+    monkeypatch.setattr(proxy_server_module, "get_config_param", read_config_row)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", mock_prisma_client)
+    monkeypatch.setattr(proxy_server_module, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server_module, "user_config_file_path", None)
+    proxy_config: Final = ProxyConfig()
+
+    for _ in range(2):
+        await proxy_config.get_config(config_file_path=str(config_path))
+        await proxy_config._add_router_settings_from_db_config(llm_router=mock_router, prisma_client=mock_prisma_client)
+
+    assert mock_router.update_settings.call_args.kwargs == {"disable_cooldowns": True, "num_retries": 0}
+    assert proxy_config.router_settings.source("num_retries") == "db"
+    assert proxy_config.router_settings.rejected_writes({"num_retries": 3}) == ()
+    assert proxy_config.router_settings.rejected_writes({"disable_cooldowns": False}) == ("disable_cooldowns",)
 
 
 @pytest.mark.asyncio
@@ -7585,7 +7610,15 @@ async def test_update_general_settings_db_pass_through_endpoint_cannot_override_
         assert still_open.api_key is None
 
 
+@pytest.fixture
+def app_routes_restored():
+    routes_before: Final = tuple(app.router.routes)
+    yield
+    app.router.routes[:] = routes_before
+
+
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("app_routes_restored")
 async def test_deleting_the_stored_pass_through_row_takes_the_route_out_of_service():
     """A pass-through route the database declared has to stop serving when that row is
     deleted. The proxy's own registry of live pass-through routes is what decides whether
@@ -7607,8 +7640,9 @@ async def test_deleting_the_stored_pass_through_row_takes_the_route_out_of_servi
 
     settings: Final = patch("litellm.proxy.proxy_server.general_settings", {})  # test-quality-ok: the method reads this module global; no injection seam
     yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", None)  # test-quality-ok: module global holding the YAML endpoints; this case has none
+    app_routes: Final = patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.SafeRouteAdder.add_api_route_if_not_exists")  # test-quality-ok: the registry is the observable; a real route would stay on the shared FastAPI app for the rest of the xdist worker
     try:
-        with settings, yaml_endpoints:
+        with settings, yaml_endpoints, app_routes:
             pc = ProxyConfig()
             await pc._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
             assert live_routes(), "the stored endpoint should be serving before the row is deleted"
@@ -7623,6 +7657,7 @@ async def test_deleting_the_stored_pass_through_row_takes_the_route_out_of_servi
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("app_routes_restored")
 async def test_a_stored_pass_through_row_never_disturbs_the_config_declared_routes():
     """``pass_through_endpoints`` is config-owned once the file declares it, so writing and then
     deleting a stored row resolves to the same list both times and the config file's routes keep
@@ -7648,8 +7683,9 @@ async def test_a_stored_pass_through_row_never_disturbs_the_config_declared_rout
 
     settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [config_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
     yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [config_endpoint])  # test-quality-ok: module global holding the YAML endpoints the reload merges in
+    app_routes: Final = patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.SafeRouteAdder.add_api_route_if_not_exists")  # test-quality-ok: the registry is the observable; a real route would stay on the shared FastAPI app for the rest of the xdist worker
     try:
-        with settings, yaml_endpoints:
+        with settings, yaml_endpoints, app_routes:
             await initialize_pass_through_endpoints(pass_through_endpoints=[config_endpoint])
             assert live_paths() == {config_path}
 
@@ -14026,32 +14062,29 @@ async def test_authoritative_floor_spend_keeps_a_reset_marker_written_during_the
 
 
 @pytest.mark.asyncio
-async def test_login_throttle_settings_are_not_hot_applied_from_the_database():
-    """LIT-5285: a stored sign-in limit does not take effect on a live worker.
-
-    _update_general_settings copies an allowlist of keys out of the DB row on every config
-    poll. Adding these to it would let a stored value outrank config.yaml without a restart,
-    so an operator locked out by a bad value could not fix it by editing YAML and restarting.
-    """
+async def test_login_throttle_limits_from_the_config_file_outrank_the_database(monkeypatch):
     import litellm.proxy.proxy_server as ps
     from litellm.proxy.proxy_server import ProxyConfig
 
-    original = dict(ps.general_settings)
-    try:
-        ps.general_settings.clear()
-        await ProxyConfig()._update_general_settings(
-            db_general_settings={
-                "max_failed_login_attempts_per_source": 999,
-                "failed_login_window_seconds": 1,
-                "failed_login_block_seconds": 1,
-            }
-        )
-        assert "max_failed_login_attempts_per_source" not in ps.general_settings
-        assert "failed_login_window_seconds" not in ps.general_settings
-        assert "failed_login_block_seconds" not in ps.general_settings
-    finally:
-        ps.general_settings.clear()
-        ps.general_settings.update(original)
+    monkeypatch.setattr(
+        ps,
+        "general_settings",
+        {
+            "max_failed_login_attempts_per_source": 10,
+            "failed_login_window_seconds": 60,
+            "failed_login_block_seconds": 300,
+        },
+    )
+    await ProxyConfig()._update_general_settings(
+        db_general_settings={
+            "max_failed_login_attempts_per_source": 999,
+            "failed_login_window_seconds": 1,
+            "failed_login_block_seconds": 1,
+        }
+    )
+    assert ps.general_settings.get("max_failed_login_attempts_per_source") == 10
+    assert ps.general_settings.get("failed_login_window_seconds") == 60
+    assert ps.general_settings.get("failed_login_block_seconds") == 300
 
 
 @pytest.mark.asyncio
@@ -14279,6 +14312,29 @@ async def test_update_general_settings_keeps_yaml_openai_websocket_passthrough()
         import litellm.proxy.proxy_server as ps
 
         assert ps.general_settings["enable_openai_websocket_passthrough"] is False
+
+
+def test_settings_store_exposes_dashboard_saved_mcp_client_allowlist_to_the_mcp_gateway() -> None:
+    from litellm.proxy._experimental.mcp_server.client_allowlist import MCPClientAllowlist, load_mcp_client_allowlist
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    settings: Final = ProxyConfig().settings
+    settings.load_yaml({"litellm_jwtauth": {"mcp_client_id_jwt_field": "azp"}})
+    assert load_mcp_client_allowlist(settings) is None
+
+    settings.apply_db_row(
+        "general_settings",
+        {
+            "mcp_allowed_clients": [{"alias": "Antigravity CLI", "value": "antigravity-cli"}],
+            "mcp_client_id_header": "X-MCP-Client",
+        },
+    )
+    assert load_mcp_client_allowlist(settings) == MCPClientAllowlist(
+        aliases_by_value={"antigravity-cli": "Antigravity CLI"}, jwt_field="azp", header="x-mcp-client"
+    )
+
+    settings.apply_db_row("general_settings", {"mcp_client_id_header": "X-MCP-Client"})
+    assert load_mcp_client_allowlist(settings) is None
 
 
 async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_count(monkeypatch):

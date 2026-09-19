@@ -34,6 +34,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.mcp import (
+    MCPAllowedClient,
     MCPAuth,
     MCPAuthType,
     MCPCredentials,
@@ -71,6 +72,7 @@ from litellm.types.utils import (
     StandardLoggingVectorStoreRequest,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
+    TranscriptionResponse,
 )
 from litellm.types.videos.main import VideoObject
 
@@ -469,6 +471,7 @@ class LiteLLMRoutes(enum.Enum):
     mapped_pass_through_routes = [
         "/bedrock",
         "/comprehendmedical",
+        "/azure_speech",
         "/transcribe",
         "/vertex-ai",
         "/vertex_ai",
@@ -490,6 +493,7 @@ class LiteLLMRoutes(enum.Enum):
         "/gigachat",
         "/watsonx",
         "/nvidia_nim",
+        "/deepgram",
     ]
 
     #########################################################
@@ -2899,6 +2903,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).",
     )
+    mcp_allowed_clients: list[MCPAllowedClient] | None = Field(
+        None,
+        description="MCP client applications admitted by the gateway, each an {alias, value} pair where alias is the name shown in the dashboard and logs and value is the identity that must match exactly. When set, every MCP request must carry a client identity equal to one of the values: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.",
+    )
+    mcp_client_id_header: str | None = Field(
+        None,
+        description="Request header whose value names the calling MCP client application (for example 'x-mcp-client') for callers that did not authenticate with a JWT, used only while mcp_allowed_clients is set. The client picks this value itself, so it is a policy control rather than a security boundary; prefer litellm_jwtauth.mcp_client_id_jwt_field where callers use JWTs.",
+    )
     mcp_trusted_proxy_ranges: list[str] | None = Field(
         None,
         description="CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For and X-Forwarded-* origin headers are only trusted from these IPs.",
@@ -4771,6 +4783,7 @@ PassThroughEndpointLoggingResultValues = (
     | VideoObject
     | StandardPassThroughResponseObject
     | ResponsesAPIResponse
+    | TranscriptionResponse
 )
 
 
@@ -5114,6 +5127,15 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "then agent_name, and the request is rejected when it matches neither."
         ),
     )
+    mcp_client_id_jwt_field: str | None = Field(
+        default=None,
+        description=(
+            "The field in the JWT token that identifies the MCP client application (harness) making the request, "
+            "e.g. 'azp' or 'client_id'. Supports dot notation. Only consulted while general_settings.mcp_allowed_clients "
+            "is set: the claim value must be listed there or the MCP request is rejected with 403. Distinct from "
+            "agent_id_jwt_field, which identifies an AI agent rather than the client software."
+        ),
+    )
     public_key_ttl: float = 600
     public_key_stale_ttl: float = Field(
         default=DEFAULT_JWKS_STALE_TTL,
@@ -5399,6 +5421,7 @@ class DBSpendUpdateTransactions(TypedDict):
     team_member_list_transactions: dict[str, float] | None
     org_list_transactions: dict[str, float] | None
     org_member_list_transactions: ReadOnly[dict[str, float] | None]
+    project_list_transactions: ReadOnly[dict[str, float] | None]
     tag_list_transactions: dict[str, float] | None
     agent_list_transactions: dict[str, float] | None
     model_access_group_list_transactions: ReadOnly[dict[str, float] | None]

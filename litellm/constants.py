@@ -158,6 +158,8 @@ DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL: Final = str(
 )
 DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD = float(os.getenv("DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD", 0.75))
 
+DEFAULT_OPENAI_MODERATIONS_MODEL: Final = "omni-moderation-latest"
+
 # MCP OAuth2 Client Credentials Defaults
 MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS: Final = int(os.getenv("MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS", "60"))
 MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE: Final = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE", "200"))
@@ -319,6 +321,9 @@ REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = float(
 
 # RFC 6455 caps the close frame payload at 125 bytes, 2 of which carry the status code
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
+
+DEEPGRAM_DEFAULT_API_BASE: Final = "https://api.deepgram.com/v1"
+DEEPGRAM_LISTEN_DEFAULT_MODEL: Final = "nova-3"
 
 BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_session_update"
 BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY: Final = "litellm.bedrock_realtime.session_committed"
@@ -1576,6 +1581,21 @@ ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS: Final = {
 # Works for all LLM pass-through endpoints (Vertex AI, Anthropic, Bedrock, etc.)
 PASS_THROUGH_HEADER_PREFIX: Final = "x-pass-"
 
+AZURE_SPEECH_CUSTOM_LLM_PROVIDER: Final = "azure_speech"
+AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX: Final = "/azure_speech"
+AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX: Final = "/speech/"
+AZURE_SPEECH_BATCH_PATH_PREFIX: Final = "/speechtotext/"
+AZURE_SPEECH_FAST_TRANSCRIPTION_PATH: Final = "/speechtotext/transcriptions:transcribe"
+AZURE_SPEECH_STT_DOMAIN: Final = "stt.speech.microsoft.com"
+AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN: Final = "api.cognitive.microsoft.com"
+AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER: Final = "Ocp-Apim-Subscription-Key"
+AZURE_SPEECH_SHORT_AUDIO_MODEL: Final = "short-audio"
+AZURE_SPEECH_BATCH_MODEL: Final = "batch-transcription"
+AZURE_SPEECH_FAST_TRANSCRIPTION_MODEL: Final = "fast-transcription"
+AZURE_SPEECH_PRICING_MODEL: Final = "azure/speech/azure-stt"
+AZURE_SPEECH_TICKS_PER_SECOND: Final = 10_000_000
+AZURE_SPEECH_MILLISECONDS_PER_SECOND: Final = 1_000
+
 BASE_MCP_ROUTE: Final = "/mcp"
 
 TRANSCRIBE_JOB_POLLING_INTERVAL_SECONDS: Final = 10.0
@@ -2064,6 +2084,9 @@ PTU_ROLLUP_MAX_BACKFILL_DAYS: Final[int] = 90
 # Deployments named in the lapsed-window alert before it is truncated, so a fleet-wide
 # expiry cannot produce an alert too large for the channel delivering it.
 PTU_LAPSED_ALERT_LIMIT: Final[int] = 10
+DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID: Final[str] = "daily_global_spend_reconcile_job"
+DAILY_GLOBAL_SPEND_RECONCILE_LOCK_TTL_SECONDS: Final[int] = 3600
+DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM: Final[str] = "daily_global_spend_reconciled_through"
 # Slack allowed when deciding a sentinel row is stale. The row's updated_at and the
 # run's cutoff are stamped by different hosts, so clock skew between them must not let
 # one run delete a charge another just wrote. A stale row is hours old and a concurrent

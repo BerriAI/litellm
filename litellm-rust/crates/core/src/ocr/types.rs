@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use bytes::Bytes;
-use litellm_auth::{InputSource, TokenProviderHandle};
+use litellm_auth::{InputSource, SecretValue, TokenProviderHandle};
 use litellm_core_utils::call_arguments::CallArguments;
 use litellm_llms::base_llm::ocr::{
     error::Error,
@@ -56,7 +56,7 @@ pub struct OcrFileContent {
 /// credentials, and per-field provenance in `input_sources`.
 #[derive(Clone, Debug, Default)]
 pub struct OcrConnectionInputs {
-    pub api_key: Option<String>,
+    pub api_key: Option<SecretValue>,
     pub api_base: Option<String>,
     pub extra_headers: Map<String, Value>,
     pub timeout: Option<Duration>,
@@ -238,6 +238,16 @@ mod tests {
     }
 
     #[test]
+    fn connection_inputs_debug_hides_the_api_key() {
+        let inputs = OcrConnectionInputs {
+            api_key: Some(SecretValue::new("caller-api-key")),
+            ..OcrConnectionInputs::default()
+        };
+
+        assert!(!format!("{inputs:?}").contains("caller-api-key"));
+    }
+
+    #[test]
     fn from_inputs_applies_connection_overrides_with_field_sources() {
         let request = LiteLLMOcrRequest::from_inputs(
             "mistral/model".into(),
@@ -245,7 +255,7 @@ mod tests {
             None,
             Default::default(),
             OcrConnectionInputs {
-                api_key: Some(" key ".into()),
+                api_key: Some(SecretValue::new(" key ")),
                 api_base: Some("".into()),
                 extra_headers: json!({"x-a": "1"}).as_object().unwrap().clone(),
                 timeout: Some(Duration::from_secs(7)),
@@ -259,7 +269,7 @@ mod tests {
         .unwrap();
 
         let api_key = request.credentials.api_key.as_ref().unwrap();
-        assert_eq!(api_key.clone().into_value(), "key");
+        assert_eq!(api_key.value().expose(), "key");
         assert_eq!(api_key.source(), InputSource::Request);
         assert!(request.credentials.api_base.is_none());
         assert_eq!(

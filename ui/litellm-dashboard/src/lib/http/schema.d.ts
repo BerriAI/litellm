@@ -1612,6 +1612,82 @@ export interface paths {
         patch: operations["azure_proxy_route_azure_ai__endpoint__patch"];
         trace?: never;
     };
+    "/azure_speech/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Azure Speech Proxy Route
+         * @description Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.
+         *     `POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`
+         *     with the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.
+         *
+         *     The body is forwarded byte for byte and the proxy injects its own
+         *     `Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key
+         *     and is never forwarded.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
+         */
+        get: operations["azure_speech_proxy_route_azure_speech__endpoint__get"];
+        /**
+         * Azure Speech Proxy Route
+         * @description Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.
+         *     `POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`
+         *     with the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.
+         *
+         *     The body is forwarded byte for byte and the proxy injects its own
+         *     `Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key
+         *     and is never forwarded.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
+         */
+        put: operations["azure_speech_proxy_route_azure_speech__endpoint__put"];
+        /**
+         * Azure Speech Proxy Route
+         * @description Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.
+         *     `POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`
+         *     with the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.
+         *
+         *     The body is forwarded byte for byte and the proxy injects its own
+         *     `Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key
+         *     and is never forwarded.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
+         */
+        post: operations["azure_speech_proxy_route_azure_speech__endpoint__post"];
+        /**
+         * Azure Speech Proxy Route
+         * @description Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.
+         *     `POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`
+         *     with the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.
+         *
+         *     The body is forwarded byte for byte and the proxy injects its own
+         *     `Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key
+         *     and is never forwarded.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
+         */
+        delete: operations["azure_speech_proxy_route_azure_speech__endpoint__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Azure Speech Proxy Route
+         * @description Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.
+         *     `POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`
+         *     with the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.
+         *
+         *     The body is forwarded byte for byte and the proxy injects its own
+         *     `Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key
+         *     and is never forwarded.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
+         */
+        patch: operations["azure_speech_proxy_route_azure_speech__endpoint__patch"];
+        trace?: never;
+    };
     "/batches": {
         parameters: {
             query?: never;
@@ -25994,6 +26070,8 @@ export interface components {
             /** Allowed Callers */
             allowed_callers?: string[];
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
+            /** Eager Input Streaming */
+            eager_input_streaming?: boolean;
             function: components["schemas"]["ChatCompletionToolParamFunctionChunk"];
             /** Type */
             type: "function" | string;
@@ -26002,6 +26080,8 @@ export interface components {
         ChatCompletionToolParamFunctionChunk: {
             /** Description */
             description?: string;
+            /** Eager Input Streaming */
+            eager_input_streaming?: boolean;
             /** Name */
             name: string;
             /** Parameters */
@@ -26847,6 +26927,16 @@ export interface components {
              * @description Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.
              */
             maximum_spend_logs_retention_period?: string | null;
+            /**
+             * Mcp Allowed Clients
+             * @description MCP client applications admitted by the gateway, each an {alias, value} pair where alias is the name shown in the dashboard and logs and value is the identity that must match exactly. When set, every MCP request must carry a client identity equal to one of the values: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.
+             */
+            mcp_allowed_clients?: components["schemas"]["MCPAllowedClient"][] | null;
+            /**
+             * Mcp Client Id Header
+             * @description Request header whose value names the calling MCP client application (for example 'x-mcp-client') for callers that did not authenticate with a JWT, used only while mcp_allowed_clients is set. The client picks this value itself, so it is a policy control rather than a security boundary; prefer litellm_jwtauth.mcp_client_id_jwt_field where callers use JWTs.
+             */
+            mcp_client_id_header?: string | null;
             /**
              * Mcp Internal Ip Ranges
              * @description Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).
@@ -30864,6 +30954,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Endpoint Url */
+            s3_endpoint_url?: string | null;
             /** S3 Output Bucket Name */
             s3_output_bucket_name?: string | null;
             /** S3 Region Name */
@@ -32480,6 +32572,22 @@ export interface components {
              * @enum {string}
              */
             status?: "healthy" | "unhealthy";
+        };
+        /**
+         * MCPAllowedClient
+         * @description One entry of `general_settings.mcp_allowed_clients`.
+         */
+        MCPAllowedClient: {
+            /**
+             * Alias
+             * @description Human-readable name for this client application, shown in the dashboard and in gateway logs.
+             */
+            alias: string;
+            /**
+             * Value
+             * @description Exact value of the JWT claim named in litellm_jwtauth.mcp_client_id_jwt_field, or of the mcp_client_id_header header, that identifies this client application. Matched case-sensitively.
+             */
+            value: string;
         };
         /** MCPConnectorEntry */
         MCPConnectorEntry: {
@@ -41497,6 +41605,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Endpoint Url */
+            s3_endpoint_url?: string | null;
             /** S3 Output Bucket Name */
             s3_output_bucket_name?: string | null;
             /** S3 Region Name */
@@ -43859,6 +43969,161 @@ export interface operations {
         };
     };
     azure_proxy_route_azure_ai__endpoint__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    azure_speech_proxy_route_azure_speech__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    azure_speech_proxy_route_azure_speech__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    azure_speech_proxy_route_azure_speech__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    azure_speech_proxy_route_azure_speech__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    azure_speech_proxy_route_azure_speech__endpoint__patch: {
         parameters: {
             query?: never;
             header?: never;
