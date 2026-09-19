@@ -1,5 +1,6 @@
 import os
 from unittest import mock
+
 from litellm.proxy import utils
 
 
@@ -14,9 +15,7 @@ def test_get_server_root_path_unset():
             del os.environ["SERVER_ROOT_PATH"]
 
         root_path = utils.get_server_root_path()
-        assert (
-            root_path == ""
-        ), "Should return empty string when unset to allow X-Forwarded-Prefix"
+        assert root_path == "", "Should return empty string when unset to allow X-Forwarded-Prefix"
 
 
 def test_get_server_root_path_set():
@@ -34,9 +33,7 @@ def test_get_server_root_path_empty_string():
     """
     with mock.patch.dict(os.environ, {"SERVER_ROOT_PATH": ""}, clear=True):
         root_path = utils.get_server_root_path()
-        assert (
-            root_path == ""
-        ), "Should return empty string when explicitly set to empty"
+        assert root_path == "", "Should return empty string when explicitly set to empty"
 
 
 # Integration test simulation for FastAPI app initialization
@@ -62,3 +59,25 @@ def test_fastapi_app_initialization_mock():
         server_root_path = utils.get_server_root_path()
         app = FastAPI(root_path=server_root_path)
         assert app.root_path == "/custom-root"
+
+
+def test_root_path_middleware_handles_prefix_stripped_by_proxy(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.middleware.per_request_root_path_middleware import RootPathMiddleware
+
+    (tmp_path / "index.html").write_text("dashboard")
+    app = FastAPI(root_path="/genai-platform/llm-gateway")
+    app.mount("/ui", StaticFiles(directory=tmp_path, html=True), name="ui")
+    app.add_middleware(RootPathMiddleware, root_path=app.root_path)
+
+    client = TestClient(app, root_path=app.root_path)
+    redirect = client.get("/ui", follow_redirects=False)
+    response = client.get("/ui/")
+
+    assert redirect.status_code == 307
+    assert redirect.headers["location"].endswith("/genai-platform/llm-gateway/ui/")
+    assert response.status_code == 200
+    assert response.text == "dashboard"

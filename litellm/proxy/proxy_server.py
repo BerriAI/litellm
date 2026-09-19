@@ -656,6 +656,7 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
 )
 from litellm.proxy.middleware.per_request_root_path_middleware import (
     PerRequestRootPathMiddleware,
+    RootPathMiddleware,
     get_server_root_paths,
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
@@ -19035,10 +19036,10 @@ app.add_middleware(
     get_settings=lambda: get_admission_control_settings(general_settings),
     state=admission_control_state,
 )
+app.add_middleware(RootPathMiddleware, root_path=server_root_path)
 # Added last on purpose - last-added is outermost, and the client-visible URL
-# prefix must be resolved into scope["root_path"] before any inner middleware
-# or the router inspects the path. Only added when SERVER_ROOT_PATHS is
-# configured, so the default deployment's middleware stack is unchanged.
+# prefix must be resolved before any inner middleware or the router inspects the
+# path. The scalar middleware also handles ingress controllers that strip it.
 _server_root_paths: Final = get_server_root_paths()
 if _server_root_paths:
     if server_root_path and server_root_path != "/":
