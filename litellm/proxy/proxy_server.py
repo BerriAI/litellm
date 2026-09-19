@@ -4792,11 +4792,13 @@ def _websearch_handler_params(stored: Mapping[str, object]) -> dict[str, object]
     Translate stored web search interception settings into handler kwargs.
 
     Drops ``enabled``, which gates the callback rather than configuring it, and
-    drops an empty ``enabled_providers`` so the handler applies its own default
-    instead of matching no provider at all.
+    drops an ``enabled_providers`` that is not a non-empty list so the handler
+    applies its own default. An empty list otherwise matches no provider at all,
+    and a bare string is iterated one character at a time.
     """
     params: Final = {key: value for key, value in stored.items() if key != "enabled"}
-    if not params.get("enabled_providers"):
+    providers: Final = params.get("enabled_providers")
+    if not isinstance(providers, list) or not providers:
         params.pop("enabled_providers", None)
     return params
 
@@ -7817,10 +7819,17 @@ class ProxyConfig:
 
             websearch_config: Final = litellm_settings.get("websearch_interception_params", None)
 
-            if not isinstance(websearch_config, Mapping) or "enabled" not in websearch_config:
+            if not isinstance(websearch_config, Mapping):
                 return
 
-            enabled: Final = bool(coerce_bool(websearch_config["enabled"]))
+            if "enabled" not in websearch_config and self._last_websearch_interception_config is None:
+                verbose_proxy_logger.debug(
+                    "Web search interception: stored settings carry no 'enabled' flag and none were applied "
+                    "before, so litellm_settings.callbacks keeps ownership of the callback."
+                )
+                return
+
+            enabled: Final = bool(coerce_bool(websearch_config.get("enabled", True)))
             registered: Final = bool(
                 litellm.logging_callback_manager.get_custom_loggers_for_type(WebSearchInterceptionLogger)
             )

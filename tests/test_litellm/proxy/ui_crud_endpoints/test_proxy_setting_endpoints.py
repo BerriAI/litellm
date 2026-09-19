@@ -3138,7 +3138,13 @@ class TestWebSearchInterceptionSettingsEndpoints:
         )
 
     def test_get_returns_stored_values_and_field_schema(self, mock_proxy_config, mock_auth, monkeypatch):
+        import litellm
+        from litellm.integrations.websearch_interception.handler import (
+            WebSearchInterceptionLogger,
+        )
+
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(search_tool_name="running")])
         mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {
             "enabled": True,
             "enabled_providers": ["bedrock", "vertex_ai"],
@@ -3184,11 +3190,16 @@ class TestWebSearchInterceptionSettingsEndpoints:
         assert mock_proxy_config["save_call_count"]() == 1
         assert mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] == payload
 
-    def test_get_reports_enabled_when_the_config_file_activates_the_callback(
+    def test_get_reports_enabled_while_the_callback_is_running_without_a_stored_flag(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):
+        import litellm
+        from litellm.integrations.websearch_interception.handler import (
+            WebSearchInterceptionLogger,
+        )
+
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
-        mock_proxy_config["config"]["litellm_settings"]["callbacks"] = ["websearch_interception"]
+        monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(search_tool_name="from-config")])
         mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {
             "enabled_providers": ["bedrock"],
             "search_tool_name": "my-perplexity-search",
@@ -3199,12 +3210,13 @@ class TestWebSearchInterceptionSettingsEndpoints:
         assert resp.status_code == 200, resp.text
         assert resp.json()["values"]["enabled"] is True
 
-    def test_get_reports_disabled_when_nothing_activates_the_callback(
-        self, mock_proxy_config, mock_auth, monkeypatch
-    ):
+    def test_get_reports_disabled_when_the_callback_is_not_running(self, mock_proxy_config, mock_auth, monkeypatch):
+        import litellm
+
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
-        mock_proxy_config["config"]["litellm_settings"].pop("callbacks", None)
+        monkeypatch.setattr(litellm, "callbacks", [])
         mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {
+            "enabled": True,
             "enabled_providers": ["bedrock"],
         }
 

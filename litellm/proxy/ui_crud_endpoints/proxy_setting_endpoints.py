@@ -508,23 +508,23 @@ class WebSearchInterceptionSettingsResponse(SettingsResponse):
 
 def _with_websearch_enabled_resolved(config: Mapping[str, object]) -> dict[str, object]:
     """
-    Report interception as on when the config file activates it through litellm_settings.callbacks.
+    Report whether interception is actually running, rather than what a stored flag claims.
 
-    Such a proxy stores no ``enabled`` flag, and reporting the field's own
-    default would tell an admin the feature is off while it is serving, then
-    persist that answer the moment they saved anything on the page.
+    A proxy can activate it through litellm_settings.callbacks, which stores no
+    flag at all, and a write through the generic config endpoint can drop the
+    flag from a block that is still live. Either way the field's own default
+    would tell an admin the feature is off while it is serving, and saving the
+    page would then persist that answer.
     """
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
     litellm_settings: Final[Mapping[str, object]] = _as_settings_section(config.get("litellm_settings"))
     stored: Final[Mapping[str, object]] = _as_settings_section(litellm_settings.get("websearch_interception_params"))
-    if "enabled" in stored:
-        return dict(config)
-
-    callbacks: Final = litellm_settings.get("callbacks")
     resolved: Final = {
         **stored,
-        "enabled": isinstance(callbacks, Sequence)
-        and not isinstance(callbacks, (str, bytes))
-        and "websearch_interception" in callbacks,
+        "enabled": bool(litellm.logging_callback_manager.get_custom_loggers_for_type(WebSearchInterceptionLogger)),
     }
     return {
         **config,
