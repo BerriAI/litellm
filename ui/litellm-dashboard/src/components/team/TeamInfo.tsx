@@ -687,6 +687,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     }
   };
 
+  const refreshTeamData = async () => {
+    if (!accessToken) return;
+    try {
+      setTeamData(await teamInfoCall(accessToken, teamId));
+    } catch {
+      toast.fromError("Failed to load team information");
+    }
+  };
+
   useEffect(() => {
     fetchTeamInfo();
   }, [teamId, accessToken]);
@@ -1378,6 +1387,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           teamData={teamData}
           canEditTeam={canEditTeam}
           handleMemberDelete={handleMemberDelete}
+          onMemberSpendReset={refreshTeamData}
           setSelectedEditMember={setSelectedEditMember}
           setIsEditMemberModalVisible={setIsEditMemberModalVisible}
           setIsAddMemberModalVisible={setIsAddMemberModalVisible}
