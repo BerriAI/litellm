@@ -1067,6 +1067,7 @@ async def test_afile_content_passes_trusted_model_credentials_to_router():
     managed_files = _make_managed_files_instance()
     unified_file_id = "unified-file-id"
     s3_uri = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
+    managed_files.get_unified_file_id = AsyncMock(return_value=None)
     managed_files.get_model_file_id_mapping = AsyncMock(
         return_value={unified_file_id: {"model-123": s3_uri}}
     )
@@ -1238,6 +1239,7 @@ async def test_afile_content_bedrock_unified_id_end_to_end(monkeypatch):
     managed_files = _make_managed_files_instance()
     unified_file_id = "unified-file-id"
     s3_uri = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
+    managed_files.get_unified_file_id = AsyncMock(return_value=None)
     managed_files.get_model_file_id_mapping = AsyncMock(
         return_value={unified_file_id: {"model-123": s3_uri}}
     )
@@ -1268,6 +1270,7 @@ async def test_afile_content_error_reports_unified_id_not_provider_uri():
     managed_files = _make_managed_files_instance()
     unified_file_id = "litellm_proxy_unified_id_abc"
     s3_uri = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
+    managed_files.get_unified_file_id = AsyncMock(return_value=None)
     managed_files.get_model_file_id_mapping = AsyncMock(
         return_value={unified_file_id: {"model-123": s3_uri}}
     )
@@ -1906,6 +1909,49 @@ async def test_afile_delete_storage_backed_row_deletes_stored_content_not_provid
     router.afile_delete.assert_not_awaited()
     file_table.delete.assert_awaited_once_with(where={"unified_file_id": unified_file_id})
     assert response == FileDeleted(id=unified_file_id, object="file", deleted=True)
+
+
+@pytest.mark.asyncio
+async def test_afile_content_storage_backed_row_returns_stored_bytes_not_provider_content():
+    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    from prisma import Base64
+
+    from litellm.caching import DualCache
+    from litellm.models.managed_files import LiteLLM_ManagedFileTable
+
+    storage_url = "litellm_db://content-row-1"
+    unified_file_id = _managed_deletion_file_id(storage_url)
+    stored_bytes = b'{"custom_id": "line-1", "method": "POST", "url": "/v1/chat/completions", "body": {}}\n'
+    row = LiteLLM_ManagedFileTable(
+        unified_file_id=unified_file_id,
+        model_mappings={"vllm-batch": storage_url},
+        flat_model_file_ids=[storage_url],
+        file_object=_make_file_object(unified_file_id),
+        storage_backend="litellm_db",
+        storage_url=storage_url,
+    )
+    file_table = MagicMock(find_first=AsyncMock(return_value=row))
+    content_table = MagicMock(find_unique=AsyncMock(return_value=MagicMock(content=Base64.encode(stored_bytes))))
+    managed_files = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=DualCache(),
+        prisma_client=MagicMock(
+            db=MagicMock(litellm_managedfiletable=file_table, litellm_managedfilecontenttable=content_table)
+        ),
+    )
+    router = MagicMock(
+        get_deployment_credentials_with_provider=MagicMock(return_value=None),
+        afile_content=AsyncMock(),
+    )
+
+    response = await managed_files.afile_content(
+        file_id=unified_file_id,
+        litellm_parent_otel_span=None,
+        llm_router=router,
+    )
+
+    assert response.content == stored_bytes
+    content_table.find_unique.assert_awaited_once_with(where={"id": "content-row-1"})
+    router.afile_content.assert_not_awaited()
 
 
 @pytest.mark.asyncio
