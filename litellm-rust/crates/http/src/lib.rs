@@ -1,9 +1,13 @@
 mod config;
 mod error;
+pub mod media;
+pub mod outbound;
 mod pool;
 mod proxy;
+pub mod request;
 mod settings;
 mod tls;
+pub mod transport;
 
 pub use config::{HttpClientConfig, Resolution, Verify};
 pub use error::Error;

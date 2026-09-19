@@ -512,6 +512,8 @@ class LiteLLMRoutes(enum.Enum):
     anthropic_routes = [
         "/v1/messages",
         "/v1/messages/count_tokens",
+        "/claude_code_gateway/v1/messages",
+        "/claude_code_gateway/v1/messages/count_tokens",
         "/v1/skills",
         "/v1/skills/{skill_id}",
         "/claude-code/marketplace.json",
@@ -532,6 +534,7 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp-rest/tools/call",
         "/v1/mcp/tools",
         "/introspect",
+        "/token",
     ]
 
     # MCP server CRUD routes — control-plane. Gated by DISABLE_ADMIN_ENDPOINTS.
@@ -889,6 +892,11 @@ class LiteLLMRoutes(enum.Enum):
         # of; a caller who administers none gets an empty result set.
         "/organization/daily/activity",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
+        # Claude Code gateway: the signed-in CLI fetches its managed settings and posts its own telemetry
+        "/claude_code_gateway/managed/settings",
+        "/claude_code_gateway/v1/metrics",
+        "/claude_code_gateway/v1/logs",
+        "/claude_code_gateway/v1/traces",
         "/user/list",  # org admins checked in endpoint; non-admins get 403
         "/management/v1/users/bulk_delete",  # proxy admins delete anyone, org admins only their orgs' users; others 403
         "/model/{model_id}/update",
@@ -2603,6 +2611,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     allow_cli_sso_verification_uri_complete: bool | None = Field(
         None,
         description="opt-in to RFC 8628 verification_uri_complete for the CLI SSO device flow, pre-filling the user_code in the browser. Off by default; intended for same-host clients where the device that starts the flow and the browser run on the same machine",
+    )
+    enable_claude_code_gateway: bool | None = Field(
+        None,
+        description="serve the Claude Code gateway protocol (https://code.claude.com/docs/en/claude-apps-gateway) under /claude_code_gateway: OAuth device-flow sign-in reusing proxy SSO, plus managed settings and OTLP telemetry ingestion. Off by default",
+    )
+    claude_code_gateway_managed_settings: dict[str, Any] | None = Field(
+        None,
+        description="Claude Code managed-settings.json served verbatim at the gateway's /claude_code_gateway/managed/settings endpoint. When unset the endpoint returns 404 (no managed policy)",
     )
     database_url: str | None = Field(
         None,

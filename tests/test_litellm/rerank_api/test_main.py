@@ -239,6 +239,7 @@ async def test_arerank_error_is_mapped_to_litellm_exception(respx_mock: respx.Mo
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(300)
 async def test_arerank_declared_authenticating_provider_skips_resolution(monkeypatch):
     """Regression for the event-loop hazard in arerank's provider pre-resolution:
     get_llm_provider runs the blocking OAuth device flow for github_copilot/chatgpt,

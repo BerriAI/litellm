@@ -46,11 +46,8 @@ mod tests {
             .send()
             .await
             .expect_err("invalid port");
-        let error = crate::custom_httpx::transport::Error::from_reqwest_before_dispatch(error);
-        assert!(matches!(
-            error,
-            crate::custom_httpx::transport::Error::Connect(_)
-        ));
+        let error = crate::transport::Error::from_reqwest_before_dispatch(error);
+        assert!(matches!(error, crate::transport::Error::Connect(_)));
         assert!(!error.to_string().contains("secret"));
         assert!(!error.to_string().contains("private"));
     }
@@ -76,7 +73,7 @@ mod tests {
             .await
             .expect_err("nothing listens on the port");
         let root_cause = root_cause(&error).expect("reqwest reports a cause");
-        let message = crate::custom_httpx::transport::Error::from(error).to_string();
+        let message = crate::transport::Error::from(error).to_string();
         assert!(message.contains(&root_cause), "{message}");
         assert!(!message.contains("secret"));
     }
@@ -105,8 +102,8 @@ mod tests {
         let error = response.expect_err("server does not respond");
         assert!(error.is_timeout());
         assert!(matches!(
-            crate::custom_httpx::transport::Error::from_reqwest_before_dispatch(error),
-            crate::custom_httpx::transport::Error::Network(_)
+            crate::transport::Error::from_reqwest_before_dispatch(error),
+            crate::transport::Error::Network(_)
         ));
     }
 }

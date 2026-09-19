@@ -627,6 +627,7 @@ def test_virtual_key_llm_api_routes_denies_spend_logs_v2():
         "/mcp/tools/call",
         "/mcp-rest/tools/call",
         "/mcp/tools/list",
+        "/token",
     ],
 )
 def test_mcp_inference_routes_classified_as_llm_api(route):
@@ -908,6 +909,36 @@ def test_anthropic_count_tokens_route_accessible_to_internal_users():
 
     # Also test that the regular messages route still works
     assert RouteChecks.is_llm_api_route("/v1/messages") is True
+
+
+_CLAUDE_CODE_GATEWAY_ROUTES: Final = (
+    "/claude_code_gateway/v1/messages",
+    "/claude_code_gateway/v1/messages/count_tokens",
+    "/claude_code_gateway/managed/settings",
+    "/claude_code_gateway/v1/metrics",
+    "/claude_code_gateway/v1/logs",
+    "/claude_code_gateway/v1/traces",
+)
+
+
+@pytest.mark.parametrize("route", _CLAUDE_CODE_GATEWAY_ROUTES)
+@pytest.mark.parametrize(
+    "role", [LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value]
+)
+def test_claude_code_gateway_routes_open_to_signed_in_cli_users(role: str, route: str):
+    user_obj: Final = LiteLLM_UserTable(user_id="test_user", user_email="test@example.com", user_role=role)
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", user_role=role)
+    request: Final = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=role,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
 
 
 def test_virtual_key_llm_api_routes_allows_registered_pass_through_endpoints():

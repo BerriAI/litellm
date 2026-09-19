@@ -466,6 +466,7 @@ class LiteLLMCompletionResponsesConfig:
         if not tools:
             litellm_completion_request.pop("tool_choice", None)
             litellm_completion_request.pop("tools", None)
+            litellm_completion_request.pop("parallel_tool_calls", None)
 
         # Responses API `Completed` events require usage, we pass `stream_options` to litellm.completion to include usage
         if stream is True:
@@ -2036,7 +2037,7 @@ class LiteLLMCompletionResponsesConfig:
         if tool_type == "custom":
             converted: Final = convert_custom_tool_to_function_tool(tool)
             return ResponsesToolChatForm(chat_tools=() if converted is None else (converted,), web_search_options=None)
-        if tool_type in ("computer_use", "image_generation", "shell"):
+        if tool_type in ("computer_use", "image_generation", "local_shell", "shell", "tool_search"):
             verbose_logger.warning(
                 "Dropping Responses API tool of type '%s': it has no Chat Completions "
                 "equivalent and the target provider would reject the request.",
@@ -2876,6 +2877,8 @@ class LiteLLMCompletionResponsesConfig:
                 cached_tokens=prompt_details.cached_tokens if prompt_details.cached_tokens is not None else 0,
                 text_tokens=prompt_details.text_tokens,
                 audio_tokens=prompt_details.audio_tokens,
+                image_tokens=prompt_details.image_tokens,
+                video_tokens=prompt_details.video_tokens,
                 cached_tokens_details=(
                     cached_tokens_details if isinstance(cached_tokens_details, CachedTokensDetails) else None
                 ),

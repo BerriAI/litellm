@@ -52,4 +52,31 @@ describe("ModelPricingSummary", () => {
     expect(screen.getByText("-")).toBeInTheDocument();
     expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
   });
+
+  it("names the fields a deployment prices itself", () => {
+    render(
+      <ModelPricingSummary
+        model={{
+          ...tokenPriced,
+          model_info: { pricing_overrides: ["input_cost_per_token", "output_cost_per_token"] },
+        }}
+      />,
+    );
+    expect(screen.getByText("Custom pricing")).toBeInTheDocument();
+    expect(
+      screen.getByText("Overrides the model cost map for input_cost_per_token, output_cost_per_token"),
+    ).toBeInTheDocument();
+  });
+
+  it("says the price follows the cost map when nothing is overridden", () => {
+    render(<ModelPricingSummary model={{ ...tokenPriced, model_info: { pricing_overrides: [] } }} />);
+    expect(screen.getByText("Follows the model cost map")).toBeInTheDocument();
+    expect(screen.queryByText("Custom pricing")).not.toBeInTheDocument();
+  });
+
+  it("says nothing about the source when the proxy did not report it", () => {
+    render(<ModelPricingSummary model={{ ...tokenPriced, model_info: {} }} />);
+    expect(screen.queryByText(/cost map/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Custom pricing")).not.toBeInTheDocument();
+  });
 });

@@ -159,6 +159,7 @@ class ProxyModelNotFoundError(HTTPException):
 REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
     "acompletion": ("messages",),
     "aembedding": ("input",),
+    "aresponses": ("input",),
     "acreate_batch": ("input_file_id", "endpoint", "completion_window"),
 }
 
