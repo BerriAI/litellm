@@ -442,8 +442,8 @@ fn resolve_headers(
     }
     let api_key = connection
         .api_key
-        .as_deref()
-        .map(str::trim)
+        .as_ref()
+        .map(|key| key.expose().trim())
         .filter(|key| !key.is_empty())
         .map(str::to_string)
         .or_else(|| {
@@ -629,7 +629,7 @@ mod tests {
     #[test]
     fn explicit_key_precedes_environment_key() {
         let connection = OcrConnection {
-            api_key: Some("passed-key".into()),
+            api_key: Some(litellm_auth::SecretValue::new("passed-key")),
             ..Default::default()
         };
         let headers = resolve_headers(&connection, &|_| Some("env-key".into())).unwrap();
@@ -639,7 +639,7 @@ mod tests {
     #[test]
     fn blank_explicit_key_uses_environment_key() {
         let connection = OcrConnection {
-            api_key: Some(" ".into()),
+            api_key: Some(litellm_auth::SecretValue::new(" ")),
             ..Default::default()
         };
         let headers = resolve_headers(&connection, &|_| Some(" env-key ".into())).unwrap();

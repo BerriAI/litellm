@@ -134,7 +134,10 @@ impl VertexAiOcrConfig {
             .vertex_auth()
             .validate_environment(
                 connection.extra_headers.clone(),
-                connection.api_key.as_deref(),
+                connection
+                    .api_key
+                    .as_ref()
+                    .map(litellm_auth::SecretValue::expose),
                 config,
                 &credential_env,
             )

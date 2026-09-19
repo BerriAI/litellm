@@ -2107,7 +2107,7 @@ def _handle_multi_valued_attribute_update(path: str, op_type: str, value: object
     except ValidationError:
         raise HTTPException(
             status_code=400,
-            detail={"error": f"Invalid value for {base}: expected a list of objects with a 'value' sub-attribute"},
+            detail={"error": f"Invalid value for {base}: expected a list of objects or strings"},
         )
 
     dumped: Final = [attr.model_dump(exclude_none=True) for attr in attrs]

@@ -40,6 +40,10 @@ def test_shipped_decisions(
         enabled: Final = environment == "1" if environment is not None else process is not False
         assert catalog.rollout(context) is Rollout.RUST_OPT_OUT
         assert catalog.decision(context) is (Decision.RUST_WITH_FALLBACK if enabled else Decision.PYTHON)
+    elif route is Route.MESSAGES:
+        enabled: Final = environment == "1" if environment is not None else process is True
+        assert catalog.rollout(context) is Rollout.RUST_OPT_IN
+        assert catalog.decision(context) is (Decision.RUST_WITH_FALLBACK if enabled else Decision.PYTHON)
     elif route is Route.TRANSCRIPTION and provider == "bedrock":
         assert catalog.rollout(context) is Rollout.RUST_REQUIRED
         assert catalog.decision(context) is Decision.RUST_REQUIRED

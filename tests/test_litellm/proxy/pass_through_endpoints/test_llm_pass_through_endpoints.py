@@ -2,6 +2,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import logging
 import os
 import traceback
 from collections.abc import Iterator, Mapping
@@ -29,8 +30,10 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
     _join_url_paths,
+    _proxy_general_settings,
     anthropic_proxy_route,
     azure_proxy_route,
+    azure_speech_proxy_route,
     bedrock_llm_proxy_route,
     bedrock_proxy_route,
     create_pass_through_route,
@@ -5275,6 +5278,304 @@ class TestComprehendMedicalProxyRoute:
         assert exc_info.value.status_code == 400
 
 
+TRANSCRIBE_UPSTREAM = "https://transcribe.us-west-2.amazonaws.com/"
+
+
+@pytest.fixture
+def transcribe_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    from litellm.proxy.proxy_server import app
+
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setitem(
+        app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual", user_id="user-a")
+    )
+    monkeypatch.setitem(
+        app.dependency_overrides, _proxy_general_settings, lambda: {"transcribe_media_buckets": ["bucket"]}
+    )
+    yield TestClient(app)
+
+
+def _owned_job(owner: str | None, status: str = "COMPLETED") -> dict[str, object]:
+    tags = {"Tags": [{"Key": "litellm-owner", "Value": owner}]} if owner is not None else {}
+    return {"TranscriptionJob": {"TranscriptionJobName": "litellm-job-1", "TranscriptionJobStatus": status, **tags}}
+
+
+class TestTranscribeProxyRoute:
+    START_JOB_BODY: Final = MappingProxyType(
+        {
+            "TranscriptionJobName": "litellm-job-1",
+            "LanguageCode": "en-US",
+            "Media": {"MediaFileUri": "s3://bucket/audio.wav"},
+        }
+    )
+    OWNER_TAG: Final = MappingProxyType({"Key": "litellm-owner", "Value": "user-a"})
+
+    def test_signs_and_forwards_start_transcription_job(self, transcribe_client: TestClient) -> None:
+        upstream_body = {
+            "TranscriptionJob": {"TranscriptionJobName": "litellm-job-1", "TranscriptionJobStatus": "IN_PROGRESS"}
+        }
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(200, json=upstream_body))
+            response = transcribe_client.post(
+                "/transcribe/StartTranscriptionJob",
+                json=dict(self.START_JOB_BODY),
+                headers={"Authorization": "Bearer sk-virtual"},
+            )
+
+        assert (response.status_code, response.json()) == (200, upstream_body)
+        targets = [call.request.headers["x-amz-target"] for call in route.calls]
+        assert targets[0] == "Transcribe.StartTranscriptionJob"
+        assert set(targets[1:]) <= {"Transcribe.GetTranscriptionJob"}
+        sent = route.calls[0].request
+        assert json.loads(sent.content) == {**dict(self.START_JOB_BODY), "Tags": [dict(self.OWNER_TAG)]}
+        assert sent.headers["content-type"] == "application/x-amz-json-1.1"
+        assert sent.headers["authorization"].startswith("AWS4-HMAC-SHA256 Credential=test-access-key/")
+        assert "/us-west-2/transcribe/aws4_request" in sent.headers["authorization"]
+        assert "x-amz-date" in sent.headers
+
+    @pytest.mark.parametrize(
+        "body, member",
+        [
+            ({"Media": {"MediaFileUri": "s3://other-tenant/audio.wav"}}, "Media.MediaFileUri"),
+            ({"OutputBucketName": "other-tenant"}, "OutputBucketName"),
+            ({"DataAccessRoleArn": "arn:aws:iam::123456789012:role/reader"}, "DataAccessRoleArn"),
+        ],
+    )
+    def test_storage_outside_the_listed_buckets_is_refused_before_signing(
+        self, transcribe_client: TestClient, body: dict[str, object], member: str
+    ) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post("/transcribe/StartTranscriptionJob", json={**dict(self.START_JOB_BODY), **body})
+
+        assert response.status_code == 403
+        assert member in response.json()["detail"]
+        assert not route.called
+
+    def test_start_needs_a_bucket_list_unless_the_caller_is_a_proxy_admin(
+        self, transcribe_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.proxy_server import app
+
+        monkeypatch.setitem(app.dependency_overrides, _proxy_general_settings, lambda: {})
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(200, json=_owned_job("admin")))
+            refused = transcribe_client.post("/transcribe/StartTranscriptionJob", json=dict(self.START_JOB_BODY))
+            monkeypatch.setitem(
+                app.dependency_overrides,
+                user_api_key_auth,
+                lambda: UserAPIKeyAuth(api_key="sk-admin", user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+            allowed = transcribe_client.post("/transcribe/StartTranscriptionJob", json=dict(self.START_JOB_BODY))
+
+        assert refused.status_code == 403
+        assert "transcribe_media_buckets" in refused.json()["detail"]
+        assert allowed.status_code == 200
+        assert route.calls[0].request.headers["x-amz-target"] == "Transcribe.StartTranscriptionJob"
+
+    def test_the_caller_cannot_forge_the_owner_tag(self, transcribe_client: TestClient) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post(
+                "/transcribe/StartTranscriptionJob",
+                json={**dict(self.START_JOB_BODY), "Tags": [{"Key": "litellm-owner", "Value": "user-b"}]},
+            )
+
+        assert response.status_code == 400
+        assert "litellm-owner" in response.json()["detail"]
+        assert not route.called
+
+    def test_sdk_route_reads_operation_from_x_amz_target_and_resigns(self, transcribe_client: TestClient) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(200, json=_owned_job("user-a")))
+            response = transcribe_client.post(
+                "/transcribe",
+                json={"TranscriptionJobName": "litellm-job-1"},
+                headers={
+                    "Authorization": "AWS4-HMAC-SHA256 Credential=sk-virtual/20260101/us-west-2/transcribe/aws4_request",
+                    "X-Amz-Target": "Transcribe.GetTranscriptionJob",
+                    "Content-Type": "application/x-amz-json-1.1",
+                },
+            )
+
+        assert (response.status_code, response.json()) == (200, _owned_job("user-a"))
+        assert [call.request.headers["x-amz-target"] for call in route.calls] == ["Transcribe.GetTranscriptionJob"] * 2
+        sent = route.calls.last.request
+        assert "Credential=test-access-key/" in sent.headers["authorization"]
+        assert "sk-virtual" not in sent.headers["authorization"]
+
+    @pytest.mark.parametrize("operation", ["GetTranscriptionJob", "DeleteTranscriptionJob"])
+    @pytest.mark.parametrize("owner", ["user-b", None])
+    def test_jobs_started_by_others_are_not_reachable(
+        self, transcribe_client: TestClient, operation: str, owner: str | None
+    ) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(200, json=_owned_job(owner)))
+            response = transcribe_client.post(
+                f"/transcribe/{operation}", json={"TranscriptionJobName": "litellm-job-1"}
+            )
+
+        assert response.status_code == 404
+        assert [call.request.headers["x-amz-target"] for call in route.calls] == ["Transcribe.GetTranscriptionJob"]
+
+    def test_the_owner_may_delete_the_job(self, transcribe_client: TestClient) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            route.side_effect = [httpx.Response(200, json=_owned_job("user-a")), httpx.Response(200, json={})]
+            response = transcribe_client.post(
+                "/transcribe/DeleteTranscriptionJob", json={"TranscriptionJobName": "litellm-job-1"}
+            )
+
+        assert (response.status_code, response.json()) == (200, {})
+        assert [call.request.headers["x-amz-target"] for call in route.calls] == [
+            "Transcribe.GetTranscriptionJob",
+            "Transcribe.DeleteTranscriptionJob",
+        ]
+
+    @pytest.mark.parametrize("operation", ["ListTranscriptionJobs", "ListVocabularies", "DeleteVocabulary"])
+    def test_account_wide_operations_need_a_proxy_admin(self, transcribe_client: TestClient, operation: str) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post(f"/transcribe/{operation}", json={})
+
+        assert response.status_code == 403
+        assert operation in response.json()["detail"]
+        assert not route.called
+
+    def test_a_proxy_admin_reaches_account_wide_operations(
+        self, transcribe_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.proxy.proxy_server import app
+
+        monkeypatch.setitem(
+            app.dependency_overrides,
+            user_api_key_auth,
+            lambda: UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(TRANSCRIBE_UPSTREAM).mock(
+                return_value=httpx.Response(200, json={"TranscriptionJobSummaries": []})
+            )
+            response = transcribe_client.post("/transcribe/ListTranscriptionJobs", json={})
+
+        assert (response.status_code, response.json()) == (200, {"TranscriptionJobSummaries": []})
+
+    def test_upstream_error_status_and_body_are_returned(self, transcribe_client: TestClient) -> None:
+        aws_error = {"__type": "BadRequestException", "Message": "The requested job couldn't be found."}
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(400, json=aws_error))
+            response = transcribe_client.post(
+                "/transcribe/StartTranscriptionJob",
+                json={**dict(self.START_JOB_BODY), "TranscriptionJobName": "missing"},
+            )
+
+        assert (response.status_code, response.json()) == (400, aws_error)
+
+    @pytest.mark.parametrize(
+        "operation",
+        [
+            "Start-Transcription-Job",
+            "Transcribe.StartTranscriptionJob",
+            "a" * 200,
+            "starttranscriptionjob",
+            "DetectEntitiesV2",
+        ],
+    )
+    def test_rejects_unsupported_operations_without_calling_aws(
+        self, transcribe_client: TestClient, operation: str
+    ) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post(f"/transcribe/{operation}", json={})
+
+        assert response.status_code == 400
+        assert "Unsupported Amazon Transcribe operation" in response.json()["detail"]
+        assert not route.called
+
+    @pytest.mark.parametrize(
+        "raw_body",
+        ['{"MaxResults": 5, "stream": true}', '{"MaxResults": 5, "stream": false}', '["x"]', "not json"],
+    )
+    def test_rejects_bad_bodies_without_calling_aws(self, transcribe_client: TestClient, raw_body: str) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post(
+                "/transcribe/GetTranscriptionJob", content=raw_body, headers={"Content-Type": "application/json"}
+            )
+
+        assert response.status_code == 400
+        assert not route.called
+
+    def test_missing_region_returns_400_without_calling_aws(
+        self, transcribe_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for name in ("AWS_REGION_NAME", "AWS_REGION", "AWS_DEFAULT_REGION"):
+            monkeypatch.delenv(name, raising=False)
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post("/transcribe/GetTranscriptionJob", json={})
+
+        assert response.status_code == 400
+        assert "AWS region" in response.json()["detail"]
+        assert not route.called
+
+    @pytest.mark.parametrize(
+        ("operation", "body", "detail_fragment"),
+        [
+            ("StartMedicalTranscriptionJob", {"MedicalTranscriptionJobName": "j"}, "StartMedicalTranscriptionJob"),
+            ("StartCallAnalyticsJob", {"CallAnalyticsJobName": "j"}, "StartCallAnalyticsJob"),
+            ("StartMedicalScribeJob", {"MedicalScribeJobName": "j"}, "StartMedicalScribeJob"),
+            ("StartTranscriptionJob", {"ContentRedaction": {"RedactionType": "PII"}}, "ContentRedaction"),
+            ("StartTranscriptionJob", {"ToxicityDetection": [{"ToxicityCategories": ["ALL"]}]}, "ToxicityDetection"),
+            ("StartTranscriptionJob", {"ModelSettings": {"LanguageModelName": "clm"}}, "LanguageModelName"),
+        ],
+    )
+    def test_rejects_unpriced_billable_jobs_without_calling_aws(
+        self, transcribe_client: TestClient, operation: str, body: dict[str, object], detail_fragment: str
+    ) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post(f"/transcribe/{operation}", json={**dict(self.START_JOB_BODY), **body})
+
+        assert response.status_code == 400
+        assert detail_fragment in response.json()["detail"]
+        assert not route.called
+
+    def test_rejects_start_transcription_job_when_the_cost_map_has_no_rate(
+        self, transcribe_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delitem(litellm.model_cost, "transcribe/StartTranscriptionJob")
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post("/transcribe/StartTranscriptionJob", json=dict(self.START_JOB_BODY))
+
+        assert response.status_code == 400
+        assert "model cost map" in response.json()["detail"]
+        assert not route.called
+
+    @pytest.mark.parametrize("target_header", ["", "Transcribe", "ComprehendMedical_20181030.DetectPHI", "Transcribe."])
+    def test_sdk_route_rejects_bad_x_amz_target(self, transcribe_client: TestClient, target_header: str) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post("/transcribe", json={}, headers={"X-Amz-Target": target_header})
+
+        assert response.status_code == 400
+        assert "X-Amz-Target" in response.json()["detail"]
+        assert not route.called
+
+    def test_transcribe_is_a_mapped_pass_through_route(self) -> None:
+        from litellm.proxy._types import LiteLLMRoutes
+
+        assert "/transcribe" in LiteLLMRoutes.mapped_pass_through_routes.value
+
+
 LIVE_RESOURCE_PATH = "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
 
 
@@ -5315,9 +5616,7 @@ class TestVertexAILiveWebsocketPassthrough:
             ]
         )
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
-        monkeypatch.setattr(
-            passthrough_module.passthrough_endpoint_router, "default_vertex_config", None
-        )
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
         self._clear_vertex_env(monkeypatch)
         websocket = self._websocket()
         ensure_token = AsyncMock(return_value=("token-abc", "proj-db"))
@@ -5459,9 +5758,7 @@ class TestVertexAILiveWebsocketPassthrough:
         )
 
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
-        monkeypatch.setattr(
-            passthrough_module.passthrough_endpoint_router, "default_vertex_config", None
-        )
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
         self._clear_vertex_env(monkeypatch)
         websocket = self._websocket()
         ensure_token = AsyncMock(side_effect=Exception("Unable to find your credentials"))
@@ -6138,6 +6435,601 @@ class TestAzureRelayDeploymentSegment:
             )
 
         assert [call["model"] for call in captured] == ["gpt", "gpt"]
+
+
+AZURE_SPEECH_SHORT_AUDIO_ENDPOINT: Final = "/speech/recognition/conversation/cognitiveservices/v1"
+AZURE_SPEECH_BATCH_ENDPOINT: Final = "/speechtotext/v3.2/transcriptions"
+AZURE_SPEECH_FAST_ENDPOINT: Final = "/speechtotext/transcriptions:transcribe"
+AZURE_SPEECH_PCM16_HEADER: Final = (
+    b"RIFF\x24\x0c\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80\x3e\x00\x00\x00\x7d\x00\x00\x02\x00\x10\x00data\x00\x0c\x00\x00"
+)
+AZURE_SPEECH_WAV_BYTES: Final = AZURE_SPEECH_PCM16_HEADER + b"\x00" * 3072
+AZURE_SPEECH_WAV_SECONDS: Final = 3072 / (16000 * 2)
+AZURE_SPEECH_NON_UTF8_WAV_BYTES: Final = AZURE_SPEECH_PCM16_HEADER + bytes(range(256)) * 12
+AZURE_SPEECH_TRANSCRIPT: Final = {"RecognitionStatus": "Success", "DisplayText": "The eagle has landed."}
+
+
+def _azure_speech_test_client(monkeypatch: pytest.MonkeyPatch, caller: UserAPIKeyAuth) -> TestClient:
+    from litellm.proxy.proxy_server import app
+
+    monkeypatch.setenv("AZURE_SPEECH_API_KEY", "server-subscription-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    monkeypatch.delenv("AZURE_SPEECH_API_BASE", raising=False)
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: caller)
+    return TestClient(app)
+
+
+@pytest.fixture
+def azure_speech_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    yield _azure_speech_test_client(monkeypatch, UserAPIKeyAuth(api_key="sk-virtual"))
+
+
+@pytest.fixture
+def azure_speech_admin_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    yield _azure_speech_test_client(
+        monkeypatch, UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    )
+
+
+class TestAzureSpeechProxyRoute:
+    """Drives the real FastAPI route with respx standing in for the Azure hosts only."""
+
+    def test_short_audio_forwards_raw_wav_bytes_with_server_key(self, azure_speech_client: TestClient) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(
+                f"https://eastus.stt.speech.microsoft.com{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}"
+            ).mock(return_value=httpx.Response(200, json=AZURE_SPEECH_TRANSCRIPT))
+
+            response = azure_speech_client.post(
+                f"/azure_speech{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}",
+                params={"language": "en-US", "format": "detailed"},
+                content=AZURE_SPEECH_WAV_BYTES,
+                headers={
+                    "Content-Type": "audio/wav; codecs=audio/pcm; samplerate=16000",
+                    "Authorization": "Bearer sk-virtual",
+                    "Ocp-Apim-Subscription-Key": "caller-supplied-key",
+                    "x-pass-ocp-apim-subscription-key": "caller-supplied-key",
+                },
+            )
+
+        assert (response.status_code, response.json()) == (200, AZURE_SPEECH_TRANSCRIPT)
+        sent = route.calls.last.request
+        assert sent.content == AZURE_SPEECH_WAV_BYTES
+        assert dict(sent.url.params) == {"language": "en-US", "format": "detailed"}
+        assert sent.headers["ocp-apim-subscription-key"] == "server-subscription-key"
+        assert sent.headers["content-type"] == "audio/wav; codecs=audio/pcm; samplerate=16000"
+        assert "authorization" not in sent.headers
+        assert "caller-supplied-key" not in repr(sent.headers)
+
+    def test_admin_batch_job_creation_goes_to_the_cognitive_services_host(
+        self, azure_speech_admin_client: TestClient
+    ) -> None:
+        body: Final = {"contentUrls": ["https://example.com/a.wav"], "locale": "en-US", "displayName": "job"}
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_BATCH_ENDPOINT}").mock(
+                return_value=httpx.Response(201, json={"self": "https://eastus.api.cognitive.microsoft.com/x"})
+            )
+
+            response = azure_speech_admin_client.post(
+                f"/azure_speech{AZURE_SPEECH_BATCH_ENDPOINT}",
+                json=body,
+                headers={"Authorization": "Bearer sk-admin"},
+            )
+
+        assert response.status_code == 201
+        sent = route.calls.last.request
+        assert json.loads(sent.content) == body
+        assert sent.headers["ocp-apim-subscription-key"] == "server-subscription-key"
+        assert "authorization" not in sent.headers
+
+    @pytest.mark.parametrize(
+        "method,endpoint",
+        [
+            ("POST", AZURE_SPEECH_BATCH_ENDPOINT),
+            ("POST", "/speechtotext/v3.2/models"),
+            ("PUT", "/speechtotext/v3.2/endpoints/8a5d3f2c-0b1e-4c7d-9e6f-1234567890ab"),
+            ("GET", AZURE_SPEECH_BATCH_ENDPOINT),
+            ("GET", f"{AZURE_SPEECH_BATCH_ENDPOINT}/8a5d3f2c-0b1e-4c7d-9e6f-1234567890ab/files"),
+            ("PATCH", f"{AZURE_SPEECH_BATCH_ENDPOINT}/8a5d3f2c-0b1e-4c7d-9e6f-1234567890ab"),
+            ("DELETE", f"{AZURE_SPEECH_BATCH_ENDPOINT}/8a5d3f2c-0b1e-4c7d-9e6f-1234567890ab"),
+        ],
+    )
+    def test_non_admin_key_cannot_manage_shared_batch_resources(
+        self, azure_speech_client: TestClient, method: str, endpoint: str
+    ) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            catch_all = upstream.route().mock(return_value=httpx.Response(200, json={"status": "Succeeded"}))
+
+            response = azure_speech_client.request(
+                method,
+                f"/azure_speech{endpoint}",
+                json={"contentUrls": ["https://example.com/a.wav"], "locale": "en-US"},
+                headers={"Authorization": "Bearer sk-virtual"},
+            )
+
+        assert response.status_code == 403, response.text
+        assert AZURE_SPEECH_FAST_ENDPOINT in response.text
+        assert not catch_all.called
+
+    def test_non_admin_key_can_still_fast_transcribe_in_the_batch_family(self, azure_speech_client: TestClient) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_FAST_ENDPOINT}").mock(
+                return_value=httpx.Response(200, json={"durationMilliseconds": 640, "combinedPhrases": []})
+            )
+
+            response = azure_speech_client.post(
+                f"/azure_speech{AZURE_SPEECH_FAST_ENDPOINT}",
+                params={"api-version": "2024-11-15"},
+                files={"audio": ("eagle.wav", AZURE_SPEECH_WAV_BYTES, "audio/wav")},
+                data={"definition": json.dumps({"locales": ["en-US"]})},
+                headers={"Authorization": "Bearer sk-virtual"},
+            )
+
+        assert response.status_code == 200
+
+    def test_admin_key_reads_and_deletes_batch_jobs(self, azure_speech_admin_client: TestClient) -> None:
+        job_path: Final = f"{AZURE_SPEECH_BATCH_ENDPOINT}/8a5d3f2c-0b1e-4c7d-9e6f-1234567890ab"
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.get(f"https://eastus.api.cognitive.microsoft.com{job_path}").mock(
+                return_value=httpx.Response(200, json={"status": "Succeeded"})
+            )
+            upstream.delete(f"https://eastus.api.cognitive.microsoft.com{job_path}").mock(
+                return_value=httpx.Response(204)
+            )
+
+            statuses = [
+                azure_speech_admin_client.get(f"/azure_speech{job_path}", headers={"Authorization": "Bearer sk-admin"}),
+                azure_speech_admin_client.delete(
+                    f"/azure_speech{job_path}", headers={"Authorization": "Bearer sk-admin"}
+                ),
+            ]
+
+        assert [r.status_code for r in statuses] == [200, 204]
+
+    def test_fast_transcription_multipart_upload_is_forwarded_byte_for_byte(
+        self, azure_speech_client: TestClient
+    ) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_FAST_ENDPOINT}").mock(
+                return_value=httpx.Response(200, json={"durationMilliseconds": 640, "combinedPhrases": []})
+            )
+
+            response = azure_speech_client.post(
+                f"/azure_speech{AZURE_SPEECH_FAST_ENDPOINT}",
+                params={"api-version": "2024-11-15"},
+                files={"audio": ("eagle.wav", AZURE_SPEECH_NON_UTF8_WAV_BYTES, "audio/wav")},
+                data={"definition": json.dumps({"locales": ["en-US"]})},
+                headers={"Authorization": "Bearer sk-virtual"},
+            )
+
+        assert response.status_code == 200
+        sent = route.calls.last.request
+        assert sent.headers["content-type"].startswith("multipart/form-data; boundary=")
+        assert dict(sent.url.params) == {"api-version": "2024-11-15"}
+        assert AZURE_SPEECH_NON_UTF8_WAV_BYTES in sent.content
+        assert b'name="definition"' in sent.content
+        assert sent.headers["ocp-apim-subscription-key"] == "server-subscription-key"
+        assert "authorization" not in sent.headers
+
+    def test_batch_get_is_forwarded_with_the_job_id_path(self, azure_speech_admin_client: TestClient) -> None:
+        job_path: Final = f"{AZURE_SPEECH_BATCH_ENDPOINT}/8a5d3f2c-0b1e-4c7d-9e6f-1234567890ab/files"
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.get(f"https://eastus.api.cognitive.microsoft.com{job_path}").mock(
+                return_value=httpx.Response(200, json={"values": []})
+            )
+
+            response = azure_speech_admin_client.get(
+                f"/azure_speech{job_path}", headers={"Authorization": "Bearer sk-admin"}
+            )
+
+        assert (response.status_code, response.json()) == (200, {"values": []})
+        assert route.calls.last.request.headers["ocp-apim-subscription-key"] == "server-subscription-key"
+
+    @pytest.mark.parametrize("method", ["GET", "POST"])
+    def test_batch_requests_are_logged_as_azure_speech_not_assemblyai(
+        self, azure_speech_admin_client: TestClient, monkeypatch: pytest.MonkeyPatch, method: str
+    ) -> None:
+        from litellm.integrations.custom_logger import CustomLogger
+
+        class _Recorder(CustomLogger):
+            def __init__(self) -> None:
+                super().__init__()
+                self.payloads: list[dict[str, object]] = []  # mutable-ok: test recorder accumulates callback payloads
+
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+                self.payloads.append(kwargs["standard_logging_object"])
+
+        recorder: Final = _Recorder()
+        monkeypatch.setattr(litellm, "_async_success_callback", [*litellm._async_success_callback, recorder])
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.request(method, f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_BATCH_ENDPOINT}").mock(
+                return_value=httpx.Response(200, json={"values": []})
+            )
+
+            response = azure_speech_admin_client.request(
+                method,
+                f"/azure_speech{AZURE_SPEECH_BATCH_ENDPOINT}",
+                json={"locale": "en-US"} if method == "POST" else None,
+                headers={"Authorization": "Bearer sk-admin"},
+            )
+
+        assert response.status_code == 200
+        assert [(p["model"], p["custom_llm_provider"], p["response_cost"]) for p in recorder.payloads] == [
+            ("azure_speech/batch-transcription", "azure_speech", 0.0)
+        ]
+
+    def test_fast_transcription_spend_is_priced_from_duration_milliseconds(
+        self, azure_speech_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.integrations.custom_logger import CustomLogger
+
+        class _Recorder(CustomLogger):
+            def __init__(self) -> None:
+                super().__init__()
+                self.payloads: list[dict[str, object]] = []  # mutable-ok: test recorder accumulates callback payloads
+
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+                self.payloads.append(kwargs["standard_logging_object"])
+
+        recorder: Final = _Recorder()
+        monkeypatch.setattr(litellm, "_async_success_callback", [*litellm._async_success_callback, recorder])
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "azure/speech/azure-stt",
+            {
+                "litellm_provider": "azure",
+                "mode": "audio_transcription",
+                "input_cost_per_second": 0.25,
+                "output_cost_per_second": 0.0,
+            },
+        )
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_FAST_ENDPOINT}").mock(
+                return_value=httpx.Response(200, json={"durationMilliseconds": 5061, "combinedPhrases": []})
+            )
+
+            response = azure_speech_client.post(
+                f"/azure_speech{AZURE_SPEECH_FAST_ENDPOINT}",
+                params={"api-version": "2024-11-15"},
+                files={"audio": ("eagle.wav", AZURE_SPEECH_WAV_BYTES, "audio/wav")},
+                data={"definition": json.dumps({"locales": ["en-US"]})},
+                headers={"Authorization": "Bearer sk-virtual"},
+            )
+
+        assert response.status_code == 200
+        assert [(p["model"], p["custom_llm_provider"]) for p in recorder.payloads] == [
+            ("azure_speech/fast-transcription", "azure_speech")
+        ]
+        assert recorder.payloads[0]["response_cost"] == pytest.approx(5.061 * 0.25)
+
+    def test_short_audio_spend_is_priced_from_the_recognized_duration(
+        self, azure_speech_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.integrations.custom_logger import CustomLogger
+
+        class _Recorder(CustomLogger):
+            def __init__(self) -> None:
+                super().__init__()
+                self.payloads: list[dict[str, object]] = []  # mutable-ok: test recorder accumulates callback payloads
+
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+                self.payloads.append(kwargs["standard_logging_object"])
+
+        recorder: Final = _Recorder()
+        monkeypatch.setattr(litellm, "_async_success_callback", [*litellm._async_success_callback, recorder])
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "azure/speech/azure-stt",
+            {
+                "litellm_provider": "azure",
+                "mode": "audio_transcription",
+                "input_cost_per_second": 0.25,
+                "output_cost_per_second": 0.0,
+            },
+        )
+        transcript: Final = {**AZURE_SPEECH_TRANSCRIPT, "Offset": 10_000_000, "Duration": 30_000_000}
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(f"https://eastus.stt.speech.microsoft.com{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}").mock(
+                return_value=httpx.Response(200, json=transcript)
+            )
+
+            response = azure_speech_client.post(
+                f"/azure_speech{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}",
+                content=AZURE_SPEECH_WAV_BYTES,
+                headers={"Content-Type": "audio/wav", "Authorization": "Bearer sk-virtual"},
+            )
+
+        assert response.status_code == 200
+        assert [(p["model"], p["custom_llm_provider"]) for p in recorder.payloads] == [
+            ("azure_speech/short-audio", "azure_speech")
+        ]
+        assert recorder.payloads[0]["response_cost"] == pytest.approx(4.0 * 0.25)
+
+    def test_api_base_wins_over_region_for_both_families(
+        self, azure_speech_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AZURE_SPEECH_API_BASE", "https://my-speech.cognitiveservices.azure.com")
+        with respx.mock(assert_all_called=True) as upstream:
+            short_audio = upstream.post(
+                f"https://my-speech.cognitiveservices.azure.com{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}"
+            ).mock(return_value=httpx.Response(200, json=AZURE_SPEECH_TRANSCRIPT))
+            fast = upstream.post(f"https://my-speech.cognitiveservices.azure.com{AZURE_SPEECH_FAST_ENDPOINT}").mock(
+                return_value=httpx.Response(200, json={"durationMilliseconds": 640, "combinedPhrases": []})
+            )
+
+            azure_speech_client.post(
+                f"/azure_speech{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}",
+                content=AZURE_SPEECH_WAV_BYTES,
+                headers={"Content-Type": "audio/wav", "Authorization": "Bearer sk-virtual"},
+            )
+            azure_speech_client.post(
+                f"/azure_speech{AZURE_SPEECH_FAST_ENDPOINT}",
+                params={"api-version": "2024-11-15"},
+                files={"audio": ("eagle.wav", AZURE_SPEECH_WAV_BYTES, "audio/wav")},
+                data={"definition": json.dumps({"locales": ["en-US"]})},
+                headers={"Authorization": "Bearer sk-virtual"},
+            )
+
+        assert short_audio.called and fast.called
+
+    @pytest.mark.parametrize("endpoint", ["openai/deployments/whisper/audio/transcriptions", "speech", "speechtotext"])
+    def test_unknown_path_family_is_rejected_before_any_upstream_call(
+        self, azure_speech_client: TestClient, endpoint: str
+    ) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            catch_all = upstream.route().mock(return_value=httpx.Response(200))
+
+            response = azure_speech_client.post(
+                f"/azure_speech/{endpoint}", content=b"x", headers={"Authorization": "Bearer sk-virtual"}
+            )
+
+        assert response.status_code == 400
+        assert not catch_all.called
+
+    def test_missing_region_and_base_is_rejected_before_any_upstream_call(
+        self, azure_speech_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("AZURE_SPEECH_REGION")
+        with respx.mock(assert_all_called=False) as upstream:
+            catch_all = upstream.route().mock(return_value=httpx.Response(200))
+
+            response = azure_speech_client.post(
+                f"/azure_speech{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}",
+                content=AZURE_SPEECH_WAV_BYTES,
+                headers={"Content-Type": "audio/wav", "Authorization": "Bearer sk-virtual"},
+            )
+
+        assert response.status_code == 400
+        assert "AZURE_SPEECH_REGION" in response.text
+        assert not catch_all.called
+
+    def test_missing_api_key_is_rejected_before_any_upstream_call(
+        self, azure_speech_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("AZURE_SPEECH_API_KEY")
+        with respx.mock(assert_all_called=False) as upstream:
+            catch_all = upstream.route().mock(return_value=httpx.Response(200))
+
+            response = azure_speech_client.post(
+                f"/azure_speech{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}",
+                content=AZURE_SPEECH_WAV_BYTES,
+                headers={"Content-Type": "audio/wav", "Authorization": "Bearer sk-virtual"},
+            )
+
+        assert response.status_code == 400
+        assert "AZURE_SPEECH_API_KEY" in response.text
+        assert not catch_all.called
+
+    def test_azure_speech_is_a_mapped_pass_through_route(self) -> None:
+        from litellm.proxy._types import LiteLLMRoutes
+
+        assert "/azure_speech" in LiteLLMRoutes.mapped_pass_through_routes.value
+
+    def test_short_audio_with_no_recognized_speech_is_billed_for_the_uploaded_audio(
+        self, azure_speech_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.integrations.custom_logger import CustomLogger
+
+        class _Recorder(CustomLogger):
+            def __init__(self) -> None:
+                super().__init__()
+                self.payloads: list[dict[str, object]] = []  # mutable-ok: test recorder accumulates callback payloads
+
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+                self.payloads.append(kwargs["standard_logging_object"])
+
+        recorder: Final = _Recorder()
+        monkeypatch.setattr(litellm, "_async_success_callback", [*litellm._async_success_callback, recorder])
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "azure/speech/azure-stt",
+            {
+                "litellm_provider": "azure",
+                "mode": "audio_transcription",
+                "input_cost_per_second": 0.25,
+                "output_cost_per_second": 0.0,
+            },
+        )
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(f"https://eastus.stt.speech.microsoft.com{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}").mock(
+                return_value=httpx.Response(200, json={"RecognitionStatus": "NoMatch", "Offset": 0, "Duration": 0})
+            )
+
+            response = azure_speech_client.post(
+                f"/azure_speech{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}",
+                content=AZURE_SPEECH_WAV_BYTES,
+                headers={"Content-Type": "audio/wav", "Authorization": "Bearer sk-virtual"},
+            )
+
+        assert response.status_code == 200
+        assert [p["model"] for p in recorder.payloads] == ["azure_speech/short-audio"]
+        assert recorder.payloads[0]["response_cost"] == pytest.approx(AZURE_SPEECH_WAV_SECONDS * 0.25)
+
+
+class TestAzureSpeechProxyRoutePathTraversal:
+    """Calls the route function directly because httpx clients resolve dot segments before sending."""
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            f"speech/..{AZURE_SPEECH_BATCH_ENDPOINT}",
+            f"speech/recognition/../..{AZURE_SPEECH_BATCH_ENDPOINT}/",
+            f"speech/./..{AZURE_SPEECH_BATCH_ENDPOINT}/8a5d3f2c-0b1e-4c7d-9e6f-1234567890ab",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_dot_segments_cannot_reach_shared_batch_resources_with_a_non_admin_key(
+        self, monkeypatch: pytest.MonkeyPatch, endpoint: str
+    ) -> None:
+        monkeypatch.setenv("AZURE_SPEECH_API_KEY", "server-subscription-key")
+        monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+        monkeypatch.delenv("AZURE_SPEECH_API_BASE", raising=False)
+        request: Final = MagicMock(spec=Request)
+        request.method = "GET"
+
+        with pytest.raises(HTTPException) as denied:
+            await azure_speech_proxy_route(
+                endpoint=endpoint,
+                request=request,
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-virtual"),
+            )
+
+        assert denied.value.status_code == 403
+        assert AZURE_SPEECH_FAST_ENDPOINT in str(denied.value.detail)
+
+
+def _azure_speech_real_auth_attrs() -> dict[str, object]:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    user_api_key_cache: Final = DualCache()
+    return {
+        "prisma_client": None,
+        "user_api_key_cache": user_api_key_cache,
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=user_api_key_cache),
+        "master_key": "sk-master-key",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "user_custom_auth": None,
+        "jwt_handler": None,
+    }
+
+
+class TestAzureSpeechRawBodyThroughRealAuth:
+    """user_api_key_auth reads the body before the route runs; raw audio must not be parsed as JSON."""
+
+    def _post(
+        self, monkeypatch: pytest.MonkeyPatch, path: str, api_key: str, content_type: str, body: bytes
+    ) -> httpx.Response:
+        from litellm.proxy.proxy_server import app
+
+        monkeypatch.delitem(app.dependency_overrides, user_api_key_auth, raising=False)
+        monkeypatch.setenv("AZURE_SPEECH_API_KEY", "server-subscription-key")
+        monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+        monkeypatch.delenv("AZURE_SPEECH_API_BASE", raising=False)
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        with patch.multiple(  # test-quality-ok: the real user_api_key_auth reads proxy_server module globals (master_key, caches) that have no injection seam
+            "litellm.proxy.proxy_server", **_azure_speech_real_auth_attrs()
+        ):
+            client = TestClient(app)
+            return client.post(
+                path,
+                params={"language": "en-US"},
+                content=body,
+                headers={"Content-Type": content_type, "Authorization": f"Bearer {api_key}"},
+            )
+
+    def _post_wav(
+        self, monkeypatch: pytest.MonkeyPatch, path: str, api_key: str, body: bytes = AZURE_SPEECH_WAV_BYTES
+    ) -> httpx.Response:
+        return self._post(monkeypatch, path, api_key, "audio/wav", body)
+
+    @pytest.mark.parametrize("body", [AZURE_SPEECH_WAV_BYTES, AZURE_SPEECH_NON_UTF8_WAV_BYTES], ids=["ascii", "binary"])
+    def test_master_key_with_raw_wav_body_reaches_azure_without_a_parse_attempt(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, body: bytes
+    ) -> None:
+        with respx.mock(assert_all_called=True) as upstream, caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+            route = upstream.post(
+                f"https://eastus.stt.speech.microsoft.com{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}"
+            ).mock(return_value=httpx.Response(200, json=AZURE_SPEECH_TRANSCRIPT))
+
+            response = self._post_wav(
+                monkeypatch, f"/azure_speech{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}", "sk-master-key", body=body
+            )
+
+        assert (response.status_code, response.json()) == (200, AZURE_SPEECH_TRANSCRIPT)
+        assert route.calls.last.request.content == body
+        assert [record.message for record in caplog.records if "request body" in record.message] == []
+
+    def test_wrong_litellm_key_with_raw_wav_body_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            catch_all = upstream.route().mock(return_value=httpx.Response(200))
+
+            response = self._post_wav(monkeypatch, f"/azure_speech{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}", "sk-wrong")
+
+        assert response.status_code in (400, 401), response.text
+        assert not catch_all.called
+
+    def test_master_key_with_multipart_batch_upload_is_forwarded_byte_for_byte(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        boundary: Final = "lit7939boundary"
+        multipart_body: Final = (
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"definition\"\r\n\r\n".encode()
+            + json.dumps({"locales": ["en-US"]}).encode()
+            + f"\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"eagle.wav\"\r\n"
+            "Content-Type: audio/wav\r\n\r\n".encode()
+            + AZURE_SPEECH_NON_UTF8_WAV_BYTES
+            + f"\r\n--{boundary}--\r\n".encode()
+        )
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_BATCH_ENDPOINT}").mock(
+                return_value=httpx.Response(201, json={"status": "NotStarted"})
+            )
+
+            response = self._post(
+                monkeypatch,
+                f"/azure_speech{AZURE_SPEECH_BATCH_ENDPOINT}",
+                "sk-master-key",
+                f"multipart/form-data; boundary={boundary}",
+                multipart_body,
+            )
+
+        assert (response.status_code, response.json()) == (201, {"status": "NotStarted"})
+        sent = route.calls.last.request
+        assert sent.content == multipart_body
+        assert sent.headers["content-type"] == f"multipart/form-data; boundary={boundary}"
+        assert sent.headers["ocp-apim-subscription-key"] == "server-subscription-key"
+
+    @pytest.mark.parametrize("content_type", ["audio/wav", "multipart/form-data; boundary=x"])
+    def test_wrong_litellm_key_with_multipart_batch_upload_is_rejected(
+        self, monkeypatch: pytest.MonkeyPatch, content_type: str
+    ) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            catch_all = upstream.route().mock(return_value=httpx.Response(200))
+
+            response = self._post(
+                monkeypatch, f"/azure_speech{AZURE_SPEECH_BATCH_ENDPOINT}", "sk-wrong", content_type, b"--x--\r\n"
+            )
+
+        assert response.status_code in (400, 401), response.text
+        assert not catch_all.called
+
+    def test_audio_content_type_off_the_azure_speech_route_is_still_parsed_as_json(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        response = self._post_wav(monkeypatch, "/v1/chat/completions", "sk-master-key", body=b'{}{"model": "gpt-4o"}')
+
+        assert response.status_code == 400
+        assert "Invalid JSON payload" in response.text
 
 
 class TestTypeSafePassthroughRoute:

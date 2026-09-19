@@ -569,6 +569,23 @@ describe("EntityUsage", () => {
     expect(screen.getAllByText("Activity Metrics")[1]).toBeInTheDocument();
   });
 
+  it("tells the team view how many keys the proxy left out of the per-key lists", async () => {
+    mockTeamDailyActivityAggregatedCall.mockResolvedValue({
+      ...mockSpendData,
+      metadata: { ...mockSpendData.metadata, api_key_limit: 100, total_api_keys: 3000 },
+    });
+    render(<EntityUsage {...defaultProps} entityType="team" />);
+
+    await waitFor(() => {
+      expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+    act(() => {
+      fireEvent.click(screen.getByText("Key Activity"));
+    });
+
+    expect(await screen.findByRole("note")).toHaveTextContent("Only the 100 highest-spend keys of 3,000 are loaded");
+  });
+
   // An inactive tab panel is marked aria-selected="false" by one tab library and hidden by the
   // other, so treat either as "not on screen" and the assertion holds whichever one is rendering.
   const isShowing = (element: HTMLElement): boolean => {

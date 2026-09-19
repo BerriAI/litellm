@@ -286,6 +286,93 @@ def test_get_proxy_model_info_surfaces_supports_parallel_function_calling(local_
     assert enriched["model_info"]["supports_parallel_function_calling"] is True
 
 
+def test_model_info_reports_null_cost_for_unpriced_deployment_and_zero_for_declared_zero():
+    """A deployment configured with no cost fields must not surface the 0 that ``get_model_info``
+    defaults to, since the zero-cost budget bypass only honours a declared zero. The declared zero
+    and a catalog price still come through."""
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vllm-unpriced",
+                "litellm_params": {"model": "openai/vllm-unpriced", "api_key": "x", "api_base": "http://vllm"},
+            },
+            {
+                "model_name": "vllm-free",
+                "litellm_params": {
+                    "model": "openai/vllm-free",
+                    "api_key": "x",
+                    "api_base": "http://vllm",
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                },
+            },
+            {"model_name": "gpt-priced", "litellm_params": {"model": "gpt-4o", "api_key": "x"}},
+        ]
+    )
+
+    def enriched_cost(model_name: str) -> tuple:
+        deployment = router.get_model_list(model_name=model_name)[0]
+        info = proxy_server._enrich_model_info_with_litellm_data({**deployment, "model_info": dict(deployment["model_info"])})["model_info"]
+        return info.get("input_cost_per_token"), info.get("output_cost_per_token")
+
+    assert enriched_cost("vllm-unpriced") == (None, None)
+    assert enriched_cost("vllm-free") == (0, 0)
+    input_cost, output_cost = enriched_cost("gpt-priced")
+    assert input_cost > 0 and output_cost > 0
+
+
+def test_model_info_id_lookup_reports_the_same_cost_as_the_list(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``GET /model/info?litellm_model_id=`` must agree with the ``GET /model/info`` list, so an
+    unpriced deployment cannot read as null in the list and as free on the id lookup."""
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    declared: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+    free: Final = {"input_cost_per_token": 0, "output_cost_per_token": 0}
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": f"openai/{name}", "api_key": "x", "api_base": "http://vllm", **costs},
+                "model_info": {"id": f"{name}-id"},
+            }
+            for name, costs in (("vllm-unpriced", {}), ("vllm-free", free), ("vllm-priced", declared))
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+    def costs_of(response: httpx.Response) -> dict[str, tuple[object, object]]:
+        assert response.status_code == 200, response.text
+        return {
+            row["model_info"]["id"]: (
+                row["model_info"].get("input_cost_per_token"),
+                row["model_info"].get("output_cost_per_token"),
+            )
+            for row in response.json()["data"]
+        }
+
+    with auth_as():
+        listed: Final = costs_of(client.get("/model/info"))
+        by_id: Final = {
+            model_id: costs_of(client.get("/model/info", params={"litellm_model_id": model_id}))[model_id]
+            for model_id in listed
+        }
+
+    assert listed == {
+        "vllm-unpriced-id": (None, None),
+        "vllm-free-id": (0, 0),
+        "vllm-priced-id": (declared["input_cost_per_token"], declared["output_cost_per_token"]),
+    }
+    assert by_id == listed
+    _invalidate_model_cost_lowercase_map()
+
+
 def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):
     from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
     from litellm.proxy.auth import model_checks

@@ -1,4 +1,4 @@
-use litellm_auth::{InputSource, Sourced};
+use litellm_auth::{InputSource, SecretValue, Sourced};
 use litellm_llms::base_llm::ocr::transformation::{
     OcrConnection, OcrCredentialInputs, PreparedOcrRequest, credential_env,
 };
@@ -22,7 +22,7 @@ pub(crate) fn prepare_request(
                 .config
                 .get_api_key_env_var()
                 .and_then(credential_env)
-                .map(|value| Sourced::new(value, InputSource::Environment))
+                .map(|value| Sourced::new(SecretValue::new(value), InputSource::Environment))
         })
     });
     let dynamic_api_base = credentials.dynamic_api_base.or_else(|| {

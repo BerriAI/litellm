@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Literal, NamedTuple
 
 FileContentProvider = Literal[
@@ -8,4 +8,4 @@ FileContentProvider = Literal[
 
 class FileContentStreamingResult(NamedTuple):
     stream_iterator: Iterator[bytes] | AsyncIterator[bytes]
-    headers: dict[str, str]
+    headers: Mapping[str, str]

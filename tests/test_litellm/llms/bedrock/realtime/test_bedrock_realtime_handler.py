@@ -855,6 +855,7 @@ class TestBedrockRealtimeAwsAuth:
             aws_role_name="arn:aws:iam::123456789012:role/nova-sonic",
             aws_session_name="realtime-session",
             aws_external_id="realtime-external-id",
+            aws_session_tags=[{"Key": "team", "Value": "realtime"}],
         )
 
         assert handler.get_credentials_kwargs == {
@@ -868,6 +869,7 @@ class TestBedrockRealtimeAwsAuth:
             "aws_web_identity_token": None,
             "aws_sts_endpoint": None,
             "aws_external_id": "realtime-external-id",
+            "aws_session_tags": ({"Key": "team", "Value": "realtime"},),
         }
         resolver = stub_aws_sdk_client["config_kwargs"]["aws_credentials_identity_resolver"]
         assert isinstance(resolver, FakeStaticCredentialsResolver)

@@ -1146,37 +1146,35 @@ def responses_api_bridge_check(
     return model_info, model
 
 
-def _should_allow_input_examples(custom_llm_provider: str | None, model: str) -> bool:
+_ANTHROPIC_ONLY_TOOL_KEYS: Final = frozenset({"input_examples", "eager_input_streaming"})
+
+
+def _is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
     if custom_llm_provider == "anthropic":
         return True
-    if custom_llm_provider == "azure_ai" or custom_llm_provider == "bedrock" or custom_llm_provider == "vertex_ai":
-        return "claude" in model.lower()
+    model_lower: Final = model.lower()
+    if custom_llm_provider == "bedrock":
+        return "claude" in model_lower or ("arn:" in model_lower and ":bedrock:" in model_lower)
+    if custom_llm_provider == "azure_ai" or custom_llm_provider == "vertex_ai":
+        return "claude" in model_lower
     return False
 
 
-def _drop_input_examples_from_tool(tool: dict) -> dict:
-    tool_copy: Final = tool.copy()
-    tool_copy.pop("input_examples", None)
-    function = tool_copy.get("function")
-    if isinstance(function, dict):
-        function = function.copy()
-        function.pop("input_examples", None)
-        tool_copy["function"] = function
-    return tool_copy
+def _without_anthropic_only_tool_keys(tool: dict) -> dict:
+    kept: Final = {key: value for key, value in tool.items() if key not in _ANTHROPIC_ONLY_TOOL_KEYS}
+    function: Final = tool.get("function")
+    if not isinstance(function, dict):
+        return kept
+    return {
+        **kept,
+        "function": {key: value for key, value in function.items() if key not in _ANTHROPIC_ONLY_TOOL_KEYS},
+    }
 
 
-def _drop_input_examples_from_tools(
-    tools: list[dict] | None,
-) -> list[dict] | None:
+def _drop_anthropic_only_tool_keys(tools: list[dict] | None) -> list[dict] | None:
     if tools is None:
         return None
-    cleaned_tools: Final[list[dict]] = []
-    for tool in tools:
-        if isinstance(tool, dict):
-            cleaned_tools.append(_drop_input_examples_from_tool(tool))
-        else:
-            cleaned_tools.append(tool)
-    return cleaned_tools
+    return [_without_anthropic_only_tool_keys(tool) if isinstance(tool, dict) else tool for tool in tools]
 
 
 class _ProxyAuthHeadersProvider(Protocol):
@@ -2193,7 +2191,7 @@ def _complete_a2a(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
         api_key,
         headers,
     ) = litellm.A2AConfig.resolve_agent_config_from_registry(
-        model=model,
+        agent_name=model,
         api_base=api_base,
         api_key=api_key,
         headers=headers,
@@ -5360,8 +5358,8 @@ def completion(
             api_base=api_base,
         )
 
-        if not _should_allow_input_examples(custom_llm_provider=custom_llm_provider, model=model):
-            tools = _drop_input_examples_from_tools(tools=tools)
+        if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
+            tools = _drop_anthropic_only_tool_keys(tools=tools)
 
         if provider_specific_header is not None:
             headers.update(

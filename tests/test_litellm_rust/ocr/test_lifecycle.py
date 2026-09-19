@@ -4,7 +4,7 @@ import gc
 import json
 import threading
 import weakref
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from contextvars import ContextVar
 from typing import Final
 
@@ -400,7 +400,7 @@ async def test_response_limit_is_enforced_at_the_public_boundary(ocr_server: Rec
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [False, True])
-async def test_empty_callbacks_keep_bookkeeping_without_optional_dispatch(
+async def test_empty_callbacks_run_deployment_hooks_and_defer_like_the_python_client_wrapper(
     ocr_server: RecordingServer,
     monkeypatch: pytest.MonkeyPatch,
     failure: bool,
@@ -414,8 +414,12 @@ async def test_empty_callbacks_keep_bookkeeping_without_optional_dispatch(
         submissions = 0
         enqueues = 0
 
-        def deployment(self, *args: object, **kwargs: object) -> None:
-            self.deployments += 1
+        def counting(self, hook: Callable[..., Awaitable[object]]) -> Callable[..., Awaitable[object]]:
+            async def counted(*args: object, **kwargs: object) -> object:
+                self.deployments += 1
+                return await hook(*args, **kwargs)
+
+            return counted
 
         def submit(self, *args: object, **kwargs: object) -> None:
             self.submissions += 1
@@ -430,7 +434,7 @@ async def test_empty_callbacks_keep_bookkeeping_without_optional_dispatch(
         "async_post_call_success_deployment_hook",
         "async_post_call_failure_deployment_hook",
     ):
-        monkeypatch.setattr(utils, name, probe.deployment)
+        monkeypatch.setattr(utils, name, probe.counting(getattr(utils, name)))
     monkeypatch.setattr(litellm_logging, "executor", probe)
     monkeypatch.setattr(logging_worker, "GLOBAL_LOGGING_WORKER", probe)
     if failure:
@@ -447,17 +451,16 @@ async def test_empty_callbacks_keep_bookkeeping_without_optional_dispatch(
         assert response._hidden_params["response_cost"] is not None
         assert response._hidden_params["_response_ms"] > 0
     assert trace_id_var.get() == "callback-free-parent"
-    assert probe.deployments == probe.submissions == probe.enqueues == 0
+    assert probe.deployments == 2
+    assert probe.submissions == probe.enqueues == 0
     assert len(created_loggers) == 1
     logger: Final = created_loggers[0]
-    assert not hasattr(logger, "_native_pending_logging")
-    assert logger.model_call_details["first_api_call_start_time"] <= logger.model_call_details["end_time"]
-    assert "standard_logging_object" not in logger.model_call_details
-    assert (
-        "original_response" not in logger.model_call_details or logger.model_call_details["original_response"] is None
-    )
-    assert "complete_input_dict" not in logger.model_call_details.get("additional_args", {})
-    assert logger.model_call_details["response_cost"] == (0 if failure else response._hidden_params["response_cost"])
+    if failure:
+        assert logger.model_call_details["first_api_call_start_time"] <= logger.model_call_details["end_time"]
+        assert logger.model_call_details["response_cost"] == 0
+    else:
+        assert getattr(logger, "_native_pending_logging", None) is not None
+        assert "end_time" not in logger.model_call_details
 
 
 @pytest.mark.asyncio

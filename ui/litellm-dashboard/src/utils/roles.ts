@@ -25,9 +25,16 @@ export const isAdminRole = (role: string): boolean => {
   return all_admin_roles.includes(role);
 };
 
+const rolesAllowedToListUsers: string[] = [...all_admin_roles, "Org Admin"];
+
+export const canListUsers = (role: string | null): boolean => rolesAllowedToListUsers.includes(role ?? "");
+
 export const isProxyAdminRole = (role: string): boolean => {
   return role === "proxy_admin" || role === "Admin";
 };
+
+export const proxyAdminTierRoles = ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"];
+export const isProxyAdminTierRole = (role: string): boolean => proxyAdminTierRoles.includes(role);
 
 export const isUserTeamAdminForAnyTeam = (teams: Team[] | null, userID: string): boolean => {
   if (teams == null) {
