@@ -1151,6 +1151,65 @@ def test_get_logging_payload_placeholders_the_stored_request_body_model_only_whe
     assert stored_request_body["model"] == expected_stored_model
 
 
+@pytest.mark.parametrize(
+    ("deployment_info", "expected_stored_model_group", "expected_stored_error_message"),
+    [
+        ({}, "", f"Invalid value for 'model' = {UNKNOWN_MODEL_SPEND_LOG_MODEL}"),
+        (
+            {"model_info": {"id": "routed-deployment"}},
+            _RAW_MODEL_WITH_PROMPT,
+            f"Invalid value for 'model' = {_RAW_MODEL_WITH_PROMPT}",
+        ),
+    ],
+)
+def test_get_logging_payload_placeholders_the_metadata_copied_into_the_stored_request_body(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_info: dict[str, object],
+    expected_stored_model_group: str,
+    expected_stored_error_message: str,
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    metadata: Final = {
+        "user_api_key": "sk-test",
+        "status": "failure",
+        "model_group": _RAW_MODEL_WITH_PROMPT,
+        "error_information": {
+            "error_code": "400",
+            "error_class": "BadRequestError",
+            "llm_provider": "openai",
+            "error_message": f"Invalid value for 'model' = {_RAW_MODEL_WITH_PROMPT}",
+            "traceback": "",
+        },
+        **deployment_info,
+    }
+    kwargs: Final = {
+        "model": _RAW_MODEL_WITH_PROMPT,
+        "call_type": "amoderation",
+        "litellm_params": {
+            "metadata": metadata,
+            "proxy_server_request": {
+                "url": "http://localhost:4000/v1/moderations",
+                "body": {"input": "hi", "model": _RAW_MODEL_WITH_PROMPT, "metadata": metadata},
+            },
+        },
+    }
+
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=ValueError("Invalid value for 'model'"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    stored_request_body: Final = json.loads(payload["proxy_server_request"])
+    assert stored_request_body["metadata"]["model_group"] == expected_stored_model_group
+    assert stored_request_body["metadata"]["error_information"]["error_message"] == expected_stored_error_message
+    assert stored_request_body["metadata"]["user_api_key"] == "sk-test"
+    assert ("medical records" in payload["proxy_server_request"]) == bool(deployment_info)
+
+
 _WHITESPACE_MODEL_GROUP: Final = "Broken GPT Mini"
 _WHITESPACE_MODEL_GROUP_ALIAS: Final = "Broken GPT Alias"
 _COOLDOWN_ERROR_MESSAGE: Final = (
