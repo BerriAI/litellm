@@ -193,6 +193,7 @@ if MCP_AVAILABLE:
         filter_tools_by_allowed_tools,
         filter_tools_by_key_team_permissions,
         fire_mcp_tool_call_failure_logging,
+        reject_disallowed_mcp_client,
     )
 
     ########################################################
@@ -875,6 +876,7 @@ if MCP_AVAILABLE:
             MCPRequestHandler,
         )
 
+        reject_disallowed_mcp_client(request.headers, user_api_key_dict)
         try:
             mcp_server_name = _as_query_str(mcp_server_name)
             toolset_name = _as_query_str(toolset_name)
@@ -1078,6 +1080,7 @@ if MCP_AVAILABLE:
             proxy_logging_obj,
         )
 
+        reject_disallowed_mcp_client(request.headers, user_api_key_dict)
         try:
             user_api_key_dict = await acting_user_auth(user_api_key_dict)
             data = await request.json()

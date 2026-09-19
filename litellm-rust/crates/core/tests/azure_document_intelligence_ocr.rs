@@ -1,12 +1,13 @@
-use litellm_callbacks::event::CallEvent;
+use litellm_host::event::{CallEvent, MachineEvent};
+use litellm_llms::base_llm::ocr::error::Error;
 use rstest::rstest;
 use serde_json::{Value, json};
 
 use super::{
-    LocalOcrHost,
     test_support::{MockResponse, mock_server, perform_ocr, perform_ocr_with, wire_request},
     wire::{OcrWireRequest, decode_request},
 };
+use crate::ocr::route::LocalOcrHost;
 
 fn query_value(url: &str, key: &str) -> Option<String> {
     url::Url::parse(url)
@@ -27,12 +28,13 @@ async fn facade_maps_pages_features_and_url_document() {
         &base,
         json!({"pages":[2,0,0,1],"features":["keyValuePairs","languages"]}),
     );
-    request.document = serde_json::from_value::<super::OcrDocument>(json!({
-        "type":"document_url",
-        "document_url":"https://example.com/document.pdf"
-    }))
-    .unwrap()
-    .into();
+    request.document =
+        serde_json::from_value::<litellm_llms::base_llm::ocr::transformation::OcrDocument>(json!({
+            "type":"document_url",
+            "document_url":"https://example.com/document.pdf"
+        }))
+        .unwrap()
+        .into();
 
     perform_ocr(request).await.unwrap();
     server.await.unwrap();
@@ -52,22 +54,22 @@ async fn facade_maps_pages_features_and_url_document() {
 }
 
 #[rstest]
-#[case(json!({"pages":[true]}), crate::ocr::Error::Pages("expected only integers or only strings".into()))]
-#[case(json!({"pages":[1,"2"]}), crate::ocr::Error::Pages("expected only integers or only strings".into()))]
-#[case(json!({"pages":[-1]}), crate::ocr::Error::Pages("negative page index".into()))]
-#[case(json!({"pages":"1&&features=bad"}), crate::ocr::Error::Pages("invalid native page range".into()))]
-#[case(json!({"features":"languages&pages=1"}), crate::ocr::Error::Features)]
-#[case(json!({"req_format":"azure"}), crate::ocr::Error::RequestFormat)]
+#[case(json!({"pages":[true]}), Error::Pages("expected only integers or only strings".into()))]
+#[case(json!({"pages":[1,"2"]}), Error::Pages("expected only integers or only strings".into()))]
+#[case(json!({"pages":[-1]}), Error::Pages("negative page index".into()))]
+#[case(json!({"pages":"1&&features=bad"}), Error::Pages("invalid native page range".into()))]
+#[case(json!({"features":"languages&pages=1"}), Error::Features)]
+#[case(json!({"req_format":"azure"}), Error::RequestFormat)]
 #[tokio::test]
 async fn rejects_invalid_pages_features_and_format(
     #[case] options: Value,
-    #[case] expected: super::Error,
+    #[case] expected: Error,
 ) {
     let (base, seen, server) = mock_server(vec![MockResponse::json(json!({}))]).await;
     let result = decode_request(OcrWireRequest {
         model: "azure_ai/doc-intelligence/prebuilt-read".into(),
         document: json!({"type":"document_url","document_url":"https://example.com/a.pdf"}),
-        api_key: Some("key".into()),
+        api_key: Some(litellm_auth::SecretValue::new("key")),
         api_base: Some(base),
         custom_llm_provider: None,
         extra_headers: None,
@@ -261,7 +263,7 @@ async fn accepted_response_emits_response_received_before_polling() {
         json!({}),
     ))
     .with_observer(move |event| {
-        let CallEvent::ResponseReceived { raw } = event else {
+        let CallEvent::Machine(MachineEvent::ResponseReceived { raw }) = event else {
             return;
         };
         match request_count.lock().unwrap().len() {
@@ -458,5 +460,209 @@ async fn model_id_is_encoded_and_dot_segments_are_rejected() {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("dot segment"));
+    }
+}
+
+mod transformation {
+    use std::sync::{Arc, Mutex};
+
+    use litellm_host::event::{CallEvent, MachineEvent};
+    use litellm_llms::base_llm::ocr::transformation::OcrDocument;
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::ocr::{
+        route::LocalOcrHost,
+        test_support::{MockResponse, mock_server, perform_ocr, perform_ocr_with, wire_request},
+    };
+
+    #[tokio::test]
+    async fn facade_maps_pages_features_and_url_document() {
+        let (base, seen, server) = mock_server(vec![MockResponse::json(json!({
+            "status":"succeeded",
+            "analyzeResult":{"pages":[]}
+        }))])
+        .await;
+        let mut request = wire_request(
+            "azure_ai/doc-intelligence/prebuilt-read",
+            &base,
+            json!({"pages":[2,0,0,1],"features":["keyValuePairs","languages"], "future_option": {"nested":null}, "extra_body":{"provider_option":false}}),
+        );
+        request.document = serde_json::from_value::<OcrDocument>(json!({
+            "type":"document_url",
+            "document_url":"https://example.com/document.pdf"
+        }))
+        .unwrap()
+        .into();
+
+        perform_ocr(request).await.unwrap();
+        server.await.unwrap();
+        let request = &seen.lock().unwrap()[0];
+        let target = request.split_whitespace().nth(1).unwrap();
+        let url = format!("{base}{target}");
+        assert_eq!(query_value(&url, "pages").as_deref(), Some("1,2,3"));
+        assert_eq!(
+            query_value(&url, "features").as_deref(),
+            Some("keyValuePairs,languages")
+        );
+        let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(
+            body,
+            json!({"urlSource":"https://example.com/document.pdf", "future_option":{"nested":null}, "provider_option":false})
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_pages_features_and_format() {
+        for options in [
+            json!({"pages":[true]}),
+            json!({"pages":[1,"2"]}),
+            json!({"pages":[-1]}),
+            json!({"pages":"1&&features=bad"}),
+            json!({"features":"languages&pages=1"}),
+            json!({"req_format":"azure"}),
+        ] {
+            let request = wire_request(
+                "azure_ai/doc-intelligence/prebuilt-read",
+                "http://127.0.0.1:1",
+                options.clone(),
+            );
+            let rejected = perform_ocr(request).await.is_err();
+            assert!(rejected, "accepted {options}");
+        }
+    }
+
+    #[tokio::test]
+    async fn immediate_response_normalizes_pages_and_preserves_native() {
+        let operation = json!({
+            "status":"succeeded",
+            "operationExtension":42,
+            "analyzeResult":{
+                "content":"A\n\nB",
+                "tables":[{"cells":[]}],
+                "keyValuePairs":[{"key":{"content":"A"}}],
+                "pages":[{
+                    "pageNumber":"2",
+                    "width":"8.5",
+                    "height":11,
+                    "unit":"inch",
+                    "lines":[{"content":"A"},{"content":null},{"content":"B"}]
+                }]
+            }
+        });
+        let (base, _, server) = mock_server(vec![MockResponse::json(operation.clone())]).await;
+        let result = perform_ocr(wire_request(
+            "azure_ai/doc-intelligence/prebuilt-read",
+            &base,
+            json!({"req_format":"native"}),
+        ))
+        .await
+        .unwrap();
+        server.await.unwrap();
+
+        assert_eq!(result.pages[0].index, 1);
+        assert_eq!(result.pages[0].markdown, "A\n\nB");
+        assert_eq!(
+            serde_json::to_value(&result.pages[0].dimensions).unwrap(),
+            json!({"width":816,"height":1056,"dpi":96})
+        );
+        assert_eq!(result.usage_info.as_ref().unwrap().pages_processed, Some(1));
+        let serialized = result.clone().into_json();
+        assert_eq!(serialized["content"], "A\n\nB");
+        assert_eq!(serialized["tables"], json!([{"cells":[]}]));
+        assert_eq!(
+            serialized["keyValuePairs"],
+            json!([{"key":{"content":"A"}}])
+        );
+        assert!(serialized.get("key_value_pairs").is_none());
+        assert_eq!(
+            result.provider_native_response.as_ref(),
+            operation.as_object()
+        );
+    }
+
+    #[tokio::test]
+    async fn accepted_response_polls_to_success_with_only_credentials() {
+        let operation = json!({"status":"succeeded","analyzeResult":{"pages":[]}});
+        let (base, seen, server) = mock_server(vec![
+            MockResponse {
+                status: 202,
+                headers: vec![("Operation-Location", "{base}/operation".into())],
+                body: json!({}),
+            },
+            MockResponse {
+                status: 200,
+                headers: vec![("Retry-After", "0".into())],
+                body: json!({"status":"running"}),
+            },
+            MockResponse::json(operation.clone()),
+        ])
+        .await;
+        let mut request = wire_request(
+            "azure_ai/doc-intelligence/prebuilt-read",
+            &base,
+            json!({"req_format":"native"}),
+        );
+        request
+            .transport
+            .extra_headers
+            .push(("X-Trace".into(), "initial-only".into()));
+
+        let result = perform_ocr(request).await.unwrap();
+        server.await.unwrap();
+        assert_eq!(
+            result.provider_native_response.as_ref(),
+            operation.as_object()
+        );
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[0].to_ascii_lowercase().contains("x-trace:"));
+        for poll in &requests[1..] {
+            assert!(!poll.to_ascii_lowercase().contains("x-trace:"));
+            assert!(
+                poll.to_ascii_lowercase()
+                    .contains("ocp-apim-subscription-key: test-key")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn accepted_response_emits_response_received_for_submission_and_completed_poll() {
+        let (base, seen, server) = mock_server(vec![
+            MockResponse {
+                status: 202,
+                headers: vec![("Operation-Location", "{base}/operation".into())],
+                body: json!({"submitted": true}),
+            },
+            MockResponse::json(json!({"status":"succeeded"})),
+        ])
+        .await;
+        let responses_received = Arc::new(Mutex::new(Vec::new()));
+        let request_count = seen.clone();
+        let observed = responses_received.clone();
+        let host = LocalOcrHost::new(wire_request(
+            "azure_ai/doc-intelligence/prebuilt-read",
+            &base,
+            json!({}),
+        ))
+        .with_observer(move |event| {
+            if let CallEvent::Machine(MachineEvent::ResponseReceived { raw }) = event {
+                observed
+                    .lock()
+                    .unwrap()
+                    .push((request_count.lock().unwrap().len(), raw.body.clone()));
+            }
+        });
+
+        perform_ocr_with(host).await.unwrap();
+        server.await.unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 2);
+        assert_eq!(
+            *responses_received.lock().unwrap(),
+            [
+                (1, r#"{"submitted":true}"#.to_string()),
+                (2, r#"{"status":"succeeded"}"#.to_string()),
+            ]
+        );
     }
 }

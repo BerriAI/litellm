@@ -1,13 +1,12 @@
-use std::collections::{BTreeMap, HashMap};
-use std::time::Duration;
-
-use pyo3::exceptions::PyValueError;
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
-use serde_json::{Map, Value};
+use std::{
+    collections::{BTreeMap, HashMap},
+    time::Duration,
+};
 
 use litellm_auth::InputSource;
 use litellm_host_python::{from_py, from_py_argument};
+use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
+use serde_json::{Map, Value};
 
 /// The keyword arguments every value route shares, validated at the Python boundary.
 pub(crate) struct RouteOptions {
@@ -17,10 +16,6 @@ pub(crate) struct RouteOptions {
     pub(crate) custom_llm_provider: Option<String>,
     pub(crate) extra_headers: Option<Map<String, Value>>,
     pub(crate) timeout: Option<Duration>,
-}
-
-pub(crate) fn body_argument(value: &Bound<'_, PyAny>) -> PyResult<Map<String, Value>> {
-    required_object("body", from_py_argument(value)?)
 }
 
 pub(crate) fn messages_argument(value: &Bound<'_, PyAny>) -> PyResult<Vec<Value>> {
@@ -156,9 +151,10 @@ pub(crate) fn marshal_headers(headers: Option<Value>) -> PyResult<HashMap<String
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pyo3::exceptions::PyTypeError;
     use serde_json::json;
+
+    use super::*;
 
     fn eval<'py>(py: Python<'py>, source: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = PyDict::new(py);
@@ -190,18 +186,6 @@ mod tests {
             assert_eq!(
                 Value::Array(messages_argument(&messages).unwrap()),
                 json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}])
-            );
-
-            let body = py
-                .eval(
-                    c"{'model': 'claude', 'metadata': {'user': '1'}}",
-                    None,
-                    None,
-                )
-                .unwrap();
-            assert_eq!(
-                Value::Object(body_argument(&body).unwrap()),
-                json!({"model": "claude", "metadata": {"user": "1"}})
             );
 
             let params = py.eval(c"{'temperature': 0.2}", None, None).unwrap();
