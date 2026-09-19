@@ -665,6 +665,28 @@ def test_is_deadlock_error_excludes_non_deadlocks(error):
     assert PrismaDBExceptionHandler.is_deadlock_error(error) is False
 
 
+@pytest.mark.parametrize(
+    ("error", "sqlstate"),
+    [
+        (
+            RawQueryError(
+                data={"user_facing_error": {"error_code": "P2010", "meta": {"code": "22021", "message": "m"}}}
+            ),
+            "22021",
+        ),
+        (RawQueryError(data={"user_facing_error": {"error_code": "P2010", "meta": {"message": "m"}}}), None),
+        (RawQueryError(data={"user_facing_error": {"error_code": "P2010", "meta": {"code": 42, "message": "m"}}}), None),
+        (prisma_errors.DataError(data={"user_facing_error": {"meta": None}}), None),
+        (PrismaError("db error"), None),
+        (httpx.ReadTimeout("no reply"), None),
+    ],
+)
+def test_postgres_sqlstate_reads_the_code_prisma_attached_to_the_failed_statement(error: Exception, sqlstate: str | None):
+    """Only a prisma data error carrying Postgres's own error code yields a SQLSTATE; a
+    codeless or malformed payload, an engine-level error, and a transport error yield None."""
+    assert PrismaDBExceptionHandler.postgres_sqlstate(error) == sqlstate
+
+
 READ_ONLY_CONNECTOR_ERROR: Final = (
     "Error occurred during query execution:\nConnectorError(ConnectorError { user_facing_error: None, "
     'kind: QueryError(PostgresError { code: "25006", message: "cannot execute UPDATE in a read-only transaction", '
