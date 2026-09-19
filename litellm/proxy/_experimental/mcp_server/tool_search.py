@@ -44,6 +44,23 @@ VIRTUAL_TOOL_NAMES: Final = frozenset(
 )
 
 
+def resolve_mcp_tool_search_enabled(user_api_key_auth: UserAPIKeyAuth | None) -> bool | None:
+    """First explicitly set ``mcp_tool_search_enabled`` across key, team, then user object permissions."""
+    if user_api_key_auth is None:
+        return None
+    for permission in (
+        user_api_key_auth.object_permission,
+        user_api_key_auth.team_object_permission,
+        user_api_key_auth.user_object_permission,
+    ):
+        if permission is None:
+            continue
+        enabled = permission.mcp_tool_search_enabled
+        if enabled is not None:
+            return enabled
+    return None
+
+
 def coerce_top_k(value: Any, default: int = 5) -> int:
     try:
         return int(value)

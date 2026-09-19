@@ -4383,7 +4383,8 @@ async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
     assert await list_teams("org_admin_user", search="team_in_org_B") == ["team_in_org_B"]
     assert await list_teams("other_user") == ["other_team_in_org_A"]
     prisma_client.db.litellm_usertable.find_unique.assert_awaited_with(
-        where={"user_id": "org_admin_user"}, include={"organization_memberships": True}
+        where={"user_id": "org_admin_user"},
+        include={"organization_memberships": True, "object_permission": True},
     )
 
     prisma_client.db.litellm_usertable.find_unique.side_effect = RuntimeError("db down")

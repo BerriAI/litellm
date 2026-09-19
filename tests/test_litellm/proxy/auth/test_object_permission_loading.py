@@ -5,6 +5,7 @@ Test that object_permission is automatically loaded when fetching keys and teams
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import BaseModel
 
 
 from litellm.proxy._types import (
@@ -13,6 +14,19 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import get_key_object, get_team_object
+
+
+class _PrismaObjectPermissionStub(BaseModel):
+    object_permission_id: str
+    mcp_tool_search_enabled: bool
+
+
+class _PrismaUserRowStub(BaseModel):
+    user_id: str
+    user_email: str | None = None
+    object_permission_id: str | None = None
+    object_permission: _PrismaObjectPermissionStub | None = None
+    organization_memberships: list[object] | None = None
 
 
 @pytest.mark.asyncio
@@ -162,3 +176,51 @@ async def test_get_team_object_loads_object_permission():
         assert result.object_permission is not None
         assert result.object_permission.object_permission_id == "test_perm_id"
         assert result.object_permission.mcp_servers == ["team_server1"]
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_loads_object_permission():
+    """
+    Test that get_user_object automatically loads object_permission when object_permission_id exists.
+    """
+    from litellm.proxy.auth.auth_checks import get_user_object
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = AsyncMock()
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    mock_user = _PrismaUserRowStub(
+        user_id="test_user",
+        user_email="test@example.com",
+        object_permission_id="test_perm_id",
+        object_permission=_PrismaObjectPermissionStub(
+            object_permission_id="test_perm_id",
+            mcp_tool_search_enabled=True,
+        ),
+    )
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
+
+    with (
+        patch(  # test-quality-ok: db freshness gate is a module-level hook
+            "litellm.proxy.auth.auth_checks._should_check_db", return_value=True
+        ),
+        patch(  # test-quality-ok: write-back hook is a module-level seam
+            "litellm.proxy.auth.auth_checks._update_last_db_access_time"
+        ),
+    ):
+        result = await get_user_object(
+            user_id="test_user",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=mock_cache,
+            user_id_upsert=False,
+        )
+
+        assert result is not None
+        assert result.object_permission is not None
+        assert result.object_permission.mcp_tool_search_enabled is True
+        mock_prisma_client.db.litellm_usertable.find_unique.assert_awaited_once_with(
+            where={"user_id": "test_user"},
+            include={"organization_memberships": True, "object_permission": True},
+        )

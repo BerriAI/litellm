@@ -281,11 +281,12 @@ if MCP_AVAILABLE:
             handle_mcp_tool_call,
             handle_mcp_tool_search,
             handle_skill_search,
+            resolve_mcp_tool_search_enabled,
         )
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
         from litellm.proxy.proxy_server import general_settings, proxy_config, proxy_logging_obj
 
-        if not getattr(getattr(user_api_key_dict, "object_permission", None), "mcp_tool_search_enabled", False):
+        if not resolve_mcp_tool_search_enabled(user_api_key_dict):
             raise HTTPException(
                 status_code=403,
                 detail={"error": "forbidden", "message": f"{tool_name} requires mcp_tool_search_enabled on the key"},
@@ -889,15 +890,13 @@ if MCP_AVAILABLE:
             if server_id is None:
                 server_id = mcp_server_name
 
+            from litellm.proxy._experimental.mcp_server.tool_search import resolve_mcp_tool_search_enabled
+
             if (
                 apply_tool_filters
                 and server_id is None
                 and toolset_name is None
-                and getattr(
-                    getattr(user_api_key_dict, "object_permission", None),
-                    "mcp_tool_search_enabled",
-                    False,
-                )
+                and resolve_mcp_tool_search_enabled(user_api_key_dict)
             ):
                 from litellm.proxy._experimental.mcp_server.tool_search import (
                     get_virtual_tool_definitions,

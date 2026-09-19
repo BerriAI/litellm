@@ -468,7 +468,7 @@ describe("UserEditView", () => {
       return onSubmit.mock.calls[0][0];
     };
 
-    it("should send exactly the ten keys an admin edit produces, with seeded types preserved", async () => {
+    it("should send exactly the eleven keys an admin edit produces, with seeded types preserved", async () => {
       const payload = await submittedPayload();
 
       expect(Object.keys(payload).sort()).toEqual([
@@ -476,6 +476,7 @@ describe("UserEditView", () => {
         "max_budget",
         "mcp_servers_and_groups",
         "mcp_tool_permissions",
+        "mcp_tool_search_enabled",
         "metadata",
         "models",
         "user_alias",
@@ -483,7 +484,7 @@ describe("UserEditView", () => {
         "user_id",
         "user_role",
       ]);
-      expect(payload).toStrictEqual({
+      const expectedPayload = {
         user_id: "user-123",
         user_email: "test@example.com",
         user_alias: "Test User",
@@ -494,11 +495,13 @@ describe("UserEditView", () => {
         metadata: { key1: "value1", key2: "value2" },
         mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
         mcp_tool_permissions: {},
-      });
+        mcp_tool_search_enabled: null,
+      };
+      expect(payload).toStrictEqual(expectedPayload);
       expect(typeof payload.max_budget).toBe("number");
     });
 
-    it("should drop user_id, user_email and both mcp keys in bulk edit mode", async () => {
+    it("should drop user_id, user_email and all mcp keys in bulk edit mode", async () => {
       const payload = await submittedPayload({ isBulkEdit: true });
 
       expect(Object.keys(payload).sort()).toEqual([
@@ -511,7 +514,7 @@ describe("UserEditView", () => {
       ]);
     });
 
-    it("should drop both mcp keys for a non-admin editor while keeping identity keys", async () => {
+    it("should drop all mcp keys for a non-admin editor while keeping identity keys", async () => {
       const payload = await submittedPayload({ userRole: "user" });
 
       expect(Object.keys(payload).sort()).toEqual([
@@ -567,14 +570,15 @@ describe("UserEditView", () => {
       await waitFor(() => {
         expect(onSubmit).toHaveBeenCalled();
       });
-      expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      const expectedKeys = {
         user_id: "user-null",
         user_email: "null@example.com",
         user_alias: null,
         user_role: null,
         budget_duration: null,
         max_budget: null,
-      });
+      };
+      expect(onSubmit.mock.calls[0][0]).toMatchObject(expectedKeys);
     });
 
     it("should keep the budget input's native step constraint armed", async () => {
@@ -640,6 +644,29 @@ describe("UserEditView", () => {
         toolsets: ["toolset-a"],
       });
       expect(payload.mcp_tool_permissions).toStrictEqual({ "server-a": ["tool-a"] });
+    });
+
+    it("should write the MCP Tool Search choice into the payload", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} onSubmit={onSubmit} />);
+
+      await userEvent.click(await screen.findByRole("combobox", { name: /MCP Tool Search/i }));
+      await userEvent.click(await screen.findByRole("option", { name: "Disabled" }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0].mcp_tool_search_enabled).toBe(false);
+    });
+
+    it("should seed the MCP Tool Search toggle from objectPermission", async () => {
+      renderWithProviders(
+        <UserEditView {...defaultProps} objectPermission={{ mcp_tool_search_enabled: true } as never} />,
+      );
+
+      const toggle = await screen.findByRole("combobox", { name: /MCP Tool Search/i });
+      expect(toggle).toHaveTextContent("Enabled");
     });
 
     it("should not submit at all when metadata is not valid JSON", async () => {

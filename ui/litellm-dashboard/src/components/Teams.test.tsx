@@ -1779,3 +1779,70 @@ describe("Teams - the create form keeps the organization and models picks while 
     expect(modelsField()).toHaveValue("");
   });
 });
+
+describe("Teams - MCP Tool Search in team create", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4"]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(teamCreateCall).mockResolvedValue({
+      team_id: "new-team-1",
+      team_alias: "Test Team",
+      models: ["gpt-4"],
+      organization_id: null,
+      keys: [],
+      members_with_roles: [],
+      spend: 0,
+    });
+    mockUseOrganizations.mockReturnValue({ data: null });
+  });
+
+  const openCreateModal = async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+
+    const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
+    act(() => {
+      fireEvent.click(createButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/team name/i)).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Test Team" } });
+    fireEvent.click(screen.getByText("MCP Settings"));
+  };
+
+  const submitCreateModal = async () => {
+    const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(teamCreateCall).toHaveBeenCalled();
+    });
+
+    return vi.mocked(teamCreateCall).mock.calls[0][1];
+  };
+
+  it("writes object_permission.mcp_tool_search_enabled when a choice is made", async () => {
+    await openCreateModal();
+
+    const toggle = await screen.findByLabelText(/MCP Tool Search/);
+    await userEvent.click(toggle);
+    await userEvent.click(await screen.findByText("Disabled"));
+
+    const payload = await submitCreateModal();
+
+    expect(payload.object_permission?.mcp_tool_search_enabled).toBe(false);
+  });
+
+  it("omits mcp_tool_search_enabled when the toggle is left unset", async () => {
+    await openCreateModal();
+
+    const payload = await submitCreateModal();
+
+    expect(payload.object_permission?.mcp_tool_search_enabled).toBeUndefined();
+  });
+});

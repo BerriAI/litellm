@@ -184,6 +184,9 @@ class _PrismaUserRow(Protocol):
     @organization_memberships.setter
     def organization_memberships(self, value: Sequence[_PrismaModelDumpRow] | None) -> None: ...
 
+    @property
+    def object_permission(self) -> _PrismaModelDumpRow | None: ...
+
     def __iter__(self) -> Iterator[tuple[str, object]]: ...
 
 
@@ -2486,7 +2489,7 @@ async def _get_fuzzy_user_object(
     if sso_user_id is not None:
         response = await _user_table(UserRepository(prisma_client)).find_unique(
             where={"sso_user_id": sso_user_id},
-            include={"organization_memberships": True},
+            include={"organization_memberships": True, "object_permission": True},
         )
 
     if response is None and user_email is not None:
@@ -2494,7 +2497,7 @@ async def _get_fuzzy_user_object(
         # This matches the pattern used in _check_duplicate_user_email
         response = await _user_table(UserRepository(prisma_client)).find_first(
             where={"user_email": {"equals": user_email, "mode": "insensitive"}},
-            include={"organization_memberships": True},
+            include={"organization_memberships": True, "object_permission": True},
         )
 
         if response is not None and sso_user_id is not None:  # update sso_user_id
@@ -2583,7 +2586,7 @@ async def get_user_object(
 
         if should_check_db:
             response = await _user_table(UserRepository(prisma_client)).find_unique(
-                where={"user_id": user_id}, include={"organization_memberships": True}
+                where={"user_id": user_id}, include={"organization_memberships": True, "object_permission": True}
             )
 
             if response is None:
@@ -2622,7 +2625,7 @@ async def get_user_object(
 
                 response = await _user_table(UserRepository(prisma_client)).create(
                     data=new_user_params,
-                    include={"organization_memberships": True},
+                    include={"organization_memberships": True, "object_permission": True},
                 )
 
                 default_teams: Final = check_if_default_team_set()
@@ -2652,7 +2655,12 @@ async def get_user_object(
             ]
             response.organization_memberships = _dumped_memberships
 
-        _response = LiteLLM_UserTable.model_validate(dict(response))
+        _object_permission: Final = (
+            LiteLLM_ObjectPermissionTable.model_validate(response.object_permission.model_dump())
+            if response.object_permission is not None
+            else None
+        )
+        _response = LiteLLM_UserTable.model_validate({**dict(response), "object_permission": _object_permission})
         _response = await _backfill_null_user_email(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,

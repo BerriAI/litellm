@@ -316,13 +316,26 @@ export default function UserInfoView({
       const mcpEntitlement = extractMcpEntitlement(formValues, allMcpServers, allMcpToolsets);
       const userFields = Object.fromEntries(
         Object.entries(formValues).filter(
-          ([field]) => field !== "mcp_servers_and_groups" && field !== "mcp_tool_permissions",
+          ([field]) =>
+            field !== "mcp_servers_and_groups" &&
+            field !== "mcp_tool_permissions" &&
+            field !== "mcp_tool_search_enabled",
         ),
       );
 
+      const objectPermissionUpdate =
+        mcpEntitlement || "mcp_tool_search_enabled" in formValues
+          ? {
+              ...(mcpEntitlement ?? {}),
+              ...("mcp_tool_search_enabled" in formValues
+                ? { mcp_tool_search_enabled: formValues.mcp_tool_search_enabled }
+                : {}),
+            }
+          : null;
+
       await userUpdateUserCall(
         accessToken,
-        mcpEntitlement ? { ...userFields, object_permission: mcpEntitlement } : userFields,
+        objectPermissionUpdate ? { ...userFields, object_permission: objectPermissionUpdate } : userFields,
         null,
       );
 
@@ -337,8 +350,8 @@ export default function UserInfoView({
           formValues.budget_duration === undefined ? userData.budget_duration : formValues.budget_duration,
         metadata: formValues.metadata ?? userData.metadata,
         model_max_budget: formValues.model_max_budget ?? userData.model_max_budget,
-        object_permission: mcpEntitlement
-          ? { ...userData.object_permission, ...mcpEntitlement }
+        object_permission: objectPermissionUpdate
+          ? { ...userData.object_permission, ...objectPermissionUpdate }
           : userData.object_permission,
       });
 

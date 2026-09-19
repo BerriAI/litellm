@@ -30,6 +30,7 @@ from litellm.proxy._experimental.mcp_server.tool_search import (
     ToolSearchResult,
     coerce_top_k,
     get_virtual_tool_definitions,
+    resolve_mcp_tool_search_enabled,
     search_mcp_tools,
     search_tools,
 )
@@ -233,6 +234,47 @@ class TestCoerceTopK:
         assert coerce_top_k("nope", default=10) == 10
 
 
+class TestResolveMcpToolSearchEnabled:
+    @pytest.mark.parametrize(
+        (
+            "key_value",
+            "team_value",
+            "user_value",
+            "expected",
+        ),
+        [
+            pytest.param(True, False, None, True, id="key-true-beats-team-false"),
+            pytest.param(None, False, True, False, id="team-false-beats-user-true"),
+            pytest.param(False, True, True, False, id="key-false-beats-team-and-user-true"),
+            pytest.param(None, None, True, True, id="falls-through-to-user"),
+            pytest.param(None, None, None, None, id="all-unset-returns-none"),
+            pytest.param(None, None, False, False, id="user-false-explicit"),
+        ],
+    )
+    def test_precedence(
+        self,
+        key_value: bool | None,
+        team_value: bool | None,
+        user_value: bool | None,
+        expected: bool | None,
+    ) -> None:
+        uak = UserAPIKeyAuth(
+            api_key="k",
+            object_permission=_make_perm(mcp_tool_search_enabled=key_value) if key_value is not None else None,
+            team_object_permission=_make_perm(mcp_tool_search_enabled=team_value) if team_value is not None else None,
+            user_object_permission=_make_perm(mcp_tool_search_enabled=user_value) if user_value is not None else None,
+        )
+        assert resolve_mcp_tool_search_enabled(uak) is expected
+
+    def test_present_row_with_unset_field_is_transparent(self) -> None:
+        uak = UserAPIKeyAuth(
+            api_key="k",
+            object_permission=_make_perm(),
+            team_object_permission=_make_perm(mcp_tool_search_enabled=True),
+        )
+        assert resolve_mcp_tool_search_enabled(uak) is True
+
+
 class TestSearchTools:
     def test_returns_matching_tools(self) -> None:
         results = search_tools("github issue", SAMPLE_TOOLS)
@@ -346,6 +388,44 @@ class TestListToolRestApiWithToolSearch:
             object_permission=_make_perm(
                 mcp_tool_search_enabled=True,
                 mcp_servers=["github", "slack"],
+            ),
+        )
+
+        mock_request = MagicMock()
+        mock_request.headers = {}
+
+        list_fn = next(
+            r.endpoint
+            for r in router.routes
+            if hasattr(r, "path") and r.path.endswith("/tools/list") and hasattr(r, "methods") and "GET" in r.methods
+        )
+
+        result = await list_fn(
+            request=mock_request,
+            server_id=None,
+            include_disabled_tools=False,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert result["error"] is None
+        tool_names = [t["name"] for t in result["tools"]]
+        assert set(tool_names) == {
+            MCP_TOOL_SEARCH_TOOL_NAME,
+            MCP_TOOL_CALL_TOOL_NAME,
+            AGENT_SEARCH_TOOL_NAME,
+            SKILL_SEARCH_TOOL_NAME,
+        }
+
+    @pytest.mark.asyncio
+    async def test_returns_only_virtual_tools_when_team_flag_enabled(self) -> None:
+        from litellm.proxy._experimental.mcp_server.rest_endpoints import router
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test_key",
+            object_permission=None,
+            team_object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="team-perm",
+                mcp_tool_search_enabled=True,
             ),
         )
 
@@ -565,6 +645,38 @@ class TestCallToolRestApiVirtualTools:
         mock_tool.inputSchema = {"type": "object", "properties": {}}
 
         with patch(
+            "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
+            new_callable=AsyncMock,
+            return_value=AggregateToolListing(tools=[mock_tool], outcomes={}),
+        ):
+            result = await self._get_call_fn()(
+                request=request,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        assert result.content
+        assert result.content[0].type == "text"
+        returned_tools = json.loads(result.content[0].text)
+        assert isinstance(returned_tools, list)
+        assert any(t["name"] == "github-create_issue" for t in returned_tools)
+
+    @pytest.mark.asyncio
+    async def test_mcp_tool_search_call_allowed_by_user_flag_only(self) -> None:
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test_key",
+            object_permission=None,
+            team_object_permission=None,
+            user_object_permission=_make_perm(mcp_tool_search_enabled=True),
+        )
+
+        request = self._make_request({"name": MCP_TOOL_SEARCH_TOOL_NAME, "arguments": {"query": "create issue"}})
+
+        mock_tool = MagicMock()
+        mock_tool.name = "github-create_issue"
+        mock_tool.description = "Create a GitHub issue"
+        mock_tool.inputSchema = {"type": "object", "properties": {}}
+
+        with patch(  # test-quality-ok: the REST handler resolves the internal catalog helper directly; no injection seam
             "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
             new_callable=AsyncMock,
             return_value=AggregateToolListing(tools=[mock_tool], outcomes={}),
@@ -888,6 +1000,27 @@ class TestCallToolRestApiVirtualTools:
 
         assert exc_info.value.status_code in (400, 403, 404)
 
+    @pytest.mark.asyncio
+    async def test_mcp_tool_search_call_rejected_when_team_disables_and_user_enables(self) -> None:
+        from fastapi import HTTPException
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test_key",
+            object_permission=None,
+            team_object_permission=_make_perm(mcp_tool_search_enabled=False),
+            user_object_permission=_make_perm(mcp_tool_search_enabled=True),
+        )
+
+        request = self._make_request({"name": MCP_TOOL_SEARCH_TOOL_NAME, "arguments": {"query": "create issue"}})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._get_call_fn()(
+                request=request,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        assert exc_info.value.status_code in (400, 403, 404)
+
 
 class TestDispatchVirtualMcpTool:
     """Covers the SSE/protocol-path interception helper in server.py."""
@@ -921,6 +1054,41 @@ class TestDispatchVirtualMcpTool:
         )
         assert result is not None
         assert result.isError is True
+
+    @pytest.mark.asyncio
+    async def test_rejects_when_team_flag_disabled(self) -> None:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _dispatch_virtual_mcp_tool,
+        )
+
+        uak = UserAPIKeyAuth(api_key="k", team_object_permission=_make_perm(mcp_tool_search_enabled=False))
+        result = await _dispatch_virtual_mcp_tool(
+            name=MCP_TOOL_SEARCH_TOOL_NAME,
+            arguments={"query": "x"},
+            user_api_key_auth=uak,
+            client_ip=None,
+        )
+        assert result is not None
+        assert result.isError is True
+
+    @pytest.mark.asyncio
+    async def test_routes_search_when_only_team_flag_enabled(self) -> None:
+        from litellm.proxy._experimental.mcp_server import server as srv
+
+        uak = UserAPIKeyAuth(api_key="k", team_object_permission=_make_perm(mcp_tool_search_enabled=True))
+        with patch(  # test-quality-ok: the dispatch reads the handler from module context; no injection seam
+            "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_search",
+            new_callable=AsyncMock,
+            return_value="SEARCH_RESULT",
+        ):
+            result = await srv._dispatch_virtual_mcp_tool(
+                name=MCP_TOOL_SEARCH_TOOL_NAME,
+                arguments={"query": "q"},
+                user_api_key_auth=uak,
+                client_ip=None,
+            )
+
+        assert result == "SEARCH_RESULT"
 
     @pytest.mark.asyncio
     async def test_routes_search_with_client_ip(self) -> None:

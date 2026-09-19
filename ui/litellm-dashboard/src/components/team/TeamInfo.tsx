@@ -89,6 +89,7 @@ import GuardrailSettingsView from "../GuardrailSettingsView";
 import LoggingSettingsView from "../logging_settings_view";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
+import { MCPToolSearchSelect } from "../mcp_server_management/MCPToolSearchSelect";
 import {
   mcpServersForIdentifier,
   resolveEffectiveMcpServers,
@@ -394,6 +395,7 @@ const teamUpdateFieldsSchema = z.object({
     })
     .optional(),
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
+  mcp_tool_search_enabled: z.boolean().nullish(),
   agents_and_groups: z.object({ agents: z.array(z.string()), accessGroups: z.array(z.string()) }).optional(),
   object_permission_search_tools: z.array(z.string()).optional(),
   object_permission_skills: z.array(z.string()).optional(),
@@ -444,6 +446,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   allowed_passthrough_routes: [],
   mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
   mcp_tool_permissions: {},
+  mcp_tool_search_enabled: null,
   agents_and_groups: { agents: [], accessGroups: [] },
   object_permission_search_tools: [],
   object_permission_skills: [],
@@ -509,6 +512,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
     toolsets: info.object_permission?.mcp_toolsets || [],
   },
   mcp_tool_permissions: info.object_permission?.mcp_tool_permissions || {},
+  mcp_tool_search_enabled: info.object_permission?.mcp_tool_search_enabled ?? null,
   agents_and_groups: {
     agents: info.object_permission?.agents || [],
     accessGroups: info.object_permission?.agent_access_groups || [],
@@ -1084,6 +1088,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       if (toolsets) {
         updateData.object_permission.mcp_toolsets = toolsets;
       }
+      updateData.object_permission.mcp_tool_search_enabled = values.mcp_tool_search_enabled ?? null;
       delete values.mcp_servers_and_groups;
       delete values.mcp_tool_permissions;
 
@@ -1888,6 +1893,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         allowAllProxyMcpServers={is_proxy_admin}
                       />
                     )}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="mcp_tool_search_enabled"
+                    label="MCP Tool Search"
+                    description="Allow the mcp_tool_search and mcp_tool_call virtual tools for keys on this team. 'Not set' inherits the key's own setting."
+                  >
+                    {({ id, value, onChange }) => <MCPToolSearchSelect id={id} value={value} onChange={onChange} />}
                   </FormField>
 
                   <div className="mb-6">
