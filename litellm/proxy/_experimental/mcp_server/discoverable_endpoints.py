@@ -2613,7 +2613,7 @@ def oauth_protected_resource_root(request: Request) -> dict[str, str | tuple[str
     }
 
 
-def _build_aggregate_protected_resource_response(request: Request) -> dict:
+def _build_aggregate_protected_resource_response(request: Request) -> dict[str, object]:
     """RFC 9728 metadata for the aggregate /mcp resource: the gateway itself is
     the authorization server. No per-server names or scopes leak here; access
     is resolved after sign-in from the authenticated user's grants.
@@ -2633,7 +2633,9 @@ def _build_aggregate_protected_resource_response(request: Request) -> dict:
     }
 
 
-def _build_aggregate_authorization_server_response(request: Request, token_exchange_available: bool) -> dict:
+def _build_aggregate_authorization_server_response(
+    request: Request, token_exchange_available: bool
+) -> dict[str, object]:
     """RFC 8414 metadata for the gateway as the aggregate authorization server.
 
     The issuer is ``{base}/mcp`` and must stay equal to the value the

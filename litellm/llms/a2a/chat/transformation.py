@@ -49,7 +49,7 @@ def _registry_api_key(agent_litellm_params: Mapping[str, object]) -> str | None:
     return configured_api_key if isinstance(configured_api_key, str) else None
 
 
-def _registry_headers(agent_litellm_params: Mapping[str, object]) -> dict[str, Any] | None:
+def _registry_headers(agent_litellm_params: Mapping[str, object]) -> dict[str, object] | None:
     stored_headers: Final = agent_litellm_params.get("headers")
     if not isinstance(stored_headers, Mapping):
         return None
