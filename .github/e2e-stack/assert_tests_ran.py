@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -45,6 +46,13 @@ def main() -> int:
             if case.get("file") != path or all(case.find(tag) is None for tag in ("failure", "error")):
                 continue
             _ = sys.stdout.write(f"  failed: {case.get('classname', '')}::{case.get('name', '')}\n")
+            for prop in case.findall("./properties/property"):
+                name = prop.get("name", "")
+                value = prop.get("value", "")
+                if name in ("oauth_failure_phase", "oauth_exception_type", "oauth_frame") and re.fullmatch(
+                    r"[A-Za-z0-9_.:<>-]{1,240}", value
+                ):
+                    _ = sys.stdout.write(f"    {name}: {value}\n")
     if (
         selected
         and not missing
