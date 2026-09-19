@@ -307,6 +307,40 @@ async def test_vector_store_file_list_resolves_credentials_from_model_query_para
 
 
 @pytest.mark.asyncio
+async def test_vector_store_file_list_registry_routed_model_skips_key_model_grant():
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.get_deployment_credentials_with_provider.return_value = {
+        "api_key": "sk-team-openai",
+        "api_base": "https://api.openai.com/v1",
+        "custom_llm_provider": "openai",
+        "model": "openai/gpt-4o-mini",
+    }
+
+    data = {"vector_store_id": "vs_123", "model": "team-openai"}
+    user_api_key_dict = UserAPIKeyAuth(
+        models=["restricted-deployment"],
+        team_models=["restricted-deployment"],
+    )
+
+    result = await _update_request_data_with_model_routing_hint(
+        data=data,
+        request=request,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert result["api_key"] == "sk-team-openai"
+    assert result["model"] == "openai/gpt-4o-mini"
+    llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
+        model_id="team-openai"
+    )
+
+
+@pytest.mark.asyncio
 async def test_vector_store_file_list_resolves_single_openai_team_deployment():
     request = MagicMock(spec=Request)
     request.query_params = {}

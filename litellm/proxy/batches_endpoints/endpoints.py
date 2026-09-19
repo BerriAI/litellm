@@ -470,6 +470,17 @@ async def retrieve_batch(
             route_type="aretrieve_batch",
         )
 
+        unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id) if unified_batch_id else None
+        if unified_model_id is not None:
+            resolved_unified_model: Final = (
+                llm_router.resolve_model_name_from_model_id(unified_model_id) if llm_router is not None else None
+            )
+            await authorize_model_for_key(
+                model_id=resolved_unified_model or unified_model_id,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+            )
+
         # FIX: First, try to read from ManagedObjectTable for consistent state
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
         from litellm.proxy.proxy_server import prisma_client
@@ -590,13 +601,6 @@ async def retrieve_batch(
                 )
 
             if unified_batch_id:
-                unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id)
-                if unified_model_id is not None:
-                    await authorize_model_for_key(
-                        model_id=llm_router.resolve_model_name_from_model_id(unified_model_id) or unified_model_id,
-                        llm_router=llm_router,
-                        user_api_key_dict=user_api_key_dict,
-                    )
                 add_internal_model_credentials(
                     data=data,
                     llm_router=llm_router,
