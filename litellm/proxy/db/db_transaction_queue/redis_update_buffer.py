@@ -62,7 +62,7 @@ else:
 
 BufferedSpendTransactions: TypeAlias = DBSpendUpdateTransactions | Mapping[str, BaseDailySpendTransaction]
 
-_SpendTransactionField: TypeAlias = Literal[
+SpendTransactionField: TypeAlias = Literal[
     "user_list_transactions",
     "end_user_list_transactions",
     "key_list_transactions",
@@ -76,7 +76,7 @@ _SpendTransactionField: TypeAlias = Literal[
     "model_access_group_list_transactions",
 ]
 
-_SPEND_TRANSACTION_FIELDS: Final[tuple[_SpendTransactionField, ...]] = (
+SPEND_TRANSACTION_FIELDS: Final[tuple[SpendTransactionField, ...]] = (
     "user_list_transactions",
     "end_user_list_transactions",
     "key_list_transactions",
@@ -97,18 +97,18 @@ def _accumulated_spend(totals: Mapping[str, float], entities: Mapping[str, float
     return {**totals, **{entity_id: totals.get(entity_id, 0) + amount for entity_id, amount in entities.items()}}
 
 
-def _entity_transactions(transaction: DBSpendUpdateTransactions, field: _SpendTransactionField) -> dict[str, float]:
+def entity_transactions(transaction: DBSpendUpdateTransactions, field: SpendTransactionField) -> dict[str, float]:
     entities: Final[dict[str, float] | None] = transaction.get(field)
     return entities if isinstance(entities, dict) else {}
 
 
 def _merged_entity_transactions(
     list_of_transactions: Sequence[DBSpendUpdateTransactions],
-    field: _SpendTransactionField,
+    field: SpendTransactionField,
 ) -> dict[str, float]:
     return reduce(
         _accumulated_spend,
-        (_entity_transactions(transaction, field) for transaction in list_of_transactions),
+        (entity_transactions(transaction, field) for transaction in list_of_transactions),
         {},
     )
 
@@ -533,9 +533,7 @@ class RedisUpdateBuffer:
         """
         Gets the number of transactions to store in Redis
         """
-        return sum(
-            len(_entity_transactions(db_spend_update_transactions, field)) for field in _SPEND_TRANSACTION_FIELDS
-        )
+        return sum(len(entity_transactions(db_spend_update_transactions, field)) for field in SPEND_TRANSACTION_FIELDS)
 
     @staticmethod
     def _remove_prefix_from_keys(data: Mapping[str, _ValueT], prefix: str) -> dict[str, _ValueT]:

@@ -1,4 +1,6 @@
 import asyncio
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
@@ -13,6 +15,22 @@ from litellm.proxy.db.db_transaction_queue.base_update_queue import (
     service_logger_obj,
 )
 from litellm.types.services import ServiceTypes
+
+_ENTITY_TYPE_TO_DICT_KEY: Final[Mapping[Litellm_EntityType, str]] = MappingProxyType(
+    {
+        Litellm_EntityType.USER: "user_list_transactions",
+        Litellm_EntityType.END_USER: "end_user_list_transactions",
+        Litellm_EntityType.KEY: "key_list_transactions",
+        Litellm_EntityType.TEAM: "team_list_transactions",
+        Litellm_EntityType.TEAM_MEMBER: "team_member_list_transactions",
+        Litellm_EntityType.ORGANIZATION: "org_list_transactions",
+        Litellm_EntityType.ORGANIZATION_MEMBER: "org_member_list_transactions",
+        Litellm_EntityType.PROJECT: "project_list_transactions",
+        Litellm_EntityType.TAG: "tag_list_transactions",
+        Litellm_EntityType.AGENT: "agent_list_transactions",
+        Litellm_EntityType.MODEL_ACCESS_GROUP: "model_access_group_list_transactions",
+    }
+)
 
 
 class SpendUpdateQueue(BaseUpdateQueue):
@@ -48,6 +66,21 @@ class SpendUpdateQueue(BaseUpdateQueue):
                 "Spend update queue is full. Aggregating all entries in queue to concatenate entries."
             )
             await self.aggregate_queue_updates()
+
+    async def add_aggregated_update(self, transactions: DBSpendUpdateTransactions) -> None:
+        """Puts an aggregated batch back on the queue, one item per entity."""
+        for entity_type, dict_key in _ENTITY_TYPE_TO_DICT_KEY.items():
+            entity_transactions = transactions.get(dict_key)
+            if entity_transactions is None:
+                continue
+            for entity_id, response_cost in entity_transactions.items():
+                await self.add_update(
+                    SpendUpdateQueueItem(
+                        entity_type=entity_type,
+                        entity_id=entity_id,
+                        response_cost=response_cost,
+                    )
+                )
 
     async def aggregate_queue_updates(self):
         """Concatenate all updates in the queue to reduce the size of in-memory queue"""
@@ -144,21 +177,6 @@ class SpendUpdateQueue(BaseUpdateQueue):
             model_access_group_list_transactions={},
         )
 
-        # Map entity types to their corresponding transaction dictionary keys
-        entity_type_to_dict_key: Final = {
-            Litellm_EntityType.USER: "user_list_transactions",
-            Litellm_EntityType.END_USER: "end_user_list_transactions",
-            Litellm_EntityType.KEY: "key_list_transactions",
-            Litellm_EntityType.TEAM: "team_list_transactions",
-            Litellm_EntityType.TEAM_MEMBER: "team_member_list_transactions",
-            Litellm_EntityType.ORGANIZATION: "org_list_transactions",
-            Litellm_EntityType.ORGANIZATION_MEMBER: "org_member_list_transactions",
-            Litellm_EntityType.PROJECT: "project_list_transactions",
-            Litellm_EntityType.TAG: "tag_list_transactions",
-            Litellm_EntityType.AGENT: "agent_list_transactions",
-            Litellm_EntityType.MODEL_ACCESS_GROUP: "model_access_group_list_transactions",
-        }
-
         for update in updates:
             entity_type = update.get("entity_type")
             entity_id = update.get("entity_id") or ""
@@ -171,7 +189,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
                 )
                 continue
 
-            dict_key = entity_type_to_dict_key.get(entity_type)
+            dict_key = _ENTITY_TYPE_TO_DICT_KEY.get(entity_type)
             if dict_key is None:
                 verbose_proxy_logger.debug(
                     "Skipping update spend for update: %s, because entity_type is not in entity_type_to_dict_key",
