@@ -4,10 +4,12 @@ import argparse
 from collections import deque
 import json
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from queue import SimpleQueue
 from typing import Final, cast
 
+import httpx
 import uvicorn
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from starlette.applications import Starlette
@@ -16,7 +18,16 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
-from integration._support.scripted_wires import RenderedResponse, Scenario, ScenarioStore, render
+from integration._support.scripted_wires import (
+    WIRE_MOUNTS,
+    RenderedResponse,
+    Scenario,
+    ScenarioDeleted,
+    ScenarioRegistered,
+    ScenarioStore,
+    Wire,
+    render,
+)
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 INTERNAL_FIELDS: Final = frozenset(
@@ -192,6 +203,48 @@ class Provider:
                 Route("/{scenario_id}/{tail:path}", self.scripted, methods=["POST"]),
             ]
         )
+
+
+CONTROL_URL: Final = os.environ.get("INTEGRATION_UPSTREAM_URL", "http://127.0.0.1:8190").rstrip("/")
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioHandle:
+    scenario_id: str
+    wire: Wire
+    control_url: str
+
+    def api_base(self) -> str:
+        return f"{self.control_url}/{self.scenario_id}/{self._mount()}"
+
+    def _mount(self) -> str:
+        return WIRE_MOUNTS[self.wire]
+
+
+def register_scenario(scenario: Scenario) -> ScenarioHandle:
+    response: Final = httpx.post(
+        f"{CONTROL_URL}/__scenarios",
+        json=scenario.model_dump(mode="json"),
+        trust_env=False,
+        timeout=15,
+    )
+    response.raise_for_status()
+    result: Final = ScenarioRegistered.model_validate_json(response.content)
+    return ScenarioHandle(
+        scenario_id=result.scenario_id,
+        wire=scenario.wire,
+        control_url=CONTROL_URL,
+    )
+
+
+def delete_scenario(handle: ScenarioHandle) -> None:
+    response: Final = httpx.delete(
+        f"{CONTROL_URL}/__scenarios/{handle.scenario_id}",
+        trust_env=False,
+        timeout=15,
+    )
+    response.raise_for_status()
+    ScenarioDeleted.model_validate_json(response.content)
 
 
 def main() -> None:
