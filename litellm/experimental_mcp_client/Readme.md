@@ -15,3 +15,9 @@ Upgrade SDK1-dependent libraries before installing them alongside `litellm[mcp]`
 The shared unit-test workflow runs the MCP integration suite once, with SDK2 in the gateway environment and an isolated SDK1 peer. Keep the SDK1 list/call compatibility test while SDK1 clients are supported; remove it when that support is explicitly retired and the client migration is documented
 
 See the official [SDK migration guide](https://py.sdk.modelcontextprotocol.io/migration/) for Python API changes
+
+## HTTP redirects
+
+The MCP SDK follows redirects within the configured endpoint's origin, so a redirect to another path on the same scheme, host and port works. It also permits an HTTP-to-HTTPS upgrade on the same host using the default ports
+
+Redirects to a different origin are rejected before the destination receives a request or credentials. Configure the final MCP endpoint URL directly if the server redirects to a different host or port. Setting the HTTP client's `follow_redirects` option does not override the SDK's policy
