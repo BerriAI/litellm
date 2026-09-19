@@ -2511,6 +2511,30 @@ def test_usage_only_chunk_not_dropped_when_finish_reason_already_set(
     assert result.usage is not None
 
 
+def test_chunk_creator_converts_openai_sdk_usage_to_litellm_usage(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
+    from openai.types.completion_usage import CompletionUsage
+
+    initialized_custom_stream_wrapper.custom_llm_provider = "hosted_vllm"
+    sdk_chunk: Final = ChatCompletionChunk.construct(
+        id="chatcmpl-1",
+        object="chat.completion.chunk",
+        created=1,
+        model="my-model",
+        choices=[{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": None}],
+        usage=CompletionUsage.construct(prompt_tokens=10, completion_tokens=2, total_tokens=12, cost=0.0042),
+    )
+
+    result: Final = initialized_custom_stream_wrapper.chunk_creator(chunk=sdk_chunk)
+
+    assert result is not None
+    assert type(result.usage) is Usage
+    assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (10, 2, 12)
+    assert result.usage.cost == 0.0042
+
+
 def _run_dispatch(wrapper: CustomStreamWrapper, chunk):
     model_response = wrapper.model_response_creator()
     completion_obj = {"content": ""}
