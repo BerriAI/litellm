@@ -7097,6 +7097,89 @@ async def test_list_key_helper_applies_search_to_prisma_where():
     assert _search_clause("key-id-123", "key-id-123") in where["AND"], f"search not in Prisma where: {where}"
 
 
+_BULK_UPDATE_TOKEN: Final = "1f2e3d4c5b6a79880123456789abcdef0123456789abcdef0123456789abcdef"
+
+
+async def _bulk_update_one_key(monkeypatch, item_payload: Mapping[str, object]) -> Mapping[str, object]:
+    """Runs /key/bulk_update with one item against a budgeted team key and returns the row written to the DB."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import bulk_update_keys
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import BulkUpdateKeyRequest
+
+    key_in_db = LiteLLM_VerificationToken(
+        token=_BULK_UPDATE_TOKEN, user_id="test-user", team_id="team-1", max_budget=100.0, budget_id="budget-1"
+    )
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_in_db)
+    mock_prisma_client.update_data = AsyncMock(return_value={"data": {"token": _BULK_UPDATE_TOKEN}})
+    _setup_update_key_mocks(monkeypatch, mock_prisma_client)
+
+    with (
+        patch(  # test-quality-ok: the handler reads the cache and hook singletons from module globals, no injection seam
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: the permission check is a classmethod the handler calls directly, no injection seam
+            "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: the audit hook is a classmethod the handler calls directly, no injection seam
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_updated_hook",
+            new_callable=AsyncMock,
+        ),
+    ):
+        response = await bulk_update_keys(
+            data=BulkUpdateKeyRequest.model_validate({"keys": [{"key": _BULK_UPDATE_TOKEN, **item_payload}]}),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+            ),
+            litellm_changed_by=None,
+        )
+
+    assert response.failed_updates == []
+    return mock_prisma_client.update_data.call_args.kwargs["data"]
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_keys_item_without_a_field_leaves_that_column_alone(monkeypatch):
+    """A tags-only item used to reach the DB with max_budget, team_id, and budget_id as explicit
+    nulls, so tagging a key wiped its budget and detached it from its team."""
+    written = await _bulk_update_one_key(monkeypatch, {"tags": ["team-a"]})
+
+    assert written["metadata"]["tags"] == ["team-a"]
+    assert not {"max_budget", "team_id", "budget_id"} & written.keys()
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_keys_explicit_null_still_clears_the_field(monkeypatch):
+    """Sending `"max_budget": null` on an item is a request to remove the budget, as on /key/update."""
+    written = await _bulk_update_one_key(monkeypatch, {"max_budget": None})
+
+    assert written["max_budget"] is None
+    assert not {"team_id", "budget_id"} & written.keys()
+
+
+def test_bulk_update_keys_rejects_a_field_the_bulk_path_cannot_apply():
+    """`object_permission` used to be accepted with 200 and dropped, leaving an item that carried
+    nothing but the key, so the call wiped the key's budget instead of granting the permission."""
+    from fastapi import FastAPI
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.management_endpoints.key_management_endpoints import router
+
+    test_app = FastAPI()
+    test_app.include_router(router)
+    test_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+    )
+    response = TestClient(test_app).post(
+        "/key/bulk_update",
+        json={"keys": [{"key": _BULK_UPDATE_TOKEN, "object_permission": {"vector_stores": ["vs-1"]}}]},
+    )
+
+    assert response.status_code == 422, response.text
+    assert "object_permission" in response.text
+
+
 @pytest.mark.asyncio
 async def test_generate_key_negative_max_budget():
     """
