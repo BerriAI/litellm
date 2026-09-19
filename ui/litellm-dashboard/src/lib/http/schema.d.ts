@@ -37896,6 +37896,19 @@ export interface components {
              */
             total_tokens: number;
         };
+        /** StandardLoggingHeuristicV2Forecast */
+        StandardLoggingHeuristicV2Forecast: {
+            /** Predicted Tier */
+            predicted_tier: string;
+            /** Probabilities */
+            probabilities: {
+                [key: string]: number;
+            };
+            /** Request Type */
+            request_type: string;
+            /** Threshold */
+            threshold: number;
+        };
         /**
          * StandardLoggingRoutingDecision
          * @description Per-request provenance for a pre-routing strategy (auto-router) decision.
@@ -37952,6 +37965,7 @@ export interface components {
             escalated?: boolean;
             /** Escalation Keyword */
             escalation_keyword?: string;
+            heuristic_v2_forecast?: components["schemas"]["StandardLoggingHeuristicV2Forecast"];
             /** Matched Keyword */
             matched_keyword?: string;
             /** Reasoning Override Min Score */
