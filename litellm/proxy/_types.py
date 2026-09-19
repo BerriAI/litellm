@@ -865,6 +865,7 @@ class LiteLLMRoutes(enum.Enum):
         "/management/v1/teams/{team_id}/members/bulk_update",
         "/team/member_update",
         "/team/{team_id}/member/{user_id}/reset_spend",
+        "/team/{team_id}/member/{user_id}/reset_budget",
         "/team/permissions_list",
         "/team/permissions_update",
         "/team/daily/activity",
