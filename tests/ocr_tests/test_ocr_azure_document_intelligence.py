@@ -1,51 +1,11 @@
-"""
-Test OCR functionality with Azure Document Intelligence API.
-
-Azure Document Intelligence provides advanced document analysis capabilities
-using the v4.0 (2024-11-30) API.
-"""
-
-import os
+"""Azure Document Intelligence request transformation: Mistral-shaped `pages` to Azure's query string."""
 
 import pytest
 
-from base_ocr_unit_tests import BaseOCRTest
 from litellm.constants import AZURE_DOCUMENT_INTELLIGENCE_API_VERSION
 from litellm.llms.azure_ai.ocr.document_intelligence.transformation import (
     AzureDocumentIntelligenceOCRConfig,
 )
-
-
-class TestAzureDocumentIntelligenceOCR(BaseOCRTest):
-    """
-    Test class for Azure Document Intelligence OCR functionality.
-
-    Inherits from BaseOCRTest and provides Azure Document Intelligence-specific configuration.
-
-    Tests the azure_ai/doc-intelligence/<model> provider route.
-    """
-
-    def get_base_ocr_call_args(self) -> dict:
-        """
-        Return the base OCR call args for Azure Document Intelligence.
-
-        Uses prebuilt-layout model which is closest to Mistral OCR format.
-        """
-        # Check for required environment variables
-        api_key = os.environ.get("AZURE_DOCUMENT_INTELLIGENCE_API_KEY")
-        endpoint = os.environ.get("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
-
-        if not api_key or not endpoint:
-            pytest.skip(
-                "AZURE_DOCUMENT_INTELLIGENCE_API_KEY and AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT "
-                "environment variables are required for Azure Document Intelligence tests"
-            )
-
-        return {
-            "model": "azure_ai/doc-intelligence/prebuilt-layout",
-            "api_key": api_key,
-            "api_base": endpoint,
-        }
 
 
 class TestAzureDocumentIntelligencePagesParam:
@@ -101,7 +61,7 @@ class TestAzureDocumentIntelligencePagesParam:
             cfg.map_ocr_params({"pages": [True, False]}, {}, "prebuilt-layout")
 
     def test_map_ocr_params_unsupported_type_raises(self, cfg):
-        with pytest.raises(ValueError, match='based, Mistral-style\\) or a string like'):
+        with pytest.raises(ValueError, match="based, Mistral-style\\) or a string like"):
             cfg.map_ocr_params({"pages": 5}, {}, "prebuilt-layout")
 
     def test_get_complete_url_appends_pages_query(self, cfg):
@@ -110,9 +70,7 @@ class TestAzureDocumentIntelligencePagesParam:
             model="azure_ai/doc-intelligence/prebuilt-layout",
             optional_params={"pages": "1-3,5"},
         )
-        assert (
-            f"api-version={AZURE_DOCUMENT_INTELLIGENCE_API_VERSION}" in url
-        ), url
+        assert f"api-version={AZURE_DOCUMENT_INTELLIGENCE_API_VERSION}" in url, url
         assert "pages=1-3,5" in url, url
         assert "/documentintelligence/documentModels/prebuilt-layout:analyze" in url
 
@@ -168,4 +126,3 @@ class TestAzureDocumentIntelligencePagesParam:
 
         assert "pages=3,4,5,6,7,8,9" in url
         assert req.data == {"urlSource": "https://example.com/x.pdf"}
-

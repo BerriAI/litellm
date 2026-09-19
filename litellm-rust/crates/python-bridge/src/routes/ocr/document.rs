@@ -1,13 +1,14 @@
 use std::path::PathBuf;
 
 use bytes::Bytes;
-use pyo3::exceptions::{PyTypeError, PyValueError};
-use pyo3::gc::{PyTraverseError, PyVisit};
-use pyo3::prelude::*;
-use pyo3::pybacked::PyBackedBytes;
-use pyo3::types::{PyBytes, PyString};
-
-use litellm_core::ocr::{OcrDocumentInput, OcrFileContent};
+use litellm_core::ocr::types::{OcrDocumentInput, OcrFileContent};
+use pyo3::{
+    exceptions::{PyTypeError, PyValueError},
+    gc::{PyTraverseError, PyVisit},
+    prelude::*,
+    pybacked::PyBackedBytes,
+    types::{PyBytes, PyString},
+};
 
 #[derive(Debug)]
 pub(super) struct PythonFileReader {
@@ -128,8 +129,9 @@ impl FromPyObject<'_, '_> for FileDocumentInput {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pyo3::types::PyDict;
+
+    use super::*;
 
     fn eval<'py>(py: Python<'py>, source: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = PyDict::new(py);
@@ -285,6 +287,41 @@ wrong = {'file': Wrong()}",
             let error = reader("wrong").read(py).unwrap_err();
             assert!(error.is_instance_of::<PyTypeError>(py));
             assert!(error.to_string().contains("bytes or str"));
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::read("read")]
+    #[case::name("name")]
+    fn reader_attribute_failures_keep_their_identity(#[case] attribute: &str) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = eval(
+                py,
+                c"failure = LookupError('file property failed')
+class File:
+    def __getattribute__(self, name):
+        if name == attribute:
+            raise failure
+        return super().__getattribute__(name)
+    name = 'scan.pdf'
+    def read(self):
+        return b'abc'
+document = {'file': File()}",
+            );
+            locals.set_item("attribute", attribute).unwrap();
+            let error = locals
+                .get_item("document")
+                .unwrap()
+                .unwrap()
+                .extract::<FileDocumentInput>()
+                .err()
+                .unwrap();
+            assert!(
+                error
+                    .value(py)
+                    .is(locals.get_item("failure").unwrap().unwrap())
+            );
         });
     }
 

@@ -168,6 +168,20 @@ export const getAttachmentTableColumns = ({
     cell: ({ row }) => <ChipList values={row.original.tags ?? []} />,
   },
   {
+    id: "priority",
+    accessorFn: (row) => row.priority ?? Number.POSITIVE_INFINITY,
+    meta: { title: "Priority" },
+    header: ({ column }) => <DataTableSortHeader column={column} title="Priority" />,
+    size: 100,
+    enableSorting: true,
+    cell: ({ row }) =>
+      row.original.priority == null ? (
+        <span className="text-muted-foreground">-</span>
+      ) : (
+        <span className="font-mono text-xs">{row.original.priority}</span>
+      ),
+  },
+  {
     id: "created_at",
     accessorFn: (row) => row.created_at ?? "",
     meta: { title: "Created At" },

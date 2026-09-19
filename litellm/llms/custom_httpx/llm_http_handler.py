@@ -1,14 +1,27 @@
 import asyncio
 import json
 import ssl
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from types import MappingProxyType, ModuleType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, TypeVar, Union, cast, get_type_hints
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    NamedTuple,
+    Optional,
+    TypedDict,
+    TypeVar,
+    Union,
+    cast,
+    get_type_hints,
+)
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
+from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
 
@@ -19,6 +32,7 @@ import litellm.types.utils
 from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
@@ -130,6 +144,7 @@ from litellm.types.llms.openai import (
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.rerank import RerankResponse
 from litellm.types.responses.main import DeleteResponseResult
+from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     CallTypes,
@@ -285,6 +300,39 @@ def _aws_signing_overrides(optional_params: Mapping[str, Any], litellm_params: M
             for key in AWS_CREDENTIAL_KWARGS_KEYS
             if optional_params.get(key) is None and litellm_params.get(key) is not None
         }
+    )
+
+
+class _PreparedFileContentRequest(NamedTuple):
+    url: str
+    params: dict
+    headers: dict
+
+
+async def _aiter_bytes_then_close(response: httpx.Response, *, chunk_size: int) -> AsyncGenerator[bytes, None]:
+    try:
+        async for chunk in response.aiter_bytes(chunk_size=chunk_size):
+            yield chunk
+    finally:
+        await response.aclose()
+
+
+_DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encoding", "content-length"})
+
+
+def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
+    """
+    `aiter_bytes` yields the decoded body, so the upstream transfer headers only
+    describe the bytes on the wire when no content-encoding was applied.
+    """
+    if response.headers.get("content-encoding", "identity").lower() == "identity":
+        return response.headers
+    return httpx.Headers(
+        [
+            (name, value)
+            for name, value in response.headers.multi_items()
+            if name.lower() not in _DECODED_BODY_STALE_HEADERS
+        ]
     )
 
 
@@ -5080,35 +5128,16 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        # Get URL and params from provider config
-        url, params = provider_config.transform_file_content_request(
+        prepared: Final = self._prepare_file_content_request(
             file_content_request=file_content_request,
-            optional_params={},
+            provider_config=provider_config,
             litellm_params=litellm_params,
-        )
-
-        # Validate environment and get headers
-        headers = provider_config.validate_environment(
-            api_key=litellm_params.get("api_key"),
             headers=headers,
-            model="",
-            messages=[],
-            optional_params={},
-            litellm_params=litellm_params,
-        )
-
-        logging_obj.pre_call(
-            input="",
-            api_key="",
-            additional_args={
-                "api_base": url,
-                "headers": headers,
-                "file_id": file_content_request.get("file_id"),
-            },
+            logging_obj=logging_obj,
         )
 
         try:
-            response: Final = sync_httpx_client.get(url=url, headers=headers, params=params)
+            response: Final = sync_httpx_client.get(url=prepared.url, headers=prepared.headers, params=prepared.params)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -5143,35 +5172,18 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        # Get URL and params from provider config
-        url, params = provider_config.transform_file_content_request(
+        prepared: Final = self._prepare_file_content_request(
             file_content_request=file_content_request,
-            optional_params={},
+            provider_config=provider_config,
             litellm_params=litellm_params,
-        )
-
-        # Validate environment and get headers
-        headers = provider_config.validate_environment(
-            api_key=litellm_params.get("api_key"),
             headers=headers,
-            model="",
-            messages=[],
-            optional_params={},
-            litellm_params=litellm_params,
-        )
-
-        logging_obj.pre_call(
-            input="",
-            api_key="",
-            additional_args={
-                "api_base": url,
-                "headers": headers,
-                "file_id": file_content_request.get("file_id"),
-            },
+            logging_obj=logging_obj,
         )
 
         try:
-            response: Final = await async_httpx_client.get(url=url, headers=headers, params=params)
+            response: Final = await async_httpx_client.get(
+                url=prepared.url, headers=prepared.headers, params=prepared.params
+            )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -5187,6 +5199,93 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             litellm_params=litellm_params,
         )
+
+    async def async_retrieve_file_content_streaming(
+        self,
+        file_content_request: "FileContentRequest",
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,
+        headers: dict,
+        logging_obj: LiteLLMLoggingObj,
+        chunk_size: int,
+        client: AsyncHTTPHandler | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> FileContentStreamingResult:
+        """
+        Async retrieve file content by ID as a byte stream, without buffering the body.
+        """
+        async_httpx_client: Final = (
+            client if client is not None else get_async_httpx_client(llm_provider=provider_config.custom_llm_provider)
+        )
+
+        prepared: Final = self._prepare_file_content_request(
+            file_content_request=file_content_request,
+            provider_config=provider_config,
+            litellm_params=litellm_params,
+            headers=headers,
+            logging_obj=logging_obj,
+        )
+
+        request: Final = async_httpx_client.client.build_request(
+            "GET",
+            prepared.url,
+            headers=prepared.headers,
+            params=httpx.QueryParams(HTTPHandler.extract_query_params(prepared.url)).merge(prepared.params),
+            timeout=USE_CLIENT_DEFAULT if timeout is None else httpx.Timeout(timeout),
+        )
+        try:
+            response: Final = await async_httpx_client.client.send(request, stream=True)
+        except Exception as e:  # noqa: BLE001  # _handle_error maps every failure kind, like the buffered fetch
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        if response.status_code >= 400:
+            error_body: Final = await response.aread()
+            await response.aclose()
+            raise provider_config.get_error_class(
+                error_message=error_body.decode("utf-8", errors="replace"),
+                status_code=response.status_code,
+                headers=response.headers,
+            )
+
+        return await provider_config.transform_file_content_stream(
+            stream_iterator=_aiter_bytes_then_close(response, chunk_size=chunk_size),
+            headers=_decoded_body_headers(response),
+            request_url=str(response.request.url),
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
+
+    @staticmethod
+    def _prepare_file_content_request(
+        file_content_request: "FileContentRequest",
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,
+        headers: dict,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> "_PreparedFileContentRequest":
+        url, params = provider_config.transform_file_content_request(
+            file_content_request=file_content_request,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+        request_headers: Final = provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": request_headers,
+                "file_id": file_content_request.get("file_id"),
+            },
+        )
+        return _PreparedFileContentRequest(url=url, params=params, headers=request_headers)
 
     def _prepare_fake_stream_request(
         self,
@@ -6490,6 +6589,7 @@ class BaseLLMHTTPHandler:
         litellm_metadata: dict[str, object] | None = None,
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
+        request_defaults: ResponsesWebSocketRequestDefaults | None = None,
         **kwargs: Any,
     ):
         """
@@ -6644,6 +6744,7 @@ class BaseLLMHTTPHandler:
                     output_guardrail_callbacks=_ws_output_guardrail_callbacks,
                     quota_callbacks=_ws_quota_callbacks,
                     authorized_model=model,
+                    request_defaults=request_defaults,
                 )
                 await streaming.bidirectional_forward()
 

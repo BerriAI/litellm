@@ -1,15 +1,12 @@
 import json
 import os
-from datetime import datetime
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import patch
 
 
-
-import httpx
 import pytest
 
 import litellm
-from litellm import Choices, Message, ModelResponse
+from litellm import ModelResponse
 from base_llm_unit_tests import BaseLLMChatTest, BaseOSeriesModelsTest
 
 
