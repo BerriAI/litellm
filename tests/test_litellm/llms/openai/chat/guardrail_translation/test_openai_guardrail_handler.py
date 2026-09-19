@@ -1262,19 +1262,74 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         return MaskWorld(guardrail_name="test-mask")
 
     @pytest.mark.asyncio
-    async def test_deliver_ended_stream_rewrite_on_multi_choice_stream_fails_closed(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
+    async def test_deliver_ended_stream_rewrite_lands_on_the_rewritten_choice_only(self):
         handler = OpenAIChatCompletionsHandler()
         chunks = self._two_choice_stream_chunks()
 
-        with pytest.raises(UndeliverableStreamRewrite):
-            await handler.process_output_streaming_response(
-                responses_so_far=chunks,
-                guardrail_to_apply=self._world_masking_guardrail(),
-                litellm_logging_obj=None,
-                deliver_ended_stream_rewrites=True,
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._world_masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert [(c.choices[0].index, c.choices[0].delta.content) for c in chunks] == [
+            (0, "safe "),
+            (1, "hello [MASKED]"),
+            (0, "text"),
+            (1, ""),
+        ]
+        assert [c.choices[0].finish_reason for c in chunks] == [None, None, "stop", "stop"]
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_each_choice_with_its_own_text(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+        chunks = self._two_choice_stream_chunks()
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert guardrail.last_inputs["texts"] == ["safe text", "hello world"]
+        assert [(c.choices[0].index, c.choices[0].delta.content) for c in chunks] == [
+            (0, "SAFE TEXT"),
+            (1, "HELLO WORLD"),
+            (0, ""),
+            (1, ""),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_deliver_rewrite_on_unfinished_stream_lands_in_the_buffered_deltas(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        handler = OpenAIChatCompletionsHandler()
+
+        def chunk(content: str) -> ModelResponseStream:
+            return ModelResponseStream(
+                id="chatcmpl-123",
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+                choices=[StreamingChoices(index=0, delta=Delta(content=content), finish_reason=None)],
             )
+
+        chunks = [chunk("hello "), chunk("world")]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._world_masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert [c.choices[0].delta.content for c in chunks] == ["hello [MASKED]", ""]
+        assert [c.choices[0].finish_reason for c in chunks] == [None, None]
 
     @staticmethod
     def _two_choice_tool_call_stream_chunks() -> list:

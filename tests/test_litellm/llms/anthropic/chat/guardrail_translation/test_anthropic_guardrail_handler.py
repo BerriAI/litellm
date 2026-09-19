@@ -445,19 +445,22 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         assert chunks == original
 
     @pytest.mark.asyncio
-    async def test_unended_stream_rewrite_with_delivery_expected_fails_closed(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
+    async def test_unended_stream_rewrite_with_delivery_expected_lands_in_the_buffered_deltas(self):
         handler = AnthropicMessagesHandler()
         chunks = self._ended_sse_chunks()[:-2]
 
-        with pytest.raises(UndeliverableStreamRewrite):
-            await handler.process_output_streaming_response(
-                responses_so_far=chunks,
-                guardrail_to_apply=self._masking_guardrail(),
-                litellm_logging_obj=MagicMock(),
-                deliver_ended_stream_rewrites=True,
-            )
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert self._delta_texts(chunks) == ["hello [MASKED]", ""]
+        raw = b"".join(chunks).decode()
+        assert "event: message_start" in raw and "event: content_block_stop" in raw
+        assert "event: message_stop" not in raw
 
     @pytest.mark.asyncio
     async def test_unended_stream_without_rewrite_is_released_with_delivery_expected(self):
