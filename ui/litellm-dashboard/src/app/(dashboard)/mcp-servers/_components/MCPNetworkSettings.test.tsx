@@ -211,6 +211,17 @@ describe("MCPNetworkSettings", () => {
     await waitFor(() => expect(screen.queryByText(/stored allowlist is not a list/)).not.toBeInTheDocument());
   });
 
+  it("treats a stored entry with an empty alias or value as denying every client, like the gateway does", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      { field_name: "mcp_allowed_clients", field_value: [ANTIGRAVITY, { alias: "", value: "claude-code" }] },
+    ]);
+
+    renderSettings();
+
+    expect(await screen.findByText(/stored allowlist is not a list of alias and value pairs/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: /^Antigravity CLI/ })).not.toBeInTheDocument();
+  });
+
   it("adds clients as alias and value pairs and saves them under mcp_allowed_clients", async () => {
     renderSettings();
     await screen.findByText("Allowed Clients");

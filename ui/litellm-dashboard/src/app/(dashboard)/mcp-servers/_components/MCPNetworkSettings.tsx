@@ -52,7 +52,7 @@ interface ClientDraft extends AllowedClient {
 const isAllowedClient = (entry: unknown): entry is AllowedClient => {
   if (typeof entry !== "object" || entry === null) return false;
   const { alias, value } = entry as Partial<Record<keyof AllowedClient, unknown>>;
-  return typeof alias === "string" && typeof value === "string";
+  return typeof alias === "string" && typeof value === "string" && !isIncomplete({ alias, value });
 };
 
 type StoredAllowlist =
