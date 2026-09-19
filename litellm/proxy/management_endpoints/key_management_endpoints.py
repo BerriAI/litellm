@@ -3519,8 +3519,8 @@ async def bulk_update_keys(
         - tags: Optional[List[str]] - Tags for organizing keys
         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission, as on /key/update
 
-    Only the fields an item carries are written: a field left out keeps its current value and an
-    explicit null clears it, the same as /key/update.
+    Only the fields an item carries are written: a field left out keeps its current value, and a field
+    sent explicitly, null included, is applied exactly as /key/update applies it.
 
     Returns:
     - total_requested: int - Total number of keys requested for update
