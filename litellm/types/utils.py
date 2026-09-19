@@ -2974,6 +2974,13 @@ LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN: Final[InternalCallOrigin] = "llm_as_a_judg
 BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN: Final[InternalCallOrigin] = "background_response_cost_poll"
 
 
+class StandardLoggingHeuristicV2Forecast(TypedDict):
+    probabilities: ReadOnly[Mapping[str, float]]
+    threshold: ReadOnly[float]
+    predicted_tier: ReadOnly[str]
+    request_type: ReadOnly[str]
+
+
 class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
@@ -2992,6 +2999,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_cost: float
     classifier_probabilities: ReadOnly[Mapping[str, float]]
     classifier_confidence: ReadOnly[float]
+    heuristic_v2_forecast: ReadOnly[StandardLoggingHeuristicV2Forecast]
     classifier_crux: str  # writable-ok: added only when a capability verdict is available
     classifier_primary_rule: str  # writable-ok: added only when a capability verdict is available
     classifier_capability_boundary: str  # writable-ok: added only when a capability verdict is available
@@ -3037,6 +3045,7 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "classifier_cost",
         "classifier_probabilities",
         "classifier_confidence",
+        "heuristic_v2_forecast",
         "classifier_primary_rule",
         "classifier_capability_boundary",
         "classifier_p_solve",
