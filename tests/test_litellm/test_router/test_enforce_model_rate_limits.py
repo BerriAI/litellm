@@ -28,8 +28,6 @@ TPM_DEPLOYMENT = {
 
 
 def _dual_cache_with_local_tpm(local_tpm: int, redis_cache: MagicMock | None) -> DualCache:
-    """In-memory tier holds ``local_tpm`` for this replica; the key is primed for this minute and the next
-    so a minute rollover between priming and the check cannot make the read miss."""
     dual_cache = DualCache(redis_cache=redis_cache)
     check = ModelRateLimitingCheck(dual_cache=dual_cache)
     now = litellm.utils.get_utc_datetime()
@@ -166,7 +164,6 @@ class TestModelRateLimitingCheck:
         assert "current usage=1000" in str(exc_info.value)
 
     def test_pre_call_check_rejects_when_shared_tpm_is_over_limit_but_local_is_under(self):
-        """Another replica's usage in Redis must count even when this replica saw only a few tokens."""
         redis_cache = MagicMock()
         redis_cache.get_cache.return_value = 1000
         check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(5, redis_cache))
@@ -180,7 +177,6 @@ class TestModelRateLimitingCheck:
         "redis_get", [MagicMock(return_value=None), MagicMock(side_effect=RedisCircuitBreakerOpenError())]
     )
     def test_pre_call_check_keeps_rejecting_on_local_usage_when_redis_read_fails(self, redis_get):
-        """A missing or failed Redis read must not admit traffic a replica already knows is over the limit."""
         redis_cache = MagicMock()
         redis_cache.get_cache = redis_get
         check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(1000, redis_cache))
@@ -314,7 +310,6 @@ class TestModelRateLimitingCheckAsync:
 
     @pytest.mark.asyncio
     async def test_async_pre_call_check_rejects_when_shared_tpm_is_over_limit_but_local_is_under(self):
-        """Another replica's usage in Redis must count even when this replica saw only a few tokens."""
         redis_cache = MagicMock()
         redis_cache.async_get_cache = AsyncMock(return_value=1000)
         check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(5, redis_cache))
@@ -329,7 +324,6 @@ class TestModelRateLimitingCheckAsync:
         "redis_get", [AsyncMock(return_value=None), AsyncMock(side_effect=RedisCircuitBreakerOpenError())]
     )
     async def test_async_pre_call_check_keeps_rejecting_on_local_usage_when_redis_read_fails(self, redis_get):
-        """A missing or failed Redis read must not admit traffic a replica already knows is over the limit."""
         redis_cache = MagicMock()
         redis_cache.async_get_cache = redis_get
         check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(1000, redis_cache))
