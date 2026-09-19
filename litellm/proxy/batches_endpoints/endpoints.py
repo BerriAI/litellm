@@ -24,7 +24,7 @@ from litellm.proxy.batches_endpoints.litellm_executed_batches import (
     LiteLLMExecutedBatchRunner,
     ManagedBatchStore,
     batch_error,
-    litellm_executed_provider_of,
+    litellm_executed_provider_for,
     resolve_litellm_executed_provider,
 )
 from litellm.proxy.common_request_processing import (
@@ -95,8 +95,8 @@ def _litellm_executed_batch_runner(llm_router: Router, proxy_logging_obj: ProxyL
     )
 
 
-def _raise_when_input_file_must_be_managed(model: str, credentials: Mapping[str, object]) -> None:
-    if litellm_executed_provider_of(credentials) is None:
+async def _raise_when_input_file_must_be_managed(model: str, credentials: Mapping[str, object]) -> None:
+    if await litellm_executed_provider_for(credentials) is None:
         return
     raise batch_error(
         400,
@@ -364,7 +364,9 @@ async def create_batch(
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
-            executed_provider: Final = resolve_litellm_executed_provider(llm_router, model, user_api_key_dict.team_id)
+            executed_provider: Final = await resolve_litellm_executed_provider(
+                llm_router, model, user_api_key_dict.team_id
+            )
             response = (
                 await _litellm_executed_batch_runner(llm_router, proxy_logging_obj).create(
                     create_request=_create_batch_data,
@@ -395,7 +397,7 @@ async def create_batch(
                     model_id=model_param,
                     operation_context="batch creation",
                 )
-                _raise_when_input_file_must_be_managed(model_param, credentials)
+                await _raise_when_input_file_must_be_managed(model_param, credentials)
 
                 prepare_data_with_credentials(
                     data=_create_batch_data,

@@ -37,7 +37,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
 import litellm
@@ -152,6 +154,7 @@ class Harness:
     router: MagicMock
     logging: MagicMock
     creds_resolver: MagicMock
+    upstream_files_route: respx.Route
 
     @property
     def router_acreate(self) -> AsyncMock:
@@ -174,7 +177,7 @@ def _creds_lookup(*, model_id: str, team_id: str | None = None) -> dict[str, str
 
 
 @pytest.fixture
-def harness():
+def harness(monkeypatch: pytest.MonkeyPatch):
     """Seam harness. Patches only true I/O boundaries; pure encode/decode/merge
     helpers run for real. Object mocks are spec'd so unknown method calls raise."""
     body_holder: Dict[str, Any] = {}
@@ -194,6 +197,7 @@ def harness():
     provider_from_headers = MagicMock(return_value=None)
     is_known_model = MagicMock(return_value=False)
     litellm_acreate = AsyncMock(return_value=make_batch())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     with ExitStack() as stack:
         stack.enter_context(patch.object(endpoints, "_read_request_body", read_body))
@@ -215,6 +219,10 @@ def harness():
         stack.enter_context(patch.object(endpoints, "is_known_model", is_known_model))
         stack.enter_context(patch.object(litellm, "acreate_batch", litellm_acreate))
         stack.enter_context(patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", False))
+        upstream = stack.enter_context(respx.mock(assert_all_called=False))
+        upstream_files_route = upstream.get(f"{CREDS['my-vllm']['api_base']}/files").mock(
+            return_value=httpx.Response(404, json={"detail": "Not Found"})
+        )
         stack.enter_context(patch.object(proxy_server, "llm_router", router))
         stack.enter_context(patch.object(proxy_server, "proxy_logging_obj", logging))
         stack.enter_context(patch.object(proxy_server, "general_settings", {}))
@@ -233,6 +241,7 @@ def harness():
             router=router,
             logging=logging,
             creds_resolver=router.get_deployment_credentials_with_provider,
+            upstream_files_route=upstream_files_route,
         )
         yield h
 
@@ -844,6 +853,25 @@ async def test_create__unified_executed_provider_without_database_400(harness):
 
 
 @pytest.mark.asyncio
+async def test_create__unified_executed_provider_with_its_own_files_api_goes_to_the_provider(harness, executed_runner):
+    runner, factory = executed_runner
+    harness.upstream_files_route.mock(return_value=httpx.Response(200, json={"object": "list", "data": []}))
+    set_body(
+        harness,
+        {
+            "input_file_id": _managed_input_file_id("my-vllm"),
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    await call_create(harness)
+
+    factory.assert_not_called()
+    runner.create.assert_not_called()
+    assert harness.router_kwargs()["model"] == "my-vllm"
+
+
+@pytest.mark.asyncio
 async def test_create__unified_provider_model_never_touches_executed_runner(harness, executed_runner):
     runner, factory = executed_runner
     set_body(
@@ -877,6 +905,26 @@ async def test_create__raw_file_with_executed_model_400_with_upload_guidance(har
     assert "x-litellm-model" in exc.value.message
     harness.litellm_acreate.assert_not_called()
     harness.router_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "upstream_answer",
+    [httpx.Response(200, json={"object": "list", "data": []}), httpx.Response(405), httpx.ConnectError("refused")],
+    ids=["lists files", "files route without list", "unreachable"],
+)
+async def test_create__raw_file_with_executed_model_is_forwarded_unless_the_server_lacks_a_files_api(
+    harness, upstream_answer
+):
+    harness.upstream_files_route.mock(side_effect=[upstream_answer])
+    set_body(harness, {"input_file_id": "file-plain", "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+
+    await call_create(harness, headers={"x-litellm-model": "my-vllm"})
+
+    forwarded = harness.acreate_kwargs()
+    assert forwarded["input_file_id"] == "file-plain"
+    assert forwarded["custom_llm_provider"] == "hosted_vllm"
+    assert forwarded["api_base"] == CREDS["my-vllm"]["api_base"]
 
 
 @pytest.mark.asyncio

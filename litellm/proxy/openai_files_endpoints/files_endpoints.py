@@ -102,24 +102,35 @@ from litellm.types.llms.openai import (
 router: Final = APIRouter()
 
 
-def _litellm_executed_batch_input_model(
+async def _litellm_executed_batch_input_model(
     llm_router: Router | None,
     purpose: OpenAIFilesPurpose,
     model: str | None,
     target_model_names_list: Sequence[str],
     team_id: str | None,
 ) -> str | None:
-    if purpose != "batch" or llm_router is None:
+    if llm_router is None:
         return None
     candidates: Final = (model,) if model is not None else tuple(target_model_names_list)
+    providers: Final = await asyncio.gather(
+        *(resolve_litellm_executed_provider(llm_router, candidate, team_id) for candidate in candidates)
+    )
     executed: Final = tuple(
-        candidate
-        for candidate in candidates
-        if resolve_litellm_executed_provider(llm_router, candidate, team_id) is not None
+        candidate for candidate, provider in zip(candidates, providers, strict=True) if provider is not None
     )
     match executed:
         case ():
             return None
+        case _ if purpose != "batch":
+            raise ProxyException(
+                message=(
+                    f"The server behind {', '.join(executed)} has no Files API, so LiteLLM keeps only batch input "
+                    f"files for it and runs the batch itself: upload with purpose=batch; got purpose={purpose}"
+                ),
+                type="invalid_request_error",
+                param="purpose",
+                code=400,
+            )
         case (only,) if len(candidates) == 1:
             return only
         case _:
@@ -279,7 +290,7 @@ async def route_create_file(
     5. Else -> use custom_llm_provider with files_settings
     """
 
-    executed_model: Final = _litellm_executed_batch_input_model(
+    executed_model: Final = await _litellm_executed_batch_input_model(
         llm_router, purpose, model, target_model_names_list, user_api_key_dict.team_id
     )
     explicit_storage: Final = target_storage if target_storage and target_storage != "default" else None

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from openai.types.batch_request_counts import BatchRequestCounts
@@ -19,9 +20,11 @@ from litellm.proxy.batches_endpoints.litellm_executed_batches import (
     InvalidBatchInput,
     LiteLLMExecutedBatchRunner,
     _resolve_transition,
+    litellm_executed_provider_for,
     litellm_executed_provider_of,
     parse_batch_input,
     resolve_litellm_executed_provider,
+    upstream_lacks_files_api,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
@@ -424,15 +427,107 @@ def test_litellm_executed_provider_of(credentials: Mapping[str, object], expecte
     assert litellm_executed_provider_of(credentials) == expected
 
 
+VLLM_CREDENTIALS: Final[Mapping[str, object]] = {
+    "model": "hosted_vllm/qwen",
+    "api_base": "http://vllm.test/v1/",
+    "api_key": "vllm-key",
+}
+
+
+@dataclass(slots=True)
+class FakeFilesApiProbe:
+    lacks_files_api: bool
+    upstreams: list[tuple[str, str | None]]
+
+    async def __call__(self, api_base: str, api_key: str | None) -> bool:
+        self.upstreams.append((api_base, api_key))
+        return self.lacks_files_api
+
+
+@dataclass(slots=True)
+class FakeHttpGetter:
+    outcome: int | httpx.HTTPError
+    requests: list[tuple[str, dict[str, str] | None]]
+
+    async def get(
+        self, url: str, *, headers: dict[str, str] | None = None, timeout: float | httpx.Timeout | None = None
+    ) -> httpx.Response:
+        self.requests.append((url, headers))
+        if isinstance(self.outcome, httpx.HTTPError):
+            raise self.outcome
+        return httpx.Response(self.outcome)
+
+
 @pytest.mark.parametrize(
-    ("credentials", "expected"), [(None, None), ({"model": "hosted_vllm/qwen"}, "hosted_vllm")], ids=["unknown", "vllm"]
+    ("outcome", "expected"),
+    [
+        (404, True),
+        (200, False),
+        (405, False),
+        (401, False),
+        (500, False),
+        (httpx.ConnectError("refused"), False),
+        (httpx.ReadTimeout("slow"), False),
+    ],
+    ids=["no files route", "lists files", "files route without list", "unauthorized", "server error", "down", "slow"],
 )
-def test_resolve_litellm_executed_provider_asks_the_router_for_the_team_scoped_deployment(
+async def test_upstream_lacks_files_api_only_when_the_files_route_is_a_404(
+    outcome: int | httpx.HTTPError, expected: bool
+) -> None:
+    assert await upstream_lacks_files_api("http://vllm.test/v1", "vllm-key", FakeHttpGetter(outcome, [])) is expected
+
+
+@pytest.mark.parametrize(
+    ("api_base", "api_key", "expected_headers"),
+    [
+        ("http://vllm.test/v1/", "vllm-key", {"Authorization": "Bearer vllm-key"}),
+        ("http://vllm.test/v1", None, None),
+    ],
+    ids=["trailing slash with key", "keyless"],
+)
+async def test_upstream_lacks_files_api_asks_the_files_route_under_the_api_base(
+    api_base: str, api_key: str | None, expected_headers: dict[str, str] | None
+) -> None:
+    http_client = FakeHttpGetter(404, [])
+    await upstream_lacks_files_api(api_base, api_key, http_client)
+    assert http_client.requests == [("http://vllm.test/v1/files", expected_headers)]
+
+
+@pytest.mark.parametrize(
+    ("lacks_files_api", "expected"), [(True, "hosted_vllm"), (False, None)], ids=["bare", "router"]
+)
+async def test_litellm_executed_provider_for_leaves_a_server_with_its_own_files_api_alone(
+    lacks_files_api: bool, expected: str | None
+) -> None:
+    probe = FakeFilesApiProbe(lacks_files_api, [])
+    assert await litellm_executed_provider_for(VLLM_CREDENTIALS, probe) == expected
+    assert probe.upstreams == [("http://vllm.test/v1/", "vllm-key")]
+
+
+@pytest.mark.parametrize(
+    "credentials",
+    [{"custom_llm_provider": "openai", "model": "gpt-4o", "api_base": "http://openai.test/v1"}, {"model": 7}],
+    ids=["provider runs its own batches", "no model to resolve an api_base from"],
+)
+async def test_litellm_executed_provider_for_never_probes_what_it_would_not_run(
+    credentials: Mapping[str, object],
+) -> None:
+    probe = FakeFilesApiProbe(True, [])
+    assert await litellm_executed_provider_for(credentials, probe) is None
+    assert probe.upstreams == []
+
+
+@pytest.mark.parametrize(
+    ("credentials", "expected"), [(None, None), (VLLM_CREDENTIALS, "hosted_vllm")], ids=["unknown", "vllm"]
+)
+async def test_resolve_litellm_executed_provider_asks_the_router_for_the_team_scoped_deployment(
     credentials: Mapping[str, object] | None, expected: str | None
 ) -> None:
     router = MagicMock(spec=Router)
     router.get_deployment_credentials_with_provider.return_value = credentials
-    assert resolve_litellm_executed_provider(router, BATCH_MODEL, "team-1") == expected
+    assert (
+        await resolve_litellm_executed_provider(router, BATCH_MODEL, "team-1", FakeFilesApiProbe(True, [])) == expected
+    )
     router.get_deployment_credentials_with_provider.assert_called_once_with(model_id=BATCH_MODEL, team_id="team-1")
 
 
