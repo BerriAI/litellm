@@ -7100,7 +7100,7 @@ async def test_list_key_helper_applies_search_to_prisma_where():
 _BULK_UPDATE_TOKEN: Final = "1f2e3d4c5b6a79880123456789abcdef0123456789abcdef0123456789abcdef"
 
 
-async def _bulk_update_one_key(monkeypatch, item_payload: Mapping[str, object]) -> Mapping[str, object]:
+async def _bulk_update_one_key(monkeypatch, item_payload: Mapping[str, object]) -> AsyncMock:
     from litellm.proxy.management_endpoints.key_management_endpoints import bulk_update_keys
     from litellm.types.proxy.management_endpoints.key_management_endpoints import BulkUpdateKeyRequest
 
@@ -7109,6 +7109,10 @@ async def _bulk_update_one_key(monkeypatch, item_payload: Mapping[str, object]) 
     )
     mock_prisma_client = AsyncMock()
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_in_db)
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(
+        return_value=MagicMock(object_permission_id="objperm-bulk")
+    )
     mock_prisma_client.update_data = AsyncMock(return_value={"data": {"token": _BULK_UPDATE_TOKEN}})
     _setup_update_key_mocks(monkeypatch, mock_prisma_client)
 
@@ -7135,14 +7139,18 @@ async def _bulk_update_one_key(monkeypatch, item_payload: Mapping[str, object]) 
         )
 
     assert response.failed_updates == []
-    return mock_prisma_client.update_data.call_args.kwargs["data"]
+    return mock_prisma_client
+
+
+def _written_key_row(prisma: AsyncMock) -> Mapping[str, object]:
+    return prisma.update_data.call_args.kwargs["data"]
 
 
 @pytest.mark.asyncio
 async def test_bulk_update_keys_item_without_a_field_leaves_that_column_alone(monkeypatch):
     """A tags-only item used to reach the DB with max_budget, team_id, and budget_id as explicit
     nulls, so tagging a key wiped its budget and detached it from its team."""
-    written = await _bulk_update_one_key(monkeypatch, {"tags": ["team-a"]})
+    written = _written_key_row(await _bulk_update_one_key(monkeypatch, {"tags": ["team-a"]}))
 
     assert written["metadata"]["tags"] == ["team-a"]
     assert not {"max_budget", "team_id", "budget_id"} & written.keys()
@@ -7151,32 +7159,23 @@ async def test_bulk_update_keys_item_without_a_field_leaves_that_column_alone(mo
 @pytest.mark.asyncio
 async def test_bulk_update_keys_explicit_null_still_clears_the_field(monkeypatch):
     """Sending `"max_budget": null` on an item is a request to remove the budget, as on /key/update."""
-    written = await _bulk_update_one_key(monkeypatch, {"max_budget": None})
+    written = _written_key_row(await _bulk_update_one_key(monkeypatch, {"max_budget": None}))
 
     assert written["max_budget"] is None
     assert not {"team_id", "budget_id"} & written.keys()
 
 
-def test_bulk_update_keys_rejects_a_field_the_bulk_path_cannot_apply():
+@pytest.mark.asyncio
+async def test_bulk_update_keys_object_permission_is_granted_not_dropped(monkeypatch):
     """`object_permission` used to be accepted with 200 and dropped, leaving an item that carried
     nothing but the key, so the call wiped the key's budget instead of granting the permission."""
-    from fastapi import FastAPI
+    prisma = await _bulk_update_one_key(monkeypatch, {"object_permission": {"vector_stores": ["vs-1"]}})
 
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    from litellm.proxy.management_endpoints.key_management_endpoints import router
-
-    test_app = FastAPI()
-    test_app.include_router(router)
-    test_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
-    )
-    response = TestClient(test_app).post(
-        "/key/bulk_update",
-        json={"keys": [{"key": _BULK_UPDATE_TOKEN, "object_permission": {"vector_stores": ["vs-1"]}}]},
-    )
-
-    assert response.status_code == 422, response.text
-    assert "object_permission" in response.text
+    upserted = prisma.db.litellm_objectpermissiontable.upsert.call_args.kwargs["data"]["create"]
+    assert upserted["vector_stores"] == ["vs-1"]
+    written = _written_key_row(prisma)
+    assert written["object_permission_id"] == "objperm-bulk"
+    assert not {"max_budget", "team_id", "budget_id"} & written.keys()
 
 
 @pytest.mark.asyncio
