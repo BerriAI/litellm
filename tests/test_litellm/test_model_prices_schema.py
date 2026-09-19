@@ -11,7 +11,9 @@ from typing import Final
 import jsonschema
 import pytest
 
+import litellm
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -363,3 +365,50 @@ def test_active_mistral_chat_rows_price_cache_reads_below_input(path: Path):
         and not cache_read_is_tenth_of_input(entry)
     ]
     assert drifted == []
+
+
+PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse"})
+MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY: Final = frozenset({"search", "evaluation"})
+
+
+def is_registered_provider(label: str) -> bool:
+    family_root: Final = label.split("-", 1)[0]
+    return any(
+        name in litellm.models_by_provider or JSONProviderRegistry.exists(name) for name in (label, family_root)
+    )
+
+
+def unregistered_providers(rows: Mapping[str, object]) -> list[str]:
+    return sorted(
+        {
+            entry["litellm_provider"]
+            for name, entry in rows.items()
+            if name != "sample_spec"
+            and isinstance(entry, dict)
+            and "litellm_provider" in entry
+            and entry.get("mode") not in MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY
+            and entry["litellm_provider"] not in PROVIDER_LABELS_WITHOUT_A_MODEL_SET
+            and not is_registered_provider(entry["litellm_provider"])
+        }
+    )
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_every_cost_map_provider_is_registered(path: Path):
+    assert unregistered_providers(json.loads(path.read_text())) == [], (
+        f"{path.name} carries a litellm_provider that litellm.models_by_provider does not know, so a `<provider>/*` "
+        "grant expands to no models. Add a `<provider>_models` set in litellm/__init__.py, fill it in "
+        "_populate_provider_model_sets, and list it in _build_models_by_provider"
+    )
+
+
+def test_unregistered_provider_guard_flags_only_labels_nobody_registered():
+    rows: Final = {
+        "sample_spec": {"litellm_provider": "one of the supported providers", "mode": "chat"},
+        "nobody_registered/StartJob": {"litellm_provider": "nobody_registered", "mode": "audio_transcription"},
+        "gpt-4o": {"litellm_provider": "openai", "mode": "chat"},
+        "vertex_ai/new-family-model": {"litellm_provider": "vertex_ai-new_family_models", "mode": "chat"},
+        "unknown_root/model": {"litellm_provider": "unknown_root-new_family_models", "mode": "chat"},
+        "some_search/search": {"litellm_provider": "some_search", "mode": "search"},
+    }
+    assert unregistered_providers(rows) == ["nobody_registered", "unknown_root-new_family_models"]
