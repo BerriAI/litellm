@@ -35,7 +35,7 @@ test.describe("MCP Tools", () => {
     await deleteMcpServerByName(page, serverName);
   });
 
-  test("MCP Tools tab lists the tools the upstream server advertises", async ({ page }) => {
+  test("MCP Catalog tab lists the tools the upstream server advertises", async ({ page }) => {
     // Fetched through the proxy on mount, so allow for a cold upstream connection.
     const toolList = page.locator(".mcp-tools-scrollable");
     await expect(toolList).toBeVisible({ timeout: 30_000 });

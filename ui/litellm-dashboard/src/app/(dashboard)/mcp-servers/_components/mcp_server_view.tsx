@@ -141,7 +141,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
             Overview
           </TabsTrigger>
           <TabsTrigger value="1" className="flex-none rounded-none px-4 py-2">
-            MCP Tools
+            MCP Catalog
           </TabsTrigger>
           {isProxyAdmin && (
             <TabsTrigger value="2" className="flex-none rounded-none px-4 py-2">

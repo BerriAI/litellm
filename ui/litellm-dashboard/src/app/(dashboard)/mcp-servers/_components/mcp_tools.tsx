@@ -229,6 +229,12 @@ const MCPToolsViewer = ({
     refetchResources();
   }, [refetchTools, refetchPrompts, refetchResources]);
 
+  const toolsError = mcpToolsError as (Error & { status?: number; response?: { status?: number } }) | null;
+  const catalogUnauthorized =
+    (toolsError?.status ?? toolsError?.response?.status) === 401 ||
+    mcpPromptsResponse?.status === 401 ||
+    mcpResourcesResponse?.status === 401;
+
   // authorization_code authorize: same redirect+exchange flow as the admin "Authorize & Fetch"
   // and the chat "Connect" button, but persists the token to the per-user DB.
   const onAuthorizationCodeAuthSuccess = useCallback(() => {
@@ -256,16 +262,14 @@ const MCPToolsViewer = ({
     startDbOAuthFlow();
   }, [serverId, startDbOAuthFlow]);
 
-  // If the tools query fails with 401, the cached OAuth token is invalid —
-  // clear it so the auth gate is shown again and the user can re-authenticate.
+  // A 401 from any listing means the cached OAuth token is invalid; clear it so the
+  // auth gate is shown again and the user can re-authenticate.
   useEffect(() => {
-    const err = mcpToolsError as (Error & { status?: number; response?: { status?: number } }) | null;
-    const status = err?.status ?? err?.response?.status;
-    if (status === 401) {
+    if (catalogUnauthorized) {
       removeToken(serverId, userID);
       setOauthToken(null);
     }
-  }, [mcpToolsError, serverId, userID]);
+  }, [catalogUnauthorized, serverId, userID]);
 
   // Mutation for calling a tool
   const { mutate: executeTool, isPending: isCallingTool } = useMutation({
@@ -298,12 +302,10 @@ const MCPToolsViewer = ({
 
   const toolsData = mcpToolsResponse?.tools || [];
 
-  const toolsError = mcpToolsError as (Error & { status?: number; response?: { status?: number } }) | null;
   // authorization_code only: a 401 from the list call means the stored credential is unusable and
   // the backend's refresh could not mint a token, so the user must re-authorize (the browser flow).
   // token_exchange has no gateway-side authorize step, so it is not gated here.
-  const authorizationCodeTokenRejected =
-    isAuthorizationCode && (toolsError?.status ?? toolsError?.response?.status) === 401;
+  const authorizationCodeTokenRejected = isAuthorizationCode && catalogUnauthorized;
 
   // An auth gate replaces the tool list when the user must authenticate first:
   // passthrough needs a browser token; authorization_code needs a stored DB credential or a
@@ -337,7 +339,7 @@ const MCPToolsViewer = ({
         <div className="grid h-auto w-full grid-cols-4 gap-4">
           {/* Left Sidebar with Controls */}
           <div className="col-span-1 flex flex-col bg-muted p-4">
-            <h2 className="mt-2 mb-6 text-xl font-semibold">MCP Tools</h2>
+            <h2 className="mt-2 mb-6 text-xl font-semibold">MCP Catalog</h2>
 
             <div className="flex flex-col flex-1">
               {/* Extra Headers Input Section */}
@@ -390,7 +392,7 @@ const MCPToolsViewer = ({
                         disabled={Object.values(passthroughHeaders).every((v) => !v || !v.trim())}
                         className="mt-2 w-full"
                       >
-                        Load Tools
+                        Load Catalog
                       </Button>
                     </div>
                   )}
@@ -422,7 +424,9 @@ const MCPToolsViewer = ({
                   <div className="rounded-lg border border-border bg-card p-4 text-center">
                     <Lock className="mx-auto mb-2 size-6 text-muted-foreground" />
                     <p className="mb-1 text-xs font-medium">Authentication required</p>
-                    <p className="mb-3 text-xs text-muted-foreground">Authenticate to view available tools</p>
+                    <p className="mb-3 text-xs text-muted-foreground">
+                      Authenticate to view available tools, prompts, and resources
+                    </p>
                     <Button
                       size="sm"
                       onClick={startOAuthFlow}
@@ -444,7 +448,7 @@ const MCPToolsViewer = ({
                     <Lock className="mx-auto mb-2 size-6 text-muted-foreground" />
                     <p className="mb-1 text-xs font-medium">Authentication required</p>
                     <p className="mb-3 text-xs text-muted-foreground">
-                      Authenticate with the upstream provider to view available tools
+                      Authenticate with the upstream provider to view available tools, prompts, and resources
                     </p>
                     <Button
                       size="sm"

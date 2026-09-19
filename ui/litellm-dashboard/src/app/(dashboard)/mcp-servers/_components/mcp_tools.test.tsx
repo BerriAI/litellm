@@ -1,4 +1,5 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import MCPToolsViewer from "./mcp_tools";
@@ -8,7 +9,7 @@ import {
   listMCPResources,
   getMCPOAuthUserCredentialStatus,
 } from "@/components/networking";
-import { isTokenValid, getToken } from "@/utils/mcpTokenStore";
+import { isTokenValid, getToken, removeToken } from "@/utils/mcpTokenStore";
 
 vi.mock("@/components/networking", () => ({
   listMCPTools: vi.fn(),
@@ -24,14 +25,14 @@ vi.mock("@/utils/mcpTokenStore", () => ({
   removeToken: vi.fn(),
 }));
 
-const { toolsOAuthFlowSpy, userMcpOAuthFlowSpy } = vi.hoisted(() => ({
-  toolsOAuthFlowSpy: vi.fn(() => ({ startOAuthFlow: vi.fn(), status: "idle", error: null })),
-  userMcpOAuthFlowSpy: vi.fn((_options: { onSuccess: () => void }) => ({
-    startOAuthFlow: vi.fn(),
-    status: "idle",
-    error: null,
-  })),
-}));
+const { toolsOAuthFlowSpy, userMcpOAuthFlowSpy } = vi.hoisted(() => {
+  type FlowState = { startOAuthFlow: () => void; status: string; error: string | null };
+  const idle = (): FlowState => ({ startOAuthFlow: () => {}, status: "idle", error: null });
+  return {
+    toolsOAuthFlowSpy: vi.fn((_options: { onSuccess: (token: string) => void }) => idle()),
+    userMcpOAuthFlowSpy: vi.fn((_options: { onSuccess: () => void }) => idle()),
+  };
+});
 
 vi.mock("@/hooks/useToolsOAuthFlow", () => ({
   useToolsOAuthFlow: toolsOAuthFlowSpy,
@@ -321,27 +322,68 @@ describe("MCPToolsViewer prompts and resources catalog", () => {
     expect(await screen.findByText("summarize")).toBeInTheDocument();
   });
 
-  it("reloads prompts and resources together with tools after the user re-authorizes", async () => {
-    const expiredPrompts = {
-      prompts: [],
-      error: "auth_required",
-      message: "upstream credential expired",
-      status: 401,
-    };
-    vi.mocked(listMCPPrompts).mockResolvedValue(expiredPrompts);
-    userMcpOAuthFlowSpy.mockClear();
+  const unauthorized = { error: "auth_required", message: "upstream credential expired", status: 401 };
+
+  it("gates on a prompts 401 even when tools load, and reloads all three listings after Authorize (stored credential)", async () => {
+    vi.mocked(listMCPTools).mockResolvedValue({ tools: [], error: null });
+    vi.mocked(listMCPPrompts).mockResolvedValue({ prompts: [], ...unauthorized });
+    // The hook completes the redirect flow out of band; here Authorize resolves it immediately.
+    userMcpOAuthFlowSpy.mockReset().mockImplementation((options) => ({
+      startOAuthFlow: () => options.onSuccess(),
+      status: "idle",
+      error: null,
+    }));
 
     renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: false });
 
-    const prompts = await screen.findByRole("region", { name: "Prompts" });
-    expect(await within(prompts).findByText("Error: upstream credential expired")).toBeInTheDocument();
+    expect(await screen.findByText(GATE_TEXT)).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Prompts" })).not.toBeInTheDocument();
+    expect(vi.mocked(listMCPTools)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(listMCPPrompts)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(listMCPResources)).toHaveBeenCalledTimes(1);
 
     vi.mocked(listMCPPrompts).mockResolvedValue({ prompts: [{ name: "summarize" }] });
-    act(() => userMcpOAuthFlowSpy.mock.calls.at(-1)?.[0].onSuccess());
+    await userEvent.click(screen.getByRole("button", { name: "Authorize" }));
 
+    const prompts = await screen.findByRole("region", { name: "Prompts" });
     expect(await within(prompts).findByText("summarize")).toBeInTheDocument();
+    expect(screen.queryByText(GATE_TEXT)).not.toBeInTheDocument();
     expect(vi.mocked(listMCPTools)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(listMCPPrompts)).toHaveBeenCalledTimes(2);
     expect(vi.mocked(listMCPResources)).toHaveBeenCalledTimes(2);
+  });
+
+  it("gates on a resources 401 even when tools load, and relists all three with the new browser token after Authorize", async () => {
+    vi.mocked(isTokenValid).mockReturnValue(true);
+    vi.mocked(getToken).mockReturnValue({
+      access_token: "stale-tok",
+      expires_at: Date.now() + 60_000,
+      token_type: "bearer",
+    });
+    vi.mocked(listMCPResources).mockResolvedValue({ resources: [], resource_templates: [], ...unauthorized });
+    toolsOAuthFlowSpy.mockReset().mockImplementation((options) => ({
+      startOAuthFlow: () => options.onSuccess("fresh-tok"),
+      status: "idle",
+      error: null,
+    }));
+
+    renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: true });
+
+    expect(await screen.findByText(GATE_TEXT)).toBeInTheDocument();
+    expect(vi.mocked(removeToken)).toHaveBeenCalledWith("srv-1", "tin@berri.ai");
+    expect(screen.queryByRole("region", { name: "Resources" })).not.toBeInTheDocument();
+
+    vi.mocked(listMCPResources).mockResolvedValue({
+      resources: [{ name: "readme", uri: "demo://readme" }],
+      resource_templates: [],
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Authorize" }));
+
+    const resources = await screen.findByRole("region", { name: "Resources" });
+    expect(await within(resources).findByText("demo://readme")).toBeInTheDocument();
+    const freshHeader = expect.objectContaining({ "x-mcp-slack-authorization": "Bearer fresh-tok" });
+    expect(vi.mocked(listMCPTools)).toHaveBeenLastCalledWith("litellm-key", "srv-1", freshHeader);
+    expect(vi.mocked(listMCPPrompts)).toHaveBeenLastCalledWith("litellm-key", "srv-1", freshHeader);
+    expect(vi.mocked(listMCPResources)).toHaveBeenLastCalledWith("litellm-key", "srv-1", freshHeader);
   });
 });
