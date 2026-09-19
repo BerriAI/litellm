@@ -42,6 +42,10 @@ ROWS: Final = {
     "not-found": Row(ResponseSpec(body={"message": "no such model"}, status=404)),
     "rate-limited": Row(ResponseSpec(body={"message": "slow down"}, status=429, headers={"retry-after": "0"})),
     "provider-failure": Row(ResponseSpec(body={"message": "provider unavailable"}, status=500)),
+    "deployment-retries": Row(
+        ResponseSpec(body={"message": "provider unavailable"}, status=500),
+        deployment=MappingProxyType({"num_retries": ROUTER_RETRIES + 1}),
+    ),
     "read-timeout": Row(ResponseSpec(body=OCR_RESPONSE, delay=1.5), deployment=MappingProxyType({"timeout": 0.5})),
     "not-json": Row(ResponseSpec(body=None, raw=b"<html>bad gateway</html>")),
     "missing-document-url": Row(
