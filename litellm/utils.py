@@ -8681,6 +8681,13 @@ class ProviderConfigManager:
             from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
             return BedrockModelInfo.get_bedrock_provider_config_for_messages_api(model)
+        elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
+            if "claude" in model_lower:
+                from litellm.llms.bedrock_mantle.messages.transformation import (
+                    BedrockMantleAnthropicMessagesConfig,
+                )
+
+                return BedrockMantleAnthropicMessagesConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
             if "claude" in model_lower:
                 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
