@@ -129,25 +129,15 @@ class EncryptedContentAffinityCheck(CustomLogger):
         if not isinstance(request_input, list):
             return None
 
-        for item in request_input:
-            if not isinstance(item, dict):
-                continue
-
-            # First, try to decode from item ID (if present)
-            item_id = item.get("id")
-            if item_id and isinstance(item_id, str):
-                decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(item_id)
-                if decoded:
-                    return decoded.get("model_id")
-
-            # If no encoded ID, check if encrypted_content itself is wrapped
-            encrypted_content = item.get("encrypted_content")
-            if encrypted_content and isinstance(encrypted_content, str):
-                model_id = EncryptedContentAffinityCheck._model_id_from_wrapped_encrypted_content(encrypted_content)
-                if model_id:
-                    return model_id
-
-        return None
+        items: Final = cast(list[object], request_input)  # cast-ok: narrowed by isinstance
+        return next(
+            (
+                model_id
+                for item in items
+                if (model_id := ResponsesAPIRequestUtils.get_encrypted_content_model_id(item)) is not None
+            ),
+            None,
+        )
 
     @staticmethod
     def _anthropic_content_blocks(messages: object) -> Iterator[Mapping[str, object]]:
@@ -216,9 +206,10 @@ class EncryptedContentAffinityCheck(CustomLogger):
     @staticmethod
     def _encryption_boundary_key(
         litellm_params: object,
-    ) -> tuple[object, object] | None:
+    ) -> tuple[object, ...] | None:
         """
         ``(api_base, api_key)`` identifies an upstream encryption boundary.
+        Bedrock OpenAI reasoning also requires the same underlying model.
         The values are resolved from the deployment and its named credential
         without modifying the deployment.
 
@@ -241,18 +232,23 @@ class EncryptedContentAffinityCheck(CustomLogger):
             if isinstance(credential_name, str) and credential_name
             else None
         )
-        effective_api_base: Final = (
+        effective_api_base: Final[object] = (
             credential_values.get("api_base")
             if credential_values is not None and "api_base" in credential_values
             else api_base
         )
-        effective_api_key: Final = (
+        effective_api_key: Final[object] = (
             credential_values.get("api_key")
             if credential_values is not None and "api_key" in credential_values
             else api_key
         )
         if not effective_api_base or not effective_api_key:
             return None
+        from litellm.llms.bedrock.common_utils import get_bedrock_openai_model
+
+        bedrock_model: Final = get_bedrock_openai_model(getter("model"))
+        if bedrock_model is not None:
+            return (effective_api_base, effective_api_key, bedrock_model)
         return (effective_api_base, effective_api_key)
 
     def _find_deployments_on_same_encryption_boundary(
@@ -290,7 +286,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         model: str,
         healthy_deployments: list,
         messages: list[AllMessageValues] | None,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
         """
@@ -310,7 +306,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
         retry after the deployment is eligible again.
         """
         request_kwargs = request_kwargs or {}
-        typed_healthy_deployments: Final = cast(list[dict], healthy_deployments)
+        typed_healthy_deployments: Final = cast(
+            list[dict[str, object]], healthy_deployments
+        )  # cast-ok: router deployment dictionaries
         if not self._is_enabled_for_model_group(model):
             return typed_healthy_deployments
 
@@ -321,10 +319,20 @@ class EncryptedContentAffinityCheck(CustomLogger):
         # completions / embeddings, which breaks tag-based routing because
         # _get_metadata_variable_name_from_kwargs would pick "litellm_metadata"
         # over "metadata" where tags are actually stored.
-        if "litellm_metadata" in request_kwargs:
-            request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"] = True
+        metadata: Final = request_kwargs.get("litellm_metadata")
+        if isinstance(metadata, dict):
+            metadata["encrypted_content_affinity_enabled"] = True
 
         request_input: Final = request_kwargs.get("input")
+        if self.router is not None:
+            from litellm.llms.bedrock.reasoning_affinity import strip_incompatible_bedrock_openai_reasoning
+
+            strip_incompatible_bedrock_openai_reasoning(
+                request_input,
+                typed_healthy_deployments,
+                lambda: self._routed_group_candidate_model_ids(request_kwargs, model),
+                lambda model_id: self.router.get_deployment(model_id=model_id),
+            )
         anthropic_messages: Final = messages or request_kwargs.get("messages")
         model_id: Final = self._extract_model_id_from_input(
             request_input
