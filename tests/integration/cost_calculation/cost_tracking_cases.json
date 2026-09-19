@@ -28717,8 +28717,7 @@
         "input_cost": 0.0018584,
         "output_cost": 0.00206412,
         "prompt_tokens": 1840,
-        "completion_tokens": 412,
-        "cost_header": true
+        "completion_tokens": 412
       }
     },
     {
@@ -28796,8 +28795,7 @@
         "input_cost": 0.0018584,
         "output_cost": 0.00206412,
         "prompt_tokens": 1840,
-        "completion_tokens": 412,
-        "cost_header": true
+        "completion_tokens": 412
       }
     },
     {
@@ -28991,8 +28989,7 @@
         "input_cost": 0.004025,
         "output_cost": 0.00721,
         "prompt_tokens": 1840,
-        "completion_tokens": 412,
-        "cost_header": true
+        "completion_tokens": 412
       }
     },
     {
@@ -29077,8 +29074,7 @@
         "input_cost": 0.0009384,
         "output_cost": 0.00062212,
         "prompt_tokens": 1840,
-        "completion_tokens": 412,
-        "cost_header": true
+        "completion_tokens": 412
       }
     },
     {
@@ -29124,8 +29120,7 @@
         "input_cost": 0.00138,
         "output_cost": 0.001854,
         "prompt_tokens": 1840,
-        "completion_tokens": 412,
-        "cost_header": true
+        "completion_tokens": 412
       }
     },
     {
@@ -29155,8 +29150,7 @@
         "input_cost": 0.00138,
         "output_cost": 0.001854,
         "prompt_tokens": 1840,
-        "completion_tokens": 412,
-        "cost_header": true
+        "completion_tokens": 412
       }
     },
     {
@@ -29190,8 +29184,7 @@
         "input_cost": 0.0006624,
         "output_cost": 0.00118656,
         "prompt_tokens": 1840,
-        "completion_tokens": 412,
-        "cost_header": true
+        "completion_tokens": 412
       }
     },
     {
@@ -29244,8 +29237,7 @@
         "input_cost": 0.001472,
         "output_cost": 0.001648,
         "prompt_tokens": 1840,
-        "completion_tokens": 412,
-        "cost_header": true
+        "completion_tokens": 412
       }
     },
     {
@@ -29326,8 +29318,7 @@
         "input_cost": 0.0046184,
         "output_cost": 0.00412412,
         "prompt_tokens": 1840,
-        "completion_tokens": 412,
-        "cost_header": true
+        "completion_tokens": 412
       }
     },
     {
@@ -29373,8 +29364,7 @@
         "input_cost": 0.0027784,
         "output_cost": 0.00309412,
         "prompt_tokens": 1840,
-        "completion_tokens": 412,
-        "cost_header": true
+        "completion_tokens": 412
       }
     },
     {
@@ -29425,8 +29415,7 @@
         "input_cost": 0.01288,
         "output_cost": 0.008652,
         "prompt_tokens": 1840,
-        "completion_tokens": 412,
-        "cost_header": true
+        "completion_tokens": 412
       }
     }
   ]
