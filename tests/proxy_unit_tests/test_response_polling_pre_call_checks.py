@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException, Request, Response
 
-
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -120,7 +119,7 @@ class TestPollingEndpointPreCallGuard:
 
         proxy_server_patches = {
             "litellm.proxy.proxy_server._read_request_body": AsyncMock(
-                return_value={"model": "gpt-4", "background": True}
+                return_value={"model": "gpt-4", "input": "hi", "background": True}
             ),
             "litellm.proxy.proxy_server.general_settings": {},
             "litellm.proxy.proxy_server.llm_router": MagicMock(),
