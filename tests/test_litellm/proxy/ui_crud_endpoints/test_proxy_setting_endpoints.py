@@ -3291,7 +3291,7 @@ class TestTeamAdminEditableTeamFieldsSetting:
     def test_patch_rejects_field_names_the_proxy_does_not_support(self, monkeypatch):
         mock_prisma = self._as_proxy_admin(monkeypatch)
         monkeypatch.setattr(
-            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS",
+            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.SUPPORTED_TEAM_ADMIN_PERMISSIONS",
             frozenset({"tpm_limit"}),
         )
 
@@ -3336,6 +3336,26 @@ class TestTeamAdminEditableTeamFieldsSetting:
         assert stored["team_admin_editable_team_fields"] == enabled
         assert general_settings["team_admin_editable_team_fields"] == enabled
 
+    def test_patch_accepts_the_projects_permission_and_project_endpoints_see_it(self, monkeypatch):
+        from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+            team_admin_may_manage_projects,
+        )
+
+        mock_prisma = self._as_proxy_admin(monkeypatch)
+        general_settings: dict = {}
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+        assert team_admin_may_manage_projects(general_settings) is False
+
+        try:
+            response = client.patch("/update/ui_settings", json={"team_admin_editable_team_fields": ["projects"]})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        stored = json.loads(mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]["create"]["ui_settings"])
+        assert stored["team_admin_editable_team_fields"] == ["projects"]
+        assert team_admin_may_manage_projects(general_settings) is True
+
     def test_patch_with_an_empty_list_turns_team_admin_editing_off_again(self, monkeypatch):
         mock_prisma = self._as_proxy_admin(monkeypatch)
         general_settings: dict = {"team_admin_editable_team_fields": ["tpm_limit"]}
@@ -3372,6 +3392,7 @@ class TestTeamAdminEditableTeamFieldsSetting:
         assert field_schema["type"] == "array"
         assert field_schema["items"]["type"] == "string"
         assert "tpm_limit" in field_schema["items"]["enum"]
+        assert "projects" in field_schema["items"]["enum"]
 
 
 class TestSyncUiSettingsToGeneralSettings:

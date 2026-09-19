@@ -334,6 +334,36 @@ async def test_arrival_time_prefers_litellm_received_at_over_time_time():
 
 
 @pytest.mark.asyncio
+async def test_proxy_clears_client_supplied_timing_windows():
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_mock.state = SimpleNamespace(litellm_received_at=datetime.now(timezone.utc))
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", metadata={}, team_metadata={})
+
+    updated_data = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-3.5-turbo",
+            "metadata": {"llm_api_timing_windows": ((0.0, 1.0),)},
+        },
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["metadata"]["llm_api_timing_windows"] == ()
+
+
+@pytest.mark.asyncio
 async def test_arrival_time_falls_back_to_time_time_without_litellm_received_at():
     """Callers that never went through user_api_key_auth (no stamp on request.state)
     must still get a usable arrival_time instead of erroring."""

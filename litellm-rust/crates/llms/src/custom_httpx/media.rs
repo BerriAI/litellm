@@ -7,12 +7,11 @@ use std::{
     time::Duration,
 };
 
+use litellm_http::{ClientVariant, EnvironmentProxies, HttpClientConfig, HttpClientPool};
 use reqwest::{
     Url,
     dns::{Addrs, Name, Resolve, Resolving},
 };
-
-const MEDIA_CONNECT_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -36,10 +35,45 @@ pub enum Error {
     Transport(#[from] crate::custom_httpx::transport::Error),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UrlPolicy {
+    pub validate: bool,
+    pub allowed_hosts: Vec<String>,
+}
+
+impl Default for UrlPolicy {
+    fn default() -> Self {
+        Self {
+            validate: true,
+            allowed_hosts: Vec::new(),
+        }
+    }
+}
+
+impl UrlPolicy {
+    fn allows(&self, host: &str, port: u16) -> bool {
+        let host = normalize_host(host);
+        let with_port = format!("{host}:{port}");
+        self.allowed_hosts
+            .iter()
+            .map(|entry| normalize_host(entry))
+            .any(|entry| entry == host || entry == with_port)
+    }
+}
+
+fn normalize_host(host: &str) -> String {
+    host.to_ascii_lowercase().trim_end_matches('.').to_owned()
+}
+
+type ProxyMatch = Arc<dyn Fn(&Url) -> bool + Send + Sync>;
+
 #[derive(Clone)]
 pub struct MediaFetcher {
-    client: reqwest::Client,
+    pinned: reqwest::Client,
+    unpinned: reqwest::Client,
+    uses_proxy: ProxyMatch,
     address_resolver: Arc<dyn AddressResolver>,
+    url_policy: UrlPolicy,
     allow_private_network: bool,
 }
 
@@ -63,26 +97,39 @@ pub struct DownloadedMedia {
 }
 
 impl MediaFetcher {
-    pub fn new() -> Result<Self, reqwest::Error> {
-        Self::with_resolvers(Arc::new(PublicDnsResolver), Arc::new(SystemAddressResolver))
+    pub fn new(
+        pool: &HttpClientPool,
+        config: &HttpClientConfig,
+        url_policy: UrlPolicy,
+    ) -> Result<Self, litellm_http::Error> {
+        let uses_proxy: ProxyMatch = if config.trust_proxy_env {
+            let proxies = EnvironmentProxies::from_environment();
+            Arc::new(move |url| proxies.apply_to(url))
+        } else {
+            Arc::new(|_| false)
+        };
+        Self::with_resolution(
+            pool,
+            config,
+            url_policy,
+            Arc::new(SystemAddressResolver),
+            uses_proxy,
+        )
     }
 
-    fn with_resolvers<R>(
-        transport_resolver: Arc<R>,
+    fn with_resolution(
+        pool: &HttpClientPool,
+        config: &HttpClientConfig,
+        url_policy: UrlPolicy,
         address_resolver: Arc<dyn AddressResolver>,
-    ) -> Result<Self, reqwest::Error>
-    where
-        R: Resolve + 'static,
-    {
-        let client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(MEDIA_CONNECT_TIMEOUT_SECS))
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .dns_resolver(transport_resolver)
-            .build()?;
+        uses_proxy: ProxyMatch,
+    ) -> Result<Self, litellm_http::Error> {
         Ok(Self {
-            client,
+            pinned: pool.client(config, ClientVariant::Media)?,
+            unpinned: pool.client(config, ClientVariant::UnpinnedMedia)?,
+            uses_proxy,
             address_resolver,
+            url_policy,
             allow_private_network: false,
         })
     }
@@ -90,8 +137,11 @@ impl MediaFetcher {
     #[cfg(any(test, feature = "test-support"))]
     pub fn for_test(client: reqwest::Client) -> Self {
         Self {
-            client,
+            pinned: client.clone(),
+            unpinned: client,
+            uses_proxy: Arc::new(|_| false),
             address_resolver: Arc::new(AllowPrivateResolver),
+            url_policy: UrlPolicy::default(),
             allow_private_network: true,
         }
     }
@@ -112,9 +162,9 @@ impl MediaFetcher {
     ) -> Result<DownloadedMedia, Error> {
         let mut redirects_followed = 0;
         loop {
-            self.validate_url(&url).await?;
             let mut response = self
-                .client
+                .client_for(&url)
+                .await?
                 .get(url.clone())
                 .send()
                 .await
@@ -161,7 +211,10 @@ impl MediaFetcher {
         }
     }
 
-    async fn validate_url(&self, url: &Url) -> Result<(), Error> {
+    async fn client_for(&self, url: &Url) -> Result<&reqwest::Client, Error> {
+        if !self.url_policy.validate {
+            return Ok(&self.unpinned);
+        }
         if !matches!(url.scheme(), "http" | "https")
             || !url.username().is_empty()
             || url.password().is_some()
@@ -170,12 +223,28 @@ impl MediaFetcher {
         }
         let host = url.host_str().ok_or(Error::BlockedUrl)?;
         if self.allow_private_network {
-            return Ok(());
-        }
-        if let Ok(ip) = host.parse::<IpAddr>() {
-            return (!is_blocked_ip(ip)).then_some(()).ok_or(Error::BlockedUrl);
+            return Ok(&self.pinned);
         }
         let port = url.port_or_known_default().ok_or(Error::BlockedUrl)?;
+        if self.url_policy.allows(host, port) {
+            return Ok(&self.unpinned);
+        }
+        self.validate_host(host, port).await?;
+        Ok(if (self.uses_proxy)(url) {
+            &self.unpinned
+        } else {
+            &self.pinned
+        })
+    }
+
+    async fn validate_host(&self, host: &str, port: u16) -> Result<(), Error> {
+        if let Ok(ip) = host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<IpAddr>()
+        {
+            return (!is_blocked_ip(ip)).then_some(()).ok_or(Error::BlockedUrl);
+        }
         let addresses = self
             .address_resolver
             .resolve(host, port)
@@ -236,7 +305,7 @@ fn is_blocked_ip(ip: IpAddr) -> bool {
 }
 
 #[derive(Default)]
-struct PublicDnsResolver;
+pub struct PublicDnsResolver;
 
 struct SystemAddressResolver;
 
@@ -281,6 +350,7 @@ impl Resolve for PublicDnsResolver {
 mod tests {
     use std::collections::HashSet;
 
+    use litellm_http::{HttpSettings, Resolution};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -364,12 +434,34 @@ mod tests {
         address: SocketAddr,
         blocked_hosts: HashSet<&'static str>,
     ) -> MediaFetcher {
-        MediaFetcher::with_resolvers(
-            Arc::new(LoopbackDnsResolver(address)),
+        fetcher(address, blocked_hosts, UrlPolicy::default(), false)
+    }
+
+    fn fetcher(
+        pinned_address: SocketAddr,
+        blocked_hosts: HashSet<&'static str>,
+        url_policy: UrlPolicy,
+        uses_proxy: bool,
+    ) -> MediaFetcher {
+        let direct = HttpClientConfig {
+            trust_proxy_env: false,
+            ..Resolution::from(&HttpSettings::default()).config
+        };
+        MediaFetcher::with_resolution(
+            &HttpClientPool::new(Arc::new(LoopbackDnsResolver(pinned_address))),
+            &direct,
+            url_policy,
             Arc::new(TestAddressResolver { blocked_hosts }),
+            Arc::new(move |_| uses_proxy),
         )
         .expect("test fetcher builds")
     }
+
+    const UNROUTABLE: SocketAddr =
+        SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 1)), 9);
+
+    const OK_RESPONSE: &[u8] =
+        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
 
     fn policy(max_bytes: u64, max_redirects: usize) -> DownloadPolicy {
         DownloadPolicy {
@@ -542,12 +634,90 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_url_credentials_before_network_access() {
-        let fetcher = MediaFetcher::new().expect("media fetcher builds");
+        let fetcher = MediaFetcher::new(
+            &HttpClientPool::new(Arc::new(PublicDnsResolver)),
+            &Resolution::from(&HttpSettings::default()).config,
+            UrlPolicy::default(),
+        )
+        .expect("media fetcher builds");
         let url =
             Url::parse("https://user:password@8.8.8.8/document").expect("credentialed URL parses");
         assert!(matches!(
-            fetcher.validate_url(&url).await,
+            fetcher.fetch(url, policy(1, 0)).await,
             Err(Error::BlockedUrl)
         ));
+    }
+
+    #[tokio::test]
+    async fn allowlisted_private_host_is_fetched_without_the_pinned_resolver() {
+        let (url, server, _) = serve_named("localhost", vec![OK_RESPONSE]).await;
+        let port = url.port().expect("test URL has a port");
+        let allowed = UrlPolicy {
+            validate: true,
+            allowed_hosts: vec![format!("LOCALHOST:{port}")],
+        };
+        let media = fetcher(UNROUTABLE, HashSet::from(["localhost"]), allowed, false)
+            .fetch(url, policy(2, 0))
+            .await
+            .expect("allowlisted host downloads");
+        server.await.expect("server completes");
+        assert_eq!(media.bytes, b"ok");
+    }
+
+    #[tokio::test]
+    async fn allowlist_entry_for_another_port_does_not_open_the_host() {
+        let (url, _server, _) = serve_named("localhost", vec![OK_RESPONSE]).await;
+        let other_port = UrlPolicy {
+            validate: true,
+            allowed_hosts: vec!["localhost:1".into()],
+        };
+        let result = fetcher(UNROUTABLE, HashSet::from(["localhost"]), other_port, false)
+            .fetch(url, policy(2, 0))
+            .await;
+        assert!(matches!(result, Err(Error::BlockedUrl)));
+    }
+
+    #[tokio::test]
+    async fn validation_off_fetches_private_hosts_and_follows_redirects() {
+        let (url, server, _) = serve_named(
+            "localhost",
+            vec![
+                b"HTTP/1.1 302 Found\r\nLocation: /moved\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                OK_RESPONSE,
+            ],
+        )
+        .await;
+        let off = UrlPolicy {
+            validate: false,
+            allowed_hosts: Vec::new(),
+        };
+        let media = fetcher(UNROUTABLE, HashSet::from(["localhost"]), off, false)
+            .fetch(url, policy(2, 1))
+            .await
+            .expect("unvalidated download succeeds");
+        let requests = server.await.expect("server completes");
+        assert_eq!(media.bytes, b"ok");
+        assert!(requests[1].starts_with("GET /moved "));
+    }
+
+    #[tokio::test]
+    async fn proxied_urls_skip_the_pinned_resolver_but_keep_the_address_check() {
+        let (url, server, _) = serve_named("localhost", vec![OK_RESPONSE]).await;
+        let media = fetcher(UNROUTABLE, HashSet::new(), UrlPolicy::default(), true)
+            .fetch(url.clone(), policy(2, 0))
+            .await
+            .expect("public host behind a proxy downloads");
+        server.await.expect("server completes");
+        assert_eq!(media.bytes, b"ok");
+
+        let blocked = fetcher(
+            UNROUTABLE,
+            HashSet::from(["localhost"]),
+            UrlPolicy::default(),
+            true,
+        )
+        .fetch(url, policy(2, 0))
+        .await;
+        assert!(matches!(blocked, Err(Error::BlockedUrl)));
     }
 }

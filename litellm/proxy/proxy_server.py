@@ -111,7 +111,6 @@ from litellm.proxy._types import (
     PassThroughGenericEndpoint,
     ProxyErrorTypes,
     ProxyException,
-    RoleBasedPermissions,
     SpecialModelNames,
     SupportedDBObjectType,
     TeamDefaultSettings,
@@ -148,11 +147,15 @@ from litellm.router_utils.auto_router_tuning_baseline import (
 from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
+    PRICING_OVERRIDES_KEY,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
     TextCompletionResponse,
     TokenCountResponse,
+    echoed_cost_map_pricing_fields,
+    is_server_derived_pricing_key,
+    pricing_override_fields,
 )
 from litellm.utils import cost_map_omits_token_price, load_credentials_from_list
 
@@ -317,6 +320,7 @@ from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
 from litellm.proxy.auth.auth_checks import (
+    ROLE_BASED_PERMISSIONS_ADAPTER,
     ExperimentalUIJWTToken,
     can_key_call_resolved_model,
     get_team_object,
@@ -1348,8 +1352,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         user_api_key_cache=user_api_key_cache,
     )
 
-    if prompt_injection_detection_obj is not None:  # [TODO] - REFACTOR THIS
-        prompt_injection_detection_obj.update_environment(router=llm_router)
+    ProxyStartupEvent._attach_router_to_prompt_injection_detectors(llm_router=llm_router)
 
     verbose_proxy_logger.debug("prisma_client: %s", prisma_client)
     if prisma_client is not None and litellm.max_budget > 0:
@@ -4867,6 +4870,16 @@ def _bind_general_settings_store(settings: SettingsStore) -> None:
     general_settings = settings  # pyright: ignore[reportAssignmentType]  # legacy global accepts mappings
 
 
+@lru_cache(maxsize=4096)
+def _log_ignored_cost_map_copy(model_id: str, fields: tuple[str, ...]) -> None:
+    verbose_proxy_logger.warning(
+        "Deployment %s stores a copy of the cost map in model_info (%s); ignoring it so the deployment follows the "
+        "current cost map. Set the price on litellm_params to override the cost map on purpose.",
+        model_id,
+        ", ".join(fields),
+    )
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -6307,9 +6320,7 @@ class ProxyConfig:
             ### RBAC ###
             rbac_role_permissions: Final = general_settings.get("role_permissions", None)
             if rbac_role_permissions is not None:
-                general_settings["role_permissions"] = [  # validate role permissions
-                    RoleBasedPermissions(**role_permission) for role_permission in rbac_role_permissions
-                ]
+                ROLE_BASED_PERMISSIONS_ADAPTER.validate_python(rbac_role_permissions)
 
             ### SSRF URL VALIDATION SETTINGS ###
             _apply_ssrf_general_settings(general_settings)
@@ -6694,7 +6705,12 @@ class ProxyConfig:
                 model.model_info["id"] = model.model_id
             if "db_model" in model.model_info and model.model_info["db_model"] is False:
                 model.model_info["db_model"] = db_model
-            _model_info = RouterModelInfo(**model.model_info)
+            echoed_pricing: Final = echoed_cost_map_pricing_fields(model.model_info)
+            if echoed_pricing:
+                _log_ignored_cost_map_copy(str(model.model_info["id"]), echoed_pricing)
+            _model_info = RouterModelInfo(
+                **MappingProxyType({k: v for k, v in model.model_info.items() if k not in echoed_pricing})
+            )
 
         else:
             _model_info = RouterModelInfo(id=model.model_id, db_model=db_model)
@@ -9384,6 +9400,15 @@ def select_data_generator(
     )
 
 
+def _pricing_override_stamps(
+    model_info: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    own_pricing: Final = MappingProxyType(
+        {k: v for k, v in litellm_params.items() if v is not None and is_server_derived_pricing_key(k)}
+    )
+    return MappingProxyType({**own_pricing, PRICING_OVERRIDES_KEY: pricing_override_fields(model_info, own_pricing)})
+
+
 def get_litellm_model_info(model: dict = {}):
     model_info: Final = model.get("model_info", {})
     model_to_lookup = model.get("litellm_params", {}).get("model", None)
@@ -9420,6 +9445,14 @@ def giveup(e):
 
 
 class ProxyStartupEvent:
+    @staticmethod
+    def _attach_router_to_prompt_injection_detectors(llm_router: Router | None) -> None:
+        for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(
+            _OPTIONAL_PromptInjectionDetection
+        ):
+            if isinstance(callback, _OPTIONAL_PromptInjectionDetection):
+                callback.update_environment(router=llm_router)
+
     @staticmethod
     async def refresh_model_info() -> None:
         if llm_router is not None:
@@ -13748,10 +13781,17 @@ def _enrich_model_info_with_litellm_data(
         llm_router.get_discovered_model_info(model_info.get("id")) if llm_router is not None else MappingProxyType({})
     )
     unpriced: Final = cost_map_omits_token_price(model_info.get("id"), litellm_model_info.get("key"))
-    for k, v in MappingProxyType({**litellm_model_info, **discovered_model_info}).items():
-        if k not in model_info or (model_info[k] is None and k in discovered_model_info):
-            model_info[k] = None if unpriced and k in ("input_cost_per_token", "output_cost_per_token") else v
-    model["model_info"] = model_info
+    stamped_model_info: Final = MappingProxyType(
+        {**model_info, **_pricing_override_stamps(model_info, model.get("litellm_params") or MappingProxyType({}))}
+    )
+    model["model_info"] = {
+        **stamped_model_info,
+        **{
+            k: None if unpriced and k in ("input_cost_per_token", "output_cost_per_token") else v
+            for k, v in MappingProxyType({**litellm_model_info, **discovered_model_info}).items()
+            if k not in stamped_model_info or (stamped_model_info[k] is None and k in discovered_model_info)
+        },
+    }
     # don't return the api key / vertex credentials
     # don't return the llm credentials
     model = remove_sensitive_info_from_deployment(model, excluded_keys={"litellm_credential_name"})
@@ -17273,6 +17313,8 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "maximum_spend_logs_cleanup_run_budget": "String",
         "maximum_spend_logs_cleanup_batch_timeout": "String",
         "mcp_internal_ip_ranges": "List",
+        "mcp_allowed_clients": "TypedDictionary",
+        "mcp_client_id_header": "String",
         "mcp_trusted_proxy_ranges": "List",
         "mcp_xff_num_trusted_hops": "Integer",
         "always_include_stream_usage": "Boolean",

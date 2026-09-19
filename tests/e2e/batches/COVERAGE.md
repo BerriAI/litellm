@@ -12,7 +12,7 @@ cost write-back via a cross-run marker baton (design below).
 Only supported cells are tested. The capability table in `capabilities.py` holds one
 row per supported (provider, scenario) pair, so there are no skipped cells in the
 parametrized run. The batches suite never skips: missing provider creds or upstream
-failures are hard test failures (see `tests/e2e/CLAUDE.md`).
+failures are hard test failures (see `tests/e2e/AGENTS.md`).
 
 | Provider  | create | retrieve | cancel | list | content download | file backing |
 |-----------|--------|----------|--------|------|------------------|--------------|
