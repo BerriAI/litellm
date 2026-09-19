@@ -1,9 +1,10 @@
-use std::{collections::BTreeMap, future::Future, time::Duration};
+use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
 
 use litellm_auth::{InputSource, SecretValue, Sourced, TokenProviderHandle};
 use litellm_core_utils::{
     call_arguments::CallArguments,
     serde_compat::{FiniteF64, LaxI64},
+    settings::ProcessEnvironment,
 };
 use serde::{
     Deserialize, Serialize,
@@ -15,7 +16,7 @@ use serde_with::serde_as;
 use crate::base_llm::ocr::{
     error::Error,
     handler::{CallHooks, OcrClient, read_response_bytes, transform_request_body},
-    settings::OcrSettings,
+    settings::{OcrSettings, Secrets},
 };
 
 pub const OCR_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -160,6 +161,7 @@ pub struct OcrConnection {
     pub timeout: Duration,
     pub max_response_bytes: usize,
     pub settings: OcrSettings,
+    pub secrets: Secrets,
 }
 
 impl OcrConnection {
@@ -167,6 +169,7 @@ impl OcrConnection {
         credentials: ResolvedOcrCredentials,
         transport: OcrTransportConfig,
         settings: OcrSettings,
+        secrets: Secrets,
     ) -> Self {
         let api_key_source = credentials
             .api_key
@@ -191,7 +194,12 @@ impl OcrConnection {
                 .unwrap_or(settings.request_timeout),
             max_response_bytes: transport.max_response_bytes,
             settings,
+            secrets,
         }
+    }
+
+    pub fn secret(&self, name: &str) -> Option<String> {
+        self.secrets.get(name)
     }
 }
 
@@ -201,6 +209,7 @@ impl Default for OcrConnection {
             ResolvedOcrCredentials::default(),
             OcrTransportConfig::default(),
             OcrSettings::default(),
+            Arc::new(ProcessEnvironment),
         )
     }
 }
@@ -563,10 +572,6 @@ pub fn decode_and_normalize_response<T: DeserializeOwned>(
     })
 }
 
-pub fn credential_env(name: &str) -> Option<String> {
-    std::env::var(name).ok()
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -587,6 +592,7 @@ mod tests {
                     ..OcrTransportConfig::default()
                 },
                 settings.clone(),
+                Arc::new(ProcessEnvironment),
             )
             .timeout
         };

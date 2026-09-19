@@ -30,6 +30,12 @@ def warn(message: str) -> None:
     verbose_logger.warning("%s", message)
 
 
+def secret(name: str) -> str | None:
+    from litellm.secret_managers.main import get_secret_str
+
+    return get_secret_str(name)
+
+
 def url_policy() -> UrlPolicy:
     import litellm
 

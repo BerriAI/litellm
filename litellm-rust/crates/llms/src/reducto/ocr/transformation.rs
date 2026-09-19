@@ -15,7 +15,7 @@ use crate::base_llm::ocr::{
     transformation::{
         BaseOcrConfig, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES, OcrConnection, OcrDocument,
         OcrPage, OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
-        credential_env, decode_and_normalize_response,
+        decode_and_normalize_response,
     },
 };
 
@@ -110,7 +110,9 @@ impl BaseOcrConfig for ReductoParseV3Config {
         request: &PreparedOcrRequest,
         _client: &OcrClient,
     ) -> Result<Self::Environment, Error> {
-        resolve_headers(&request.connection, &credential_env)
+        resolve_headers(&request.connection, &|name: &str| {
+            request.connection.secret(name)
+        })
     }
 
     fn get_complete_url(

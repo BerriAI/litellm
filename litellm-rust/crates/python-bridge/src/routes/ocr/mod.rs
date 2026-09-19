@@ -3,7 +3,7 @@ mod errors;
 mod host;
 mod project;
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use host::OcrRouteHost;
 use litellm_auth_gcp::VertexAuth;
@@ -16,7 +16,7 @@ use pyo3::{
     types::{PyDict, PyTuple},
 };
 
-use crate::{errors::RustBridgeDeclined, http};
+use crate::{errors::RustBridgeDeclined, http, python_settings::PythonSecrets};
 
 const SURFACE: LegacySurface = LegacySurface {
     call_type: "ocr",
@@ -45,6 +45,7 @@ fn run_ocr(
         http::url_policy(py)?,
         VERTEX_AUTH.clone(),
         OcrSettings::from_environment(&ProcessEnvironment),
+        Arc::new(PythonSecrets),
     )
     .map_err(|error| RustBridgeDeclined::new_err(error.to_string()))?;
     run_legacy_call(

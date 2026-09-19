@@ -9,7 +9,7 @@ use crate::base_llm::ocr::{
     handler::OcrClient,
     transformation::{
         BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage,
-        OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest, credential_env,
+        OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
         decode_and_normalize_response, decode_response_value,
     },
 };
@@ -126,8 +126,9 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
             &request.optional_params,
             &request.input_sources,
         )?;
-        let location = vertex::get_vertex_ai_location(&config, &credential_env)
-            .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
+        let location =
+            vertex::get_vertex_ai_location(&config, &|name: &str| request.connection.secret(name))
+                .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
         self.get_complete_url(
             request.connection.api_base.as_deref(),
             &environment.project_id,

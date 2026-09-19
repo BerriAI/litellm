@@ -3,12 +3,15 @@ import logging
 from pathlib import Path
 from typing import Final
 
+import httpx
 import pytest
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.llms.custom_httpx.http_handler import default_user_agent
 from litellm.rust_bridge import settings
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
 CONTRACT_PATH: Final = Path(__file__).parents[3] / "litellm-rust/crates/python-bridge/python_settings.json"
 
@@ -73,3 +76,46 @@ def test_warn_reaches_the_litellm_logger(caplog: pytest.LogCaptureFixture) -> No
         settings.warn("ssl_ecdh_curve 'secp521r1' is not supported")
 
     assert [record.getMessage() for record in caplog.records] == ["ssl_ecdh_curve 'secp521r1' is not supported"]
+
+
+class _VaultSecrets(CustomSecretManager):
+    def __init__(self, secrets: dict[str, str]) -> None:
+        super().__init__(secret_manager_name="rust_bridge_settings_test")
+        self.secrets = secrets
+
+    async def async_read_secret(
+        self,
+        secret_name: str,
+        optional_params: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> str | None:
+        return self.secrets.get(secret_name)
+
+    def sync_read_secret(
+        self,
+        secret_name: str,
+        optional_params: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> str | None:
+        return self.secrets.get(secret_name)
+
+
+def test_secret_prefers_the_secret_manager_and_falls_back_to_the_environment_on_a_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MISTRAL_API_KEY", "stale-env-key")
+    monkeypatch.setenv("REDUCTO_API_KEY", "env-only-key")
+    monkeypatch.setattr(litellm, "secret_manager_client", _VaultSecrets({"MISTRAL_API_KEY": "vault-key"}))
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+
+    assert settings.secret("MISTRAL_API_KEY") == "vault-key"
+    assert settings.secret("REDUCTO_API_KEY") == "env-only-key"
+    assert settings.secret("ABSENT_KEY") is None
+
+
+def test_secret_reads_the_environment_without_a_secret_manager(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MISTRAL_API_KEY", "env-key")
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+
+    assert settings.secret("MISTRAL_API_KEY") == "env-key"

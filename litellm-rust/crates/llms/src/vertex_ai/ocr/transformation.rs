@@ -10,7 +10,7 @@ use crate::{
         handler::OcrClient,
         transformation::{
             BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrEnvironment,
-            OcrRequestContext, OcrResponseFormat, PreparedOcrRequest, credential_env,
+            OcrRequestContext, OcrResponseFormat, PreparedOcrRequest,
         },
     },
     mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
@@ -65,8 +65,9 @@ impl BaseOcrConfig for VertexAiOcrConfig {
             &request.optional_params,
             &request.input_sources,
         )?;
-        let location = vertex::get_vertex_ai_location(&config, &credential_env)
-            .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
+        let location =
+            vertex::get_vertex_ai_location(&config, &|name: &str| request.connection.secret(name))
+                .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
         self.build_ocr_url(
             request.connection.api_base.as_deref(),
             &environment.project_id,
@@ -139,7 +140,7 @@ impl VertexAiOcrConfig {
                     .as_ref()
                     .map(litellm_auth::SecretValue::expose),
                 config,
-                &credential_env,
+                &|name: &str| connection.secret(name),
             )
             .await
             .map_err(Error::from)

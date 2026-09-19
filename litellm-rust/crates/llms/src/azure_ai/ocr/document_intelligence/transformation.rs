@@ -23,7 +23,7 @@ use crate::base_llm::ocr::{
         BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES,
         OCR_POLL_RETRY_SECS, OcrConnection, OcrCredentialInputs, OcrDocument, OcrPage,
         OcrPageDimensions, OcrResponseContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
-        ResolvedOcrCredentials, credential_env, decode_and_normalize_response, decode_response,
+        ResolvedOcrCredentials, decode_and_normalize_response, decode_response,
     },
 };
 
@@ -181,8 +181,10 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
                 &request.input_sources,
             )?
         };
-        self.resolve_headers(&request.connection, &config, &credential_env)
-            .await
+        self.resolve_headers(&request.connection, &config, &|name: &str| {
+            request.connection.secret(name)
+        })
+        .await
     }
 
     fn get_complete_url(
@@ -192,7 +194,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         _environment: &Self::Environment,
     ) -> Result<String, Error> {
         let endpoint = nonblank(request.connection.api_base.clone())
-            .or_else(|| nonblank(credential_env(AZURE_DI_ENDPOINT_ENV)))
+            .or_else(|| nonblank(request.connection.secret(AZURE_DI_ENDPOINT_ENV)))
             .ok_or_else(|| Error::Auth(litellm_auth::Error::ProviderAuthentication("Missing Azure Document Intelligence API Base - Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT or pass api_base".into())))?;
         self.build_ocr_url(
             &endpoint,

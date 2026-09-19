@@ -10,7 +10,7 @@ use crate::{
         handler::OcrClient,
         transformation::{
             BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrRequestContext,
-            OcrResponseFormat, PreparedOcrRequest, credential_env,
+            OcrResponseFormat, PreparedOcrRequest,
         },
     },
     mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
@@ -57,8 +57,10 @@ impl BaseOcrConfig for AzureAiOcrConfig {
                 &request.input_sources,
             )?
         };
-        self.resolve_headers(&request.connection, &config, &credential_env)
-            .await
+        self.resolve_headers(&request.connection, &config, &|name: &str| {
+            request.connection.secret(name)
+        })
+        .await
     }
 
     fn get_complete_url(
@@ -67,7 +69,9 @@ impl BaseOcrConfig for AzureAiOcrConfig {
         _optional_params: &Self::OcrParams,
         _environment: &Self::Environment,
     ) -> Result<String, Error> {
-        self.build_ocr_url(request.connection.api_base.as_deref(), &credential_env)
+        self.build_ocr_url(request.connection.api_base.as_deref(), &|name: &str| {
+            request.connection.secret(name)
+        })
     }
 
     fn transform_ocr_request(
