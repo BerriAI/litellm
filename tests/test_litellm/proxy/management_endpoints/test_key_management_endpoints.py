@@ -7101,7 +7101,6 @@ _BULK_UPDATE_TOKEN: Final = "1f2e3d4c5b6a79880123456789abcdef0123456789abcdef012
 
 
 async def _bulk_update_one_key(monkeypatch, item_payload: Mapping[str, object]) -> Mapping[str, object]:
-    """Runs /key/bulk_update with one item against a budgeted team key and returns the row written to the DB."""
     from litellm.proxy.management_endpoints.key_management_endpoints import bulk_update_keys
     from litellm.types.proxy.management_endpoints.key_management_endpoints import BulkUpdateKeyRequest
 
