@@ -7,7 +7,7 @@ while preserving the existing public import path.
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Final, Optional
+from typing import TYPE_CHECKING, Final, Optional, cast
 
 from fastapi import HTTPException
 
@@ -43,6 +43,24 @@ def _serialize_mcp_content_item(item: object) -> dict[str, object]:
     if isinstance(text, str):
         return {"type": getattr(item, "type", "text"), "text": text}
     return {"type": "text", "text": str(item)}
+
+
+def _coerce_pair_list_source(source: object) -> object:
+    if not isinstance(source, list):
+        return source
+    try:
+        return dict(cast("Sequence[tuple[str, object]]", source))  # pyright: ignore[reportUnknownArgumentType]  # response_obj arrives untyped; dict() rejects non-pair shapes
+    except (TypeError, ValueError):
+        return source
+
+
+def _source_field(source: object, key: str, snake_key: str) -> object:
+    if isinstance(source, dict):
+        for candidate in (key, snake_key):
+            if candidate in source:
+                return source[candidate]  # pyright: ignore[reportUnknownVariableType]  # dict-shaped sources arrive untyped
+        return None
+    return getattr(source, snake_key, None)
 
 
 class _CiscoAIDefenseMcpMixin:
@@ -508,9 +526,10 @@ class _CiscoAIDefenseMcpMixin:
         content: Sequence[object],
         source: object = None,
     ) -> dict[str, object]:
+        source_map: Final[object] = _coerce_pair_list_source(source)
         result: Final[dict[str, object]] = {"content": [_serialize_mcp_content_item(item) for item in content]}
         for key, snake_key in (("structuredContent", "structured_content"), ("isError", "is_error")):
-            value = source.get(key) if isinstance(source, dict) else getattr(source, snake_key, None)
+            value = _source_field(source_map, key, snake_key)
             if value is not None and (key != "isError" or isinstance(value, bool)):
                 result[key] = value
         return result
@@ -551,7 +570,7 @@ class _CiscoAIDefenseMcpMixin:
             and all(isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str) for item in response_obj)
         ):
             for index, item in enumerate(response_obj):
-                if item[0] == "structuredContent":
+                if item[0] in ("structuredContent", "structured_content"):
                     response_obj[index] = (item[0], replacement)
                     replaced = True
         elif hasattr(response_obj, "structured_content"):

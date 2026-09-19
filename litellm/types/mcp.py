@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import enum
 import re
 from collections.abc import Awaitable, Callable, Mapping
@@ -6,13 +8,13 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlsplit
 
 import httpx
-import httpx2
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
 from litellm.types.llms.base import HiddenParams
 
 if TYPE_CHECKING:
+    import httpx2
     from mcp.types import EmbeddedResource as MCPEmbeddedResource
     from mcp.types import ImageContent as MCPImageContent
     from mcp.types import TextContent as MCPTextContent
