@@ -172,7 +172,7 @@ class CostTrackingTestCase(BaseModel):
         provider: Final = self.rates.litellm_provider
         prefix: Final = (
             "openai"
-            if provider == "openai" and self.rates.mode == "chat"
+            if provider == "openai" and (self.rates.mode == "chat" or self.endpoint == "/v1/responses")
             else "openai/responses"
             if provider == "openai"
             else _PROVIDER_PREFIXES.get(provider)
