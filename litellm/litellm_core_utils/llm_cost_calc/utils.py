@@ -14,11 +14,11 @@ from typing_extensions import ReadOnly
 import litellm
 from litellm._internal_context import current_billing_time
 from litellm._logging import verbose_logger
-from litellm.constants import FIREWORKS_AI_DEFAULT_CACHE_READ_RATE_RATIO
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
     select_tier_for_input,
     tier_rate,
 )
+from litellm.llms.fireworks_ai.cache_pricing import with_default_cache_read_rate
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
@@ -74,31 +74,12 @@ def _uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
 
 
 def apply_provider_cache_read_default(model_info: ModelInfo, custom_llm_provider: str | None) -> ModelInfo:
-    """Apply provider-specific defaults for cache-read pricing."""
-    if custom_llm_provider != "fireworks_ai":
-        return model_info
-    input_rate: Final = model_info.get("input_cost_per_token")
-    if model_info.get("cache_read_input_token_cost") is not None or input_rate is None:
-        return model_info
-    cache_read_rate: Final = input_rate * FIREWORKS_AI_DEFAULT_CACHE_READ_RATE_RATIO
-    off_peak: Final = model_info.get("off_peak_pricing")
-    if off_peak is None or "cache_read_input_token_cost" in off_peak:
-        return cast(ModelInfo, {**model_info, "cache_read_input_token_cost": cache_read_rate})
-    return cast(
-        ModelInfo,
-        {
-            **model_info,
-            "cache_read_input_token_cost": cache_read_rate,
-            "off_peak_pricing": {
-                **off_peak,
-                "cache_read_input_token_cost": (
-                    off_peak["input_cost_per_token"] * FIREWORKS_AI_DEFAULT_CACHE_READ_RATE_RATIO
-                    if "input_cost_per_token" in off_peak
-                    else cache_read_rate
-                ),
-            },
-        },
-    )
+    """Dispatch to the provider's cache-read pricing default; providers without one keep their entry as is."""
+    match custom_llm_provider:
+        case "fireworks_ai":
+            return with_default_cache_read_rate(model_info)
+        case _:
+            return model_info
 
 
 def _get_token_detail_value(details: object, key: str) -> int | None:
