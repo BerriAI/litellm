@@ -411,6 +411,98 @@ class TestOllamaConfig:
         )
         assert result.choices[0]["finish_reason"] == "stop"
 
+    def test_transform_response_with_thinking_field(self):
+        """Non-streaming /api/generate replies carry the model's reasoning in a
+        top-level `thinking` field (mirrors message.thinking on /api/chat); it
+        must be surfaced as reasoning_content instead of being dropped."""
+        # Initialize config
+        config = OllamaConfig()
+
+        # Create mock response matching the real upstream shape from #41962
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "model": "gpt-oss:120b",
+            "response": "OK",
+            "thinking": 'We need to reply with exactly "OK". No extra punctuation, whitespace? Probably just OK.',
+            "done": True,
+            "done_reason": "stop",
+            "eval_count": 36,
+        }
+
+        # Create properly structured model response object
+        model_response = ModelResponse(
+            id="test_id",
+            choices=[{"message": Message(content="")}],
+        )
+
+        # Create mock encoding
+        mock_encoding = MagicMock()
+        mock_encoding.encode.return_value = [1, 2, 3]
+
+        # Transform response
+        result = config.transform_response(
+            model="gpt-oss:120b",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=mock_encoding,
+        )
+
+        # Verify reasoning content is surfaced and content is kept
+        assert (
+            result.choices[0]["message"].reasoning_content
+            == 'We need to reply with exactly "OK". No extra punctuation, whitespace? Probably just OK.'
+        )
+        assert result.choices[0]["message"].content == "OK"
+        assert result.choices[0]["finish_reason"] == "stop"
+
+    def test_transform_response_thinking_field_without_response(self):
+        """A thinking-only turn (empty `response`) must not come back as an
+        empty assistant message with the reasoning silently dropped."""
+        # Initialize config
+        config = OllamaConfig()
+
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "model": "gpt-oss:120b",
+            "response": "",
+            "thinking": "User asks for OK; answer plainly.",
+            "done": True,
+            "done_reason": "stop",
+            "eval_count": 30,
+        }
+
+        model_response = ModelResponse(
+            id="test_id",
+            choices=[{"message": Message(content="")}],
+        )
+
+        mock_encoding = MagicMock()
+        mock_encoding.encode.return_value = [1, 2, 3]
+
+        result = config.transform_response(
+            model="gpt-oss:120b",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=mock_encoding,
+        )
+
+        assert (
+            result.choices[0]["message"].reasoning_content
+            == "User asks for OK; answer plainly."
+        )
+        assert result.choices[0]["message"].content == ""
+        assert result.choices[0]["finish_reason"] == "stop"
+
 
 class TestOllamaTextCompletionResponseIterator:
     def test_chunk_parser_with_thinking_field(self):
