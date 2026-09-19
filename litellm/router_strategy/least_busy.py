@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Final
 
@@ -6,6 +7,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import log_redis_failure
 from litellm.integrations.custom_logger import CustomLogger
 
 IN_FLIGHT_COUNT_TTL_SECONDS: Final = 60 * 60
@@ -87,16 +89,22 @@ def _least_busy(
 
 
 def _warn_unreadable(model_group: str, error: Exception) -> None:
-    verbose_router_logger.warning(
-        "least-busy routing could not read the shared in-flight counts for %s, "
-        "falling back to this worker's own counts: %s",
-        model_group,
+    log_redis_failure(
+        verbose_router_logger,
+        logging.WARNING,
+        f"least-busy routing could not read the shared in-flight counts for {model_group}, "
+        "falling back to this worker's own counts",
         error,
     )
 
 
 def _warn_unwritable(key: str, error: Exception) -> None:
-    verbose_router_logger.warning("least-busy routing could not update the in-flight count under %s: %s", key, error)
+    log_redis_failure(
+        verbose_router_logger,
+        logging.WARNING,
+        f"least-busy routing could not update the in-flight count under {key}",
+        error,
+    )
 
 
 class LeastBusyLoggingHandler(CustomLogger):

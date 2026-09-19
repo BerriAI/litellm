@@ -51,7 +51,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from typing_extensions import ReadOnly, TypedDict, assert_never
+from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
@@ -122,13 +122,13 @@ _USED_CODE_CACHE_PREFIX: Final = "mcp_gateway_dcr_code_used:"
 _USED_FLOW_CACHE_PREFIX: Final = "mcp_gateway_dcr_flow_used:"
 _USED_REFRESH_CACHE_PREFIX: Final = "mcp_gateway_dcr_refresh_used:"
 
-MAX_REDIRECT_URIS: Final = 3
+MAX_REDIRECT_URIS: Final = 4
 MAX_REDIRECT_URI_LENGTH: Final = 256
 MAX_CLIENT_ID_LENGTH: Final = 2048
 """Registration bounds. They exist to bound the sealed client_id, which rides inside
-every session-token claim set: 3 URIs of 256 bytes seal to roughly 1.2KB, comfortably
-under this cap and under the session token's own 4KB ceiling. Claude Desktop and MCP
-Inspector register one or two redirect URIs."""
+every session-token claim set. Four 256-character ASCII URIs seal to roughly 1.5KB;
+the encoded client_id is checked against its own cap before registration succeeds.
+VS Code registers four callbacks for its web and desktop environments."""
 
 MAX_STATE_LENGTH: Final = 1024
 """Bound on the client ``state`` sealed into the flow cookie and echoed on the auth-code
@@ -187,6 +187,52 @@ class MintProxyCredential(Protocol):
     ) -> Awaitable[MintedProxyCredential | ProxyCredentialMintFailure]: ...
 
 
+TOKEN_EXCHANGE_GRANT_TYPE: Final = "urn:ietf:params:oauth:grant-type:token-exchange"
+
+
+def supported_grant_types(token_exchange_available: bool) -> tuple[str, ...]:
+    """The grants ``/token`` can serve on this deployment. The RFC 8693 exchange is listed
+    only where the JWT auth that proves a subject token is on, backed by a database, and
+    licensed, so a client never selects a grant the gateway would then refuse."""
+    if token_exchange_available:
+        return ("authorization_code", "refresh_token", TOKEN_EXCHANGE_GRANT_TYPE)
+    return ("authorization_code", "refresh_token")
+
+
+"""RFC 8693: a native client that already holds a token from the customer's identity
+provider trades it for the proxy-API credential without a browser round trip."""
+
+_IssuedTokenType = Literal["urn:ietf:params:oauth:token-type:access_token"]
+ACCESS_TOKEN_TOKEN_TYPE: Final[_IssuedTokenType] = "urn:ietf:params:oauth:token-type:access_token"
+SUBJECT_TOKEN_TYPES: Final = frozenset(
+    {
+        "urn:ietf:params:oauth:token-type:jwt",
+        "urn:ietf:params:oauth:token-type:id_token",
+        ACCESS_TOKEN_TOKEN_TYPE,
+    }
+)
+
+
+class SubjectIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    user_id: str = Field(min_length=1)
+    team_id: str | None = None
+
+
+class SubjectTokenRefusal(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    error: Literal["unsupported_grant_type", "invalid_request", "temporarily_unavailable"]
+    description: str = Field(min_length=1)
+
+
+class ExchangeSubjectToken(Protocol):
+    """Injected RFC 8693 subject-token verifier ``(subject_token, request)``: proves the
+    IdP token the way the proxy's own JWT auth does and names the litellm user and team it
+    stands for, or says why this gateway will not take it."""
+
+    def __call__(self, subject_token: str, request: Request, /) -> Awaitable[SubjectIdentity | SubjectTokenRefusal]: ...
+
+
 class ConsentTeam(BaseModel):
     model_config = ConfigDict(frozen=True)
     team_id: str = Field(min_length=1)
@@ -211,6 +257,12 @@ class LookupConsentTeams(Protocol):
 
 async def _refuse_proxy_credential(user_id: str, team_id: str | None) -> ProxyCredentialMintFailure:
     return "unresolvable"
+
+
+async def _refuse_subject_token(subject_token: str, request: Request) -> SubjectTokenRefusal:
+    return SubjectTokenRefusal(
+        error="unsupported_grant_type", description="this gateway is not configured to exchange IdP tokens"
+    )
 
 
 async def _unavailable_vendor_credential(user_id: str, server_id: str) -> VendorCredentialState:
@@ -318,7 +370,9 @@ def open_gateway_dcr_client(client_id: str) -> GatewayDcrClient | None:
     return _open_sealed(client_id, GATEWAY_DCR_CLIENT_ID_PREFIX, GatewayDcrClient, _CLIENT_RECORD_DEBUG_KEY)
 
 
-async def register_aggregate_client(request: Request, request_body: Mapping[str, object]) -> Response:
+async def register_aggregate_client(
+    request: Request, request_body: Mapping[str, object], token_exchange_available: bool
+) -> Response:
     """RFC 7591 dynamic registration against the gateway itself, statelessly.
 
     Only ``redirect_uris`` is authoritative; every client is registered as a public
@@ -382,7 +436,7 @@ async def register_aggregate_client(request: Request, request_body: Mapping[str,
             "client_id_issued_at": int(now.timestamp()),
             "redirect_uris": list(raw_uris),
             "token_endpoint_auth_method": "none",
-            "grant_types": ["authorization_code", "refresh_token"],
+            "grant_types": list(supported_grant_types(token_exchange_available)),
             "response_types": ["code"],
         },
     )
@@ -411,7 +465,7 @@ def relative_request_url(request: Request) -> str:
 
 
 def resolve_scoped_resource_server(request: Request, resource: str | None) -> MCPServer | None:
-    """Resolve an RFC 8707 ``resource`` value to the single gateway-managed oauth2 server it
+    """Resolve an RFC 8707 ``resource`` value to the single gateway-owned server it
     names, or ``None`` for every other shape: absent, the aggregate resource, a foreign
     host, an unparseable value, a multi-server path, an unknown name, or any server mode the
     keyless gateway flow does not serve (whose protected-resource metadata never directs a
@@ -443,7 +497,7 @@ def resolve_scoped_resource_server(request: Request, resource: str | None) -> MC
     if len(names) != 1:
         return None
     server: Final = global_mcp_server_manager.get_mcp_server_by_name(names[0])
-    if server is None or not server.is_gateway_managed_oauth2:
+    if server is None or not (server.is_gateway_managed_oauth2 or server.advertises_gateway_authorization_server):
         return None
     return server
 
@@ -580,7 +634,7 @@ class NativeClientAuthContract(TypedDict):
     revocation_endpoint_auth_methods_supported: ReadOnly[tuple[str, ...]]
 
 
-def native_client_auth_contract(request: Request) -> NativeClientAuthContract:
+def native_client_auth_contract(request: Request, token_exchange_available: bool) -> NativeClientAuthContract:
     """The versioned discovery document at ``/.well-known/litellm-cli-auth``: everything a
     native client (in any language) needs to run the sign-in without reading LiteLLM
     source. ``resource`` is the exact value to send as the RFC 8707 ``resource`` parameter
@@ -595,7 +649,7 @@ def native_client_auth_contract(request: Request) -> NativeClientAuthContract:
         "revocation_endpoint": f"{base_url}/revoke",
         "resource": base_url,
         "response_types_supported": ("code",),
-        "grant_types_supported": ("authorization_code", "refresh_token"),
+        "grant_types_supported": supported_grant_types(token_exchange_available),
         "code_challenge_methods_supported": ("S256",),
         "token_endpoint_auth_methods_supported": ("none",),
         "revocation_endpoint_auth_methods_supported": ("none",),
@@ -729,11 +783,15 @@ async def _flow_target(
     server: Final = global_mcp_server_manager.get_mcp_server_by_id(flow.resource_server_id)
     if (
         server is None
-        or not server.is_gateway_managed_oauth2
+        or not (server.is_gateway_managed_oauth2 or server.advertises_gateway_authorization_server)
         or not await lookup_server_reachability(flow.user_id, server.server_id)
     ):
         return "stale", None
-    state: Final = "m2m" if MCPServerManager.effective_oauth2_flow(server) == "client_credentials" else "interactive"
+    state: Final = (
+        "interactive"
+        if server.is_gateway_managed_oauth2 and MCPServerManager.effective_oauth2_flow(server) != "client_credentials"
+        else "m2m"
+    )
     return state, server
 
 
@@ -1029,20 +1087,26 @@ class _ProxyCredentialTokenResponse(TypedDict):
     refresh_token: ReadOnly[str]
     user_id: ReadOnly[str]
     team_id: ReadOnly[str | None]
+    issued_token_type: NotRequired[ReadOnly[_IssuedTokenType]]
 
 
 def _proxy_credential_response(
-    minted: MintedProxyCredential, principal: SessionPrincipal, keys: SessionSigningKeys, now: datetime
+    minted: MintedProxyCredential,
+    principal: SessionPrincipal,
+    keys: SessionSigningKeys,
+    now: datetime,
+    issued_token_type: _IssuedTokenType | None = None,
 ) -> Response:
     """The proxy-API token response: the access token is the very credential ``lite
     login`` stores (accepted on every proxy route with user and team attribution), and
     the refresh token is a gateway-sealed rotating token bound to the team the credential
-    was minted for, so a renewal keeps the team the user consented to."""
+    was minted for, so a renewal keeps the team the user consented to. A token exchange
+    also states ``issued_token_type``, which RFC 8693 section 2.2.1 requires."""
     bound_principal: Final = principal.model_copy(update=MappingProxyType({"team_id": minted.team_id}))
     refresh: Final = mint_session_refresh_token(bound_principal, keys, now)
     if not isinstance(refresh, MintedSessionToken):
         return _oauth_error(500, "server_error", "failed to mint the session credential")
-    body: Final[_ProxyCredentialTokenResponse] = {
+    credential: Final[_ProxyCredentialTokenResponse] = {
         "access_token": minted.key,
         "token_type": "Bearer",
         "expires_in": minted.expires_in,
@@ -1050,7 +1114,10 @@ def _proxy_credential_response(
         "user_id": minted.user_id,
         "team_id": minted.team_id,
     }
-    return JSONResponse(status_code=200, content=body, headers=TOKEN_NO_CACHE_HEADERS)
+    if issued_token_type is None:
+        return JSONResponse(status_code=200, content=credential, headers=TOKEN_NO_CACHE_HEADERS)
+    exchanged: Final[_ProxyCredentialTokenResponse] = {**credential, "issued_token_type": issued_token_type}
+    return JSONResponse(status_code=200, content=exchanged, headers=TOKEN_NO_CACHE_HEADERS)
 
 
 def _reload_failure_response(failure: ReloadUserFailure) -> Response:
@@ -1067,6 +1134,16 @@ def _reload_failure_response(failure: ReloadUserFailure) -> Response:
             return _oauth_error(400, "invalid_grant", "the user for this grant is no longer active")
         case _:
             assert_never(failure)
+
+
+def _subject_token_refusal_response(refusal: SubjectTokenRefusal) -> Response:
+    match refusal.error:
+        case "temporarily_unavailable":
+            return _oauth_error(503, refusal.error, refusal.description)
+        case "unsupported_grant_type" | "invalid_request":
+            return _oauth_error(400, refusal.error, refusal.description)
+        case _:
+            assert_never(refusal.error)
 
 
 def _mint_failure_response(failure: ProxyCredentialMintFailure) -> Response:
@@ -1112,11 +1189,16 @@ async def aggregate_token(
     cache: DualCache,
     resource: str | None = None,
     mint_proxy_credential: MintProxyCredential = _refuse_proxy_credential,
+    subject_token: str | None = None,
+    subject_token_type: str | None = None,
+    requested_token_type: str | None = None,
+    exchange_subject_token: ExchangeSubjectToken = _refuse_subject_token,
 ) -> Response:
     """The aggregate token verb: authorization_code and refresh_token grants for the
     identity-only session pair, or for the proxy-API credential when the grant was issued
-    with that audience. Every path re-validates the litellm user live before minting, so a
-    deactivated user cannot obtain or renew a session."""
+    with that audience, and the RFC 8693 token exchange that turns an IdP token straight
+    into the proxy-API credential. Every path re-validates the litellm user live before
+    minting, so a deactivated user cannot obtain or renew a session."""
     if master_key is None:
         verbose_logger.error("mcp_gateway_dcr token grant rejected: no master_key configured")
         return _oauth_error(500, "server_error", "the gateway has no master key configured")
@@ -1155,7 +1237,20 @@ async def aggregate_token(
             now=now,
             issue=issue,
         )
-    return _oauth_error(400, "unsupported_grant_type", "grant_type must be authorization_code or refresh_token")
+    if grant_type == TOKEN_EXCHANGE_GRANT_TYPE:
+        return await _token_exchange_grant(
+            subject_token=subject_token,
+            subject_token_type=subject_token_type,
+            requested_token_type=requested_token_type,
+            client_id=client_id,
+            exchange_subject_token=exchange_subject_token,
+            issue=issue,
+        )
+    return _oauth_error(
+        400,
+        "unsupported_grant_type",
+        f"grant_type must be authorization_code, refresh_token, or {TOKEN_EXCHANGE_GRANT_TYPE}",
+    )
 
 
 class _GrantIssuer:
@@ -1207,10 +1302,9 @@ class _GrantIssuer:
     async def _issue_proxy_credential(
         self, principal: SessionPrincipal, claim_key: str, claim_ttl_seconds: int, replayed: str
     ) -> Response:
-        if self._resource is not None and not is_proxy_api_resource(self._request, self._resource):
-            return _oauth_error(
-                400, "invalid_target", "resource does not match the proxy API this grant was issued for"
-            )
+        target_refusal: Final = self._proxy_api_target_refusal()
+        if target_refusal is not None:
+            return target_refusal
         minted: Final = await self._mint_proxy_credential(principal.user_id, principal.team_id)
         if not isinstance(minted, MintedProxyCredential):
             return _mint_failure_response(minted)
@@ -1218,6 +1312,33 @@ class _GrantIssuer:
         if refusal is not None:
             return refusal
         return _proxy_credential_response(minted, principal, self._keys, self._now)
+
+    async def exchange(
+        self, subject_token: str, client_id: str, exchange_subject_token: ExchangeSubjectToken
+    ) -> Response:
+        """The RFC 8693 tail: prove the IdP token, then mint. No single-use marker, because
+        the subject token stays a valid proof for as long as the IdP says it is and every
+        exchange mints a fresh credential and refresh token of its own."""
+        target_refusal: Final = self._proxy_api_target_refusal()
+        if target_refusal is not None:
+            return target_refusal
+        identity: Final = await exchange_subject_token(subject_token, self._request)
+        if isinstance(identity, SubjectTokenRefusal):
+            return _subject_token_refusal_response(identity)
+        principal: Final = SessionPrincipal(
+            user_id=identity.user_id, client_id=client_id, audience=PROXY_API_AUDIENCE, team_id=identity.team_id
+        )
+        minted: Final = await self._mint_proxy_credential(principal.user_id, principal.team_id)
+        if not isinstance(minted, MintedProxyCredential):
+            return _mint_failure_response(minted)
+        return _proxy_credential_response(
+            minted, principal, self._keys, self._now, issued_token_type=ACCESS_TOKEN_TOKEN_TYPE
+        )
+
+    def _proxy_api_target_refusal(self) -> Response | None:
+        if self._resource is None or is_proxy_api_resource(self._request, self._resource):
+            return None
+        return _oauth_error(400, "invalid_target", "resource does not match the proxy API this grant was issued for")
 
     async def _claim_refusal(self, claim_key: str, claim_ttl_seconds: int, replayed: str) -> Response | None:
         return _claim_refusal(
@@ -1291,6 +1412,32 @@ async def _refresh_token_grant(
         claim_ttl_seconds=SESSION_REFRESH_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS,
         replayed="the refresh token was already used",
     )
+
+
+async def _token_exchange_grant(
+    subject_token: str | None,
+    subject_token_type: str | None,
+    requested_token_type: str | None,
+    client_id: str,
+    exchange_subject_token: ExchangeSubjectToken,
+    issue: _GrantIssuer,
+) -> Response:
+    """RFC 8693 token exchange for a registered native client that already holds an IdP
+    token: the gateway proves the token the way its JWT auth does and answers with the
+    proxy-API credential, so a fresh laptop with only an IdP login gets a gateway key
+    without a browser round trip. The client must be registered because the refresh token
+    in the answer is bound to it."""
+    if not is_gateway_dcr_client_id(client_id) or open_gateway_dcr_client(client_id) is None:
+        return _oauth_error(401, "invalid_client", "unknown or malformed client_id")
+    if not subject_token or not subject_token_type:
+        return _oauth_error(400, "invalid_request", "subject_token and subject_token_type are required")
+    if subject_token_type not in SUBJECT_TOKEN_TYPES:
+        return _oauth_error(
+            400, "invalid_request", f"subject_token_type must be one of {', '.join(sorted(SUBJECT_TOKEN_TYPES))}"
+        )
+    if requested_token_type is not None and requested_token_type != ACCESS_TOKEN_TOKEN_TYPE:
+        return _oauth_error(400, "invalid_request", f"requested_token_type must be {ACCESS_TOKEN_TOKEN_TYPE}")
+    return await issue.exchange(subject_token, client_id, exchange_subject_token)
 
 
 async def revoke_refresh_token(token: str, client_id: str, master_key: str | None, cache: DualCache) -> Response:

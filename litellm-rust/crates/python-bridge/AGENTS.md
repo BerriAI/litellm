@@ -1,3 +1,78 @@
-litellm-python-bridge is the PyO3 cdylib that exposes LiteLLM Rust APIs to the Python SDK. Keep API registration, domain dependency wiring, request assembly, and Python exception mapping here. Put domain-neutral Python/Serde conversion and GIL primitives in litellm-python-interop.
+- Target invariants, not completion claims; these supersede the crate guidance below where they conflict
+- Keep this crate the product-specific PyO3 consumer of `litellm-host-python`
+  - Own registration, input projection, the route host and the caller callables it answers operations with (file readers, token providers), public response/error construction and the per-call composition of machine, route host and callback contract
+  - Legacy callback sharing (the caller's args, kwargs and request object, body/header roots, re-aliasing unchanged body keys) lives in `litellm-callbacks-legacy` behind `PublicCall` and `run_legacy_call`; the bridge hands the public call over and keeps no copy
+  - Value-oriented execution, sync waiting, nested-runtime checks, signal polling and panic containment live in `litellm-host-python`; native async work uses `pyo3-async-runtimes`, Serde output uses `Pythonized<T>`
+  - Core owns typed native state, the route machine, provider preparation/I/O and normalization; the host driver owns terminal events; the legacy adapter in `litellm-callbacks-legacy` owns `Logging` dispatch policy
+  - Python, Rust SDK and gateway use one lifecycle-bearing core route entrypoint; provider helpers stay private, never bridge-accessible transport drivers
+  - Built-in provider/config/secret/auth/document preparation stays in Rust; caller-authored callbacks and focused Python-file reads run only at core-selected points
+- Target GIL-enabled CPython explicitly with `#[pymodule(gil_used = true)]`; detach Rust-only work
+  - Free-threading requires separate runtime/concurrency validation; omitting the attribute does not opt out on PyO3 0.28+
+- Preserve public argument binding and Python object provenance
+  - Project only consumed fields at reference read points; no eager whole-graph serialization or equality-based alias reconstruction
+  - Preserve provider-specific upload/submission/poll observation and encoding boundaries; signed/build-captured bytes must not be silently reserialized
+- Conversion errors and every failure after the call starts are terminal
+  - Disabled/unavailable native execution may select legacy once; callback exceptions never authorize fallback or replay
+- Use one ordinary inline `async def` driver in `litellm/rust_bridge/lifecycle.py`, with the native handle and call driver in `litellm-host-python`
+  - Contract: `start`, `resume_value`, `resume_error`, idempotent `close`; explicitly tagged `Await`/`Complete` preserve awaitable final values
+  - Validate Created/Running/Suspended/Closed protocol states; the machine yields ops, the driver emits one terminal event, the adapter chooses dispatch policy
+  - Defer effectful setup/context reads/timestamps until start; unstarted-handle destruction releases inputs independently of Python `finally`
+  - Catch only the selected await's errors; start/resume errors propagate, `GeneratorExit` closes without further awaits
+  - Inline hooks preserve caller task/thread/loop and context writes; `into_future` creates a separate task and cannot satisfy this contract
+- Finalize fallible public response/error construction, replacements and metadata before terminal dispatch
+- Make ownership safe across suspension, re-entry, cancellation and GC
+  - Keep native provider state typed in core; do not shuttle it through opaque Python transport/response classes
+  - Prefer one retained `Py<PyBaseException>` via `PyErr::into_value(py)`; reconstruct transient `PyErr`s, preserving identity, traceback, cause and context
+  - Traverse every owned Python edge, including duplicate references; traversal cannot call Python
+  - Take state out and mark Running under a short borrow, release borrows/locks before Python invocation, publish terminal state before finalizer-capable drops
+  - Close/GC/deferred release are idempotent and re-entry-safe, including during Rust unwinding; release only owned references, never clear caller containers or mask the selected error
+  - The machine owns its in-flight provider future; `interrupt` drops it synchronously, so provider captures are released before the driver returns and no task outlives the call
+- Verify behavior through a fresh, provenance-checked installed extension and positive native execution evidence before replacing the custom coroutine
+  - Cover admitted provider workflows, binding/read-point/identity behavior, failure continuation, finalization, no replay, deferred gates, re-entry, GC and cancellation termination
+  - Measure real conversion/copy costs before optimizing; preserve input contracts and capture lifetimes with `PyBackedBytes`, and lookup timing when interning names
+  - Ship accurate `_native.pyi` declarations and typing markers; distinguish Future-returning bindings from coroutine-returning bindings
+- References: [ownership](https://pyo3.rs/v0.29.2/types.html), [GC](https://pyo3.rs/v0.29.2/class/protocols.html#garbage-collector-integration), [exception transfer](https://docs.rs/pyo3/0.29.2/pyo3/struct.PyErr.html#method.into_value), [re-entry](https://pyo3.rs/v0.29.2/class/call.html)
+  - [GIL policy](https://pyo3.rs/v0.29.2/free-threading.html), [experimental async limits](https://pyo3.rs/v0.29.2/async-await.html), [task conversion](https://docs.rs/pyo3-async-runtimes/0.29.0/pyo3_async_runtimes/fn.into_future_with_locals.html), [native cancellation/delivery](https://docs.rs/pyo3-async-runtimes/0.29.0/pyo3_async_runtimes/tokio/fn.future_into_py.html)
+  - [performance](https://pyo3.rs/v0.29.2/performance.html), [PyBackedBytes](https://docs.rs/pyo3/0.29.2/pyo3/pybacked/struct.PyBackedBytes.html), [typing](https://pyo3.rs/v0.29.2/python-typing-hints.html)
 
-Keep it thin: no business logic, no transforms, no I/O orchestration — just marshal in/out and call the core entrypoint.
+Rules for `litellm-rust/crates/python-bridge`.
+
+## Responsibility
+
+`python-bridge` is the PyO3 boundary between Python LiteLLM and Rust transforms.
+Keep this crate thin. It exposes LiteLLM Rust APIs, assembles domain requests,
+maps domain errors to Python exceptions, and delegates generic conversion and
+GIL handling to `litellm-host-python`.
+
+## Bridge Shape
+
+- Prefer one stable method per top-level LiteLLM route, for example
+  `messages(...)`, calling the matching `litellm-core` entrypoint.
+- Do not add one exported PyO3 function per provider helper unless there is a
+  measured reason.
+- Provider dispatch belongs in the `litellm-core` route module (e.g.
+  `litellm_core::messages`), not in this PyO3 crate.
+- Python owns rollout state and fallback. Rust should return errors; Python
+  decides whether to raise or fall back. For a rust-only provider/route (no
+  Python reference), the Python side is a thin dispatch that calls Rust and
+  raises when the bridge is unavailable, with no fallback.
+- Keep the Python interface minimal (well under 100 lines per route): it only
+  marshals inputs and calls Rust. Do not add per-route feature flags, and do
+  not put provider dispatch in `litellm/main.py`; it lives in a thin dispatch
+  class under `litellm/llms/<provider>/<route>/`.
+
+## Data Handling
+
+- OCR payloads can contain personal data and large base64 images. Do not log
+  payloads or provider responses.
+- Avoid copying large payloads more than needed. The current JSON round-trip is
+  acceptable for the first scaffold, but future performance work should evaluate
+  direct PyO3 conversion before expanding Rust coverage to image-heavy paths.
+- Do not expose raw Rust errors that include document contents or upstream
+  bodies.
+
+## Tests
+
+- `cargo test --workspace` must compile this crate.
+- Python tests must cover bridge disabled, bridge enabled, and module-missing
+  fallback behavior for every exposed route.

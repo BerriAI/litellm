@@ -199,7 +199,7 @@ class BaseSearchConfig:
         self,
         headers: dict[str, str],  # mutable-ok: matches the request header dict every other hook on this base takes
         optional_params: dict[str, object],  # mutable-ok: matches every other hook on this base
-        request_data: (dict[str, object] | list[dict[str, object]]),  # mutable-ok: transform_search_request's body
+        request_data: dict[str, object] | list[dict[str, object]],  # mutable-ok: transform_search_request's body
         api_base: str,
         api_key: str | None = None,
     ) -> tuple[dict[str, str], bytes | None]:  # mutable-ok: the handler passes these headers straight to httpx
@@ -275,6 +275,13 @@ class BaseSearchConfig:
         Override in provider-specific implementations.
         """
         raise NotImplementedError("transform_search_response must be implemented by provider")
+
+    def get_http_error_class(self, error: httpx.HTTPStatusError) -> Exception:
+        return self.get_error_class(
+            error_message=error.response.text,
+            status_code=error.response.status_code,
+            headers=dict(error.response.headers),  # mutable-ok: provider error factories require dict headers
+        )
 
     def get_error_class(
         self,

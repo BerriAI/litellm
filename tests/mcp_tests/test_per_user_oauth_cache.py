@@ -331,9 +331,7 @@ class TestMCPPerUserTokenCache:
         with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache):
             await cache.delete("alice", "slack-test")
 
-        mock_dual_cache.async_delete_cache.assert_called_once_with(
-            "mcp:per_user_token:alice:slack-test"
-        )
+        mock_dual_cache.async_delete_cache.assert_called_once_with(key="mcp:per_user_token:alice:slack-test")
         mock_dual_cache.async_set_cache.assert_not_called()
 
     @pytest.mark.asyncio

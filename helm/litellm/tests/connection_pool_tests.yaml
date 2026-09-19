@@ -1,0 +1,204 @@
+suite: test in-container connection pool env vars
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+  - backend/configmap.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: renders no pool env by default
+    template: gateway/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+          any: true
+
+  - it: enabled pool renders the three pgbouncer vars with the configured sizes
+    template: gateway/deployment.yaml
+    set:
+      gateway.numWorkers: 4
+      database.connectionPool.enabled: true
+      database.connectionPool.maxDbConnections: 8
+      database.connectionPool.maxClientConn: 250
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+            value: "8"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+            value: "250"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NUM_WORKERS
+            value: "4"
+
+  - it: enabled pool uses the chart default sizes
+    template: gateway/deployment.yaml
+    set:
+      database.connectionPool.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+            value: "20"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+            value: "1000"
+
+  - it: backend never gets the pool env
+    template: backend/deployment.yaml
+    set:
+      database.connectionPool.enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+          any: true
+
+  - it: collector sidecar gets the same pool env as the gateway container, the metrics sidecar none
+    template: gateway/deployment.yaml
+    set:
+      gateway.collector.enabled: true
+      gateway.metricsServer.enabled: true
+      database.connectionPool.enabled: true
+      database.connectionPool.maxDbConnections: 8
+      database.connectionPool.maxClientConn: 250
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: metrics
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+          any: true
+      - equal:
+          path: spec.template.spec.containers[2].name
+          value: collector
+      - contains:
+          path: spec.template.spec.containers[2].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[2].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+            value: "8"
+      - contains:
+          path: spec.template.spec.containers[2].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+            value: "250"
+
+  - it: collector sidecar gets no pool env when the pool is off
+    template: gateway/deployment.yaml
+    set:
+      gateway.collector.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: collector
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+          any: true
+
+  - it: pool with IAM auth renders both the pool and the token auth flag
+    template: gateway/deployment.yaml
+    set:
+      gateway.collector.enabled: true
+      database.connectionPool.enabled: true
+      database.writer.useIAMAuth: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: IAM_TOKEN_DB_AUTH
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: IAM_TOKEN_DB_AUTH
+            value: "true"
+
+  - it: pool with Entra auth renders both the pool and the token auth flag
+    template: gateway/deployment.yaml
+    set:
+      database.connectionPool.enabled: true
+      database.writer.useAzureEntraAuth: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AZURE_POSTGRESQL_AUTH
+            value: "true"
+
+  - it: IAM auth without the pool still renders
+    template: gateway/deployment.yaml
+    set:
+      database.writer.useIAMAuth: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: IAM_TOKEN_DB_AUTH
+            value: "true"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+          any: true

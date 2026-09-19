@@ -35,7 +35,8 @@ describe("getVectorStoreProviderLogoAndName", () => {
     });
     expect(vectorStoreProviderMap.MongoDB).toBe("mongodb");
     expect(getProviderSpecificFields("mongodb").map((field) => field.name)).toEqual([
-      "mongodb_connection_string",
+      "api_base",
+      "api_key",
       "mongodb_database",
       "mongodb_collection",
       "embedding_model",
@@ -45,12 +46,10 @@ describe("getVectorStoreProviderLogoAndName", () => {
     ]);
   });
 
-  it("hides the mongodb connection string, which carries the database password", () => {
-    const connectionString = getProviderSpecificFields("mongodb").find(
-      (field) => field.name === "mongodb_connection_string",
-    );
+  it("hides the mongodb sidecar API key", () => {
+    const apiKey = getProviderSpecificFields("mongodb").find((field) => field.name === "api_key");
 
-    expect(connectionString).toMatchObject({ type: "password", required: true });
+    expect(apiKey).toMatchObject({ type: "password", required: true });
   });
 
   it("picks the mongodb embedding model from the proxy's models rather than a fixed list", () => {

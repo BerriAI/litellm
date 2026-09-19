@@ -2,34 +2,58 @@
 Tests for litellm.litellm_core_utils.logging_utils — base64 truncation helpers.
 """
 
+import datetime
 import threading
+from unittest.mock import MagicMock
 
 import pytest
 
 from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.logging_utils import (
-    _format_base64_size,
+    _set_duration_in_model_call_details,
     _truncate_base64_in_string,
+    format_base64_size,
     truncate_base64_in_messages,
     truncate_base64_in_messages_async,
 )
 
+
+class TestSetDurationInModelCallDetails:
+    def test_records_provider_attempt_windows_in_shared_metadata(self):
+        metadata = {"request_id": "test"}
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"litellm_params": {"metadata": metadata}}
+        first_start = datetime.datetime(2025, 1, 1, 0, 0, 0)
+        first_end = first_start + datetime.timedelta(milliseconds=300)
+        second_start = datetime.datetime(2025, 1, 1, 0, 0, 1)
+        second_end = second_start + datetime.timedelta(milliseconds=700)
+
+        _set_duration_in_model_call_details(logging_obj, first_start, first_end)
+        _set_duration_in_model_call_details(logging_obj, second_start, second_end)
+
+        assert metadata["llm_api_timing_windows"] == (
+            (first_start.timestamp(), first_end.timestamp()),
+            (second_start.timestamp(), second_end.timestamp()),
+        )
+        assert logging_obj.model_call_details["llm_api_duration_ms"] == pytest.approx(700.0)
+
+
 # ---------------------------------------------------------------------------
-# _format_base64_size
+# format_base64_size
 # ---------------------------------------------------------------------------
 
 
 class TestFormatBase64Size:
     def test_bytes_range(self):
-        assert _format_base64_size(4) == "3B"
+        assert format_base64_size(4) == "3B"
 
     def test_kb_range(self):
         # 2000 base64 chars ~ 1500 bytes ~ 1.5KB
-        assert "KB" in _format_base64_size(2000)
+        assert "KB" in format_base64_size(2000)
 
     def test_mb_range(self):
         # 2_000_000 base64 chars ~ 1.5MB
-        result = _format_base64_size(2_000_000)
+        result = format_base64_size(2_000_000)
         assert "MB" in result
 
 
@@ -157,10 +181,7 @@ class TestTruncateBase64InMessages:
             }
         ]
         result = truncate_base64_in_messages(messages)
-        assert (
-            result[0]["content"][0]["image_url"]["url"]
-            == f"data:image/png;base64,{short}"
-        )
+        assert result[0]["content"][0]["image_url"]["url"] == f"data:image/png;base64,{short}"
 
 
 # ---------------------------------------------------------------------------

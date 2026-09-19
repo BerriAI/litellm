@@ -91,6 +91,22 @@ class MCPPublicServer(BaseModel):
     mcp_info: dict[str, Any] | None = None
 
 
+class MCPAllowedClient(BaseModel):
+    """One entry of `general_settings.mcp_allowed_clients`."""
+
+    model_config = ConfigDict(frozen=True)
+
+    alias: str = Field(
+        min_length=1,
+        description="Human-readable name for this client application, shown in the dashboard and in gateway logs.",
+    )
+    value: str = Field(
+        min_length=1,
+        description="Exact value of the JWT claim named in litellm_jwtauth.mcp_client_id_jwt_field, or of the "
+        "mcp_client_id_header header, that identifies this client application. Matched case-sensitively.",
+    )
+
+
 class MCPToolSearchSettings(BaseModel):
     """`litellm_settings.mcp_tool_search`: how the native `mcp_tool_search` virtual tool ranks the caller's tools."""
 
@@ -435,3 +451,40 @@ class MCPPostCallResponseObject(BaseModel):
 
     mcp_tool_call_response: list[MCPTextContent | MCPImageContent | MCPEmbeddedResource]
     hidden_params: HiddenParams
+
+
+class MCPGatewaySession(BaseModel):
+    """One live stateful Streamable HTTP session held by this proxy worker."""
+
+    session_id_prefix: str
+    client_name: str | None = None
+    client_version: str | None = None
+    user_id: str | None = None
+    user_email: str | None = None
+    key_alias: str | None = None
+    team_id: str | None = None
+    team_alias: str | None = None
+    client_ip: str | None = None
+    idle_seconds: float
+    in_flight_requests: int
+
+
+class MCPGatewaySessionGroupCount(BaseModel):
+    label: str | None = None
+    count: int
+
+
+class MCPGatewaySessionsResponse(BaseModel):
+    worker_pid: int
+    total_sessions: int
+    by_client: list[MCPGatewaySessionGroupCount] = Field(default_factory=list)
+    by_user: list[MCPGatewaySessionGroupCount] = Field(default_factory=list)
+    sessions: list[MCPGatewaySession] = Field(default_factory=list)
+
+
+class MCPGatewaySessionsTerminateResponse(BaseModel):
+    """Stateful sessions an administrator force-closed on this proxy worker."""
+
+    worker_pid: int
+    terminated_sessions: int
+    sessions: list[MCPGatewaySession] = Field(default_factory=list)

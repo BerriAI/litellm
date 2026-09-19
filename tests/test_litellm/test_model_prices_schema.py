@@ -3,7 +3,10 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
+from typing import Final
 
 import jsonschema
 import pytest
@@ -122,6 +125,55 @@ def test_schema_accepts_cache_creation_cost_inside_a_pricing_tier(committed_sche
     assert validator.is_valid({"some-model": entry})
 
 
+OFF_PEAK_ENTRY: Final = MappingProxyType(
+    {
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 8e-6,
+        "off_peak_pricing": {
+            "hours_utc": "16:30-00:30",
+            "windows": [{"hours_utc": ["00:30-02:00"], "weekdays": [6, "Sunday", "mon", "THURS"]}],
+            "weekday_timezone": "Asia/Shanghai",
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 4e-6,
+            "cache_read_input_token_cost": 1e-7,
+        },
+    }
+)
+
+
+def test_generator_classifies_off_peak_pricing_as_a_windowed_rate_block():
+    generator = load_generator()
+    schema = json.loads(generator.render(generator.build_schema({"some-model": dict(OFF_PEAK_ENTRY)})))
+    validator = build_validator(schema)
+    assert validator.is_valid({"some-model": dict(OFF_PEAK_ENTRY)})
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"hours_utc": "16:30-00:30", "input_cost_per_token": "1e-6"},
+        {"hours_utc": "16:30-00:30", "input_cost_per_token": -1e-6},
+        {"hours_utc": 1630, "input_cost_per_token": 1e-6},
+        {"hours_utc": "16:30-00:30", "discount": 0.5},
+        {"windows": [{"weekdays": [6]}], "input_cost_per_token": 1e-6},
+        {"windows": [{"hours_utc": "00:30-02:00", "weekdays": [0]}], "input_cost_per_token": 1e-6},
+        {"windows": [], "input_cost_per_token": 1e-6},
+        {"input_cost_per_token": 1e-6},
+        {"hours_utc": "16:30", "input_cost_per_token": 1e-6},
+        {"hours_utc": "25:00-01:00", "input_cost_per_token": 1e-6},
+        {"hours_utc": ["16:30-00:30", "4pm-midnight"], "input_cost_per_token": 1e-6},
+        {"windows": [{"hours_utc": "00:30-02:00", "weekdays": ["Funday"]}], "input_cost_per_token": 1e-6},
+    ],
+)
+def test_generated_off_peak_schema_rejects_malformed_blocks(block: dict):
+    generator = load_generator()
+    schema = json.loads(generator.render(generator.build_schema({"some-model": dict(OFF_PEAK_ENTRY)})))
+    validator = build_validator(schema)
+    assert not validator.is_valid({"some-model": {**OFF_PEAK_ENTRY, "off_peak_pricing": block}})
+
+
 def find_duplicate_keys(path: Path) -> list[str]:
     duplicates: list[str] = []
 
@@ -217,3 +269,97 @@ def test_chat_latest_declares_the_one_effort_openai_accepts(prices: dict):
     with no declared levels resolves to None, which lets /model_group/info and the dashboard offer
     levels the upstream will 400 on."""
     assert resolve_supported_reasoning_efforts(prices["chat-latest"], deployment_is_mapped=True) == ("medium",)
+
+
+@pytest.mark.parametrize("key", ["azure/gpt-chat-latest", "azure/chat-latest", "azure/us/gpt-chat-latest"])
+def test_azure_gpt_chat_latest_declares_the_one_effort_azure_accepts(prices: dict, key: str):
+    """Azure answers every reasoning_effort on a gpt-chat-latest deployment except medium with
+    "Unsupported value ... Supported values are: 'medium'", the same fixed level OpenAI's chat-latest
+    carries, so the Foundry product name and the OpenAI API name both declare that one level."""
+    assert resolve_supported_reasoning_efforts(prices[key], deployment_is_mapped=True) == ("medium",)
+
+
+BEDROCK_OPENAI_GPT_MARKERS: Final = ("openai.gpt-5.4", "openai.gpt-5.5", "openai.gpt-5.6", "openai.gpt-6-astra")
+BEDROCK_PROVIDERS: Final = frozenset(("bedrock", "bedrock_converse", "bedrock_mantle"))
+BEDROCK_ROW_PREFIXES: Final = ("bedrock_mantle/", "us.", "global.")
+GPT_5_4_BEDROCK_LADDER: Final = ("none", "low", "medium", "high", "xhigh")
+GPT_5_6_BEDROCK_LADDER: Final = ("none", "low", "medium", "high", "xhigh", "max")
+GPT_6_ASTRA_BEDROCK_LADDER: Final = ("low", "medium", "high", "xhigh", "max")
+BEDROCK_OPENAI_GPT_LADDERS: Final = MappingProxyType(
+    {
+        "bedrock_mantle/openai.gpt-5.4": GPT_5_4_BEDROCK_LADDER,
+        "bedrock_mantle/openai.gpt-5.5": GPT_5_4_BEDROCK_LADDER,
+        **{
+            f"{prefix}openai.gpt-5.6-{variant}": GPT_5_6_BEDROCK_LADDER
+            for prefix in BEDROCK_ROW_PREFIXES
+            for variant in ("luna", "sol", "terra")
+        },
+        **{f"{prefix}openai.gpt-6-astra": GPT_6_ASTRA_BEDROCK_LADDER for prefix in BEDROCK_ROW_PREFIXES},
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "ladder"), tuple(BEDROCK_OPENAI_GPT_LADDERS.items()), ids=tuple(BEDROCK_OPENAI_GPT_LADDERS)
+)
+def test_bedrock_openai_gpt_rows_advertise_the_ladder_bedrock_accepts(prices: dict, name: str, ladder: tuple[str, ...]):
+    """Each ladder is the set of levels Bedrock answered 200 to for that row through the proxy on
+    2026-09-11 (PR #40740): the Mantle rows go out over its Responses endpoint and the Converse rows
+    over inference profiles. Bedrock differs from the direct OpenAI rows in two places, gpt-5.6 and
+    gpt-6-astra take max there, and gpt-6-astra refuses none; minimal is refused on every row.
+    xhigh and max are opt-in for the resolver, so a row missing either flag silently drops that
+    level from every group it belongs to."""
+    assert resolve_supported_reasoning_efforts(prices[name], deployment_is_mapped=True) == ladder
+
+
+def test_every_bedrock_openai_gpt_row_advertises_xhigh(prices: dict):
+    """The GovCloud and gpt-5.6-cyber rows cannot be called from our account, so they carry the
+    family's xhigh flag rather than a measured ladder."""
+    missing: Final = [
+        name
+        for name, entry in prices.items()
+        if isinstance(entry, dict)
+        and entry.get("litellm_provider") in BEDROCK_PROVIDERS
+        and any(marker in name for marker in BEDROCK_OPENAI_GPT_MARKERS)
+        and "xhigh" not in (resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) or ())
+    ]
+    assert missing == []
+
+
+def is_active_priced_mistral_chat_row(name: str, entry: Mapping[str, object]) -> bool:
+    input_cost: Final = entry.get("input_cost_per_token")
+    return (
+        name.startswith("mistral/")
+        and entry.get("mode") == "chat"
+        and entry.get("deprecation_date") is None
+        and isinstance(input_cost, (int, float))
+        and input_cost > 0
+    )
+
+
+def cache_read_is_tenth_of_input(entry: Mapping[str, object]) -> bool:
+    cache_read: Final = entry.get("cache_read_input_token_cost")
+    input_cost: Final = entry.get("input_cost_per_token")
+    return (
+        isinstance(cache_read, float)
+        and isinstance(input_cost, (int, float))
+        and 0 < cache_read < input_cost
+        and cache_read == pytest.approx(input_cost / 10)
+    )
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_active_mistral_chat_rows_price_cache_reads_below_input(path: Path):
+    """A Mistral chat row without a cache-read rate bills cached prompt tokens at zero, so every
+    active priced row must carry one, and it must be cheaper than a fresh input token. Mistral
+    bills cached tokens at 10% of the input price for every model (docs.mistral.ai/studio/
+    conversations/advanced/prompt-caching, read 2026-09-18), so the ratio is checked as well."""
+    rows: Mapping[str, object] = json.loads(path.read_text())
+    drifted: Final = [
+        f"{name}: cache_read={entry.get('cache_read_input_token_cost')} input={entry.get('input_cost_per_token')}"
+        for name, entry in rows.items()
+        if isinstance(entry, dict)
+        and is_active_priced_mistral_chat_row(name, entry)
+        and not cache_read_is_tenth_of_input(entry)
+    ]
+    assert drifted == []

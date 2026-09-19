@@ -65,6 +65,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
     AuthorizationCodeConfig,
+    AuthResolution,
     AuthSpecKind,
     AwsSigV4Config,
     Byok,
@@ -76,6 +77,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     NoneConfig,
     PassthroughConfig,
     PrivateKeyJwtAuth,
+    ResolvedCredential,
     ServerSpec,
     SharedKey,
     Subject,
@@ -448,3 +450,32 @@ def _client_auth_fingerprint(client_auth: ClientAuth) -> str:
 
 def _not_implemented(kind: AuthSpecKind) -> Result[httpx.Auth, CredError]:
     return Error(CredError.of_not_implemented(f"{kind.value}: resolver arm not implemented yet"))
+
+
+async def resolve_credentials_with_source(
+    provider: UpstreamCredentialProvider, subject: Subject, server: ServerSpec
+) -> Result[ResolvedCredential, CredError]:
+    match await provider.resolve_credentials(subject, server):
+        case Error(err):
+            return Error(err)
+        case Ok(auth):
+            if isinstance(auth, NoOpAuth):
+                return Ok(ResolvedCredential(auth, AuthResolution.no_auth))
+            match server.config:
+                case NoneConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.no_auth))
+                case ApiKeyConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.static_token))
+                case PassthroughConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.oauth2_passthrough))
+                case ClientCredentialsConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.client_credentials))
+                case TokenExchangeConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.token_exchange))
+                case IdJagConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.id_jag))
+                case AuthorizationCodeConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.stored_user_token))
+                case AwsSigV4Config():
+                    return Ok(ResolvedCredential(auth, AuthResolution.aws_sigv4))
+            assert_never(server.config)

@@ -1,8 +1,8 @@
 import asyncio
 import datetime
 import json
+from collections.abc import Callable, Mapping
 from datetime import timezone
-from collections.abc import Mapping
 from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,12 +15,16 @@ from litellm.constants import (
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
     LITTELM_CLI_SERVICE_ACCOUNT_NAME,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+    MAX_SPEND_LOG_MODEL_NAME_LENGTH,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
+    UNKNOWN_MODEL_SPEND_LOG_MODEL,
 )
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_messages_for_spend_logs_payload,
     _get_proxy_server_request_for_spend_logs_payload,
@@ -35,12 +39,12 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_error_information_for_spend_logs,
     _sanitize_guardrail_information_for_spend_logs,
     _sanitize_request_body_for_spend_logs_payload,
-    _should_store_prompts_and_responses_in_spend_logs,
     get_logging_payload,
     get_spend_logs_id,
+    should_store_prompts_and_responses_in_spend_logs,
 )
-from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.utils import hash_token
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
@@ -67,6 +71,30 @@ def _get_additional_usage_values_for_usage(usage: litellm.Usage) -> dict:
     return metadata["additional_usage_values"]
 
 
+@pytest.mark.parametrize("store_prompts,redact", [(True, False), (False, False), (True, True)])
+def test_classifier_audit_spend_storage_obeys_privacy_and_truncation(monkeypatch, store_prompts, redact):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": store_prompts})
+    audit: Final = {
+        "classifier_input": {"system": "rubric" * 1000, "messages": [{"role": "user", "content": "ask"}]},
+        "originating_request_masked": {"input": "source-only", "api_key": "REDACTED"},
+    }
+    stored: Final = json.loads(_get_proxy_server_request_for_spend_logs_payload(
+        metadata={}, litellm_params={"proxy_server_request": {"body": {"model": "classifier"}}},
+        kwargs={"standard_logging_object": audit, "standard_callback_dynamic_params": {"turn_off_message_logging": redact}},
+    ))
+    if not store_prompts or redact:
+        assert "classifier_input" not in stored
+        assert "originating_request_masked" not in stored
+    else:
+        assert stored["classifier_input"]["messages"] == audit["classifier_input"]["messages"]
+        assert LITELLM_TRUNCATED_PAYLOAD_FIELD in json.dumps(stored["classifier_input"])
+        assert stored["originating_request_masked"]["input"] == "source-only"
+        assert stored["model"] == "classifier"
+        assert audit["classifier_input"]["system"] == "rubric" * 1000
+
+
 def test_get_logging_payload_maps_openai_cached_tokens_to_cache_read_input_tokens():
     additional_usage_values = _get_additional_usage_values_for_usage(
         litellm.Usage(
@@ -79,6 +107,48 @@ def test_get_logging_payload_maps_openai_cached_tokens_to_cache_read_input_token
 
     assert additional_usage_values["cache_read_input_tokens"] == 123
     assert additional_usage_values["prompt_tokens_details"]["cached_tokens"] == 123
+
+
+class _HashingCache(litellm.Cache):
+    def __init__(self) -> None:
+        pass
+
+    def get_cache_key(self, **kwargs) -> str:
+        raise AssertionError("a preset cache key must be reused instead of hashing the request")
+
+
+def _cache_key_in_spend_log(monkeypatch: pytest.MonkeyPatch, cache: litellm.Cache | None, preset: str | None) -> str:
+    monkeypatch.setattr(litellm, "cache", cache)
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "x" * 10_000}],
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}, "preset_cache_key": preset},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    return payload["cache_key"]
+
+
+def test_get_logging_payload_reuses_the_preset_cache_key_instead_of_hashing_the_body(monkeypatch):
+    assert _cache_key_in_spend_log(monkeypatch, _HashingCache(), "preset-key") == "preset-key"
+
+
+def test_get_logging_payload_records_cache_off_without_hashing(monkeypatch):
+    assert _cache_key_in_spend_log(monkeypatch, None, None) == "Cache OFF"
+
+
+def test_get_logging_payload_still_hashes_when_caching_is_on_and_no_preset_key_exists(monkeypatch):
+    class _RecordingCache(litellm.Cache):
+        def __init__(self) -> None:
+            pass
+
+        def get_cache_key(self, **kwargs) -> str:
+            return "hashed-from-" + kwargs["model"]
+
+    assert _cache_key_in_spend_log(monkeypatch, _RecordingCache(), None) == "hashed-from-gpt-4o-mini"
 
 
 _TRACE_ONLY_STANDARD_LOGGING: Final = cast(
@@ -130,6 +200,68 @@ def test_legacy_policy_keeps_trace_id_fallback():
         kwargs={}, metadata=None, standard_logging_payload=None, omit_when_missing=False
     )
     assert len(str(generated)) == 36
+
+
+def test_batch_lifecycle_rows_derive_the_same_session_from_the_batch_id():
+    """The create call's request id IS the batch id and the poller's cost row appends
+    _batch_cost to it, so deriving the session from the request id lands both rows in one
+    trace on the logs UI even though the poller builds a fresh logging context per cycle."""
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_batch_trace_session_id
+
+    create_session: Final = _get_batch_trace_session_id(call_type="acreate_batch", request_id="batch-uid-1")
+    cost_session: Final = _get_batch_trace_session_id(
+        call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost"
+    )
+    assert create_session == cost_session == "batch-uid-1"
+
+
+def test_non_batch_call_types_derive_no_batch_session():
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_batch_trace_session_id
+
+    assert _get_batch_trace_session_id(call_type="acompletion", request_id="chatcmpl-1") is None
+
+
+def test_batch_session_outranks_the_per_request_trace_id():
+    """Each batch lifecycle call carries its own auto-generated trace id, so letting the
+    trace id win would scatter the rows across sessions again."""
+    session_id: Final = _get_session_id_for_spend_log(
+        kwargs={"litellm_trace_id": "trace-abc"},
+        metadata={"trace_id": "trace-abc"},
+        standard_logging_payload=_TRACE_ONLY_STANDARD_LOGGING,
+        omit_when_missing=False,
+        batch_trace_session_id="batch-uid-1",
+    )
+    assert session_id == "batch-uid-1"
+
+
+def test_omit_policy_still_suppresses_batch_sessions():
+    session_id: Final = _get_session_id_for_spend_log(
+        kwargs={},
+        metadata=None,
+        standard_logging_payload=None,
+        omit_when_missing=True,
+        batch_trace_session_id="batch-uid-1",
+    )
+    assert session_id is None
+
+
+def test_get_logging_payload_groups_batch_create_and_cost_rows_in_one_session():
+    def _payload(call_type: str) -> SpendLogsPayload:
+        return get_logging_payload(
+            kwargs={
+                "call_type": call_type,
+                "model": "gpt-4o-mini",
+                "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            },
+            response_obj=litellm.ModelResponse(id="batch-uid-1", choices=[], usage=litellm.Usage()),
+            start_time=datetime.datetime.now(timezone.utc),
+            end_time=datetime.datetime.now(timezone.utc),
+        )
+
+    create_payload: Final = _payload("acreate_batch")
+    cost_payload: Final = _payload("aretrieve_batch")
+    assert cost_payload["request_id"] == "batch-uid-1_batch_cost"
+    assert create_payload["session_id"] == cost_payload["session_id"] == "batch-uid-1"
 
 
 @pytest.mark.parametrize(
@@ -525,11 +657,11 @@ def test_sanitize_request_body_for_spend_logs_payload_circular_reference():
     assert sanitized == {"b": {"a": {}}}  # Should return empty dict for circular reference
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_get_vector_store_request_for_spend_logs_payload_store_prompts_true(
     mock_should_store,
 ):
-    # When _should_store_prompts_and_responses_in_spend_logs returns True
+    # When should_store_prompts_and_responses_in_spend_logs returns True
     mock_should_store.return_value = True
 
     # Sample vector store request metadata
@@ -543,11 +675,11 @@ def test_get_vector_store_request_for_spend_logs_payload_store_prompts_true(
     assert result[0]["vector_store_search_response"]["data"][0]["content"][0]["text"] == "sensitive information"
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_get_vector_store_request_for_spend_logs_payload_store_prompts_false(
     mock_should_store,
 ):
-    # When _should_store_prompts_and_responses_in_spend_logs returns False
+    # When should_store_prompts_and_responses_in_spend_logs returns False
     mock_should_store.return_value = False
 
     # Sample vector store request metadata
@@ -563,7 +695,7 @@ def test_get_vector_store_request_for_spend_logs_payload_store_prompts_false(
     assert result[0]["vector_store_search_response"]["data"][0]["content"][0]["type"] == "text"
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_get_vector_store_request_for_spend_logs_payload_null_input(mock_should_store):
     # When input is None
     mock_should_store.return_value = False
@@ -571,7 +703,7 @@ def test_get_vector_store_request_for_spend_logs_payload_null_input(mock_should_
     assert result is None
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_get_messages_for_spend_logs_realtime_returns_messages(mock_should_store):
     """
     Test that _get_messages_for_spend_logs_payload returns messages
@@ -598,7 +730,7 @@ def test_get_messages_for_spend_logs_realtime_returns_messages(mock_should_store
     assert parsed[1]["content"] == "What is the weather today?"
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_get_messages_for_spend_logs_strips_null_bytes(mock_should_store):
     """Regression for PostgreSQL 22P05: NUL bytes must be stripped from messages."""
     mock_should_store.return_value = True
@@ -615,7 +747,7 @@ def test_get_messages_for_spend_logs_strips_null_bytes(mock_should_store):
     assert parsed[0]["content"] == "helloworld"
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_get_messages_for_spend_logs_realtime_empty_when_disabled(mock_should_store):
     """
     Test that _get_messages_for_spend_logs_payload returns '{}' for realtime calls
@@ -633,7 +765,7 @@ def test_get_messages_for_spend_logs_realtime_empty_when_disabled(mock_should_st
     assert result == "{}"
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_get_messages_for_spend_logs_non_realtime_returns_empty(mock_should_store):
     """
     Test that _get_messages_for_spend_logs_payload returns '{}' for non-realtime
@@ -651,7 +783,7 @@ def test_get_messages_for_spend_logs_non_realtime_returns_empty(mock_should_stor
     assert result == "{}"
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_get_response_for_spend_logs_payload_truncates_large_base64(mock_should_store):
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 
@@ -679,7 +811,7 @@ def test_get_response_for_spend_logs_payload_truncates_large_base64(mock_should_
     assert parsed["data"][0]["other_field"] == "value"
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_get_response_for_spend_logs_payload_strips_null_bytes(mock_should_store):
     """Regression for PostgreSQL 22P05: NUL bytes must be stripped from response."""
     mock_should_store.return_value = True
@@ -692,7 +824,7 @@ def test_get_response_for_spend_logs_payload_strips_null_bytes(mock_should_store
     assert json.loads(response_json)["content"] == "answerhere"
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_get_response_for_spend_logs_payload_truncates_large_embedding(
     mock_should_store,
 ):
@@ -747,7 +879,7 @@ def test_truncation_includes_db_safeguard_note():
     )
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_response_truncation_logs_info_message(mock_should_store):
     """
     Test that when response is truncated before DB storage, an info log is emitted
@@ -769,7 +901,7 @@ def test_response_truncation_logs_info_message(mock_should_store):
         assert "response was truncated" in log_msg
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_request_body_truncation_logs_info_message(mock_should_store):
     """
     Test that when request body is truncated before DB storage, an info log is emitted.
@@ -858,6 +990,114 @@ def test_safe_dumps_complex_metadata_like_object():
     parsed = json.loads(result)
     assert parsed["user_api_key"] == "test-key"
     assert parsed["model"] == "gpt-4"
+
+
+_RAW_MODEL_WITH_PROMPT: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
+
+
+_BEDROCK_INFERENCE_PROFILE_ARN: Final = (
+    "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-sonnet-4-5"
+)
+_OVERLONG_MODEL: Final = "m" * (MAX_SPEND_LOG_MODEL_NAME_LENGTH + 1)
+
+
+@pytest.mark.parametrize(
+    ("requested_model", "failure", "expected_model"),
+    [
+        (
+            _RAW_MODEL_WITH_PROMPT,
+            ProxyModelNotFoundError(route="acompletion", model_name=_RAW_MODEL_WITH_PROMPT),
+            UNKNOWN_MODEL_SPEND_LOG_MODEL,
+        ),
+        (
+            _RAW_MODEL_WITH_PROMPT,
+            ValueError("Upstream passthrough request failed with status 404"),
+            UNKNOWN_MODEL_SPEND_LOG_MODEL,
+        ),
+        (_OVERLONG_MODEL, ValueError("provider timed out"), UNKNOWN_MODEL_SPEND_LOG_MODEL),
+        (
+            "gpt-5.2",
+            ProxyModelNotFoundError(route="acompletion", model_name="gpt-5.2"),
+            UNKNOWN_MODEL_SPEND_LOG_MODEL,
+        ),
+        ("gpt-5.2", ValueError("provider timed out"), "gpt-5.2"),
+        (_BEDROCK_INFERENCE_PROFILE_ARN, ValueError("provider timed out"), _BEDROCK_INFERENCE_PROFILE_ARN),
+        (
+            "MCP: deepwiki-ask_question",
+            ValueError("Content blocked: keyword 'confidential' detected"),
+            "MCP: deepwiki-ask_question",
+        ),
+    ],
+)
+def test_get_logging_payload_replaces_rejected_or_prompt_shaped_models_with_the_placeholder(
+    requested_model: str, failure: Exception, expected_model: str
+):
+    kwargs: Final = {
+        "model": requested_model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "call_type": "acompletion",
+        "litellm_params": {"metadata": {"user_api_key": "sk-test", "status": "failure"}},
+    }
+
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=failure,
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["model"] == expected_model
+
+
+@pytest.mark.parametrize("requested_model", [{"bad": "value"}, ["gpt-5.2"], 1])
+def test_get_logging_payload_replaces_a_non_string_model_with_the_placeholder(
+    requested_model: dict[str, str] | list[str] | int,
+):
+    kwargs: Final = {
+        "model": requested_model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "call_type": "acompletion",
+        "litellm_params": {"metadata": {"user_api_key": "sk-test", "status": "failure"}},
+    }
+
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=ValueError("model must be a string"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["model"] == UNKNOWN_MODEL_SPEND_LOG_MODEL
+
+
+@pytest.mark.parametrize(
+    ("metadata", "response_obj"),
+    [
+        ({"user_api_key": "sk-test"}, litellm.ModelResponse(id="chatcmpl-test", choices=[])),
+        (
+            {"user_api_key": "sk-test", "model_group": "team alias", "status": "failure"},
+            ValueError("provider timed out"),
+        ),
+    ],
+)
+def test_get_logging_payload_keeps_a_whitespace_model_name_on_success_or_a_routed_failure(
+    metadata: dict[str, str], response_obj: litellm.ModelResponse | Exception
+):
+    kwargs: Final = {
+        "model": _RAW_MODEL_WITH_PROMPT,
+        "messages": [{"role": "user", "content": "hi"}],
+        "call_type": "acompletion",
+        "litellm_params": {"metadata": metadata},
+    }
+
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["model"] == _RAW_MODEL_WITH_PROMPT
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
@@ -969,6 +1209,7 @@ async def test_api_key_preserved_through_failure_hook_to_database():
         start_time,
         end_time,
         org_id,
+        project_id=None,
     ):
         """Mock update_database and capture the payload it creates"""
         from litellm.proxy.spend_tracking.spend_tracking_utils import (
@@ -1109,6 +1350,33 @@ def test_get_logging_payload_includes_agent_id_from_kwargs():
     )
 
     assert payload["agent_id"] == test_agent_id, f"Expected agent_id '{test_agent_id}', got '{payload.get('agent_id')}'"
+
+
+def test_get_logging_payload_populates_litellm_call_id_alongside_provider_request_id():
+    """
+    LIT-6302: request_id stays the provider response id, so clients holding the
+    x-litellm-call-id header value could never find their row. The payload now
+    also carries litellm_call_id as its own column for lookups by either id.
+    """
+    call_id = "b980eea9-5cd9-4099-93cd-8291e46c76fd"
+
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_call_id": call_id,
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj=litellm.ModelResponse(
+            id="chatcmpl-provider-id",
+            choices=[],
+            usage=litellm.Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        ),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["request_id"] == "chatcmpl-provider-id"
+    assert payload["litellm_call_id"] == call_id
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
@@ -1350,7 +1618,7 @@ def test_get_logging_payload_handles_missing_overhead_gracefully():
     )
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_spend_logs_redacts_request_and_response_when_turn_off_message_logging_enabled(
     mock_should_store,
 ):
@@ -1414,7 +1682,7 @@ def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_strin
     mock_get_secret_bool,
 ):
     """
-    Test that _should_store_prompts_and_responses_in_spend_logs handles
+    Test that should_store_prompts_and_responses_in_spend_logs handles
     case-insensitive string values for store_prompts_in_spend_logs in general_settings.
     """
     # Test case-insensitive string "true" variations
@@ -1424,7 +1692,7 @@ def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_strin
             {"store_prompts_in_spend_logs": true_value},
         ):
             mock_get_secret_bool.return_value = False  # Ensure env var is False
-            result = _should_store_prompts_and_responses_in_spend_logs()
+            result = should_store_prompts_and_responses_in_spend_logs()
             assert result is True, f"Expected True for '{true_value}', got {result}"
 
     # Test boolean True
@@ -1433,7 +1701,7 @@ def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_strin
         {"store_prompts_in_spend_logs": True},
     ):
         mock_get_secret_bool.return_value = False
-        result = _should_store_prompts_and_responses_in_spend_logs()
+        result = should_store_prompts_and_responses_in_spend_logs()
         assert result is True, f"Expected True for boolean True, got {result}"
 
     # Test that non-true values fall back to environment variable
@@ -1444,22 +1712,22 @@ def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_strin
         ):
             # When env var is True, should return True
             mock_get_secret_bool.return_value = True
-            result = _should_store_prompts_and_responses_in_spend_logs()
+            result = should_store_prompts_and_responses_in_spend_logs()
             assert result is True, f"Expected True (from env var) for '{false_value}', got {result}"
 
             # When env var is False, should return False
             mock_get_secret_bool.return_value = False
-            result = _should_store_prompts_and_responses_in_spend_logs()
+            result = should_store_prompts_and_responses_in_spend_logs()
             assert result is False, f"Expected False (from env var) for '{false_value}', got {result}"
 
     # Test when general_settings doesn't have the key at all
     with patch("litellm.proxy.proxy_server.general_settings", {}):
         mock_get_secret_bool.return_value = True
-        result = _should_store_prompts_and_responses_in_spend_logs()
+        result = should_store_prompts_and_responses_in_spend_logs()
         assert result is True, "Expected True (from env var) when key missing, got False"
 
         mock_get_secret_bool.return_value = False
-        result = _should_store_prompts_and_responses_in_spend_logs()
+        result = should_store_prompts_and_responses_in_spend_logs()
         assert result is False, "Expected False (from env var) when key missing, got True"
 
 
@@ -1492,7 +1760,7 @@ def test_get_spend_logs_metadata_guardrail_info_fallback_from_metadata():
     assert result["guardrail_information"] is None
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_guardrail_information_redacts_all_prompt_carrying_fields_when_flag_false(
     mock_should_store,
 ):
@@ -1528,7 +1796,7 @@ def test_sanitize_guardrail_information_redacts_all_prompt_carrying_fields_when_
     assert entry["guardrail_action"] == "NONE"
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_guardrail_information_redacts_prompt_fields_when_flag_false(
     mock_should_store,
 ):
@@ -1592,7 +1860,7 @@ def test_sanitize_guardrail_information_redacts_prompt_fields_when_flag_false(
     }
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_guardrail_information_preserves_guardrail_usage_when_flag_false(
     mock_should_store,
 ):
@@ -1624,7 +1892,7 @@ def test_sanitize_guardrail_information_preserves_guardrail_usage_when_flag_fals
     assert entry["guardrail_usage"] == {"topicPolicyUnits": 1, "contentPolicyUnits": 1, "wordPolicyUnits": 0}
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_guardrail_information_passthrough_when_flag_true(
     mock_should_store,
 ):
@@ -1647,13 +1915,13 @@ def test_sanitize_guardrail_information_passthrough_when_flag_true(
     assert result == guardrail_info
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_guardrail_information_none_passthrough(mock_should_store):
     mock_should_store.return_value = False
     assert _sanitize_guardrail_information_for_spend_logs(None) is None
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_guardrail_information_normalizes_bare_dict_input(mock_should_store):
     """
     Regression: xecguard (xecguard.py:246) assigns a bare dict to
@@ -1685,7 +1953,7 @@ def test_sanitize_guardrail_information_normalizes_bare_dict_input(mock_should_s
     assert entry["start_time"] == 1.0
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_guardrail_information_drops_non_dict_items_in_list(mock_should_store):
     """
     A stray non-dict item in the list (e.g. from a buggy caller that
@@ -1704,7 +1972,7 @@ def test_sanitize_guardrail_information_drops_non_dict_items_in_list(mock_should
     assert result == [{"guardrail_name": "x", "guardrail_response": REDACTED_BY_LITELM_STRING}]
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_guardrail_information_preserves_absent_prompt_fields(mock_should_store):
     """
     Entries that never carried guardrail_request or guardrail_response must
@@ -2120,7 +2388,7 @@ def test_sanitize_request_body_strips_secret_fields():
     assert sanitized["messages"] == [{"role": "user", "content": "hi"}]
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_proxy_server_request_payload_excludes_secret_fields(mock_should_store):
     """
     End-to-end test: when the proxy_server_request body contains
@@ -2200,7 +2468,7 @@ def test_redact_prompt_leaks_empty_string():
     assert _redact_prompt_leaks_in_error_string("") == ""
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_error_information_redacts_when_not_storing_prompts(
     mock_should_store,
 ):
@@ -2228,7 +2496,7 @@ def test_sanitize_error_information_redacts_when_not_storing_prompts(
     assert sanitized["llm_provider"] == "openai"
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_error_information_skips_redaction_when_storing_prompts(
     mock_should_store,
 ):
@@ -2250,7 +2518,7 @@ def test_sanitize_error_information_skips_redaction_when_storing_prompts(
     assert REDACTED_BY_LITELM_STRING not in sanitized["error_message"]
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_error_information_caps_size_regardless_of_prompt_flag(
     mock_should_store,
 ):
@@ -2281,7 +2549,7 @@ def test_sanitize_error_information_none_passthrough():
     assert _sanitize_error_information_for_spend_logs(None) is None
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_error_information_reproduces_lit_2992(mock_should_store):
     # Mirrors the reproduced row body from LIT-2992 — a RateLimitError whose
     # message embeds 178 pydantic validation errors, each carrying a full
@@ -2366,7 +2634,7 @@ def test_redact_prompt_leaks_handles_unterminated_value():
     assert REDACTED_BY_LITELM_STRING in redacted
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_error_information_redacts_traceback_when_not_storing_prompts(
     mock_should_store,
 ):
@@ -2398,7 +2666,7 @@ def test_sanitize_error_information_redacts_traceback_when_not_storing_prompts(
     assert "ValueError: invalid request" in sanitized["traceback"]
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_error_information_skips_traceback_redaction_when_storing_prompts(
     mock_should_store,
 ):
@@ -2506,7 +2774,7 @@ def test_redact_prompt_leaks_combined_quoted_key_and_pydantic_assignment():
     assert redacted.count(REDACTED_BY_LITELM_STRING) >= 2
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_error_information_redacts_pydantic_assignment_form(
     mock_should_store,
 ):
@@ -2536,6 +2804,31 @@ def test_sanitize_error_information_redacts_pydantic_assignment_form(
 
 
 # ── _redact_logged_api_key unit tests ──────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("original_exception", "expected_error_message"),
+    [
+        (
+            ProxyModelNotFoundError(route="/chat/completions", model_name=_RAW_MODEL_WITH_PROMPT),
+            "/chat/completions: Invalid model name passed in. Call `/v1/models` to view available models for your key.",
+        ),
+        (ValueError("provider timed out"), "provider timed out"),
+    ],
+)
+def test_sanitize_error_information_persists_no_raw_model_for_an_unknown_model_rejection(
+    original_exception: Exception, expected_error_message: str
+):
+    error_information: Final = StandardLoggingPayloadSetup.get_error_information(original_exception=original_exception)
+
+    sanitized: Final = _sanitize_error_information_for_spend_logs(
+        error_information, original_exception=original_exception
+    )
+
+    assert sanitized is not None
+    assert sanitized["error_message"] == expected_error_message
+    assert "medical records" not in json.dumps(sanitized)
+    assert sanitized["error_class"] == type(original_exception).__name__
 
 
 def test_redact_logged_api_key_none_returns_none():
@@ -2663,6 +2956,16 @@ def test_get_spend_logs_metadata_keeps_master_key_alias_readable():
         }
     )
     assert meta["user_api_key"] == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+def test_get_spend_logs_metadata_keeps_user_agent():
+    """`add_litellm_data_to_request` stamps the caller's User-Agent next to its IP, but
+    the spend log metadata dropped it, so an abusive client could not be identified
+    from the Logs page."""
+    meta = _get_spend_logs_metadata({"requester_ip_address": "203.0.113.9", "user_agent": "abusive-client/9.9"})
+    assert meta["requester_ip_address"] == "203.0.113.9"
+    assert meta["user_agent"] == "abusive-client/9.9"
+    assert _get_spend_logs_metadata(None)["user_agent"] is None
 
 
 def test_redact_logged_api_key_bearer_only_returns_none():
@@ -3102,7 +3405,7 @@ def test_get_logging_payload_hashes_bearer_prefixed_api_key():
     )
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_sanitize_guardrail_information_preserves_headroom_compression_token_stats(
     mock_should_store,
 ):
@@ -3721,6 +4024,184 @@ def test_get_logging_payload_failed_request_without_standard_logging_payload_lea
     assert payload["model_group"] == ""
     assert payload["api_base"] == ""
     assert payload["custom_llm_provider"] == ""
+
+
+def _router_rejected_failure_payload(model_group: str, llm_router: litellm.Router | None) -> SpendLogsPayload:
+    return get_logging_payload(
+        kwargs={
+            "model": model_group,
+            "litellm_params": {
+                "metadata": {"user_api_key": "test-key", "model_group": model_group, "status": "failure"}
+            },
+        },
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+        llm_router=llm_router,
+    )
+
+
+_ProviderResolution = tuple[str, str, str | None, str | None]
+
+
+def _router_init_provider_stub(
+    model: str,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    litellm_params: GenericLiteLLMParams | None = None,
+) -> _ProviderResolution:
+    prefix, _, suffix = model.partition("/")
+    return (suffix or model, custom_llm_provider or (prefix if suffix else "openai"), api_base, api_key)
+
+
+def _oauth_tripwire(resolution_attempts: list[str]) -> Callable[..., _ProviderResolution]:
+    def _trip(
+        model: str,
+        custom_llm_provider: str | None = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
+    ) -> _ProviderResolution:
+        resolution_attempts.append(model)
+        raise AssertionError("get_llm_provider would run the OAuth device flow")
+
+    return _trip
+
+
+def _openai_and_anthropic_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {"model_name": "openai-group", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-a"}},
+            {"model_name": "openai-group", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-b"}},
+            {"model_name": "mixed-group", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-a"}},
+            {
+                "model_name": "mixed-group",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-c"},
+            },
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "model_group,expected_provider",
+    [("openai-group", "openai"), ("mixed-group", ""), ("not-in-router", "")],
+)
+def test_get_logging_payload_router_rejected_request_takes_provider_from_model_group(
+    model_group: str, expected_provider: str
+):
+    payload = _router_rejected_failure_payload(model_group, _openai_and_anthropic_router())
+
+    assert payload["model_group"] == model_group
+    assert payload["custom_llm_provider"] == expected_provider
+
+
+def test_get_logging_payload_router_rejected_request_without_router_leaves_provider_empty():
+    assert _router_rejected_failure_payload("openai-group", None)["custom_llm_provider"] == ""
+
+
+@pytest.mark.parametrize(
+    "litellm_params,expected_provider",
+    [
+        ({"model": "github_copilot/gpt-4o"}, "github_copilot"),
+        ({"model": "gpt-5", "custom_llm_provider": "chatgpt"}, "chatgpt"),
+    ],
+)
+def test_get_logging_payload_inferred_provider_never_resolves_declared_authenticating_providers(
+    monkeypatch: pytest.MonkeyPatch, litellm_params: dict[str, str], expected_provider: str
+):
+    resolution_attempts: list[str] = []
+
+    monkeypatch.setattr(litellm, "get_llm_provider", _router_init_provider_stub)
+    llm_router = litellm.Router(model_list=[{"model_name": "oauth-group", "litellm_params": litellm_params}])
+    monkeypatch.setattr(litellm, "get_llm_provider", _oauth_tripwire(resolution_attempts))
+
+    payload = _router_rejected_failure_payload("oauth-group", llm_router)
+
+    assert payload["custom_llm_provider"] == expected_provider
+    assert resolution_attempts == []
+
+
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"model": "github_copilot/gpt-4o"},
+        {"model": "gpt-5", "custom_llm_provider": "chatgpt"},
+        {"model": "openai/gpt-4o-mini", "api_key": "sk-a"},
+    ],
+)
+def test_get_logging_payload_inferred_provider_honours_global_litellm_proxy_override(
+    monkeypatch: pytest.MonkeyPatch, litellm_params: dict[str, str]
+):
+    monkeypatch.setattr(litellm, "get_llm_provider", _router_init_provider_stub)
+    llm_router = litellm.Router(model_list=[{"model_name": "proxied-group", "litellm_params": litellm_params}])
+    monkeypatch.setattr(litellm, "get_llm_provider", _oauth_tripwire([]))
+    monkeypatch.setattr(litellm, "use_litellm_proxy", True)
+
+    payload = _router_rejected_failure_payload("proxied-group", llm_router)
+
+    assert payload["custom_llm_provider"] == "litellm_proxy"
+
+
+def test_get_logging_payload_router_rejected_request_for_unresolvable_deployment_leaves_provider_empty(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with monkeypatch.context() as router_init:
+        router_init.setattr(litellm, "get_llm_provider", _router_init_provider_stub)
+        llm_router = litellm.Router(
+            model_list=[{"model_name": "opaque-group", "litellm_params": {"model": "my-unprefixed-model"}}]
+        )
+
+    payload = _router_rejected_failure_payload("opaque-group", llm_router)
+
+    assert payload["model_group"] == "opaque-group"
+    assert payload["custom_llm_provider"] == ""
+
+
+def test_get_logging_payload_inferred_provider_does_not_rewrite_spend_log_model():
+    llm_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-group",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+                    "aws_region_name": "us-east-1",
+                },
+            },
+            {
+                "model_name": "bedrock-group",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+                    "aws_region_name": "us-west-2",
+                },
+            },
+        ]
+    )
+
+    payload = _router_rejected_failure_payload("bedrock-group", llm_router)
+
+    assert payload["custom_llm_provider"] == "bedrock"
+    assert payload["model"] == "bedrock-group"
+
+
+def test_get_logging_payload_logged_provider_wins_over_model_group_provider():
+    payload = get_logging_payload(
+        kwargs={
+            "model": "openai-group",
+            "litellm_params": {"metadata": {"user_api_key": "test-key", "model_group": "openai-group"}},
+            "standard_logging_object": {
+                **_make_failed_request_standard_logging_payload(),
+                "model_group": "openai-group",
+                "custom_llm_provider": "azure",
+            },
+        },
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+        llm_router=_openai_and_anthropic_router(),
+    )
+
+    assert payload["custom_llm_provider"] == "azure"
 
 
 class _ModelRouterSpendLogKwargs(TypedDict):
@@ -4370,3 +4851,58 @@ def test_spend_log_request_id_is_the_response_id_a_bridged_messages_caller_recei
         )
         == "resp_01Lit6806Bridged"
     )
+
+
+def test_azure_spillover_stamped_from_response_headers():
+    """Raw provider response headers on the logging kwargs mark the request as spilled."""
+    kwargs: Final = {
+        **_routed_call_kwargs({"id": "mi-1"}),
+        "response_headers": {
+            "x-ms-is-spilled-over": "true",
+            "x-ms-spillover-from-deployment": "my-ptu",
+        },
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=litellm.ModelResponse(id="chatcmpl-spill-raw", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["azure_spillover"] == {"from_deployment": "my-ptu"}
+
+
+def test_azure_spillover_stamped_from_standard_logging_additional_headers():
+    """Streaming requests carry the processed llm_provider- headers on the standard payload."""
+    kwargs: Final = {
+        **_routed_call_kwargs({"id": "mi-1"}),
+        "standard_logging_object": {
+            "hidden_params": {
+                "additional_headers": {
+                    "llm_provider-x-ms-is-spilled-over": "true",
+                    "llm_provider-x-ms-spillover-from-deployment": "my-ptu",
+                }
+            },
+            "metadata": {},
+            "model_map_information": None,
+        },
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=litellm.ModelResponse(id="chatcmpl-spill-sl", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["azure_spillover"] == {"from_deployment": "my-ptu"}
+
+
+def test_azure_spillover_absent_without_spillover_headers():
+    payload = get_logging_payload(
+        kwargs=_routed_call_kwargs({"id": "mi-1"}),
+        response_obj=litellm.ModelResponse(id="chatcmpl-no-spill", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["azure_spillover"] is None

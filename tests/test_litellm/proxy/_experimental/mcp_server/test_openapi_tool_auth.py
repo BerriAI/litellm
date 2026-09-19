@@ -78,6 +78,7 @@ async def test_openapi_local_tool_runs_pre_call_tool_check():
             allowed_mcp_servers=[fake_server],
             start_time=datetime.now(timezone.utc),
             user_api_key_auth=user,
+            guardrail_context={"metadata": {"guardrails": ("block-all",)}},
         )
 
     pre_call.assert_awaited_once()
@@ -88,6 +89,7 @@ async def test_openapi_local_tool_runs_pre_call_tool_check():
     # records call order indirectly — we already asserted both were
     # called; the relative ordering is enforced by the source change.
     pre_call_kwargs = pre_call.await_args.kwargs
+    assert pre_call_kwargs["guardrail_context"] == {"metadata": {"guardrails": ("block-all",)}}
     assert pre_call_kwargs["name"] == "list_pets"
     assert pre_call_kwargs["server"] is fake_server
     assert pre_call_kwargs["user_api_key_auth"] is user

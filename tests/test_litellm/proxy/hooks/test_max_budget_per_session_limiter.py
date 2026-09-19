@@ -10,10 +10,12 @@ Tests that session-scoped budget tracking works correctly:
 
 from unittest.mock import patch
 
+import logging
 import pytest
 from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.max_budget_per_session_limiter import (
     _PROXY_MaxBudgetPerSessionHandler,
@@ -163,3 +165,37 @@ async def test_no_agent_id_passes():
         call_type="",
     )
     assert result is None
+
+
+class _OpenBreakerRedis:
+    def __init__(self) -> None:
+        from litellm.caching.redis_cache import RedisCircuitBreaker
+
+        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+        for _ in range(3):
+            self._circuit_breaker.record_failure()
+
+    @_redis_circuit_breaker_guard
+    async def async_get_cache(self, key, **kwargs):
+        raise AssertionError("never reached")
+
+    def async_register_script(self, script):
+        @_redis_circuit_breaker_guard
+        async def refused(_self, keys, args):
+            raise AssertionError("never reached")
+
+        return lambda keys, args: refused(self, keys, args)
+
+
+@pytest.mark.asyncio
+async def test_an_open_circuit_breaker_reads_session_spend_locally_without_a_warning(caplog):
+    cache = DualCache(redis_cache=_OpenBreakerRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    handler = _PROXY_MaxBudgetPerSessionHandler(internal_usage_cache=InternalUsageCache(cache))
+    caplog.clear()
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        spend = await handler._get_current_spend("{session_budget:quiet}:spend")
+
+    assert spend == 0.0
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
+    assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
