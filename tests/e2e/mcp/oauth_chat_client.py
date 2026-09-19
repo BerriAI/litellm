@@ -101,6 +101,9 @@ async def _browser_follow_authorize(
 
     def _note_request(request: object) -> None:
         url = getattr(request, "url", "")
+        host = httpx.URL(url).host
+        if not allow_upstream_consent and (host == "linear.app" or host.endswith(".linear.app")):
+            captured["upstream_consent"] = "seen"
         if url.startswith(OAUTH_CLIENT_REDIRECT_URI) and "url" not in captured:
             captured["url"] = url
 
@@ -112,7 +115,7 @@ async def _browser_follow_authorize(
         context = await browser.new_context(storage_state=storage_state_path)
         await context.route(re.compile(re.escape(OAUTH_CLIENT_REDIRECT_URI) + r".*"), _swallow_redirect)
         page = await context.new_page()
-        page.on("request", _note_request)
+        context.on("request", _note_request)
         page.on("framenavigated", lambda frame: trail.append(frame.url.split("?", 1)[0]))
         await page.goto(start_url, wait_until="domcontentloaded")
         deadline = time.monotonic() + BROWSER_CONSENT_TIMEOUT
@@ -121,15 +124,13 @@ async def _browser_follow_authorize(
                 await page.wait_for_load_state("networkidle", timeout=8000)
             except Exception:  # noqa: BLE001 - a busy consent page never idles; fall through and try to advance it
                 pass
-            if "url" in captured:
+            if "upstream_consent" in captured or "url" in captured:
                 break
             if await page.locator("#username").count() and identity is not None:
                 await page.locator("#username").fill(identity.username)
                 await page.locator("#password").fill(identity.password)
                 await page.locator("#kc-login").click()
                 continue
-            if httpx.URL(page.url).host.endswith("linear.app") and not allow_upstream_consent:
-                raise AssertionError("cold reconnect required upstream consent")
             if "/ui/connect" in page.url and server_alias is not None:
                 card = page.locator("div.cursor-pointer").filter(has=page.get_by_text(server_alias, exact=True))
                 if await card.count() != 1:
@@ -157,6 +158,8 @@ async def _browser_follow_authorize(
         final_url = page.url
         await browser.close()
 
+    # A redirect chain can finish inside goto/networkidle before the loop checks the page.
+    assert "upstream_consent" not in captured, "cold reconnect required upstream consent"
     landing = captured.get("url")
     assert landing is not None, (
         f"consent flow never reached {OAUTH_CLIENT_REDIRECT_URI}; "
