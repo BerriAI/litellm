@@ -245,7 +245,7 @@ const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptions
             value={fuse.max_quality_gap}
             min={0}
             max={1}
-            help="Allowed difference between capable and efficient success probabilities, from 0 to 1. This is an estimate, not a measured quality guarantee"
+            help="Allowed difference between capable and efficient success probabilities, from 0 to 1. Tune on held-out tasks from your workload; this estimate is not a measured quality guarantee. A gap of 0 still selects efficient on tied or higher forecasts. Route directly to one model to avoid judging when you do not want model selection"
             onChange={(max_quality_gap) => updateFuse({ ...fuse, max_quality_gap })}
           />
         </>
