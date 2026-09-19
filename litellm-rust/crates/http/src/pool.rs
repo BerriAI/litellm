@@ -51,6 +51,7 @@ impl HttpClientPool {
         let effective = match variant {
             ClientVariant::Media => HttpClientConfig {
                 client_certificate: None,
+                trust_proxy_env: false,
                 ..config.clone()
             },
             ClientVariant::Provider | ClientVariant::NoRedirect => config.clone(),
@@ -86,7 +87,6 @@ impl HttpClientPool {
             ClientVariant::NoRedirect => builder.redirect(reqwest::redirect::Policy::none()),
             ClientVariant::Media => builder
                 .redirect(reqwest::redirect::Policy::none())
-                .no_proxy()
                 .dns_resolver2(Arc::clone(&self.media_resolver)),
         }
     }
@@ -204,6 +204,21 @@ mod tests {
         get(&pool, &config("a"), ClientVariant::Provider, &url).await;
         get(&pool, &config("a"), ClientVariant::Provider, &url).await;
         assert_eq!(connections.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn media_clients_are_shared_across_proxy_settings_they_never_use() {
+        let (address, connections, _) = serve("HTTP/1.1 204 No Content").await;
+        let pool = HttpClientPool::new(Arc::new(FixedResolver(address)));
+        let url = format!("http://media.invalid:{}/doc", address.port());
+        for trust_proxy_env in [true, false] {
+            let config = HttpClientConfig {
+                trust_proxy_env,
+                ..config("a")
+            };
+            get(&pool, &config, ClientVariant::Media, &url).await;
+        }
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
     }
 
     #[test]
