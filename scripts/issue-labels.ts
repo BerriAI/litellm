@@ -2,13 +2,15 @@ import manifest from "../.github/issue-labels.json";
 
 export const NAMESPACES = ["domain", "provider", "kind", "priority", "lift", "needs"] as const;
 export type Namespace = (typeof NAMESPACES)[number];
+export const LIFECYCLE_NAMESPACES = ["dup", "repro"] as const;
+export type LifecycleNamespace = (typeof LIFECYCLE_NAMESPACES)[number];
 
 export interface LabelSpec {
   readonly color: string;
   readonly description: string;
 }
 
-export type Manifest = Readonly<Record<Namespace, Readonly<Record<string, LabelSpec>>>>;
+export type Manifest = Readonly<Record<Namespace | LifecycleNamespace, Readonly<Record<string, LabelSpec>>>>;
 
 export interface ManifestLabel extends LabelSpec {
   readonly name: string;
@@ -16,7 +18,7 @@ export interface ManifestLabel extends LabelSpec {
 
 export const MANIFEST: Manifest = manifest;
 
-export function labelName(namespace: Namespace, value: string): string {
+export function labelName(namespace: Namespace | LifecycleNamespace, value: string): string {
   return `${namespace}:${value}`;
 }
 
@@ -26,7 +28,7 @@ export function namespaceOf(label: string): Namespace | undefined {
 }
 
 export function manifestLabels(source: Manifest): readonly ManifestLabel[] {
-  return NAMESPACES.flatMap((namespace) =>
+  return [...NAMESPACES, ...LIFECYCLE_NAMESPACES].flatMap((namespace) =>
     Object.entries(source[namespace]).map(([value, spec]) => ({ name: labelName(namespace, value), ...spec })),
   );
 }
