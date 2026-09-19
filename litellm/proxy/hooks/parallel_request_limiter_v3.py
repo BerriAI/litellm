@@ -561,6 +561,13 @@ class RequestRateLimiterStash:
     batch_enqueued_reservation: BatchEnqueuedTokenReservation | None = None
     batch_tpd_refund_ops: tuple[ReservationAwareIncrementOperation, ...] = ()
     reservation_released: bool = False
+    dynamic_reserved_tokens: int = 0
+    dynamic_token_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
+    dynamic_reservation_windows: frozenset[tuple[str, str, Literal["redis", "local"]]] = field(
+        default_factory=frozenset
+    )
+    dynamic_reservation_settled: bool = False
+    fairness_queue_wait_seconds: float = 0.0
 
 
 _request_stash: Final[ContextVar[RequestRateLimiterStash | None]] = ContextVar(

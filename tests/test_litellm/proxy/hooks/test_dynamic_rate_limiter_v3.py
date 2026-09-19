@@ -1945,3 +1945,275 @@ async def test_post_call_success_hook_priority_header_is_always_http_encodable(t
     http_response = Response(headers={key: str(value) for key, value in additional_headers.items()})
     assert http_response.headers.get("x-litellm-priority") == expected_priority_header
     assert http_response.headers["x-litellm-rate-limiter-version"] == "v3"
+
+
+def _fairness_router(model: str, rpm: int | None = None, tpm: int | None = None) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    **({"rpm": rpm} if rpm is not None else {}),
+                    **({"tpm": tpm} if tpm is not None else {}),
+                },
+            }
+        ]
+    )
+
+
+def _enable_fairness(monkeypatch, settings) -> None:
+    from litellm.types.utils import PriorityReservationSettings
+
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    monkeypatch.setattr(litellm, "fairness_settings", settings)
+    monkeypatch.setattr(litellm, "priority_reservation", settings.reserved_shares())
+    monkeypatch.setattr(
+        litellm,
+        "priority_reservation_settings",
+        PriorityReservationSettings(
+            default_priority=settings.default_reserved_share,
+            saturation_threshold=settings.saturation_threshold,
+            saturation_check_cache_ttl=settings.saturation_check_cache_ttl,
+        ),
+    )
+
+
+def _prod_user() -> UserAPIKeyAuth:
+    user = UserAPIKeyAuth()
+    user.metadata = {"priority": "prod"}
+    return user
+
+
+async def _model_tokens(handler: DynamicRateLimitHandler, dual_cache: DualCache, model: str) -> int:
+    key = handler.v3_limiter.create_rate_limit_keys("model_saturation_check", model, "tokens")
+    raw = await dual_cache.async_get_cache(key)
+    return int(float(raw)) if raw is not None else 0
+
+
+async def _priority_tokens(handler: DynamicRateLimitHandler, dual_cache: DualCache, model: str, name: str) -> int:
+    key = handler.v3_limiter.create_rate_limit_keys("priority_model", f"{model}:{name}", "tokens")
+    raw = await dual_cache.async_get_cache(key)
+    return int(float(raw)) if raw is not None else 0
+
+
+def _success_kwargs(model: str, call_id: str, priority: str) -> dict:
+    return {
+        "litellm_call_id": call_id,
+        "standard_logging_object": {"metadata": {"user_api_key_auth_metadata": {"priority": priority}}},
+        "litellm_params": {"metadata": {"model_group": model}},
+    }
+
+
+@pytest.mark.asyncio
+async def test_fairness_reserves_estimated_tokens_pre_call_and_reconciles_to_actual_usage(monkeypatch):
+    from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
+    from litellm.types.utils import ModelResponse, Usage
+
+    model = "fairness-reserve-model"
+    _enable_fairness(
+        monkeypatch,
+        FairnessSettings(enabled=True, workload_classes=(WorkloadClass(name="prod", reserved_share=0.5),)),
+    )
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    handler.update_variables(llm_router=_fairness_router(model, tpm=100_000))
+
+    async def run_request(call_id: str, actual_tokens: int | None) -> tuple[int, int, int]:
+        data = {
+            "model": model,
+            "litellm_call_id": call_id,
+            "messages": [{"role": "user", "content": "summarize the fairness design in one paragraph"}],
+            "max_tokens": 200,
+        }
+        estimate = handler.v3_limiter._estimate_tokens_for_request(
+            data, model=model, min_configured_tpm_limit=100_000, call_type="completion"
+        )
+        before_priority = await _priority_tokens(handler, dual_cache, model, "prod")
+        assert (
+            await handler.async_pre_call_hook(
+                user_api_key_dict=_prod_user(), cache=dual_cache, data=data, call_type="completion"
+            )
+            is None
+        )
+        reserved = await _model_tokens(handler, dual_cache, model)
+        if actual_tokens is None:
+            await handler.async_log_failure_event(
+                kwargs=_success_kwargs(model, call_id, "prod"), response_obj=None, start_time=0.0, end_time=0.0
+            )
+        else:
+            await handler.async_log_success_event(
+                kwargs=_success_kwargs(model, call_id, "prod"),
+                response_obj=ModelResponse(
+                    model=model,
+                    usage=Usage(prompt_tokens=0, completion_tokens=actual_tokens, total_tokens=actual_tokens),
+                ),
+                start_time=None,
+                end_time=None,
+            )
+        priority_delta = await _priority_tokens(handler, dual_cache, model, "prod") - before_priority
+        return estimate, reserved, priority_delta
+
+    estimate_1, reserved_1, priority_delta_1 = await asyncio.create_task(run_request("call-1", None))
+    assert estimate_1 > 0
+    assert reserved_1 == estimate_1
+    assert await _model_tokens(handler, dual_cache, model) == 0
+    assert priority_delta_1 <= 1
+
+    estimate_2, reserved_2, priority_delta_2 = await asyncio.create_task(run_request("call-2", estimate_1 + 37))
+    assert reserved_2 == estimate_2
+    assert await _model_tokens(handler, dual_cache, model) == estimate_2 + 37
+    assert priority_delta_2 - (estimate_2 + 37) <= 1
+
+    under_actual = max(estimate_2 - 20, 1)
+    _, reserved_3, priority_delta_3 = await asyncio.create_task(run_request("call-3", under_actual))
+    assert reserved_3 == (estimate_2 + 37) + estimate_2
+    assert await _model_tokens(handler, dual_cache, model) == (estimate_2 + 37) + under_actual
+    assert priority_delta_3 - under_actual <= 1
+
+
+@pytest.mark.asyncio
+async def test_fairness_queue_admits_waiting_request_once_window_frees(time_controller, monkeypatch):
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+    from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
+
+    model = "fairness-queue-model"
+    _enable_fairness(
+        monkeypatch,
+        FairnessSettings(
+            enabled=True,
+            workload_classes=(WorkloadClass(name="prod", reserved_share=0.5, max_queue_wait_seconds=5.0),),
+            queue_poll_interval_seconds=0.01,
+        ),
+    )
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache, time_provider=time_controller.now)
+    handler.update_variables(llm_router=_fairness_router(model, rpm=2))
+
+    async def admit(call_id: str) -> float:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=_prod_user(),
+            cache=dual_cache,
+            data={"model": model, "litellm_call_id": call_id},
+            call_type="completion",
+        )
+        return get_or_create_request_stash().fairness_queue_wait_seconds
+
+    assert await asyncio.create_task(admit("a")) == 0.0
+
+    queued = asyncio.create_task(admit("b"))
+    await asyncio.sleep(0.1)
+    assert not queued.done()
+    assert handler.fair_queue.depths(model) == {"prod": 1}
+    time_controller.advance(61)
+    waited = await asyncio.wait_for(queued, timeout=3.0)
+    assert waited >= 0.1
+    assert handler.fair_queue.depths(model) == {"prod": 0}
+
+    status = (await handler.fairness_status((model,)))[0]
+    prod = next(cls for cls in status.classes if cls.name == "prod")
+    assert prod.queued_total == 1
+    assert prod.admitted_after_wait_total == 1
+    assert prod.rejected_deadline_total == 0
+    assert prod.avg_queue_wait_seconds >= 0.1
+    assert prod.queue_depth == 0
+    assert prod.reserved_rpm == 1
+
+
+@pytest.mark.asyncio
+async def test_fairness_queue_deadline_rejects_with_reason_headers_and_request_override(monkeypatch):
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+    from litellm.types.proxy.fairness import MAX_QUEUE_WAIT_HEADER, FairnessSettings, WorkloadClass
+
+    model = "fairness-deadline-model"
+    _enable_fairness(
+        monkeypatch,
+        FairnessSettings(
+            enabled=True,
+            workload_classes=(WorkloadClass(name="prod", reserved_share=0.5, max_queue_wait_seconds=0.3),),
+            queue_poll_interval_seconds=0.01,
+        ),
+    )
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    handler.update_variables(llm_router=_fairness_router(model, rpm=1))
+
+    async def call(call_id: str, headers: dict | None = None) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=_prod_user(),
+            cache=dual_cache,
+            data={
+                "model": model,
+                "litellm_call_id": call_id,
+                **({"proxy_server_request": {"headers": headers}} if headers is not None else {}),
+            },
+            call_type="completion",
+        )
+
+    await asyncio.create_task(call("first"))
+
+    started = time.monotonic()
+    with pytest.raises(ProxyRateLimitError) as deadline:
+        await asyncio.create_task(call("second"))
+    assert time.monotonic() - started >= 0.3
+    assert deadline.value.status_code == 429
+    assert deadline.value.headers["x-litellm-fairness-reason"] == "queue_deadline_exceeded"
+    assert float(deadline.value.headers["x-litellm-queue-wait-seconds"]) >= 0.3
+    assert deadline.value.headers["rate_limit_type"] == "requests"
+    assert deadline.value.detail["fairness_reason"] == "queue_deadline_exceeded"
+
+    started_override = time.monotonic()
+    with pytest.raises(ProxyRateLimitError) as immediate:
+        await asyncio.create_task(call("third", headers={MAX_QUEUE_WAIT_HEADER: "0"}))
+    assert time.monotonic() - started_override < 0.2
+    assert immediate.value.headers["x-litellm-fairness-reason"] == "capacity_exhausted"
+
+    prod = next(cls for cls in (await handler.fairness_status((model,)))[0].classes if cls.name == "prod")
+    assert prod.queued_total == 1
+    assert prod.rejected_deadline_total == 1
+    assert prod.rejected_capacity_total == 1
+    assert prod.admitted_after_wait_total == 0
+
+
+@pytest.mark.asyncio
+async def test_fairness_queue_drops_request_when_client_disconnects(monkeypatch):
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+    from litellm.types.proxy.fairness import FairnessSettings
+
+    model = "fairness-disconnect-model"
+    _enable_fairness(
+        monkeypatch,
+        FairnessSettings(enabled=True, default_max_queue_wait_seconds=5.0, queue_poll_interval_seconds=0.01),
+    )
+    dual_cache = DualCache()
+    disconnect_checks: list[int] = []
+
+    async def client_gone() -> bool:
+        disconnect_checks.append(1)
+        return len(disconnect_checks) >= 2
+
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache, is_client_disconnected=client_gone)
+    handler.update_variables(llm_router=_fairness_router(model, rpm=1))
+
+    async def call(call_id: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=dual_cache,
+            data={"model": model, "litellm_call_id": call_id},
+            call_type="completion",
+        )
+
+    await asyncio.create_task(call("first"))
+    started = time.monotonic()
+    with pytest.raises(ProxyRateLimitError) as dropped:
+        await asyncio.create_task(call("second"))
+    assert time.monotonic() - started < 1.0
+    assert dropped.value.headers["x-litellm-fairness-reason"] == "client_disconnected"
+    assert dropped.value.headers["x-litellm-priority"] == "default"
+    assert handler.fair_queue.depths(model) == {"default": 0}
+
+    default_pool = next(cls for cls in (await handler.fairness_status((model,)))[0].classes if cls.name == "default")
+    assert default_pool.disconnected_total == 1
+    assert default_pool.current_requests == 1

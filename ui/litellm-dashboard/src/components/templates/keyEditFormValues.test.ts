@@ -25,6 +25,31 @@ describe("tpd_limit round trip", () => {
   });
 });
 
+describe("workload_class round trip", () => {
+  const gates = { canViewPolicies: true, canViewPrompts: true };
+  const keyData = {
+    token: "tok",
+    models: [],
+    metadata: { priority: "batch", region: "us" },
+  } as unknown as KeyResponse;
+
+  it("lifts metadata.priority into the selector and hides it from the free-form metadata JSON", () => {
+    const values = toKeyEditFormValues(keyData);
+    expect(values.workload_class).toBe("batch");
+    expect(JSON.parse(values.metadata ?? "{}")).toEqual({ region: "us" });
+  });
+
+  it("writes the newly picked class back into metadata.priority next to untouched keys", () => {
+    const submitted = toSubmittedValues({ ...toKeyEditFormValues(keyData), workload_class: "production" }, gates);
+    expect(JSON.parse(String(submitted.metadata))).toEqual({ region: "us", priority: "production" });
+  });
+
+  it("drops metadata.priority when the key moves back to the default pool", () => {
+    const submitted = toSubmittedValues({ ...toKeyEditFormValues(keyData), workload_class: "default" }, gates);
+    expect(JSON.parse(String(submitted.metadata))).toEqual({ region: "us" });
+  });
+});
+
 describe("keyEditFormSchema", () => {
   it("accepts an empty form", () => {
     expect(parse({}).success).toBe(true);

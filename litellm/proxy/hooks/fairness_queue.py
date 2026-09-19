@@ -1,0 +1,165 @@
+import asyncio
+import heapq
+import time
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Final, Literal
+
+FairnessQueueRejectReason = Literal["queue_full", "queue_deadline_exceeded", "client_disconnected"]
+
+
+@dataclass(frozen=True, slots=True)
+class QueueTicket:
+    model: str
+    class_name: str
+    request_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ClassQueueState:
+    head_request_id: str | None
+    depth: int
+    pass_value: float
+
+
+@dataclass(slots=True)
+class _ModelQueues:
+    queues: dict[str, list[tuple[float, str]]] = field(default_factory=dict)
+    passes: dict[str, float] = field(default_factory=dict)
+    virtual_time: float = 0.0
+
+
+class InMemoryFairQueueStore:
+    def __init__(self) -> None:
+        self._models: dict[str, _ModelQueues] = {}
+
+    def _model(self, model: str) -> _ModelQueues:
+        return self._models.setdefault(model, _ModelQueues())
+
+    def enqueue(self, ticket: QueueTicket, enqueued_at: float) -> int:
+        state: Final = self._model(ticket.model)
+        queue: Final = state.queues.setdefault(ticket.class_name, [])
+        if not queue:
+            state.passes[ticket.class_name] = max(state.passes.get(ticket.class_name, 0.0), state.virtual_time)
+        heapq.heappush(queue, (enqueued_at, ticket.request_id))
+        return len(queue)
+
+    def remove(self, ticket: QueueTicket) -> None:
+        state: Final = self._models.get(ticket.model)
+        if state is None:
+            return
+        queue: Final = state.queues.get(ticket.class_name)
+        if queue is None:
+            return
+        remaining: Final = [entry for entry in queue if entry[1] != ticket.request_id]
+        heapq.heapify(remaining)
+        state.queues[ticket.class_name] = remaining
+
+    def snapshot(self, model: str, class_names: Sequence[str]) -> Mapping[str, ClassQueueState]:
+        state: Final = self._model(model)
+        return MappingProxyType(
+            {
+                class_name: ClassQueueState(
+                    head_request_id=(queue[0][1] if (queue := state.queues.get(class_name)) else None),
+                    depth=len(state.queues.get(class_name, ())),
+                    pass_value=state.passes.get(class_name, 0.0),
+                )
+                for class_name in class_names
+            }
+        )
+
+    def advance(self, model: str, class_name: str, amount: float) -> None:
+        state: Final = self._model(model)
+        new_pass: Final = state.passes.get(class_name, 0.0) + amount
+        state.passes[class_name] = new_pass
+        state.virtual_time = new_pass
+
+    def depths(self, model: str) -> Mapping[str, int]:
+        state: Final = self._models.get(model)
+        if state is None:
+            return MappingProxyType({})
+        return MappingProxyType({class_name: len(queue) for class_name, queue in state.queues.items()})
+
+
+@dataclass(frozen=True, slots=True)
+class QueueAdmitted:
+    waited_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class QueueRejected:
+    reason: FairnessQueueRejectReason
+    waited_seconds: float
+
+
+QueueOutcome = QueueAdmitted | QueueRejected
+
+
+class FairQueue:
+    def __init__(
+        self,
+        store: InMemoryFairQueueStore | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._store = store if store is not None else InMemoryFairQueueStore()
+        self._clock = clock
+
+    def depths(self, model: str) -> Mapping[str, int]:
+        return self._store.depths(model)
+
+    async def wait_for_admission(
+        self,
+        ticket: QueueTicket,
+        weights: Mapping[str, float],
+        max_wait_seconds: float,
+        max_depth: int,
+        poll_interval_seconds: float,
+        try_admit: Callable[[], Awaitable[bool]],
+        is_cancelled: Callable[[], Awaitable[bool]],
+    ) -> QueueOutcome:
+        started: Final = self._clock()
+        depth: Final = self._store.enqueue(ticket, enqueued_at=time.time())
+        if depth > max_depth:
+            self._store.remove(ticket)
+            return QueueRejected(reason="queue_full", waited_seconds=0.0)
+        try:
+            while True:
+                outcome: QueueOutcome | None = await self._poll_once(
+                    ticket, weights, started, max_wait_seconds, poll_interval_seconds, try_admit, is_cancelled
+                )
+                if outcome is not None:
+                    return outcome
+        finally:
+            self._store.remove(ticket)
+
+    async def _poll_once(
+        self,
+        ticket: QueueTicket,
+        weights: Mapping[str, float],
+        started: float,
+        max_wait_seconds: float,
+        poll_interval_seconds: float,
+        try_admit: Callable[[], Awaitable[bool]],
+        is_cancelled: Callable[[], Awaitable[bool]],
+    ) -> QueueOutcome | None:
+        if await is_cancelled():
+            return QueueRejected(reason="client_disconnected", waited_seconds=self._clock() - started)
+        if _has_turn(ticket, self._store.snapshot(ticket.model, tuple(weights))):
+            admitted: Final = await try_admit()
+            self._store.advance(ticket.model, ticket.class_name, 1.0 / max(weights.get(ticket.class_name, 0.0), 1e-6))
+            if admitted:
+                return QueueAdmitted(waited_seconds=self._clock() - started)
+        elapsed: Final = self._clock() - started
+        if elapsed >= max_wait_seconds:
+            return QueueRejected(reason="queue_deadline_exceeded", waited_seconds=elapsed)
+        await asyncio.sleep(min(poll_interval_seconds, max_wait_seconds - elapsed))
+        return None
+
+
+def _has_turn(ticket: QueueTicket, snapshot: Mapping[str, ClassQueueState]) -> bool:
+    own: Final = snapshot.get(ticket.class_name)
+    if own is None or own.head_request_id != ticket.request_id:
+        return False
+    active: Final = tuple((state.pass_value, name) for name, state in snapshot.items() if state.depth > 0)
+    return min(active) == (own.pass_value, ticket.class_name)

@@ -548,6 +548,9 @@ from litellm.proxy.management_endpoints.cost_tracking_settings import (
 from litellm.proxy.management_endpoints.customer_endpoints import (
     router as customer_router,
 )
+from litellm.proxy.management_endpoints.fairness_endpoints import (
+    router as fairness_router,
+)
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     router as fallback_management_router,
 )
@@ -783,6 +786,7 @@ from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.fairness import FAIRNESS_SETTINGS_KEY
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
@@ -5889,6 +5893,8 @@ class ProxyConfig:
                     from litellm.types.utils import PriorityReservationSettings
 
                     litellm.priority_reservation_settings = PriorityReservationSettings(**value)
+                elif key == "fairness_settings":
+                    self._apply_fairness_settings_value(value, router)
                 elif key == "callbacks":
                     initialize_callbacks_on_proxy(
                         value=value,
@@ -7471,8 +7477,25 @@ class ProxyConfig:
     def _apply_litellm_settings_db_values(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         self.litellm_settings.apply_db_row("litellm_settings", db_values)
         for key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:
-            if key in db_values and (value := self.litellm_settings.get(key)) is not None:
-                setattr(litellm, key, value)
+            if key not in db_values or (value := self.litellm_settings.get(key)) is None:
+                continue
+            if key == FAIRNESS_SETTINGS_KEY:
+                self._apply_fairness_settings_value(value, llm_router)
+                continue
+            setattr(litellm, key, value)
+
+    @staticmethod
+    def _apply_fairness_settings_value(value: object, router: litellm.Router | None) -> None:
+        from litellm.proxy.hooks.fairness_settings import apply_fairness_settings, parse_fairness_settings
+
+        settings: Final = parse_fairness_settings(value)
+        if settings is None:
+            return
+        apply_fairness_settings(
+            settings,
+            internal_usage_cache=proxy_logging_obj.internal_usage_cache.dual_cache,
+            llm_router=router,
+        )
 
     def _should_load_db_object(self, object_type: str | SupportedDBObjectType) -> bool:
         return should_load_db_object(object_type=object_type)
@@ -19087,6 +19110,7 @@ app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
+app.include_router(fairness_router)
 app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)

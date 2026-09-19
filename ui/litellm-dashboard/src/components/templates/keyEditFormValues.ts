@@ -3,6 +3,7 @@ import { z } from "zod/v4";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
+import { readWorkloadClass, stripWorkloadClass, withWorkloadClassJson } from "../fairness/workloadClass";
 import { estimateChecks, estimateFields } from "./estimatedOutputTokens";
 import { canonicalBudgetDuration } from "./keyEditFieldNormalizers";
 
@@ -53,6 +54,7 @@ export interface KeyEditFormValues {
   project_id?: string | null;
   logging_settings?: unknown[];
   metadata?: string;
+  workload_class?: string;
   duration?: string | null;
   token?: string;
   disabled_callbacks?: string[];
@@ -111,7 +113,8 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
   team_id: keyData.team_id,
   project_id: keyData.project_id,
   logging_settings: extractLoggingSettings(keyData.metadata),
-  metadata: formatMetadataForDisplay(stripTagsFromMetadata(keyData.metadata)),
+  metadata: formatMetadataForDisplay(stripWorkloadClass(stripTagsFromMetadata(keyData.metadata))),
+  workload_class: readWorkloadClass(keyData.metadata as Record<string, unknown> | null | undefined),
   duration: (keyData as { duration?: string }).duration ?? "",
   token: keyData.token || keyData.token_id,
   disabled_callbacks: Array.isArray(readMetadata(keyData, "litellm_disabled_callbacks"))
@@ -161,6 +164,7 @@ export const keyEditFormSchema = z.object({
   project_id: z.string().nullable().optional(),
   logging_settings: z.custom<unknown[] | undefined>(),
   metadata: z.custom<string | undefined>(),
+  workload_class: z.custom<string | undefined>(),
   duration: z.custom<string | null | undefined>(),
   token: z.custom<string | undefined>(),
   disabled_callbacks: z.custom<string[] | undefined>(),
@@ -210,7 +214,7 @@ export const toSubmittedValues = (
   organization_id: values.organization_id,
   team_id: values.team_id,
   logging_settings: values.logging_settings,
-  metadata: values.metadata,
+  metadata: withWorkloadClassJson(values.metadata, values.workload_class),
   duration: values.duration,
   token: values.token,
   disabled_callbacks: values.disabled_callbacks,

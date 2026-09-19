@@ -47,6 +47,7 @@ import {
   PiggyBank,
   PlayCircle,
   Route,
+  Scale,
   ScrollText,
   Search,
   Server,
@@ -332,6 +333,13 @@ const menuGroups: MenuGroup[] = [
             page: "router-settings",
             label: "Router Settings",
             icon: <Route {...ICON} />,
+            roles: all_admin_roles,
+          },
+          {
+            key: "fairness",
+            page: "fairness",
+            label: "Fairness under Load",
+            icon: <Scale {...ICON} />,
             roles: all_admin_roles,
           },
           {

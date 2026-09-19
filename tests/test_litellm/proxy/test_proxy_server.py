@@ -11553,6 +11553,55 @@ def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_n
     assert getattr(litellm, field_name) == db_value
 
 
+def test_fairness_settings_propagate_on_config_reload(monkeypatch):
+    """A fairness update saved by one worker reaches peer workers through the periodic
+    litellm_settings reload: it becomes the effective settings object and is mirrored into
+    the priority reservation globals the dynamic limiter reads."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
+
+    monkeypatch.setattr(litellm, "fairness_settings", None)
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+    monkeypatch.setattr(litellm, "priority_reservation_settings", None)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(ps, "llm_router", None)
+    saved = FairnessSettings(
+        enabled=True,
+        workload_classes=(WorkloadClass(name="production", reserved_share=0.7, max_queue_wait_seconds=15.0),),
+        saturation_threshold=0.9,
+    )
+
+    pc = ps.ProxyConfig()
+    pc._apply_litellm_settings_db_values(
+        pc._prepared_db_settings_values("litellm_settings", {"fairness_settings": saved.model_dump(mode="json")})
+    )
+
+    assert litellm.fairness_settings == saved
+    assert litellm.priority_reservation == {"production": 0.7}
+    assert litellm.priority_reservation_settings is not None
+    assert litellm.priority_reservation_settings.saturation_threshold == 0.9
+    assert "dynamic_rate_limiter_v3" in litellm.callbacks
+
+
+def test_invalid_fairness_settings_row_is_ignored_on_config_reload(monkeypatch):
+    """A malformed row must not take down the reload or half-apply."""
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(litellm, "fairness_settings", None)
+    monkeypatch.setattr(litellm, "priority_reservation", None)
+
+    pc = ps.ProxyConfig()
+    pc._apply_litellm_settings_db_values(
+        pc._prepared_db_settings_values(
+            "litellm_settings",
+            {"fairness_settings": {"enabled": True, "workload_classes": [{"name": "default", "reserved_share": 2}]}},
+        )
+    )
+
+    assert litellm.fairness_settings is None
+    assert litellm.priority_reservation is None
+
+
 def test_get_config_list_marks_untouched_prompt_caching_flag_as_not_set(monkeypatch):
     """The flag defaults to False rather than None, so a plain 'is not None' check would
     report the default as 'In Config' and imply an admin had set it."""

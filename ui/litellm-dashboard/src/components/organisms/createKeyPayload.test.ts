@@ -191,6 +191,16 @@ describe("metadata", () => {
     ).toStrictEqual(aliasOnly({ metadata: '{"team":"core","logging":[{"callback_name":"langfuse"}]}' }));
   });
 
+  it("stores a named workload class as metadata.priority and never as a top-level key", () => {
+    expect(
+      payloadOf(build({ key_alias: "my-key", metadata: '{"team":"core"}', workload_class: "batch" })),
+    ).toStrictEqual(aliasOnly({ metadata: '{"team":"core","priority":"batch"}' }));
+  });
+
+  it("writes no priority for the default pool", () => {
+    expect(payloadOf(build({ key_alias: "my-key", workload_class: "default" }))).toStrictEqual(aliasOnly());
+  });
+
   it("maps disabled callbacks from display names to internal names", () => {
     expect(payloadOf(build({ key_alias: "my-key" }, { disabledCallbacks: ["Langfuse"] }))).toStrictEqual(
       aliasOnly({ metadata: '{"litellm_disabled_callbacks":["langfuse"]}' }),

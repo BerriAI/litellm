@@ -1,5 +1,5 @@
 import React from "react";
-import { Control, UseFormReturn } from "react-hook-form";
+import { Control, UseFormReturn, useWatch } from "react-hook-form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -10,6 +10,7 @@ import AgentSelector from "../agent_management/AgentSelector";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import NumericalInput from "../shared/numerical_input";
 import SkillSelector from "../skills/SkillSelector";
+import { useShowWorkloadClass, WORKLOAD_CLASS_HINT, WorkloadClassSelect } from "../fairness/WorkloadClassSelect";
 import { moveTagsOutOfMetadataJson } from "./keyEditFieldNormalizers";
 import { AgentsAndGroups, KeyEditFormValues } from "./keyEditFormValues";
 
@@ -169,6 +170,17 @@ export const KeyMetadataField = ({ form }: { form: KeyEditForm }) => (
     )}
   </FormField>
 );
+
+export const KeyWorkloadClassField = ({ control }: { control: Control<KeyEditFormValues> }) => {
+  const current = useWatch({ control, name: "workload_class" });
+  const show = useShowWorkloadClass(current);
+  if (!show) return null;
+  return (
+    <FormField control={control} name="workload_class" label={labelWithHint("Workload class", WORKLOAD_CLASS_HINT)}>
+      {({ id, value, onChange }) => <WorkloadClassSelect id={id} value={value} onChange={onChange} />}
+    </FormField>
+  );
+};
 
 export const KeyBudgetNumberField = ({
   control,
