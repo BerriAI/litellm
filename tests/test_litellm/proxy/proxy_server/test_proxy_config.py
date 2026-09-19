@@ -4526,3 +4526,89 @@ async def test_add_deployment_syncs_ui_settings_even_when_the_model_reconcile_fa
     await config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=MagicMock())
 
     assert general_settings["allow_agents_for_team_admins"] is True
+
+
+def _websearch_logger_cls():
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    return WebSearchInterceptionLogger
+
+
+def _run_websearch_init(monkeypatch, stored_params, starting_callbacks):
+    pc = ProxyConfig()
+    monkeypatch.setattr(litellm, "callbacks", list(starting_callbacks))
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_config_param",
+        AsyncMock(return_value=SimpleNamespace(param_value={"websearch_interception_params": stored_params}))
+        if stored_params is not None
+        else AsyncMock(return_value=SimpleNamespace(param_value={})),
+    )
+    asyncio.run(pc.init_websearch_interception_settings_in_db(prisma_client=MagicMock()))
+    return pc
+
+
+def test_init_websearch_interception_absent_key_leaves_callbacks_untouched(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    config_registered = logger_cls(search_tool_name="from-config-yaml")
+
+    _run_websearch_init(monkeypatch, stored_params=None, starting_callbacks=[config_registered])
+
+    assert litellm.callbacks == [config_registered]
+
+
+def test_init_websearch_interception_enables_when_enabled_key_missing(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"search_tool_name": "stored-tool"},
+        starting_callbacks=[],
+    )
+
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
+    assert len(registered) == 1
+    assert registered[0].search_tool_name == "stored-tool"
+
+
+def test_init_websearch_interception_disabled_removes_the_callback(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    existing = logger_cls(search_tool_name="stored-tool")
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": False, "search_tool_name": "stored-tool"},
+        starting_callbacks=[existing],
+    )
+
+    assert [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)] == []
+
+
+def test_init_websearch_interception_replaces_stale_instance_on_param_change(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    stale = logger_cls(search_tool_name="old-tool", max_agentic_loops=2)
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": True, "search_tool_name": "new-tool", "max_agentic_loops": 7},
+        starting_callbacks=[stale],
+    )
+
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
+    assert len(registered) == 1
+    assert (registered[0].search_tool_name, registered[0].max_agentic_loops) == ("new-tool", 7)
+
+
+def test_init_websearch_interception_honors_enabled_providers(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": True, "enabled_providers": ["bedrock", "vertex_ai"]},
+        starting_callbacks=[],
+    )
+
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
+    assert len(registered) == 1
+    assert registered[0].enabled_providers == ["bedrock", "vertex_ai"]
