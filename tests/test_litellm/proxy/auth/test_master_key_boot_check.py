@@ -1,6 +1,7 @@
 import re
 import shutil
 import subprocess
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from litellm.proxy.auth.master_key_boot_check import (
     UnsafeMasterKeyError,
     UnsafeMasterKeyReason,
     UnsafeMasterKeyRefused,
+    announce_on_stderr_at_exit,
     enforce_master_key_boot_verdict,
     master_key_boot_verdict,
     render_refusal,
@@ -144,10 +146,14 @@ def test_rotation_is_only_needed_when_the_known_key_encrypts_a_database(
 def _refusal(
     reason: UnsafeMasterKeyReason = UnsafeMasterKeyReason.PUBLICLY_KNOWN,
     source: ConfigFileSource | EnvironmentSource = EnvironmentSource(),
+    environment_variable_is_set: bool = False,
     stored_credentials_need_rotation: bool = False,
 ) -> UnsafeMasterKeyRefused:
     return UnsafeMasterKeyRefused(
-        reason=reason, source=source, stored_credentials_need_rotation=stored_credentials_need_rotation
+        reason=reason,
+        source=source,
+        environment_variable_is_set=environment_variable_is_set,
+        stored_credentials_need_rotation=stored_credentials_need_rotation,
     )
 
 
@@ -160,11 +166,40 @@ def test_config_refusal_names_the_file_and_tells_it_to_read_the_environment():
 
 
 def test_environment_refusal_gives_the_command_without_a_config_step():
-    text = render_refusal(_refusal(source=EnvironmentSource()))
+    text = render_refusal(_refusal(reason=UnsafeMasterKeyReason.NOT_SET, source=EnvironmentSource()))
 
     assert f"the {MASTER_KEY_ENV_VAR} environment variable" in text
     assert GENERATE_MASTER_KEY_COMMAND in text
     assert "os.environ/" not in text
+
+
+@pytest.mark.parametrize(
+    ("master_key", "general_settings", "environment_master_key", "is_set"),
+    [
+        (None, {}, None, False),
+        ("sk-1234", {"master_key": "sk-1234"}, None, False),
+        ("sk-1234", {}, "sk-1234", True),
+        ("sk-1234", {"master_key": "sk-1234"}, "", True),
+    ],
+)
+def test_refusal_records_whether_the_environment_variable_is_already_set(
+    master_key: str | None, general_settings: Mapping[str, object], environment_master_key: str | None, is_set: bool
+):
+    refusal = _verdict(master_key, general_settings, environment_master_key=environment_master_key)
+
+    assert isinstance(refusal, UnsafeMasterKeyRefused)
+    assert refusal.environment_variable_is_set is is_set
+
+
+@pytest.mark.parametrize("source", [EnvironmentSource(), ConfigFileSource(config_file_path="/app/config.yaml")])
+def test_refusal_never_tells_a_user_with_an_exported_key_to_append_to_the_env_file(
+    source: ConfigFileSource | EnvironmentSource,
+):
+    text = render_refusal(_refusal(source=source, environment_variable_is_set=True))
+
+    assert PRINT_NEW_MASTER_KEY_COMMAND in text
+    assert "tee" not in text
+    assert "wins over .env" in text
 
 
 def test_unset_key_refusal_says_nothing_supplied_one():
@@ -242,3 +277,19 @@ def test_safe_and_overridden_keys_boot_without_announcing(verdict: MasterKeyBoot
     enforce_master_key_boot_verdict(verdict, announce=announced.append)
 
     assert announced == []
+
+
+def test_announced_fix_is_the_last_thing_a_crashing_process_prints():
+    crash_after_announcing = (
+        "from litellm.proxy.auth.master_key_boot_check import announce_on_stderr_at_exit\n"
+        "announce_on_stderr_at_exit('THE FIX')\n"
+        "print('buffered stdout')\n"
+        "raise RuntimeError('lifespan failed')\n"
+    )
+
+    completed = subprocess.run([sys.executable, "-c", crash_after_announcing], capture_output=True, text=True)
+
+    assert completed.returncode != 0
+    assert "RuntimeError: lifespan failed" in completed.stderr
+    assert completed.stderr.endswith("THE FIX")
+    assert completed.stdout == "buffered stdout\n"

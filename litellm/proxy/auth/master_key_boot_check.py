@@ -1,5 +1,3 @@
-"""Decides at boot whether the proxy may start with the master key it resolved."""
-
 import atexit
 import sys
 from collections.abc import Callable, Mapping
@@ -57,6 +55,7 @@ class UnsafeMasterKeyAllowed:
 class UnsafeMasterKeyRefused:
     reason: UnsafeMasterKeyReason
     source: MasterKeySource
+    environment_variable_is_set: bool
     stored_credentials_need_rotation: bool
 
 
@@ -90,6 +89,7 @@ def master_key_boot_verdict(
             if MASTER_KEY_SETTING in general_settings and not config_file_only_relays_the_environment
             else EnvironmentSource()
         ),
+        environment_variable_is_set=environment_master_key is not None,
         stored_credentials_need_rotation=(
             reason is UnsafeMasterKeyReason.PUBLICLY_KNOWN and not salt_key_is_set and database_is_configured
         ),
@@ -116,11 +116,7 @@ def enforce_master_key_boot_verdict(verdict: MasterKeyBootVerdict, announce: Cal
 
 
 def announce_on_stderr_at_exit(message: str) -> None:
-    """Keeps the fix as the last thing on screen and away from the log handlers.
-
-    A failed lifespan prints a traceback hundreds of lines long (a frame pair per included router) that buries
-    anything written before it, and the log redactor strips the key-shaped command from anything sent to a logger.
-    """
+    """A logger would redact the key-shaped command and the lifespan traceback would bury it, so print at exit."""
     atexit.register(_flush_stdout_then_write_stderr, message)
 
 
@@ -133,7 +129,7 @@ def render_refusal(refusal: UnsafeMasterKeyRefused) -> str:
     return "\n\n".join(
         (
             f"LiteLLM proxy refused to start: {_REFUSAL_HEADLINE[refusal.reason]}\n{_source_line(refusal)}",
-            _ROTATE_INSTEAD_OF_REPLACING if refusal.stored_credentials_need_rotation else _fix_steps(refusal.source),
+            _ROTATE_INSTEAD_OF_REPLACING if refusal.stored_credentials_need_rotation else _fix_steps(refusal),
             _OVERRIDE_HINT,
         )
     )
@@ -162,6 +158,14 @@ _SAVE_KEY_STEP: Final = (
     f"     {GENERATE_MASTER_KEY_COMMAND}\n"
     "   Not using a .env file (docker run, Kubernetes, pip install)? Pass the same value as the\n"
     f"   {MASTER_KEY_ENV_VAR} environment variable instead."
+)
+
+_REPLACE_EXPORTED_KEY_STEP: Final = (
+    "Generate a key:\n"
+    f"     {PRINT_NEW_MASTER_KEY_COMMAND}\n"
+    f"   Put it in place of the current {MASTER_KEY_ENV_VAR} value wherever that is set: a shell export, your\n"
+    "   container or deployment environment, or its line in .env. Do not just add it to .env, because a value\n"
+    "   already exported in the environment wins over .env."
 )
 
 _ROTATE_INSTEAD_OF_REPLACING: Final = (
@@ -213,15 +217,16 @@ def _source_line(refusal: UnsafeMasterKeyRefused) -> str:
             assert_never(refusal.source)
 
 
-def _fix_steps(source: MasterKeySource) -> str:
-    match source:
-        case ConfigFileSource():
+def _fix_steps(refusal: UnsafeMasterKeyRefused) -> str:
+    set_key_step: Final = _REPLACE_EXPORTED_KEY_STEP if refusal.environment_variable_is_set else _SAVE_KEY_STEP
+    match refusal.source:
+        case ConfigFileSource() as source:
             return (
                 f"1. Make sure {_config_label(source)} reads the key from the environment:\n"
                 f"     general_settings:\n       {MASTER_KEY_SETTING}: os.environ/{MASTER_KEY_ENV_VAR}\n"
-                f"2. {_SAVE_KEY_STEP}"
+                f"2. {set_key_step}"
             )
         case EnvironmentSource():
-            return f"1. {_SAVE_KEY_STEP}"
+            return f"1. {set_key_step}"
         case _:
-            assert_never(source)
+            assert_never(refusal.source)
