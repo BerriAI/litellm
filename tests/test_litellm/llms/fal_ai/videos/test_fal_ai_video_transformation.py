@@ -161,8 +161,8 @@ class TestFalAIVideoTransformation:
         ],
     )
     def test_status_response_mapping(self, response_data, expected_status):
-        response = Mock(spec=httpx.Response)
-        response.json.return_value = response_data
+        status_url = "https://queue.fal.run/bytedance/seedance-2.5/requests/abc/status"
+        response = httpx.Response(200, json=response_data, request=httpx.Request("GET", status_url))
 
         video = self.config.transform_video_status_retrieve_response(
             raw_response=response,
@@ -172,43 +172,32 @@ class TestFalAIVideoTransformation:
 
         assert video.status == expected_status
         assert video.created_at == 0
+        decoded = decode_video_id_with_provider(video.id)
+        assert decoded["model_id"] == "bytedance/seedance-2.5"
+        assert decoded["video_id"] == "abc"
 
-    def test_status_response_id_stays_pollable(self):
-        response = Mock(spec=httpx.Response)
-        response.json.return_value = {
-            "request_id": "abc",
-            "status": "IN_PROGRESS",
-            "response_url": "https://queue.fal.run/bytedance/seedance-2.5/requests/abc",
-        }
-
-        video = self.config.transform_video_status_retrieve_response(
-            raw_response=response,
-            logging_obj=self.logging_obj,
-            custom_llm_provider="fal_ai",
-        )
-
-        status_url, _ = self.config.transform_video_status_retrieve_request(
+        poll_url, _ = self.config.transform_video_status_retrieve_request(
             video_id=video.id,
             api_base="https://queue.fal.run",
             litellm_params=GenericLiteLLMParams(),
             headers={},
         )
-        content_url, _ = self.config.transform_video_content_request(
-            video_id=video.id,
-            api_base="https://queue.fal.run",
-            litellm_params=GenericLiteLLMParams(),
-            headers={},
-        )
-        assert status_url == "https://queue.fal.run/bytedance/seedance-2.5/requests/abc/status"
-        assert content_url == "https://queue.fal.run/bytedance/seedance-2.5/requests/abc"
+        assert poll_url == status_url
 
     def test_status_response_error(self):
-        response = Mock(spec=httpx.Response)
-        response.json.return_value = {
+        response_data = {
             "request_id": "abc",
             "status": "COMPLETED",
             "error": "generation failed",
         }
+        response = httpx.Response(
+            200,
+            json=response_data,
+            request=httpx.Request(
+                "GET",
+                "https://queue.fal.run/bytedance/seedance-2.5/requests/abc/status",
+            ),
+        )
 
         video = self.config.transform_video_status_retrieve_response(
             raw_response=response,
@@ -218,6 +207,27 @@ class TestFalAIVideoTransformation:
 
         assert video.status == "failed"
         assert video.error == {"code": "fal_error", "message": "generation failed"}
+
+    def test_status_response_uses_namespaced_request_url(self):
+        response = httpx.Response(
+            200,
+            json={"status": "IN_PROGRESS"},
+            request=httpx.Request(
+                "GET",
+                "https://example.com/proxy/workflows/owner/app/requests/xyz/status",
+            ),
+        )
+
+        video = self.config.transform_video_status_retrieve_response(
+            raw_response=response,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="fal_ai",
+        )
+
+        decoded = decode_video_id_with_provider(video.id)
+        assert decoded["model_id"] == "workflows/owner/app"
+        assert decoded["video_id"] == "xyz"
+        assert video.model == "workflows/owner/app"
 
     def test_content_response_downloads_video_url(self, monkeypatch):
         content_response = httpx.Response(
