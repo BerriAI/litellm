@@ -3399,9 +3399,8 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
     fake_prisma.db.litellm_config.find_first = AsyncMock(
         return_value=SimpleNamespace(param_value={"timeout": 30, "retries": 2, "fallbacks": []})
     )
-    config_data = {"router_settings": {"timeout": 10}}
+    pc.router_settings.load_yaml({"timeout": 10})
     await pc._add_router_settings_from_db_config(
-        config_data=config_data,
         llm_router=fake_router,
         prisma_client=fake_prisma,
     )
@@ -3421,7 +3420,7 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
 async def test_ProxyConfig__add_router_settings_from_db_config_none_router_noop():
     pc = ProxyConfig()
     # No router and no prisma — should silently return.
-    await pc._add_router_settings_from_db_config(config_data={}, llm_router=None, prisma_client=None)
+    await pc._add_router_settings_from_db_config(llm_router=None, prisma_client=None)
     # Error-style: bad call signature raises.
     with pytest.raises(TypeError):
         await pc._add_router_settings_from_db_config()  # type: ignore[call-arg]
