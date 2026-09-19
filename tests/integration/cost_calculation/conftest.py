@@ -136,7 +136,7 @@ def register_scenario_deployment(
         **model.litellm_params,
         **(
             {"vertex_credentials": _vertex_service_account_json(control_url)}
-            if model.wire == "vertex_generate"
+            if model.llm_provider == "vertex_ai"
             else {}
         ),
     }

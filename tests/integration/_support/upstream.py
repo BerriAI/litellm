@@ -18,14 +18,12 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
-from integration._support.scripted_wires import (
+from integration._support.scripted_shapes import (
     RenderedResponse,
     Scenario,
     ScenarioDeleted,
     ScenarioRegistered,
     ScenarioStore,
-    WIRES,
-    Wire,
     render,
 )
 
@@ -211,14 +209,10 @@ CONTROL_URL: Final = os.environ.get("INTEGRATION_UPSTREAM_URL", "http://127.0.0.
 @dataclass(frozen=True, slots=True)
 class ScenarioHandle:
     scenario_id: str
-    wire: Wire
     control_url: str
 
     def api_base(self) -> str:
-        return f"{self.control_url}/{self.scenario_id}/{self._mount()}"
-
-    def _mount(self) -> str:
-        return WIRES[self.wire].mount
+        return f"{self.control_url}/{self.scenario_id}"
 
 
 def register_scenario(scenario: Scenario) -> ScenarioHandle:
@@ -232,7 +226,6 @@ def register_scenario(scenario: Scenario) -> ScenarioHandle:
     result: Final = ScenarioRegistered.model_validate_json(response.content)
     return ScenarioHandle(
         scenario_id=result.scenario_id,
-        wire=scenario.wire,
         control_url=CONTROL_URL,
     )
 

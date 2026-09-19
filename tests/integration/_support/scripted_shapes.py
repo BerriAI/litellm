@@ -1,24 +1,20 @@
-"""Scripted provider wires for the cost-calculation integration suite.
+"""Scripted response shapes for the cost-calculation integration suite.
 
-The shared integration upstream registers a Scenario over a small control API;
-the provider wire routes answer the proxy's upstream calls with the scripted usage figures, in the exact wire shape
-the real provider would emit (OpenAI chat completions, OpenAI Responses,
-Anthropic Messages, Gemini generateContent, or the OpenAI-compatible Together /
-Fireworks surfaces). Because the usage is scripted, expected spend is literal
-arithmetic on the test cost map's rates, with no dependency on what a real
-provider would report.
+This module owns the Scenario schema, the five renderers, one per LiteLLM
+parser family, and the dispatcher. Because the usage is scripted, expected
+spend is literal arithmetic on the test cost map's rates, with no dependency
+on what a real provider would report.
 
 The upstream exposes:
 
 - ``POST /__scenarios``                 register a Scenario JSON, returns its id
 - ``DELETE /__scenarios/<id>``          remove it
-- ``POST /<id>/<mount>/<provider path>`` provider wire; mount is one of
-  ``openai``, ``anthropic``, ``gemini``, ``together``, ``fireworks``, ``azure``,
-  ``bedrock``, ``vertex`` and the remainder is whatever path the provider
-  client appends (``chat/completions``, ``responses``, ``v1/messages``,
-  ``models/<m>:generateContent`` ...). Vertex appends ``:generateContent`` /
-  ``:streamGenerateContent`` to the mount segment itself, and Bedrock Converse
-  targets ``model/<modelId>/converse`` / ``converse-stream``
+- ``POST /<id>/<provider path>`` provider response; the remainder is whatever
+  path the provider client appends (``chat/completions``, ``responses``,
+  ``v1/messages``, ``models/<m>:generateContent`` ...). Vertex appends
+  ``:generateContent`` / ``:streamGenerateContent`` to the scenario segment,
+  and Bedrock Converse targets ``model/<modelId>/converse`` /
+  ``converse-stream``
 
 A request carrying ``"stream": true`` (or the ``:streamGenerateContent`` Gemini
 verb) gets an SSE answer; ``stream_usage`` on the Scenario decides whether the
@@ -34,14 +30,12 @@ import time
 import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, assert_never
 from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
 
-Wire: TypeAlias = str
 Shape: TypeAlias = Literal[
     "openai_chat",
     "openai_responses",
@@ -49,6 +43,77 @@ Shape: TypeAlias = Literal[
     "gemini_generate",
     "bedrock_converse",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class ShapeSpec:
+    usage: frozenset[str]
+    terminals: frozenset[str]
+
+
+SHAPES: Final[Mapping[Shape, ShapeSpec]] = MappingProxyType(
+    {
+        "openai_chat": ShapeSpec(
+            usage=frozenset(
+                {
+                    "cache_read_tokens",
+                    "reasoning_tokens",
+                    "audio_input_tokens",
+                    "audio_output_tokens",
+                    "web_search_calls",
+                }
+            ),
+            terminals=frozenset(),
+        ),
+        "openai_responses": ShapeSpec(
+            usage=frozenset(
+                {
+                    "cache_read_tokens",
+                    "reasoning_tokens",
+                    "web_search_calls",
+                    "file_search_calls",
+                }
+            ),
+            terminals=frozenset({"incomplete", "unvalidated"}),
+        ),
+        "anthropic_messages": ShapeSpec(
+            usage=frozenset(
+                {
+                    "cache_read_tokens",
+                    "web_search_calls",
+                    "cache_write_5m_tokens",
+                    "cache_write_1h_tokens",
+                }
+            ),
+            terminals=frozenset(),
+        ),
+        "gemini_generate": ShapeSpec(
+            usage=frozenset(
+                {
+                    "cache_read_tokens",
+                    "reasoning_tokens",
+                    "audio_input_tokens",
+                    "audio_output_tokens",
+                    "image_input_tokens",
+                    "video_input_tokens",
+                    "web_search_calls",
+                    "google_maps_calls",
+                }
+            ),
+            terminals=frozenset({"prompt_blocked"}),
+        ),
+        "bedrock_converse": ShapeSpec(
+            usage=frozenset(
+                {
+                    "cache_read_tokens",
+                    "cache_write_5m_tokens",
+                    "cache_write_1h_tokens",
+                }
+            ),
+            terminals=frozenset(),
+        ),
+    }
+)
 StreamUsage: TypeAlias = Literal["final_chunk", "absent"]
 ServiceTier: TypeAlias = Literal["flex", "priority"]
 TerminalKind: TypeAlias = Literal["completed", "incomplete", "unvalidated", "prompt_blocked"]
@@ -58,7 +123,7 @@ _BASE_USAGE_FIELDS: Final = frozenset({"fresh_input_tokens", "output_tokens"})
 
 class ScriptedToolCall(BaseModel):
     """A single function call the scripted output emits instead of text.
-    ``arguments`` is the wire's JSON string (~250 chars), sliced into deltas
+    ``arguments`` is the shape's JSON string (~250 chars), sliced into deltas
     for streams."""
 
     model_config = ConfigDict(frozen=True)
@@ -71,7 +136,7 @@ class ScriptedUsage(BaseModel):
     """Physical token counts the scripted response reports. ``fresh_input_tokens``
     is the uncached, never-written, non-audio input count; ``output_tokens`` is
     the non-reasoning, non-audio output count. Renderers add the cached, written,
-    audio, and reasoning counts into the wire's total fields the way the real
+    audio, and reasoning counts into the shape's total fields the way the real
     provider does (inside prompt_tokens for OpenAI/Gemini, as uncached-only
     input_tokens for Anthropic)."""
 
@@ -92,32 +157,6 @@ class ScriptedUsage(BaseModel):
     file_search_calls: int = 0
 
 
-class WireSpec(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    shape: Shape
-    mount: str
-    usage: frozenset[str]
-    terminals: frozenset[TerminalKind]
-
-
-def _load_wires() -> Mapping[str, WireSpec]:
-    adapter: Final = TypeAdapter(dict[str, WireSpec])
-    loaded: Final = adapter.validate_json((Path(__file__).resolve().with_name("wires.json")).read_bytes())
-    known_usage_fields: Final = frozenset(ScriptedUsage.model_fields) - _BASE_USAGE_FIELDS
-    unknown: Final = {
-        wire: sorted(spec.usage - known_usage_fields)
-        for wire, spec in loaded.items()
-        if spec.usage - known_usage_fields
-    }
-    if unknown:
-        raise ValueError(f"wires.json has unknown usage fields: {unknown}")
-    return MappingProxyType(loaded)
-
-
-WIRES: Final[Mapping[str, WireSpec]] = _load_wires()
-
-
 class ScriptedOutput(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -127,9 +166,9 @@ class ScriptedOutput(BaseModel):
     # prove the biller prices the provider-reported model.
     response_model: str | None = None
     # OpenAI-compatible providers can report a provider-computed cost; emitted as
-    # the top-level "cost" field on the together/fireworks wire.
+    # the top-level "cost" field on the together/fireworks response.
     provider_cost: float | None = None
-    # When set, the response is a tool call only: no text content on any wire.
+    # When set, the response is a tool call only: no text content on any response.
     tool_call: ScriptedToolCall | None = None
     # Terminal shape: "unvalidated" makes the Responses terminal response fail
     # pydantic validation so the proxy takes its model_construct dict path;
@@ -141,7 +180,7 @@ class Scenario(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     scenario_id: str
-    wire: Wire
+    shape: Shape
     usage: ScriptedUsage
     output: ScriptedOutput
     # The bare provider-facing model name the renderer echoes when the request
@@ -157,17 +196,13 @@ class Scenario(BaseModel):
 
     @model_validator(mode="after")
     def _check_terminal_supported(self) -> Scenario:
-        spec: Final = WIRES.get(self.wire)
-        if spec is None:
-            raise ValueError(
-                f"unknown wire {self.wire}; known wires: {', '.join(sorted(WIRES))}"
-            )
+        spec: Final = SHAPES[self.shape]
         if (
             self.output.terminal != "completed"
             and self.output.terminal not in spec.terminals
         ):
             raise ValueError(
-                f"wire {self.wire} cannot emit terminal={self.output.terminal}"
+                f"shape {self.shape} cannot emit terminal={self.output.terminal}"
             )
         unsupported: Final = frozenset(
             field
@@ -177,17 +212,13 @@ class Scenario(BaseModel):
         )
         if unsupported:
             raise ValueError(
-                f"wire {self.wire} cannot express usage fields {sorted(unsupported)}"
+                f"shape {self.shape} cannot express usage fields {sorted(unsupported)}"
             )
-        if (self.speed or self.inference_geo) and self.wire != "anthropic_messages":
+        if (self.speed or self.inference_geo) and self.shape != "anthropic_messages":
             raise ValueError(
-                f"wire {self.wire} cannot emit speed/inference_geo (anthropic usage fields)"
+                f"shape {self.shape} cannot emit speed/inference_geo (anthropic usage fields)"
             )
         return self
-
-    @property
-    def mount(self) -> str:
-        return WIRES[self.wire].mount
 
 
 class ScenarioRegistered(BaseModel):
@@ -233,7 +264,7 @@ def _sse(events: tuple[tuple[str | None, Mapping[str, object] | str], ...]) -> b
     return "".join(_sse_frame(event_name, data) for event_name, data in events).encode("utf-8")
 
 
-# ---------- per-wire usage shapes ----------
+    # ---------- per-shape usage shapes ----------
 
 
 def _openai_usage(u: ScriptedUsage) -> Mapping[str, object]:
@@ -400,7 +431,7 @@ def _responses_usage(u: ScriptedUsage) -> Mapping[str, object]:
     )
 
 
-# ---------- per-wire responses ----------
+    # ---------- per-shape responses ----------
 
 
 def _split_arguments(arguments: str) -> tuple[str, ...]:
@@ -1214,8 +1245,8 @@ def _render(
     scenario: Scenario, *, stream: bool, requested_model: str, path_tail: str
 ) -> RenderedResponse:
     # Azure bridges gpt-5.4+ chat requests carrying function tools onto the
-    # Responses API, which lands on the same mount at openai/responses.
-    if scenario.wire == "azure_chat" and path_tail.endswith("openai/responses"):
+    # Responses API, which lands on the same shape at openai/responses.
+    if scenario.shape == "openai_chat" and path_tail.endswith("openai/responses"):
         if stream:
             return RenderedResponse(
                 200, "text/event-stream", _responses_sse(scenario, requested_model)
@@ -1223,7 +1254,7 @@ def _render(
         return RenderedResponse(
             200, "application/json", _json_bytes(_responses_body(scenario, requested_model))
         )
-    shape: Final = WIRES[scenario.wire].shape
+    shape: Final = scenario.shape
     match shape:
         case "bedrock_converse":
             if stream:
@@ -1282,8 +1313,8 @@ def _request_body(body: bytes) -> Mapping[str, object]:
         return MappingProxyType({})
 
 
-def _request_wants_stream(mount_endpoint: str | None, path_tail: str, body: bytes) -> bool:
-    if mount_endpoint == "streamGenerateContent" or ":streamGenerateContent" in path_tail:
+def _request_wants_stream(endpoint: str | None, path_tail: str, body: bytes) -> bool:
+    if endpoint == "streamGenerateContent" or ":streamGenerateContent" in path_tail:
         return True
     if path_tail.endswith("converse-stream"):
         return True
@@ -1301,44 +1332,33 @@ def _request_model(body: bytes, path_tail: str, scenario: Scenario) -> str:
         path_model: Final = path_tail.split("/", 2)[1] if path_tail.count("/") >= 2 else ""
         if path_model:
             return unquote(path_model)
-    # Vertex names it in the URL too, but the mount segment swallowed it when
-    # the api_base carried a path; fall back to the scenario's declared model.
+    # Vertex names it in the URL too, but the path may carry only the endpoint;
+    # fall back to the scenario's declared model.
     return scenario.model
 
 
 def render(store: ScenarioStore, method: str, raw_path: str, body: bytes) -> RenderedResponse:
     path: Final = urlsplit(raw_path).path
     segments: Final = tuple(segment for segment in path.split("/") if segment)
-    if len(segments) < 2 or method != "POST":
+    if len(segments) < 1 or method != "POST":
         return RenderedResponse(
             404, "application/json", _json_bytes(_jobj(("error", f"no route for {method} {path}")))
         )
-    scenario_id: Final = segments[0]
-    # Vertex builds {api_base}:{endpoint}, so the mount segment can carry a
-    # :generateContent / :streamGenerateContent suffix.
-    mount_segment: Final = segments[1]
-    mount, mount_endpoint = (
-        mount_segment.split(":", 1)
-        if ":" in mount_segment
-        else (mount_segment, None)
+    scenario_segment: Final = segments[0]
+    scenario_id, endpoint = (
+        scenario_segment.split(":", 1)
+        if ":" in scenario_segment
+        else (scenario_segment, None)
     )
     found: Final = store.get(scenario_id)
     if found is None:
         return RenderedResponse(
             404, "application/json", _json_bytes(_jobj(("error", f"unknown scenario {scenario_id}")))
         )
-    if found.mount != mount:
-        return RenderedResponse(
-            400,
-            "application/json",
-            _json_bytes(
-                _jobj(("error", f"scenario {scenario_id} is wire {found.wire}, not mount {mount}"))
-            ),
-        )
-    tail: Final = "/".join(segments[2:])
+    tail: Final = "/".join(segments[1:])
     return _render(
         found,
-        stream=_request_wants_stream(mount_endpoint, tail, body),
+        stream=_request_wants_stream(endpoint, tail, body),
         requested_model=_request_model(body, tail, found),
         path_tail=tail,
     )
