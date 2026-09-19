@@ -15382,14 +15382,31 @@
               "title": "Jwt Issuer"
             },
             "key": {
-              "title": "Key",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key"
+            },
+            "token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
             }
           },
           "required": [
             "jwt_claim_name",
-            "jwt_claim_value",
-            "key"
+            "jwt_claim_value"
           ],
           "title": "CreateJWTKeyMappingRequest",
           "type": "object"
@@ -15553,6 +15570,17 @@
                 }
               ],
               "title": "Key"
+            },
+            "token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
             }
           },
           "required": [
