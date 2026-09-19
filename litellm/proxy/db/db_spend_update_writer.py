@@ -57,7 +57,12 @@ from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
     DailySpendUpdateQueue,
 )
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
-from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
+from litellm.proxy.db.db_transaction_queue.redis_update_buffer import (
+    SPEND_TRANSACTION_FIELDS,
+    RedisUpdateBuffer,
+    SpendTransactionField,
+    entity_transactions,
+)
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
     ToolDiscoveryQueue,
@@ -166,11 +171,25 @@ class _DailySpendCommit(Protocol[_DailySpendTransactionT]):
 _DATA_REJECTED_SQLSTATE_CLASSES: Final = frozenset({"22", "23"})
 
 
-def _daily_spend_commit_failure_is_requeue_safe(e: Exception) -> bool:
+def _spend_commit_failure_is_requeue_safe(e: Exception) -> bool:
     if isinstance(e, DB_CONNECTION_ERROR_TYPES):
         return isinstance(e, DB_RETRY_SAFE_ERROR_TYPES)
     sqlstate: Final = PrismaDBExceptionHandler.postgres_sqlstate(e)
     return sqlstate is None or sqlstate[:2] not in _DATA_REJECTED_SQLSTATE_CLASSES
+
+
+def _single_table_transactions(
+    transactions: DBSpendUpdateTransactions,
+    field: SpendTransactionField,
+) -> DBSpendUpdateTransactions:
+    return DBSpendUpdateTransactions(
+        **MappingProxyType(
+            {
+                transaction_field: transactions.get(transaction_field) if transaction_field == field else None
+                for transaction_field in SPEND_TRANSACTION_FIELDS
+            }
+        )
+    )
 
 
 def _timed_request_duration_ms(
@@ -1323,13 +1342,18 @@ class DBSpendUpdateWriter:
                         len(db_spend_update_transactions.get("agent_list_transactions") or ()),
                         len(db_spend_update_transactions.get("model_access_group_list_transactions") or ()),
                     )
-                    await self._commit_spend_updates_to_db(
+                    failed_db_spend_update_transactions: Final = await self._commit_spend_updates_to_db_per_table(
                         prisma_client=prisma_client,
                         n_retry_times=n_retry_times,
                         proxy_logging_obj=proxy_logging_obj,
                         db_spend_update_transactions=db_spend_update_transactions,
                     )
-                uncommitted.pop("db_spend_update_transactions", None)
+                    if failed_db_spend_update_transactions is None:
+                        uncommitted.pop("db_spend_update_transactions", None)
+                    else:
+                        uncommitted["db_spend_update_transactions"] = failed_db_spend_update_transactions
+                else:
+                    uncommitted.pop("db_spend_update_transactions", None)
 
                 if daily_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_user_spend(
@@ -1447,12 +1471,14 @@ class DBSpendUpdateWriter:
         db_spend_update_transactions: Final = (
             await self.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
         )
-        await self._commit_spend_updates_to_db(
+        failed_db_spend_update_transactions: Final = await self._commit_spend_updates_to_db_per_table(
             prisma_client=prisma_client,
             n_retry_times=n_retry_times,
             proxy_logging_obj=proxy_logging_obj,
             db_spend_update_transactions=db_spend_update_transactions,
         )
+        if failed_db_spend_update_transactions is not None:
+            await self.spend_update_queue.add_aggregated_update(failed_db_spend_update_transactions)
 
         ################## Daily Spend Update Transactions ##################
         # Aggregate all in memory daily spend transactions and commit to db
@@ -1534,6 +1560,60 @@ class DBSpendUpdateWriter:
 
         ################## Tool Registry Upserts ##################
         await self._flush_tool_discovery_queue(prisma_client=prisma_client)
+
+    async def _commit_spend_updates_to_db_per_table(
+        self,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+        db_spend_update_transactions: DBSpendUpdateTransactions,
+    ) -> DBSpendUpdateTransactions | None:
+        """Commits each aggregate table independently so one failed table cannot block later tables."""
+
+        async def _commit_table(
+            field: SpendTransactionField,
+        ) -> tuple[SpendTransactionField, dict[str, float]] | None:
+            rows: Final = entity_transactions(db_spend_update_transactions, field)
+            if not rows:
+                return None
+            try:
+                await self._commit_spend_updates_to_db(
+                    prisma_client=prisma_client,
+                    n_retry_times=n_retry_times,
+                    proxy_logging_obj=proxy_logging_obj,
+                    db_spend_update_transactions=_single_table_transactions(db_spend_update_transactions, field),
+                )
+            except Exception as e:  # noqa: BLE001  # the other tables must still commit
+                if _spend_commit_failure_is_requeue_safe(e):
+                    spend_log_error(
+                        "Spend tracking - failed to commit %s spend updates. "
+                        "Re-queued %d rows for retry on next tick. Error: %s",
+                        field,
+                        len(rows),
+                        str(e),
+                        exc=e,
+                    )
+                    return field, rows
+                spend_log_error(
+                    "Spend tracking - failed to commit %s spend updates. "
+                    "Dropped %d rows that the database refused. Error: %s",
+                    field,
+                    len(rows),
+                    str(e),
+                    exc=e,
+                )
+            return None
+
+        failed_tables: Final = tuple(
+            [result for field in SPEND_TRANSACTION_FIELDS if (result := await _commit_table(field)) is not None]
+        )
+        if not failed_tables:
+            return None
+
+        failed_by_field: Final = MappingProxyType({field: rows for field, rows in failed_tables})
+        return DBSpendUpdateTransactions(
+            **MappingProxyType({field: failed_by_field.get(field) for field in SPEND_TRANSACTION_FIELDS})
+        )
 
     async def _commit_daily_tag_spend_to_db(
         self,
@@ -2140,7 +2220,7 @@ class DBSpendUpdateWriter:
                             sql, params = build_bulk_upsert(table=table, batch=merged_batch)
                             await prisma_client.db.execute_raw(sql, *params)
                         except Exception as batch_error:
-                            if _daily_spend_commit_failure_is_requeue_safe(batch_error):
+                            if _spend_commit_failure_is_requeue_safe(batch_error):
                                 spend_log_error(
                                     "Daily %s spend batch upsert failed. Table: %s, Rows: %d, Error: %s",
                                     entity_type,
