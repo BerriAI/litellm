@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -42,6 +43,37 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class _OllamaGenerateReasoning(BaseModel):
+    """The two `/api/generate` fields a reply's reasoning can arrive in."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    # Absent and explicitly null are distinct here: Ollama omits `response` where it sends
+    # no text, and sends null where the reply carries none, which stay "" and None downstream.
+    response: str | None = ""
+    thinking: str | None = None
+
+    @classmethod
+    def from_response(cls, response_json: object) -> "_OllamaGenerateReasoning":
+        try:
+            return cls.model_validate(response_json)
+        except ValidationError:
+            return cls()
+
+    def split(self) -> tuple[str | None, str | None]:
+        """Reasoning reaches `/api/generate` either in the top-level `thinking` field or
+        inline in `<think>` tags, never both. The field wins, matching `ollama_chat`."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            _parse_content_for_reasoning,
+        )
+
+        if self.thinking:
+            return self.thinking, self.response
+        if self.response is None:
+            return None, None
+        return _parse_content_for_reasoning(self.response)
 
 
 class OllamaConfig(BaseConfig):
@@ -256,10 +288,6 @@ class OllamaConfig(BaseConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            _parse_content_for_reasoning,
-        )
-
         response_json: Final = raw_response.json()
         ## RESPONSE OBJECT
         model_response.choices[0].finish_reason = "stop"
@@ -308,22 +336,12 @@ class OllamaConfig(BaseConfig):
                         model_response.choices[0].finish_reason = "stop"
                 except json.JSONDecodeError:
                     # If JSON parsing fails, treat as regular text response
-                    ## output parse reasoning content from response_text
-                    reasoning_content: str | None = None
-                    content: str | None = None
-                    if response_text is not None:
-                        reasoning_content, content = _parse_content_for_reasoning(response_text)
+                    reasoning_content, content = _OllamaGenerateReasoning.from_response(response_json).split()
                     message = litellm.Message(content=content, reasoning_content=reasoning_content)
                     model_response.choices[0].message = message
                     model_response.choices[0].finish_reason = "stop"
         else:
-            response_text = response_json.get("response", "")
-            content = None
-            reasoning_content = None
-            if response_text is not None and isinstance(response_text, str):
-                reasoning_content, content = _parse_content_for_reasoning(response_text)
-            else:
-                content = response_text
+            reasoning_content, content = _OllamaGenerateReasoning.from_response(response_json).split()
             model_response.choices[0].message.content = content
             model_response.choices[0].message.reasoning_content = reasoning_content
         model_response.created = int(time.time())

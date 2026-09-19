@@ -411,6 +411,98 @@ class TestOllamaConfig:
         )
         assert result.choices[0]["finish_reason"] == "stop"
 
+    def _transform(self, response_json, request_data=None):
+        config = OllamaConfig()
+
+        raw_response = MagicMock()
+        raw_response.json.return_value = response_json
+
+        mock_encoding = MagicMock()
+        mock_encoding.encode.return_value = [1, 2, 3]
+
+        return config.transform_response(
+            model="gpt-oss:120b",
+            raw_response=raw_response,
+            model_response=ModelResponse(
+                id="test_id",
+                choices=[{"message": Message(content="")}],
+            ),
+            logging_obj=MagicMock(),
+            request_data=request_data or {},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=mock_encoding,
+        )
+
+    def test_transform_response_with_thinking_field(self):
+        """`/api/generate` returns reasoning in a top-level `thinking` field, which must
+        reach `reasoning_content` instead of being dropped."""
+        result = self._transform(
+            {
+                "response": "OK",
+                "thinking": 'We need to reply with exactly "OK".',
+                "prompt_eval_count": 15,
+                "eval_count": 8,
+            }
+        )
+
+        assert result.choices[0]["message"].reasoning_content == 'We need to reply with exactly "OK".'
+        assert result.choices[0]["message"].content == "OK"
+        assert result.choices[0]["finish_reason"] == "stop"
+
+    def test_transform_response_with_thinking_field_and_empty_response(self):
+        """A model that spends its whole turn reasoning leaves `response` empty; the
+        reasoning still has to be surfaced rather than billed and discarded."""
+        result = self._transform(
+            {
+                "response": "",
+                "thinking": "Entire turn went into reasoning.",
+                "eval_count": 96,
+            }
+        )
+
+        assert result.choices[0]["message"].reasoning_content == "Entire turn went into reasoning."
+        assert result.choices[0]["message"].content == ""
+
+    def test_transform_response_thinking_field_wins_over_inline_tags(self):
+        """When both shapes are present the field wins, matching the `ollama_chat` transport."""
+        result = self._transform(
+            {
+                "response": "<think>inline</think>Answer",
+                "thinking": "from field",
+            }
+        )
+
+        assert result.choices[0]["message"].reasoning_content == "from field"
+        assert result.choices[0]["message"].content == "<think>inline</think>Answer"
+
+    def test_transform_response_json_mode_with_thinking_field(self):
+        """JSON mode falls back to text handling when the payload is not JSON, so the
+        `thinking` field has to be picked up on that path too."""
+        result = self._transform(
+            {
+                "response": "not valid json",
+                "thinking": "reasoning in json mode",
+            },
+            request_data={"format": "json"},
+        )
+
+        assert result.choices[0]["message"].reasoning_content == "reasoning in json mode"
+        assert result.choices[0]["message"].content == "not valid json"
+
+    def test_transform_response_empty_thinking_field_falls_back_to_tags(self):
+        """An empty `thinking` field must not mask inline `<think>` tags."""
+        result = self._transform(
+            {
+                "response": "<think>inline reasoning</think>Answer",
+                "thinking": "",
+            }
+        )
+
+        assert result.choices[0]["message"].reasoning_content == "inline reasoning"
+        assert result.choices[0]["message"].content == "Answer"
+
 
 class TestOllamaTextCompletionResponseIterator:
     def test_chunk_parser_with_thinking_field(self):
