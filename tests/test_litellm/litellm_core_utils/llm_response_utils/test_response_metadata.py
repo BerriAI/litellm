@@ -72,9 +72,7 @@ class TestCallbackDurationMs:
     def test_update_response_metadata_includes_callback_duration(self):
         """End-to-end: update_response_metadata should propagate callback_duration_ms."""
         result = ModelResponse()
-        logging_obj = self._make_logging_obj(
-            callback_duration_ms=5.5, llm_api_duration_ms=800.0
-        )
+        logging_obj = self._make_logging_obj(callback_duration_ms=5.5, llm_api_duration_ms=800.0)
         logging_obj._response_cost_calculator = MagicMock(return_value=0.001)
         logging_obj.litellm_call_id = "test-call-id"
 
@@ -236,6 +234,7 @@ class TestResponseTimingMetrics:
     def _make_logging_obj(
         self,
         llm_api_duration_ms: float | None = None,
+        llm_api_duration_ms_total: float | None = None,
         caching_details: dict[str, object] | None = None,
         received_at: datetime.datetime | str | None = None,
     ) -> MagicMock:
@@ -243,8 +242,13 @@ class TestResponseTimingMetrics:
         logging_obj.model_call_details = {}
         if llm_api_duration_ms is not None:
             logging_obj.model_call_details["llm_api_duration_ms"] = llm_api_duration_ms
-        if received_at is not None:
-            logging_obj.model_call_details["litellm_params"] = {"metadata": {"litellm_received_at": received_at}}
+        if received_at is not None or llm_api_duration_ms_total is not None:
+            metadata = {}
+            if received_at is not None:
+                metadata["litellm_received_at"] = received_at
+            if llm_api_duration_ms_total is not None:
+                metadata["llm_api_duration_ms_total"] = llm_api_duration_ms_total
+            logging_obj.model_call_details["litellm_params"] = {"metadata": metadata}
         logging_obj.caching_details = caching_details
         return logging_obj
 
@@ -263,6 +267,40 @@ class TestResponseTimingMetrics:
 
         assert result["_response_ms"] == pytest.approx(4000.0)
         assert result["litellm_overhead_time_ms"] == pytest.approx(3100.0)
+
+    def test_receive_anchored_window_subtracts_all_provider_attempts(self):
+        logging_obj = self._make_logging_obj(
+            llm_api_duration_ms=300.0,
+            llm_api_duration_ms_total=700.0,
+            received_at=self.START,
+        )
+
+        result = response_timing_metrics(self.START, self.END, logging_obj)
+
+        assert result["_response_ms"] == pytest.approx(1000.0)
+        assert result["litellm_overhead_time_ms"] == pytest.approx(300.0)
+
+    def test_sdk_window_subtracts_current_provider_attempt(self):
+        logging_obj = self._make_logging_obj(
+            llm_api_duration_ms=300.0,
+            llm_api_duration_ms_total=700.0,
+        )
+
+        result = response_timing_metrics(self.START, self.END, logging_obj)
+
+        assert result["_response_ms"] == pytest.approx(1000.0)
+        assert result["litellm_overhead_time_ms"] == pytest.approx(700.0)
+
+    def test_receive_anchored_window_falls_back_to_current_provider_attempt(self):
+        logging_obj = self._make_logging_obj(
+            llm_api_duration_ms=300.0,
+            received_at=self.START,
+        )
+
+        result = response_timing_metrics(self.START, self.END, logging_obj)
+
+        assert result["_response_ms"] == pytest.approx(1000.0)
+        assert result["litellm_overhead_time_ms"] == pytest.approx(700.0)
 
     def test_cache_hit_window_starts_at_proxy_receive_when_stamped(self):
         received_at = self.START.astimezone(datetime.timezone.utc) - datetime.timedelta(seconds=3)
@@ -415,9 +453,7 @@ class TestDetailedTiming:
 
     def test_detailed_timing_headers_in_custom_headers(self, monkeypatch):
         """When LITELLM_DETAILED_TIMING is true, headers flow to get_custom_headers."""
-        monkeypatch.setattr(
-            common_request_processing_mod, "LITELLM_DETAILED_TIMING", True
-        )
+        monkeypatch.setattr(common_request_processing_mod, "LITELLM_DETAILED_TIMING", True)
 
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         hidden_params = {
@@ -440,9 +476,7 @@ class TestDetailedTiming:
 
     def test_detailed_timing_headers_absent_when_disabled(self, monkeypatch):
         """When LITELLM_DETAILED_TIMING is false, no timing headers emitted."""
-        monkeypatch.setattr(
-            common_request_processing_mod, "LITELLM_DETAILED_TIMING", False
-        )
+        monkeypatch.setattr(common_request_processing_mod, "LITELLM_DETAILED_TIMING", False)
 
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         hidden_params = {

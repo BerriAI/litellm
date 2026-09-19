@@ -2,17 +2,38 @@
 Tests for litellm.litellm_core_utils.logging_utils — base64 truncation helpers.
 """
 
+import datetime
 import threading
+from unittest.mock import MagicMock
 
 import pytest
 
 from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.logging_utils import (
-    format_base64_size,
+    _set_duration_in_model_call_details,
     _truncate_base64_in_string,
+    format_base64_size,
     truncate_base64_in_messages,
     truncate_base64_in_messages_async,
 )
+
+
+class TestSetDurationInModelCallDetails:
+    def test_accumulates_provider_attempts_in_shared_metadata(self):
+        metadata = {"request_id": "test"}
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"litellm_params": {"metadata": metadata}}
+        first_start = datetime.datetime(2025, 1, 1, 0, 0, 0)
+        first_end = first_start + datetime.timedelta(milliseconds=300)
+        second_start = datetime.datetime(2025, 1, 1, 0, 0, 1)
+        second_end = second_start + datetime.timedelta(milliseconds=700)
+
+        _set_duration_in_model_call_details(logging_obj, first_start, first_end)
+        _set_duration_in_model_call_details(logging_obj, second_start, second_end)
+
+        assert metadata["llm_api_duration_ms_total"] == pytest.approx(1000.0)
+        assert logging_obj.model_call_details["llm_api_duration_ms"] == pytest.approx(700.0)
+
 
 # ---------------------------------------------------------------------------
 # format_base64_size
@@ -157,10 +178,7 @@ class TestTruncateBase64InMessages:
             }
         ]
         result = truncate_base64_in_messages(messages)
-        assert (
-            result[0]["content"][0]["image_url"]["url"]
-            == f"data:image/png;base64,{short}"
-        )
+        assert result[0]["content"][0]["image_url"]["url"] == f"data:image/png;base64,{short}"
 
 
 # ---------------------------------------------------------------------------

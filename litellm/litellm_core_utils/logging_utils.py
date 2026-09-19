@@ -5,13 +5,14 @@ import re
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import format_base64_size, verbose_logger
 from litellm.constants import (
     BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS,
     MAX_BASE64_LENGTH_FOR_LOGGING,
 )
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -286,6 +287,13 @@ def _set_duration_in_model_call_details(
         duration_ms: Final = (end_time - start_time).total_seconds() * 1000
         if logging_obj and hasattr(logging_obj, "model_call_details"):
             logging_obj.model_call_details["llm_api_duration_ms"] = duration_ms
+            metadata_value: Final = get_litellm_metadata_from_kwargs(logging_obj.model_call_details)
+            if isinstance(metadata_value, dict):
+                metadata: Final = cast(dict[str, object], metadata_value)
+                existing_total: Final = metadata.get("llm_api_duration_ms_total")
+                metadata["llm_api_duration_ms_total"] = (
+                    existing_total if isinstance(existing_total, float) else 0.0
+                ) + duration_ms
         else:
             verbose_logger.debug("`logging_obj` not found - unable to track `llm_api_duration_ms")
     except Exception as e:

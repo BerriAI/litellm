@@ -1,6 +1,6 @@
 import datetime
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import httpx
 
@@ -16,9 +16,13 @@ from litellm.types.utils import (
 )
 
 
-def _timing_window_start(start_time: datetime.datetime, logging_obj: LiteLLMLoggingObject) -> datetime.datetime:
+def _timing_window_start(
+    start_time: datetime.datetime, logging_obj: LiteLLMLoggingObject
+) -> tuple[datetime.datetime, bool]:
     received_at: Final = get_litellm_metadata_from_kwargs(logging_obj.model_call_details).get("litellm_received_at")
-    return received_at if isinstance(received_at, datetime.datetime) else start_time
+    if isinstance(received_at, datetime.datetime):
+        return received_at, True
+    return start_time, False
 
 
 def response_timing_metrics(
@@ -33,7 +37,9 @@ def response_timing_metrics(
     the provider call (``llm_api_duration_ms``). It is omitted when neither duration was recorded,
     and when ``include_overhead`` is False because the two durations cover different windows.
     """
-    window_start: Final = _timing_window_start(start_time, logging_obj)
+    timing_window: Final = _timing_window_start(start_time, logging_obj)
+    window_start: Final = timing_window[0]
+    receive_anchored: Final = timing_window[1]
     total_response_time_ms: Final = (end_time.timestamp() - window_start.timestamp()) * 1000
     if not include_overhead:
         return {"_response_ms": total_response_time_ms}  # mutable-ok: read-only timing result
@@ -43,11 +49,26 @@ def response_timing_metrics(
         if caching_details is not None and caching_details.get("cache_hit") is True
         else None
     )
+    metadata_value: Final = get_litellm_metadata_from_kwargs(logging_obj.model_call_details)
+    metadata: Final = cast(dict[str, object], metadata_value) if isinstance(metadata_value, dict) else {}
     llm_api_duration_ms: Final = logging_obj.model_call_details.get("llm_api_duration_ms")
     if cache_duration_ms is not None:
         overhead_ms: float | None = total_response_time_ms - cache_duration_ms
     elif llm_api_duration_ms is not None:
-        overhead_ms = round(total_response_time_ms - llm_api_duration_ms, 4)
+        total_provider_duration_ms: Final = metadata.get("llm_api_duration_ms_total")
+        provider_duration_ms: Final = (
+            total_provider_duration_ms
+            if receive_anchored
+            and isinstance(total_provider_duration_ms, float)
+            and isinstance(llm_api_duration_ms, (int, float))
+            and total_provider_duration_ms >= llm_api_duration_ms
+            else llm_api_duration_ms
+        )
+        overhead_ms = (
+            round(total_response_time_ms - provider_duration_ms, 4)
+            if isinstance(provider_duration_ms, (int, float))
+            else None
+        )
     else:
         overhead_ms = None
     if overhead_ms is None:
