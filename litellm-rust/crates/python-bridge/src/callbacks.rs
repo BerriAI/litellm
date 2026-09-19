@@ -19,6 +19,7 @@ pub(crate) struct CallSurface {
     /// Legacy only: how a streamed response is billed; `None` for a route that never
     /// streams.
     pub stream: Option<PassThroughStream>,
+    pub updates_logging_before_preparation: bool,
 }
 
 impl CallSurface {
@@ -27,6 +28,7 @@ impl CallSurface {
             call_type: self.call_type,
             input_description: self.input_description,
             stream: self.stream,
+            updates_logging_before_preparation: self.updates_logging_before_preparation,
         }
     }
 
