@@ -5235,6 +5235,12 @@
       }
     }
   },
+  "claude_code_gateway": {
+    "components": {
+      "schemas": {}
+    },
+    "paths": {}
+  },
   "claude_code_marketplace": {
     "components": {
       "schemas": {
