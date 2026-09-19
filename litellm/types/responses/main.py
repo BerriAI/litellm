@@ -144,6 +144,11 @@ class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     role: str  # "assistant", "user", etc.
     content: list[OutputText]
     phase: Phase = None
+    # Carries unsigned plain-text reasoning from providers whose thinking output
+    # is not cryptographically signed (e.g. hosted_vllm GLM/DeepSeek). Signed
+    # reasoning uses encrypted_content instead. Optional so existing callers
+    # are unaffected.
+    reasoning_content: str | None = None
 
 
 class DeleteResponseResult(BaseLiteLLMOpenAIResponseObject):
