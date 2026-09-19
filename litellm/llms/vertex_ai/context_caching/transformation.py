@@ -6,6 +6,7 @@ Why separate file? Make it easy to see how transformation works
 
 import re
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -89,7 +90,7 @@ def extract_ttl_from_cached_messages(messages: list[AllMessageValues]) -> str | 
 
 _TTL_PATTERN: Final = re.compile(r"^([0-9]*\.?[0-9]+)([smh])$")
 _TTL_UNIT_SECONDS: Final = MappingProxyType({"s": 1, "m": 60, "h": 3600})
-_PROTOBUF_DURATION_MAX_SECONDS: Final = 315_576_000_000
+_LAST_EXPIRY_GOOGLE_ACCEPTS: Final = datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
 
 
 def _normalize_ttl_to_seconds(ttl: object) -> str | None:
@@ -99,7 +100,8 @@ def _normalize_ttl_to_seconds(ttl: object) -> str | None:
     if match is None:
         return None
     seconds: Final = round(float(match.group(1)) * _TTL_UNIT_SECONDS[match.group(2)], 9)
-    if not 0 < seconds <= _PROTOBUF_DURATION_MAX_SECONDS:
+    longest_ttl: Final = (_LAST_EXPIRY_GOOGLE_ACCEPTS - datetime.now(timezone.utc)).total_seconds()
+    if not 0 < seconds <= longest_ttl:
         return None
     return f"{seconds:.9f}".rstrip("0").rstrip(".") + "s"
 
