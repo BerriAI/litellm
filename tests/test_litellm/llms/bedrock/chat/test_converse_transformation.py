@@ -289,6 +289,74 @@ def test_reasoning_with_forced_tool_choice_switches_to_auto():
 
 
 @pytest.mark.parametrize(
+    "model",
+    [
+        "us.openai.gpt-5.6-sol",
+        "global.openai.gpt-5.6-terra",
+        "bedrock/converse/us.openai.gpt-5.6-luna",
+        "us.openai.gpt-6-astra",
+        "bedrock/converse/global.openai.gpt-6-astra",
+    ],
+)
+def test_reasoning_effort_maps_to_reasoning_effort_for_openai_gpt5_converse(model):
+    """OpenAI GPT-5.x on Bedrock Converse routes reasoning_effort to
+    ``additionalModelRequestFields.reasoning.effort`` rather than Anthropic ``thinking``."""
+    config = AmazonConverseConfig()
+
+    assert "reasoning_effort" in config.get_supported_openai_params(model=model)
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["reasoning"] == {"effort": "high"}
+    assert "thinking" not in optional_params
+    assert "reasoning_effort" not in optional_params
+
+    _, additional_request_params, _, _ = config._prepare_request_params(optional_params, model)
+    assert additional_request_params["reasoning"] == {"effort": "high"}
+    assert "thinking" not in additional_request_params
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.openai.gpt-5.6-sol",
+        "bedrock/converse/global.openai.gpt-5.6-luna",
+        "us.openai.gpt-6-astra",
+    ],
+)
+def test_openai_gpt5_converse_never_forwards_thinking(model):
+    """GPT-5.x on Converse must never send Anthropic ``thinking``/``output_config`` (Bedrock rejects them).
+
+    Regression: ``thinking`` is not advertised as supported, and even when supplied alongside
+    ``reasoning_effort`` in either order it never survives into the request."""
+    config = AmazonConverseConfig()
+
+    supported = config.get_supported_openai_params(model=model)
+    assert "thinking" not in supported
+    assert "output_config" not in supported
+
+    thinking_block = {"type": "enabled", "budget_tokens": 2048}
+    for non_default_params in (
+        {"reasoning_effort": "high", "thinking": thinking_block},
+        {"thinking": thinking_block, "reasoning_effort": "high"},
+    ):
+        optional_params = config.map_openai_params(
+            non_default_params=dict(non_default_params),
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        _, additional_request_params, _, _ = config._prepare_request_params(optional_params, model)
+        assert additional_request_params["reasoning"] == {"effort": "high"}
+        assert "thinking" not in additional_request_params
+
+
+@pytest.mark.parametrize(
     "model, param, value, expected_max_tokens",
     [
         ("us.openai.gpt-6-astra", "max_tokens", 1, 16),
