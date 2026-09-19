@@ -8,18 +8,14 @@ use litellm_core_utils::{
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::{
-    base_llm::ocr::{
-        document::InlineDocument,
-        error::Error,
-        transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES, OcrConnection, OcrDocument,
-            OcrPage, OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
-            credential_env, decode_and_normalize_response,
-        },
-    },
-    custom_httpx::llm_http_handler::{
-        CallHooks, OcrClient, build_http_request, guardrail_document,
+use crate::base_llm::ocr::{
+    document::InlineDocument,
+    error::Error,
+    handler::{CallHooks, OcrClient, build_http_request, guardrail_document},
+    transformation::{
+        BaseOcrConfig, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES, OcrConnection, OcrDocument,
+        OcrPage, OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        decode_and_normalize_response,
     },
 };
 
@@ -114,7 +110,9 @@ impl BaseOcrConfig for ReductoParseV3Config {
         request: &PreparedOcrRequest,
         _client: &OcrClient,
     ) -> Result<Self::Environment, Error> {
-        resolve_headers(&request.connection, &credential_env)
+        resolve_headers(&request.connection, &|name: &str| {
+            request.connection.secret(name)
+        })
     }
 
     fn get_complete_url(
@@ -437,7 +435,7 @@ fn resolve_headers(
     connection: &OcrConnection,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Vec<(String, String)>, Error> {
-    if crate::custom_httpx::http_handler::has_header(&connection.extra_headers, "authorization") {
+    if litellm_http::request::has_header(&connection.extra_headers, "authorization") {
         return Ok(connection.extra_headers.clone());
     }
     let api_key = connection
@@ -515,25 +513,21 @@ async fn upload_bytes_async(
         )?)
         .multipart(reqwest::multipart::Form::new().part("file", part))
         .timeout(connection.timeout);
-    let builder = crate::custom_httpx::http_handler::with_headers(
+    let builder = litellm_http::request::with_headers(
         builder,
         headers,
-        crate::custom_httpx::http_handler::HeaderPolicy::Except(&[
-            "content-type",
-            "content-length",
-        ]),
+        litellm_http::request::HeaderPolicy::Except(&["content-type", "content-length"]),
     );
-    let response = crate::custom_httpx::http_handler::http_request(builder)
+    let response = litellm_http::request::http_request(builder)
         .await
-        .map_err(crate::custom_httpx::transport::Error::from)?;
-    let uploaded =
-        crate::custom_httpx::llm_http_handler::read_json_response::<ReductoUploadResponse>(
-            response,
-            false,
-            connection.max_response_bytes,
-        )
-        .await?
-        .data;
+        .map_err(litellm_http::transport::Error::from)?;
+    let uploaded = crate::base_llm::ocr::handler::read_json_response::<ReductoUploadResponse>(
+        response,
+        false,
+        connection.max_response_bytes,
+    )
+    .await?
+    .data;
     let file_id = uploaded
         .file_id
         .as_deref()

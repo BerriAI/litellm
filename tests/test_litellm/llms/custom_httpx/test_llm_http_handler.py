@@ -1957,6 +1957,96 @@ async def test_async_anthropic_messages_handler_passes_api_key_to_agentic_hooks(
     )
 
 
+_FOUNDRY_API_BASE: Final = "https://lit5418.services.ai.azure.com/anthropic"
+_FOUNDRY_SSE_BODY: Final = (
+    b'event: message_start\ndata: {"type": "message_start", "message": {"id": "msg_1", "type": "message", '
+    b'"role": "assistant", "model": "claude-fable-5-1", "content": [], "stop_reason": null, '
+    b'"usage": {"input_tokens": 1, "output_tokens": 0}}}\n\n'
+    b'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, '
+    b'"content_block": {"type": "text", "text": ""}}\n\n'
+    b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, '
+    b'"delta": {"type": "text_delta", "text": "ready"}}\n\n'
+    b'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 0}\n\n'
+    b'event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, '
+    b'"usage": {"output_tokens": 1}}\n\n'
+    b'event: message_stop\ndata: {"type": "message_stop"}\n\n'
+)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_passes_deployment_api_base_to_agentic_hooks(stream, monkeypatch):
+    """
+    Regression for LIT-5418: an azure_ai deployment carries its Foundry endpoint as
+    ``api_base``, a named parameter that never lands in kwargs. The agentic hooks
+    (websearch interception's follow-up call after the search) must receive it on
+    both the non-streaming and the streaming path, or the follow-up fails with
+    "Missing Azure API Base" and the client gets the dangling tool_use back.
+    """
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
+
+    monkeypatch.delenv("AZURE_API_BASE", raising=False)
+
+    class CapturingAgenticCallback(CustomLogger):
+        def __init__(self):
+            super().__init__()
+            self.hook_kwargs: dict | None = None
+
+        async def async_should_run_agentic_loop(self, response, model, messages, tools, stream, custom_llm_provider, kwargs):
+            self.hook_kwargs = dict(kwargs)
+            return False, {}
+
+    callback = CapturingAgenticCallback()
+    handler = BaseLLMHTTPHandler()
+    upstream_request = httpx.Request("POST", f"{_FOUNDRY_API_BASE}/v1/messages")
+    upstream_response = (
+        httpx.Response(200, content=_FOUNDRY_SSE_BODY, request=upstream_request)
+        if stream
+        else httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-fable-5-1",
+                "content": [{"type": "text", "text": "ready"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+            request=upstream_request,
+        )
+    )
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=upstream_response)
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.dynamic_success_callbacks = [callback]
+
+    result = await handler.async_anthropic_messages_handler(
+        model="claude-fable-5-1",
+        messages=[{"role": "user", "content": "Say ready"}],
+        anthropic_messages_provider_config=AzureAnthropicMessagesConfig(),
+        anthropic_messages_optional_request_params={"max_tokens": 32},
+        custom_llm_provider="azure_ai",
+        litellm_params=GenericLiteLLMParams(api_key="foundry-key", api_base=_FOUNDRY_API_BASE),
+        logging_obj=mock_logging_obj,
+        client=mock_client,
+        api_key="foundry-key",
+        api_base=_FOUNDRY_API_BASE,
+        stream=stream,
+        kwargs={},
+    )
+    if stream:
+        _ = [chunk async for chunk in result]
+
+    assert mock_client.post.call_args.kwargs["url"] == f"{_FOUNDRY_API_BASE}/v1/messages"
+    assert callback.hook_kwargs is not None, "agentic hook never ran"
+    assert callback.hook_kwargs.get("api_base") == _FOUNDRY_API_BASE
+    assert callback.hook_kwargs.get("api_key") == "foundry-key"
+
+
 class _FakeWSExceptions:
     class WebSocketException(Exception):
         pass
@@ -2761,6 +2851,68 @@ def test_direct_vector_store_search_debug_log_omits_stored_credentials(caplog, i
     logged = "\n".join(record.getMessage() for record in caplog.records)
     assert "sup3r-s3cret-valkey-pw" not in logged
     assert "sk-embedding-s3cret" not in logged
+
+
+@pytest.mark.asyncio
+async def test_async_retrieve_batch_masks_presigned_auth_header_in_raw_request_log():
+    """Regression: a pre-signed retrieve-batch request (Mistral, Bedrock) embeds its auth
+    header inside the transformed request, which pre_call logs verbatim as the raw request
+    body, so the provider key landed unmasked in raw_request_typed_dict and every
+    raw-request callback."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+    from litellm.llms.mistral.batches.transformation import MistralBatchesConfig
+
+    provider_key = "mistral-s3cret-provider-key-123456"
+    job_payload = {
+        "id": "batch-1",
+        "input_files": ["file-1"],
+        "endpoint": "/v1/ocr",
+        "model": "mistral-ocr-latest",
+        "status": "SUCCESS",
+        "created_at": 1_757_400_000,
+    }
+    sent_requests = []
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        sent_requests.append(request)
+        return httpx.Response(200, json=job_payload)
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(_capture))
+
+    logging_obj = LitellmLogging(
+        model="mistral/mistral-ocr-latest",
+        messages=[],
+        stream=False,
+        call_type="batch_retrieve",
+        start_time=time.time(),
+        litellm_call_id="batch-retrieve-call-id",
+        function_id="batch-retrieve-function-id",
+        log_raw_request_response=True,
+    )
+    logging_obj.update_environment_variables(
+        model="mistral/mistral-ocr-latest",
+        optional_params={},
+        litellm_params={"litellm_call_id": "batch-retrieve-call-id", "metadata": {}},
+    )
+
+    result = await BaseLLMHTTPHandler().retrieve_batch(
+        batch_id="batch-1",
+        litellm_params={"api_key": provider_key},
+        provider_config=MistralBatchesConfig(),
+        headers={},
+        api_base=None,
+        api_key=provider_key,
+        logging_obj=logging_obj,
+        _is_async=True,
+        client=client,
+        model="mistral/mistral-ocr-latest",
+    )
+
+    assert result.id == "batch-1"
+    assert sent_requests[0].headers["Authorization"] == f"Bearer {provider_key}"
+    raw_request_body = logging_obj.model_call_details["raw_request_typed_dict"]["raw_request_body"]
+    assert provider_key not in json.dumps(raw_request_body)
 
 
 @pytest.mark.asyncio

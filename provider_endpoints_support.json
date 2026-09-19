@@ -1577,7 +1577,7 @@
         "audio_transcriptions": false,
         "audio_speech": false,
         "moderations": false,
-        "batches": false,
+        "batches": true,
         "rerank": false,
         "ocr": true,
         "a2a": true,

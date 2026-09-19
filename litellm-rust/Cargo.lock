@@ -1976,6 +1976,7 @@ dependencies = [
  "azure_identity",
  "litellm-auth",
  "moka",
+ "rstest",
  "serde_json",
  "sha2 0.10.9",
  "strum",
@@ -2137,11 +2138,14 @@ version = "0.1.0"
 dependencies = [
  "http 1.4.2",
  "hyper-util",
+ "litellm-core-utils",
  "reqwest 0.12.28",
  "rstest",
  "rustls 0.23.42",
+ "serde_json",
  "thiserror 2.0.19",
  "tokio",
+ "veil",
  "webpki-roots",
 ]
 
@@ -2187,6 +2191,7 @@ dependencies = [
  "litellm-auth-gcp",
  "litellm-callbacks-legacy",
  "litellm-core",
+ "litellm-core-utils",
  "litellm-host-python",
  "litellm-http",
  "litellm-llms",

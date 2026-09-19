@@ -1,9 +1,7 @@
 use std::time::Duration;
 
-use litellm_llms::{
-    base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig,
-    custom_httpx::{http_handler::http_request, transport::Error as TransportError},
-};
+use litellm_http::{request::http_request, transport::Error as TransportError};
+use litellm_llms::base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig;
 use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
 use serde_json::Value;
 
