@@ -17,7 +17,6 @@ import functools
 import os
 from collections.abc import Generator, Iterator
 from datetime import datetime, timezone
-from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
@@ -29,7 +28,6 @@ from e2e_config import (
     FIXTURE_DIR,
     FIXTURE_MODE_RAW,
     MANAGED_FILES_OPT_IN_ENV,
-    MCP_OAUTH_LIVE_OPT_IN_ENV,
     PROMPT_CACHING_OPT_IN_ENV,
     PROXY_BASE_URL,
     REDIS_CHAOS_OPT_IN_ENV,
@@ -58,7 +56,6 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "prompt_caching_stack": PROMPT_CACHING_OPT_IN_ENV,
         "redis_chaos": REDIS_CHAOS_OPT_IN_ENV,
         "cli_determinism": CLI_DETERMINISM_OPT_IN_ENV,
-        "mcp_oauth_live": MCP_OAUTH_LIVE_OPT_IN_ENV,
     }
 )
 
@@ -134,11 +131,6 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "redis_chaos: load test that pauses the proxy's Redis outright mid-run; needs a proxy booted from "
         "gateway/redis_chaos_ci_config.yml on the same host, and is deselected unless E2E_REDIS_CHAOS is set",
-    )
-    config.addinivalue_line(
-        "markers",
-        "mcp_oauth_live: real Linear OAuth consent via a captured browser session; deselected unless "
-        "E2E_MCP_OAUTH_LIVE is set",
     )
 
 
@@ -221,8 +213,6 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     LIVE_PROVIDER_REQUIRED.set(item.get_closest_marker("provider_live") is not None)
     if item.get_closest_marker("e2e") is None:
         return
-    if isinstance(item, pytest.Function) and "oauth_gateway" in item.fixturenames:
-        return
     reason = _proxy_fail_reason()
     if reason is not None:
         pytest.fail(reason)
@@ -246,13 +236,6 @@ def pytest_runtest_makereport(
     """Stash the call-phase outcome so teardown can tell a passed test from a
     failed one without re-deriving it."""
     report = yield
-    if item.get_closest_marker("mcp_oauth_live") is not None and call.excinfo is not None:
-        # Publish code locations only, never exception messages, source text or locals.
-        item.user_properties.append(("oauth_failure_phase", report.when))
-        item.user_properties.append(("oauth_exception_type", call.excinfo.type.__name__))
-        for entry in call.excinfo.traceback:
-            item.user_properties.append(("oauth_frame", f"{Path(entry.path).name}:{entry.lineno + 1}:{entry.name}"))
-        report.user_properties = list(item.user_properties)
     if report.when == "call":
         item.stash[_CALL_PASSED] = report.passed
     return report
