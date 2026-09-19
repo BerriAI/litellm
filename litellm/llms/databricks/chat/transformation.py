@@ -689,7 +689,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         response_service_tier: Final = completion_response.get("service_tier")
         if response_service_tier is not None:
-            setattr(model_response, "service_tier", response_service_tier)
+            setattr(model_response, "service_tier", response_service_tier)  # noqa: B010  # not a declared field
 
         return model_response
 
