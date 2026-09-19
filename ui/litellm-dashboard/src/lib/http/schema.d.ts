@@ -26812,6 +26812,12 @@ export interface components {
              */
             forward_client_headers_to_llm_api?: boolean | null;
             /**
+             * Forward Openai Project Id
+             * @description Allow client OpenAI-Project headers and project query/body fields on file uploads and batch creation. Configured deployment projects take precedence. Explicit extra_headers retain their existing behavior.
+             * @default false
+             */
+            forward_openai_project_id: boolean;
+            /**
              * Global Max Parallel Requests
              * @description global max parallel requests to allow for a proxy instance.
              */
