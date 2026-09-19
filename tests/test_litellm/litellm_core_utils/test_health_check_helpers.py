@@ -1,10 +1,15 @@
 """Test health check helper functions"""
 
+import json
 import struct
 import zlib
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import google.oauth2.credentials
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
@@ -389,6 +394,49 @@ async def test_batch_health_check_falls_back_to_acompletion_for_unsupported():
         )
         mock_alist.assert_not_called()
         mock_acompletion.assert_called_once_with(**model_params)
+
+
+VERTEX_AUTHORIZED_USER_WITH_LIVE_TOKEN: Final = json.dumps(
+    {
+        "type": "authorized_user",
+        "client_id": "qa-client",
+        "client_secret": "qa-secret",
+        "refresh_token": "qa-refresh",
+        "token": "qa-access-token",
+    }
+)
+CHAT_COMPLETION_BODY: Final = {
+    "id": "chatcmpl-health",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "health",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.asyncio
+async def test_vertex_wildcard_health_check_only_calls_vertex_hosts(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-not-vertex")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(google.oauth2.credentials.Credentials, "refresh", lambda self, request: None)
+    async with respx.mock(assert_all_called=False) as router:
+        vertex_route: Final = router.route(host__regex=r".*aiplatform\.googleapis\.com$").mock(
+            return_value=httpx.Response(200, json=CHAT_COMPLETION_BODY)
+        )
+        other_hosts: Final = router.route().mock(return_value=httpx.Response(200, json=CHAT_COMPLETION_BODY))
+        result: Final = await ahealth_check(
+            model_params={
+                "model": "vertex_ai/*",
+                "vertex_project": "qa-project",
+                "vertex_location": "us-central1",
+                "vertex_credentials": VERTEX_AUTHORIZED_USER_WITH_LIVE_TOKEN,
+            },
+            mode="chat",
+        )
+    assert "error" not in result
+    assert vertex_route.called
+    assert not other_hosts.called
 
 
 class _FakeWebsocketConnect:
