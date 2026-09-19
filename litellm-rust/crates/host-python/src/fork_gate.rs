@@ -58,8 +58,6 @@ impl ForkGate {
     pub(crate) fn reserve(&self, pid: u32) -> Result<(), RuntimeAlreadyStarted> {
         self.fork_only_pid.store(pid, Ordering::SeqCst);
         if self.runtime_pid.load(Ordering::SeqCst) == pid {
-            // Nothing may change for a process that already runs the runtime: its children
-            // must still be refused.
             let _ =
                 self.fork_only_pid
                     .compare_exchange(pid, UNSET, Ordering::SeqCst, Ordering::SeqCst);
