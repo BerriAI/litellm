@@ -1,11 +1,10 @@
 use futures_util::future::BoxFuture;
-use litellm_callbacks::event::{CallEvent, Passthrough, RawResponse, RequestContext, WireRequest};
-use litellm_llms::{
-    base_llm::ocr::{
-        error::Error,
-        transformation::{LiteLLMOcrResponse, PreparedOcrRequest},
-    },
-    custom_httpx::llm_http_handler::{CallHooks, OcrClient},
+use litellm_auth::SecretValue;
+use litellm_host::event::{MachineEvent, RawResponse, RequestContext, WireRequest};
+use litellm_llms::base_llm::ocr::{
+    error::Error,
+    handler::{CallHooks, OcrClient},
+    transformation::{LiteLLMOcrResponse, PreparedOcrRequest},
 };
 use serde_json::Value;
 
@@ -23,7 +22,7 @@ pub(crate) async fn perform_ocr_request(
 ) -> Result<LiteLLMOcrResponse, Error> {
     request.response_format()?;
     let config = request.config;
-    let request = prepare_request(request, caller_document);
+    let request = prepare_request(request, caller_document, client);
     let hooks = OcrCallHooks::new(host.clone(), &request, config);
     config.ocr(client, &request, &hooks).await
 }
@@ -36,6 +35,7 @@ pub(crate) struct OcrCallHooks {
     custom_llm_provider: &'static str,
     optional_params: Value,
     secret_fields: Vec<String>,
+    api_key: Option<SecretValue>,
 }
 
 impl OcrCallHooks {
@@ -51,28 +51,25 @@ impl OcrCallHooks {
                 .filter(|name| is_secret_param(name))
                 .cloned()
                 .collect(),
+            api_key: request.connection.api_key.clone(),
         }
     }
 }
 
 impl CallHooks<Error> for OcrCallHooks {
-    fn before_send(
-        &self,
-        wire: WireRequest,
-        passthrough_fields: Passthrough,
-    ) -> BoxFuture<'_, Result<WireRequest, Error>> {
+    fn before_send(&self, wire: WireRequest) -> BoxFuture<'_, Result<WireRequest, Error>> {
         let context = RequestContext {
             model: self.model.clone(),
             custom_llm_provider: self.custom_llm_provider.into(),
             optional_params: self.optional_params.clone(),
-            passthrough_fields,
             secret_fields: self.secret_fields.clone(),
+            api_key: self.api_key.clone(),
         };
         Box::pin(self.host.before_send(wire, context))
     }
 
     fn response_received<'a>(&'a self, body: &'a [u8]) -> BoxFuture<'a, Result<(), Error>> {
-        Box::pin(self.host.emit(CallEvent::ResponseReceived {
+        Box::pin(self.host.emit(MachineEvent::ResponseReceived {
             raw: RawResponse {
                 body: String::from_utf8_lossy(body).into_owned(),
             },

@@ -1,16 +1,20 @@
 use std::sync::{Arc, Mutex};
 
-use litellm_callbacks::{
-    event::{CallEvent, WireRequest},
+use litellm_auth_gcp::VertexAuth;
+use litellm_host::{
+    event::{CallEvent, MachineEvent, WireRequest},
     host::{Host, HostOp, HostResult},
     machine::{HostFailure, Machine, MachineStep},
 };
-use litellm_llms::{
-    base_llm::ocr::{
-        error::Error as OcrError,
-        transformation::{LiteLLMOcrResponse, OCR_RESPONSE_MAX_BYTES, OcrTransportConfig},
-    },
-    custom_httpx::llm_http_handler::OcrClient,
+use litellm_http::{
+    HttpClientPool, HttpSettings, Resolution,
+    media::{PublicDnsResolver, UrlPolicy},
+};
+use litellm_llms::base_llm::ocr::{
+    error::Error as OcrError,
+    handler::OcrClient,
+    settings::OcrSettings,
+    transformation::{LiteLLMOcrResponse, OCR_RESPONSE_MAX_BYTES, OcrTransportConfig},
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -81,7 +85,7 @@ fn request_boundary_selects_mistral_and_rejects_unknown_providers() {
     let request = OcrWireRequest {
         model: "mistral/model".into(),
         document: json!({"type":"document_url","document_url":"https://example.com/doc.pdf"}),
-        api_key: Some("key".into()),
+        api_key: Some(litellm_auth::SecretValue::new("key")),
         api_base: None,
         custom_llm_provider: None,
         extra_headers: None,
@@ -97,7 +101,7 @@ fn request_boundary_selects_mistral_and_rejects_unknown_providers() {
         decode_request(OcrWireRequest {
             model: "model".into(),
             document: json!({"type":"document_url","document_url":"https://example.com/doc.pdf"}),
-            api_key: Some("key".into()),
+            api_key: Some(litellm_auth::SecretValue::new("key")),
             api_base: None,
             custom_llm_provider: Some("unknown".into()),
             extra_headers: None,
@@ -170,31 +174,70 @@ async fn facade_retains_native_response_when_requested() {
     );
 }
 
+#[rstest]
+#[case::plain_key(&[("MISTRAL_API_KEY", "plain")], "plain")]
+#[case::azure_key_wins(&[("MISTRAL_AZURE_API_KEY", "azure"), ("MISTRAL_API_KEY", "plain")], "azure")]
+#[case::empty_azure_key_falls_through(&[("MISTRAL_AZURE_API_KEY", ""), ("MISTRAL_API_KEY", "plain")], "plain")]
 #[tokio::test]
-async fn facade_uses_the_injected_http_client() {
+async fn mistral_env_fallbacks_follow_python_through_the_injected_secret_source(
+    #[case] secrets: &'static [(&'static str, &'static str)],
+    #[case] expected_key: &str,
+) {
     let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
-    let mut default_headers = reqwest::header::HeaderMap::new();
-    default_headers.insert(
-        "x-transport-owner",
-        reqwest::header::HeaderValue::from_static("host"),
-    );
-    let provider_http = reqwest::Client::builder()
-        .default_headers(default_headers)
-        .build()
-        .unwrap();
-    crate::ocr::client::perform(
-        &OcrClient::new(provider_http).unwrap(),
-        wire_request("mistral/model", &base, json!({})),
-    )
-    .await
+    let secret_base = base.clone();
+    let client = ocr_client().with_secrets(Arc::new(move |name: &str| match name {
+        "MISTRAL_AZURE_API_BASE" => Some(secret_base.clone()),
+        "MISTRAL_API_BASE" => Some("http://127.0.0.1:9/never-read".into()),
+        _ => secrets
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| value.to_string()),
+    }));
+    let request = decode_request(OcrWireRequest {
+        model: "mistral/model".into(),
+        document: json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
+        api_key: None,
+        api_base: None,
+        custom_llm_provider: None,
+        extra_headers: None,
+        optional_params: Default::default(),
+        input_sources: Default::default(),
+        timeout_seconds: Some(2.0),
+    })
     .unwrap();
+
+    crate::ocr::client::perform(&client, request).await.unwrap();
     server.await.unwrap();
-    assert!(seen.lock().unwrap()[0].contains("x-transport-owner: host"));
+    assert!(seen.lock().unwrap()[0].contains(&format!("authorization: Bearer {expected_key}")));
+}
+
+#[tokio::test]
+async fn ocr_client_uses_the_injected_http_pool_configuration() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
+    let settings = HttpSettings {
+        user_agent: Some("host-owned/1".into()),
+        ..HttpSettings::default()
+    };
+    let client = OcrClient::new(
+        &HttpClientPool::new(Arc::new(PublicDnsResolver)),
+        &Resolution::from(&settings).config,
+        UrlPolicy::default(),
+        VertexAuth::default(),
+        OcrSettings::default(),
+        Arc::new(litellm_core_utils::settings::ProcessEnvironment),
+    )
+    .unwrap();
+    crate::ocr::client::perform(&client, wire_request("mistral/model", &base, json!({})))
+        .await
+        .unwrap();
+    server.await.unwrap();
+    assert!(seen.lock().unwrap()[0].contains("user-agent: host-owned/1"));
 }
 
 fn event_name(event: &CallEvent) -> &'static str {
     match event {
-        CallEvent::ResponseReceived { .. } => "response",
+        CallEvent::Started { .. } => "started",
+        CallEvent::Machine(MachineEvent::ResponseReceived { .. }) => "response",
         CallEvent::Succeeded { .. } => "success",
         CallEvent::Failed { .. } => "failure",
     }
@@ -235,7 +278,7 @@ async fn lifecycle_sends_headers_returned_by_the_before_send_operation() {
 }
 
 #[tokio::test]
-async fn before_send_context_names_passthrough_fields_and_secrets() {
+async fn before_send_context_names_the_route_and_its_secrets() {
     let (base, _, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
     let observed = Arc::new(Mutex::new(None));
     let captured = observed.clone();
@@ -254,8 +297,6 @@ async fn before_send_context_names_passthrough_fields_and_secrets() {
     assert_eq!(context.custom_llm_provider, "mistral");
     assert_eq!(context.model, "model");
     assert_eq!(wire.body["pages"], json!([0]));
-    assert!(context.passthrough_fields.contains("pages"));
-    assert!(context.passthrough_fields.contains("document"));
     assert!(context.secret_fields.is_empty());
     assert_eq!(context.optional_params["req_format"], "native");
 
@@ -279,7 +320,6 @@ async fn before_send_context_names_passthrough_fields_and_secrets() {
     perform_ocr_with(host).await.unwrap();
     server.await.unwrap();
     let context = observed.lock().unwrap().take().unwrap();
-    assert!(!context.passthrough_fields.contains("document"));
     assert_eq!(context.secret_fields, ["client_secret"]);
 }
 
@@ -296,7 +336,7 @@ async fn lifecycle_orders_hooks_and_emits_one_success() {
     server.await.unwrap();
     assert_eq!(
         *events.lock().unwrap(),
-        ["before_send", "response", "success"]
+        ["started", "before_send", "response", "success"]
     );
     assert_eq!(seen.lock().unwrap().len(), 1);
 }
@@ -311,7 +351,10 @@ async fn lifecycle_blocking_prevents_execution_and_emits_one_failure() {
     );
     let error = perform_ocr_with(host).await.unwrap_err();
     assert!(matches!(error, OcrError::InvalidRequest(message) if message == "blocked"));
-    assert_eq!(*events.lock().unwrap(), ["before_send", "failure"]);
+    assert_eq!(
+        *events.lock().unwrap(),
+        ["started", "before_send", "failure"]
+    );
 }
 
 #[tokio::test]
@@ -330,7 +373,10 @@ async fn upstream_failure_emits_one_terminal_failure() {
     );
     assert!(perform_ocr_with(host).await.is_err());
     server.await.unwrap();
-    assert_eq!(*events.lock().unwrap(), ["before_send", "failure"]);
+    assert_eq!(
+        *events.lock().unwrap(),
+        ["started", "before_send", "failure"]
+    );
     assert_eq!(seen.lock().unwrap().len(), 1);
 }
 
@@ -371,6 +417,7 @@ async fn drive_until(
                 intercept(*wire).map(|wire| HostResult::BeforeSend(Box::new(wire)))
             }
             HostOp::Emit(event) => {
+                let event = CallEvent::Machine(event);
                 ops.push(event_name(&event));
                 host.emit(&event)
                     .await
@@ -414,7 +461,7 @@ async fn invalid_provider_response_emits_response_received_before_normalization_
     let observed = responses_received.clone();
     let host = LocalOcrHost::new(wire_request("mistral/model", &base, json!({}))).with_observer(
         move |event| {
-            if let CallEvent::ResponseReceived { raw } = event {
+            if let CallEvent::Machine(MachineEvent::ResponseReceived { raw }) = event {
                 observed.lock().unwrap().push(raw.body.clone());
             }
         },
@@ -615,7 +662,7 @@ async fn read_bounded_response(response: Vec<u8>, limit: usize) -> Result<bytes:
         .unwrap();
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        litellm_llms::custom_httpx::llm_http_handler::read_response_bytes(response, limit),
+        litellm_llms::base_llm::ocr::handler::read_response_bytes(response, limit),
     )
     .await;
     server.abort();
@@ -667,10 +714,7 @@ async fn oversized_error_retains_http_status_and_bounded_diagnostics_without_dra
         .await
         .unwrap_err();
     match error {
-        OcrError::Transport(litellm_llms::custom_httpx::transport::Error::Http {
-            status,
-            body,
-        }) => {
+        OcrError::Transport(litellm_http::transport::Error::Http { status, body }) => {
             assert_eq!(status, 429);
             assert_eq!(body, prefix);
         }
@@ -815,7 +859,7 @@ impl Host<crate::ocr::route::Ocr> for CallerTokenHost {
     async fn before_send(
         &self,
         wire: WireRequest,
-        _: &litellm_callbacks::event::RequestContext,
+        _: &litellm_host::event::RequestContext,
     ) -> Result<WireRequest, OcrError> {
         let is_authorization = |name: &str| name.eq_ignore_ascii_case("authorization");
         let authorization = wire
@@ -850,7 +894,7 @@ async fn the_callers_azure_token_is_acquired_before_before_send_which_can_still_
         trace: Mutex::new(Vec::new()),
     };
 
-    litellm_callbacks::run::run(ocr_machine(ocr_client()), &host)
+    litellm_host::run::run(ocr_machine(ocr_client()), &host)
         .await
         .unwrap();
     server.await.unwrap();

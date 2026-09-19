@@ -364,6 +364,11 @@ async def update_coordination_redis_settings(
     settings: Final = _merge_over_saved(request.settings, saved_settings or {})
     _validated_params(settings)
 
+    from litellm.proxy.proxy_server import proxy_config
+
+    proxy_config.reject_config_owned_writes(
+        section_name=_GENERAL_SETTINGS_PARAM_NAME, changed_keys={_COORDINATION_REDIS_KEY: settings}
+    )
     general_settings: Final = await _read_general_settings()
     before_settings: Final = general_settings.get(_COORDINATION_REDIS_KEY)
     action: Final[AUDIT_ACTIONS] = "updated" if isinstance(before_settings, dict) else "created"

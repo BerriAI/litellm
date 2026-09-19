@@ -2616,6 +2616,23 @@ wheels = [
 ]
 
 [[package]]
+name = "google-cloud-speech"
+version = "2.40.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-api-core", version = "2.25.2", source = { registry = "https://pypi.org/simple" }, extra = ["grpc"], marker = "python_full_version >= '3.14'" },
+    { name = "google-api-core", version = "2.30.3", source = { registry = "https://pypi.org/simple" }, extra = ["grpc"], marker = "python_full_version < '3.14'" },
+    { name = "google-auth" },
+    { name = "grpcio" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5a/c1/5dc9795314f4aefea0b01b02e9f5486a198341ecc15fe47f89a61c68df63/google_cloud_speech-2.40.0.tar.gz", hash = "sha256:e89e688e4ce0b926754038bf992d0d0f065c5f1c3503bb20e6c46d08b63658fc", size = 404366, upload-time = "2026-06-03T16:13:59.506Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cc/78/afeca8d597fab54bdd823f857aad15d6f9c4628ff3cb72aa237d01700721/google_cloud_speech-2.40.0-py3-none-any.whl", hash = "sha256:7cc0302b3b9ca33d2eae9669da94a44316601a240942895362ac70e765b9f39c", size = 345427, upload-time = "2026-06-03T16:12:40.909Z" },
+]
+
+[[package]]
 name = "google-cloud-storage"
 version = "3.4.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3274,6 +3291,19 @@ wheels = [
 ]
 
 [[package]]
+name = "httpcore2"
+version = "2.13.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "h11" },
+    { name = "truststore" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/15/8c/e925b1c92018abb3a1863ce1549d76d2381e334d21d65d4ac8f65dabd78a/httpcore2-2.13.0.tar.gz", hash = "sha256:2adc8be4fb285fbcd6d894298db3b52c177e74b6674eda3a76bd36be3292a3db", size = 67740, upload-time = "2026-09-14T14:18:04.717Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7e/0d/117a771a2bb91df334b66bf4da14cd02f21aefbcfe53180f336ce55e8f90/httpcore2-2.13.0-py3-none-any.whl", hash = "sha256:35ae5be347aa40467b4a5dc032ac67ebb6d27189fc97e8cebcf99616f6a1bb9e", size = 83162, upload-time = "2026-09-14T14:18:02.529Z" },
+]
+
+[[package]]
 name = "httplib2"
 version = "0.32.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3312,6 +3342,32 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/0f/4c/751061ffa58615a32c31b2d82e8482be8dd4a89154f003147acee90f2be9/httpx_sse-0.4.3.tar.gz", hash = "sha256:9b1ed0127459a66014aec3c56bebd93da3c1bc8bb6618c8082039a44889a755d", size = 15943, upload-time = "2025-10-10T21:48:22.271Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d2/fd/6668e5aec43ab844de6fc74927e155a3b37bf40d7c3790e49fc0406b6578/httpx_sse-0.4.3-py3-none-any.whl", hash = "sha256:0ac1c9fe3c0afad2e0ebb25a934a59f4c7823b60792691f779fad2c5568830fc", size = 8960, upload-time = "2025-10-10T21:48:21.158Z" },
+]
+
+[[package]]
+name = "httpx2"
+version = "2.13.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio", marker = "sys_platform != 'emscripten'" },
+    { name = "httpcore2", marker = "sys_platform != 'emscripten'" },
+    { name = "httpx2-jsfetch", marker = "python_full_version >= '3.12' and sys_platform == 'emscripten'" },
+    { name = "idna" },
+    { name = "truststore", marker = "sys_platform != 'emscripten'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b9/a0/e9deef4654132857b5a5dbe4eddd0ac59c2814500e11f2f5044cd81103ee/httpx2-2.13.0.tar.gz", hash = "sha256:81bd07dc67a3701729ef1f777a3c00c915d4539604fdb5afd327f8682f6b7b44", size = 100290, upload-time = "2026-09-14T14:18:05.486Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fe/d1/a0c72b0e006df654709fbc366cc5bcb53e5aee13e1e3395152c6dd293376/httpx2-2.13.0-py3-none-any.whl", hash = "sha256:fc12720cedf72faa26cca6b4ca394e05c894e7d7933fc45cafe767960804e49a", size = 95565, upload-time = "2026-09-14T14:18:03.553Z" },
+]
+
+[[package]]
+name = "httpx2-jsfetch"
+version = "1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cd/c4/0e5636363151a2a1795e0a77617168b9ca438e1748ec05fc9b5687f93d64/httpx2_jsfetch-1.0.tar.gz", hash = "sha256:70a0e3eabfef7cce5ad9c629f7d01ca05e418f586646f4ddf14782e4c1454c60", size = 6872, upload-time = "2026-08-07T00:13:07.492Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9b/43/832f631d32e4f1211caa2ba368317739fe71f0b8530e4c9d15dc454bac2a/httpx2_jsfetch-1.0-py3-none-any.whl", hash = "sha256:cb916b707601e69a07721aabc8f3f6659be3a6893bc1ff5c6f9e02241df2da32", size = 6382, upload-time = "2026-08-07T00:13:06.567Z" },
 ]
 
 [[package]]
@@ -3477,11 +3533,11 @@ wheels = [
 
 [[package]]
 name = "idna"
-version = "3.15"
+version = "3.19"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/82/77/7b3966d0b9d1d31a36ddf1746926a11dface89a83409bf1483f0237aa758/idna-3.15.tar.gz", hash = "sha256:ca962446ea538f7092a95e057da437618e886f4d349216d2b1e294abfdb65fdc", size = 199245, upload-time = "2026-05-12T22:45:57.011Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5f/f7/abb373e5757eaec4b922b92f97ec8d6d7e057cf06778247604fbc4e7c3f3/idna-3.19.tar.gz", hash = "sha256:5e0811a4383b21dc5838069f801c4fb62113b7447663d2530d2bd6e77b49bf15", size = 215237, upload-time = "2026-08-18T05:14:24.27Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d2/23/408243171aa9aaba178d3e2559159c24c1171a641aa83b67bdd3394ead8e/idna-3.15-py3-none-any.whl", hash = "sha256:048adeaf8c2d788c40fee287673ccaa74c24ffd8dcf09ffa555a2fbb59f10ac8", size = 72340, upload-time = "2026-05-12T22:45:55.733Z" },
+    { url = "https://files.pythonhosted.org/packages/57/b0/0e52c878c53f245edd3a11020f20979b3f490f245af532c7cae3027754b5/idna-3.19-py3-none-any.whl", hash = "sha256:815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4", size = 68550, upload-time = "2026-08-18T05:14:22.343Z" },
 ]
 
 [[package]]
@@ -4171,20 +4227,6 @@ wheels = [
 ]
 
 [[package]]
-name = "langchain-mcp-adapters"
-version = "0.2.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "langchain-core" },
-    { name = "mcp" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d9/52/cebf0ef5b1acef6cbc63d671171d43af70f12d19f55577909c7afa79fb6e/langchain_mcp_adapters-0.2.1.tar.gz", hash = "sha256:58e64c44e8df29ca7eb3b656cf8c9931ef64386534d7ca261982e3bdc63f3176", size = 36394, upload-time = "2025-12-09T16:28:38.98Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/03/81/b2479eb26861ab36be851026d004b2d391d789b7856e44c272b12828ece0/langchain_mcp_adapters-0.2.1-py3-none-any.whl", hash = "sha256:9f96ad4c64230f6757297fec06fde19d772c99dbdfbca987f7b7cfd51ff77240", size = 22708, upload-time = "2025-12-09T16:28:37.877Z" },
-]
-
-[[package]]
 name = "langchain-openai"
 version = "1.1.14"
 source = { registry = "https://pypi.org/simple" }
@@ -4520,7 +4562,9 @@ grpc = [
     { name = "grpcio" },
 ]
 mcp = [
+    { name = "httpx2" },
     { name = "mcp" },
+    { name = "pydantic" },
 ]
 mlflow = [
     { name = "mlflow" },
@@ -4538,12 +4582,14 @@ proxy = [
     { name = "granian" },
     { name = "gunicorn" },
     { name = "hiredis" },
+    { name = "httpx2" },
     { name = "inquirerpy" },
     { name = "litellm-enterprise" },
     { name = "litellm-proxy-extras" },
     { name = "mcp" },
     { name = "orjson" },
     { name = "polars" },
+    { name = "pydantic" },
     { name = "pyjwt" },
     { name = "pynacl" },
     { name = "pyroscope-io", marker = "sys_platform != 'win32'" },
@@ -4566,6 +4612,7 @@ proxy-runtime = [
     { name = "ddtrace" },
     { name = "detect-secrets" },
     { name = "google-cloud-aiplatform" },
+    { name = "google-cloud-speech" },
     { name = "google-genai" },
     { name = "grpcio" },
     { name = "langfuse" },
@@ -4593,6 +4640,9 @@ stt-nvidia-riva = [
     { name = "nvidia-riva-client" },
     { name = "soundfile" },
 ]
+stt-vertex-chirp = [
+    { name = "google-cloud-speech" },
+]
 utils = [
     { name = "numpydoc" },
 ]
@@ -4607,10 +4657,10 @@ ci = [
     { name = "blockbuster" },
     { name = "claude-agent-sdk" },
     { name = "detect-secrets" },
+    { name = "google-cloud-speech" },
     { name = "google-generativeai" },
     { name = "jsonlines" },
     { name = "langchain" },
-    { name = "langchain-mcp-adapters" },
     { name = "langchain-openai" },
     { name = "langgraph" },
     { name = "langgraph-prebuilt" },
@@ -4721,6 +4771,8 @@ requires-dist = [
     { name = "google-cloud-aiplatform", marker = "extra == 'proxy-runtime'", specifier = ">=1.133.0,<2.0" },
     { name = "google-cloud-iam", marker = "extra == 'extra-proxy'", specifier = ">=2.19.1,<3.0" },
     { name = "google-cloud-kms", marker = "extra == 'extra-proxy'", specifier = ">=2.24.2,<3.0" },
+    { name = "google-cloud-speech", marker = "extra == 'proxy-runtime'", specifier = ">=2.40.0,<3.0" },
+    { name = "google-cloud-speech", marker = "extra == 'stt-vertex-chirp'", specifier = ">=2.40.0,<3.0" },
     { name = "google-genai", marker = "extra == 'proxy-runtime'", specifier = ">=1.37.0,<2.0" },
     { name = "granian", marker = "extra == 'proxy'", specifier = ">=2.7.4,<3.0" },
     { name = "grpcio", marker = "extra == 'grpc'", specifier = "==1.78.0" },
@@ -4728,6 +4780,8 @@ requires-dist = [
     { name = "gunicorn", marker = "extra == 'proxy'", specifier = ">=23.0.0,<24.0" },
     { name = "hiredis", marker = "extra == 'proxy'", specifier = ">=3.0.0,<4.0" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.28.0,<1.0" },
+    { name = "httpx2", marker = "extra == 'mcp'", specifier = ">=2.5.0,<3" },
+    { name = "httpx2", marker = "extra == 'proxy'", specifier = ">=2.5.0,<3" },
     { name = "importlib-metadata", specifier = ">=8.0.0,<9.0" },
     { name = "inquirerpy", marker = "extra == 'cli'", specifier = ">=0.3.4,<1.0" },
     { name = "inquirerpy", marker = "extra == 'proxy'", specifier = ">=0.3.4,<1.0" },
@@ -4739,8 +4793,8 @@ requires-dist = [
     { name = "litellm-proxy-extras", marker = "extra == 'proxy'", editable = "litellm-proxy-extras" },
     { name = "llm-sandbox", marker = "extra == 'proxy-runtime'", specifier = ">=0.3.39,<1.0" },
     { name = "mangum", marker = "extra == 'proxy-runtime'", specifier = ">=0.17.0,<1.0" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28.1,<2.0" },
-    { name = "mcp", marker = "extra == 'proxy'", specifier = ">=1.28.1,<2.0" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.2.0,<3" },
+    { name = "mcp", marker = "extra == 'proxy'", specifier = ">=2.2.0,<3" },
     { name = "mlflow", marker = "extra == 'mlflow'", specifier = ">=3.11.1,<4.0" },
     { name = "numpy", marker = "extra == 'stt-nvidia-riva'", specifier = ">=1.26.0" },
     { name = "numpydoc", marker = "extra == 'utils'", specifier = ">=1.8.0,<2.0" },
@@ -4756,7 +4810,10 @@ requires-dist = [
     { name = "prometheus-client", marker = "extra == 'proxy-runtime'", specifier = ">=0.20.0,<1.0" },
     { name = "psycopg", marker = "extra == 'extra-proxy'", specifier = ">=3.2,<4.0" },
     { name = "psycopg-binary", marker = "extra == 'extra-proxy'", specifier = ">=3.2,<4.0" },
-    { name = "pydantic", specifier = ">=2.10.0,<3.0.0" },
+    { name = "pydantic", marker = "python_full_version < '3.14'", specifier = ">=2.11.0,<3.0.0" },
+    { name = "pydantic", marker = "python_full_version >= '3.14'", specifier = ">=2.12.0,<3.0.0" },
+    { name = "pydantic", marker = "extra == 'mcp'", specifier = ">=2.12.0,<3" },
+    { name = "pydantic", marker = "extra == 'proxy'", specifier = ">=2.12.0,<3" },
     { name = "pydantic-settings", specifier = ">=2.14.1,<3.0" },
     { name = "pyjwt", marker = "extra == 'proxy'", specifier = ">=2.13.0,<3.0" },
     { name = "pynacl", marker = "extra == 'proxy'", specifier = ">=1.6.2,<2.0" },
@@ -4779,7 +4836,8 @@ requires-dist = [
     { name = "soundfile", marker = "extra == 'proxy'", specifier = ">=0.12.1,<1.0" },
     { name = "soundfile", marker = "extra == 'stt-nvidia-riva'", specifier = ">=0.12.1" },
     { name = "starlette", marker = "extra == 'proxy'", specifier = ">=1.0.1,<2.0" },
-    { name = "tiktoken", specifier = ">=0.8.0,<1.0" },
+    { name = "tiktoken", marker = "python_full_version < '3.14'", specifier = ">=0.8.0,<1.0" },
+    { name = "tiktoken", marker = "python_full_version >= '3.14'", specifier = ">=0.12.0,<1.0" },
     { name = "tokenizers", specifier = ">=0.21.0,<1.0" },
     { name = "tomlkit", marker = "extra == 'cli'", specifier = ">=0.13.3,<1.0" },
     { name = "tomlkit", marker = "extra == 'proxy'", specifier = ">=0.13.3,<1.0" },
@@ -4787,7 +4845,7 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.22.1,<1.0" },
     { name = "websockets", marker = "extra == 'proxy'", specifier = ">=15.0.1,<16.0" },
 ]
-provides-extras = ["proxy", "cli", "extra-proxy", "utils", "caching", "mcp", "saml", "semantic-router", "mlflow", "grpc", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
+provides-extras = ["proxy", "cli", "extra-proxy", "utils", "caching", "mcp", "saml", "semantic-router", "mlflow", "grpc", "stt-vertex-chirp", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
 
 [package.metadata.requires-dev]
 ci = [
@@ -4799,10 +4857,10 @@ ci = [
     { name = "blockbuster", specifier = "==1.5.26" },
     { name = "claude-agent-sdk", specifier = "==0.1.44" },
     { name = "detect-secrets", specifier = "==1.5.0" },
+    { name = "google-cloud-speech", specifier = "==2.40.0" },
     { name = "google-generativeai", specifier = "==0.8.6" },
     { name = "jsonlines", specifier = "==4.0.0" },
     { name = "langchain", specifier = "==1.3.9" },
-    { name = "langchain-mcp-adapters", specifier = "==0.2.1" },
     { name = "langchain-openai", specifier = "==1.1.14" },
     { name = "langgraph", specifier = ">=1.2.4,<1.3.0" },
     { name = "langgraph-prebuilt", specifier = ">=1.1.0,<1.3.0" },
@@ -4861,7 +4919,7 @@ dev = [
 ]
 e2e-dev = [
     { name = "locust", specifier = "==2.45.0" },
-    { name = "mcp", specifier = ">=1.28.1,<2.0" },
+    { name = "mcp", specifier = ">=2.2.0,<3" },
     { name = "playwright", specifier = "==1.61.0" },
     { name = "psutil", specifier = "==7.2.2" },
     { name = "websockets", specifier = ">=15.0.1,<16.0" },
@@ -4884,12 +4942,12 @@ proxy-dev = [
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.68"
+version = "0.1.69"
 source = { editable = "enterprise" }
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.99"
+version = "0.4.100"
 source = { editable = "litellm-proxy-extras" }
 
 [[package]]
@@ -5339,15 +5397,15 @@ wheels = [
 
 [[package]]
 name = "mcp"
-version = "1.28.1"
+version = "2.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
-    { name = "httpx" },
-    { name = "httpx-sse" },
+    { name = "httpx2" },
     { name = "jsonschema" },
+    { name = "mcp-types" },
+    { name = "opentelemetry-api" },
     { name = "pydantic" },
-    { name = "pydantic-settings" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "python-multipart" },
     { name = "pywin32", marker = "sys_platform == 'win32'" },
@@ -5357,9 +5415,22 @@ dependencies = [
     { name = "typing-inspection" },
     { name = "uvicorn", marker = "sys_platform != 'emscripten'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6e/77/9450b8f251a13affb6281997d0523c4615f8a8b35d0b21ff30db3a5aac9d/mcp-1.28.1.tar.gz", hash = "sha256:d51e36a5f5644faea4f85ea649bfffa6bc6c26770d42798ad6a3de3d2ba69683", size = 638501, upload-time = "2026-06-26T12:57:29.093Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/76/31/ac54fb0fdd5b37de704486e288bba4fbbb463f24cfcfedbede407b854513/mcp-2.2.0.tar.gz", hash = "sha256:2dc37ecb1974becdcebdbf7561e7c15a07dbbf20ba21ba16c3593b3038b3afbd", size = 4084129, upload-time = "2026-09-07T16:06:23.439Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e2/5e/d118fce19f87a2e7d8101c35c8ae0ec289098a4df0ff244cec23e415aca0/mcp-1.28.1-py3-none-any.whl", hash = "sha256:2726bca5e7193f61c5dde8b12500a6de2d9acf6d1a1c0be9e8c2e706437991df", size = 222620, upload-time = "2026-06-26T12:57:27.218Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/ff/8e7eade68b8a28f7da0ed1085544341b51f9c935dbf6b95c76b7edfea6a0/mcp-2.2.0-py3-none-any.whl", hash = "sha256:bde982589473a060ae145e3406e9a5333fe538c97229ba841f5a7f92be004f81", size = 365656, upload-time = "2026-09-07T16:06:19.711Z" },
+]
+
+[[package]]
+name = "mcp-types"
+version = "2.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ae/91/762d7755d971aff8a28d75f7961656148edf27875c8026e6385aaab08ae7/mcp_types-2.2.0.tar.gz", hash = "sha256:d3ed53703ddd10d9c6399f29d322bb66f3f67ab41348ac8556ba23e07fedefad", size = 65892, upload-time = "2026-09-07T16:06:25.187Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8f/d7/6ffba5d8cd5dd9b8a19478875c50e04945314ba5074e84d749283f27f62d/mcp_types-2.2.0-py3-none-any.whl", hash = "sha256:ea476b73ee86709ab5abc9452385ed36cc05907e582355622e294595c9a04f13", size = 69106, upload-time = "2026-09-07T16:06:21.461Z" },
 ]
 
 [[package]]
@@ -9818,6 +9889,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/7e/0d/d7d413e9fe907a8abc33e6f93044484d158722b5ca0bfe22e1ef9ad4e729/traceloop_sdk-0.33.12.tar.gz", hash = "sha256:999ae50b1e5773b2802a8b3e8585c3826b7867bba032a88b6f30ec2727225dda", size = 19768, upload-time = "2024-11-13T20:29:26.67Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ce/13/53c2ab6ac27804769314554a062e0651a44db2360be47e21cf0a29d202ee/traceloop_sdk-0.33.12-py3-none-any.whl", hash = "sha256:d47a474afbf4a68ff38a702dbaca7b17d2d4f0b0e14dc2f1560b6bdd3859ac75", size = 25932, upload-time = "2024-11-13T20:29:25.174Z" },
+]
+
+[[package]]
+name = "truststore"
+version = "0.10.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/53/a3/1585216310e344e8102c22482f6060c7a6ea0322b63e026372e6dcefcfd6/truststore-0.10.4.tar.gz", hash = "sha256:9d91bd436463ad5e4ee4aba766628dd6cd7010cf3e2461756b3303710eebc301", size = 26169, upload-time = "2025-08-12T18:49:02.73Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/19/97/56608b2249fe206a67cd573bc93cd9896e1efb9e98bce9c163bcdc704b88/truststore-0.10.4-py3-none-any.whl", hash = "sha256:adaeaecf1cbb5f4de3b1959b42d41f6fab57b2b1666adb59e89cb0b53361d981", size = 18660, upload-time = "2025-08-12T18:49:01.46Z" },
 ]
 
 [[package]]

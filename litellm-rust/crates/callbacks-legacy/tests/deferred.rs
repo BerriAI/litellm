@@ -16,7 +16,7 @@ fn defer<'py>(py: Python<'py>, script: &CStr) -> Bound<'py, PyDict> {
         py,
         PendingLogging {
             pending: Some(PendingSuccess {
-                logger: PythonLogger::new(local(&locals, "logger").unbind(), true),
+                logger: PythonLogger::new(local(&locals, "logger").unbind()),
                 response: Some(local(&locals, "response").unbind()),
                 start: py.None(),
                 end: Some(py.None()),
@@ -74,22 +74,6 @@ fn a_blocked_release_drops_the_success_for_good() {
 pending.release(False)
 pending.release(True)
 assert logger.calls == [], logger.calls
-",
-        );
-    });
-}
-
-#[test]
-fn a_release_after_the_async_callbacks_went_away_only_keeps_the_books() {
-    Python::initialize();
-    Python::attach(|py| {
-        let locals = defer(py, c"logger.needed = {'async_success': False}");
-        run(
-            py,
-            &locals,
-            c"
-pending.release(True)
-assert logger.calls == [('success_bookkeeping', True)], logger.calls
 ",
         );
     });
