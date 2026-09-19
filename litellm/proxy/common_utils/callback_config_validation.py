@@ -161,7 +161,6 @@ def conflicting_span_scope_error(
     callback_vars: Mapping[str, str] | None,
     stored_vars_by_entry: Sequence[Mapping[str, str]],
 ) -> str | None:
-    """Reject a ``langfuse_span_scope`` another entry already sets differently; the entries flatten last-wins."""
     incoming: Final = None if callback_vars is None else callback_vars.get(_LANGFUSE_SPAN_SCOPE_VAR)
     if incoming is None:
         return None
