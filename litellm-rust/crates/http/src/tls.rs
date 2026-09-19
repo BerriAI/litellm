@@ -97,6 +97,7 @@ pub enum Unsupported {
     CipherToken(String),
 }
 
+#[derive(Default)]
 pub(crate) struct CipherSelection {
     pub(crate) tls12_cipher_suites: Option<Vec<Tls12CipherSuite>>,
     pub(crate) unsupported: Vec<Unsupported>,
@@ -304,10 +305,10 @@ mod tests {
     use rustls::NamedGroup;
 
     use super::*;
-    use crate::HttpSettings;
+    use crate::{HttpSettings, Resolution};
 
     fn config(settings: HttpSettings) -> HttpClientConfig {
-        HttpClientConfig::resolve(&settings).config
+        Resolution::from(&settings).config
     }
 
     fn offered_groups(tls: &ClientConfig) -> Vec<NamedGroup> {

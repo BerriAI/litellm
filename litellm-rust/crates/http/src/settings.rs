@@ -111,6 +111,10 @@ impl HttpSettings {
         }
     }
 
+    pub fn trusts_proxy_env(&self) -> bool {
+        !self.ignore_proxy_env || self.trust_proxy_env || self.http2 || self.httpx_transport
+    }
+
     pub fn without_missing_files(self, exists: &dyn Fn(&Path) -> bool) -> Self {
         Self {
             ssl_verify: match self.ssl_verify {

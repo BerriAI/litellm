@@ -4,7 +4,9 @@ use std::{
     sync::{Arc, LazyLock, Mutex, PoisonError},
 };
 
-use litellm_http::{HttpClientConfig, HttpClientPool, HttpSettings, SslVerify, Unsupported};
+use litellm_http::{
+    HttpClientConfig, HttpClientPool, HttpSettings, Resolution, SslVerify, Unsupported,
+};
 use litellm_llms::custom_httpx::media::{PublicDnsResolver, UrlPolicy};
 use pyo3::{prelude::*, types::PyDict};
 
@@ -28,7 +30,7 @@ pub(crate) fn call_config(
         .with_environment(&|name| std::env::var(name).ok());
     let settings = for_call(configured, call_ssl_verify(kwargs)?, asynchronous)
         .without_missing_files(&|path: &Path| path.exists());
-    let resolution = HttpClientConfig::resolve(&settings);
+    let resolution = Resolution::from(&settings);
     for unsupported in unreported(&REPORTED_UNSUPPORTED, resolution.unsupported) {
         PythonSettings::warn(py, &unsupported.to_string())?;
     }
@@ -251,7 +253,7 @@ user_agent='litellm/9.9.9',
         Python::initialize();
         Python::attach(|py| {
             let settings = settings(&python_settings(py, overrides)).unwrap();
-            let config = HttpClientConfig::resolve(&settings).config;
+            let config = Resolution::from(&settings).config;
             assert_eq!(config.verify, expected);
         });
     }
@@ -345,7 +347,7 @@ user_agent='litellm/9.9.9',
             ..HttpSettings::default()
         };
         let settings = for_call(opted_out, None, asynchronous);
-        let config = HttpClientConfig::resolve(&settings).config;
+        let config = Resolution::from(&settings).config;
         assert_eq!(config.trust_proxy_env, expected);
     }
 }

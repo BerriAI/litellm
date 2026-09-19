@@ -6,7 +6,7 @@ use litellm_host::{
     host::{Host, HostOp, HostResult},
     machine::{HostFailure, Machine, MachineStep},
 };
-use litellm_http::{HttpClientConfig, HttpClientPool, HttpSettings};
+use litellm_http::{HttpClientPool, HttpSettings, Resolution};
 use litellm_llms::{
     base_llm::ocr::{
         error::Error as OcrError,
@@ -184,7 +184,7 @@ async fn ocr_client_uses_the_injected_http_pool_configuration() {
     };
     let client = OcrClient::new(
         &HttpClientPool::new(Arc::new(PublicDnsResolver)),
-        &HttpClientConfig::resolve(&settings).config,
+        &Resolution::from(&settings).config,
         UrlPolicy::default(),
         VertexAuth::default(),
     )

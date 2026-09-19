@@ -350,7 +350,7 @@ impl Resolve for PublicDnsResolver {
 mod tests {
     use std::collections::HashSet;
 
-    use litellm_http::HttpSettings;
+    use litellm_http::{HttpSettings, Resolution};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -445,7 +445,7 @@ mod tests {
     ) -> MediaFetcher {
         let direct = HttpClientConfig {
             trust_proxy_env: false,
-            ..HttpClientConfig::resolve(&HttpSettings::default()).config
+            ..Resolution::from(&HttpSettings::default()).config
         };
         MediaFetcher::with_resolution(
             &HttpClientPool::new(Arc::new(LoopbackDnsResolver(pinned_address))),
@@ -636,7 +636,7 @@ mod tests {
     async fn rejects_url_credentials_before_network_access() {
         let fetcher = MediaFetcher::new(
             &HttpClientPool::new(Arc::new(PublicDnsResolver)),
-            &HttpClientConfig::resolve(&HttpSettings::default()).config,
+            &Resolution::from(&HttpSettings::default()).config,
             UrlPolicy::default(),
         )
         .expect("media fetcher builds");

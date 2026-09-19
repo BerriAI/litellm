@@ -67,7 +67,9 @@ impl HttpClientPool {
         {
             return Ok(pooled.client.clone());
         }
-        let client = self.apply(variant, key.0.client_builder()?).build()?;
+        let client = self
+            .apply(variant, reqwest::ClientBuilder::try_from(&key.0)?)
+            .build()?;
         self.lock().insert(
             key,
             PooledClient {
@@ -114,7 +116,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{HttpSettings, Verify};
+    use crate::{HttpSettings, Resolution, Verify};
 
     struct FixedResolver(SocketAddr);
 
@@ -132,7 +134,7 @@ mod tests {
     fn config(user_agent: &str) -> HttpClientConfig {
         HttpClientConfig {
             user_agent: Some(user_agent.into()),
-            ..HttpClientConfig::resolve(&HttpSettings::default()).config
+            ..Resolution::from(&HttpSettings::default()).config
         }
     }
 
