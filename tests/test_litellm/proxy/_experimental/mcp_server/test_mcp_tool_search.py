@@ -40,7 +40,7 @@ from litellm.types.mcp import MCPToolSearchSettings
 
 def _make_tools(specs: list[tuple[str, str]]) -> tuple[Tool, ...]:
     return tuple(
-        Tool(name=name, description=desc, input_schema={"type": "object", "properties": {}}) for name, desc in specs
+        Tool(name=name, description=desc, inputSchema={"type": "object", "properties": {}}) for name, desc in specs
     )
 
 
@@ -62,17 +62,17 @@ SAMPLE_TOOLS = _make_tools(
 FX_TOOL = Tool(
     name="treasury-get_rates",
     description="Get foreign exchange rates for a currency pair",
-    input_schema={"type": "object", "properties": {}},
+    inputSchema={"type": "object", "properties": {}},
 )
 WEATHER_TOOL = Tool(
     name="weather-forecast",
     description="Get the weather forecast for a city",
-    input_schema={"type": "object", "properties": {}},
+    inputSchema={"type": "object", "properties": {}},
 )
 CALENDAR_TOOL = Tool(
     name="calendar-create_event",
     description="Create a calendar event",
-    input_schema={"type": "object", "properties": {}},
+    inputSchema={"type": "object", "properties": {}},
 )
 CATALOG = (FX_TOOL, WEATHER_TOOL, CALENDAR_TOOL)
 
@@ -85,23 +85,6 @@ FAKE_VECTORS: dict[str, Vector] = {
 }
 
 
-def _mcp_request_ctx(**overrides):
-    from types import SimpleNamespace
-
-    from mcp.server.context import ServerRequestContext
-
-    kwargs = {
-        "session": SimpleNamespace(),
-        "lifespan_context": {},
-        "protocol_version": "2025-06-18",
-        "method": "",
-        "params": None,
-        "request_id": 1,
-        "meta": None,
-        "request": None,
-    }
-    kwargs.update(overrides)
-    return ServerRequestContext(**kwargs)
 
 
 def _paged_params():
@@ -586,7 +569,7 @@ class TestCallToolRestApiVirtualTools:
         mock_tool = MagicMock()
         mock_tool.name = "github-create_issue"
         mock_tool.description = "Create a GitHub issue"
-        mock_tool.input_schema= {"type": "object", "properties": {}}
+        mock_tool.input_schema = {"type": "object", "properties": {}}
 
         with patch(
             "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
@@ -628,7 +611,7 @@ class TestCallToolRestApiVirtualTools:
 
         fake_result = CallToolResult(
             content=[TextContent(type="text", text="Issue created")],
-            is_error=False,
+            isError=False,
         )
 
         with (
@@ -678,7 +661,7 @@ class TestCallToolRestApiVirtualTools:
             }
         )
 
-        fake_result = CallToolResult(content=[TextContent(type="text", text="ok")], is_error=False)
+        fake_result = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
 
         with (
             patch(
@@ -782,7 +765,7 @@ class TestCallToolRestApiVirtualTools:
         request = self._make_request(
             {"name": SKILL_SEARCH_TOOL_NAME, "arguments": {"query": "translate a document", "top_k": "not-a-number"}}
         )
-        fake_result = CallToolResult(content=[TextContent(type="text", text="[]")], is_error=False)
+        fake_result = CallToolResult(content=[TextContent(type="text", text="[]")], isError=False)
         with patch(  # test-quality-ok: the embedding router only resolves via proxy_server globals, no injection seam
             "litellm.proxy._experimental.mcp_server.tool_search.handle_skill_search",
             new_callable=AsyncMock,
@@ -1097,7 +1080,7 @@ class TestDispatchVirtualMcpTool:
         )
 
         uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
-        fake = CallToolResult(content=[TextContent(type="text", text="ok")], is_error=False)
+        fake = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
@@ -1168,76 +1151,28 @@ class TestDispatchVirtualMcpTool:
 
 
 class TestCaptureHostProgressCallback:
-    """Covers the host progress-forwarding helper extracted from the tool call path."""
+    @pytest.mark.parametrize("meta", [None, {}, {"traceparent": "trace"}])
+    def test_returns_none_without_progress(self, _mcp_request_ctx, meta) -> None:
+        from litellm.proxy._experimental.mcp_server.server import _capture_host_progress_callback
 
-    def test_returns_none_when_no_meta(self) -> None:
-        from types import SimpleNamespace
-
-        from litellm.proxy._experimental.mcp_server.server import (
-            _capture_host_progress_callback,
-        )
-
-        assert _capture_host_progress_callback(SimpleNamespace(meta=None, session=object())) is None
-
-    def test_returns_none_when_no_progress_token(self) -> None:
-        from litellm.proxy._experimental.mcp_server.server import (
-            _capture_host_progress_callback,
-        )
-
-        from types import SimpleNamespace
-
-        host = SimpleNamespace(meta=SimpleNamespace(progress_token=None), session=MagicMock())
-        assert _capture_host_progress_callback(host) is None
-
-    def test_returns_callable_when_token_present(self) -> None:
-        from litellm.proxy._experimental.mcp_server.server import (
-            _capture_host_progress_callback,
-        )
-
-        from types import SimpleNamespace
-
-        host = SimpleNamespace(meta=SimpleNamespace(progress_token="tok12345"), session=MagicMock())
-        assert callable(_capture_host_progress_callback(host))
-
-    def test_returns_callable_when_token_is_integer(self) -> None:
-        from litellm.proxy._experimental.mcp_server.server import (
-            _capture_host_progress_callback,
-        )
-
-        from types import SimpleNamespace
-
-        host = SimpleNamespace(meta=SimpleNamespace(progress_token=12345), session=MagicMock())
-        assert callable(_capture_host_progress_callback(host))
-
-    def test_returns_callable_when_token_is_zero(self) -> None:
-        from litellm.proxy._experimental.mcp_server.server import (
-            _capture_host_progress_callback,
-        )
-
-        from types import SimpleNamespace
-
-        host = SimpleNamespace(meta=SimpleNamespace(progress_token=0), session=MagicMock())
-        assert callable(_capture_host_progress_callback(host))
+        assert _capture_host_progress_callback(_mcp_request_ctx(meta=meta)) is None
 
     @pytest.mark.asyncio
-    async def test_forwarded_progress_token_preserves_integer_value(self) -> None:
-        from litellm.proxy._experimental.mcp_server.server import (
-            _capture_host_progress_callback,
+    @pytest.mark.parametrize("token", ["tok12345", 12345, 0])
+    async def test_forwards_wire_progress_token(self, _mcp_request_ctx, token) -> None:
+        from mcp.types import CallToolRequestParams
+
+        from litellm.proxy._experimental.mcp_server.server import _capture_host_progress_callback
+
+        params = CallToolRequestParams.model_validate(
+            {"name": "tool", "_meta": {"progressToken": token}}, by_name=False
         )
-
-        from types import SimpleNamespace
-
         session = AsyncMock()
-        host = SimpleNamespace(meta=SimpleNamespace(progress_token=12345), session=session)
-
-        callback = _capture_host_progress_callback(host)
+        callback = _capture_host_progress_callback(_mcp_request_ctx(meta=params.meta, session=session))
         assert callback is not None
         await callback(0.5, 1.0)
-
         session.send_progress_notification.assert_awaited_once_with(
-            progress_token=12345,
-            progress=0.5,
-            total=1.0,
+            progress_token=token, progress=0.5, total=1.0
         )
 
 
@@ -1245,7 +1180,7 @@ class TestHandleListToolsVirtual:
     """Covers the protocol list_tools early-return when the flag is enabled."""
 
     @pytest.mark.asyncio
-    async def test_returns_virtual_tools_when_flag_enabled(self) -> None:
+    async def test_returns_virtual_tools_when_flag_enabled(self, _mcp_request_ctx) -> None:
         from litellm.proxy._experimental.mcp_server import server as srv
 
         uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
@@ -1269,7 +1204,7 @@ class TestMcpServerToolCallErrorHandling:
     isError CallToolResult instead of letting them raise out of the handler."""
 
     @pytest.mark.asyncio
-    async def test_virtual_tool_error_returns_iserror_not_raised(self) -> None:
+    async def test_virtual_tool_error_returns_iserror_not_raised(self, _mcp_request_ctx) -> None:
         from fastapi import HTTPException
 
         from litellm.proxy._experimental.mcp_server import server as srv

@@ -58,46 +58,46 @@ async def test_e2e_semantic_filter():
         MCPTool(
             name="gmail_send",
             description="Send an email via Gmail",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
         MCPTool(
             name="calendar_create",
             description="Create a calendar event",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
         MCPTool(
             name="file_upload",
             description="Upload a file",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
         MCPTool(
             name="web_search",
             description="Search the web",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
         MCPTool(
             name="slack_send",
             description="Send Slack message",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
         MCPTool(
-            name="doc_read", description="Read document", input_schema={"type": "object"}
+            name="doc_read", description="Read document", inputSchema={"type": "object"}
         ),
         MCPTool(
             name="db_query",
             description="Query database",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
         MCPTool(
-            name="api_call", description="Make API call", input_schema={"type": "object"}
+            name="api_call", description="Make API call", inputSchema={"type": "object"}
         ),
         MCPTool(
             name="task_create",
             description="Create task",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
         MCPTool(
-            name="note_add", description="Add note", input_schema={"type": "object"}
+            name="note_add", description="Add note", inputSchema={"type": "object"}
         ),
     ]
 

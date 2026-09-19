@@ -374,7 +374,7 @@ def _convert_single_content(
         # ToolResultContent → proper OpenAI tool-role message.
         # Marked so the message-level converter can emit it as a
         # separate ``{"role": "tool", ...}`` message.
-        tool_result_use_id: Final = getattr(content, "toolUseId", "")
+        tool_result_use_id: Final = getattr(content, "tool_use_id", "")
         nested_content: Final[Sequence[ContentBlock]] = getattr(content, "content", [])
         if isinstance(nested_content, list):
             text_parts = [getattr(c, "text", str(c)) for c in nested_content if getattr(c, "type", None) == "text"]
@@ -537,7 +537,7 @@ def _extract_tool_results(
     results: Final = []
     for item in items:
         if getattr(item, "type", None) == "tool_result":
-            tool_use_id = getattr(item, "toolUseId", "")
+            tool_use_id = getattr(item, "tool_use_id", "")
             # Extract text from nested content
             nested_content: Sequence[ContentBlock] = getattr(item, "content", [])
             if isinstance(nested_content, list):

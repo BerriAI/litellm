@@ -10,6 +10,8 @@ import json
 from types import SimpleNamespace
 from typing import Any, Dict
 
+from mcp.types import TextContent, ToolResultContent
+
 from litellm.proxy._experimental.mcp_server.sampling_handler import (
     _convert_mcp_messages_to_openai,
     _convert_single_content,
@@ -21,8 +23,8 @@ from litellm.proxy._experimental.mcp_server.sampling_handler import (
 # ---------------------------------------------------------------------------
 
 
-def _text(text: str) -> SimpleNamespace:
-    return SimpleNamespace(type="text", text=text)
+def _text(text: str) -> TextContent:
+    return TextContent(type="text", text=text)
 
 
 def _tool_use(*, name: str, tool_id: str, input_data: Dict[str, Any]) -> SimpleNamespace:
@@ -31,11 +33,9 @@ def _tool_use(*, name: str, tool_id: str, input_data: Dict[str, Any]) -> SimpleN
 
 def _tool_result(
     *, tool_use_id: str, content: Any = None, is_error: bool = False
-) -> SimpleNamespace:
-    if content is None:
-        content = []
-    return SimpleNamespace(
-        type="tool_result", toolUseId=tool_use_id, content=content, is_error=is_error
+) -> ToolResultContent:
+    return ToolResultContent(
+        tool_use_id=tool_use_id, content=[] if content is None else content, is_error=is_error
     )
 
 
