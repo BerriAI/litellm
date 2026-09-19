@@ -5221,7 +5221,7 @@ class ProxyConfig:
             verbose_proxy_logger.warning("Maximum recursion depth (%s) reached while processing config.", max_depth)
             return config
 
-        return {
+        return {  # mutable-ok: callers deep-copy and mutate this, and a mappingproxy cannot be deep-copied
             key: self._resolved_config_value(value=value, depth=depth, max_depth=max_depth)
             for key, value in config.items()
         }
@@ -5230,7 +5230,7 @@ class ProxyConfig:
         if isinstance(value, dict):
             return self._check_for_os_environ_vars(config=value, depth=depth + 1, max_depth=max_depth)
         if isinstance(value, list):
-            return [
+            return [  # mutable-ok: config values round-trip through json, where a tuple is not a list
                 self._check_for_os_environ_vars(config=item, depth=depth + 1, max_depth=max_depth)
                 if isinstance(item, dict)
                 else item
