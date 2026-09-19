@@ -16,11 +16,11 @@ import Fallbacks from "@/components/Settings/RouterSettings/Fallbacks/Fallbacks"
 import RoutingGroups from "@/components/routing_groups";
 
 const PROMPT_CACHING_TAB = "prompt_caching";
-const ENABLE_ANTHROPIC_PROMPT_CACHING = "enable_anthropic_prompt_caching";
+export const ENABLE_ANTHROPIC_PROMPT_CACHING = "enable_anthropic_prompt_caching";
 const ANTHROPIC_PROMPT_CACHING_TTL = "anthropic_prompt_caching_ttl";
 const OPENAI_SYSTEM_MESSAGES_FIRST = "openai_system_messages_first";
 
-const isOn = (value: unknown) => value === true || value === "true";
+export const isOn = (value: unknown) => value === true || value === "true";
 
 interface GeneralSettingsPageProps {
   accessToken: string | null;
