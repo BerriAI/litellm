@@ -9705,6 +9705,25 @@ class TestJwtScopeMcpGrants:
             tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
         assert tools is None, "a key's access-group grant is a whole-server grant like a direct one"
 
+    @pytest.mark.parametrize(
+        ("group_servers", "expected"),
+        [(["math_beta"], None), (["math_alpha"], ["add"])],
+        ids=["group grants the server", "group grants another server"],
+    )
+    async def test_key_unified_access_group_grant_is_a_whole_server_grant_next_to_scope_tools(
+        self, group_servers, expected
+    ):
+        auth = _jwt_auth("litellm.mcp.beta_add", _BETA_ADD_SCOPE, api_key="sk-h", access_group_ids=["grp"])
+        with patch.object(  # test-quality-ok: stub the DB access-group loader, same seam as the key/team tests above
+            MCPRequestHandler,
+            "_get_key_access_group_mcp_server_extras",
+            new_callable=AsyncMock,
+            return_value=group_servers,
+        ) as resolve_groups:
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
+        assert tools == expected, "a key's unified access group grant keeps every tool on its servers"
+        resolve_groups.assert_awaited_once_with(auth)
+
     async def test_key_grant_on_another_server_does_not_widen_a_scope_tool_allowlist(self):
         auth = _jwt_auth(
             "litellm.mcp.beta_add",
