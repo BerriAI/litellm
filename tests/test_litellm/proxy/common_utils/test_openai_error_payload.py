@@ -148,8 +148,6 @@ def test_a_status_carried_by_an_exception_drives_the_type_it_reports():
 
 
 def test_an_upstream_5xx_body_does_not_relabel_the_internal_server_error():
-    """The upstream body rides along on the exception for the Responses ``response.failed``
-    event, but a 500 keeps answering the proxy's own ``internal_server_error`` label."""
     from litellm.exceptions import InternalServerError
 
     carried = InternalServerError(
