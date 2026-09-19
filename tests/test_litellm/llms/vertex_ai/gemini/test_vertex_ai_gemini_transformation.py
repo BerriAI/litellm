@@ -412,6 +412,61 @@ def test_empty_content_handling():
     assert contents[0]["parts"][0]["text"] == ""
 
 
+def test_transform_request_body_wraps_tool_result_with_json_schema_ref():
+    """
+    Regression: Gemini treats {"$ref": ...} objects inside functionResponse.response
+    as references to named parts in function_response.parts and rejects the request.
+    The shared request-body transformation must deliver schema-bearing tool output
+    opaquely instead of structurally.
+    Fixes: https://github.com/BerriAI/litellm/issues/38223
+    """
+    schema_json = (
+        '{"$defs":{"humanScalar":{"type":"string"}},'
+        '"type":"object","properties":{"value":{"$ref":"#/$defs/humanScalar"}}}'
+    )
+    messages = [
+        {"role": "user", "content": "Inspect this schema."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_schema",
+                    "type": "function",
+                    "function": {"name": "inspect_schema", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_schema", "content": schema_json},
+        {"role": "user", "content": "Acknowledge the result."},
+    ]
+
+    result = _transform_request_body(
+        messages=messages,
+        model="gemini-2.0-flash",
+        optional_params={},
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        cached_content=None,
+    )
+
+    parts = [part for content in result["contents"] for part in content.get("parts", [])]
+    function_responses = [
+        part[key] for part in parts for key in ("function_response", "functionResponse") if key in part
+    ]
+    assert len(function_responses) == 1
+    assert function_responses[0]["response"] == {"content": schema_json}
+
+    stack: list[object] = list(parts)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            assert "$ref" not in node
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+
+
 def test_thought_signature_extraction_from_response():
     """Test that thought signatures are extracted from Gemini response parts and stored in provider_specific_fields"""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
