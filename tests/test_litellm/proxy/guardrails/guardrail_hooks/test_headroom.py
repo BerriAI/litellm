@@ -3154,10 +3154,10 @@ async def test_implicit_cache_protection_skipped_when_request_carries_cache_cont
 
 
 @pytest.mark.asyncio
-async def test_model_without_prompt_caching_keeps_compressing_history():
+async def test_model_unknown_to_the_cost_map_keeps_compressing_history():
     guardrail = _make_guardrail(
         implicit_cache_frozen_messages=None,
-        llm_router_getter=lambda: _StubRouter("openai/o1-mini"),
+        llm_router_getter=lambda: _StubRouter("openai/model-not-in-cost-map"),
     )
     messages = _agentic_request(2)
 
@@ -3170,7 +3170,7 @@ async def test_model_without_prompt_caching_keeps_compressing_history():
     with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_record):
         result = await guardrail.apply_guardrail(
             inputs=GenericGuardrailAPIInputs(texts=["x"], structured_messages=json.loads(json.dumps(messages))),
-            request_data={"model": "o1", "messages": json.loads(json.dumps(messages))},
+            request_data={"model": "unknown", "messages": json.loads(json.dumps(messages))},
             input_type="request",
         )
 
