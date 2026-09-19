@@ -29,6 +29,8 @@ vi.mock("../../../templates/key_info_view", () => ({
   ),
 }));
 
+const chartBars = (container: HTMLElement) => Array.from(container.querySelectorAll("path.recharts-rectangle"));
+
 describe("TopKeyView", () => {
   const mockUseAuthorized = vi.mocked(useAuthorized);
   const mockKeyInfoV1Call = vi.mocked(networking.keyInfoV1Call);
@@ -206,7 +208,7 @@ describe("TopKeyView", () => {
 
     await user.click(screen.getByRole("button", { name: "Chart View" }));
 
-    const bars = container.querySelectorAll("path.recharts-rectangle");
+    const bars = chartBars(container);
     expect(bars).toHaveLength(1);
     expect(bars[0]).toHaveAttribute("fill", "var(--color-cyan-500, #06b6d4)");
     expect(screen.getAllByText("A Very Lon...").length).toBeGreaterThan(0);
@@ -511,7 +513,7 @@ describe("TopKeyView", () => {
     await user.click(screen.getByText("session-key"));
 
     await user.click(screen.getByRole("button", { name: "Chart View" }));
-    const bars = container.querySelectorAll("path.recharts-rectangle");
+    const bars = chartBars(container);
     expect(bars).toHaveLength(2);
     bars.forEach((bar) => fireEvent.click(bar));
 
