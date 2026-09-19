@@ -4787,6 +4787,20 @@ def _swap_in_model_cost_map(new_model_cost_map: dict) -> int:
     return adopt_model_cost_map(new_model_cost_map)
 
 
+def _websearch_handler_params(stored: Mapping[str, object]) -> dict[str, object]:
+    """
+    Translate stored web search interception settings into handler kwargs.
+
+    Drops ``enabled``, which gates the callback rather than configuring it, and
+    drops an empty ``enabled_providers`` so the handler applies its own default
+    instead of matching no provider at all.
+    """
+    params: Final = {key: value for key, value in stored.items() if key != "enabled"}
+    if not params.get("enabled_providers"):
+        params.pop("enabled_providers", None)
+    return params
+
+
 def should_load_db_object(object_type: str | SupportedDBObjectType) -> bool:
     """
     Check if an object type should be loaded from the database based on general_settings.supported_db_objects.
@@ -7803,23 +7817,26 @@ class ProxyConfig:
 
             websearch_config: Final = litellm_settings.get("websearch_interception_params", None)
 
-            # Absent means nobody stored params, so a callbacks-list proxy keeps its callback.
-            if websearch_config is None:
+            if not isinstance(websearch_config, Mapping) or "enabled" not in websearch_config:
                 return
 
-            enabled: Final = bool(websearch_config.get("enabled", True))
+            enabled: Final = bool(coerce_bool(websearch_config["enabled"]))
             registered: Final = bool(
                 litellm.logging_callback_manager.get_custom_loggers_for_type(WebSearchInterceptionLogger)
             )
             if self._last_websearch_interception_config == websearch_config and registered == enabled:
                 return
 
+            replacement: Final = (
+                WebSearchInterceptionLogger.from_config_yaml(_websearch_handler_params(websearch_config))
+                if enabled
+                else None
+            )
+
             litellm.logging_callback_manager.remove_callbacks_by_type(litellm.callbacks, WebSearchInterceptionLogger)
 
-            if enabled:
-                litellm.logging_callback_manager.add_litellm_callback(
-                    WebSearchInterceptionLogger.from_config_yaml(websearch_config)
-                )
+            if replacement is not None:
+                litellm.logging_callback_manager.add_litellm_callback(replacement)
                 verbose_proxy_logger.info("Web search interception reinitialized from DB")
             else:
                 verbose_proxy_logger.info("Web search interception disabled")

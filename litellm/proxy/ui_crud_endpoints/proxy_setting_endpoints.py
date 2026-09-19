@@ -506,6 +506,36 @@ class WebSearchInterceptionSettingsResponse(SettingsResponse):
     """Response model for web search interception settings"""
 
 
+def _with_websearch_enabled_resolved(config: Mapping[str, object]) -> dict[str, object]:
+    """
+    Report interception as on when the config file activates it through litellm_settings.callbacks.
+
+    Such a proxy stores no ``enabled`` flag, and reporting the field's own
+    default would tell an admin the feature is off while it is serving, then
+    persist that answer the moment they saved anything on the page.
+    """
+    litellm_settings: Final[Mapping[str, object]] = _as_settings_section(config.get("litellm_settings"))
+    stored: Final[Mapping[str, object]] = _as_settings_section(litellm_settings.get("websearch_interception_params"))
+    if "enabled" in stored:
+        return dict(config)
+
+    callbacks: Final = litellm_settings.get("callbacks")
+    resolved: Final = {
+        **stored,
+        "enabled": isinstance(callbacks, Sequence)
+        and not isinstance(callbacks, (str, bytes))
+        and "websearch_interception" in callbacks,
+    }
+    return {
+        **config,
+        "litellm_settings": {**litellm_settings, "websearch_interception_params": resolved},
+    }
+
+
+def _as_settings_section(value: object) -> Mapping[str, object]:
+    return cast("Mapping[str, object]", value) if isinstance(value, Mapping) else MappingProxyType({})
+
+
 @router.get(
     "/get/allowed_ips",
     tags=["Budget & Spend Tracking"],
@@ -1461,7 +1491,7 @@ async def get_websearch_interception_settings(
     return await _get_settings_with_schema(
         settings_key="websearch_interception_params",
         settings_class=WebSearchInterceptionSettings,
-        config=config,
+        config=_with_websearch_enabled_resolved(config),
     )
 
 
