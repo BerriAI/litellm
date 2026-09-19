@@ -133,6 +133,32 @@ def test_transform_request_drops_tool_reference_parts():
 
 
 @pytest.mark.parametrize(
+    "enabled, expected", [(False, ("hi", "sys", "reply", "more")), (True, ("sys", "hi", "reply", "more"))]
+)
+def test_transform_request_system_messages_first_follows_global_flag(monkeypatch, enabled, expected):
+    """Azure OpenAI shares OpenAI's prefix-matched prompt cache, so the same flag moves
+    system messages ahead of the conversation on the Azure request body."""
+    monkeypatch.setattr(litellm, "openai_system_messages_first", enabled)
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": "sys"},
+        {"role": "assistant", "content": "reply"},
+        {"role": "user", "content": "more"},
+    ]
+
+    request = AzureOpenAIConfig().transform_request(
+        model="gpt-4o",
+        messages=messages,
+        optional_params={},
+        litellm_params={"custom_llm_provider": "azure"},
+        headers={},
+    )
+
+    assert tuple(m["content"] for m in request["messages"]) == expected
+    assert [m["content"] for m in messages] == ["hi", "sys", "reply", "more"]
+
+
+@pytest.mark.parametrize(
     "model, emitted_key, absent_key",
     [
         ("gpt-5-chat", "max_completion_tokens", "max_tokens"),
@@ -307,3 +333,37 @@ class TestAzureToolSchemaCombinatorFlattening:
         )
         assert "tools" not in request
         assert request["temperature"] == 0.2
+
+
+def test_transform_request_strips_litellm_format_from_managed_file_id():
+    import base64
+
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        update_messages_with_model_file_ids,
+    )
+
+    managed_file_id: Final = base64.b64encode(
+        b"litellm_proxy:application/pdf;unified_id,abc123;llm_output_file_id,assistant-xyz;target_model_names,azure-gpt"
+    ).decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize this file"},
+                {"type": "file", "file": {"file_id": managed_file_id}},
+            ],
+        }
+    ]
+    updated_messages = update_messages_with_model_file_ids(messages, None, {})
+
+    request = AzureOpenAIConfig().transform_request(
+        model="gpt-5.4",
+        messages=updated_messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    file_part = request["messages"][0]["content"][1]["file"]
+    assert "format" not in file_part
+    assert file_part["file_id"] == "assistant-xyz"

@@ -14,8 +14,8 @@ from ...shared.reporting.strategy import (
     StrategyDefinition,
     SuiteCaseSpec,
 )
+from ...shared.unit_runners.contracts import UNIT_TEST_CONTRACTS
 from ...shared.unit_runners.suite_runner import run_suites
-from ..unit_tests_mapping.mappings import UNIT_TEST_CONTRACTS
 from .reporting import render_unit_parity_results
 from .runner import UnitParityExclusion, UnitParitySuite, run_suite
 

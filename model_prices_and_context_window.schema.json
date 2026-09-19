@@ -427,6 +427,7 @@
             "chat",
             "completion",
             "embedding",
+            "evaluation",
             "guardrail",
             "image_edit",
             "image_generation",
@@ -714,6 +715,9 @@
           "type": "boolean"
         },
         "supports_embedding_image_input": {
+          "type": "boolean"
+        },
+        "supports_fast_mode": {
           "type": "boolean"
         },
         "supports_forced_tool_use": {
