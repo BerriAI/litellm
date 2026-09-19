@@ -1,19 +1,26 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, field
 from collections import deque
+from dataclasses import dataclass, field
 from queue import SimpleQueue
 from typing import Final
 
 import uvicorn
+from _fake_openai_endpoint_server import (
+    chat_completions,
+    completions,
+    health,
+    moderations,
+)
+from _fake_openai_endpoint_server import (
+    embeddings as fake_embeddings,
+)
 from pydantic import JsonValue, TypeAdapter
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
-
-from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 INTERNAL_FIELDS: Final = frozenset(
@@ -72,10 +79,21 @@ class Provider:
             status: Final = script.popleft()
             if status != 200:
                 return JSONResponse(
-                    {"error": {"message": "Controlled provider failure", "type": error_type(status), "code": str(status)}},
+                    {
+                        "error": {
+                            "message": "Controlled provider failure",
+                            "type": error_type(status),
+                            "code": str(status),
+                        }
+                    },
                     status_code=status,
                 )
         return await chat_completions(request)
+
+    async def embeddings(self, request: Request) -> Response:
+        body: Final = JSON_OBJECT.validate_json(await request.body())
+        self.observations.put(Observation(request.url.path, request.headers.get("authorization", ""), body))
+        return await fake_embeddings(request)
 
     async def script(self, request: Request) -> Response:
         name: Final = request.path_params["model"]
@@ -111,7 +129,7 @@ class Provider:
                 Route("/__scripts/{model}", self.script, methods=["POST", "DELETE", "GET"]),
                 Route("/v1/chat/completions", self.chat, methods=["POST"]),
                 Route("/v1/completions", completions, methods=["POST"]),
-                Route("/v1/embeddings", embeddings, methods=["POST"]),
+                Route("/v1/embeddings", self.embeddings, methods=["POST"]),
                 Route("/v1/moderations", moderations, methods=["POST"]),
             ]
         )

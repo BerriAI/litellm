@@ -1930,6 +1930,20 @@ def client(original_function):
                 elif _caching_handler_response.embedding_all_elements_cache_hit is True:
                     return _caching_handler_response.final_embedding_cached_response
 
+            provider_kwargs: Final = (
+                MappingProxyType(
+                    {
+                        **kwargs,
+                        "input": list(  # mutable-ok: LiteLLM embedding calls require a list input
+                            _caching_handler_response.remaining_embedding_inputs
+                        ),
+                    }
+                )
+                if _caching_handler_response is not None
+                and _caching_handler_response.remaining_embedding_inputs is not None
+                else kwargs
+            )
+
             if _llm_caching_handler.preset_cache_key is not None:
                 logging_obj.litellm_params["preset_cache_key"] = _llm_caching_handler.preset_cache_key
 
@@ -1968,7 +1982,7 @@ def client(original_function):
 
             # MODEL CALL
             try:
-                result = await original_function(*args, **kwargs)
+                result = await original_function(*args, **provider_kwargs)
             except Exception as deployment_error:
                 _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
                 try:
@@ -2031,30 +2045,35 @@ def client(original_function):
             await _llm_caching_handler.async_set_cache(
                 result=result,
                 original_function=original_function,
-                kwargs=kwargs,
+                kwargs=provider_kwargs,
                 args=args,
             )
 
-            # REBUILD EMBEDDING CACHING
             if (
                 isinstance(result, EmbeddingResponse)
                 and _caching_handler_response is not None
                 and _caching_handler_response.final_embedding_cached_response is not None
             ):
+                provider_response_cost: Final = logging_obj._response_cost_calculator(result=result)
+                if provider_response_cost is not None:
+                    logging_obj.model_call_details["response_cost"] = provider_response_cost
+                combined_embedding_response: Final = (
+                    _llm_caching_handler._combine_cached_embedding_response_with_api_result(
+                        _caching_handler_response=_caching_handler_response,
+                        embedding_response=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+                )
                 _dispatch_success_logging(
                     logging_obj=logging_obj,
-                    result=result,
+                    result=combined_embedding_response,
                     start_time=start_time,
                     end_time=end_time,
                     is_completion_with_fallbacks=is_completion_with_fallbacks,
                     is_litellm_internal_call=_is_litellm_internal_call,
                 )
-                return _llm_caching_handler._combine_cached_embedding_response_with_api_result(
-                    _caching_handler_response=_caching_handler_response,
-                    embedding_response=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                )
+                return combined_embedding_response
 
             _update_response_metadata(
                 result=result,
