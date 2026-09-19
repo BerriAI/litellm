@@ -713,6 +713,15 @@ class JevClassifierConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _require_api_key(self) -> "JevClassifierConfig":
+        from litellm.secret_managers.main import get_secret_str
+
+        api_key: Final = self.api_key or get_secret_str("TYPESAFE_API_KEY")
+        if not api_key:
+            raise ValueError("jev_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'")
+        return self
+
 
 MAX_CUSTOM_PATTERN_REPEAT: Final[int] = 64
 MAX_CUSTOM_PATTERN_WORK: Final[int] = 2048
