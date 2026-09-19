@@ -278,6 +278,23 @@ def _has_pre_call_deployment_hook(logging_obj: LiteLLMLoggingObj) -> bool:
     return False
 
 
+def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> bytes | str | dict:
+    """A pre-signed request carries its auth inside its own ``headers`` key, which
+    logging treats as request body (only the top-level headers channel gets masked),
+    so mask it here before the request is handed to ``pre_call``."""
+    if not isinstance(transformed_request, dict):
+        return transformed_request
+    request_headers: Final = transformed_request.get("headers")
+    if not isinstance(request_headers, dict):
+        return transformed_request
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        _get_masked_values,  # pyright: ignore[reportPrivateUsage]  # the shared header-masking helper has no public name
+    )
+
+    return {**transformed_request, "headers": _get_masked_values(request_headers)}
+
+
 def _aws_signing_overrides(optional_params: Mapping[str, Any], litellm_params: Mapping[str, Any]) -> Mapping[str, Any]:
     return MappingProxyType(
         {
@@ -3692,7 +3709,7 @@ class BaseLLMHTTPHandler:
                 "complete_input_dict": (
                     "<streaming media upload>"
                     if isinstance(transformed_request, dict) and "streaming_media_upload" in transformed_request
-                    else transformed_request
+                    else _mask_presigned_request_headers(transformed_request)
                 ),
                 "api_base": api_base,
                 "headers": headers,
@@ -4115,7 +4132,7 @@ class BaseLLMHTTPHandler:
             input="",
             api_key="",
             additional_args={
-                "complete_input_dict": transformed_request,
+                "complete_input_dict": _mask_presigned_request_headers(transformed_request),
                 "api_base": api_base,
                 "headers": headers,
             },
@@ -4194,7 +4211,7 @@ class BaseLLMHTTPHandler:
             input="",
             api_key="",
             additional_args={
-                "complete_input_dict": transformed_request,
+                "complete_input_dict": _mask_presigned_request_headers(transformed_request),
                 "api_base": api_base,
                 "headers": headers,
                 "batch_id": batch_id,
