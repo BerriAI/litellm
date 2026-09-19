@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 FILE_LIST_CONTINUATION_CHUNK_SIZE: Final = 500
 
 BATCH_CREATE_HIDDEN_PARAM: Final = "batch_create"
+LITELLM_EXECUTED_BATCH_ID_PREFIX: Final = "litellm_batch_"
 
 
 def validate_file_list_limit(limit: int | None) -> None:
@@ -177,6 +178,11 @@ def get_batch_id_from_unified_batch_id(file_id: str) -> str:
     else:
         batch_id = file_id.split("generic_response_id:", 1)[1]
     return re.split(r"[;,]", batch_id, maxsplit=1)[0]
+
+
+def is_litellm_executed_batch(decoded_unified_batch_id: str) -> bool:
+    _, marker, batch_id = decoded_unified_batch_id.partition("llm_batch_id:")
+    return bool(marker) and batch_id.startswith(LITELLM_EXECUTED_BATCH_ID_PREFIX)
 
 
 def encode_file_id_with_model(file_id: str, model: str, id_type: Literal["file", "batch"] = "file") -> str:
@@ -370,6 +376,8 @@ def get_credentials_for_model(
     """
     from fastapi import HTTPException
 
+    from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+
     if llm_router is None:
         raise HTTPException(
             status_code=500,
@@ -381,9 +389,8 @@ def get_credentials_for_model(
     )
 
     if credentials is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": f"Model '{model_id}' not found in model_list. Please check your config.yaml."},
+        raise ProxyModelNotFoundError(
+            route=operation_context, model_name=model_id, retryable_with_model_read_through=False
         )
 
     return credentials
@@ -691,7 +698,7 @@ async def handle_model_based_routing(
             llm_router=llm_router,
             model_id=model_from_id,
             user_api_key_dict=user_api_key_dict,
-            operation_context=f"file operation (file created with model '{model_from_id}')",
+            operation_context="file operation (file created with model)",
         )
         original_file_id: Final = get_original_file_id(file_id)
         return True, model_from_id, original_file_id, credentials

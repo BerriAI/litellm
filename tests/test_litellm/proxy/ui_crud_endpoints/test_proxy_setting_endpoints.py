@@ -2604,6 +2604,67 @@ def test_add_allowed_ip_writes_audit_log(mock_proxy_config, monkeypatch):
         app.dependency_overrides.pop(user_api_key_auth, None)
 
 
+def test_add_allowed_ip_hands_save_config_only_the_changed_general_setting(monkeypatch):
+    """An allowed-IP write must not drag the config file's own general_settings into
+    the database row. This covers the route end of that contract: what /add/allowed_ip
+    hands save_config differs from the loaded config in allowed_ips and nothing else.
+    save_config's end -- that the row it writes holds only those changed keys -- is
+    covered by test_ProxyConfig_save_config_merges_changed_keys_without_copying_file_settings.
+
+    This lives here rather than in the e2e suite because /add/allowed_ip mutates the
+    live general_settings["allowed_ips"] that auth_utils._check_valid_ip reads, so on a
+    shared proxy the first call locks every later request out, cleanup included.
+    """
+    from types import MappingProxyType
+    from typing import Final
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.config_resolvers.changed_section_keys import changed_section_keys
+    from litellm.proxy.config_resolvers.settings_store import SettingsStore
+
+    file_settings: Final = MappingProxyType({"max_parallel_requests": 100, "proxy_config_reload_interval_seconds": 7})
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml(file_settings)
+
+    fake_prisma: Final = MagicMock()
+    fake_prisma.db.litellm_auditlog.create = AsyncMock()
+    save_config: Final = AsyncMock(side_effect=lambda new_config: new_config)
+
+    async def _get_config():
+        return {"general_settings": dict(file_settings)}
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server_module, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr(proxy_server_module, "general_settings", store)
+    monkeypatch.setattr(proxy_server_module.proxy_config, "get_config", _get_config)
+    monkeypatch.setattr(proxy_server_module.proxy_config, "save_config", save_config)
+
+    async def _admin_auth():
+        return UserAPIKeyAuth(
+            user_id="config-admin",
+            api_key="hashed-admin-key",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+    try:
+        resp: Final = client.post("/add/allowed_ip", json={"ip": "203.0.113.77"})
+        assert resp.status_code == 200, resp.text
+
+        save_config.assert_awaited_once()
+        persisted: Final = save_config.await_args.kwargs["new_config"]["general_settings"]
+        changed, removed = changed_section_keys(file_settings, persisted)
+        assert dict(changed) == {"allowed_ips": ["203.0.113.77"]}
+        assert removed == frozenset()
+        assert store["allowed_ips"] == ["203.0.113.77"]
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
 def test_delete_allowed_ip_writes_deleted_audit_log(monkeypatch):
     """Removing an allowed IP must be audited as a deletion, symmetric with the
     add path."""
@@ -2658,6 +2719,55 @@ def test_delete_allowed_ip_writes_deleted_audit_log(monkeypatch):
         after = json.loads(written["updated_values"])
         assert "203.0.113.77" in before["allowed_ips"]
         assert "203.0.113.77" not in after["allowed_ips"]
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.parametrize("route", ["/add/allowed_ip", "/delete/allowed_ip"])
+def test_allowed_ip_routes_refuse_a_config_owned_list_with_a_clear_400(route, monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.config_resolvers.settings_store import SettingsStore
+
+    store = SettingsStore("general_settings")
+    store.load_yaml({"allowed_ips": ["203.0.113.77"]})
+    saved = []
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_auditlog.create = AsyncMock()
+
+    async def _get_config():
+        return {"general_settings": {"allowed_ips": ["203.0.113.77"]}}
+
+    async def _save_config(new_config=None):
+        saved.append(new_config)
+        return new_config
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server_module, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server_module, "general_settings", store)
+    monkeypatch.setattr(proxy_server_module.proxy_config, "get_config", _get_config)
+    monkeypatch.setattr(proxy_server_module.proxy_config, "save_config", _save_config)
+
+    async def _admin_auth():
+        return UserAPIKeyAuth(
+            user_id="config-admin",
+            api_key="hashed-admin-key",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+    try:
+        ip = "198.51.100.9" if route == "/add/allowed_ip" else "203.0.113.77"
+        resp = client.post(route, json={"ip": ip})
+
+        assert resp.status_code == 400, resp.text
+        assert "allowed_ips" in resp.text
+        assert list(store["allowed_ips"]) == ["203.0.113.77"]
+        assert saved == []
     finally:
         app.dependency_overrides.pop(user_api_key_auth, None)
 
