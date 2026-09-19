@@ -506,6 +506,16 @@ class WebSearchInterceptionSettings(BaseModel):
 class WebSearchInterceptionSettingsResponse(SettingsResponse):
     """Response model for web search interception settings"""
 
+    active_on_this_pod: bool = Field(
+        default=False,
+        description=(
+            "Whether the process answering this request has the interception callback "
+            "registered. Read-only: it reports what is running here, while values.enabled "
+            "is the cluster-wide setting, and the two disagree while a pod is still "
+            "applying a change or failed to apply it."
+        ),
+    )
+
 
 def _with_websearch_enabled_resolved(config: Mapping[str, object]) -> dict[str, object]:
     """
@@ -1496,11 +1506,21 @@ async def get_websearch_interception_settings(
 
     config: Final = await proxy_config.get_config()
 
-    return await _get_settings_with_schema(
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    settings: Final = await _get_settings_with_schema(
         settings_key="websearch_interception_params",
         settings_class=WebSearchInterceptionSettings,
         config=_with_websearch_enabled_resolved(config),
     )
+    return {
+        **settings,
+        "active_on_this_pod": bool(
+            litellm.logging_callback_manager.get_custom_loggers_for_type(WebSearchInterceptionLogger)
+        ),
+    }
 
 
 @router.patch(
