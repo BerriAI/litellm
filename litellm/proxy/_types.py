@@ -2932,6 +2932,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
     )
+    forward_openai_project_id: bool = Field(
+        False,
+        description="Allow client OpenAI-Project headers and project query/body fields on file uploads and batch creation. Configured deployment projects take precedence. Explicit extra_headers retain their existing behavior.",
+    )
     mcp_required_fields: list[str] | None = Field(
         None,
         description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",

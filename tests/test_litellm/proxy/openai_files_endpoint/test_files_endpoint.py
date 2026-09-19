@@ -5238,11 +5238,15 @@ def test_get_file_content_keeps_the_status_of_a_rejection_raised_inside_the_rout
         ({"project": "proj-form"}, {"openai-project": "proj-config", "X-Deployment": "keep"}, "proj-config"),
     ],
 )
+@pytest.mark.parametrize("forward_project", [None, False, True])
+@pytest.mark.parametrize("query_project", [False, True])
 def test_upload_forwards_openai_project(
     monkeypatch: pytest.MonkeyPatch,
     form_fields: dict[str, str],
     configured_headers: dict[str, str],
     expected_project: str,
+    forward_project: bool | None,
+    query_project: bool,
 ) -> None:
     router = Router(
         model_list=[
@@ -5260,6 +5264,11 @@ def test_upload_forwards_openai_project(
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "master_key", None)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"forward_openai_project_id": forward_project} if forward_project is not None else {},
+    )
     monkeypatch.setattr(
         files_endpoints, "files_config", [{"custom_llm_provider": "openai", "extra_headers": configured_headers}]
     )
@@ -5290,22 +5299,36 @@ def test_upload_forwards_openai_project(
             "/v1/files",
             files={"file": ("batch.jsonl", VALID_BATCH_LINE, "application/jsonl")},
             data={"purpose": "batch", **form_fields},
-            headers={"Authorization": "Bearer test-key", "OpenAI-Project": "proj-request"},
+            headers={
+                "Authorization": "Bearer test-key",
+                **({} if query_project else {"OpenAI-Project": "proj-request"}),
+            },
+            params={"project": "proj-query"} if query_project else {},
         )
     finally:
         proxy_server.app.dependency_overrides.pop(proxy_server.user_api_key_auth, None)
 
     assert response.status_code == 200, response.text
-    assert captured_kwargs["extra_headers"] == {
+    selected_project: Final = (
+        "proj-config"
+        if configured_headers
+        else ("proj-query" if query_project and expected_project == "proj-request" else expected_project)
+        if forward_project
+        else None
+    )
+    assert captured_kwargs.get("extra_headers", {}) == {
         **{key: value for key, value in configured_headers.items() if key.lower() != "openai-project"},
-        "OpenAI-Project": expected_project,
+        **({"OpenAI-Project": selected_project} if selected_project else {}),
     }
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("managed", [False, True])
-async def test_routed_upload_forwards_openai_project(monkeypatch: pytest.MonkeyPatch, managed: bool) -> None:
+@pytest.mark.parametrize("forward_project", [False, True])
+async def test_routed_upload_forwards_openai_project(
+    monkeypatch: pytest.MonkeyPatch, managed: bool, forward_project: bool
+) -> None:
     request: Final = Request({"type": "http", "headers": [(b"openai-project", b"proj-request")], "query_string": b""})
     file_request: Final = CreateFileRequest(file=("batch.jsonl", VALID_BATCH_LINE), purpose="batch")
     file_response: Final = OpenAIFileObject(
@@ -5336,6 +5359,7 @@ async def test_routed_upload_forwards_openai_project(monkeypatch: pytest.MonkeyP
         router_model="gpt-4o",
         custom_llm_provider="openai",
         request=request,
+        forward_request_project=forward_project,
     )
 
     sent: Final = (
@@ -5343,4 +5367,4 @@ async def test_routed_upload_forwards_openai_project(monkeypatch: pytest.MonkeyP
         if managed
         else router.acreate_file.call_args.kwargs
     )
-    assert sent["extra_headers"] == {"OpenAI-Project": "proj-request"}
+    assert sent.get("extra_headers", {}) == ({"OpenAI-Project": "proj-request"} if forward_project else {})

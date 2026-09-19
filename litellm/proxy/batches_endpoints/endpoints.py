@@ -183,7 +183,23 @@ async def create_batch(
             or get_custom_llm_provider_from_request_headers(request=request)
         )
         custom_llm_provider: Final = requested_provider or "openai"
-        _create_batch_data: Final = LiteLLMBatchCreateRequest(**data)
+        request_fields: Final = cast(  # cast-ok: parsed batch payload is a string-keyed mapping
+            Mapping[str, object], data
+        )
+        _create_batch_data: Final = cast(  # cast-ok: preserve the parsed batch fields without runtime filtering
+            LiteLLMBatchCreateRequest,
+            dict(request_fields),  # mutable-ok: request copy receives provider credentials before dispatch
+        )
+        forward_project: Final = (
+            cast(  # cast-ok: resolved server configuration mapping
+                Mapping[str, object], general_settings
+            ).get("forward_openai_project_id")
+            is True
+        )
+        header_project: Final = request.headers.get("openai-project") if forward_project else None
+        query_project: Final = request.query_params.get("project") if forward_project else None
+        requested_project: Final = _create_batch_data.get("project")
+        body_project: Final = requested_project if forward_project and isinstance(requested_project, str) else None
 
         # Apply team-level batch output expiry enforcement
         team_metadata: Final = user_api_key_dict.team_metadata or {}
@@ -232,6 +248,8 @@ async def create_batch(
 
             original_file_id: Final = get_original_file_id(input_file_id)
             _create_batch_data["input_file_id"] = original_file_id
+            if credentials["custom_llm_provider"] == "openai":
+                _create_batch_data.pop("project", None)
             prepare_data_with_credentials(
                 data=_create_batch_data,
                 credentials=credentials,
@@ -242,8 +260,9 @@ async def create_batch(
                 with_openai_project_header(
                     _create_batch_data,
                     cast(str, credentials["custom_llm_provider"]),  # cast-ok: router credentials identify the provider
-                    request.headers.get("openai-project"),
-                    request.query_params.get("project"),
+                    header_project,
+                    query_project,
+                    body_project=body_project,
                 ),
             )
 
@@ -289,13 +308,16 @@ async def create_batch(
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
+            if custom_llm_provider == "openai":
+                _create_batch_data.pop("project", None)
             loadbalanced_batch_data: Final = cast(  # cast-ok: conversion preserves batch request fields
                 LiteLLMBatchCreateRequest,
                 with_openai_project_header(
                     _create_batch_data,
                     custom_llm_provider,
-                    request.headers.get("openai-project"),
-                    request.query_params.get("project"),
+                    header_project,
+                    query_project,
+                    body_project=body_project,
                 ),
             )
             response = await llm_router.acreate_batch(**loadbalanced_batch_data)
@@ -323,13 +345,16 @@ async def create_batch(
                 )
 
             _create_batch_data.update(disable_fallbacks=True)  # pyright: ignore[reportCallIssue]  # router flag
+            if custom_llm_provider == "openai":
+                _create_batch_data.pop("project", None)
             unified_batch_data: Final = cast(  # cast-ok: conversion preserves batch request fields
                 LiteLLMBatchCreateRequest,
                 with_openai_project_header(
                     _create_batch_data,
                     custom_llm_provider,
-                    request.headers.get("openai-project"),
-                    request.query_params.get("project"),
+                    header_project,
+                    query_project,
+                    body_project=body_project,
                 ),
             )
             response = await llm_router.acreate_batch(**unified_batch_data)
@@ -350,6 +375,8 @@ async def create_batch(
                     operation_context="batch creation",
                 )
 
+                if credentials["custom_llm_provider"] == "openai":
+                    _create_batch_data.pop("project", None)
                 prepare_data_with_credentials(
                     data=_create_batch_data,
                     credentials=credentials,
@@ -362,8 +389,9 @@ async def create_batch(
                         cast(
                             str, credentials["custom_llm_provider"]
                         ),  # cast-ok: router credentials identify the provider
-                        request.headers.get("openai-project"),
-                        request.query_params.get("project"),
+                        header_project,
+                        query_project,
+                        body_project=body_project,
                     ),
                 )
 
@@ -378,6 +406,8 @@ async def create_batch(
                 verbose_proxy_logger.debug("Created batch using model: %s", model_param)
             else:
                 # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
+                if custom_llm_provider == "openai":
+                    _create_batch_data.pop("project", None)
                 apply_team_provider_credentials(
                     data=cast(dict, _create_batch_data),  # cast-ok: TypedDict is a dict at runtime
                     llm_router=llm_router,
@@ -389,8 +419,9 @@ async def create_batch(
                     with_openai_project_header(
                         _create_batch_data,
                         cast(str, custom_llm_provider),  # cast-ok: request provider selection is a string
-                        request.headers.get("openai-project"),
-                        request.query_params.get("project"),
+                        header_project,
+                        query_project,
+                        body_project=body_project,
                     ),
                 )
                 _raise_not_found_when_openai_fallback_unservable(

@@ -235,6 +235,7 @@ async def route_create_file(
     target_storage: str | None = "default",
     request: Request | None = None,
     request_project: str | None = None,
+    forward_request_project: bool = False,
 ) -> OpenAIFileObject:
     """
     Route file creation request to the appropriate provider.
@@ -246,6 +247,14 @@ async def route_create_file(
     4. If enable_loadbalancing_on_batch_endpoints -> deprecated loadbalancing
     5. Else -> use custom_llm_provider with files_settings
     """
+
+    header_project: Final = (
+        request.headers.get("openai-project") if forward_request_project and request is not None else None
+    )
+    query_project: Final = (
+        request.query_params.get("project") if forward_request_project and request is not None else None
+    )
+    body_project: Final = request_project if forward_request_project else None
 
     # Handle custom storage backend
     if target_storage and target_storage != "default":
@@ -291,9 +300,9 @@ async def route_create_file(
             with_openai_project_header(
                 _create_file_request,
                 cast(str, credentials["custom_llm_provider"]),  # cast-ok: router credentials identify the provider
-                request.headers.get("openai-project") if request is not None else None,
-                request.query_params.get("project") if request is not None else None,
-                body_project=request_project,
+                header_project,
+                query_project,
+                body_project=body_project,
             ),
         )
 
@@ -342,9 +351,9 @@ async def route_create_file(
             with_openai_project_header(
                 _create_file_request,
                 custom_llm_provider,
-                request.headers.get("openai-project") if request is not None else None,
-                request.query_params.get("project") if request is not None else None,
-                body_project=request_project,
+                header_project,
+                query_project,
+                body_project=body_project,
             ),
         )
         # Managed files internally calls llm_router.acreate_file() which includes loadbalancing
@@ -362,9 +371,9 @@ async def route_create_file(
             with_openai_project_header(
                 _create_file_request,
                 custom_llm_provider,
-                request.headers.get("openai-project") if request is not None else None,
-                request.query_params.get("project") if request is not None else None,
-                body_project=request_project,
+                header_project,
+                query_project,
+                body_project=body_project,
             ),
         )
         response = await _deprecated_loadbalanced_create_file(
@@ -390,9 +399,9 @@ async def route_create_file(
             with_openai_project_header(
                 _create_file_request,
                 custom_llm_provider,
-                request.headers.get("openai-project") if request is not None else None,
-                request.query_params.get("project") if request is not None else None,
-                body_project=request_project,
+                header_project,
+                query_project,
+                body_project=body_project,
             ),
         )
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
@@ -726,6 +735,10 @@ async def create_file(
             target_storage=target_storage,
             request=request,
             request_project=project_in_body if isinstance(project_in_body, str) else None,
+            forward_request_project=cast(  # cast-ok: resolved server configuration mapping
+                Mapping[str, object], general_settings
+            ).get("forward_openai_project_id")
+            is True,
         )
 
         if response is None:
