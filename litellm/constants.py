@@ -999,10 +999,8 @@ openai_compatible_providers: Final[list] = [
     "scx-ai",
 ]
 
-# Providers that are openai-compatible for chat but have their own audio
-# transcription endpoint, so litellm.transcription must route them through
-# their provider config instead of the OpenAI SDK handler.
 OPENAI_COMPATIBLE_PROVIDERS_WITH_NATIVE_AUDIO_TRANSCRIPTION: Final = frozenset({"xai"})
+
 openai_text_completion_compatible_providers: Final[list] = [  # providers that support `/v1/completions`
     "together_ai",
     "fireworks_ai",

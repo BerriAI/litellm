@@ -111,7 +111,7 @@ def test_transform_response_maps_xai_shape():
             "language": "en",
             "duration": 3.2,
             "words": [
-                {"text": "hello", "start": 0.0, "end": 0.5, "speaker": "1"},
+                {"text": "hello", "start": 0.0, "end": 0.5, "speaker": 1},
                 {"text": "world", "start": 0.5, "end": 1.0},
             ],
         },
@@ -124,7 +124,7 @@ def test_transform_response_maps_xai_shape():
     assert response["duration"] == 3.2
     assert response["task"] == "transcribe"
     assert response["words"] == [
-        {"word": "hello", "start": 0.0, "end": 0.5, "speaker": "1"},
+        {"word": "hello", "start": 0.0, "end": 0.5, "speaker": 1},
         {"word": "world", "start": 0.5, "end": 1.0},
     ]
     assert response._hidden_params["audio_transcription_duration"] == 3.2

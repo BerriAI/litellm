@@ -2,11 +2,11 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to xAI's `/v1/stt`
 """
 
-from collections.abc import Iterable, Mapping
-from typing import Final, cast
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 from httpx import Headers, Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
@@ -33,7 +33,7 @@ class _XAISttWord(BaseModel):
     text: str = ""
     start: float = 0.0
     end: float = 0.0
-    speaker: str | None = None
+    speaker: int | None = None
 
 
 class _XAISttResponse(BaseModel):
@@ -41,14 +41,18 @@ class _XAISttResponse(BaseModel):
     text: str = ""
     language: str = "unknown"
     duration: float | None = None
-    words: list[_XAISttWord] | None = None
+    words: tuple[_XAISttWord, ...] | None = None
 
 
-def _serialize_form_value(value: object) -> str | list[str]:
+_OBJECT_TUPLE: Final = TypeAdapter(tuple[object, ...])
+_STRING_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
+
+
+def _serialize_form_value(value: object) -> str | list[str]:  # mutable-ok: httpx multipart data takes list values for repeated form fields
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (list, tuple)):
-        return [str(item) for item in cast(Iterable[object], value)]
+        return [str(item) for item in _OBJECT_TUPLE.validate_python(value)]
     return str(value)
 
 
@@ -57,24 +61,24 @@ class XAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def custom_llm_provider(self) -> str:
         return litellm.LlmProviders.XAI.value
 
-    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:  # mutable-ok: base class signature returns list
         return ["language"]
 
     def map_openai_params(
         self,
-        non_default_params: dict[str, object],
-        optional_params: dict[str, object],
+        non_default_params: Mapping[str, object],
+        optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict[str, object]:  # mutable-ok: base class signature returns dict
         supported_params: Final = self.get_supported_openai_params(model)
-        for k, v in non_default_params.items():
-            if k in supported_params:
-                optional_params[k] = v
-        return optional_params
+        return {
+            **optional_params,
+            **{k: v for k, v in non_default_params.items() if k in supported_params},
+        }
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers  # mutable-ok: base class signature takes dict
     ) -> BaseLLMException:
         return XAIAudioTranscriptionError(message=error_message, status_code=status_code, headers=headers)
 
@@ -82,31 +86,30 @@ class XAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> AudioTranscriptionRequestData:
         processed_audio: Final = process_audio_file(audio_file)
 
-        # Provider kwargs land in `extra_body` for openai_compatible_providers
         extra_body: Final = optional_params.get("extra_body")
-        flat_params: Final[dict[str, object]] = {
-            **(dict(cast(Mapping[str, object], extra_body)) if isinstance(extra_body, Mapping) else {}),
+        flat_params: Final[Mapping[str, object]] = {
+            **(
+                _STRING_OBJECT_DICT.validate_python(extra_body)
+                if isinstance(extra_body, Mapping)
+                else {}
+            ),
             **{k: v for k, v in optional_params.items() if k != "extra_body"},
         }
 
-        openai_params: Final = self.get_supported_openai_params(model)
-        excluded_params: Final = frozenset({"model", "OPENAI_TRANSCRIPTION_PARAMS", *openai_params})
-        provider_specific_params: Final[dict[str, object]] = {
-            k: v for k, v in flat_params.items() if v is not None and k not in excluded_params
+        excluded_params: Final = frozenset({"model", "OPENAI_TRANSCRIPTION_PARAMS", "extra_body"})
+        form_data: Final[dict[str, str | list[str]]] = {  # mutable-ok: AudioTranscriptionRequestData.data requires dict and httpx needs list values
+            "model": model,
+            **{
+                k: _serialize_form_value(v)
+                for k, v in flat_params.items()
+                if v is not None and k not in excluded_params
+            },
         }
-
-        form_data: Final[dict[str, str | list[str]]] = {"model": model}
-        for key, value in provider_specific_params.items():
-            form_data[key] = _serialize_form_value(value)
-        for key in openai_params:
-            value = flat_params.get(key)
-            if value is not None:
-                form_data[key] = _serialize_form_value(value)
 
         files: Final = {
             "file": (
@@ -124,7 +127,7 @@ class XAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> TranscriptionResponse:
         try:
             payload: Final = _XAISttResponse.model_validate_json(raw_response.content)
-        except Exception as e:
+        except ValidationError as e:
             raise XAIAudioTranscriptionError(
                 message=f"Error parsing xAI response: {e}",
                 status_code=raw_response.status_code,
@@ -149,7 +152,7 @@ class XAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 for word in payload.words
             ]
 
-        hidden_params: Final[dict[str, object]] = dict(payload.model_dump(mode="json"))
+        hidden_params: Final[dict[str, object]] = dict(payload.model_dump(mode="json"))  # mutable-ok: TranscriptionResponse._hidden_params is a dict
         if payload.duration is not None:
             hidden_params["audio_transcription_duration"] = payload.duration
         response._hidden_params = hidden_params  # pyright: ignore[reportPrivateUsage]  # TranscriptionResponse exposes no public hidden-params setter
@@ -161,8 +164,8 @@ class XAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         base: Final = (XAIModelInfo.get_api_base(api_base) or "").rstrip("/")
@@ -171,17 +174,16 @@ class XAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, object],
+        headers: dict[str, object],  # mutable-ok: base class signature takes and returns dict
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
+        messages: Sequence[AllMessageValues],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, object]:
+    ) -> dict[str, object]:  # mutable-ok: base class signature returns dict
         resolved_key: Final = XAIModelInfo.get_api_key(api_key)
         if resolved_key is None:
             raise ValueError("xAI API key is required. Set XAI_API_KEY environment variable.")
 
-        headers["Authorization"] = f"Bearer {resolved_key}"
-        return headers
+        return {**headers, "Authorization": f"Bearer {resolved_key}"}
