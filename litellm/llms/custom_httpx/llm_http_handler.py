@@ -2223,6 +2223,7 @@ class BaseLLMHTTPHandler:
 
         # Prepare headers
         kwargs = kwargs or {}
+        kwargs_for_agentic: Final = self._agentic_hook_kwargs(kwargs=kwargs, api_key=api_key, api_base=api_base)
         provider_specific_header: Final = cast(
             litellm.types.utils.ProviderSpecificHeader | Sequence[litellm.types.utils.ProviderSpecificHeader] | None,
             kwargs.get("provider_specific_header", None),
@@ -2410,7 +2411,7 @@ class BaseLLMHTTPHandler:
                 anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
-                kwargs={**kwargs, "api_key": api_key} if api_key else kwargs,
+                kwargs=kwargs_for_agentic,
                 hold_back=bool(held_back_tool_names),
                 server_fulfilled_tool_names=held_back_tool_names,
             )
@@ -2433,8 +2434,7 @@ class BaseLLMHTTPHandler:
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
-            api_key=api_key,
-            kwargs=kwargs,
+            kwargs=kwargs_for_agentic,
         )
 
     async def _finalize_anthropic_messages_response(
@@ -2447,14 +2447,8 @@ class BaseLLMHTTPHandler:
         anthropic_messages_optional_request_params: dict,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str,
-        api_key: str | None,
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> AnthropicMessagesResponse | AsyncIterator:
-        # Inject api_key into kwargs so follow-up calls in agentic hooks can
-        # authenticate. api_key is a named param here (not in kwargs), so
-        # _prepare_followup_kwargs would miss it otherwise.
-        kwargs_for_agentic: Final = {**kwargs, "api_key": api_key} if api_key else kwargs
-        # Call agentic completion hooks (non-streaming path only)
         final_response: Final = await self._call_agentic_completion_hooks(
             response=initial_response,
             model=model,
@@ -2464,7 +2458,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             stream=False,
             custom_llm_provider=custom_llm_provider,
-            kwargs=kwargs_for_agentic,
+            kwargs=kwargs,
         )
 
         return self._maybe_wrap_in_fake_stream(
@@ -5313,6 +5307,15 @@ class BaseLLMHTTPHandler:
         return depth, max_loops, fingerprints
 
     @staticmethod
+    def _agentic_hook_kwargs(
+        kwargs: Mapping[str, object], api_key: str | None, api_base: str | None
+    ) -> dict[str, object]:
+        """``api_key`` and ``api_base`` are named parameters of ``anthropic_messages`` rather than kwargs, so the
+        follow-up call an agentic hook makes only reaches the same deployment if they are re-added here."""
+        deployment_params: Final = {"api_key": api_key, "api_base": api_base}
+        return {**kwargs, **{key: value for key, value in deployment_params.items() if value}}
+
+    @staticmethod
     def _has_agentic_completion_hook(logging_obj: LiteLLMLoggingObj) -> bool:
         """
         True if any registered callback actually overrides
@@ -5906,7 +5909,15 @@ class BaseLLMHTTPHandler:
                         callback.__class__.__name__,
                         plan.stop_reason,
                     )
-                    return self._maybe_wrap_in_fake_stream(response, logging_obj, api_surface)
+                    return self._maybe_wrap_in_fake_stream(
+                        await callback.async_post_agentic_loop_response_hook(
+                            response=self._finalize_refused_agentic_response(response=response, tool_calls=tool_calls),
+                            plan=plan,
+                            kwargs=kwargs_with_provider,
+                        ),
+                        logging_obj,
+                        api_surface,
+                    )
                 if not plan.run_agentic_loop:
                     continue
 
@@ -6279,7 +6290,12 @@ class BaseLLMHTTPHandler:
                 ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
                 ssl_context.check_hostname = False
                 ssl_context.verify_mode = ssl.CERT_NONE
-            backend_ws: Final = await self._open_realtime_backend_ws(websockets, url, headers, ssl_context)
+            provider_backend: Final = await provider_config.open_backend(url, headers)
+            backend_ws: Final = (
+                provider_backend
+                if provider_backend is not None
+                else await self._open_realtime_backend_ws(websockets, url, headers, ssl_context)
+            )
             async with backend_ws:
                 _request_data: Final[dict[str, object]] = {}
                 if litellm_metadata:
@@ -6591,7 +6607,7 @@ class BaseLLMHTTPHandler:
         first_message: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
         **kwargs: Any,
-    ):
+    ) -> Exception | None:
         """
         Handles Responses API WebSocket mode.
 
@@ -6625,7 +6641,7 @@ class BaseLLMHTTPHandler:
                 **kwargs,
             )
             await handler.run()
-            return
+            return None
 
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -6744,9 +6760,10 @@ class BaseLLMHTTPHandler:
                     output_guardrail_callbacks=_ws_output_guardrail_callbacks,
                     quota_callbacks=_ws_quota_callbacks,
                     authorized_model=model,
+                    custom_llm_provider=custom_llm_provider,
                     request_defaults=request_defaults,
                 )
-                await streaming.bidirectional_forward()
+                return await streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatusCode as e:
             verbose_logger.exception("Error connecting to responses WS backend: %s", e)
@@ -6760,6 +6777,7 @@ class BaseLLMHTTPHandler:
                     pass
                 else:
                     raise Exception(f"Unexpected error while closing WebSocket: {close_error}")
+        return None
 
     def image_edit_handler(
         self,

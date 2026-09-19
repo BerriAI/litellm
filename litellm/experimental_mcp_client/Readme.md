@@ -6,7 +6,7 @@ LiteLLM MCP Client allows you to use MCP tools with LiteLLM
 
 The `mcp` and `proxy` extras require MCP Python SDK 2.2 or newer within the 2.x release line. Installing core LiteLLM without these extras does not require MCP
 
-Existing MCP SDK1 clients can continue connecting to the gateway over the supported legacy MCP protocols. The client and gateway can use different SDK versions in separate Python environments. Modern protocol advertisement remains disabled during the Phase 0 upgrade
+Existing MCP SDK1 clients can continue connecting to the gateway over the supported legacy MCP protocols. The client and gateway can use different SDK versions in separate Python environments. Modern protocol advertisement remains disabled during the Phase 0 upgrade. An initialize body requesting `2026-07-28` falls back to the supported legacy version `2025-11-25`; an explicit `MCP-Protocol-Version: 2026-07-28` HTTP header is rejected with HTTP 400
 
 Code sharing the gateway's Python environment must support SDK2. Its Python API has breaking changes, including renamed imports and snake_case model attributes such as `input_schema`, `is_error`, and `structured_content`. This also applies to callers consuming SDK objects returned by LiteLLM's experimental MCP client. MCP JSON fields retain their protocol spelling, such as `inputSchema` and `isError`
 

@@ -1995,3 +1995,63 @@ async def test_request_auth_preview_uses_the_same_effective_headers_as_egress() 
     assert str(request.url) == "https://upstream.example/mcp"
     assert request.headers["Authorization"] == "Bearer resolved"
     assert request.headers["X-Trace"] == "trace"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rpc_error", [False, True])
+async def test_expired_session_preserves_sdk_error_and_next_operation_reinitializes(rpc_error: bool) -> None:
+    from mcp.types import INVALID_REQUEST, METHOD_NOT_FOUND
+
+    requests = []
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method != "POST":
+            return httpx2.Response(405)
+        payload = json.loads(request.content)
+        if "id" not in payload:
+            return httpx2.Response(202)
+        requests.append((payload["method"], request.headers.get("mcp-session-id")))
+        if payload["method"] == "initialize":
+            return httpx2.Response(200, headers={"mcp-session-id": f"session-{len(requests)}"}, json={
+                "jsonrpc": "2.0", "id": payload["id"], "result": {
+                    "protocolVersion": "2025-06-18", "capabilities": {},
+                    "serverInfo": {"name": "expiry-test", "version": "1"},
+                },
+            })
+        if len(requests) == 2:
+            if rpc_error:
+                return httpx2.Response(404, json={
+                    "jsonrpc": "2.0", "id": payload["id"],
+                    "error": {"code": METHOD_NOT_FOUND, "message": "Tool catalog unavailable"},
+                })
+            return httpx2.Response(404)
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": {"tools": []}})
+
+    client = MCPClient(server_url="https://example.com/mcp", timeout=3)
+    async with client._create_httpx_client_factory(transport=httpx2.MockTransport(respond))() as http_client:
+        with pytest.raises(MCPError) as caught:
+            await client._execute_session_operation(
+                streamable_http_client(client.server_url, http_client=http_client), lambda session: session.list_tools()
+            )
+        assert caught.value.error.code == (METHOD_NOT_FOUND if rpc_error else INVALID_REQUEST)
+        assert caught.value.error.message == ("Tool catalog unavailable" if rpc_error else "Session terminated")
+        result = await client._execute_session_operation(
+            streamable_http_client(client.server_url, http_client=http_client), lambda session: session.list_tools()
+        )
+    assert result.tools == []
+    assert requests == [("initialize", None), ("tools/list", "session-1"), ("initialize", None), ("tools/list", "session-3")]
+
+
+@pytest.mark.asyncio
+async def test_404_before_session_initialization_preserves_method_not_found() -> None:
+    from mcp.types import METHOD_NOT_FOUND
+
+    client = MCPClient(server_url="https://example.com/mcp", timeout=3)
+    transport = httpx2.MockTransport(lambda request: httpx2.Response(404))
+    async with client._create_httpx_client_factory(transport=transport)() as http_client:
+        with pytest.raises(MCPError) as caught:
+            await client._execute_session_operation(
+                streamable_http_client(client.server_url, http_client=http_client), lambda session: session.list_tools()
+            )
+    assert caught.value.error.code == METHOD_NOT_FOUND
+    assert caught.value.error.message == "Not Found"

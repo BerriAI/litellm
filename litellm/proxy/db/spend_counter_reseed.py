@@ -26,6 +26,7 @@ from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_lookup_gate import db_lookup_gate
 from litellm.proxy.spend_tracking.spend_counter_batch import read_batched_spend_counter, record_spend_counter_value
 from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
     BudgetWindowSpendRepository,
     EndUserRepository,
@@ -77,6 +78,7 @@ class SpendCounterReseed:
         spend:team_member:{uid}:{tid}     -> LiteLLM_TeamMembership.spend
         spend:user:{user_id}              -> LiteLLM_UserTable.spend
         spend:org:{org_id}                -> LiteLLM_OrganizationTable.spend
+        spend:project:{project_id}        -> LiteLLM_ProjectTable.spend
 
     End-user and tag spend counters intentionally do not reseed here. Their
     auth paths already load the corresponding objects via get_end_user_object()
@@ -157,6 +159,9 @@ class SpendCounterReseed:
                     row = await OrganizationRepository(prisma_client).table.find_unique(
                         where={"organization_id": org_id}
                     )
+                elif counter_key.startswith("spend:project:"):
+                    project_id: Final = counter_key[len("spend:project:") :]
+                    row = await ProjectRepository(prisma_client).table.find_unique(where={"project_id": project_id})
                 else:
                     return None
         except Exception:

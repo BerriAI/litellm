@@ -33,6 +33,8 @@ jobs:
       - name: Detect relevant changes
         id: changes
         uses: ./.github/actions/detect-changes
+        with:
+          category: mcp-dependencies
 
       - name: Set up Python
         if: steps.changes.outputs.decision != 'skip'
