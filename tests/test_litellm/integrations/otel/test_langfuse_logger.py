@@ -42,6 +42,7 @@ from litellm.types.utils import (  # noqa: E402
 INPUT_ATTR: Final = "langfuse.observation.input"
 OUTPUT_ATTR: Final = "langfuse.observation.output"
 TRACE_NAME_ATTR: Final = "langfuse.trace.name"
+TRACE_CONTROL_ATTRS: Final = (TRACE_NAME_ATTR, "user.id", "session.id", "langfuse.trace.tags")
 CHAT_DATA: Final = {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "ping"}]}
 
 
@@ -372,6 +373,99 @@ def test_unnamed_request_leaves_the_trace_name_off_both_spans():
     root_attrs, generation_attrs = _run_named_request(logger, exporter, {"proxy_server_request": {"headers": {}}})
 
     assert TRACE_NAME_ATTR not in root_attrs and TRACE_NAME_ATTR not in generation_attrs
+
+
+@pytest.mark.parametrize("capture", ["span_only", "no_content"])
+def test_body_metadata_user_session_and_tags_land_on_the_root_and_the_generation(capture):
+    logger, exporter = _logger(capture=capture)
+
+    root_attrs, generation_attrs = _run_named_request(
+        logger,
+        exporter,
+        {
+            "metadata": {
+                "trace_user_id": "user-42",
+                "session_id": "session-7",
+                "tags": ["prod", "eval", "nightly"],
+                "user_api_key_team_id": "team-from-proxy",
+            },
+            "proxy_server_request": {"headers": {}},
+        },
+    )
+
+    for attrs in (root_attrs, generation_attrs):
+        assert attrs["user.id"] == "user-42"
+        assert attrs["session.id"] == "session-7"
+        assert tuple(attrs["langfuse.trace.tags"]) == ("prod", "eval", "nightly")
+        assert TRACE_NAME_ATTR not in attrs
+
+
+def test_langfuse_user_and_session_headers_beat_body_metadata_on_both_spans():
+    logger, exporter = _logger()
+
+    root_attrs, generation_attrs = _run_named_request(
+        logger,
+        exporter,
+        {
+            "metadata": {"trace_user_id": "from-body", "session_id": "from-body"},
+            "proxy_server_request": {
+                "headers": {"langfuse_trace_user_id": "from-header", "langfuse_session_id": "from-header-s"}
+            },
+        },
+    )
+
+    for attrs in (root_attrs, generation_attrs):
+        assert attrs["user.id"] == "from-header"
+        assert attrs["session.id"] == "from-header-s"
+
+
+def test_caller_metadata_cannot_override_the_proxy_team_identity():
+    logger, exporter = _logger()
+    response: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content="pong"))])
+    litellm_params: Final = {
+        "metadata": {"trace_user_id": "u", "trace_metadata": {"team_id": "spoofed"}, "team_id": "spoofed"}
+    }
+    logger.log_pre_api_call(
+        model="gpt-5.4-mini", messages=[], kwargs={"litellm_call_id": "call_1", "litellm_params": litellm_params}
+    )
+    payload: Final = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-5.4-mini",
+        "messages": CHAT_DATA["messages"],
+        "response": response.model_dump(),
+        "status": "success",
+        "litellm_call_id": "call_1",
+        "metadata": {
+            "user_api_key_team_id": "real-team",
+            "user_api_key_team_alias": "real-alias",
+            "team_id": "spoofed",
+            "team_alias": "spoofed",
+        },
+        "hidden_params": {},
+    }
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": payload, "litellm_params": litellm_params}, response, None, None
+        )
+    )
+
+    attrs: Final = dict(exporter.get_finished_spans()[0].attributes or {})
+    assert attrs["user.id"] == "u"
+    assert attrs["langfuse.trace.metadata.team_id"] == "real-team"
+    assert attrs["langfuse.trace.metadata.team_alias"] == "real-alias"
+    assert "langfuse.trace.metadata" not in attrs and "langfuse.trace.id" not in attrs
+
+
+def test_a_request_without_trace_controls_stamps_none_of_them():
+    logger, exporter = _logger()
+
+    root_attrs, generation_attrs = _run_named_request(
+        logger, exporter, {"metadata": {"user_api_key_team_id": "t1", "tags": []}, "proxy_server_request": {"headers": {}}}
+    )
+
+    assert set(TRACE_CONTROL_ATTRS).isdisjoint(root_attrs)
+    assert set(TRACE_CONTROL_ATTRS).isdisjoint(generation_attrs)
 
 
 @pytest.mark.parametrize(

@@ -26,6 +26,7 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
+    ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponseFailedEvent,
     ResponseIncompleteEvent,
@@ -69,6 +70,7 @@ class TestBaseResponsesAPIStreamingIterator:
 
         mock_responses_api_response = Mock(spec=ResponsesAPIResponse)
         mock_responses_api_response.id = "resp_u2028"
+        mock_responses_api_response.usage = ResponseAPIUsage(input_tokens=3, output_tokens=2, total_tokens=5)
         mock_completed_event = Mock(spec=ResponseCompletedEvent)
         mock_completed_event.type = ResponsesAPIStreamEvents.RESPONSE_COMPLETED
         mock_completed_event.response = mock_responses_api_response
@@ -123,6 +125,7 @@ class TestBaseResponsesAPIStreamingIterator:
         # Mock the _update_responses_api_response_id_with_model_id method
         updated_response = Mock(spec=ResponsesAPIResponse)
         updated_response.id = "updated_response_id"
+        updated_response.usage = ResponseAPIUsage(input_tokens=3, output_tokens=2, total_tokens=5)
 
         # Create the iterator instance
         iterator = BaseResponsesAPIStreamingIterator(
@@ -524,7 +527,7 @@ class TestBaseResponsesAPIStreamingIterator:
             "type": "server_error",
             "message": "The model encountered an error",
         }
-        mock_responses_api_response.usage = None
+        mock_responses_api_response.usage = ResponseAPIUsage(input_tokens=3, output_tokens=2, total_tokens=5)
 
         mock_failed_event = Mock(spec=ResponseFailedEvent)
         mock_failed_event.type = ResponsesAPIStreamEvents.RESPONSE_FAILED
@@ -604,7 +607,7 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_responses_api_response = Mock(spec=ResponsesAPIResponse)
         mock_responses_api_response.id = "resp_incomplete_123"
         mock_responses_api_response.incomplete_details = {"reason": "max_output_tokens"}
-        mock_responses_api_response.usage = None
+        mock_responses_api_response.usage = ResponseAPIUsage(input_tokens=3, output_tokens=2, total_tokens=5)
 
         mock_incomplete_event = Mock(spec=ResponseIncompleteEvent)
         mock_incomplete_event.type = ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE

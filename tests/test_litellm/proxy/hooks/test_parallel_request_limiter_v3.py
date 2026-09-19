@@ -7,9 +7,10 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Final, List, Optional
 
 import pytest
 from fastapi import HTTPException
@@ -17,11 +18,15 @@ from fastapi import HTTPException
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     ParallelSlotAcquisition,
+    RateLimitDescriptor,
+    RateLimitResponse,
     RequestRateLimiterStash,
     _request_stash,
     get_or_create_request_stash,
@@ -32,6 +37,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
     EmbeddingResponse,
     ModelResponse,
@@ -4054,6 +4060,125 @@ async def _seed_max_parallel_requests_slots(
     )
 
 
+@pytest.mark.asyncio
+async def test_completed_responses_post_call_releases_parallel_slot() -> None:
+    api_key = hash_token("sk-responses-post-call")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    data = {
+        "model": "gpt-4o-mini",
+        "input": "hello",
+        "litellm_call_id": "responses-owner",
+    }
+    parallel_key = f"{{api_key:{api_key}}}:max_parallel_requests"
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="aresponses",
+    )
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=parallel_key)
+    ) == 1
+
+    await handler.async_post_call_success_hook(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        response=ResponsesAPIResponse(
+            id="resp_parallel_slot",
+            created_at=0,
+            model="gpt-4o-mini",
+            object="response",
+            output=[],
+            status="completed",
+        ),
+    )
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=parallel_key)
+    ) == 0
+
+    await handler.async_log_success_event(
+        kwargs={"litellm_call_id": data["litellm_call_id"]},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=parallel_key)
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_success_callbacks_release_parallel_slot_once_when_redis_fails() -> None:
+    from unittest.mock import AsyncMock
+
+    api_key = hash_token("sk-concurrent-release")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=2)
+    call_id = "concurrent-release-owner"
+    parallel_key = f"{{api_key:{api_key}}}:max_parallel_requests"
+    release_started = asyncio.Event()
+    allow_redis_failure = asyncio.Event()
+
+    async def failing_release(
+        keys: Sequence[str], args: Sequence[object]
+    ) -> list[int]:
+        release_started.set()
+        await allow_redis_failure.wait()
+        raise ConnectionError("redis unavailable")
+
+    release_script = AsyncMock(side_effect=failing_release)
+    handler.parallel_release_script = release_script
+    await local_cache.async_set_cache(key=parallel_key, value=2, local_only=True)
+    stash = get_or_create_request_stash()
+    stash.owner_litellm_call_id = call_id
+    stash.parallel_slot = ParallelSlotAcquisition(
+        slot_id="slot-concurrent-release",
+        counter_keys=[parallel_key],
+    )
+    data = {"litellm_call_id": call_id}
+
+    post_call_task = asyncio.create_task(
+        handler.async_post_call_success_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=ResponsesAPIResponse(
+                id="resp_concurrent_release",
+                created_at=0,
+                model="gpt-4o-mini",
+                object="response",
+                output=[],
+                status="completed",
+            ),
+        )
+    )
+    await asyncio.wait_for(release_started.wait(), timeout=5)
+    logging_task = asyncio.create_task(
+        handler.async_log_success_event(
+            kwargs=data,
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+    )
+    allow_redis_failure.set()
+    await asyncio.wait_for(
+        asyncio.gather(post_call_task, logging_task),
+        timeout=5,
+    )
+
+    assert release_script.await_count == 1
+    assert await local_cache.async_get_cache(key=parallel_key) == 1
+    assert stash.parallel_slot is None
+
+
 async def _build_seeded_limiter():
     """Build a v3 limiter whose api-key slot registry already holds the pre-call slot."""
     api_key = hash_token("sk-disconnect")
@@ -5482,6 +5607,155 @@ async def _reserved_tokens_for(
 
 
 @pytest.mark.asyncio
+async def test_tpm_reservation_resets_sibling_tokens_with_request_window(monkeypatch):
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "true")
+    time_controller = TimeController()
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-window-reset-siblings"),
+        tpm_limit=1000,
+        rpm_limit=1000,
+    )
+
+    async def request(call_id):
+        data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 200,
+            "litellm_call_id": call_id,
+            "metadata": {
+                "user_api_key": user_api_key_dict.api_key,
+                "user_api_key_user_id": user_api_key_dict.user_id,
+            },
+        }
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type="completion",
+        )
+        await handler.async_log_success_event(
+            kwargs={
+                "litellm_call_id": call_id,
+                "litellm_params": {
+                    "metadata": {
+                        "user_api_key": user_api_key_dict.api_key,
+                        "user_api_key_user_id": user_api_key_dict.user_id,
+                        "model_group": "gpt-4o",
+                    }
+                },
+                "standard_logging_object": {
+                    "metadata": {
+                        "user_api_key_hash": user_api_key_dict.api_key,
+                        "user_api_key_user_id": user_api_key_dict.user_id,
+                    }
+                },
+            },
+            response_obj=ModelResponse(
+                model="gpt-4o",
+                usage=Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300),
+            ),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    tokens_key = handler.create_rate_limit_keys(
+        key="api_key", value=user_api_key_dict.api_key, rate_limit_type="tokens"
+    )
+    for index in range(3):
+        await request(f"call-{index}")
+        assert await local_cache.async_get_cache(key=tokens_key) == (index + 1) * 300
+
+    time_controller.advance(61)
+    await request("call-after-window-reset")
+    assert await local_cache.async_get_cache(key=tokens_key) == 300
+
+
+@pytest.mark.asyncio
+async def test_atomic_tpm_reservation_rollover_resets_sibling_requests_counter():
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    window_size = 60
+    now_int = int(time.time())
+    window_key = "{api_key:atomic-rollover}:window"
+    requests_key = handler.create_rate_limit_keys("api_key", "atomic-rollover", "requests")
+    tokens_key = handler.create_rate_limit_keys("api_key", "atomic-rollover", "tokens")
+    for key, value in ((window_key, str(now_int - window_size - 1)), (requests_key, 3), (tokens_key, 900)):
+        await local_cache.async_set_cache(key=key, value=value, ttl=window_size)
+
+    tpm_pass = await handler.atomic_check_and_increment_by_n(
+        descriptors=[
+            RateLimitDescriptor(
+                key="api_key",
+                value="atomic-rollover",
+                rate_limit={"tokens_per_unit": 1000, "window_size": window_size},
+            )
+        ],
+        increments=[{"tokens": 200}],
+    )
+    assert tpm_pass["overall_code"] == "OK"
+    assert await local_cache.async_get_cache(key=tokens_key) == 200
+
+    rpm_pass = await handler.should_rate_limit(
+        descriptors=[
+            RateLimitDescriptor(
+                key="api_key",
+                value="atomic-rollover",
+                rate_limit={"requests_per_unit": 5, "window_size": window_size},
+            )
+        ],
+        skip_tpm_check=True,
+    )
+    assert rpm_pass["overall_code"] == "OK"
+    assert [status["limit_remaining"] for status in rpm_pass["statuses"]] == [4]
+    assert await local_cache.async_get_cache(key=requests_key) == 1
+
+
+class _YieldingInMemoryCache(InMemoryCache):
+    async def async_get_cache(self, key: str, **kwargs: object) -> object:
+        value = await super().async_get_cache(key, **kwargs)
+        await asyncio.sleep(0)
+        return value
+
+
+@pytest.mark.asyncio
+async def test_window_rollover_reset_does_not_erase_concurrent_sibling_increment():
+    local_cache = DualCache(in_memory_cache=_YieldingInMemoryCache())
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    window_size = 60
+    now_int = int(time.time())
+    window_key = "{api_key:concurrent-rollover}:window"
+    requests_key = handler.create_rate_limit_keys("api_key", "concurrent-rollover", "requests")
+    tokens_key = handler.create_rate_limit_keys("api_key", "concurrent-rollover", "tokens")
+    for key, value in ((window_key, str(now_int - window_size - 1)), (requests_key, 3), (tokens_key, 900)):
+        await local_cache.async_set_cache(key=key, value=value, ttl=window_size)
+
+    tpm_descriptor = RateLimitDescriptor(
+        key="api_key",
+        value="concurrent-rollover",
+        rate_limit={"tokens_per_unit": 1000, "window_size": window_size},
+    )
+    rpm_pass, tpm_pass = await asyncio.gather(
+        handler.in_memory_cache_sliding_window(
+            keys=[window_key, requests_key], now_int=now_int, window_size=window_size
+        ),
+        handler.atomic_check_and_increment_by_n(
+            descriptors=[tpm_descriptor],
+            increments=[{"requests": 0, "tokens": 200}],
+        ),
+    )
+
+    assert rpm_pass == [str(now_int), 1]
+    assert tpm_pass["overall_code"] == "OK"
+    assert await local_cache.async_get_cache(key=requests_key) == 1
+    assert await local_cache.async_get_cache(key=tokens_key) == 200
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "key_metadata, team_metadata, expected_output_estimate, tier",
     [
@@ -6311,7 +6585,7 @@ async def test_an_open_circuit_breaker_reads_the_sliding_window_locally_without_
         (
             {
                 "team_id": "t",
-                "metadata": {"model_rpm_limit": {"test-model": 100}},
+                "metadata": {"model_rpm_limit": {"other-model": 100}},
                 "team_metadata": {"model_rpm_limit": {"test-model": 1}},
             },
             {},
@@ -6529,3 +6803,161 @@ async def test_request_capacity_rejection_keeps_existing_redis_mirror():
                 pytest.fail("rejection released another request's mirrored slot")
         assert exc.value.status_code == 429
         assert await cache.async_get_cache(counter_key, local_only=True) == 1
+
+
+@pytest.mark.parametrize(
+    "key_limits",
+    [
+        {"metadata": {"model_rpm_limit": {"test-model": 3}}},
+        {"model_max_budget": {"test-model": {"rpm_limit": 3}}},
+    ],
+)
+@pytest.mark.asyncio
+async def test_key_model_rpm_override_takes_precedence_over_team_model_rpm_limit(key_limits):
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth = UserAPIKeyAuth(
+        api_key=hash_token("sk-key-override"),
+        team_id="t",
+        team_metadata={"model_rpm_limit": {"test-model": 1}},
+        **key_limits,
+    )
+
+    async def request():
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth, cache=cache, data={"model": "test-model"}, call_type="acompletion"
+        )
+
+    for _ in range(3):
+        await request()
+    with pytest.raises(HTTPException) as exc:
+        await request()
+    assert exc.value.status_code == 429
+    assert "model_per_key" in str(exc.value.detail)
+
+
+@pytest.mark.parametrize(
+    "key_limits, override_key_gets_through",
+    [
+        ({"model_rpm_limit": {"test-model": 10}}, False),
+        ({"model_rpm_limit": {"test-model": 10}, "model_tpm_limit": {"test-model": 5000}}, True),
+    ],
+    ids=["rpm_only_override_still_shares_team_tpm", "rpm_and_tpm_override_leaves_team_tpm"],
+)
+@pytest.mark.asyncio
+async def test_key_model_rpm_override_keeps_team_model_tpm_limit(key_limits, override_key_gets_through):
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    team_metadata = {"model_rpm_limit": {"test-model": 5}, "model_tpm_limit": {"test-model": 500}}
+    sibling_key = UserAPIKeyAuth(api_key=hash_token("sk-sibling"), team_id="t", team_metadata=team_metadata)
+    override_key = UserAPIKeyAuth(
+        api_key=hash_token("sk-key-override"), team_id="t", metadata=key_limits, team_metadata=team_metadata
+    )
+
+    async def request(auth):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={"model": "test-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 300},
+            call_type="acompletion",
+        )
+
+    await request(sibling_key)
+    if override_key_gets_through:
+        await request(override_key)
+        return
+    with pytest.raises(HTTPException) as exc:
+        await request(override_key)
+    assert exc.value.status_code == 429
+    assert "model_per_team" in str(exc.value.detail)
+    assert exc.value.headers["rate_limit_type"] == "tokens"
+
+
+@pytest.mark.parametrize(
+    "key_metadata, charges_team_model_pool",
+    [
+        ({}, True),
+        ({"model_rpm_limit": {"test-model": 10}}, True),
+        ({"model_tpm_limit": {"test-model": 5000}}, False),
+        ({"model_tpm_limit": {"other-model": 5000}}, True),
+    ],
+    ids=["no_override", "rpm_only_override", "tpm_override", "tpm_override_on_other_model"],
+)
+def test_success_tpm_accounting_skips_team_model_pool_when_key_owns_model_tpm_limit(
+    key_metadata, charges_team_model_pool
+):
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    response = ModelResponse(
+        id="team-pool-tpm",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="test-model",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+    kwargs = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": hash_token("sk-pool"), "user_api_key_team_id": "t"}},
+        "litellm_params": {
+            "metadata": {
+                "model_group": "test-model",
+                "user_api_key_metadata": key_metadata,
+                "user_api_key_team_metadata": {"model_tpm_limit": {"test-model": 500}},
+            }
+        },
+        "model": "test-model",
+    }
+
+    ops = handler._build_success_event_pipeline_operations(kwargs=kwargs, response_obj=response, rate_limit_type="output")
+
+    charged_keys = {op["key"] for op in ops}
+    assert handler.create_rate_limit_keys("model_per_key", f"{hash_token('sk-pool')}:test-model", "tokens") in charged_keys
+    team_pool_key = handler.create_rate_limit_keys("model_per_team", "t:test-model", "tokens")
+    assert (team_pool_key in charged_keys) is charges_team_model_pool
+
+
+@pytest.fixture(params=["Europe/Paris", "Asia/Kolkata", "America/Los_Angeles"])
+def process_timezone(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    monkeypatch.setenv("TZ", request.param)
+    time.tzset()
+    yield request.param
+    monkeypatch.undo()
+    time.tzset()
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="switching the process timezone needs time.tzset()")
+def test_rate_limit_error_reports_reset_time_in_utc_on_a_non_utc_proxy(process_timezone: str) -> None:
+    now: Final = datetime(2026, 9, 4, 21, 53, 21, tzinfo=timezone.utc)
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), time_provider=lambda: now
+    )
+    expected_reset: Final = (now + timedelta(seconds=handler.window_size)).strftime("%Y-%m-%d %H:%M:%S UTC")
+    over_limit: Final[RateLimitResponse] = {
+        "overall_code": "OVER_LIMIT",
+        "statuses": [
+            {
+                "code": "OVER_LIMIT",
+                "descriptor_key": "api_key",
+                "limit_remaining": 0,
+                "rate_limit_type": "requests",
+                "current_limit": 2,
+            }
+        ],
+    }
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        handler._handle_rate_limit_error(
+            response=over_limit,
+            descriptors=[{"key": "api_key", "value": "sk-test", "rate_limit": None}],
+            requested_model="gpt-4o-mini",
+        )
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.headers == {
+        "retry-after": str(handler.window_size),
+        "rate_limit_type": "requests",
+        "reset_at": expected_reset,
+    }
+    assert exc_info.value.detail == (
+        "Rate limit exceeded for api_key: sk-test. Limit type: requests. "
+        f"Current limit: 2, Remaining: 0. Limit resets at: {expected_reset}"
+    )
