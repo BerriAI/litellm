@@ -2269,6 +2269,10 @@ class TestAutoRouterSessionRepository:
         "classifier_cost": 0.01,
         "tier_turns": {"complex": 3},
         "baseline_models": {"anthropic/claude-opus-5": 3},
+        "savings_estimated_turns": 3,
+        "savings_estimated_actual_spend": 0.14,
+        "savings_estimated_saved_spend": 0.24,
+        "savings_estimated_baseline_models": {"anthropic/claude-opus-5": 3},
     }
 
     @staticmethod
@@ -2295,6 +2299,9 @@ class TestAutoRouterSessionRepository:
         assert (row.router_name, row.turns, row.spend, row.saved_spend) == ("claude-auto", 3, 0.14, 0.24)
         assert row.baseline_models == {"anthropic/claude-opus-5": 3}
         assert row.baseline_model == "anthropic/claude-opus-5"
+        assert row.savings_estimated_turns == 3
+        assert row.savings_estimated_actual_spend == 0.14
+        assert row.savings_estimated_saved_spend == 0.24
 
     @pytest.mark.asyncio
     async def test_find_latest_for_key_is_none_when_the_key_wrote_no_such_session(self):

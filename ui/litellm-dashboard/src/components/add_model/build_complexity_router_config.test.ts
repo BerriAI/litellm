@@ -48,6 +48,23 @@ const baseParams: BuildComplexityRouterConfigParams = {
 };
 
 describe("buildComplexityRouterConfig", () => {
+  it("forwards preset references and explicit overrides without materializing absent text on create", () => {
+    const settings = {
+      efficient_profile_preset: "efficient-v1",
+      capable_profile_preset: "capable-v1",
+      harness_preset: "runtime-v1",
+      efficient_profile: "Explicit efficient override",
+      capable_profile: "Explicit capable override",
+      harness: "Explicit harness override",
+      max_quality_gap: 0.05,
+    };
+    const config = buildComplexityRouterConfig({ ...baseParams, classifierType: "llm_v2", llmV2Config: settings });
+    expect(config.llm_v2_config).toEqual(settings);
+    const { efficient_profile: _efficient, capable_profile: _capable, harness: _harness, ...refs } = settings;
+    const refConfig = buildComplexityRouterConfig({ ...baseParams, classifierType: "llm_v2", llmV2Config: refs });
+    expect(JSON.parse(JSON.stringify(refConfig)).llm_v2_config).toEqual(refs);
+  });
+
   it.each(["capability", "llm_v2", "heuristic"] as const)(
     "disables the removed overrides only for forecast creates: %s",
     (classifierType) => {
