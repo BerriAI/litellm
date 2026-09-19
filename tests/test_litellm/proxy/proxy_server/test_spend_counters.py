@@ -22,13 +22,17 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import litellm.proxy.proxy_server as ps
+from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 
 from .conftest import normalize
 
@@ -1288,14 +1292,115 @@ async def test_ensure_spend_counter_initialized_cold_seeds_from_source_cache(
 
     observed = {
         "source_cache_called": fake_user_cache.async_get_cache.called,
+        "seed_set_max_value": fake_cache.redis_cache.async_set_max.call_args.kwargs["value"] == 7.0,
         "seed_increment_called": fake_cache.redis_cache.async_increment.called,
+        "in_memory_seeded_value": fake_cache.in_memory_cache.set_cache.call_args.kwargs["value"],
         "warm_check_done": fake_cache.redis_cache.async_get_cache.called,
     }
     assert normalize(observed) == {
         "source_cache_called": True,
-        "seed_increment_called": True,
+        "seed_set_max_value": True,
+        "seed_increment_called": False,
+        "in_memory_seeded_value": 7.0,
         "warm_check_done": True,
     }
+
+
+class _DbDownSpendTable:
+    def __init__(self) -> None:
+        self.read_started: Final = asyncio.Event()
+        self.resume_read: Final = asyncio.Event()
+
+    async def find_unique(self, where: Mapping[str, object]) -> SimpleNamespace:
+        self.read_started.set()
+        await self.resume_read.wait()
+        raise ConnectionError("database unavailable")
+
+
+@pytest.mark.asyncio
+async def test_ensure_spend_counter_initialized_concurrent_cold_seeds_converge_when_db_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache: Final = DualCache(in_memory_cache=InMemoryCache())
+    counter_key: Final = "spend:user:db-down-user"
+    cached_spend: Final = 6.0
+    table: Final = _DbDownSpendTable()
+    user_cache: Final = DualCache(in_memory_cache=InMemoryCache())
+    user_cache.in_memory_cache.set_cache(key="db-down-user", value={"spend": cached_spend})
+    monkeypatch.setattr(ps, "spend_counter_cache", cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", user_cache)
+    monkeypatch.setattr(ps, "prisma_client", SimpleNamespace(db=SimpleNamespace(litellm_usertable=table)))
+
+    first: Final = asyncio.create_task(
+        ps._ensure_spend_counter_initialized(counter_key=counter_key, source_cache_key="db-down-user")
+    )
+    await asyncio.wait_for(table.read_started.wait(), timeout=5)
+    second: Final = asyncio.create_task(
+        ps._ensure_spend_counter_initialized(counter_key=counter_key, source_cache_key="db-down-user")
+    )
+    await asyncio.sleep(0)
+    table.resume_read.set()
+    await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
+
+    assert cache.in_memory_cache.get_cache(key=counter_key) == cached_spend
+
+
+class _FakeSetMaxRedis:
+    def __init__(self, existing: float | None = None) -> None:
+        self.value = existing
+
+    async def async_get_cache(self, key: str) -> float | None:
+        return self.value
+
+    async def async_set_max(self, key: str, value: float) -> float:
+        self.value = value if self.value is None else max(self.value, value)
+        return self.value
+
+
+class _DbDownSpendTableWhileAnotherPodSeeds:
+    def __init__(self, redis: _FakeSetMaxRedis, counter_key: str, other_pod_spend: float | None) -> None:
+        self._redis: Final = redis
+        self._counter_key: Final = counter_key
+        self._other_pod_spend: Final = other_pod_spend
+
+    async def find_unique(self, where: Mapping[str, object]) -> SimpleNamespace:
+        if self._other_pod_spend is not None:
+            await self._redis.async_set_max(key=self._counter_key, value=self._other_pod_spend)
+        raise ConnectionError("database unavailable")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "other_pod_spend",
+    [None, 9.5, 2.5],
+    ids=["cold", "another_pod_seeded_higher", "another_pod_seeded_lower"],
+)
+async def test_ensure_spend_counter_initialized_cold_seed_from_source_cache_is_monotonic_across_pods(
+    monkeypatch: pytest.MonkeyPatch, other_pod_spend: float | None
+) -> None:
+    redis: Final = _FakeSetMaxRedis(existing=None)
+    cache: Final = DualCache(
+        in_memory_cache=InMemoryCache(),
+        redis_cache=redis,  # pyright: ignore[reportArgumentType]  # duck-typed fake standing in for RedisCache
+    )
+    counter_key: Final = "spend:user:db-down-multi-pod-user"
+    cached_spend: Final = 6.0
+    table: Final = _DbDownSpendTableWhileAnotherPodSeeds(
+        redis=redis, counter_key=counter_key, other_pod_spend=other_pod_spend
+    )
+    user_cache: Final = DualCache(in_memory_cache=InMemoryCache())
+    user_cache.in_memory_cache.set_cache(key="db-down-multi-pod-user", value={"spend": cached_spend})
+    monkeypatch.setattr(ps, "spend_counter_cache", cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", user_cache)
+    monkeypatch.setattr(ps, "prisma_client", SimpleNamespace(db=SimpleNamespace(litellm_usertable=table)))
+
+    await ps._ensure_spend_counter_initialized(
+        counter_key=counter_key, source_cache_key="db-down-multi-pod-user"
+    )
+
+    expected: Final = cached_spend if other_pod_spend is None else max(other_pod_spend, cached_spend)
+    assert redis.value == expected
+    assert cache.in_memory_cache.get_cache(key=counter_key) == cached_spend
 
 
 # ---------------------------------------------------------------------------
