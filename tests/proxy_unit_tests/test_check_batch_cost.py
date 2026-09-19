@@ -23,6 +23,30 @@ _CLAIM_UNIFIED_BATCH_ID = "dW5pZmllZF9iYXRjaF9pZA=="
 _CLAIM_OUTPUT_FILE_ID = "file-output-123"
 
 
+def test_batch_output_file_object_derives_metadata():
+    from litellm_enterprise.proxy.common_utils.check_batch_cost import _batch_output_file_object
+
+    output_file = _batch_output_file_object(
+        unified_file_id="unified-output",
+        raw_file_id="s3://bucket/path/to/output.jsonl.out",
+        size_bytes=4321,
+    )
+    provider_file = _batch_output_file_object(
+        unified_file_id="unified-provider",
+        raw_file_id="file-abc",
+        size_bytes=0,
+    )
+
+    assert output_file.id == "unified-output"
+    assert output_file.object == "file"
+    assert output_file.purpose == "batch_output"
+    assert output_file.filename == "output.jsonl.out"
+    assert output_file.bytes == 4321
+    assert output_file.status == "processed"
+    assert provider_file.filename == "file-abc"
+    assert provider_file.bytes == 0
+
+
 def _batch_cost_result(
     cost: float,
     usage: dict,
@@ -1777,6 +1801,18 @@ class TestCheckBatchCost:
             raw_output_file_id: fake_managed_output_id,
             raw_error_file_id: fake_managed_error_id,
         }
+        for store_call in mock_hook.store_unified_file_id.call_args_list:
+            file_object = store_call.kwargs["file_object"]
+            assert file_object is not None
+            assert file_object.object == "file"
+            assert file_object.purpose == "batch_output"
+            assert file_object.id == store_call.kwargs["file_id"]
+        stored_file_objects = {
+            next(iter(c.kwargs["model_mappings"].values())): c.kwargs["file_object"]
+            for c in mock_hook.store_unified_file_id.call_args_list
+        }
+        assert stored_file_objects[raw_output_file_id].bytes == len(mock_file_content.content)
+        assert stored_file_objects[raw_error_file_id].bytes == 0
         assert mock_response.output_file_id == fake_managed_output_id
         assert mock_response.error_file_id == fake_managed_error_id
 
