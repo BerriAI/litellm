@@ -613,6 +613,8 @@ class ProxyClient:
         model_name: str,
         litellm_params: LiteLLMParamsBody,
         mode: ModelMode | None = None,
+        *,
+        provider_live: bool = False,
     ) -> str:
         """Register a deployment under `model_name` and return its proxy-assigned
         model_id, once the model is actually servable on the data plane."""
@@ -621,15 +623,20 @@ class ProxyClient:
                 model_name=model_name,
                 litellm_params=litellm_params,
                 model_info=ModelInfoBody(mode=mode),
-            )
+            ),
+            provider_live=provider_live,
         )
 
-    def register_model(self, body: ModelNewBody, listed_for: str | None = None) -> str:
+    def register_model(
+        self, body: ModelNewBody, listed_for: str | None = None, *, provider_live: bool = False
+    ) -> str:
         """`create_model` for deployments that carry more than a mode: access groups,
         team scoping, a pinned id. `listed_for` is the virtual key whose /v1/models
         view must list the deployment before it counts as servable, because a
         team-scoped deployment is listed to its own team and to nobody else, master
-        key included; leave it unset for a proxy-wide model.
+        key included; leave it unset for a proxy-wide model. `provider_live` keeps
+        the deployment on its real provider path whatever the cache setting, for a
+        deployment shared across tests or workers, which no one test could own.
 
         /model/new is a control-plane route; the data plane (which serves /chat,
         /ocr, ...) only picks the new model up on its next DB reload, so a call
@@ -650,7 +657,8 @@ class ProxyClient:
                 headers=self.management_headers(),
                 json=body.model_copy(update={"litellm_params": route_cache_model(
                     body.litellm_params, provider_edge_base,
-                    enabled=os.environ.get("E2E_PROVIDER_CACHE", "0") == "1", mode=body.model_info.mode,
+                    enabled=os.environ.get("E2E_PROVIDER_CACHE", "0") == "1" and not provider_live,
+                    mode=body.model_info.mode,
                 )}),
                 response_type=ModelNewResponse,
             )

@@ -446,6 +446,12 @@
         "ui_name": "S3 Path Prefix",
         "description": "Path prefix within the bucket for organizing logs",
         "required": false
+      },
+      "s3_log_prompts_only": {
+        "type": "boolean",
+        "ui_name": "Log Prompts Only",
+        "description": "Log request messages to S3 but drop the model response from each logged object",
+        "required": false
       }
     },
     "description": "S3 Bucket (AWS) Logging Integration"

@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, cast
 from urllib.parse import urlsplit
 
-from litellm.integrations.otel.model.metadata import (
-    RequestContext,
-    RequestIdentity,
-)
+from litellm.integrations.otel.model.metadata import RequestContext, RequestIdentity
 from litellm.integrations.otel.model.semconv import (
     GenAIOperation,
     GenAIOutputType,
@@ -22,6 +19,7 @@ from litellm.integrations.otel.model.semconv import (
     resolve_output_type,
     resolve_provider,
 )
+from litellm.integrations.otel.model.trace_controls import TraceControls
 from litellm.integrations.otel.model.utils import (
     as_bool,
     as_float,
@@ -355,6 +353,24 @@ class ToolDefinition:
     parameters_json: str | None = None  # JSON-serialized schema (str so it's an AttrValue)
 
 
+@dataclass(frozen=True, slots=True)
+class EmbeddingOutput:
+    count: int
+    dimensions: int | None
+
+    @classmethod
+    def from_response(cls, response: Mapping[str, object]) -> EmbeddingOutput | None:
+        vectors: Final = tuple(row.get("embedding") for row in _dicts(response.get("data")))
+        if not vectors:
+            return None
+        first: Final = vectors[0]
+        width: Final = len(cast(Sequence[object], first)) if isinstance(first, list) else None
+        return cls(count=len(vectors), dimensions=width)
+
+    def as_json(self) -> str:
+        return json.dumps({"count": self.count, "dimensions": self.dimensions})
+
+
 @dataclass(frozen=True)
 class LLMCallSpanData:
     operation: GenAIOperation
@@ -387,7 +403,8 @@ class LLMCallSpanData:
     output_type: GenAIOutputType | None = None
     call_type: str | None = None
     request_route: str | None = None
-    trace_name: str | None = None
+    trace: TraceControls = field(default_factory=TraceControls)
+    embedding_output: EmbeddingOutput | None = None
 
     @classmethod
     def from_standard_logging_payload(
@@ -396,7 +413,7 @@ class LLMCallSpanData:
         capture_content: bool = False,
         time_to_first_chunk_seconds: float | None = None,
         request_route: str | None = None,
-        trace_name: str | None = None,
+        trace: TraceControls | None = None,
     ) -> LLMCallSpanData:
         params: Final = cast(Mapping[str, object], payload.get("model_parameters") or {})
         # The single parse of the request's metadata — the request-vs-provider
@@ -415,8 +432,12 @@ class LLMCallSpanData:
         # no prompt/response text.
         finish_reasons: Final = _finish_reasons(choices_out)
         call_type: Final = as_str(payload.get("call_type"))
+        operation: Final = resolve_operation(call_type)
+        embedding_output: Final = (
+            EmbeddingOutput.from_response(response) if operation is GenAIOperation.EMBEDDINGS else None
+        )
         return cls(
-            operation=resolve_operation(call_type),
+            operation=operation,
             provider=resolve_provider(as_str(payload.get("custom_llm_provider"))),
             request_model=context.request_model,
             response_model=context.response_model,
@@ -438,7 +459,8 @@ class LLMCallSpanData:
             output_type=resolve_output_type(call_type),
             call_type=call_type or None,
             request_route=request_route or context.identity.request_route,
-            trace_name=trace_name,
+            trace=trace or TraceControls(),
+            embedding_output=embedding_output if capture_content else None,
         )
 
 

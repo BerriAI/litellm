@@ -421,6 +421,25 @@ async def _is_fallback_target_authorized(
     return False
 
 
+async def _is_fallback_target_within_budget(
+    litellm_router: LitellmRouter,
+    fallback_entry: str | Mapping[str, object],
+    original_model_group: str,
+    kwargs: Mapping[str, object],
+) -> bool:
+    budget_check: Final = litellm_router.fallback_budget_check
+    target: Final = _get_fallback_target_model_group(fallback_entry)
+    if budget_check is None or target is None or target == original_model_group:
+        return True
+    if await budget_check(model=target, request_kwargs=kwargs, llm_router=litellm_router):
+        return True
+    verbose_router_logger.info(
+        "Skipping fallback to model_group = %s: caller is over budget",
+        mask_sensitive_structure(fallback_entry),
+    )
+    return False
+
+
 def references_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
     """
     True when a file, batch, or fine-tuning job operation names an id that only exists
@@ -527,6 +546,8 @@ async def run_async_fallback(
             )
             continue
         if not await _is_fallback_target_authorized(litellm_router, mg, original_model_group, kwargs):
+            continue
+        if not await _is_fallback_target_within_budget(litellm_router, mg, original_model_group, kwargs):
             continue
         attempt_key = fallback_attempt_key(mg)
         if attempt_key is not None:

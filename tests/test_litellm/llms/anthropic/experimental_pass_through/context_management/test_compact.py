@@ -1200,6 +1200,7 @@ def _fake_user_api_key_auth(
     team_models=None,
     team_id=None,
     model_max_budget=None,
+    team_model_max_budget=None,
     end_user_model_max_budget=None,
     end_user_id=None,
     user_model_max_budget=None,
@@ -1220,6 +1221,7 @@ def _fake_user_api_key_auth(
     auth.team_id = team_id
     auth.team_model_aliases = None
     auth.model_max_budget = model_max_budget
+    auth.team_model_max_budget = team_model_max_budget
     auth.end_user_model_max_budget = end_user_model_max_budget
     auth.end_user_id = end_user_id
     auth.user_model_max_budget = user_model_max_budget
@@ -1858,6 +1860,78 @@ async def test_summary_model_rate_limit_skipped_for_legacy_limiter():
     mock_call.assert_awaited_once()
     assert result.compaction_block is not None
     assert not result.applied_edits[0].get("error")
+
+
+async def test_summary_model_denied_when_team_over_model_budget():
+    """The team per-model budget gates the summary subrequest, whose spend is
+    charged to the team counter via the propagated `user_api_key_team_model_max_budget`.
+    The key's own `model_max_budget` is handed to the limiter so a key-level
+    override keeps taking precedence over the team cap here as it does in auth."""
+    import litellm
+
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
+    key_budget = {"claude-opus-4-8": {"budget_limit": 1}}
+    team_budget = {"claude-haiku-4-5": {"budget_limit": 5, "time_period": "1d"}}
+
+    auth = _fake_user_api_key_auth(
+        key_models=["all-proxy-models"],
+        model_max_budget=key_budget,
+        team_model_max_budget=team_budget,
+        team_id="team-over-budget",
+        token="hashed-token",
+    )
+
+    limiter = MagicMock()
+    limiter.is_key_within_model_budget = AsyncMock(return_value=True)
+    limiter.is_team_within_model_budget = AsyncMock(
+        side_effect=litellm.BudgetExceededError(
+            message="over budget", current_cost=10, max_budget=5
+        )
+    )
+
+    with (
+        patch(  # test-quality-ok: apply_compact_20260112 reads the summary model setting as a module global, no seam
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),  # test-quality-ok: forces the over-threshold branch
+        patch(  # test-quality-ok: the summary call is the observable that must NOT happen when the team is over budget
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+        patch(  # test-quality-ok: the limiter is a proxy_server module global the editor imports, no injection seam
+            "litellm.proxy.proxy_server.model_max_budget_limiter", limiter
+        ),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=auth,
+        )
+
+    mock_call.assert_not_awaited()
+    assert result.applied_edits[0].get("error") == "summary_model_budget_exceeded"
+    limiter.is_team_within_model_budget.assert_awaited_once_with(
+        team_id="team-over-budget",
+        team_model_max_budget=team_budget,
+        key_model_max_budget=key_budget,
+        model="claude-haiku-4-5",
+    )
+    import inspect
+
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        _PROXY_VirtualKeyModelMaxBudgetLimiter,
+    )
+
+    real_params = inspect.signature(
+        _PROXY_VirtualKeyModelMaxBudgetLimiter.is_team_within_model_budget
+    ).parameters
+    for kwarg in ("team_id", "team_model_max_budget", "key_model_max_budget", "model"):
+        assert kwarg in real_params, f"compact.py passes {kwarg}=, which the limiter does not accept"
 
 
 async def test_scoped_budget_metadata_propagated_to_summary_call():

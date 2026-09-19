@@ -23,6 +23,7 @@ from typing import Final
 import pytest
 import requests
 from e2e_config import (
+    CLI_DETERMINISM_OPT_IN_ENV,
     CONTROL_PLANE_BASE_URL,
     FIXTURE_DIR,
     FIXTURE_MODE_RAW,
@@ -36,6 +37,7 @@ from e2e_config import (
 from e2e_db import RESET_OPT_IN_ENV, reset_spend_logs, run_spend_log_cleanup
 from e2e_http import unwrap
 from fixture_mode import fixture_mode_collection_error, fixture_report_lines
+from fixture_mode import pytest_fixture_setup as pytest_fixture_setup
 from idp import Identity, Keycloak, keycloak_from_env
 from junit_properties import attach_result_properties
 from lifecycle import ProxyClientProvider, ResourceManager
@@ -53,6 +55,7 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "managed_files": MANAGED_FILES_OPT_IN_ENV,
         "prompt_caching_stack": PROMPT_CACHING_OPT_IN_ENV,
         "redis_chaos": REDIS_CHAOS_OPT_IN_ENV,
+        "cli_determinism": CLI_DETERMINISM_OPT_IN_ENV,
     }
 )
 
@@ -85,7 +88,11 @@ def jwt_identity(idp: Keycloak, resources: ResourceManager, proxy: ProxyClient) 
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line("markers", "provider_live: requires actual provider timing, limits or state; bypass shared cache")
+    config.addinivalue_line(
+        "markers",
+        "provider_live: requires actual provider timing, limits, state, or a response that echoes this"
+        " run's own unique value; bypass shared cache",
+    )
     config.addinivalue_line(
         "markers",
         "e2e: live test that requires a running proxy and real provider keys",
@@ -115,6 +122,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "prompt_caching_stack: needs a proxy running with router_settings.optional_pre_call_checks including "
         "prompt_caching; deselected unless E2E_PROMPT_CACHING_STACK is set",
+    )
+    config.addinivalue_line(
+        "markers",
+        "cli_determinism: drives the real claude CLI for several seconds; deselected unless E2E_CLI_DETERMINISM is set",
     )
     config.addinivalue_line(
         "markers",

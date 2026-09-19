@@ -24,6 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import (
     GuardrailConfigModel,
 )
@@ -40,7 +41,7 @@ from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 _DEFAULT_API_BASE: Final = "http://localhost:8003"
 _GUARD_ENDPOINT: Final = "/api/v1/ai-gateway/litellm-v2"
 _DEFAULT_TIMEOUT: Final = 30.0
-_EMPTY_MAPPING: Final[Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_MAPPING: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
 _MCP_MODEL_PREFIX: Final = "MCP:"
 
 
@@ -159,7 +160,7 @@ class SingulrGuardrail(CustomGuardrail):
         return {key: value for key, value in resolved if value}  # mutable-ok: short-lived JSON payload dict
 
     @staticmethod
-    def _build_user_message(text: str) -> Mapping[str, Any]:
+    def _build_user_message(text: str) -> Mapping[str, str]:
         return {"role": "user", "content": text}  # mutable-ok: short-lived JSON payload dict
 
     def _build_headers(self) -> Mapping[str, str]:
@@ -224,7 +225,7 @@ class SingulrGuardrail(CustomGuardrail):
         self,
         inputs: GenericGuardrailAPIInputs,
         texts: Sequence[str],
-        structured_messages: Sequence[Any],
+        structured_messages: Sequence[AllMessageValues],
         request_data: Mapping[str, Any],
     ) -> GenericGuardrailAPIInputs:
         messages: Final = (
@@ -271,12 +272,12 @@ class SingulrGuardrail(CustomGuardrail):
         return request_data.get("mcp_tool_name") or request_data.get("name")
 
     @staticmethod
-    def _mcp_arguments(request_data: Mapping[str, Any]) -> object:
+    def _mcp_arguments(request_data: Mapping[str, object]) -> object:
         arguments: Final = request_data.get("mcp_arguments")
         return arguments if arguments is not None else request_data.get("arguments")
 
     @staticmethod
-    def _is_mcp_call(request_data: Mapping[str, Any], logging_obj: LiteLLMLoggingObj | None) -> bool:
+    def _is_mcp_call(request_data: Mapping[str, object], logging_obj: LiteLLMLoggingObj | None) -> bool:
         call_type: Final = logging_obj.call_type if logging_obj is not None else request_data.get("call_type")
         if call_type is not None:
             return call_type == CallTypes.call_mcp_tool.value

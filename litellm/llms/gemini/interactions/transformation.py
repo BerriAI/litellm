@@ -6,10 +6,7 @@ Per OpenAPI spec (https://ai.google.dev/static/api/interactions.openapi.json):
 - Get: GET https://generativelanguage.googleapis.com/{api_version}/interactions/{interaction_id}
 - Delete: DELETE https://generativelanguage.googleapis.com/{api_version}/interactions/{interaction_id}
 
-Schema versioning:
-- Default (Api-Revision: 2026-05-20): new `steps` schema.
-- Legacy (Api-Revision: 2026-05-07): old `outputs` schema, controlled via
-  litellm.use_legacy_interactions_schema = True. Remove flag after June 8, 2026.
+Requests use Api-Revision 2026-05-20 (`steps` schema).
 """
 
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias
@@ -17,7 +14,6 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias
 import httpx
 from typing_extensions import ReadOnly, TypedDict
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -137,13 +133,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             if api_key:
                 headers["x-goog-api-key"] = api_key
 
-        # Inject the Api-Revision header to select the response schema.
-        # Default to the new `steps` schema unless the operator has opted out.
-        # Remove this conditional after June 8, 2026 and always use 2026-05-20.
-        if litellm.use_legacy_interactions_schema:
-            headers["Api-Revision"] = "2026-05-07"
-        else:
-            headers["Api-Revision"] = "2026-05-20"
+        headers["Api-Revision"] = "2026-05-20"
 
         return headers
 
@@ -180,17 +170,11 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         """
         Build request body per OpenAPI spec.
 
-        When on the new schema (use_legacy_interactions_schema=False, the default):
         - ``response_mime_type`` is folded into ``response_format`` and stripped from
           the body (the field was removed in Api-Revision 2026-05-20).
         - ``generation_config.image_config`` is moved to a ``response_format`` entry
           with ``"type": "image"`` (also removed from generation_config in 2026-05-20).
-
-        When on the legacy schema (use_legacy_interactions_schema=True):
-        - All fields are forwarded as-is.
         """
-        use_legacy: Final[bool] = litellm.use_legacy_interactions_schema
-
         request_body: Final[dict[str, object]] = {}
 
         # Model or Agent (one required)
@@ -205,7 +189,6 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         if input is not None:
             request_body["input"] = input
 
-        # Pass through optional params — legacy schema keeps all fields as-is.
         optional_keys: Final = [
             "tools",
             "system_instruction",
@@ -220,58 +203,51 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             if optional_params.get(key) is not None:
                 request_body[key] = optional_params[key]
 
-        if use_legacy:
-            # Legacy schema: forward response_mime_type and response_format as-is.
-            for key in ("response_format", "response_mime_type", "generation_config"):
-                if optional_params.get(key) is not None:
-                    request_body[key] = optional_params[key]
-        else:
-            # New schema (Api-Revision: 2026-05-20):
-            # response_mime_type is removed — fold it into response_format.
-            response_format = optional_params.get("response_format")
-            response_mime_type: Final = optional_params.get("response_mime_type")
+        # response_mime_type is removed — fold it into response_format.
+        response_format = optional_params.get("response_format")
+        response_mime_type: Final = optional_params.get("response_mime_type")
 
-            if (
-                response_mime_type
-                and not isinstance(response_format, list)
-                and (not isinstance(response_format, dict) or "mime_type" not in response_format)
-            ):
-                # Wrap the legacy schema into the new polymorphic format.
-                new_rf: Final[dict[str, object]] = {
-                    "type": "text",
-                    "mime_type": response_mime_type,
-                }
-                if response_format is not None:
-                    new_rf["schema"] = response_format
-                response_format = new_rf
-
+        if (
+            response_mime_type
+            and not isinstance(response_format, list)
+            and (not isinstance(response_format, dict) or "mime_type" not in response_format)
+        ):
+            # Wrap the legacy schema into the new polymorphic format.
+            new_rf: Final[dict[str, object]] = {
+                "type": "text",
+                "mime_type": response_mime_type,
+            }
             if response_format is not None:
-                request_body["response_format"] = response_format
+                new_rf["schema"] = response_format
+            response_format = new_rf
 
-            # image_config moves out of generation_config into response_format.
-            generation_config: dict[str, Any] | None = optional_params.get("generation_config")
+        if response_format is not None:
+            request_body["response_format"] = response_format
+
+        # image_config moves out of generation_config into response_format.
+        generation_config: dict[str, Any] | None = optional_params.get("generation_config")
+        if generation_config is not None:
+            image_config = None
+            if isinstance(generation_config, dict):
+                generation_config = dict(generation_config)  # avoid mutating the caller's dict
+                image_config = generation_config.pop("image_config", None)
+                if not generation_config:
+                    generation_config = None
+
             if generation_config is not None:
-                image_config = None
-                if isinstance(generation_config, dict):
-                    generation_config = dict(generation_config)  # avoid mutating the caller's dict
-                    image_config = generation_config.pop("image_config", None)
-                    if not generation_config:
-                        generation_config = None
+                request_body["generation_config"] = generation_config
 
-                if generation_config is not None:
-                    request_body["generation_config"] = generation_config
-
-                if image_config is not None:
-                    # Move image_config to response_format with type=image.
-                    image_rf: Final[_JsonObject] = {"type": "image", **image_config}
-                    existing_rf: Final = request_body.get("response_format")
-                    if existing_rf is None:
-                        request_body["response_format"] = image_rf
-                    elif isinstance(existing_rf, list):
-                        request_body["response_format"] = [*existing_rf, image_rf]
-                    else:
-                        # Convert single entry to array for multimodal output.
-                        request_body["response_format"] = [existing_rf, image_rf]
+            if image_config is not None:
+                # Move image_config to response_format with type=image.
+                image_rf: Final[_JsonObject] = {"type": "image", **image_config}
+                existing_rf: Final = request_body.get("response_format")
+                if existing_rf is None:
+                    request_body["response_format"] = image_rf
+                elif isinstance(existing_rf, list):
+                    request_body["response_format"] = [*existing_rf, image_rf]
+                else:
+                    # Convert single entry to array for multimodal output.
+                    request_body["response_format"] = [existing_rf, image_rf]
 
         return request_body
 
