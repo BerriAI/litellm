@@ -4,28 +4,10 @@ use std::{
     time::Duration,
 };
 
-use crate::settings::{HttpSettings, SslVerify};
-
-#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
-pub enum Error {
-    #[error("{setting} cannot be expressed with rustls: {reason}")]
-    Unsupported {
-        setting: &'static str,
-        reason: String,
-    },
-    #[error("could not read {}: {message}", path.display())]
-    Read { path: PathBuf, message: String },
-    #[error("{} is not a PEM file: {message}", path.display())]
-    InvalidPem { path: PathBuf, message: String },
-    #[error("could not build the HTTP client: {0}")]
-    Client(String),
-}
-
-impl From<reqwest::Error> for Error {
-    fn from(error: reqwest::Error) -> Self {
-        Self::Client(error.without_url().to_string())
-    }
-}
+use crate::{
+    error::Error,
+    settings::{HttpSettings, SslVerify},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Verify {
@@ -45,17 +27,13 @@ pub struct HttpClientConfig {
     pub user_agent: Option<String>,
     pub trust_proxy_env: bool,
     pub connect_timeout: Duration,
-    pub request_timeout: Option<Duration>,
 }
 
 impl HttpClientConfig {
-    /// Port of `get_ssl_verify` + `get_ssl_configuration`: the per-call value wins, then the
-    /// configured (environment-overlaid) `ssl_verify`, then `SSL_CERT_FILE`, then the built-in
-    /// roots. Settings rustls has no equivalent for are an error instead of a silent no-op.
-    pub fn resolve(
-        settings: &HttpSettings,
-        per_call_ssl_verify: Option<&SslVerify>,
-    ) -> Result<Self, Error> {
+    /// Port of `get_ssl_verify` + `get_ssl_configuration`: the configured (environment-overlaid)
+    /// `ssl_verify`, then `SSL_CERT_FILE`, then the built-in roots. Settings rustls has no
+    /// equivalent for are an error instead of a silent no-op.
+    pub fn resolve(settings: &HttpSettings) -> Result<Self, Error> {
         if let Some(level) = &settings.ssl_security_level {
             return Err(Error::Unsupported {
                 setting: "ssl_security_level",
@@ -68,7 +46,7 @@ impl HttpClientConfig {
                 reason: format!("key exchange group {curve:?} is fixed by the rustls provider"),
             });
         }
-        let verify = match per_call_ssl_verify.or(settings.ssl_verify.as_ref()) {
+        let verify = match &settings.ssl_verify {
             Some(SslVerify::Disabled) => Verify::Disabled,
             Some(SslVerify::CaBundle(path)) => Verify::CaBundle(path.clone()),
             Some(SslVerify::Enabled) | None => settings
@@ -84,7 +62,6 @@ impl HttpClientConfig {
             user_agent: settings.user_agent.clone(),
             trust_proxy_env: settings.trust_proxy_env,
             connect_timeout: settings.connect_timeout,
-            request_timeout: settings.request_timeout,
         })
     }
 
@@ -141,14 +118,10 @@ impl HttpClientConfig {
             Some(agent) => with_protocol.user_agent(agent),
             None => with_protocol,
         };
-        let with_proxy = if self.trust_proxy_env {
+        Ok(if self.trust_proxy_env {
             with_agent
         } else {
             with_agent.no_proxy()
-        };
-        Ok(match self.request_timeout {
-            Some(timeout) => with_proxy.timeout(timeout),
-            None => with_proxy,
         })
     }
 }
@@ -180,49 +153,25 @@ mod tests {
     }
 
     #[rstest]
-    #[case::default(settings(None, None), None, Verify::BuiltInRoots)]
+    #[case::default(settings(None, None), Verify::BuiltInRoots)]
     #[case::setting_disables(
         settings(Some(SslVerify::Disabled), Some("/env/roots.pem")),
-        None,
         Verify::Disabled
     )]
     #[case::setting_bundle(
         settings(Some(SslVerify::CaBundle("/configured.pem".into())), Some("/env/roots.pem")),
-        None,
         Verify::CaBundle("/configured.pem".into())
     )]
     #[case::enabled_uses_cert_file(
         settings(Some(SslVerify::Enabled), Some("/env/roots.pem")),
-        None,
         Verify::CaBundle("/env/roots.pem".into())
     )]
-    #[case::unset_uses_cert_file(settings(None, Some("/env/roots.pem")), None, Verify::CaBundle("/env/roots.pem".into()))]
-    #[case::per_call_beats_setting(
-        settings(Some(SslVerify::Disabled), None),
-        Some(SslVerify::Enabled),
-        Verify::BuiltInRoots
-    )]
-    #[case::per_call_disables(
-        settings(Some(SslVerify::CaBundle("/configured.pem".into())), Some("/env/roots.pem")),
-        Some(SslVerify::Disabled),
-        Verify::Disabled
-    )]
-    #[case::per_call_bundle(
-        settings(None, Some("/env/roots.pem")),
-        Some(SslVerify::CaBundle("/call.pem".into())),
-        Verify::CaBundle("/call.pem".into())
-    )]
-    #[case::per_call_enabled_still_honours_cert_file(
-        settings(Some(SslVerify::Disabled), Some("/env/roots.pem")),
-        Some(SslVerify::Enabled),
-        Verify::CaBundle("/env/roots.pem".into())
-    )]
-    fn verify_follows_per_call_then_setting_then_cert_file(
+    #[case::unset_uses_cert_file(settings(None, Some("/env/roots.pem")), Verify::CaBundle("/env/roots.pem".into()))]
+    fn verify_follows_setting_then_cert_file(
         #[case] settings: HttpSettings,
-        #[case] per_call: Option<SslVerify>,
         #[case] expected: Verify,
     ) {
-        let config = HttpClientConfig::resolve(&settings, per_call.as_ref()).unwrap();
+        let config = HttpClientConfig::resolve(&settings).unwrap();
         assert_eq!(config.verify, expected);
     }
 
@@ -233,7 +182,7 @@ mod tests {
             ..HttpSettings::default()
         }
         .with_environment(&|name: &str| (name == "SSL_VERIFY").then(|| "true".to_string()));
-        let config = HttpClientConfig::resolve(&settings, None).unwrap();
+        let config = HttpClientConfig::resolve(&settings).unwrap();
         assert_eq!(config.verify, Verify::BuiltInRoots);
     }
 
@@ -244,7 +193,7 @@ mod tests {
             ..HttpSettings::default()
         };
         assert!(matches!(
-            HttpClientConfig::resolve(&settings, None),
+            HttpClientConfig::resolve(&settings),
             Err(Error::Unsupported {
                 setting: "ssl_security_level",
                 ..
@@ -259,7 +208,7 @@ mod tests {
             ..HttpSettings::default()
         };
         assert!(matches!(
-            HttpClientConfig::resolve(&settings, None),
+            HttpClientConfig::resolve(&settings),
             Err(Error::Unsupported {
                 setting: "ssl_ecdh_curve",
                 ..
@@ -276,10 +225,9 @@ mod tests {
             user_agent: Some("litellm/1.0".into()),
             trust_proxy_env: true,
             connect_timeout: Duration::from_secs(7),
-            request_timeout: Some(Duration::from_secs(70)),
             ..HttpSettings::default()
         };
-        let config = HttpClientConfig::resolve(&settings, None).unwrap();
+        let config = HttpClientConfig::resolve(&settings).unwrap();
         assert_eq!(
             config,
             HttpClientConfig {
@@ -290,7 +238,6 @@ mod tests {
                 user_agent: Some("litellm/1.0".into()),
                 trust_proxy_env: true,
                 connect_timeout: Duration::from_secs(7),
-                request_timeout: Some(Duration::from_secs(70)),
             }
         );
     }
@@ -300,7 +247,7 @@ mod tests {
         let path = std::env::temp_dir().join("litellm-http-missing-bundle.pem");
         let config = HttpClientConfig {
             verify: Verify::CaBundle(path.clone()),
-            ..HttpClientConfig::resolve(&HttpSettings::default(), None).unwrap()
+            ..HttpClientConfig::resolve(&HttpSettings::default()).unwrap()
         };
         assert!(matches!(
             config.client_builder(),
@@ -315,7 +262,7 @@ mod tests {
         std::fs::write(&path, b"not a certificate").unwrap();
         let config = HttpClientConfig {
             verify: Verify::CaBundle(path.clone()),
-            ..HttpClientConfig::resolve(&HttpSettings::default(), None).unwrap()
+            ..HttpClientConfig::resolve(&HttpSettings::default()).unwrap()
         };
         let result = config.client_builder().map(drop);
         std::fs::remove_file(&path).unwrap();

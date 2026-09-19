@@ -31,7 +31,6 @@ pub struct HttpSettings {
     pub user_agent: Option<String>,
     pub trust_proxy_env: bool,
     pub connect_timeout: Duration,
-    pub request_timeout: Option<Duration>,
 }
 
 impl Default for HttpSettings {
@@ -47,7 +46,6 @@ impl Default for HttpSettings {
             user_agent: None,
             trust_proxy_env: false,
             connect_timeout: Duration::from_secs(5),
-            request_timeout: None,
         }
     }
 }

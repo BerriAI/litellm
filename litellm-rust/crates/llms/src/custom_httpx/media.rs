@@ -66,26 +66,15 @@ impl MediaFetcher {
         pool: &HttpClientPool,
         config: &HttpClientConfig,
     ) -> Result<Self, litellm_http::Error> {
-        Self::with_resolvers(
-            pool,
-            config,
-            Arc::new(PublicDnsResolver),
-            Arc::new(SystemAddressResolver),
-        )
+        Self::with_address_resolver(pool, config, Arc::new(SystemAddressResolver))
     }
 
-    fn with_resolvers<R>(
+    fn with_address_resolver(
         pool: &HttpClientPool,
         config: &HttpClientConfig,
-        transport_resolver: Arc<R>,
         address_resolver: Arc<dyn AddressResolver>,
-    ) -> Result<Self, litellm_http::Error>
-    where
-        R: Resolve + 'static,
-    {
-        let client = pool.client_with(config, ClientVariant::Media, |builder| {
-            builder.dns_resolver(transport_resolver)
-        })?;
+    ) -> Result<Self, litellm_http::Error> {
+        let client = pool.client(config, ClientVariant::Media)?;
         Ok(Self {
             client,
             address_resolver,
@@ -242,7 +231,7 @@ fn is_blocked_ip(ip: IpAddr) -> bool {
 }
 
 #[derive(Default)]
-struct PublicDnsResolver;
+pub struct PublicDnsResolver;
 
 struct SystemAddressResolver;
 
@@ -371,10 +360,9 @@ mod tests {
         address: SocketAddr,
         blocked_hosts: HashSet<&'static str>,
     ) -> MediaFetcher {
-        MediaFetcher::with_resolvers(
-            &HttpClientPool::new(),
-            &HttpClientConfig::resolve(&HttpSettings::default(), None).unwrap(),
-            Arc::new(LoopbackDnsResolver(address)),
+        MediaFetcher::with_address_resolver(
+            &HttpClientPool::new(Arc::new(LoopbackDnsResolver(address))),
+            &HttpClientConfig::resolve(&HttpSettings::default()).unwrap(),
             Arc::new(TestAddressResolver { blocked_hosts }),
         )
         .expect("test fetcher builds")
@@ -552,9 +540,8 @@ mod tests {
     #[tokio::test]
     async fn rejects_url_credentials_before_network_access() {
         let fetcher = MediaFetcher::new(
-            &HttpClientPool::new(),
-            &HttpClientConfig::resolve(&litellm_http::HttpSettings::default(), None)
-                .expect("default settings resolve"),
+            &HttpClientPool::new(Arc::new(PublicDnsResolver)),
+            &HttpClientConfig::resolve(&HttpSettings::default()).expect("default settings resolve"),
         )
         .expect("media fetcher builds");
         let url =
