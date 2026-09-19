@@ -100,6 +100,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.llms.azure_ai.common_utils import azure_ai_supports_native_responses
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
@@ -1118,16 +1119,23 @@ def responses_api_bridge_check(
         reasoning_active = reasoning_effort != "none"
     # The reasoning+tools constraint is enforced by the real OpenAI backend behind any api.openai.com
     # host (the default URL or a PrivateLink hostname such as <region>.privatelink.api.openai.com) and
-    # by Azure OpenAI. Resolve the effective base arg>global>env>default exactly as the chat handler
-    # does, so a custom base set via litellm.api_base or OPENAI_BASE_URL/OPENAI_API_BASE isn't misread
-    # as the default and bridged to a /responses route it lacks. A whitespace-only base collapses to
-    # the default too.
+    # by Azure OpenAI, whether reached through the azure provider or as a Foundry OpenAI v1 host through
+    # the azure_ai provider. Resolve the effective OpenAI base arg>global>env>default exactly as the chat
+    # handler does, so a custom base set via litellm.api_base or OPENAI_BASE_URL/OPENAI_API_BASE isn't
+    # misread as the default and bridged to a /responses route it lacks. A whitespace-only base
+    # collapses to the default too.
     resolved_api_base: Final = _resolve_openai_api_base(api_base).strip()
+    on_foundry_openai_endpoint: Final = custom_llm_provider == "azure_ai" and azure_ai_supports_native_responses(
+        model, api_base
+    )
     on_constraint_enforcing_endpoint: Final = (
-        custom_llm_provider == "azure" or resolved_api_base == "" or _is_openai_backed_api_base(resolved_api_base)
+        custom_llm_provider == "azure"
+        or on_foundry_openai_endpoint
+        or resolved_api_base == ""
+        or _is_openai_backed_api_base(resolved_api_base)
     )
     if (
-        custom_llm_provider in ("openai", "azure")
+        (custom_llm_provider in ("openai", "azure") or on_foundry_openai_endpoint)
         and model_info.get("mode") != "responses"
         and OpenAIGPT5Config.is_model_gpt_5_model(model)
         and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
