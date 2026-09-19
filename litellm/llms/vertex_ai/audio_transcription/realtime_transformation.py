@@ -236,6 +236,7 @@ class ChirpEventTransformer:
             case VertexSpeechStreamingTurnFinished():
                 return self._finish_turn()
             case VertexSpeechStreamingTurnDiscarded():
+                self._billed_seconds = max(self._billed_seconds, frame.billed_seconds)
                 self._turn = None
                 return ()
             case _:

@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import replace
 from datetime import timedelta
 from typing import Final
@@ -128,6 +128,14 @@ async def _configure(backend: SpeechStreamingBackend) -> None:
     assert await _recv(backend) == {"kind": "configured"}
 
 
+async def _until(condition: Callable[[], bool]) -> None:
+    async def poll() -> None:
+        while not condition():
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(poll(), timeout=2)
+
+
 def _audio(stream: list[StreamingRecognizeRequest]) -> list[bytes]:
     return [bytes(request.audio) for request in stream[1:]]
 
@@ -221,7 +229,7 @@ async def test_turn_commands_without_audio_answer_immediately():
     await backend.send(FINISH_TURN)
     assert await _recv(backend) == {"kind": "turn_finished"}
     await backend.send(DISCARD_TURN)
-    assert await _recv(backend) == {"kind": "turn_discarded"}
+    assert await _recv(backend) == {"kind": "turn_discarded", "billed_seconds": 0.0}
 
 
 @pytest.mark.asyncio
@@ -232,10 +240,45 @@ async def test_discard_turn_cancels_the_open_stream_and_the_next_turn_starts_fre
         await backend.send(b"\x01\x01")
         assert await _transcript(backend) == "draft"
         await backend.send(DISCARD_TURN)
-        assert await _recv(backend) == {"kind": "turn_discarded"}
+        assert await _recv(backend) == {"kind": "turn_discarded", "billed_seconds": 0.0}
         await backend.send(b"\x02\x02")
         assert await _transcript(backend) == "again"
     assert [_audio(stream) for stream in client.streams] == [[b"\x01\x01"], [b"\x02\x02"]]
+
+
+@pytest.mark.asyncio
+async def test_discard_turn_drops_its_queued_results_and_keeps_google_billed_seconds():
+    client = _FakeSpeechClient(
+        [_response("draft"), _response("leftover", is_final=True, billed=2.0)],
+        [_response("fresh", is_final=True, billed=1.0)],
+    )
+    async with _backend(client) as backend:
+        await _configure(backend)
+        await backend.send(b"\x01\x01")
+        assert await _transcript(backend) == "draft"
+        await backend.send(b"\x02\x02")
+        await _until(lambda: len(client.streams[0]) == 3)
+        await backend.send(DISCARD_TURN)
+        assert await _recv(backend) == {"kind": "turn_discarded", "billed_seconds": 2.0}
+        await backend.send(b"\x03\x03")
+        fresh = await _recv(backend)
+    assert fresh["results"] == [{"transcript": "fresh", "is_final": True}]
+    assert fresh["billed_seconds"] == 3.0
+
+
+@pytest.mark.asyncio
+async def test_discard_turn_keeps_the_queued_results_of_the_turn_finished_before_it():
+    client = _FakeSpeechClient([_response("one", is_final=True, billed=2.0)], [_response("two")])
+    async with _backend(client) as backend:
+        await _configure(backend)
+        await backend.send(b"\x01\x01")
+        await backend.send(FINISH_TURN)
+        await backend.send(b"\x02\x02")
+        await _until(lambda: len(client.streams) == 2 and len(client.streams[1]) == 2)
+        await backend.send(DISCARD_TURN)
+        assert await _transcript(backend) == "one"
+        assert await _recv(backend) == {"kind": "turn_finished"}
+        assert await _recv(backend) == {"kind": "turn_discarded", "billed_seconds": 2.0}
 
 
 @pytest.mark.asyncio
@@ -425,7 +468,7 @@ async def test_discard_turn_cancels_every_stream_of_the_turn():
         now[0] = 240.0
         await backend.send(b"\x02\x02")
         await backend.send(DISCARD_TURN)
-        assert await _recv(backend) == {"kind": "turn_discarded"}
+        assert await _recv(backend) == {"kind": "turn_discarded", "billed_seconds": 0.0}
         await backend.send(b"\x03\x03")
         assert await _transcript(backend) == "fresh"
     assert [_audio(stream) for stream in client.streams] == [[b"\x01\x01"], [b"\x03\x03"]]

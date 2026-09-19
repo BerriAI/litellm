@@ -317,11 +317,18 @@ def test_manual_turns_complete_on_commit_without_speech_events():
 def test_clear_discards_the_open_turn():
     config = _configured(turn_detection=None)
     draft = _backend_events(config, _response(("draft", False)))
-    assert _backend_events(config, VertexSpeechStreamingTurnDiscarded()) == []
+    assert _backend_events(config, VertexSpeechStreamingTurnDiscarded(billed_seconds=0.0)) == []
     assert _backend_events(config, VertexSpeechStreamingTurnFinished()) == []
     fresh = _backend_events(config, _response(("again", False)))
     assert fresh[0]["delta"] == "again"
     assert fresh[0]["item_id"] != draft[0]["item_id"]
+
+
+def test_cleared_audio_keeps_google_billed_seconds_for_the_close_flush():
+    config = _configured(turn_detection=None)
+    assert _backend_events(config, _response(("draft", False), billed_seconds=1.0)) != []
+    assert _backend_events(config, VertexSpeechStreamingTurnDiscarded(billed_seconds=2.5)) == []
+    assert config.unbilled_usage_on_session_close(MODEL) == {"type": "duration", "seconds": 2.5}
 
 
 def test_usage_is_billed_once_across_turns_and_flushed_on_close():
