@@ -57,7 +57,7 @@ def _coerce_missing_choices_status(value: object) -> int | None:
         return None
     if isinstance(value, int):
         return value if 100 <= value <= 599 else None
-    if isinstance(value, str) and value.strip().isdigit():
+    if isinstance(value, str) and value.strip().isdecimal():
         status_code = int(value.strip())
         return status_code if 100 <= status_code <= 599 else None
     return None

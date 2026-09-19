@@ -56,6 +56,21 @@ def test_non_openai_error_coerces_numeric_string_status():
     assert "Token is invalid [2]" in exc_info.value.message
 
 
+def test_non_openai_error_ignores_non_decimal_unicode_status():
+    with pytest.raises(APIError) as exc_info:
+        convert_to_model_response_object(
+            response_object={
+                "status": "²00",
+                "response": "Provider returned an invalid status",
+                "choices": None,
+            },
+            model_response_object=ModelResponse(),
+        )
+
+    assert exc_info.value.status_code == 500
+    assert "Provider returned an invalid status" in exc_info.value.message
+
+
 @pytest.mark.parametrize("code", [401, "401"])
 def test_non_openai_error_uses_nested_error_object(code):
     with pytest.raises(APIError) as exc_info:
