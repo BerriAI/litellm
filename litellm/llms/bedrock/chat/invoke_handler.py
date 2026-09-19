@@ -574,6 +574,7 @@ class AWSEventStreamDecoder:
             tool_use: ChatCompletionToolCallChunk | None = None
             finish_reason = ""
             usage: Usage | None = None
+            raw_stop_reason: Final[object] = chunk_data.get("stopReason")
             provider_specific_fields: dict = {}
             reasoning_content: str | None = None
             thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None
@@ -597,8 +598,8 @@ class AWSEventStreamDecoder:
                 ) = self._handle_converse_delta_event(delta_obj, content_block_index)
             elif "contentBlockIndex" in chunk_data:  # stop block, no 'start' or 'delta' object
                 tool_use = self._handle_converse_stop_event(content_block_index)
-            elif "stopReason" in chunk_data:
-                finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
+            elif isinstance(raw_stop_reason, str):
+                finish_reason = map_finish_reason(raw_stop_reason)
                 self._provider_reasoning_tokens = AmazonConverseConfig.thinking_tokens_from_additional_fields(
                     chunk_data.get("additionalModelResponseFields")
                 )
@@ -612,6 +613,12 @@ class AWSEventStreamDecoder:
                 self._thinking_ran = True
 
             trace: Final = chunk_data.get("trace")
+            choice_provider_specific_fields: Final[dict[str, str] | None] = (
+                {"native_finish_reason": raw_stop_reason}  # mutable-ok: response field contract requires a dict
+                if isinstance(raw_stop_reason, str) and raw_stop_reason != finish_reason
+                else None
+            )
+
             carries_message_content: Final = bool(trace) or any(
                 key in chunk_data for key in ("start", "delta", "contentBlockIndex", "stopReason")
             )
@@ -622,6 +629,7 @@ class AWSEventStreamDecoder:
                     StreamingChoices(
                         finish_reason=finish_reason,
                         index=0,  # Always 0 - Bedrock never returns multiple choices
+                        provider_specific_fields=choice_provider_specific_fields,
                         delta=Delta(
                             content=text if carries_message_content else None,
                             role="assistant" if carries_message_content else None,
