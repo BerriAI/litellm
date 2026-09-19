@@ -179,7 +179,8 @@ def mask_credentials_in_payload(data: object) -> object:
 
     A container referenced from several places in ``data`` is rebuilt once and
     referenced from the same places in the copy, so a shared subtree never
-    fans out into independent copies. A container nested past
+    fans out into independent copies, and a reference back into a container
+    still being rebuilt (a cycle) becomes ``REDACTED``. A container nested past
     ``DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER`` is replaced by
     ``REDACTED`` rather than returned unmasked.
 
@@ -204,6 +205,7 @@ class _PayloadWalker:
         cached: Final = self._memo.get(memo_key)
         if cached is not None:
             return cached[1]
+        self._memo[memo_key] = (node, REDACTED)
         rebuilt: Final = self._rebuild(node, key_is_sensitive, depth)
         self._memo[memo_key] = (node, rebuilt)
         return rebuilt
@@ -212,7 +214,7 @@ class _PayloadWalker:
         self, node: Mapping[str, object] | Sequence[object] | BaseModel, key_is_sensitive: bool, depth: int
     ) -> object:
         if isinstance(node, BaseModel):
-            return self._rebuild(node.model_dump(), key_is_sensitive, depth)
+            return self.walk(node.model_dump(), key_is_sensitive, depth)
         if isinstance(node, Mapping):
             return {k: self.walk(v, _default_masker.is_sensitive_key(k), depth + 1) for k, v in node.items()}
         if isinstance(node, tuple):
