@@ -53,6 +53,7 @@ ALL_STATUSES: Final[tuple[BatchStatus, ...]] = (
     "failed",
     "cancelling",
     "cancelled",
+    "expired",
 )
 
 
@@ -375,6 +376,7 @@ def make_runner(
     store_factory: Callable[[Mapping[str, LiteLLM_ManagedFileTable]], FakeManagedBatchStore] = FakeManagedBatchStore,
     general_settings: Mapping[str, object] = MappingProxyType({}),
     heartbeat_seconds: float = 30.0,
+    completion_window_seconds: float = 24 * 60 * 60,
 ) -> Harness:
     store = store_factory({INPUT_FILE_ID: managed_input_file()} if files is None else files)
     router = FakeRouter()
@@ -393,6 +395,7 @@ def make_runner(
         general_settings=general_settings,
         concurrency=concurrency,
         heartbeat_seconds=heartbeat_seconds,
+        completion_window_seconds=completion_window_seconds,
         storage_backend_factory=storage_factory,
         upload_result_file=uploads,
     )
@@ -464,6 +467,7 @@ def test_resolve_transition_keeps_the_requested_status_unless_cancelling(current
     ("requested", "expected"),
     [
         ("completed", "cancelled"),
+        ("expired", "cancelled"),
         ("in_progress", "cancelling"),
         ("finalizing", "cancelling"),
         ("failed", "failed"),
@@ -1012,6 +1016,46 @@ async def test_running_batch_skips_the_remaining_rows_after_an_operator_cancel(
     assert finished.cancelled_at is not None
     assert finished.request_counts == BatchRequestCounts(completed=1, failed=0, total=3)
     assert (finished.output_file_id, finished.error_file_id) == ("unified-output-1", None)
+
+
+async def test_batch_expires_at_the_completion_window_and_keeps_what_finished() -> None:
+    rows = jsonl(chat_row("row-1", "hi 1"), chat_row("row-2", "hi 2"), chat_row("row-3", "hi 3"))
+    harness = make_runner(content=rows, concurrency=1, completion_window_seconds=0.2)
+    reply = chat_response("hi 1")
+
+    async def dispatch(messages: Sequence[Mapping[str, str]], **_: object) -> ModelResponse:
+        if messages[0]["content"] == "hi 1":
+            return reply
+        await asyncio.Event().wait()
+        raise AssertionError("a row still running at the completion window must be cut off")
+
+    harness.router.acompletion.side_effect = dispatch
+    created, finished = await harness.create_and_finish()
+
+    assert created.expires_at == created.created_at
+    assert finished.status == "expired"
+    assert finished.expired_at is not None
+    assert finished.request_counts == BatchRequestCounts(completed=1, failed=2, total=3)
+    assert (finished.output_file_id, finished.error_file_id) == ("unified-output-1", "unified-output-2")
+    assert set(harness.uploads.calls[0].lines()) == {"row-1"}
+    error_lines = harness.uploads.calls[1].lines()
+    assert set(error_lines) == {"row-2", "row-3"}
+    for line in error_lines.values():
+        assert line["response"] is None
+        error = line["error"]
+        assert isinstance(error, dict)
+        assert error["code"] == "batch_expired"
+
+
+async def test_batch_created_past_its_window_dispatches_nothing() -> None:
+    harness = make_runner(completion_window_seconds=0)
+    _, finished = await harness.create_and_finish()
+
+    assert harness.router.acompletion.await_count == 0
+    assert finished.status == "expired"
+    assert finished.request_counts == BatchRequestCounts(completed=0, failed=2, total=2)
+    assert (finished.output_file_id, finished.error_file_id) == (None, "unified-output-1")
+    assert set(harness.uploads.calls[0].lines()) == {"row-1", "row-2"}
 
 
 async def test_upload_failure_marks_the_batch_failed() -> None:

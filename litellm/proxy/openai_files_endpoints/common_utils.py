@@ -181,7 +181,8 @@ def get_batch_id_from_unified_batch_id(file_id: str) -> str:
 
 
 def is_litellm_executed_batch(decoded_unified_batch_id: str) -> bool:
-    return get_batch_id_from_unified_batch_id(decoded_unified_batch_id).startswith(LITELLM_EXECUTED_BATCH_ID_PREFIX)
+    _, marker, batch_id = decoded_unified_batch_id.partition("llm_batch_id:")
+    return bool(marker) and batch_id.startswith(LITELLM_EXECUTED_BATCH_ID_PREFIX)
 
 
 def encode_file_id_with_model(file_id: str, model: str, id_type: Literal["file", "batch"] = "file") -> str:
