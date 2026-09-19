@@ -753,6 +753,10 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)
 ANTHROPIC_TOOL_SEARCH_BETA_HEADER: Final = "advanced-tool-use-2025-11-20"
 
+ANTHROPIC_TOOL_SEARCH_TOOL_TYPES: Final = frozenset(
+    {"tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119"}
+)
+
 # Effort beta header constant
 ANTHROPIC_EFFORT_BETA_HEADER: Final = "effort-2025-11-24"
 
