@@ -3225,6 +3225,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # Decoded upstream IdP claims (groups, roles, etc.) propagated by JWT auth machinery
     # and forwarded into outbound tokens by guardrails such as MCPJWTSigner.
     jwt_claims: dict | None = None
+    jwt_scope_mcp_grants: tuple[LiteLLM_ObjectPermissionBase, ...] = ()
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -4872,6 +4873,7 @@ class JWTAuthBuilderResult(TypedDict):
     team_membership: LiteLLM_TeamMembership | None
     jwt_claims: dict  # Decoded JWT token claims (avoids re-decoding)
     agent_id: ReadOnly[str | None]
+    jwt_scope_mcp_grants: NotRequired[ReadOnly[tuple[LiteLLM_ObjectPermissionBase, ...]]]
 
 
 class ClientSideFallbackModel(TypedDict, total=False):

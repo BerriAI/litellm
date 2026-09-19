@@ -2309,20 +2309,7 @@ class MCPRequestHandler:
     def _get_jwt_scope_object_permissions(
         user_api_key_auth: UserAPIKeyAuth | None,
     ) -> tuple[LiteLLM_ObjectPermissionBase, ...]:
-        if user_api_key_auth is None or not user_api_key_auth.jwt_claims:
-            return ()
-        from litellm.proxy.auth.handle_jwt import JWTAuthManager
-        from litellm.proxy.proxy_server import jwt_handler
-
-        scope_mappings: Final = jwt_handler.litellm_jwtauth.scope_mappings
-        if not scope_mappings:
-            return ()
-        try:
-            scopes: Final = jwt_handler.get_scopes(token=user_api_key_auth.jwt_claims)
-        except Exception as e:  # noqa: BLE001  # get_scopes raises a bare Exception on a malformed scope claim
-            verbose_logger.warning("Ignoring malformed JWT scope claim for MCP authorization: %s", e)
-            return ()
-        return JWTAuthManager.mcp_permissions_from_scopes(scope_mappings=scope_mappings, scopes=scopes)
+        return user_api_key_auth.jwt_scope_mcp_grants if user_api_key_auth is not None else ()
 
     @staticmethod
     async def _expand_scope_grant_servers(scope_obj_perm: LiteLLM_ObjectPermissionBase) -> frozenset[str]:

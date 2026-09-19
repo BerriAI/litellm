@@ -16,6 +16,7 @@ from litellm.proxy._types import (
     JWTLiteLLMRoleMap,
     LiteLLM_JWTAuth,
     LiteLLM_ModelTable,
+    LiteLLM_ObjectPermissionBase,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -7111,6 +7112,75 @@ def test_check_scope_based_access_denial_hides_scope_allowlist_from_client():
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == {"error": _JWT_DENIED_CLIENT_MESSAGE}
     assert exc_info.value.internal_message == "model=gpt-5.6 not allowed. Allowed_models=['gpt-5.6-mini']"
+
+
+_MCP_SCOPE_MAPPINGS = (
+    ScopeMapping(scope="litellm.mcp.alpha", mcp_servers=["math_alpha"]),
+    ScopeMapping(scope="litellm.mcp.beta_add", mcp_tool_permissions={"math_beta": ["add"]}),
+    ScopeMapping(scope="litellm.api.consumer", models=["gpt-5.6"]),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_admin_token", [False, True], ids=["standard_jwt", "proxy_admin_jwt"])
+async def test_auth_builder_resolves_mcp_grants_from_scope_mappings(monkeypatch, is_admin_token: bool):
+    admin_scope = f" {LiteLLM_JWTAuth().admin_jwt_scope}" if is_admin_token else ""
+    jwt_handler, token = _entra_signed_app_token(
+        monkeypatch,
+        azp="2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21",
+        scope=f"litellm.mcp.alpha litellm.mcp.beta_add{admin_scope}",
+    )
+    jwt_handler.bind_agent_lookup(_entra_agent_registry())
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        agent_id_jwt_field="azp", enforce_scope_based_access=True, scope_mappings=list(_MCP_SCOPE_MAPPINGS)
+    )
+
+    result = await JWTAuthManager.auth_builder(
+        api_key=token,
+        jwt_handler=jwt_handler,
+        request_data={},
+        general_settings={"enforce_rbac": False},
+        route="/key/info" if is_admin_token else "/chat/completions",
+        prisma_client=None,
+        user_api_key_cache=None,
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+    )
+    user_auth = JWTAuthManager.user_api_key_auth_from_result(result)
+
+    assert result["is_proxy_admin"] is is_admin_token
+    assert user_auth.jwt_scope_mcp_grants == (
+        LiteLLM_ObjectPermissionBase(mcp_servers=["math_alpha"]),
+        LiteLLM_ObjectPermissionBase(mcp_tool_permissions={"math_beta": ["add"]}),
+    ), "each matched scope with MCP fields becomes its own grant; model-only scopes contribute nothing"
+
+
+@pytest.mark.parametrize(
+    ("claims", "expected"),
+    [
+        ({"sub": "s", "scope": "litellm.mcp.alpha"}, (LiteLLM_ObjectPermissionBase(mcp_servers=["math_alpha"]),)),
+        ({"sub": "s", "scope": ["litellm.mcp.alpha"]}, (LiteLLM_ObjectPermissionBase(mcp_servers=["math_alpha"]),)),
+        ({"sub": "s", "scope": "openid"}, ()),
+        ({"sub": "s"}, ()),
+        ({"sub": "s", "scope": {"nested": "litellm.mcp.alpha"}}, ()),
+        (None, ()),
+    ],
+    ids=["string scope", "list scope", "unmatched", "missing claim", "malformed claim", "no claims"],
+)
+def test_mcp_grants_from_claims(claims, expected):
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        enforce_scope_based_access=True, scope_mappings=list(_MCP_SCOPE_MAPPINGS)
+    )
+
+    assert JWTAuthManager.mcp_grants_from_claims(jwt_handler, claims) == expected
+
+
+def test_mcp_grants_from_claims_without_scope_mappings_is_empty():
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    assert JWTAuthManager.mcp_grants_from_claims(jwt_handler, {"sub": "s", "scope": "litellm.mcp.alpha"}) == ()
 
 
 @pytest.mark.asyncio
