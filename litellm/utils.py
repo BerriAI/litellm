@@ -571,15 +571,23 @@ def custom_llm_setup():
             litellm._custom_providers.append(custom_llm["provider"])
 
 
-def _add_custom_logger_callback_to_specific_event(callback: str, logging_event: Literal["success", "failure"]) -> None:
-    """
-    Add a custom logger callback to the specific event
-    """
+def _initialize_custom_logger_callback(callback: str) -> CustomLogger | None:
     from litellm import _custom_logger_compatible_callbacks_literal
     from litellm.litellm_core_utils.litellm_logging import (
         _init_custom_logger_compatible_class,
     )
 
+    return _init_custom_logger_compatible_class(
+        cast(_custom_logger_compatible_callbacks_literal, callback),
+        internal_usage_cache=None,
+        llm_router=None,
+    )
+
+
+def _add_custom_logger_callback_to_specific_event(callback: str, logging_event: Literal["success", "failure"]) -> None:
+    """
+    Add a custom logger callback to the specific event
+    """
     if callback not in litellm._known_custom_logger_compatible_callbacks:
         verbose_logger.debug(
             "Callback %s is not a valid custom logger compatible callback. Known list - %s",
@@ -588,11 +596,7 @@ def _add_custom_logger_callback_to_specific_event(callback: str, logging_event: 
         )
         return
 
-    callback_class: Final = _init_custom_logger_compatible_class(
-        cast(_custom_logger_compatible_callbacks_literal, callback),
-        internal_usage_cache=None,
-        llm_router=None,
-    )
+    callback_class: Final = _initialize_custom_logger_callback(callback)
 
     if callback_class:
         if logging_event == "success" and _custom_logger_class_exists_in_success_callbacks(callback_class) is False:
@@ -694,11 +698,26 @@ def load_credentials_from_list(kwargs: dict):
 
 def get_dynamic_callbacks(
     dynamic_callbacks: list[str | Callable | CustomLogger] | None,
-) -> list:
-    returned_callbacks: Final = litellm.callbacks.copy()
-    if dynamic_callbacks:
-        returned_callbacks.extend(dynamic_callbacks)
-    return returned_callbacks
+) -> list[Callable | CustomLogger] | None:
+    if not dynamic_callbacks:
+        return None
+    initialized_callbacks: Final = tuple(
+        (_initialize_custom_logger_callback(callback) if isinstance(callback, str) else callback)
+        for callback in dynamic_callbacks
+    )
+    return [
+        callback
+        for index, callback in enumerate(initialized_callbacks)
+        if callback is not None and callback not in initialized_callbacks[:index]
+    ]
+
+
+def _merge_dynamic_callbacks(
+    callbacks: Sequence[str | Callable | CustomLogger] | None,
+    additional_callbacks: Sequence[str | Callable | CustomLogger] | None,
+) -> list[str | Callable | CustomLogger] | None:
+    merged_callbacks: Final = (*(callbacks or ()), *(additional_callbacks or ()))
+    return list(merged_callbacks) if merged_callbacks else None
 
 
 def _is_gemini_model(model: str | None, custom_llm_provider: str | None) -> bool:
@@ -912,7 +931,13 @@ def function_setup(
 
         ## DYNAMIC CALLBACKS ##
         dynamic_callbacks: Final[list[str | Callable | CustomLogger] | None] = kwargs.pop("callbacks", None)
-        all_callbacks: Final = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
+        request_callbacks: Final = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
+        request_sync_callbacks: Final = (
+            [callback for callback in request_callbacks if not coroutine_checker.is_async_callable(callback)]
+            if request_callbacks
+            else None
+        )
+        all_callbacks: Final = litellm.callbacks.copy()
 
         if len(all_callbacks) > 0:
             for callback in all_callbacks:
@@ -990,7 +1015,7 @@ def function_setup(
         dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = None
         dynamic_async_success_callbacks: list[str | Callable | CustomLogger] | None = None
         dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = None
-        dynamic_async_failure_callbacks: Final[list[str | Callable | CustomLogger] | None] = None
+        dynamic_async_failure_callbacks: list[str | Callable | CustomLogger] | None = None
         if kwargs.get("success_callback", None) is not None and isinstance(kwargs["success_callback"], list):
             removed_async_items = []
             for index, callback in enumerate(kwargs["success_callback"]):
@@ -1008,6 +1033,16 @@ def function_setup(
             dynamic_success_callbacks = kwargs.pop("success_callback")
         if kwargs.get("failure_callback", None) is not None and isinstance(kwargs["failure_callback"], list):
             dynamic_failure_callbacks = kwargs.pop("failure_callback")
+
+        dynamic_input_callbacks: Final = (
+            [callback for callback in request_sync_callbacks if callback not in litellm.input_callback]
+            if request_sync_callbacks
+            else None
+        )
+        dynamic_success_callbacks = _merge_dynamic_callbacks(request_sync_callbacks, dynamic_success_callbacks)
+        dynamic_async_success_callbacks = _merge_dynamic_callbacks(request_callbacks, dynamic_async_success_callbacks)
+        dynamic_failure_callbacks = _merge_dynamic_callbacks(request_sync_callbacks, dynamic_failure_callbacks)
+        dynamic_async_failure_callbacks = _merge_dynamic_callbacks(request_callbacks, dynamic_async_failure_callbacks)
 
         if add_breadcrumb:
             try:
@@ -1188,6 +1223,7 @@ def function_setup(
             function_id=function_id or "",
             call_type=call_type,
             start_time=start_time,
+            dynamic_input_callbacks=dynamic_input_callbacks,
             dynamic_success_callbacks=dynamic_success_callbacks,
             dynamic_failure_callbacks=dynamic_failure_callbacks,
             dynamic_async_success_callbacks=dynamic_async_success_callbacks,

@@ -1107,14 +1107,10 @@ async def test_key_metadata_enable_prompt_caching_promoted_to_request_root(key_v
 async def test_add_litellm_data_to_request_strips_callback_control_fields(
     control_field,
 ):
-    """``callbacks`` / ``service_callback`` / ``logger_fn`` get appended to
-    the worker-wide ``litellm.{input,success,failure,_async_*,service}_callback``
-    lists and ``litellm.user_logger_fn`` from inside ``function_setup`` —
-    one request poisons every subsequent caller in that worker.
-    ``litellm_disabled_callbacks`` is the inverse: a request-body value
-    silently disables admin-configured audit/observability for the call.
-    None has a documented per-request use, so all four are stripped at
-    the proxy boundary alongside the existing internal-only fields."""
+    """Callback controls are proxy-owned, including the request-scoped
+    ``callbacks`` SDK parameter. A request-body ``litellm_disabled_callbacks``
+    value could also disable admin-configured audit/observability for the call,
+    so the proxy strips every callback control field."""
     request_mock = MagicMock(spec=Request)
     request_mock.url.path = "/v1/chat/completions"
     request_mock.url = MagicMock()

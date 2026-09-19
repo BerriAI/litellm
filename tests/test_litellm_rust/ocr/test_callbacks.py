@@ -44,6 +44,37 @@ async def call_native_aocr_with_callbacks(server: RecordingServer, callbacks: li
     return await call_native_aocr(server, callbacks=callbacks, **kwargs)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_native_ocr_callbacks_are_request_scoped(ocr_server: RecordingServer, asynchronous: bool) -> None:
+    request_ids: Final = tuple(f"request-{index}" for index in range(8))
+    observed: Final = {request_id: [] for request_id in request_ids}
+    ocr_server.expected_requests = len(request_ids) + 1
+
+    class Observe(CustomLogger):
+        def __init__(self, request_id: str) -> None:
+            super().__init__()
+            self.request_id: Final = request_id
+
+        def log_pre_api_call(self, model, messages, kwargs):
+            observed[self.request_id].append(kwargs["litellm_call_id"])
+
+    await asyncio.gather(
+        *(
+            call_native(
+                ocr_server,
+                asynchronous,
+                callbacks=[Observe(request_id)],
+                litellm_call_id=request_id,
+            )
+            for request_id in request_ids
+        )
+    )
+    await call_native(ocr_server, asynchronous, litellm_call_id="without-callback")
+
+    assert observed == {request_id: [request_id] for request_id in request_ids}
+
+
 def test_native_ocr_pre_call_callback_receives_transformed_provider_request(ocr_server: RecordingServer) -> None:
     observations: Final = []
 

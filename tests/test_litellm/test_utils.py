@@ -3923,6 +3923,130 @@ def test_custom_logger_guards_ignore_subclass_instances(monkeypatch: pytest.Monk
 
 
 @pytest.mark.asyncio
+async def test_completion_callbacks_are_request_scoped_while_registered_callbacks_remain_global(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request_ids: Final = tuple(f"request-{index}" for index in range(8))
+    global_calls: Final[list[str]] = []
+    observed: Final = {request_id: [] for request_id in request_ids}
+
+    class Observe(CustomLogger):
+        def __init__(self, calls: list[str]) -> None:
+            super().__init__()
+            self.calls: Final = calls
+
+        def log_pre_api_call(self, model, messages, kwargs):
+            self.calls.append(kwargs["litellm_call_id"])
+
+    global_callback: Final = Observe(global_calls)
+    request_callbacks: Final = {request_id: Observe(observed[request_id]) for request_id in request_ids}
+    monkeypatch.setattr(litellm, "callbacks", [global_callback])
+    for attribute in (
+        "input_callback",
+        "success_callback",
+        "failure_callback",
+        "_async_input_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, attribute, [])
+    monkeypatch.setattr(litellm.utils, "callback_list", [])
+
+    async def call(request_id: str) -> None:
+        await litellm.acompletion(
+            model="gpt-5.6",
+            messages=[{"role": "user", "content": request_id}],
+            mock_response="ok",
+            mock_delay=0.01,
+            litellm_call_id=request_id,
+            callbacks=[request_callbacks[request_id]],
+        )
+
+    await asyncio.gather(*(call(request_id) for request_id in request_ids))
+    await litellm.acompletion(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "without callback"}],
+        mock_response="ok",
+        litellm_call_id="without-callback",
+    )
+    await litellm.acompletion(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "registered and requested"}],
+        mock_response="ok",
+        litellm_call_id="registered-and-requested",
+        callbacks=[global_callback],
+    )
+
+    assert len(global_calls) == len(request_ids) + 2
+    assert set(global_calls) == {*request_ids, "without-callback", "registered-and-requested"}
+    assert observed == {request_id: [request_id] for request_id in request_ids}
+    assert all(
+        callback not in getattr(litellm, attribute)
+        for callback in request_callbacks.values()
+        for attribute in (
+            "callbacks",
+            "input_callback",
+            "success_callback",
+            "failure_callback",
+            "_async_input_callback",
+            "_async_success_callback",
+            "_async_failure_callback",
+        )
+    )
+
+
+def test_completion_callback_does_not_leak_to_the_next_sync_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: Final[list[str]] = []
+
+    class Observe(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            calls.append(kwargs["litellm_call_id"])
+
+    callback: Final = Observe()
+    monkeypatch.setattr(litellm, "callbacks", [])
+    for attribute in (
+        "input_callback",
+        "success_callback",
+        "failure_callback",
+        "_async_input_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, attribute, [])
+    monkeypatch.setattr(litellm.utils, "callback_list", [])
+
+    litellm.completion(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "with callback"}],
+        mock_response="ok",
+        litellm_call_id="with-callback",
+        callbacks=[callback],
+    )
+    litellm.completion(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "without callback"}],
+        mock_response="ok",
+        litellm_call_id="without-callback",
+    )
+
+    assert calls == ["with-callback"]
+    assert all(
+        callback not in getattr(litellm, attribute)
+        for attribute in (
+            "callbacks",
+            "input_callback",
+            "success_callback",
+            "failure_callback",
+            "_async_input_callback",
+            "_async_success_callback",
+            "_async_failure_callback",
+        )
+    )
+
+
+@pytest.mark.asyncio
 async def test_s3_v2_success_callback_registers_alongside_user_subclass(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

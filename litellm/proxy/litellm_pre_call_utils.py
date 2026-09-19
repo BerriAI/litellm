@@ -276,11 +276,9 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "pillar_response_headers",
     "_guardrail_pipelines",
     "_pipeline_managed_guardrails",
-    # Callback-registration fields. ``callbacks``, ``service_callback``,
-    # and ``logger_fn`` are read by ``litellm.utils.function_setup`` and
-    # appended to process-wide ``litellm.{input,success,failure,_async_*,
-    # service}_callback`` lists / ``litellm.user_logger_fn`` — one request
-    # poisons the worker for every subsequent caller.
+    # Callback-control fields are proxy-owned. Letting request bodies select
+    # callbacks, service callbacks, or logger functions would let callers
+    # choose server integrations and logging destinations.
     # ``litellm_disabled_callbacks`` is the inverse primitive: the
     # legitimate path reads it from key/team metadata, the request-body
     # version silently turns off admin-configured audit/observability
