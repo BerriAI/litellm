@@ -15,10 +15,10 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol
 
 from fastapi import HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -2414,22 +2414,22 @@ def _update_last_db_access_time(key: str, value: object | None, last_db_access_t
     last_db_access_time[key] = (value, time.time())
 
 
+ROLE_BASED_PERMISSIONS_ADAPTER: Final[TypeAdapter[list[RoleBasedPermissions]]] = TypeAdapter(list[RoleBasedPermissions])
+
+
 def _get_role_based_permissions(
     rbac_role: RBAC_ROLES,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
     key: Literal["models", "routes"],
 ) -> list[str] | None:
     """
     Get the role based permissions from the general settings.
     """
-    role_based_permissions: Final = cast(
-        list[RoleBasedPermissions] | None,
-        general_settings.get("role_permissions", []),
-    )
-    if role_based_permissions is None:
+    configured: Final = general_settings.get("role_permissions")
+    if configured is None:
         return None
 
-    for role_based_permission in role_based_permissions:
+    for role_based_permission in ROLE_BASED_PERMISSIONS_ADAPTER.validate_python(configured):
         if role_based_permission.role == rbac_role:
             return role_based_permission.models if key == "models" else role_based_permission.routes
 
@@ -2438,7 +2438,7 @@ def _get_role_based_permissions(
 
 def get_role_based_models(
     rbac_role: RBAC_ROLES,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
 ) -> list[str] | None:
     """
     Get the models allowed for a user role.
@@ -2455,7 +2455,7 @@ def get_role_based_models(
 
 def get_role_based_routes(
     rbac_role: RBAC_ROLES,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
 ) -> list[str] | None:
     """
     Get the routes allowed for a user role.
