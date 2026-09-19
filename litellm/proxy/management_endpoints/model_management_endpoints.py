@@ -138,7 +138,6 @@ from litellm.types.router import (
     updateLiteLLMParams,
 )
 from litellm.types.utils import (
-    COST_MAP_LOOKUP_KEY,
     echoed_cost_map_fields,
     echoed_cost_map_pricing_fields,
     without_server_derived_pricing,
@@ -876,12 +875,11 @@ def _ptu_priced_deployment(model_params: Deployment) -> Deployment:
     )
 
 
-def _cost_map_entry(model_info: Mapping[str, object]) -> Mapping[str, object]:
-    key: Final = model_info.get(COST_MAP_LOOKUP_KEY)
-    if not isinstance(key, str):
-        return MappingProxyType({})
+def _cost_map_entry(db_model: Deployment, incoming_model_info: Mapping[str, object]) -> Mapping[str, object]:
+    base_model: Final = incoming_model_info.get("base_model")
+    lookup: Final = base_model if isinstance(base_model, str) else db_model.litellm_params.model
     try:
-        return MappingProxyType(dict(litellm.get_model_info(model=key)))
+        return MappingProxyType(dict(litellm.get_model_info(model=lookup)))
     except Exception:
         return MappingProxyType({})
 
@@ -909,7 +907,9 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
     # update model info
     if updated_patch.model_info:
         incoming_model_info: Final = updated_patch.model_info.model_dump(exclude_none=True)
-        echoed_fields: Final = echoed_cost_map_fields(incoming_model_info, _cost_map_entry(incoming_model_info))
+        echoed_fields: Final = echoed_cost_map_fields(
+            incoming_model_info, _cost_map_entry(db_model, incoming_model_info)
+        )
         merged_model_info.update(
             MappingProxyType(
                 dict(

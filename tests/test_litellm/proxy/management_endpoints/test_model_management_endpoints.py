@@ -3961,7 +3961,7 @@ class TestModelInfoCostMapEchoFilter:
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
-        entry = litellm.get_model_info("gpt-5.6")
+        entry = litellm.get_model_info("openai/gpt-5.6")
         echo = {**entry, "id": "dep-echo-0", "db_model": True, "access_groups": ["prod"]}
         db_model = Deployment(
             model_name="gpt-5.6",
@@ -3987,7 +3987,7 @@ class TestModelInfoCostMapEchoFilter:
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
-        entry = litellm.get_model_info("gpt-5.6")
+        entry = litellm.get_model_info("openai/gpt-5.6")
         echo = {
             **entry,
             "id": "dep-echo-1",
@@ -4020,7 +4020,7 @@ class TestModelInfoCostMapEchoFilter:
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
         from litellm.types.utils import echoed_cost_map_fields
 
-        entry = litellm.get_model_info("gpt-5.6")
+        entry = litellm.get_model_info("openai/gpt-5.6")
         assert echoed_cost_map_fields({"max_input_tokens": entry["max_input_tokens"]}, entry) == ()
         db_model = Deployment(
             model_name="gpt-5.6",
@@ -4049,7 +4049,7 @@ class TestModelInfoCostMapEchoFilter:
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
-        entry = litellm.get_model_info("gpt-5.6")
+        entry = litellm.get_model_info("openai/gpt-5.6")
         db_model = Deployment(
             model_name="gpt-5.6",
             litellm_params=LiteLLM_Params(model="openai/gpt-5.6"),
@@ -4072,7 +4072,7 @@ class TestModelInfoCostMapEchoFilter:
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
-        entry = litellm.get_model_info("gpt-5.6")
+        entry = litellm.get_model_info("openai/gpt-5.6")
         db_model = Deployment(
             model_name="gpt-5.6",
             litellm_params=LiteLLM_Params(model="openai/gpt-5.6"),
@@ -4089,6 +4089,76 @@ class TestModelInfoCostMapEchoFilter:
         assert "max_input_tokens" not in info
         assert info["mode"] == "chat"
         assert info["access_groups"] == ["staging"]
+
+    def test_echo_is_compared_against_the_deployments_lookup_not_the_key(self):
+        import litellm
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        lookup_pairs: Final = (
+            ("openai/gpt-5.6", "gpt-5.6"),
+            ("openai/gpt-4.1-mini", "gpt-4.1-mini"),
+        )
+        lookup_data: Final = tuple(
+            (deployment_model, deployment_entry, differing_fields)
+            for deployment_model, key_model in lookup_pairs
+            for deployment_entry in (litellm.get_model_info(deployment_model),)
+            for key_entry in (litellm.get_model_info(key_model),)
+            for differing_fields in (
+                frozenset(
+                    k for k in deployment_entry if k in key_entry and deployment_entry[k] != key_entry[k]
+                ),
+            )
+            if differing_fields
+        )
+        if not lookup_data:
+            pytest.skip("No deployment/key cost-map lookup differences are available")
+
+        deployment_model, entry, differing_fields = lookup_data[0]
+        assert differing_fields
+        db_model = Deployment(
+            model_name=deployment_model,
+            litellm_params=LiteLLM_Params(model=deployment_model),
+            model_info=ModelInfo(id="dep-echo-5"),
+        )
+        echo = {**entry, "id": "dep-echo-5", "db_model": True, "access_groups": ["prod"]}
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_info=ModelInfo(**echo)),
+        )
+
+        info = json.loads(result["model_info"])
+        assert not frozenset(info).intersection(frozenset(entry) - frozenset(("mode",)))
+
+    def test_base_model_wins_over_litellm_params_model_for_the_lookup(self):
+        import litellm
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        entry = litellm.get_model_info("azure/gpt-5.6")
+        db_model = Deployment(
+            model_name="azure/my-deploy",
+            litellm_params=LiteLLM_Params(model="azure/my-deploy"),
+            model_info=ModelInfo(id="dep-echo-6", base_model="azure/gpt-5.6"),
+        )
+        echo = {
+            **entry,
+            "id": "dep-echo-6",
+            "base_model": "azure/gpt-5.6",
+            "db_model": True,
+        }
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_info=ModelInfo(**echo)),
+        )
+
+        info = json.loads(result["model_info"])
+        assert not frozenset(info).intersection(frozenset(entry) - frozenset(("mode",)))
+        assert info["base_model"] == "azure/gpt-5.6"
 
 
 class TestUpdateDBModelClearCacheControlInjectionPoints:
