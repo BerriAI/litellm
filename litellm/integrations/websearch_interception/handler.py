@@ -44,6 +44,8 @@ from litellm.types.integrations.custom_logger import (
 from litellm.types.integrations.websearch_interception import (
     AnthropicSearchQuery,
     AnthropicServerToolUseBlock,
+    SearchFailed,
+    SearchOutcome,
     WebSearchInterceptionConfig,
 )
 from litellm.types.llms.anthropic import AnthropicThinkingParam
@@ -332,16 +334,8 @@ class WebSearchInterceptionLogger(CustomLogger):
             None,
         )
 
-        # Execute search — keep the structured SearchResponse so the native
-        # block can carry per-result url/title/page_age.
-        try:
-            if kwargs is None:
-                search_result_text, structured = await self._execute_search(query)
-            else:
-                search_result_text, structured = await self._execute_search(query, kwargs=kwargs)
-        except Exception as e:
-            verbose_logger.error("WebSearchInterception: Short-circuit search failed: %s", e)
-            search_result_text, structured = f"Search failed: {e}", None
+        outcome: Final = await self._short_circuit_search_outcome(query, kwargs=kwargs)
+        search_result_text: Final = WebSearchTransformation.search_outcome_text(outcome)
 
         content: Final[list[dict[str, object]]] = []
         if native_tool is not None:
@@ -356,10 +350,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 }
             )
             content.append(
-                WebSearchTransformation.build_web_search_tool_result_block(
-                    tool_use_id=tool_use_id,
-                    search_response=structured,
-                )
+                WebSearchTransformation.build_web_search_outcome_block(tool_use_id=tool_use_id, outcome=outcome)
             )
         # Keep the text block so non-native short-circuit callers (Claude Code,
         # github_copilot, etc.) see the same payload they always have.
@@ -934,7 +925,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         tool_calls: Final = tools["tool_calls"]
         thinking_blocks: Final = tools.get("thinking_blocks", [])
-        request_patch, structured_results = await self._build_anthropic_request_patch(
+        request_patch, search_outcomes = await self._build_anthropic_request_patch(
             model=model,
             messages=messages,
             tool_calls=tool_calls,
@@ -953,17 +944,21 @@ class WebSearchInterceptionLogger(CustomLogger):
         # pre-build the Anthropic-native ``web_search_tool_result`` blocks now
         # (while we still have the structured SearchResponse list) and stash
         # them on plan metadata for the post-hook to inject.
-        if kwargs.get(WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY):
-            metadata[WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY] = self._build_native_result_blocks(
-                tool_calls=tool_calls,
-                structured_results=structured_results,
-            )
+        if not kwargs.get(WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY):
+            return AgenticLoopPlan(run_agentic_loop=True, request_patch=request_patch, metadata=metadata)
 
-        return AgenticLoopPlan(
-            run_agentic_loop=True,
-            request_patch=request_patch,
-            metadata=metadata,
+        metadata[WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY] = self._build_native_result_blocks(
+            tool_calls=tool_calls,
+            search_outcomes=search_outcomes,
         )
+        every_search_failed: Final = bool(search_outcomes) and all(
+            isinstance(outcome, SearchFailed) for outcome in search_outcomes
+        )
+        if every_search_failed:
+            return AgenticLoopPlan(
+                run_agentic_loop=False, terminate=True, stop_reason="web_search_failed", metadata=metadata
+            )
+        return AgenticLoopPlan(run_agentic_loop=True, request_patch=request_patch, metadata=metadata)
 
     async def async_post_agentic_loop_response_hook(
         self,
@@ -992,7 +987,7 @@ class WebSearchInterceptionLogger(CustomLogger):
     @staticmethod
     def _build_native_result_blocks(
         tool_calls: list[dict],
-        structured_results: list[SearchResponse | None],
+        search_outcomes: Sequence[SearchOutcome],
     ) -> tuple[Mapping[str, object], ...]:
         """
         Build a ``server_tool_use`` + ``web_search_tool_result`` pair per tool_call.
@@ -1004,10 +999,10 @@ class WebSearchInterceptionLogger(CustomLogger):
         """
         return tuple(
             block
-            for i, tool_call in enumerate(tool_calls)
+            for tool_call, outcome in zip(tool_calls, search_outcomes, strict=True)
             for block in WebSearchInterceptionLogger._native_result_pair(
                 query=WebSearchInterceptionLogger._tool_call_query(tool_call),
-                search_response=structured_results[i] if i < len(structured_results) else None,
+                outcome=outcome,
             )
         )
 
@@ -1022,15 +1017,12 @@ class WebSearchInterceptionLogger(CustomLogger):
     @staticmethod
     def _native_result_pair(
         query: str,
-        search_response: SearchResponse | None,
+        outcome: SearchOutcome,
     ) -> tuple[Mapping[str, object], Mapping[str, object]]:
         tool_use_id: Final = f"srvtoolu_{uuid.uuid4().hex}"
         return (
             AnthropicServerToolUseBlock(id=tool_use_id, input=AnthropicSearchQuery(query=query)).model_dump(),
-            WebSearchTransformation.build_web_search_tool_result_block(
-                tool_use_id=tool_use_id,
-                search_response=search_response,
-            ),
+            WebSearchTransformation.build_web_search_outcome_block(tool_use_id=tool_use_id, outcome=outcome),
         )
 
     @staticmethod
@@ -1306,7 +1298,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         kwargs: Mapping[str, object],
     ) -> "AnthropicMessagesResponse | AsyncIterator[object]":
         """Legacy path: execute search + build patch + run follow-up call."""
-        request_patch, structured_results = await self._build_anthropic_request_patch(
+        request_patch, search_outcomes = await self._build_anthropic_request_patch(
             model=model,
             messages=messages,
             tool_calls=tool_calls,
@@ -1344,7 +1336,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         if kwargs.get(WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY):
             native_blocks: Final = self._build_native_result_blocks(
                 tool_calls=tool_calls,
-                structured_results=structured_results,
+                search_outcomes=search_outcomes,
             )
             response = self._inject_native_blocks(response, native_blocks)
 
@@ -1359,15 +1351,9 @@ class WebSearchInterceptionLogger(CustomLogger):
         anthropic_messages_optional_request_params: dict,
         logging_obj: "LiteLLMLoggingObj | None",
         kwargs: dict,
-    ) -> tuple[AgenticLoopRequestPatch, list[SearchResponse | None]]:
+    ) -> tuple[AgenticLoopRequestPatch, tuple[SearchOutcome, ...]]:
         """
         Execute litellm.search() and build follow-up request patch.
-
-        Returns the patch alongside the parallel list of structured
-        ``SearchResponse`` objects (one per tool_call, ``None`` when the
-        search failed or the tool_call had no query). The caller uses these
-        to optionally build Anthropic-native ``web_search_tool_result``
-        content blocks for the final response.
         """
 
         # Extract search queries from tool_use blocks
@@ -1385,27 +1371,10 @@ class WebSearchInterceptionLogger(CustomLogger):
         # Execute searches in parallel
         verbose_logger.debug("WebSearchInterception: Executing %s search(es) in parallel", len(search_tasks))
         search_results: Final = await asyncio.gather(*search_tasks, return_exceptions=True)
-
-        # Split the gathered (text, structured) tuples into two parallel lists.
-        # The text list feeds the follow-up model call; the structured list
-        # is returned to the caller for native-block emission.
-        final_search_results: Final[list[str]] = []
-        structured_results: Final[list[SearchResponse | None]] = []
-        for i, result in enumerate(search_results):
-            if isinstance(result, Exception):
-                verbose_logger.error("WebSearchInterception: Search %s failed with error: %s", i, result)
-                final_search_results.append(f"Search failed: {result}")
-                structured_results.append(None)
-            elif isinstance(result, tuple) and len(result) == 2:
-                text_value, structured_value = result
-                final_search_results.append(cast(str, text_value) if isinstance(text_value, str) else str(text_value))
-                structured_results.append(structured_value if isinstance(structured_value, SearchResponse) else None)
-            else:
-                # Defensive: legacy callers / unexpected shape — preserve text,
-                # drop structure.
-                verbose_logger.debug("WebSearchInterception: Unexpected result type %s at index %s", type(result), i)
-                final_search_results.append(str(result))
-                structured_results.append(None)
+        search_outcomes: Final = tuple(WebSearchTransformation.search_outcome(result) for result in search_results)
+        final_search_results: Final = tuple(
+            WebSearchTransformation.search_outcome_text(outcome) for outcome in search_outcomes
+        )
 
         # Build assistant and user messages using transformation
         assistant_message, user_message = WebSearchTransformation.transform_response(
@@ -1449,7 +1418,18 @@ class WebSearchInterceptionLogger(CustomLogger):
             optional_params=optional_params_without_max_tokens,
             kwargs=kwargs_for_followup,
         )
-        return patch, structured_results
+        return patch, search_outcomes
+
+    async def _short_circuit_search_outcome(self, query: str, kwargs: Mapping[str, object] | None) -> SearchOutcome:
+        try:
+            result: Final = (
+                await self._execute_search(query)
+                if kwargs is None
+                else await self._execute_search(query, kwargs=kwargs)
+            )
+        except Exception as e:
+            return WebSearchTransformation.search_outcome(e)
+        return WebSearchTransformation.search_outcome(result)
 
     async def _execute_search(
         self, query: str, kwargs: Mapping[str, object] | None = None
