@@ -1636,6 +1636,8 @@ def _boot_with_general_settings(monkeypatch, tmp_path, general_settings):
     for name in ("LITELLM_MASTER_KEY", "LITELLM_DANGEROUSLY_ALLOW_UNSAFE_PROXY", "WORKER_CONFIG", "DATABASE_URL"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
+    scheduler_left_on_a_closed_event_loop_by_an_earlier_test = "litellm.proxy.proxy_server.scheduler"
+    monkeypatch.setattr(scheduler_left_on_a_closed_event_loop_by_an_earlier_test, None)
     announced = []
     monkeypatch.setattr("litellm.proxy.proxy_server.announce_on_stderr_at_exit", announced.append)
     return config_path, announced

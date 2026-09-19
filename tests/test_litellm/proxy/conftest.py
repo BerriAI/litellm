@@ -268,6 +268,7 @@ def create_proxy_test_client(
 
     # Set environment variables
     set_proxy_environment_variables(monkeypatch, database_url=database_url)
+    monkeypatch.setenv("LITELLM_DANGEROUSLY_ALLOW_UNSAFE_PROXY", "true")
 
     # Initialize proxy
     asyncio.run(initialize(config=config_fp, debug=init_options.get("debug", False)))
