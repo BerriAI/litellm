@@ -3,7 +3,12 @@
 import { Waypoints } from "lucide-react";
 import { useMemo } from "react";
 
-import { DataTable } from "@/components/shared/DataTable";
+import {
+  DataTable,
+  DEFAULT_PAGE_SIZE_OPTIONS,
+  useUrlTableState,
+  type UrlTableStateOptions,
+} from "@/components/shared/DataTable";
 
 import { getPassThroughEndpointsTableColumns } from "./PassThroughEndpointsTableColumns";
 import type { passThroughItem } from "./PassThroughSettings";
@@ -14,6 +19,14 @@ interface PassThroughEndpointsTableProps {
   onEndpointClick: (endpointId: string) => void;
   onDeleteClick: (endpointId: string) => void;
 }
+
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: [],
+  defaultSort: { id: "", desc: false },
+  defaultPageSize: DEFAULT_PAGE_SIZE_OPTIONS[0],
+  filterColumns: [],
+  keyPrefix: "pass_through_",
+};
 
 function EmptyState() {
   return (
@@ -33,6 +46,7 @@ export function PassThroughEndpointsTable({
   onEndpointClick,
   onDeleteClick,
 }: PassThroughEndpointsTableProps) {
+  const { pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
   const columns = useMemo(
     () => getPassThroughEndpointsTableColumns({ onEndpointClick, onDeleteClick }),
     [onEndpointClick, onDeleteClick],
@@ -42,6 +56,8 @@ export function PassThroughEndpointsTable({
     <DataTable
       data={endpoints}
       paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       columns={columns}
       getRowId={(endpoint, index) => endpoint.id || endpoint.path || String(index)}
       isLoading={isLoading}

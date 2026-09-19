@@ -1,6 +1,8 @@
-import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 
 import { PassThroughEndpointsTable } from "./PassThroughEndpointsTable";
 import type { passThroughItem } from "./PassThroughSettings";
@@ -36,7 +38,7 @@ describe("PassThroughEndpointsTable", () => {
   });
 
   it("should render a row per endpoint with path and target", () => {
-    render(<PassThroughEndpointsTable {...defaultProps} />);
+    renderWithProviders(<PassThroughEndpointsTable {...defaultProps} />);
     expect(screen.getByText("/v1/rerank")).toBeInTheDocument();
     expect(screen.getByText("https://api.cohere.com/v1/rerank")).toBeInTheDocument();
     expect(screen.getByText("/bria")).toBeInTheDocument();
@@ -45,26 +47,26 @@ describe("PassThroughEndpointsTable", () => {
   it("should open the endpoint when its ID is clicked", async () => {
     const user = userEvent.setup();
     const onEndpointClick = vi.fn();
-    render(<PassThroughEndpointsTable {...defaultProps} onEndpointClick={onEndpointClick} />);
+    renderWithProviders(<PassThroughEndpointsTable {...defaultProps} onEndpointClick={onEndpointClick} />);
     await user.click(screen.getByRole("button", { name: "ep-1" }));
     expect(onEndpointClick).toHaveBeenCalledWith("ep-1");
   });
 
   it("should show method chips, or ALL when no methods are set", () => {
-    render(<PassThroughEndpointsTable {...defaultProps} />);
+    renderWithProviders(<PassThroughEndpointsTable {...defaultProps} />);
     expect(screen.getByText("POST")).toBeInTheDocument();
     expect(screen.getByText("ALL")).toBeInTheDocument();
   });
 
   it("should show authentication as Yes or No", () => {
-    render(<PassThroughEndpointsTable {...defaultProps} />);
+    renderWithProviders(<PassThroughEndpointsTable {...defaultProps} />);
     expect(screen.getByText("Yes")).toBeInTheDocument();
     expect(screen.getByText("No")).toBeInTheDocument();
   });
 
   it("should mask headers until the visibility toggle is clicked", async () => {
     const user = userEvent.setup();
-    render(<PassThroughEndpointsTable {...defaultProps} />);
+    renderWithProviders(<PassThroughEndpointsTable {...defaultProps} />);
 
     expect(screen.queryByText(/secret-value/)).not.toBeInTheDocument();
     const toggles = screen.getAllByRole("button", { name: "Show headers" });
@@ -76,7 +78,7 @@ describe("PassThroughEndpointsTable", () => {
     const user = userEvent.setup();
     const onEndpointClick = vi.fn();
     const onDeleteClick = vi.fn();
-    render(
+    renderWithProviders(
       <PassThroughEndpointsTable {...defaultProps} onEndpointClick={onEndpointClick} onDeleteClick={onDeleteClick} />,
     );
 
@@ -100,7 +102,7 @@ describe("PassThroughEndpointsTable", () => {
       headers: {},
       is_from_config: true,
     };
-    render(
+    renderWithProviders(
       <PassThroughEndpointsTable
         {...defaultProps}
         endpoints={[configEndpoint]}
@@ -128,7 +130,7 @@ describe("PassThroughEndpointsTable", () => {
 
   it("should not show the config hint for DB endpoints", async () => {
     const user = userEvent.setup();
-    render(<PassThroughEndpointsTable {...defaultProps} />);
+    renderWithProviders(<PassThroughEndpointsTable {...defaultProps} />);
 
     await user.click(screen.getByTestId("endpoint-actions-ep-1"));
     await screen.findByTestId("endpoint-action-delete");
@@ -143,7 +145,7 @@ describe("PassThroughEndpointsTable", () => {
       headers: {},
       is_from_config: true,
     };
-    render(<PassThroughEndpointsTable {...defaultProps} endpoints={[...endpoints, configEndpoint]} />);
+    renderWithProviders(<PassThroughEndpointsTable {...defaultProps} endpoints={[...endpoints, configEndpoint]} />);
     expect(screen.getByText("Config")).toBeInTheDocument();
     expect(screen.getAllByText("DB")).toHaveLength(2);
   });
@@ -153,7 +155,7 @@ describe("PassThroughEndpointsTable", () => {
     const onEndpointClick = vi.fn();
     const onDeleteClick = vi.fn();
     const endpointWithoutId: passThroughItem = { path: "/legacy", target: "https://legacy.example.com", headers: {} };
-    render(
+    renderWithProviders(
       <PassThroughEndpointsTable
         {...defaultProps}
         endpoints={[endpointWithoutId]}
@@ -177,13 +179,47 @@ describe("PassThroughEndpointsTable", () => {
   });
 
   it("should show the empty state when there are no endpoints", () => {
-    render(<PassThroughEndpointsTable {...defaultProps} endpoints={[]} />);
+    renderWithProviders(<PassThroughEndpointsTable {...defaultProps} endpoints={[]} />);
     expect(screen.getByText("No pass-through endpoints configured")).toBeInTheDocument();
   });
 
   it("should show skeleton rows while loading", () => {
-    render(<PassThroughEndpointsTable {...defaultProps} endpoints={[]} isLoading />);
+    renderWithProviders(<PassThroughEndpointsTable {...defaultProps} endpoints={[]} isLoading />);
     expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
     expect(screen.queryByText("No pass-through endpoints configured")).not.toBeInTheDocument();
+  });
+
+  describe("URL page state", () => {
+    const manyEndpoints: passThroughItem[] = Array.from({ length: 27 }, (_, index) => ({
+      id: `ep-${index + 1}`,
+      path: `/route-${index + 1}`,
+      target: `https://upstream.example.com/${index + 1}`,
+      headers: {},
+    }));
+
+    it("keeps the page named in the URL once the endpoints finish loading", () => {
+      const { rerender } = renderWithProviders(
+        <PassThroughEndpointsTable {...defaultProps} endpoints={[]} isLoading />,
+        { searchParams: "?pass_through_page=2" },
+      );
+
+      rerender(<PassThroughEndpointsTable {...defaultProps} endpoints={manyEndpoints} isLoading={false} />);
+
+      expect(screen.getByText("/route-26")).toBeInTheDocument();
+      expect(screen.getByText("/route-27")).toBeInTheDocument();
+      expect(screen.queryByText("/route-1")).not.toBeInTheDocument();
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
+    });
+
+    it("writes a page change to the URL", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<PassThroughEndpointsTable {...defaultProps} endpoints={manyEndpoints} />, { onUrlUpdate });
+
+      await user.click(screen.getByTestId("pagination-next"));
+
+      await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("pass_through_page")).toBe("2"));
+      expect(screen.getByText("/route-26")).toBeInTheDocument();
+    });
   });
 });

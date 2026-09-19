@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CredentialItem, credentialCreateCall, credentialUpdateCall } from "@/components/networking";
 import { toast } from "@/lib/toast";
+
+import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 
 import CredentialsPanel from "./CredentialsPanel";
 
@@ -79,12 +80,13 @@ const createQueryClient = () =>
     },
   });
 
-const renderPanel = () =>
-  render(
-    <QueryClientProvider client={createQueryClient()}>
-      <CredentialsPanel />
-    </QueryClientProvider>,
-  );
+const panel = (queryClient: QueryClient) => (
+  <QueryClientProvider client={queryClient}>
+    <CredentialsPanel />
+  </QueryClientProvider>
+);
+
+const renderPanel = (searchParams?: string) => renderWithProviders(panel(createQueryClient()), { searchParams });
 
 describe("CredentialsPanel", () => {
   beforeEach(() => {
@@ -126,6 +128,26 @@ describe("CredentialsPanel", () => {
 
     // isLoading must reach the table: the empty state must not render mid-load.
     expect(screen.queryByText("No credentials configured")).not.toBeInTheDocument();
+  });
+
+  it("keeps the page named in the URL once credentials finish loading", () => {
+    const manyCredentials: CredentialItem[] = Array.from({ length: 27 }, (_, index) => ({
+      credential_name: `cred-${String(index + 1).padStart(2, "0")}`,
+      credential_values: {},
+      credential_info: { custom_llm_provider: "openai" },
+    }));
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
+    mockUseCredentials.mockReturnValue({ data: undefined, isLoading: true, refetch: vi.fn() });
+    const queryClient = createQueryClient();
+    const { rerender } = renderWithProviders(panel(queryClient), { searchParams: "?credentials_page=2" });
+
+    mockUseCredentials.mockReturnValue({ data: { credentials: manyCredentials }, isLoading: false, refetch: vi.fn() });
+    rerender(panel(queryClient));
+
+    expect(screen.getByText("cred-26")).toBeInTheDocument();
+    expect(screen.getByText("cred-27")).toBeInTheDocument();
+    expect(screen.queryByText("cred-01")).not.toBeInTheDocument();
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
   });
 
   it("opens the add modal when the add button is clicked", async () => {

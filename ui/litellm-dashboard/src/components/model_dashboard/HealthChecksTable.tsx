@@ -1,13 +1,14 @@
 "use client";
 
-import { OnChangeFn, PaginationState, RowSelectionState, SortingState } from "@tanstack/react-table";
+import { OnChangeFn, PaginationState, RowSelectionState } from "@tanstack/react-table";
 import { HeartPulse } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { Team } from "@/components/key_team_helpers/key_list";
 import { DataTable } from "@/components/shared/DataTable";
 
 import { getHealthChecksTableColumns, type HealthCheckData, type HealthStatus } from "./HealthChecksTableColumns";
+import { useHealthTableUrlState } from "./useHealthTableUrlState";
 
 interface HealthChecksTableProps {
   data: HealthCheckData[];
@@ -54,7 +55,7 @@ export function HealthChecksTable({
   onSelectModel,
   teams,
 }: HealthChecksTableProps) {
-  const [sorting, setSorting] = useState<SortingState>([]);
+  const { sorting, onSortingChange } = useHealthTableUrlState();
 
   const columns = useMemo(() => {
     const columnDeps = {
@@ -76,7 +77,7 @@ export function HealthChecksTable({
       getRowId={(row, index) => row.model_info?.id ?? String(index)}
       sortingMode="client"
       sorting={sorting}
-      onSortingChange={setSorting}
+      onSortingChange={onSortingChange}
       paginationMode="server"
       pagination={pagination}
       onPaginationChange={onPaginationChange}

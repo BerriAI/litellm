@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
-import type { PaginationState } from "@tanstack/react-table";
+import { useCallback, useMemo } from "react";
 import HealthCheckComponent from "@/components/model_dashboard/HealthCheckComponent";
+import { useHealthTableUrlState } from "@/components/model_dashboard/useHealthTableUrlState";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
 import { useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
@@ -11,15 +11,18 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { transformModelData } from "@/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer";
 import { useModelDetailRouting } from "@/app/(dashboard)/models-and-endpoints/detailNavigation";
 
-const HEALTH_PAGE_SIZE = 50;
-
 export default function HealthStatusPanel() {
   const { accessToken } = useAuthorized();
   const { data: teams } = useTeams();
   const { data: modelCostMapData } = useModelCostMap();
   const { openModel } = useModelDetailRouting();
-  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: HEALTH_PAGE_SIZE });
-  const { data: healthModelDataResponse, isLoading } = useModelsInfo(pagination.pageIndex + 1, pagination.pageSize);
+  const { pagination, onPaginationChange } = useHealthTableUrlState();
+  const {
+    data: healthModelDataResponse,
+    isLoading,
+    isError,
+  } = useModelsInfo(pagination.pageIndex + 1, pagination.pageSize);
+  const pageUnavailable = isLoading || (isError && !healthModelDataResponse);
 
   const getProviderFromModel = useCallback(
     (model: string) => {
@@ -54,9 +57,9 @@ export default function HealthStatusPanel() {
       getDisplayModelName={getDisplayModelName}
       setSelectedModelId={openModel}
       teams={teams ?? null}
-      isLoading={isLoading}
+      isLoading={pageUnavailable}
       pagination={pagination}
-      onPaginationChange={setPagination}
+      onPaginationChange={onPaginationChange}
       rowCount={healthModelDataResponse?.total_count ?? 0}
     />
   );

@@ -46,6 +46,7 @@ import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import ModelInfoEditForm, { type ModelEditFormValues, type TouchedPricingField } from "./ModelInfoEditForm";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
+import { useModelInfoTab } from "./useModelInfoTab";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface ModelInfoViewProps {
@@ -70,6 +71,7 @@ export default function ModelInfoView({
   modelAccessGroups,
 }: ModelInfoViewProps) {
   const queryClient = useQueryClient();
+  const { tab: detailTab, setTab: setDetailTab, close } = useModelInfoTab(onClose);
   const [localModelData, setLocalModelData] = useState<any>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -433,7 +435,7 @@ export default function ModelInfoView({
   if (isLoadingModel) {
     return (
       <div className="p-4">
-        <Button variant="ghost" onClick={onClose} className="mb-4">
+        <Button variant="ghost" onClick={close} className="mb-4">
           <ArrowLeft className="size-4" />
           Back to Models
         </Button>
@@ -446,7 +448,7 @@ export default function ModelInfoView({
   if (!modelData) {
     return (
       <div className="p-4">
-        <Button variant="ghost" onClick={onClose} className="mb-4">
+        <Button variant="ghost" onClick={close} className="mb-4">
           <ArrowLeft className="size-4" />
           Back to Models
         </Button>
@@ -517,7 +519,7 @@ export default function ModelInfoView({
         });
       }
 
-      onClose();
+      close();
     } catch (error) {
       console.error("Error deleting the model:", error);
       toast.fromError("Failed to delete model");
@@ -557,7 +559,7 @@ export default function ModelInfoView({
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button variant="ghost" onClick={onClose} className="mb-4">
+          <Button variant="ghost" onClick={close} className="mb-4">
             <ArrowLeft className="size-4" />
             Back to Models
           </Button>
@@ -630,7 +632,7 @@ export default function ModelInfoView({
         </div>
       </div>
 
-      <Tabs defaultValue="overview">
+      <Tabs value={detailTab} onValueChange={setDetailTab}>
         <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             Overview
