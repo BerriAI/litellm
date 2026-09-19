@@ -2,10 +2,10 @@
 
 The test creates a JWT-authorized user, completes real Linear authorization
 consent, lists and calls a tool immediately through the per-server MCP route,
-and verifies the canonical per-user credential row. It then uses a fresh SDK
-client against one gateway URL or a configured replica URL. With one gateway
-URL, that second run proves fresh-client reuse only. With replica URLs, it
-proves that a process which did not run consent resolves the stored token.
+and verifies the canonical per-user credential row. The first run targets the
+first configured gateway replica, and a fresh SDK client then targets a
+different replica to prove that a process which did not run consent resolves
+the stored token.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from e2e_config import (
     LINEAR_MCP_URL,
     LINEAR_READONLY_TOOL,
     LINEAR_STORAGE_STATE,
-    PROXY_BASE_URL,
     PROXY_REPLICA_URLS,
     unique_marker,
 )
@@ -61,6 +60,11 @@ class TestMcpOauthHappyPath:
         )
 
         alias: Final = f"e2elinear{unique_marker()}"
+        tool: Final = f"{alias}-{LINEAR_READONLY_TOOL}"
+        assert len(PROXY_REPLICA_URLS) >= 2, (
+            "set LITELLM_PROXY_REPLICA_URLS to at least two gateway URLs; the persistence cell needs a process "
+            "that did not run the consent"
+        )
         created: Final = chat_client.create_server(
             McpServerCreateBody(
                 alias=alias,
@@ -88,10 +92,11 @@ class TestMcpOauthHappyPath:
             headers,
             storage,
             LINEAR_STORAGE_STATE,
-            LINEAR_READONLY_TOOL,
+            tool,
             {},
+            base_url=PROXY_REPLICA_URLS[0],
         )
-        assert f"{alias}-{LINEAR_READONLY_TOOL}" in first_run.tools
+        assert tool in first_run.tools
         assert first_run.is_error is False
         assert first_run.text.strip() != ""
 
@@ -106,16 +111,16 @@ class TestMcpOauthHappyPath:
             )
         )
 
-        replica: Final = PROXY_REPLICA_URLS[-1] if len(PROXY_REPLICA_URLS) > 1 else PROXY_BASE_URL
+        replica: Final = PROXY_REPLICA_URLS[-1]
         second_run: Final = chat_client.list_and_call(
             alias,
             {"x-litellm-api-key": f"Bearer {idp.access_token(jwt_identity)}"},
             InMemoryTokenStorage(),
             None,
-            LINEAR_READONLY_TOOL,
+            tool,
             {},
             base_url=replica,
         )
-        assert f"{alias}-{LINEAR_READONLY_TOOL}" in second_run.tools
+        assert tool in second_run.tools
         assert second_run.is_error is False
         assert second_run.text.strip() != ""
