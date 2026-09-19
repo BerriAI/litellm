@@ -281,7 +281,6 @@ async def responses_api(
         # instead of a polling ID that immediately fails in the background task.
         processor = ProxyBaseLLMRequestProcessing(data=data)
         try:
-            raise_if_required_body_param_missing(route_type="aresponses", data=data)
             data, _logging_obj = await processor.common_processing_pre_call_logic(
                 request=request,
                 general_settings=general_settings,
@@ -298,6 +297,7 @@ async def responses_api(
                 route_type="aresponses",
                 llm_router=llm_router,
             )
+            raise_if_required_body_param_missing(route_type="aresponses", data=data)
         except Exception as e:
             raise await processor._handle_llm_api_exception(
                 e=e,
