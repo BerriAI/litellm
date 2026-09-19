@@ -106,6 +106,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/cursor/",
     "/milvus/",
     "/openai_passthrough/",
+    "/xai/",
     # Dynamic provider / toolset passthrough (path templates)
     "/{provider}/",
     "/toolset/",

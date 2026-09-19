@@ -216,6 +216,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/vertex_ai/",
             "/vllm/",
             "/watsonx/",
+            "/xai/",
         ),
     ),
     LazyFeature(
