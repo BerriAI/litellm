@@ -447,7 +447,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     project_spend_counter_key,
     tag_cache_key,
 )
-from litellm.proxy.config_resolvers import SettingsStore, resolve_fields
+from litellm.proxy.config_resolvers import SettingsStore, config_ownership_message, resolve_fields
 from litellm.proxy.config_resolvers.alerting import (
     EMAIL_DESCRIPTORS,
     MS_TEAMS_DESCRIPTORS,
@@ -4907,6 +4907,7 @@ class ProxyConfig:
         self.router_settings: Final[SettingsStore] = SettingsStore("router_settings")
         self.litellm_settings: Final[SettingsStore] = SettingsStore("litellm_settings")
         self.environment_variables: Final[SettingsStore] = SettingsStore("environment_variables")
+        self._warned_shadowed_keys: frozenset[tuple[Section, str]] = frozenset()
         self._settings_stores: Final[Mapping[Section, SettingsStore]] = MappingProxyType(
             {
                 "general_settings": self.settings,
@@ -5128,12 +5129,20 @@ class ProxyConfig:
             f"key '{rejected[0]}' is" if len(rejected) == 1 else f"keys {', '.join(repr(key) for key in rejected)} are"
         )
         pronoun: Final = "it" if len(rejected) == 1 else "them"
+        shadowed: Final = tuple(key for key in rejected if store.shadows_db_value(key))
+        stored: Final = (
+            f" The {'value' if len(shadowed) == 1 else 'values'} already stored in the database for "
+            f"{', '.join(shadowed)} {'is' if len(shadowed) == 1 else 'are'} ignored and will never be applied."
+            if shadowed
+            else ""
+        )
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"{section_name} {subject} set in the config file and cannot be changed here",
+                "error": f"{section_name} {subject} set in the config file and cannot be changed here.{stored}",
                 "keys": list(rejected),
                 "section": section_name,
+                "stored_database_values_ignored": list(shadowed),
                 "resolution": (
                     f"edit {user_config_file_path} to change {pronoun}, "
                     f"or remove {pronoun} from the file to let the database own {pronoun}"
@@ -5234,20 +5243,27 @@ class ProxyConfig:
             verbose_proxy_logger.warning("Maximum recursion depth (%s) reached while processing config.", max_depth)
             return config
 
-        for key, value in config.items():
-            if isinstance(value, dict):
-                config[key] = self._check_for_os_environ_vars(config=value, depth=depth + 1, max_depth=max_depth)
-            elif isinstance(value, list):
-                for item in value:
-                    if isinstance(item, dict):
-                        item = self._check_for_os_environ_vars(config=item, depth=depth + 1, max_depth=max_depth)
-            # if the value is a string and starts with "os.environ/" - then it's an environment variable
-            elif isinstance(value, str) and value.startswith("os.environ/"):
-                resolved = get_secret(value)
-                if resolved is None and secret_manager_would_be_consulted(value):
-                    verbose_proxy_logger.warning("%s is absent from the configured secret manager", value)
-                config[key] = resolved
-        return config
+        return {  # mutable-ok: callers deep-copy and mutate this, and a mappingproxy cannot be deep-copied
+            key: self._resolved_config_value(value=value, depth=depth, max_depth=max_depth)
+            for key, value in config.items()
+        }
+
+    def _resolved_config_value(self, value: object, depth: int, max_depth: int) -> object:
+        if isinstance(value, dict):
+            return self._check_for_os_environ_vars(config=value, depth=depth + 1, max_depth=max_depth)
+        if isinstance(value, list):
+            return [  # mutable-ok: config values round-trip through json, where a tuple is not a list
+                self._check_for_os_environ_vars(config=item, depth=depth + 1, max_depth=max_depth)
+                if isinstance(item, dict)
+                else item
+                for item in value
+            ]
+        if isinstance(value, str) and value.startswith("os.environ/"):
+            resolved: Final = get_secret(value)
+            if resolved is None and secret_manager_would_be_consulted(value):
+                verbose_proxy_logger.warning("%s is absent from the configured secret manager", value)
+            return resolved
+        return value
 
     def _initialize_secret_manager_from_raw_config(
         self, config: Mapping[str, object], config_file_path: str | None
@@ -7339,7 +7355,9 @@ class ProxyConfig:
             "disable_auto_add_proxy_admin_to_teams",
             "apply_user_budget_to_team_keys",
         ):
-            if key in db_values and (value := self.settings.get(key)) is not None:
+            if key not in db_values or self.settings.owned_by_config(key):
+                continue
+            if (value := self.settings.get(key)) is not None:
                 self.settings[key] = coerce_bool(value)
 
     async def _apply_cache_size_setting(
@@ -7349,21 +7367,24 @@ class ProxyConfig:
     ) -> None:
         if "user_api_key_cache_max_size" not in db_values and not cache_size_was_db:
             return
+        writable: Final = not self.settings.owned_by_config("user_api_key_cache_max_size")
         cache_value: Final = self.settings.get("user_api_key_cache_max_size")
         try:
             cache_max_size: Final = ConfigGeneralSettings.model_validate(
                 MappingProxyType({"user_api_key_cache_max_size": cache_value})
             ).user_api_key_cache_max_size
         except ValidationError:
-            self.settings.pop("user_api_key_cache_max_size", None)
+            if writable:
+                self.settings.pop("user_api_key_cache_max_size", None)
             verbose_proxy_logger.warning(
                 "Ignoring invalid general_settings.user_api_key_cache_max_size=%r from the DB", cache_value
             )
             return
-        if cache_max_size is None:
-            self.settings.pop("user_api_key_cache_max_size", None)
-        else:
-            self.settings["user_api_key_cache_max_size"] = cache_max_size
+        if writable:
+            if cache_max_size is None:
+                self.settings.pop("user_api_key_cache_max_size", None)
+            else:
+                self.settings["user_api_key_cache_max_size"] = cache_max_size
         user_api_key_cache.update_in_memory_max_size(cache_max_size)
 
     async def _apply_store_model_in_db_setting(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
@@ -7375,7 +7396,8 @@ class ProxyConfig:
             return
         normalized: Final = coerce_bool(value)
         store_model_in_db = normalized if isinstance(normalized, bool) else bool(normalized)
-        self.settings["store_model_in_db"] = store_model_in_db
+        if not self.settings.owned_by_config("store_model_in_db"):
+            self.settings["store_model_in_db"] = store_model_in_db
 
     async def _apply_retention_settings(
         self,
@@ -7417,7 +7439,18 @@ class ProxyConfig:
                     self._prepared_db_settings_values(section, param_value),
                 )
 
+        self._warn_about_shadowed_db_settings()
         return self._config_with_resolved_settings(config)
+
+    def _warn_about_shadowed_db_settings(self) -> None:
+        shadowed: Final[frozenset[tuple[Section, str]]] = frozenset(
+            (section, key) for section, store in self._settings_stores.items() for key in store.shadowed_db_keys()
+        )
+        for section, key in sorted(shadowed - self._warned_shadowed_keys):
+            verbose_proxy_logger.warning(
+                "%s", config_ownership_message(section=section, key=key, shadows_db_value=True)
+            )
+        self._warned_shadowed_keys = shadowed
 
     def _prepared_db_settings_values(self, section: Section, value: object) -> Mapping[str, SettingsJsonValue]:
         if section == "environment_variables":
@@ -17675,8 +17708,8 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
         "type": "Boolean",
         "tab": "prompt_caching",
         "description": (
-            "Auto-adds cache_control to the system prompt and trailing turn for supported Anthropic "
-            "and Bedrock Claude models. The cache is shared across callers on the same upstream credentials."
+            "Auto-adds cache_control to the system prompt and trailing turn for supported Claude models on "
+            "Anthropic, Bedrock, Vertex AI, and Azure AI. The cache is shared across callers on the same upstream credentials."
         ),
     },
     "anthropic_prompt_caching_ttl": {

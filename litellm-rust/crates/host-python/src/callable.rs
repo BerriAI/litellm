@@ -73,13 +73,7 @@ abort = KeyboardInterrupt('cancelled')
             let wrapped = wrap_failure(py, TEMPLATE, failure(&original)).unwrap_err();
             assert!(wrapped.is_instance_of::<PyRuntimeError>(py));
             assert!(wrapped.cause(py).unwrap().value(py).is(&original));
-            assert!(
-                wrapped
-                    .value(py)
-                    .getattr("__context__")
-                    .unwrap()
-                    .is(&original)
-            );
+            assert!(wrapped.context(py).unwrap().value(py).is(&original));
             assert_eq!(
                 wrapped.value(py).str().unwrap().to_str().unwrap(),
                 "Failed to reach the caller: unavailable"
@@ -115,13 +109,7 @@ original = Unformattable('cannot render')
             let original = raised(&locals, "original");
             let error = wrap_failure(py, TEMPLATE, failure(&original)).unwrap_err();
             assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
-            assert!(
-                error
-                    .value(py)
-                    .getattr("__context__")
-                    .unwrap()
-                    .is(&original)
-            );
+            assert!(error.context(py).unwrap().value(py).is(&original));
         });
     }
 

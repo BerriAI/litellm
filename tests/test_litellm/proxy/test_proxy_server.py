@@ -3342,6 +3342,94 @@ async def test_load_config_rejects_malformed_role_permissions(tmp_path):
         await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
 
 
+def test_os_environ_resolution_leaves_the_config_layer_holding_the_reference(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("PROOF_NESTED_SECRET", "sk-nested-value")
+    proxy_config: Final = ProxyConfig()
+    config: Final = {
+        "general_settings": {
+            "master_key": "os.environ/PROOF_NESTED_SECRET",
+            "coordination_redis": {"password": "os.environ/PROOF_NESTED_SECRET"},
+        }
+    }
+
+    proxy_config._load_yaml_settings_stores(config)
+    resolved: Final = proxy_config._check_for_os_environ_vars(
+        config=proxy_config._config_with_resolved_settings(config)
+    )
+
+    assert resolved["general_settings"]["coordination_redis"]["password"] == "sk-nested-value"
+    assert resolved["general_settings"]["master_key"] == "sk-nested-value"
+    assert proxy_config.settings.config_value("master_key") == "os.environ/PROOF_NESTED_SECRET"
+    assert proxy_config.settings.config_value("coordination_redis") == {
+        "password": "os.environ/PROOF_NESTED_SECRET"
+    }
+
+
+def test_os_environ_resolution_reaches_dicts_nested_in_a_list(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("PROOF_LIST_SECRET", "sk-list-value")
+    config: Final = {"model_list": [{"litellm_params": {"api_key": "os.environ/PROOF_LIST_SECRET"}}]}
+
+    resolved: Final = ProxyConfig()._check_for_os_environ_vars(config=config)
+
+    assert resolved["model_list"][0]["litellm_params"]["api_key"] == "sk-list-value"
+
+
+@pytest.mark.parametrize("config_cache_size", ("not-a-number", "7"))
+@pytest.mark.asyncio
+async def test_db_reload_finishes_when_the_config_owns_a_setting_the_db_also_sets(monkeypatch, config_cache_size):
+    import litellm
+    from litellm.proxy import proxy_server as proxy_server_module
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", [], raising=False)
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", MagicMock(), raising=False)
+    proxy_config: Final = ProxyConfig()
+    proxy_config.settings.load_yaml(
+        {
+            "store_prompts_in_spend_logs": "os.environ/PROOF_FLAG",
+            "store_model_in_db": "os.environ/PROOF_FLAG",
+            "user_api_key_cache_max_size": config_cache_size,
+        }
+    )
+    monkeypatch.setattr(proxy_server_module, "general_settings", proxy_config.settings, raising=False)
+
+    await proxy_config._update_general_settings(
+        {
+            "store_prompts_in_spend_logs": False,
+            "store_model_in_db": False,
+            "user_api_key_cache_max_size": 5,
+            "user_url_allowed_hosts": ["proof.example.com"],
+        }
+    )
+
+    assert litellm.user_url_allowed_hosts == ["proof.example.com"]
+    assert proxy_config.settings["store_prompts_in_spend_logs"] == "os.environ/PROOF_FLAG"
+    assert proxy_config.settings["store_model_in_db"] == "os.environ/PROOF_FLAG"
+    assert proxy_config.settings["user_api_key_cache_max_size"] == config_cache_size
+
+
+@pytest.mark.asyncio
+async def test_db_reload_keeps_the_resolved_value_of_a_config_owned_env_reference(monkeypatch):
+    from litellm.proxy import proxy_server as proxy_server_module
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", MagicMock(), raising=False)
+    monkeypatch.setattr(proxy_server_module, "store_model_in_db", True, raising=False)
+    proxy_config: Final = ProxyConfig()
+    proxy_config.settings.load_yaml({"store_model_in_db": "os.environ/PROOF_STORE_FLAG"})
+    proxy_config.settings.apply_runtime_values({"store_model_in_db": True})
+    monkeypatch.setattr(proxy_server_module, "general_settings", proxy_config.settings, raising=False)
+
+    await proxy_config._update_general_settings({"store_model_in_db": True})
+
+    assert proxy_config.settings["store_model_in_db"] is True
+    assert proxy_server_module.store_model_in_db is True
+
+
 def test_max_ui_session_budget_default_is_one_dollar():
     """LIT-4662: the dashboard session budget default is a product decision; the
     old 0.25 default locked admins out of auto router Test Connection and the
@@ -5426,6 +5514,37 @@ async def test_router_settings_reload_keeps_db_values_writable(tmp_path, monkeyp
     assert proxy_config.router_settings.source("num_retries") == "db"
     assert proxy_config.router_settings.rejected_writes({"num_retries": 3}) == ()
     assert proxy_config.router_settings.rejected_writes({"disable_cooldowns": False}) == ("disable_cooldowns",)
+
+
+@pytest.mark.asyncio
+async def test_boot_warns_that_a_shadowed_database_value_will_never_apply(tmp_path, monkeypatch, caplog):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"model_list": [], "general_settings": {"allowed_ips": ["1.2.3.4"], "max_file_size_mb": 5}})
+    )
+    db_row: Final = types.SimpleNamespace(param_value={"allowed_ips": ["1.2.3.4", "5.6.7.8"], "max_parallel_requests": 7})
+
+    async def read_config_row(_prisma_client, param_name):
+        return db_row if param_name == "general_settings" else None
+
+    monkeypatch.setattr(proxy_server_module, "get_config_param", read_config_row)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server_module, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server_module, "user_config_file_path", None)
+    proxy_config: Final = ProxyConfig()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await proxy_config.get_config(config_file_path=str(config_path))
+
+    warnings: Final = " ".join(record.getMessage() for record in caplog.records)
+    assert "allowed_ips" in warnings
+    assert "ignored" in warnings
+    assert "max_parallel_requests" not in warnings
+    assert "max_file_size_mb" not in warnings
+    assert proxy_config.settings["allowed_ips"] == ["1.2.3.4"]
+    assert proxy_config.settings["max_parallel_requests"] == 7
 
 
 @pytest.mark.asyncio

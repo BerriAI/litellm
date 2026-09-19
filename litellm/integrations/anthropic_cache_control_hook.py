@@ -25,7 +25,10 @@ from litellm.integrations.prompt_management_base import PromptManagementClient
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     with_prompt_cache_breakpoint,
 )
-from litellm.llms.anthropic.common_utils import is_claude_code_one_shot_subagent_request
+from litellm.llms.anthropic.common_utils import (
+    is_claude_code_one_shot_subagent_request,
+    supports_anthropic_cache_control,
+)
 from litellm.types.integrations.anthropic_cache_control_hook import (
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
     GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT,
@@ -574,8 +577,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         custom_llm_provider: str | None,
         api_base: object,
         prompt_cache_options: object,
+        request_kwargs: object,
     ) -> Sequence[Mapping[str, object]] | None:
-        if AnthropicCacheControlHook._should_stand_down(points, messages, None, tools, cache_control):
+        if AnthropicCacheControlHook._should_stand_down(points, messages, None, tools, cache_control, request_kwargs):
             return None
         return AnthropicCacheControlHook._stamped_with_dialect(
             points, model, custom_llm_provider, api_base, prompt_cache_options
@@ -612,6 +616,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         system: str | list | None,
         tools: list | None,
         cache_control: object = None,
+        request_kwargs: object = None,
     ) -> bool:
         """Whether configured injection points must yield to client-set cache_control.
 
@@ -624,7 +629,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         """
         if all(point.get("_litellm_judged") for point in points):
             return False
-        return AnthropicCacheControlHook._request_has_cache_control(messages, system, tools, cache_control)
+        return AnthropicCacheControlHook._request_has_cache_control(
+            messages, system, tools, cache_control, request_kwargs
+        )
 
     @staticmethod
     def _request_has_cache_control(
@@ -632,31 +639,29 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         system: str | list | None,
         tools: list | None = None,
         cache_control: object = None,
+        request_kwargs: object = None,
     ) -> bool:
-        """Return True if the request already carries any client-supplied cache_control.
-
-        When the client (e.g. Claude Code) already marks its own breakpoints we
-        stand down entirely rather than add more, per the auto-caching contract.
-        Tools count: they are a breakpoint the client can mark, they count toward
-        the provider's four-block limit, and caching only the tool definitions is
-        a common pattern, so injecting alongside them can exceed the cap. Tools
-        carry the mark either at the top level (Anthropic shape) or nested under
-        ``function`` (OpenAI shape); the Anthropic chat transform accepts both.
-        """
-        if cache_control is not None:
-            return True
-        if AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system) > 0:
-            return True
-        if tools is not None:
-            return any(
-                isinstance(tool, dict)
-                and (
-                    tool.get("cache_control") is not None
-                    or (isinstance(tool.get("function"), dict) and tool["function"].get("cache_control") is not None)
-                )
-                for tool in tools
+        """Client breakpoints own caching in both the request and its extra_body envelope."""
+        bodies: Final = (
+            {"messages": messages, "system": system, "tools": tools, "cache_control": cache_control},
+            _validated_object_mapping(AnthropicCacheControlHook._request_value(request_kwargs, "extra_body")) or {},
+        )
+        return any(
+            body.get("cache_control") is not None
+            or AnthropicCacheControlHook.count_request_cache_breakpoints(
+                _validated_object_list(body.get("messages")) or (), body.get("system")
             )
-        return False
+            > 0
+            or any(
+                AnthropicCacheControlHook._request_value(tool, "cache_control") is not None
+                or AnthropicCacheControlHook._request_value(
+                    AnthropicCacheControlHook._request_value(tool, "function"), "cache_control"
+                )
+                is not None
+                for tool in (_validated_object_list(body.get("tools")) or ())
+            )
+            for body in bodies
+        )
 
     @staticmethod
     def get_default_injection_points(
@@ -676,36 +681,19 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         even when the global flag is off. Caches the system prompt and the
         trailing turn, so the stable prefix (system + tools + history) is
         reused while the breakpoint advances with the conversation. Returns []
-        (stand down) when neither flag is on, the provider does not consume
-        cache_control breakpoints (only anthropic / bedrock do), the model
-        lacks prompt-caching support, or the request already carries
-        client-supplied cache_control.
+        (stand down) when neither flag is on, the model is not Claude on a
+        supported explicit-cache transport, the model lacks prompt-caching
+        support, or the request already carries client-supplied cache_control.
         """
         import litellm
 
         if litellm.enable_anthropic_prompt_caching is not True and enable_prompt_caching is not True:
             return []
 
-        provider = custom_llm_provider
-        if provider is None:
-            from litellm.litellm_core_utils.get_llm_provider_logic import (
-                get_llm_provider,
-            )
-
-            try:
-                _, provider, _, _ = get_llm_provider(model=model)
-            except Exception:  # noqa: BLE001  # unroutable model must never block the call, just skip auto-caching
-                return []
-
-        if provider not in ("anthropic", "bedrock"):
+        if not supports_anthropic_cache_control(model, custom_llm_provider):
             return []
 
-        from litellm.utils import supports_prompt_caching
-
-        if not supports_prompt_caching(model=model, custom_llm_provider=provider):
-            return []
-
-        if AnthropicCacheControlHook._request_has_cache_control(messages, system, tools, cache_control):
+        if AnthropicCacheControlHook._request_has_cache_control(messages, system, tools, cache_control, request_kwargs):
             return []
 
         if is_claude_code_one_shot_subagent_request(
@@ -737,13 +725,15 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         prompt and trailing turn) do not depend on which deployment serves the call. Returns the
         input list itself when auto-injection would not apply
         """
+        import litellm
+
         points: Final = next(
             (
                 candidate
                 for candidate in (
                     AnthropicCacheControlHook.get_default_injection_points(
                         messages=messages,
-                        model=model,
+                        model=litellm.model_alias_map.get(model, model),
                         custom_llm_provider=None,
                         tools=tools,
                         enable_prompt_caching=enable_prompt_caching,
@@ -789,6 +779,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         prompt-management gate and the AnthropicCacheControlHook run
         unchanged.
         """
+        import litellm
+
         if non_default_params.get("cache_control_injection_points"):
             judged: Final = AnthropicCacheControlHook._judged_configured_points(
                 non_default_params["cache_control_injection_points"],
@@ -799,6 +791,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 custom_llm_provider,
                 api_base,
                 non_default_params.get("prompt_cache_options"),
+                non_default_params,
             )
             if judged is None:
                 non_default_params.pop("cache_control_injection_points")
@@ -808,7 +801,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         points: Final = AnthropicCacheControlHook.get_default_injection_points(
             messages=messages,
             system=None,
-            model=model,
+            model=litellm.model_alias_map.get(model, model),
             custom_llm_provider=custom_llm_provider,
             tools=tools,
             enable_prompt_caching=enable_prompt_caching,
@@ -925,7 +918,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             list[CacheControlInjectionPoint] | None, kwargs.pop("cache_control_injection_points", None)
         )
         if configured and AnthropicCacheControlHook._should_stand_down(
-            configured, typed_messages, system, tools, cache_control
+            configured, typed_messages, system, tools, cache_control, kwargs
         ):
             return messages, system
         injection_points: list[CacheControlInjectionPoint] = configured or []
