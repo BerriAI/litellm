@@ -106,6 +106,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             "recognition_config": recognition_config,
             "response_format": optional_params.get("response_format") or "json",
             "timestamp_granularities": optional_params.get("timestamp_granularities"),
+            "riva_offline": bool(optional_params.get("riva_offline", False)),
         }
 
         return AudioTranscriptionRequestData(data=request_payload, files=None)

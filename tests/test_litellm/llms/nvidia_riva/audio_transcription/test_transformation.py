@@ -5,7 +5,6 @@ These tests do not require ``nvidia-riva-client`` or any audio libs to be
 installed; the transformation layer is intentionally pure-Python on dicts.
 """
 
-
 import pytest
 
 
@@ -110,10 +109,7 @@ def test_transform_request_builds_recognition_config(cfg):
     assert payload["recognition_config"]["audio_channel_count"] == 1
     assert payload["recognition_config"]["encoding"] == "LINEAR_PCM"
     assert payload["recognition_config"]["enable_word_time_offsets"] is True
-    assert (
-        payload["recognition_config"]["model"]
-        == "parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer"
-    )
+    assert payload["recognition_config"]["model"] == "parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer"
     assert "audio_file" not in payload
     assert "auth" not in payload
 
@@ -131,6 +127,24 @@ def test_transform_request_default_riva_model_is_empty_for_auto_select(cfg):
         litellm_params={"api_base": "grpc.nvcf.nvidia.com:443"},
     )
     assert result.data["recognition_config"]["model"] == ""
+
+
+@pytest.mark.parametrize(
+    "optional_params, expected",
+    [
+        ({"language_code": "multi"}, False),
+        ({"language_code": "multi", "riva_offline": True}, True),
+        ({"language_code": "multi", "riva_offline": False}, False),
+    ],
+)
+def test_transform_request_riva_offline_flag(cfg, optional_params, expected):
+    result = cfg.transform_audio_transcription_request(
+        model="nvidia/parakeet-0.6b-tdt",
+        audio_file=b"fake-audio",
+        optional_params=optional_params,
+        litellm_params={"api_base": "localhost:50051"},
+    )
+    assert result.data["riva_offline"] is expected
 
 
 def test_chunking_strategy_server_vad_maps_to_endpointing_config(cfg):
@@ -169,9 +183,7 @@ def test_explicit_endpointing_config_pass_through(cfg):
     result = cfg.transform_audio_transcription_request(
         model="m",
         audio_file=b"x",
-        optional_params={
-            "endpointing_config": {"stop_history": 1200, "start_threshold": 0.3}
-        },
+        optional_params={"endpointing_config": {"stop_history": 1200, "start_threshold": 0.3}},
         litellm_params={"api_base": "localhost:50051"},
     )
     ep = result.data["recognition_config"]["endpointing_config"]

@@ -2895,6 +2895,28 @@ class TestIsRequestBodySafeBlocksNVCFFunctionOverride:
         )
 
 
+class TestIsRequestBodySafeBlocksRivaOffline:
+    def test_riva_offline_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError, match="riva_offline"):
+            is_request_body_safe(
+                request_body={"model": "nvidia_riva/parakeet", "riva_offline": True},
+                general_settings={},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_riva_offline(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "nvidia_riva/parakeet", "riva_offline": True},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
+            )
+            is True
+        )
+
+
 class TestIsRequestBodySafeBlocksRivaUseSsl:
     """``use_ssl`` is rejected as a request-body param unless the admin
     opted in proxy-wide or per-deployment."""
