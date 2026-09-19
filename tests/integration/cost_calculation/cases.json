@@ -3,49 +3,42 @@
     {
       "litellm_provider": "openai",
       "mode": "chat",
-      "wire": "openai_chat",
       "model_prefix": "openai",
       "litellm_params": {}
     },
     {
       "litellm_provider": "openai",
       "mode": "responses",
-      "wire": "openai_responses",
       "model_prefix": "openai/responses",
       "litellm_params": {}
     },
     {
       "litellm_provider": "anthropic",
       "mode": "chat",
-      "wire": "anthropic_messages",
       "model_prefix": "anthropic",
       "litellm_params": {}
     },
     {
       "litellm_provider": "gemini",
       "mode": "chat",
-      "wire": "gemini_generate",
       "model_prefix": null,
       "litellm_params": {}
     },
     {
       "litellm_provider": "together_ai",
       "mode": "chat",
-      "wire": "together_chat",
       "model_prefix": null,
       "litellm_params": {}
     },
     {
       "litellm_provider": "fireworks_ai",
       "mode": "chat",
-      "wire": "fireworks_chat",
       "model_prefix": null,
       "litellm_params": {}
     },
     {
       "litellm_provider": "azure",
       "mode": "chat",
-      "wire": "azure_chat",
       "model_prefix": null,
       "litellm_params": {
         "api_version": "2025-04-01-preview"
@@ -54,7 +47,6 @@
     {
       "litellm_provider": "bedrock_converse",
       "mode": "chat",
-      "wire": "bedrock_converse",
       "model_prefix": "bedrock/converse",
       "litellm_params": {
         "aws_access_key_id": "AKIASCRIPTEDPROVIDER",
@@ -65,7 +57,6 @@
     {
       "litellm_provider": "vertex_ai-language-models",
       "mode": "chat",
-      "wire": "vertex_generate",
       "model_prefix": "vertex_ai",
       "litellm_params": {
         "vertex_project": "cc-scripted-project",

@@ -2,7 +2,7 @@
 
 These tests exercise a running gateway, PostgreSQL and Redis with an owned local upstream. CircleCI owns this suite. Tests are grouped by behavior, with no automatic test retries or fallback to paid provider calls
 
-The `cost` group runs the scripted-wire cost matrix through the shared integration upstream, which serves the test-owned cost map over loopback through `LITELLM_MODEL_COST_MAP_URL`; cost goldens are checked into the integration suite and must not be copied into the E2E coverage registry. A provider speaking an existing response shape is a `wires.json` row, a `cases.json` `providers` row and cost-map entries; a new response shape needs a renderer in `scripted_wires.py`
+The `cost` group runs the scripted-shape cost matrix through the shared integration upstream, which serves the test-owned cost map over loopback through `LITELLM_MODEL_COST_MAP_URL`; cost goldens are checked into the integration suite and must not be copied into the E2E coverage registry. The upstream renders a scenario in the shape LiteLLM's own provider config resolves to for the deployment, so a provider LiteLLM already parses with one of the five rendered families is a cost-map entry plus a `cases.json` `providers` row with its deployment parameters; a provider whose config class is none of those families fails at collection until `scripted_shapes.py` gains a renderer
 
 Use `tests/integration/run.py management`, `accounting`, `database`, `providers`, `extensions`, `sdk` or `cost` to run a selected group. Set `INTEGRATION_PROXY_URL`, `INTEGRATION_UPSTREAM_URL`, `INTEGRATION_MASTER_KEY` and `DATABASE_URL` to an isolated test deployment. The runner selects the new domain directories explicitly; the legacy OCI and sandbox selections remain separate
 

@@ -1,4 +1,4 @@
-"""Token pricing coverage for the integration scripted-wire cost shard."""
+"""Token pricing coverage for the integration scripted-shape cost shard."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pytest
 from pydantic import JsonValue
 
 from integration._support.client import JSON_OBJECT, Gateway
-from integration._support.scripted_wires import WIRES, ScriptedUsage, Wire
+from integration._support.scripted_shapes import ScriptedUsage, Shape
 from integration.cost_calculation.conftest import (
     approx_equal,
     assert_total_is_sum_of_components,
@@ -20,7 +20,7 @@ from integration.cost_calculation.cost_matrix import (
     AUDIO_INPUT_DATA_URL,
     FRONTIER_MODELS,
     IMAGE_INPUT_DATA_URL,
-    SERVICE_TIER_REQUEST_WIRES,
+    SERVICE_TIER_REQUEST_SHAPES,
     VIDEO_INPUT_DATA_URL,
     Case,
     FrontierModel,
@@ -54,8 +54,8 @@ _CACHE_SHAPES: Final = frozenset({"anthropic_messages", "bedrock_converse"})
 _WEB_SEARCH_OPTION_SHAPES: Final = frozenset({"openai_chat", "openai_responses"})
 
 
-def _cache_control(usage: ScriptedUsage, wire: Wire) -> dict[str, JsonValue] | None:
-    if WIRES[wire].shape not in _CACHE_SHAPES:
+def _cache_control(usage: ScriptedUsage, shape: Shape) -> dict[str, JsonValue] | None:
+    if shape not in _CACHE_SHAPES:
         return None
     if not (usage.cache_read_tokens or usage.cache_write_5m_tokens or usage.cache_write_1h_tokens):
         return None
@@ -107,18 +107,18 @@ def _chat_body(model: FrontierModel, case: Case, model_name: str, marker: str) -
         ),
         *(
             [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
-            if case.web_search is not None and model.wire == "anthropic_messages"
+            if case.web_search is not None and model.shape == "anthropic_messages"
             else []
         ),
         *(
             [{"googleSearch": {}}]
-            if case.web_search is not None and model.wire in ("gemini_generate", "vertex_generate")
+            if case.web_search is not None and model.shape == "gemini_generate"
             else []
         ),
         *([{"googleMaps": {}}] if case.google_maps else []),
         *([{"type": "file_search", "vector_store_ids": ["vs_cost_calc_fixture"]}] if case.file_search else []),
     ]
-    cache_control: Final = _cache_control(usage, model.wire)
+    cache_control: Final = _cache_control(usage, model.shape)
     message: Final = {
         "role": "system",
         "content": [
@@ -136,7 +136,7 @@ def _chat_body(model: FrontierModel, case: Case, model_name: str, marker: str) -
         **({"stream_options": {"include_usage": True}} if case.stream else {}),
         **(
             {"service_tier": case.service_tier}
-            if case.service_tier is not None and model.wire in SERVICE_TIER_REQUEST_WIRES
+            if case.service_tier is not None and model.shape in SERVICE_TIER_REQUEST_SHAPES
             else {}
         ),
         **({"reasoning_effort": "medium"} if case.reasoning else {}),
@@ -148,15 +148,15 @@ def _chat_body(model: FrontierModel, case: Case, model_name: str, marker: str) -
         **({"audio": {"voice": "alloy", "format": "pcm16"}} if case.audio_output else {}),
         **(
             {"web_search_options": {"search_context_size": case.web_search}}
-            if case.web_search is not None and WIRES[model.wire].shape in _WEB_SEARCH_OPTION_SHAPES
+            if case.web_search is not None and model.shape in _WEB_SEARCH_OPTION_SHAPES
             else {}
         ),
         **({"tools": tools} if tools else {}),
-        **({"tool_choice": "auto"} if case.tool_call and model.wire != "bedrock_converse" else {}),
+        **({"tool_choice": "auto"} if case.tool_call and model.shape != "bedrock_converse" else {}),
         "allowed_openai_params": [
             name
             for name, sent in (
-                ("tool_choice", case.tool_call and model.wire != "bedrock_converse"),
+                ("tool_choice", case.tool_call and model.shape != "bedrock_converse"),
                 ("modalities", case.audio_input or case.audio_output),
                 ("audio", case.audio_output),
                 ("web_search_options", case.web_search is not None),

@@ -26,14 +26,22 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal
 
+from litellm import get_llm_provider
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
-from integration._support.scripted_wires import (
-    WIRES,
+from integration._support.scripted_shapes import (
     Scenario,
+    Shape,
     ScriptedOutput,
     ScriptedToolCall,
     ScriptedUsage,
-    Wire,
 )
 
 COST_MAP_PATH: Final = Path(__file__).resolve().parent / "cost_map.json"
@@ -151,8 +159,8 @@ def _entry_has_rate_key(entry: CostMapEntry, rate_key: str) -> bool:
     return value is not None
 
 
-SERVICE_TIER_REQUEST_WIRES: Final = frozenset(
-    {"openai_chat", "azure_chat", "openai_responses", "bedrock_converse"}
+SERVICE_TIER_REQUEST_SHAPES: Final = frozenset(
+    {"openai_chat", "openai_responses", "bedrock_converse"}
 )
 
 
@@ -240,7 +248,7 @@ class Case(BaseModel):
     def scenario(self, scenario_id: str, model: FrontierModel, text: str) -> Scenario:
         return Scenario(
             scenario_id=scenario_id,
-            wire=model.wire,
+            shape=model.shape,
             usage=self.usage_for(model.map_key),
             model=model.provider_model,
             output=ScriptedOutput(
@@ -263,7 +271,6 @@ class _ProviderWiringRow(BaseModel):
 
     litellm_provider: str
     mode: str
-    wire: str
     model_prefix: str | None
     litellm_params: Mapping[str, str]
 
@@ -284,26 +291,19 @@ _DEPLOYMENTS: Final[Mapping[str, DeploymentSpec]] = MappingProxyType(
 
 
 @dataclass(frozen=True, slots=True)
-class _ProviderWiring:
-    """How a (litellm_provider, mode) pair maps to a provider wire, the provider
-    prefix on the registered litellm model string, and extra litellm_params."""
+class _DeploymentDefaults:
+    """How a (litellm_provider, mode) pair maps to deployment defaults."""
 
-    wire: Wire
     model_prefix: str | None
     litellm_params: Mapping[str, str]
 
 
-def _provider_wiring(rows: tuple[_ProviderWiringRow, ...]) -> Mapping[tuple[str, str], _ProviderWiring]:
-    unknown_wires: Final = sorted({row.wire for row in rows if row.wire not in WIRES})
-    if unknown_wires:
-        raise ValueError(
-            f"cases.json providers has unknown wires: {unknown_wires}; "
-            f"known wires are {sorted(WIRES)}"
-        )
+def _deployment_defaults(
+    rows: tuple[_ProviderWiringRow, ...],
+) -> Mapping[tuple[str, str], _DeploymentDefaults]:
     return MappingProxyType(
         {
-            (row.litellm_provider, row.mode): _ProviderWiring(
-                row.wire,
+            (row.litellm_provider, row.mode): _DeploymentDefaults(
                 row.model_prefix,
                 MappingProxyType(dict(row.litellm_params)),
             )
@@ -312,19 +312,22 @@ def _provider_wiring(rows: tuple[_ProviderWiringRow, ...]) -> Mapping[tuple[str,
     )
 
 
-_PROVIDER_WIRING: Final[Mapping[tuple[str, str], _ProviderWiring]] = _provider_wiring(CASES_FILE.providers)
+_DEPLOYMENT_DEFAULTS: Final[Mapping[tuple[str, str], _DeploymentDefaults]] = _deployment_defaults(
+    CASES_FILE.providers
+)
 
 
 @dataclass(frozen=True, slots=True)
 class FrontierModel:
     """One deployment under test, derived from a cost-map entry: the model_name
-    the suite registers, the provider-prefixed litellm model string, the wire
-    the scripted upstream speaks, and the sibling map model the response_model
-    override case reports."""
+    the suite registers, the provider-prefixed litellm model string, the
+    response shape the scripted upstream speaks, and the sibling map model the
+    response_model override case reports."""
 
     model_name: str
     litellm_model: str
-    wire: Wire
+    shape: Shape
+    llm_provider: str
     map_key: str
     override_model: str | None = None
     override_map_key: str | None = None
@@ -343,7 +346,7 @@ class FrontierModel:
         # override can never repoint pricing there, same as a base_model pin.
         if (
             self.base_model is not None
-            or self.wire == "bedrock_converse"
+            or self.shape == "bedrock_converse"
             or self.override_map_key is None
         ):
             return self.rates
@@ -371,12 +374,35 @@ def _provider_model(litellm_model: str) -> str:
     return "/".join(tail[1:] if tail and tail[0] in ("converse", "responses") else tail)
 
 
-def _litellm_model_for(map_key: str, wiring: _ProviderWiring) -> str:
-    if wiring.model_prefix is None:
+def _litellm_model_for(map_key: str, defaults: _DeploymentDefaults) -> str:
+    if defaults.model_prefix is None:
         return map_key
-    if map_key.startswith(f"{wiring.model_prefix}/"):
+    if map_key.startswith(f"{defaults.model_prefix}/"):
         return map_key
-    return f"{wiring.model_prefix}/{map_key}"
+    return f"{defaults.model_prefix}/{map_key}"
+
+
+def _resolve(litellm_model: str, mode: str) -> tuple[str, Shape]:
+    model, provider, _, _ = get_llm_provider(model=litellm_model)
+    llm_provider: Final = LlmProviders(provider)
+    if mode == "responses":
+        responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
+            model=model,
+            provider=llm_provider,
+        )
+        if isinstance(responses_config, OpenAIResponsesAPIConfig):
+            return provider, "openai_responses"
+        raise ValueError(f"no scripted renderer for {type(responses_config).__name__} ({litellm_model})")
+    config: Final = ProviderConfigManager.get_provider_chat_config(model=model, provider=llm_provider)
+    if isinstance(config, AmazonConverseConfig):
+        return provider, "bedrock_converse"
+    if isinstance(config, VertexGeminiConfig):
+        return provider, "gemini_generate"
+    if isinstance(config, AnthropicConfig):
+        return provider, "anthropic_messages"
+    if isinstance(config, (AzureOpenAIConfig, OpenAIGPTConfig)):
+        return provider, "openai_chat"
+    raise ValueError(f"no scripted renderer for {type(config).__name__} ({litellm_model})")
 
 
 def _frontier() -> tuple[FrontierModel, ...]:
@@ -390,26 +416,29 @@ def _frontier() -> tuple[FrontierModel, ...]:
     for map_key in sorted(COST_MAP):
         entry = COST_MAP[map_key]
         pair = (entry.litellm_provider, entry.mode)
-        wiring = _PROVIDER_WIRING.get(pair)
-        if wiring is None:
+        defaults = _DEPLOYMENT_DEFAULTS.get(pair)
+        if defaults is None:
             continue
         siblings = groups[pair]
         override_key = (
             siblings[(siblings.index(map_key) + 1) % len(siblings)] if len(siblings) > 1 else None
         )
         override_litellm = (
-            _litellm_model_for(override_key, wiring) if override_key is not None else None
+            _litellm_model_for(override_key, defaults) if override_key is not None else None
         )
         deployment = _DEPLOYMENTS.get(map_key)
+        litellm_model = (
+            deployment.litellm_model
+            if deployment is not None and deployment.litellm_model is not None
+            else _litellm_model_for(map_key, defaults)
+        )
+        llm_provider, shape = _resolve(litellm_model, entry.mode)
         models.append(
             FrontierModel(
                 model_name=f"cc-{map_key.replace('/', '-').replace(':', '-').replace('.', '-').lower()}",
-                litellm_model=(
-                    deployment.litellm_model
-                    if deployment is not None and deployment.litellm_model is not None
-                    else _litellm_model_for(map_key, wiring)
-                ),
-                wire=wiring.wire,
+                litellm_model=litellm_model,
+                shape=shape,
+                llm_provider=llm_provider,
                 map_key=map_key,
                 override_model=(
                     _provider_model(override_litellm)
@@ -418,7 +447,7 @@ def _frontier() -> tuple[FrontierModel, ...]:
                 ),
                 override_map_key=override_key,
                 base_model=deployment.base_model if deployment is not None else None,
-                litellm_params=wiring.litellm_params,
+                litellm_params=defaults.litellm_params,
             )
         )
     return tuple(models)
@@ -471,7 +500,7 @@ def audio_input_data_url() -> str:
 
 def video_input_data_url() -> str:
     """A deterministic mp4-looking blob (ftyp box plus a fixed mdat payload)
-    as a data URL; only the media type and bytes matter to the wire."""
+    as a data URL; only the media type and bytes matter to the response."""
     ftyp: Final = struct.pack(">I4s4sI4s4s", 24, b"ftyp", b"isom", 0x200, b"isom", b"iso6")
     mdat_payload: Final = bytes((i * 7 + 13) % 256 for i in range(4096))
     mdat: Final = struct.pack(">I4s", 8 + len(mdat_payload), b"mdat") + mdat_payload
@@ -570,7 +599,7 @@ def matrix_data_errors() -> tuple[str, ...]:
         f"(litellm_provider={entry.litellm_provider}, mode={entry.mode}); "
         f"add a providers row in cases.json"
         for map_key, entry in COST_MAP.items()
-        if (entry.litellm_provider, entry.mode) not in _PROVIDER_WIRING
+        if (entry.litellm_provider, entry.mode) not in _DEPLOYMENT_DEFAULTS
     )
     input_rates: Final = tuple(entry.input_cost_per_token for entry in COST_MAP.values())
     findings: Final = (
