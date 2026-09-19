@@ -17146,6 +17146,8 @@ export interface paths {
          *             Get list of users by sso_ids. Comma separated list of sso_ids.
          *         user_email: Optional[str]
          *             Filter users by partial email match
+         *         user_alias: Optional[str]
+         *             Filter users by partial alias match (case-insensitive)
          *         search: Optional[str]
          *             Combined search: matches users whose user_id or user_email contains the value (case-insensitive)
          *         team: Optional[str]
@@ -63097,6 +63099,8 @@ export interface operations {
                 sso_user_ids?: string | null;
                 /** @description Filter users by partial email match */
                 user_email?: string | null;
+                /** @description Filter users by partial alias match (case-insensitive) */
+                user_alias?: string | null;
                 /** @description Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive). */
                 search?: string | null;
                 /** @description Filter users by team id */
