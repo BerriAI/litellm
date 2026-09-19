@@ -13,24 +13,28 @@ pub(crate) fn prepare_request(
     client: &OcrClient,
 ) -> PreparedOcrRequest {
     let credentials = request.credentials.clone();
-    let api_base_env = match request.config.provider() {
-        OcrProvider::Mistral => Some("MISTRAL_API_BASE"),
-        OcrProvider::AzureAi => Some("AZURE_AI_API_BASE"),
-        OcrProvider::Cohere | OcrProvider::Reducto | OcrProvider::VertexAi => None,
+    let (preferred_api_key_env, api_base_env) = match request.config.provider() {
+        OcrProvider::Mistral => (
+            Some("MISTRAL_AZURE_API_KEY"),
+            Some("MISTRAL_AZURE_API_BASE"),
+        ),
+        OcrProvider::AzureAi => (None, Some("AZURE_AI_API_BASE")),
+        OcrProvider::Cohere | OcrProvider::Reducto | OcrProvider::VertexAi => (None, None),
     };
+    let secret = |name: &str| client.secrets().truthy(name);
     let dynamic_api_key = credentials.dynamic_api_key.or_else(|| {
         credentials.api_key.clone().or_else(|| {
-            request
-                .config
-                .get_api_key_env_var()
-                .and_then(|name| client.secrets().get(name))
+            preferred_api_key_env
+                .into_iter()
+                .chain(request.config.get_api_key_env_var())
+                .find_map(secret)
                 .map(|value| Sourced::new(SecretValue::new(value), InputSource::Environment))
         })
     });
     let dynamic_api_base = credentials.dynamic_api_base.or_else(|| {
         credentials.api_base.clone().or_else(|| {
             api_base_env
-                .and_then(|name| client.secrets().get(name))
+                .and_then(secret)
                 .map(|value| Sourced::new(value, InputSource::Environment))
         })
     });
