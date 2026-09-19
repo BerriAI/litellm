@@ -2137,6 +2137,7 @@ version = "0.1.0"
 dependencies = [
  "http 1.4.2",
  "hyper-util",
+ "litellm-core-utils",
  "reqwest 0.12.28",
  "rstest",
  "rustls 0.23.42",
@@ -2187,6 +2188,7 @@ dependencies = [
  "litellm-auth-gcp",
  "litellm-callbacks-legacy",
  "litellm-core",
+ "litellm-core-utils",
  "litellm-host-python",
  "litellm-http",
  "litellm-llms",

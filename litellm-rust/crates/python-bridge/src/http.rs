@@ -4,6 +4,7 @@ use std::{
     sync::{Arc, LazyLock, Mutex, PoisonError},
 };
 
+use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_http::{
     HttpClientConfig, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
     Unsupported,
@@ -29,7 +30,7 @@ pub(crate) fn call_config(
 ) -> PyResult<HttpClientConfig> {
     let settings = HttpSettings::from_layers([
         for_call(call_ssl_verify(kwargs)?, asynchronous),
-        HttpSettingsLayer::from_environment(&|name| std::env::var(name).ok()),
+        HttpSettingsLayer::from_environment(&ProcessEnvironment),
         configured(&PythonSettings::Http.read(py)?)?,
     ])
     .without_missing_files(&|path: &Path| path.exists());
@@ -232,7 +233,7 @@ user_agent='litellm/9.9.9',
         Python::initialize();
         Python::attach(|py| {
             let settings = HttpSettings::from_layers([
-                HttpSettingsLayer::from_environment(&|name| {
+                HttpSettingsLayer::from_environment(&|name: &str| {
                     (name == "LITELLM_USER_AGENT").then(|| "operator/1".to_string())
                 }),
                 configured(&python_settings(py, "")).unwrap(),
