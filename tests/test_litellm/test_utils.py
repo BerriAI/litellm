@@ -186,15 +186,14 @@ def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local
 @pytest.mark.parametrize(
     ("model", "custom_llm_provider", "expected_key"),
     [
-        ("gpt-5.6-luna", "openai", "gpt-5.6-luna"),
-        ("gpt-5.6-luna", "azure", "azure/gpt-5.6-luna"),
+        ("gpt-5.6-luna-2099-01-01", "openai", "gpt-5.6-luna"),
+        ("gpt-5.6-luna-2099-01-01", "azure", "azure/gpt-5.6-luna"),
     ],
 )
 def test_get_model_info_falls_back_from_dated_snapshot_to_undated_entry(
     local_model_cost_map, model, custom_llm_provider, expected_key
 ):
-    """Uses a far-future snapshot date so the map never grows an exact dated key for it"""
-    info = litellm.get_model_info(model=f"{model}-2099-12-31", custom_llm_provider=custom_llm_provider)
+    info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     assert info["key"] == expected_key
 
 
@@ -972,6 +971,38 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_image_size": {"type": "boolean"},
                 "supports_native_structured_output": {"type": "boolean"},
                 "use_openai_responses_path": {"type": "boolean"},
+                "off_peak_pricing": {
+                    "type": "object",
+                    "properties": {
+                        "hours_utc": {
+                            "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        },
+                        "windows": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "hours_utc": {
+                                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                                    },
+                                    "weekdays": {
+                                        "type": "array",
+                                        "items": {"oneOf": [{"type": "integer"}, {"type": "string"}]},
+                                    },
+                                },
+                                "required": ["hours_utc"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "weekday_timezone": {"type": "string"},
+                        "input_cost_per_token": {"type": "number"},
+                        "output_cost_per_token": {"type": "number"},
+                        "output_cost_per_reasoning_token": {"type": "number"},
+                        "cache_read_input_token_cost": {"type": "number"},
+                        "cache_creation_input_token_cost": {"type": "number"},
+                    },
+                    "additionalProperties": False,
+                },
                 "tiered_pricing": {
                     "type": "array",
                     "items": {

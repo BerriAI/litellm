@@ -59567,6 +59567,34 @@
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 3e-09,
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 6e-07,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
         "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
@@ -59593,6 +59621,34 @@
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 3e-09,
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 6e-07,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
         "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
@@ -59619,6 +59675,34 @@
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 3e-09,
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 6e-07,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
         "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
@@ -59645,6 +59729,34 @@
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 2.2e-08,
+            "input_cost_per_token": 6.6e-07,
+            "output_cost_per_token": 1.98e-06,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
         "output_cost_per_token": 3.96e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
@@ -59671,6 +59783,34 @@
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 3e-09,
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 6e-07,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
         "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
@@ -59697,6 +59837,34 @@
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 3e-09,
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 6e-07,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
         "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
@@ -59723,6 +59891,34 @@
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 3e-09,
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 6e-07,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
         "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
@@ -59749,6 +59945,34 @@
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 2.2e-08,
+            "input_cost_per_token": 6.6e-07,
+            "output_cost_per_token": 1.98e-06,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
         "output_cost_per_token": 3.96e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [

@@ -457,6 +457,114 @@
           "type": "number",
           "minimum": 0
         },
+        "off_peak_pricing": {
+          "type": "object",
+          "description": "Rates that replace the same-named base fields while the request falls inside the stated UTC windows.",
+          "properties": {
+            "hours_utc": {
+              "description": "UTC \"HH:MM-HH:MM\" window, or a list of them; a window may wrap past midnight.",
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^([01]\\d|2[0-3]):[0-5]\\d-([01]\\d|2[0-3]):[0-5]\\d$"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^([01]\\d|2[0-3]):[0-5]\\d-([01]\\d|2[0-3]):[0-5]\\d$"
+                  },
+                  "minItems": 1
+                }
+              ]
+            },
+            "windows": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "hours_utc": {
+                    "description": "UTC \"HH:MM-HH:MM\" window, or a list of them; a window may wrap past midnight.",
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([01]\\d|2[0-3]):[0-5]\\d-([01]\\d|2[0-3]):[0-5]\\d$"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d-([01]\\d|2[0-3]):[0-5]\\d$"
+                        },
+                        "minItems": 1
+                      }
+                    ]
+                  },
+                  "weekdays": {
+                    "type": "array",
+                    "description": "ISO-8601 weekday numbers (1 = Monday .. 7 = Sunday) or English day names the window applies on.",
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 7
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "(?i)^(mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)$"
+                        }
+                      ]
+                    },
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "hours_utc"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1
+            },
+            "weekday_timezone": {
+              "type": "string",
+              "description": "IANA zone the weekdays of each window are read on; defaults to UTC."
+            },
+            "input_cost_per_token": {
+              "type": "number",
+              "minimum": 0
+            },
+            "output_cost_per_token": {
+              "type": "number",
+              "minimum": 0
+            },
+            "output_cost_per_reasoning_token": {
+              "type": "number",
+              "minimum": 0
+            },
+            "cache_read_input_token_cost": {
+              "type": "number",
+              "minimum": 0
+            },
+            "cache_creation_input_token_cost": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "anyOf": [
+            {
+              "required": [
+                "hours_utc"
+              ]
+            },
+            {
+              "required": [
+                "windows"
+              ]
+            }
+          ],
+          "additionalProperties": false
+        },
         "output_cost_per_audio_token": {
           "type": "number",
           "minimum": 0
