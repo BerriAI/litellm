@@ -12,7 +12,7 @@ use pyo3::{
     exceptions::{PyBaseException, PyException},
     gc::{PyTraverseError, PyVisit},
     prelude::*,
-    types::{PyDict, PyList},
+    types::{PyDateTime, PyDict, PyList},
 };
 use serde_json::Value;
 
@@ -73,10 +73,7 @@ pub struct LegacyLogging {
 }
 
 fn datetime(py: Python<'_>, epoch_seconds: f64) -> PyResult<Py<PyAny>> {
-    py.import("datetime")?
-        .getattr("datetime")?
-        .call_method1("fromtimestamp", (epoch_seconds,))
-        .map(Bound::unbind)
+    PyDateTime::from_timestamp(py, epoch_seconds, None).map(|value| value.into_any().unbind())
 }
 
 fn is_cancellation(py: Python<'_>, error: &PyErr) -> bool {

@@ -428,7 +428,7 @@ fn resolves_the_messages_url_and_x_api_key_auth() {
         config
             .auth(Some("sk-x"), "claude-sonnet-4-5", &Map::new(), &|_| None)
             .expect("auth resolves"),
-        ChatCompletionsAuth::Header {
+        RequestAuth::Header {
             name: "x-api-key",
             value: "sk-x".to_string()
         }

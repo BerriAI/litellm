@@ -3247,6 +3247,17 @@
               ],
               "title": "Key Alias"
             },
+            "key_exists": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key Exists"
+            },
             "team_id": {
               "anyOf": [
                 {
@@ -11155,7 +11166,6 @@
                   "type": "null"
                 }
               ],
-              "default": "v1",
               "description": "API version for Javelin service",
               "title": "Api Version"
             },
