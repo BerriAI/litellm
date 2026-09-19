@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -29,6 +30,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     end_user_cache_key,
     model_access_group_cache_key,
     model_access_group_spend_counter_key,
+    project_cache_key,
+    project_spend_counter_key,
     tag_cache_key,
     team_membership_reservation_cache_key,
 )
@@ -62,6 +65,7 @@ _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
     "Tag": Litellm_EntityType.TAG.value,
     "Model access group": Litellm_EntityType.MODEL_ACCESS_GROUP.value,
     "Organization": Litellm_EntityType.ORGANIZATION.value,
+    "Project": Litellm_EntityType.PROJECT.value,
 }
 
 
@@ -542,6 +546,13 @@ async def _get_budget_counters(
     if org_counter is not None:
         counters.append(org_counter)
 
+    project_counter: Final = await _get_project_budget_counter(
+        valid_token=valid_token,
+        user_api_key_cache=user_api_key_cache,
+    )
+    if project_counter is not None:
+        counters.append(project_counter)
+
     return counters
 
 
@@ -688,16 +699,22 @@ async def _get_team_member_budget_counter(
     elif isinstance(cached_team_membership, dict):
         team_membership = LiteLLM_TeamMembership(**cached_team_membership)
 
+    member_budget_row: Final = team_membership.litellm_budget_table if team_membership is not None else None
+    now: Final = datetime.now(timezone.utc)
     team_member_budget: float | None = None
-    if team_membership is not None and team_membership.litellm_budget_table is not None:
-        team_member_budget = team_membership.litellm_budget_table.max_budget
+    if member_budget_row is not None and member_budget_row.max_budget is not None:
+        team_member_budget = member_budget_row.effective_max_budget(now=now)
     else:
         default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
         if isinstance(default_budget_id, str):
             default_budget: Final = await user_api_key_cache.async_get_cache(
                 key=f"team_member_default_budget:{default_budget_id}",
             )
-            team_member_budget = _to_float(_get_value(default_budget, "max_budget"))
+            default_cap: Final = _to_float(_get_value(default_budget, "max_budget"))
+            if default_cap is not None and default_cap > 0:
+                team_member_budget = default_cap + (
+                    member_budget_row.active_temp_budget_increase(now=now) if member_budget_row is not None else 0.0
+                )
 
     if team_member_budget is None or team_member_budget <= 0:
         return None
@@ -748,6 +765,36 @@ async def _get_org_budget_counter(
         fallback_spend=org_spend,
         entity_type="Organization",
         entity_id=org_id,
+    )
+
+
+async def _get_project_budget_counter(
+    valid_token: UserAPIKeyAuth,
+    user_api_key_cache: UserApiKeyCache,
+) -> _BudgetCounter | None:
+    if valid_token.project_id is None:
+        return None
+
+    source_cache_key: Final = project_cache_key(valid_token.project_id)
+    project_object: Final = await user_api_key_cache.async_get_cache(key=source_cache_key)
+    if project_object is None:
+        return None
+
+    project_budget_table: Final = _get_value(project_object, "litellm_budget_table")
+    if project_budget_table is None:
+        return None
+
+    project_max_budget: Final = _to_float(_get_value(project_budget_table, "max_budget"))
+    if project_max_budget is None or project_max_budget <= 0 or not math.isfinite(project_max_budget):
+        return None
+
+    return _BudgetCounter(
+        counter_key=project_spend_counter_key(valid_token.project_id),
+        source_cache_key=source_cache_key,
+        max_budget=project_max_budget,
+        fallback_spend=_to_float(_get_value(project_object, "spend")) or 0.0,
+        entity_type="Project",
+        entity_id=valid_token.project_id,
     )
 
 

@@ -1,18 +1,17 @@
-use std::num::NonZero;
-use std::sync::Arc;
-use std::thread::available_parallelism;
+use std::{num::NonZero, sync::Arc, thread::available_parallelism};
 
-use litellm_host_python::release_gil;
+use litellm_host_python::{release_gil, run_async};
 use litellm_token_counter::{
     CountableRequest, Error, InputTokenCount, TokenCounter as CoreTokenCounter,
 };
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
-use pyo3::prelude::*;
-use pyo3::types::PyAny;
+use pyo3::{
+    exceptions::{PyRuntimeError, PyValueError},
+    prelude::*,
+    types::PyAny,
+};
 use tokio::sync::Semaphore;
 
 use crate::errors::RustBridgeDeclined;
-use litellm_host_python::run_async;
 
 /// Counts the input tokens of a raw request body off the Python event loop with
 /// the GIL released. Python owns which requests get here and what to do with

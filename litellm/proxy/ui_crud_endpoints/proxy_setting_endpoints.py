@@ -30,7 +30,7 @@ from litellm.proxy.config_resolvers.sso import (
     resolve_sso_config,
 )
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
-    SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
+    SUPPORTED_TEAM_ADMIN_PERMISSIONS,
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
@@ -216,7 +216,7 @@ class UIThemeSettingsResponse(SettingsResponse):
     """Response model for UI theme settings"""
 
 
-_TEAM_ADMIN_FIELD_ENUM: Final = tuple(sorted(SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS))
+_TEAM_ADMIN_FIELD_ENUM: Final = tuple(sorted(SUPPORTED_TEAM_ADMIN_PERMISSIONS))
 
 
 class UISettings(BaseModel):
@@ -315,7 +315,8 @@ class UISettings(BaseModel):
         default=(),
         description=(
             "Team settings fields a team admin may change on the teams they administer. "
-            "Empty means team admins cannot edit team settings at all. "
+            "Include 'projects' to let team admins create and update projects for those teams. "
+            "Empty means team admins cannot edit team settings or manage projects at all. "
             "Proxy admins and org admins are not affected."
         ),
         json_schema_extra={  # mutable-ok: pydantic only merges json_schema_extra when it is a plain dict
@@ -1483,10 +1484,13 @@ _UI_SETTINGS_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 def apply_runtime_general_settings_flags(ui_settings: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
     """Copy the UI settings that gate runtime behavior into ``general_settings``. Returns what was applied."""
+    from litellm.proxy.config_resolvers import SettingsStore
     from litellm.proxy.proxy_server import general_settings
 
     flags: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
-    if flags:
+    if isinstance(general_settings, SettingsStore):
+        general_settings.apply_db_row("ui_settings", flags)
+    elif flags:
         general_settings.update(flags)
     return MappingProxyType(flags)
 
@@ -1623,7 +1627,7 @@ async def update_ui_settings(
         raise HTTPException(status_code=422, detail=e.errors())
 
     unsupported_team_fields: Final = sorted(
-        frozenset(settings.team_admin_editable_team_fields) - SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+        frozenset(settings.team_admin_editable_team_fields) - SUPPORTED_TEAM_ADMIN_PERMISSIONS
     )
     if unsupported_team_fields:
         raise HTTPException(
@@ -1631,7 +1635,7 @@ async def update_ui_settings(
             detail={  # mutable-ok: HTTPException detail must be a plain dict for FastAPI JSON serialization
                 "error": (
                     f"{TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING} does not support {unsupported_team_fields}. "
-                    f"Supported fields: {sorted(SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS)}."
+                    f"Supported fields: {sorted(SUPPORTED_TEAM_ADMIN_PERMISSIONS)}."
                 )
             },
         )

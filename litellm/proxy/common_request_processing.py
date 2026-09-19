@@ -1934,6 +1934,7 @@ class ProxyBaseLLMRequestProcessing:
         user_api_base: str | None = None,
         model: str | None = None,
         llm_router: Router | None = None,
+        rate_limited_model: str | None = None,
     ) -> tuple[dict, LiteLLMLoggingObj]:
         start_time: Final = datetime.now()  # start before calling guardrail hooks
 
@@ -2097,8 +2098,15 @@ class ProxyBaseLLMRequestProcessing:
         # model_info when allow_client_pricing_override is set, so a caller
         # could otherwise spoof an unguarded model_info.id while requesting
         # a guarded alias and bypass guardrails (veria-ai HIGH on #29654).
+        merged_for_requested: Final = (
+            self.data
+            if rate_limited_model is None
+            else _check_and_merge_model_level_guardrails(
+                data=self.data, llm_router=llm_router, trust_client_model_info=False, model_alias=rate_limited_model
+            )
+        )
         self.data = _check_and_merge_model_level_guardrails(
-            data=self.data,
+            data=merged_for_requested,
             llm_router=llm_router,
             trust_client_model_info=False,
         )
@@ -2163,7 +2171,7 @@ class ProxyBaseLLMRequestProcessing:
 
         configured_fallbacks: Final = (
             self._configured_fallbacks(llm_router=llm_router, user_api_key_dict=user_api_key_dict)
-            if llm_router is not None and not self.data.get("disable_fallbacks")
+            if llm_router is not None
             else None
         )
         pristine: Final = independent_snapshot(self.data) if configured_fallbacks else None
@@ -2208,7 +2216,6 @@ class ProxyBaseLLMRequestProcessing:
                 original_model,
                 fallback_models,
             )
-
             try:
                 for fallback_model in fallback_models:
                     if fallback_model == original_model:
@@ -2231,6 +2238,7 @@ class ProxyBaseLLMRequestProcessing:
                             model=fallback_model,
                             route_type=route_type,
                             llm_router=llm_router,
+                            rate_limited_model=original_model,
                         )
                     except ProxyRateLimitError:
                         continue
@@ -2585,10 +2593,12 @@ class ProxyBaseLLMRequestProcessing:
 
                 async def refresh_stream_headers() -> Mapping[str, str]:
                     """`custom_headers` rebuilt for whichever deployment served the stream."""
-                    if not getattr(response, "fallback_headers_adopted", False):
-                        return custom_headers
                     return self._stream_response_headers(
-                        hidden_params=get_hidden_params_dict(response),
+                        hidden_params=(
+                            get_hidden_params_dict(response)
+                            if getattr(response, "fallback_headers_adopted", False)
+                            else hidden_params
+                        ),
                         user_api_key_dict=user_api_key_dict,
                         logging_obj=logging_obj,
                         version=version,
