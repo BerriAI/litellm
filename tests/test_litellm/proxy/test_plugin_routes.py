@@ -14,6 +14,8 @@ Covers three bugs:
 import asyncio
 from unittest.mock import MagicMock
 
+import pytest
+
 from litellm.proxy._types import (
     ConfigGeneralSettings,
     LitellmUserRoles,
@@ -131,16 +133,16 @@ def test_plugin_key_is_never_returned_to_the_browser() -> None:
     register_plugins_from_config({})
 
 
-def test_db_persisted_plugins_load_on_startup() -> None:
-    """Plugins saved to DB general_settings must register when the DB config is
-    merged at startup, not just when present in the YAML file."""
+def test_db_persisted_plugins_load_on_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import ProxyConfig
 
-    register_plugins_from_config({})  # start empty (as if YAML had no plugins)
+    register_plugins_from_config({})
+    monkeypatch.setattr(proxy_server, "general_settings", {})
 
-    ProxyConfig()._add_general_settings_from_db_config(
-        config_data={
-            "general_settings": {
+    asyncio.run(
+        ProxyConfig()._update_general_settings(
+            {
                 "plugins": [
                     {
                         "name": "db-plugin",
@@ -149,9 +151,7 @@ def test_db_persisted_plugins_load_on_startup() -> None:
                     }
                 ]
             }
-        },
-        general_settings={},
-        proxy_logging_obj=MagicMock(),
+        )
     )
 
     names = [p["name"] for p in asyncio.run(list_plugins(user_api_key_dict=_admin()))]

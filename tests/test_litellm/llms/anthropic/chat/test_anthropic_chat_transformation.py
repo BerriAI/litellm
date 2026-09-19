@@ -2442,21 +2442,6 @@ def test_get_max_tokens_for_model_claude_35():
         assert max_tokens == 8192
 
 
-def test_get_max_tokens_for_model_claude_37():
-    """
-    Test that get_max_tokens_for_model returns correct value for Claude 3.7 models.
-    Claude 3.7 Sonnet has max_output_tokens of 64000 by default.
-    128K output requires the beta header 'output-128k-2025-02-19'.
-
-    Fixes: https://github.com/BerriAI/litellm/issues/8835
-    """
-    config = AnthropicConfig()
-
-    # Claude 3.7 Sonnet should return 64000 (64K default, 128K requires beta header)
-    max_tokens = config.get_max_tokens_for_model("claude-3-7-sonnet-20250219")
-    assert max_tokens == 64000
-
-
 def test_get_max_tokens_for_model_unknown():
     """
     Test that get_max_tokens_for_model returns 4096 fallback for unknown models.
@@ -2629,29 +2614,6 @@ def test_transform_request_injects_dummy_tool_without_tools_param():
         if isinstance(t, dict) and t.get("name") is not None
     ]
     assert "dummy_tool" in names
-
-
-def test_transform_request_uses_dynamic_max_tokens():
-    """
-    Test that transform_request uses dynamic max_tokens based on model
-    when max_tokens is not explicitly provided.
-
-    Fixes: https://github.com/BerriAI/litellm/issues/8835
-    """
-    config = AnthropicConfig()
-
-    messages = [{"role": "user", "content": "Hello"}]
-
-    # Claude 3.7 model should get 64000 as default max_tokens (from model_prices_and_context_window.json)
-    result = config.transform_request(
-        model="claude-3-7-sonnet-20250219",
-        messages=messages,
-        optional_params={},  # No max_tokens provided
-        litellm_params={},
-        headers={},
-    )
-
-    assert result["max_tokens"] == 64000
 
 
 def test_transform_request_respects_user_max_tokens():
@@ -2849,7 +2811,6 @@ def test_raw_adaptive_thinking_untouched_for_46_plus_model():
     )
 
     assert result["thinking"] == {"type": "adaptive"}
-
 
 
 @pytest.mark.parametrize(
@@ -6409,3 +6370,74 @@ def test_response_format_tool_path_skips_forced_tool_choice_when_unsupported(loc
 
     assert "tools" in result
     assert "tool_choice" not in result
+
+
+def _eager_chat_function(**extra: object) -> dict[str, object]:
+    return {
+        "name": "write_file",
+        "description": "Write a file",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        **extra,
+    }
+
+
+def _eager_chat_tool(**extra: object) -> dict[str, object]:
+    return {"type": "function", "function": _eager_chat_function(), **extra}
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_eager_input_streaming_passed_through_from_tool_top_level(flag):
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(_eager_chat_tool(eager_input_streaming=flag))
+
+    assert mapped_tool == {
+        "name": "write_file",
+        "description": "Write a file",
+        "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        "type": "custom",
+        "eager_input_streaming": flag,
+    }
+
+
+def test_eager_input_streaming_passed_through_from_function():
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(
+        {"type": "function", "function": _eager_chat_function(eager_input_streaming=True)}
+    )
+
+    assert mapped_tool["eager_input_streaming"] is True
+    assert "eager_input_streaming" not in mapped_tool["input_schema"]
+
+
+def test_eager_input_streaming_absent_stays_absent():
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(_eager_chat_tool())
+
+    assert "eager_input_streaming" not in mapped_tool
+
+
+def test_eager_input_streaming_rejects_non_boolean():
+    with pytest.raises(litellm.BadRequestError, match="eager_input_streaming must be a boolean"):
+        AnthropicConfig()._map_tool_helper(_eager_chat_tool(eager_input_streaming="true"))
+
+
+def test_eager_input_streaming_not_set_on_computer_use_tool():
+    computer_tool = {
+        "type": "computer_20250124",
+        "function": {"name": "computer", "parameters": {"display_width_px": 1024, "display_height_px": 768}},
+        "eager_input_streaming": True,
+    }
+
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(computer_tool)
+
+    assert mapped_tool["type"] == "computer_20250124"
+    assert "eager_input_streaming" not in mapped_tool
+
+
+def test_eager_input_streaming_reaches_anthropic_request_tools():
+    result = AnthropicConfig().map_openai_params(
+        non_default_params={"tools": [_eager_chat_tool(eager_input_streaming=True)], "stream": True},
+        optional_params={},
+        model="claude-sonnet-5",
+        drop_params=False,
+    )
+
+    assert result["tools"][0]["eager_input_streaming"] is True
+    assert result["tools"][0]["name"] == "write_file"

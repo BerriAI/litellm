@@ -2893,6 +2893,7 @@ RoutingDecisionCause = Literal[
     "reasoning_override",
     "llm_classifier",
     "capability_classifier",
+    "jev_classifier",
     "llm_v2_classifier",
     "llm_v2_fallback",
     # classifier_type 'heuristic_first': the local scorer produced at least one signal and landed at
@@ -2987,6 +2988,8 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     escalation_keyword: str
     classifier_model: str
     classifier_cost: float
+    classifier_probabilities: ReadOnly[Mapping[str, float]]
+    classifier_confidence: ReadOnly[float]
     classifier_crux: str  # writable-ok: added only when a capability verdict is available
     classifier_primary_rule: str  # writable-ok: added only when a capability verdict is available
     classifier_capability_boundary: str  # writable-ok: added only when a capability verdict is available
@@ -3030,6 +3033,8 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "score",
         "classifier_model",
         "classifier_cost",
+        "classifier_probabilities",
+        "classifier_confidence",
         "classifier_primary_rule",
         "classifier_capability_boundary",
         "classifier_p_solve",
@@ -3074,6 +3079,12 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     cold_storage_object_key: str | None  # S3/GCS object key for cold storage retrieval
     team_alias: str | None
     team_id: str | None
+
+
+class AzureSpillover(TypedDict):
+    """Spillover Azure reports in its response headers for a request it served from pay-as-you-go capacity."""
+
+    from_deployment: ReadOnly[str | None]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -3765,6 +3776,7 @@ bedrock_batch_litellm_params: Final = (
     "aws_batch_role_arn",
     "s3_bucket_name",
     "s3_region_name",
+    "s3_endpoint_url",
     "s3_output_bucket_name",
     "bedrock_tags",
 )
@@ -4063,6 +4075,7 @@ class LlmProviders(str, Enum):
     TOPAZ = "topaz"
     SAP_GENERATIVE_AI_HUB = "sap"
     ASSEMBLYAI = "assemblyai"
+    AZURE_SPEECH = "azure_speech"
     CHARITY_ENGINE = "charity_engine"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
@@ -4125,6 +4138,10 @@ OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
     LlmProviders.HOSTED_VLLM.value,
     LlmProviders.LITELLM_PROXY.value,
 }
+
+FILE_CONTENT_STREAMING_PROVIDERS: Final[frozenset[str]] = frozenset(
+    {*OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders.VERTEX_AI.value}
+)
 
 ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "litellm_proxy", "vertex_ai"]
 

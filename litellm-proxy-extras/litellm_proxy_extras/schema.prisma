@@ -22,6 +22,8 @@ model LiteLLM_BudgetTable {
   budget_duration String?
   budget_reset_at DateTime?
   allowed_models String[] @default([]) // per-member model scope; empty = inherit team models
+  temp_budget_increase Float?
+  temp_budget_expiry DateTime?
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -818,6 +820,37 @@ model LiteLLM_DailyUserSpend {
   @@index([endpoint])
 }
 
+// Key-free daily rollup of LiteLLM_DailyUserSpend, read by the global usage view
+model LiteLLM_DailyGlobalSpend {
+  id                  String   @id @default(uuid())
+  date                String
+  model               String?
+  model_group         String?
+  custom_llm_provider String?
+  mcp_namespaced_tool_name String?
+  endpoint               String?
+  prompt_tokens       BigInt      @default(0)
+  completion_tokens   BigInt      @default(0)
+  cache_read_input_tokens     BigInt      @default(0)
+  cache_creation_input_tokens BigInt      @default(0)
+  compression_saved_tokens    BigInt      @default(0)
+  compression_savings_spend    Float       @default(0.0)
+  prompt_caching_savings_spend Float       @default(0.0)
+  gateway_injected_caching_savings_spend Float @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
+  spend               Float    @default(0.0)
+  api_requests        BigInt      @default(0)
+  successful_requests BigInt      @default(0)
+  failed_requests     BigInt      @default(0)
+  total_response_time_ms BigInt   @default(0)
+  timed_requests      BigInt      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@unique([date, model, model_group, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
+  @@index([date])
+}
+
 // Track daily organization spend metrics per model and key
 model LiteLLM_DailyOrganizationSpend {
   id                  String   @id @default(uuid())
@@ -1379,6 +1412,7 @@ model LiteLLM_PolicyAttachmentTable {
   keys             String[]  @default([])  // Key aliases or patterns
   models           String[]  @default([])  // Model names or patterns
   tags             String[]  @default([])  // Tag patterns (e.g., ["healthcare", "prod-*"])
+  priority         Int?                    // Explicit execution order
   created_at       DateTime  @default(now())
   created_by       String?
   updated_at       DateTime  @default(now()) @updatedAt

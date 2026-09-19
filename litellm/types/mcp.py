@@ -436,3 +436,40 @@ class MCPPostCallResponseObject(BaseModel):
 
     mcp_tool_call_response: list[MCPTextContent | MCPImageContent | MCPEmbeddedResource]
     hidden_params: HiddenParams
+
+
+class MCPGatewaySession(BaseModel):
+    """One live stateful Streamable HTTP session held by this proxy worker."""
+
+    session_id_prefix: str
+    client_name: str | None = None
+    client_version: str | None = None
+    user_id: str | None = None
+    user_email: str | None = None
+    key_alias: str | None = None
+    team_id: str | None = None
+    team_alias: str | None = None
+    client_ip: str | None = None
+    idle_seconds: float
+    in_flight_requests: int
+
+
+class MCPGatewaySessionGroupCount(BaseModel):
+    label: str | None = None
+    count: int
+
+
+class MCPGatewaySessionsResponse(BaseModel):
+    worker_pid: int
+    total_sessions: int
+    by_client: list[MCPGatewaySessionGroupCount] = Field(default_factory=list)
+    by_user: list[MCPGatewaySessionGroupCount] = Field(default_factory=list)
+    sessions: list[MCPGatewaySession] = Field(default_factory=list)
+
+
+class MCPGatewaySessionsTerminateResponse(BaseModel):
+    """Stateful sessions an administrator force-closed on this proxy worker."""
+
+    worker_pid: int
+    terminated_sessions: int
+    sessions: list[MCPGatewaySession] = Field(default_factory=list)

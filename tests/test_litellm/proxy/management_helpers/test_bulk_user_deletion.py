@@ -8,6 +8,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.list_api.common import ManagementProblem
 from litellm.proxy.management_helpers.bulk_user_deletion import bulk_delete_users, bulk_remove_team_members
@@ -114,6 +115,7 @@ class _Db:
         tokens: Sequence[Mapping[str, object]] = (),
         invitations: Sequence[Mapping[str, object]] = (),
         org_memberships: Sequence[Mapping[str, object]] = (),
+        jwt_mappings: Sequence[Mapping[str, object]] = (),
     ) -> None:
         self.litellm_usertable = _UserTable(users)
         self.litellm_teamtable = _TeamTable(teams)
@@ -122,6 +124,7 @@ class _Db:
         self.litellm_deletedverificationtoken = _Rows()
         self.litellm_invitationlink = _Rows(invitations)
         self.litellm_organizationmembership = _Rows(org_memberships)
+        self.litellm_jwtkeymapping = _Rows(jwt_mappings)
 
 
 class _Tx:
@@ -163,11 +166,12 @@ class _FakePrisma:
         tokens: Sequence[Mapping[str, object]] = (),
         invitations: Sequence[Mapping[str, object]] = (),
         org_memberships: Sequence[Mapping[str, object]] = (),
+        jwt_mappings: Sequence[Mapping[str, object]] = (),
         on_lock: Callable[[str], None] = lambda _: None,
         fail_locks: frozenset[str] = frozenset(),
         fail_commit: bool = False,
     ) -> None:
-        self.db = _Db(users, teams, memberships, tokens, invitations, org_memberships)
+        self.db = _Db(users, teams, memberships, tokens, invitations, org_memberships, jwt_mappings)
         self._on_lock = on_lock
         self._fail_locks = fail_locks
         self._fail_commit = fail_commit
@@ -209,6 +213,17 @@ def _cache_with(*hashed_tokens: str) -> UserApiKeyCache:
     cache = UserApiKeyCache()
     for token in hashed_tokens:
         cache.set_cache(key=token, value=UserAPIKeyAuth(token=token))
+    return cache
+
+
+def _jwt_mapping(token: str, claim_value: str, issuer: str | None = None) -> Mapping[str, object]:
+    return {"token": token, "jwt_claim_name": "sub", "jwt_claim_value": claim_value, "jwt_issuer": issuer}
+
+
+def _cache_with_jwt_mapping_keys(*cache_keys: str) -> UserApiKeyCache:
+    cache = UserApiKeyCache()
+    for key in cache_keys:
+        cache.set_cache(key=key, value={"cache_key": key})
     return cache
 
 
@@ -450,6 +465,34 @@ async def test_bulk_delete_evicts_deleted_keys_and_users_from_the_auth_cache():
 
 
 @pytest.mark.asyncio
+async def test_bulk_delete_evicts_jwt_key_mappings_of_the_deleted_users_keys():
+    issuer: Final = "https://issuer.example"
+    doomed_global: Final = jwt_key_mapping_cache_key("sub", "alice")
+    doomed_scoped: Final = jwt_key_mapping_cache_key("sub", "alice", issuer)
+    kept: Final = jwt_key_mapping_cache_key("sub", "bob")
+    prisma = _FakePrisma(
+        users=[_user("u1", "t1"), _user("keep", "t1")],
+        teams=[_team("t1", "u1", "keep")],
+        tokens=[
+            {"token": "team-key", "user_id": "u1", "team_id": "t1"},
+            {"token": "personal-key", "user_id": "u1"},
+            {"token": "keep-key", "user_id": "keep", "team_id": "t1"},
+        ],
+        jwt_mappings=[
+            _jwt_mapping("personal-key", "alice"),
+            _jwt_mapping("team-key", "alice", issuer=issuer),
+            _jwt_mapping("keep-key", "bob"),
+        ],
+    )
+    cache = _cache_with_jwt_mapping_keys(doomed_global, doomed_scoped, kept)
+
+    await _delete(prisma, ["u1"], cache=cache)
+
+    assert cache.get_cache(key=doomed_global) is None and cache.get_cache(key=doomed_scoped) is None
+    assert cache.get_cache(key=kept) is not None
+
+
+@pytest.mark.asyncio
 async def test_bulk_delete_rejects_non_admin_callers_before_touching_the_db():
     prisma = _FakePrisma(users=[_user("u1")])
 
@@ -575,6 +618,28 @@ async def test_bulk_member_delete_evicts_the_removed_team_keys_from_the_auth_cac
 
     assert cache.get_cache(key="team-key") is None
     assert cache.get_cache(key="keep-key") is not None
+
+
+@pytest.mark.asyncio
+async def test_bulk_member_delete_evicts_jwt_key_mappings_of_the_removed_team_keys():
+    issuer: Final = "https://issuer.example"
+    doomed: Final = jwt_key_mapping_cache_key("sub", "alice", issuer)
+    kept: Final = jwt_key_mapping_cache_key("sub", "bob")
+    prisma = _FakePrisma(
+        users=[_user("u1", "t1"), _user("keep", "t1")],
+        teams=[_team("t1", "u1", "keep")],
+        tokens=[
+            {"token": "team-key", "user_id": "u1", "team_id": "t1"},
+            {"token": "keep-key", "user_id": "keep", "team_id": "t1"},
+        ],
+        jwt_mappings=[_jwt_mapping("team-key", "alice", issuer=issuer), _jwt_mapping("keep-key", "bob")],
+    )
+    cache = _cache_with_jwt_mapping_keys(doomed, kept)
+
+    await _remove(prisma, "t1", [{"user_id": "u1"}], cache=cache)
+
+    assert cache.get_cache(key=doomed) is None
+    assert cache.get_cache(key=kept) is not None
 
 
 @pytest.mark.asyncio
