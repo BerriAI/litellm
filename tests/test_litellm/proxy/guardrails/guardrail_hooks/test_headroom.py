@@ -260,6 +260,8 @@ async def test_apply_guardrail_skips_compress_below_min_tokens():
     response = _recorded_guardrail_response(request_data)
     assert response["skipped"] == "below_min_tokens"
     assert response["tokens_saved"] == 0
+    assert response["tokens_after"] == response["tokens_before"] == response["compressible_tokens"]
+    assert response["compression_ratio"] == 1.0
     entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
     assert entry["guardrail_status"] == "success"
     assert entry["guardrail_provider"] == "headroom"

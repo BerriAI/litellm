@@ -837,6 +837,7 @@ class HeadroomGuardrail(CustomGuardrail):
                     "tokens_before": compressible_tokens,
                     "tokens_after": compressible_tokens,
                     "tokens_saved": 0,
+                    "compression_ratio": 1.0,
                 },
                 request_data=request_data,
                 guardrail_status="success",
