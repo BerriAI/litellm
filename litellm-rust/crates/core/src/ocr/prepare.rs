@@ -1,7 +1,7 @@
 use litellm_auth::{InputSource, SecretValue, Sourced};
 use litellm_llms::base_llm::ocr::{
-    settings::OcrSettings,
-    transformation::{OcrConnection, OcrCredentialInputs, PreparedOcrRequest, credential_env},
+    handler::OcrClient,
+    transformation::{OcrConnection, OcrCredentialInputs, PreparedOcrRequest},
 };
 
 use super::provider_config::OcrProvider;
@@ -10,7 +10,7 @@ use crate::ocr::types::{LiteLLMOcrRequest, ResolvedOcrRequest};
 pub(crate) fn prepare_request(
     request: ResolvedOcrRequest,
     caller_document: bool,
-    settings: &OcrSettings,
+    client: &OcrClient,
 ) -> PreparedOcrRequest {
     let credentials = request.credentials.clone();
     let api_base_env = match request.config.provider() {
@@ -23,14 +23,14 @@ pub(crate) fn prepare_request(
             request
                 .config
                 .get_api_key_env_var()
-                .and_then(credential_env)
+                .and_then(|name| client.secrets().get(name))
                 .map(|value| Sourced::new(SecretValue::new(value), InputSource::Environment))
         })
     });
     let dynamic_api_base = credentials.dynamic_api_base.or_else(|| {
         credentials.api_base.clone().or_else(|| {
             api_base_env
-                .and_then(credential_env)
+                .and_then(|name| client.secrets().get(name))
                 .map(|value| Sourced::new(value, InputSource::Environment))
         })
     });
@@ -53,7 +53,12 @@ pub(crate) fn prepare_request(
     PreparedOcrRequest {
         model,
         document,
-        connection: OcrConnection::new(resolved, transport, settings.clone()),
+        connection: OcrConnection::new(
+            resolved,
+            transport,
+            client.settings().clone(),
+            client.secrets().clone(),
+        ),
         caller_document,
         optional_params,
         input_sources,
@@ -63,7 +68,11 @@ pub(crate) fn prepare_request(
 
 #[cfg(test)]
 pub(crate) fn prepare_request_for_test(request: ResolvedOcrRequest) -> PreparedOcrRequest {
-    prepare_request(request, true, &OcrSettings::default())
+    prepare_request(
+        request,
+        true,
+        &OcrClient::for_test(reqwest::Client::new(), reqwest::Client::new()),
+    )
 }
 
 #[cfg(test)]

@@ -22,7 +22,7 @@ pub(crate) async fn perform_ocr_request(
 ) -> Result<LiteLLMOcrResponse, Error> {
     request.response_format()?;
     let config = request.config;
-    let request = prepare_request(request, caller_document, client.settings());
+    let request = prepare_request(request, caller_document, client);
     let hooks = OcrCallHooks::new(host.clone(), &request, config);
     config.ocr(client, &request, &hooks).await
 }

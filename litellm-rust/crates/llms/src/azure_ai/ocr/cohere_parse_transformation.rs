@@ -53,7 +53,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
     ) -> Result<String, Error> {
         let base = super::transformation::AzureAiOcrConfig::resolve_api_base(
             request.connection.api_base.as_deref(),
-            &crate::base_llm::ocr::transformation::credential_env,
+            &|name: &str| request.connection.secret(name),
         )?;
         self.get_complete_url(&base)
     }

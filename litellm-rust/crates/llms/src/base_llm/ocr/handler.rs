@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::base_llm::ocr::{
     error::Error,
-    settings::OcrSettings,
+    settings::{OcrSettings, Secrets},
     transformation::{
         BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OcrDocument, OcrResponseContext,
         PreparedOcrRequest, decode_request_value, decode_response,
@@ -35,6 +35,7 @@ pub struct OcrClient {
     document_fetcher: MediaFetcher,
     vertex_auth: VertexAuth,
     settings: OcrSettings,
+    secrets: Secrets,
 }
 
 impl OcrClient {
@@ -44,6 +45,7 @@ impl OcrClient {
         url_policy: UrlPolicy,
         vertex_auth: VertexAuth,
         settings: OcrSettings,
+        secrets: Secrets,
     ) -> Result<Self, litellm_http::Error> {
         Ok(Self {
             provider_http: pool.client(config, ClientVariant::Provider)?,
@@ -51,6 +53,7 @@ impl OcrClient {
             document_fetcher: MediaFetcher::new(pool, config, url_policy)?,
             vertex_auth,
             settings,
+            secrets,
         })
     }
 
@@ -74,6 +77,10 @@ impl OcrClient {
         &self.settings
     }
 
+    pub fn secrets(&self) -> &Secrets {
+        &self.secrets
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn for_test(provider_http: reqwest::Client, document_http: reqwest::Client) -> Self {
         Self {
@@ -85,12 +92,18 @@ impl OcrClient {
             document_fetcher: MediaFetcher::for_test(document_http),
             vertex_auth: VertexAuth::default(),
             settings: OcrSettings::default(),
+            secrets: std::sync::Arc::new(litellm_core_utils::settings::ProcessEnvironment),
         }
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn with_settings(self, settings: OcrSettings) -> Self {
         Self { settings, ..self }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_secrets(self, secrets: Secrets) -> Self {
+        Self { secrets, ..self }
     }
 }
 

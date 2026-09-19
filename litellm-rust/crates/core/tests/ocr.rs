@@ -175,6 +175,30 @@ async fn facade_retains_native_response_when_requested() {
 }
 
 #[tokio::test]
+async fn provider_key_fallback_reads_the_injected_secret_source() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
+    let request = decode_request(OcrWireRequest {
+        model: "mistral/model".into(),
+        document: json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
+        api_key: None,
+        api_base: Some(base.clone()),
+        custom_llm_provider: None,
+        extra_headers: None,
+        optional_params: Default::default(),
+        input_sources: Default::default(),
+        timeout_seconds: Some(2.0),
+    })
+    .unwrap();
+    let client = ocr_client().with_secrets(Arc::new(|name: &str| {
+        (name == "MISTRAL_API_KEY").then(|| "from-secret-manager".to_string())
+    }));
+
+    crate::ocr::client::perform(&client, request).await.unwrap();
+    server.await.unwrap();
+    assert!(seen.lock().unwrap()[0].contains("authorization: Bearer from-secret-manager"));
+}
+
+#[tokio::test]
 async fn ocr_client_uses_the_injected_http_pool_configuration() {
     let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
     let settings = HttpSettings {
@@ -187,6 +211,7 @@ async fn ocr_client_uses_the_injected_http_pool_configuration() {
         UrlPolicy::default(),
         VertexAuth::default(),
         OcrSettings::default(),
+        Arc::new(litellm_core_utils::settings::ProcessEnvironment),
     )
     .unwrap();
     crate::ocr::client::perform(&client, wire_request("mistral/model", &base, json!({})))

@@ -7,7 +7,7 @@ use crate::base_llm::ocr::{
     handler::OcrClient,
     transformation::{
         BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrResponseFormat,
-        OcrUsageInfo, PreparedOcrRequest, credential_env, decode_and_normalize_response,
+        OcrUsageInfo, PreparedOcrRequest, decode_and_normalize_response,
     },
 };
 
@@ -84,7 +84,9 @@ impl BaseOcrConfig for MistralOcrConfig {
         request: &PreparedOcrRequest,
         _client: &OcrClient,
     ) -> Result<Self::Environment, Error> {
-        self.resolve_headers(&request.connection, &credential_env)
+        self.resolve_headers(&request.connection, &|name: &str| {
+            request.connection.secret(name)
+        })
     }
 
     fn get_complete_url(
