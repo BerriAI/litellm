@@ -2854,6 +2854,68 @@ def test_direct_vector_store_search_debug_log_omits_stored_credentials(caplog, i
 
 
 @pytest.mark.asyncio
+async def test_async_retrieve_batch_masks_presigned_auth_header_in_raw_request_log():
+    """Regression: a pre-signed retrieve-batch request (Mistral, Bedrock) embeds its auth
+    header inside the transformed request, which pre_call logs verbatim as the raw request
+    body, so the provider key landed unmasked in raw_request_typed_dict and every
+    raw-request callback."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+    from litellm.llms.mistral.batches.transformation import MistralBatchesConfig
+
+    provider_key = "mistral-s3cret-provider-key-123456"
+    job_payload = {
+        "id": "batch-1",
+        "input_files": ["file-1"],
+        "endpoint": "/v1/ocr",
+        "model": "mistral-ocr-latest",
+        "status": "SUCCESS",
+        "created_at": 1_757_400_000,
+    }
+    sent_requests = []
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        sent_requests.append(request)
+        return httpx.Response(200, json=job_payload)
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(_capture))
+
+    logging_obj = LitellmLogging(
+        model="mistral/mistral-ocr-latest",
+        messages=[],
+        stream=False,
+        call_type="batch_retrieve",
+        start_time=time.time(),
+        litellm_call_id="batch-retrieve-call-id",
+        function_id="batch-retrieve-function-id",
+        log_raw_request_response=True,
+    )
+    logging_obj.update_environment_variables(
+        model="mistral/mistral-ocr-latest",
+        optional_params={},
+        litellm_params={"litellm_call_id": "batch-retrieve-call-id", "metadata": {}},
+    )
+
+    result = await BaseLLMHTTPHandler().retrieve_batch(
+        batch_id="batch-1",
+        litellm_params={"api_key": provider_key},
+        provider_config=MistralBatchesConfig(),
+        headers={},
+        api_base=None,
+        api_key=provider_key,
+        logging_obj=logging_obj,
+        _is_async=True,
+        client=client,
+        model="mistral/mistral-ocr-latest",
+    )
+
+    assert result.id == "batch-1"
+    assert sent_requests[0].headers["Authorization"] == f"Bearer {provider_key}"
+    raw_request_body = logging_obj.model_call_details["raw_request_typed_dict"]["raw_request_body"]
+    assert provider_key not in json.dumps(raw_request_body)
+
+
+@pytest.mark.asyncio
 async def test_async_anthropic_messages_handler_carries_deployment_vertex_location_for_pricing(monkeypatch):
     """
     The proxy pre-creates the logging object before the router picks a deployment, so the
