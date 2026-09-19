@@ -34,7 +34,6 @@ from typing import Any, Optional
 import aiohttp
 from aiohttp import web
 
-
 DEFAULT_MODEL = "perf-test-model"
 DEFAULT_API_KEY = "sk-1234"
 

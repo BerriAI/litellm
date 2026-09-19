@@ -1,10 +1,12 @@
-from fastapi import FastAPI
-import uvicorn
-from memory_profiler import profile
 import os
+
+import uvicorn
+from dotenv import load_dotenv
+from fastapi import FastAPI
+from memory_profiler import profile
+
 import litellm
 from litellm import Router
-from dotenv import load_dotenv
 from litellm._uuid import uuid
 
 load_dotenv()

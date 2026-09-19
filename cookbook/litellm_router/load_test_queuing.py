@@ -1,5 +1,6 @@
-import sys
 import os
+import sys
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -8,8 +9,8 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-from litellm import Router
 import litellm
+from litellm import Router
 
 litellm.set_verbose = False
 # os.environ.pop("AZURE_AD_TOKEN")
