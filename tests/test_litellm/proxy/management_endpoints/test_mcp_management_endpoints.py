@@ -882,6 +882,14 @@ class TestListMCPServers:
                 {"scopes": ["read", "write"], "upstream_token_header": "esb-oauth"},
             ),
             (
+                {"client_id": "cid", "client_secret": "csecret", "scopes": []},
+                None,
+            ),
+            (
+                '{"client_id": "cid", "client_secret": "csecret", "scopes": []}',
+                None,
+            ),
+            (
                 {"client_id": "cid", "client_secret": "csecret", "scopes": ["read", ""]},
                 None,
             ),
