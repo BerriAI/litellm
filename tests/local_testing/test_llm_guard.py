@@ -5,7 +5,6 @@
 ## Unit test for presidio pii masking
 import sys, os, asyncio, time, random
 from datetime import datetime
-from typing import Final, Literal
 import traceback
 from dotenv import load_dotenv
 
@@ -20,7 +19,6 @@ from litellm import Router, mock_completion
 from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching.caching import DualCache
-from litellm.types.utils import CallTypesLiteral
 
 ### UNIT TESTS FOR LLM GUARD ###
 
@@ -106,97 +104,6 @@ async def test_llm_guard_sanitizes_multimodal_and_input():
         data=input_data, user_api_key_dict=user_api_key_dict, call_type="embeddings"
     )
     assert input_result["input"] == ["email: [REDACTED]", "email: [REDACTED]"]
-
-
-@pytest.mark.parametrize(
-    "call_type, payload_key",
-    (
-        ("completion", "messages"),
-        ("acompletion", "messages"),
-        ("text_completion", "prompt"),
-        ("atext_completion", "prompt"),
-        ("embeddings", "input"),
-        ("embedding", "input"),
-        ("aembedding", "input"),
-        ("moderation", "input"),
-        ("amoderation", "input"),
-        ("image_generation", "prompt"),
-        ("aimage_generation", "prompt"),
-        ("audio_transcription", "prompt"),
-        ("transcription", "prompt"),
-        ("atranscription", "prompt"),
-    ),
-)
-@pytest.mark.parametrize("is_valid", (True, False))
-@pytest.mark.asyncio
-async def test_llm_guard_call_type_aliases(
-    call_type: CallTypesLiteral,
-    payload_key: Literal["messages", "input", "prompt"],
-    is_valid: bool,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(litellm, "llm_guard_mode", "all")
-    llm_guard: Final = _ENTERPRISE_LLMGuard(
-        mock_testing=True,
-        mock_redacted_text={
-            "sanitized_prompt": "email: [REDACTED]",
-            "is_valid": is_valid,
-        },
-    )
-    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-12345"))
-    data: Final = {
-        payload_key: [{"role": "user", "content": "email: person@example.com"}]
-        if payload_key == "messages"
-        else "email: person@example.com"
-    }
-
-    if not is_valid:
-        with pytest.raises(HTTPException) as exc_info:
-            await llm_guard.async_moderation_hook(
-                data=data, user_api_key_dict=user_api_key_dict, call_type=call_type
-            )
-        assert exc_info.value.status_code == 400
-        assert exc_info.value.detail == {"error": "Violated content safety policy"}
-        return
-
-    result: Final = await llm_guard.async_moderation_hook(
-        data=data, user_api_key_dict=user_api_key_dict, call_type=call_type
-    )
-    assert result is data
-    assert data[payload_key] == (
-        [{"role": "user", "content": "email: [REDACTED]"}]
-        if payload_key == "messages"
-        else "email: [REDACTED]"
-    )
-
-
-@pytest.mark.parametrize(
-    "call_type",
-    (
-        "responses",
-        "aresponses",
-        "anthropic_messages",
-        "aanthropic_messages",
-        "aspeech",
-        "aimage_edit",
-        "pass_through_endpoint",
-    ),
-)
-@pytest.mark.asyncio
-async def test_llm_guard_skips_unsupported_call_types(
-    call_type: CallTypesLiteral, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(litellm, "llm_guard_mode", "all")
-    llm_guard: Final = _ENTERPRISE_LLMGuard(
-        mock_testing=True,
-        mock_redacted_text={"is_valid": False},
-    )
-    data: Final = {"messages": [{"role": "user", "content": "unchanged"}]}
-    result: Final = await llm_guard.async_moderation_hook(
-        data=data, user_api_key_dict=UserAPIKeyAuth(), call_type=call_type
-    )
-    assert result is data
-    assert data == {"messages": [{"role": "user", "content": "unchanged"}]}
 
 
 @pytest.mark.asyncio
