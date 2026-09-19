@@ -17,6 +17,7 @@ import functools
 import os
 from collections.abc import Generator, Iterator
 from datetime import datetime, timezone
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
@@ -245,6 +246,13 @@ def pytest_runtest_makereport(
     """Stash the call-phase outcome so teardown can tell a passed test from a
     failed one without re-deriving it."""
     report = yield
+    if item.get_closest_marker("mcp_oauth_live") is not None and call.excinfo is not None:
+        # Publish code locations only, never exception messages, source text or locals.
+        item.user_properties.append(("oauth_failure_phase", report.when))
+        item.user_properties.append(("oauth_exception_type", call.excinfo.type.__name__))
+        for entry in call.excinfo.traceback:
+            item.user_properties.append(("oauth_frame", f"{Path(entry.path).name}:{entry.lineno + 1}:{entry.name}"))
+        report.user_properties = list(item.user_properties)
     if report.when == "call":
         item.stash[_CALL_PASSED] = report.passed
     return report

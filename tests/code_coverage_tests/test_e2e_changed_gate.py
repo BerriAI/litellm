@@ -226,3 +226,31 @@ def test_an_unusable_secret_is_named_without_printing_its_value(
     assert unprintable not in result.stderr
     assert result.stdout == ""
     assert not env_path.exists()
+
+
+@pytest.mark.parametrize("phase", ("setup", "call", "teardown"))
+def test_oauth_failure_diagnostics_do_not_publish_private_payloads(tmp_path: Path, phase: str) -> None:
+    suite: Final = ET.Element("testsuite")
+    case: Final = ET.SubElement(suite, "testcase", file=SELECTED[0])
+    private: Final = "private-token-in-exception-message"
+    failure: Final = ET.SubElement(case, "failure", message=private)
+    failure.text = private
+    properties: Final = ET.SubElement(case, "properties")
+    for name, value in (
+        ("oauth_failure_phase", phase),
+        ("oauth_exception_type", "AssertionError"),
+        ("oauth_frame", "oauth_gateway.py:120:start"),
+        ("oauth_frame", f"injected\\n{private}"),
+        ("unrelated_property", private),
+    ):
+        _ = ET.SubElement(properties, "property", name=name, value=value)
+    report: Final = tmp_path / "report.xml"
+    ET.ElementTree(suite).write(report)
+    result: Final = subprocess.run(
+        [sys.executable, str(GATE), str(report), SELECTED[0]], capture_output=True, text=True
+    )
+    assert result.returncode == 1
+    assert f"oauth_failure_phase: {phase}" in result.stdout
+    assert "oauth_exception_type: AssertionError" in result.stdout
+    assert "oauth_frame: oauth_gateway.py:120:start" in result.stdout
+    assert private not in result.stdout + result.stderr
