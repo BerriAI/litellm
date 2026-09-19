@@ -1395,6 +1395,15 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
     return MappingProxyType({key: value for key, value in hints.items() if value is not None})
 
 
+def _responses_ws_failure_frame(failure: Exception) -> str:
+    raw_status: Final = getattr(failure, "status_code", None)
+    status: Final = raw_status if isinstance(raw_status, int) and not isinstance(raw_status, bool) else 500
+    error_type: Final = (
+        "rate_limit_exceeded" if status == 429 else "invalid_request_error" if 400 <= status < 500 else "server_error"
+    )
+    return json.dumps({"type": "error", "status": status, "error": {"type": error_type, "message": str(failure)}})
+
+
 async def _enforce_responses_ws_first_frame_model_auth(
     request: Request,
     model: str,
@@ -1574,6 +1583,15 @@ async def responses_websocket_endpoint(
                 original_exception=failure,
                 request_data=data,
             )
-    except Exception:
+    except Exception as e:
         verbose_proxy_logger.exception("Responses WebSocket error")
+        try:
+            await websocket.send_text(_responses_ws_failure_frame(e))
+        except Exception:
+            pass
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=data,
+        )
         await websocket.close(code=1011, reason="Internal server error")
