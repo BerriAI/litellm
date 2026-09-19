@@ -35,12 +35,13 @@ from opentelemetry.sdk.trace.export import (
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from opentelemetry.trace import Span, SpanKind, Status, Tracer
+from opentelemetry.trace import Span, SpanContext, SpanKind, Status, Tracer
 from opentelemetry.util.re import parse_env_headers
 from opentelemetry.util.types import Attributes, AttributeValue
 
 from litellm._logging import verbose_logger
 from litellm._version import version as litellm_version
+from litellm.integrations.otel.mappers.langfuse import LANGFUSE_TRACE_NAME
 from litellm.integrations.otel.model.config import ExporterOwner, ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.model.semconv import (
     DB,
@@ -380,8 +381,8 @@ _URL_KEYS: Final = frozenset({"http.url", "http.target", "url.full"})
 _URL_QUERY_KEY: Final = "url.query"
 
 
-class _TenantSpanView(ReadableSpan):
-    """A ``ReadableSpan`` view for one destination, leaving the operator's own span alone."""
+class _SpanView(ReadableSpan):
+    """A ``ReadableSpan`` view for one exporter, leaving the span every other exporter sees alone."""
 
     def __init__(
         self,
@@ -390,11 +391,12 @@ class _TenantSpanView(ReadableSpan):
         attributes: Attributes,
         events: Sequence[Event],
         status: Status,
+        parent: SpanContext | None,
     ) -> None:
         super().__init__(
             name=inner.name,
             context=inner.context,
-            parent=inner.parent,
+            parent=parent,
             resource=resource,
             attributes=attributes,
             events=events,
@@ -429,6 +431,23 @@ def is_llm_call_span(span: ReadableSpan) -> bool:
 
 def _in_scope(span: ReadableSpan, scope: "OtelSpanScope") -> bool:
     return scope == "full" or is_llm_call_span(span)
+
+
+def _scoped(span: ReadableSpan, scope: "OtelSpanScope") -> ReadableSpan:
+    """Under ``llm_only`` the model call is the only span the exporter gets, so it goes out as the
+    trace's root (its parent is the request span that is held back) and, unless the caller named the
+    trace, its own name doubles as ``langfuse.trace.name`` so Langfuse does not show "Unnamed trace"."""
+    if scope == "full":
+        return span
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    named: Final = (
+        attributes
+        if LANGFUSE_TRACE_NAME in attributes
+        else MappingProxyType({**attributes, LANGFUSE_TRACE_NAME: span.name})
+    )
+    if span.parent is None and named is attributes:
+        return span
+    return _SpanView(span, span.resource, named, span.events, span.status, parent=None)
 
 
 def _guardrail_unreachable(attributes: Mapping[str, AttributeValue]) -> bool:
@@ -501,7 +520,7 @@ def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> Read
         return span
     resource: Final = span.resource.merge(Resource(extra)) if extra else span.resource
     status: Final = span.status if owned else Status(span.status.status_code)
-    return _TenantSpanView(span, resource, kept, events, status)
+    return _SpanView(span, resource, kept, events, status, parent=span.parent)
 
 
 class TenantFanOutSpanProcessor(SpanProcessor):
@@ -552,7 +571,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             if processor is None:
                 continue
             try:
-                processor.on_end(_for_destination(span, destination))
+                processor.on_end(_scoped(_for_destination(span, destination), destination.span_scope))
             except Exception as exc:  # noqa: BLE001  # one destination's failure must not cost the others their span
                 verbose_logger.debug("OTel V2 fan-out: forwarding to %s failed: %s", destination.endpoint, exc)
             finally:
@@ -779,13 +798,23 @@ class _OverriddenBackendFilter(SpanProcessor):
     straight through and the operator keeps its copy.
 
     ``scope`` narrows what the exporter receives independently of that: under
-    ``llm_only`` the model-call spans go through and the rest of the tree is held back.
+    ``llm_only`` the model-call spans go through as trace roots and the rest of the
+    tree is held back, unless a destination of the request names ``sink``, the account
+    this exporter writes to, with a wider scope: the fan-out then delivers the rest of
+    the tree there and the model call keeps its place in it.
     """
 
-    def __init__(self, inner: SpanProcessor, owner: str | None, scope: "OtelSpanScope" = "full") -> None:
+    def __init__(
+        self,
+        inner: SpanProcessor,
+        owner: str | None,
+        scope: "OtelSpanScope" = "full",
+        sink: _SinkKey | None = None,
+    ) -> None:
         self._inner: Final = inner
         self._owner: Final = owner
         self._scope: Final = scope
+        self._sink: Final = sink
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         self._inner.on_start(span, parent_context)
@@ -793,7 +822,17 @@ class _OverriddenBackendFilter(SpanProcessor):
     def on_end(self, span: ReadableSpan) -> None:
         if self._owner in suppressed_backends() or not _in_scope(span, self._scope):
             return
-        self._inner.on_end(span)
+        self._inner.on_end(_scoped(span, self._account_scope()))
+
+    def _account_scope(self) -> "OtelSpanScope":
+        if self._scope == "full" or self._sink is None:
+            return self._scope
+        shared: Final = tuple(
+            destination.span_scope
+            for destination in request_destinations()
+            if _sink_key(destination.endpoint, destination.headers) == self._sink
+        )
+        return _widest((self._scope, *shared))
 
     def shutdown(self) -> None:
         self._inner.shutdown()
@@ -1093,8 +1132,11 @@ def build_tracer_provider(
         )
         owner = spec.owner.value if tenant_overrides and spec.owner is not None else None
         scope = _operator_scope(config, spec)
+        sink = _sink_key(spec.endpoint, parse_headers(spec.headers)) if _exports_to_the_wire(spec) else None
         provider.add_span_processor(
-            _OverriddenBackendFilter(processor, owner, scope) if owner is not None or scope != "full" else processor
+            _OverriddenBackendFilter(processor, owner, scope, sink)
+            if owner is not None or scope != "full"
+            else processor
         )
     return provider
 

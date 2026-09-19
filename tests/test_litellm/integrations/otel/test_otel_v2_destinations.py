@@ -1559,7 +1559,9 @@ class TestSpanScope:
     def _same_account_provider(shared, operator_scope):
         provider = TracerProvider()
         provider.add_span_processor(
-            _OverriddenBackendFilter(SimpleSpanProcessor(shared), "langfuse_otel", operator_scope)
+            _OverriddenBackendFilter(
+                SimpleSpanProcessor(shared), "langfuse_otel", operator_scope, TestRoutingMode.OPERATOR_SINK
+            )
         )
         provider.add_span_processor(
             TenantFanOutSpanProcessor(
@@ -1599,17 +1601,127 @@ class TestSpanScope:
         assert frozenset(finished) == expected
         assert len(finished) == len(expected), "the same account received a span twice"
 
-    def test_a_kept_generation_still_hangs_off_the_request_trace_with_its_trace_controls(self, monkeypatch):
+    def test_a_full_team_on_the_operators_llm_only_project_gets_one_whole_tree(self, monkeypatch):
+        """The operator's exporter writes the model call, the fan-out the rest, and Langfuse
+        upserts by span id: a re-rooted, self-named generation there would replace the one
+        parented under the request span and rename the whole trace after itself."""
+        self._additive(monkeypatch)
+        shared = InMemorySpanExporter()
+
+        self._run(self._same_account_provider(shared, "llm_only"), (self._same_account_destination("full"),))
+
+        whole = {s.name: s for s in shared.get_finished_spans()}
+        assert whole["chat claude-haiku"].parent == whole["POST /v1/chat/completions"].context
+        assert "langfuse.trace.name" not in whole["chat claude-haiku"].attributes
+
+    def test_an_llm_only_team_on_the_operators_llm_only_project_gets_re_rooted_generations(self, monkeypatch):
+        self._additive(monkeypatch)
+        shared = InMemorySpanExporter()
+
+        self._run(self._same_account_provider(shared, "llm_only"), (self._same_account_destination("llm_only"),))
+
+        kept = {s.name: s for s in shared.get_finished_spans()}["chat claude-haiku"]
+        assert kept.parent is None
+        assert kept.attributes["langfuse.trace.name"] == "chat claude-haiku"
+
+    def test_a_full_team_on_another_account_does_not_widen_the_operators_llm_only_exporter(self, monkeypatch):
+        self._additive(monkeypatch)
+        operator = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(
+            _OverriddenBackendFilter(
+                SimpleSpanProcessor(operator), "langfuse_otel", "llm_only", TestRoutingMode.OPERATOR_SINK
+            )
+        )
+        provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=lambda _d: None))
+
+        self._run(provider, (LANGFUSE_DEST,))
+
+        kept = {s.name: s for s in operator.get_finished_spans()}["chat claude-haiku"]
+        assert names(operator) == LLM_SPANS
+        assert kept.parent is None
+        assert kept.attributes["langfuse.trace.name"] == "chat claude-haiku"
+
+    def test_a_built_provider_knows_which_account_its_llm_only_exporter_writes_to(self, monkeypatch):
+        self._additive(monkeypatch)
+        shared = InMemorySpanExporter()
+        monkeypatch.setattr(otel_providers, "_exporter_from_spec", lambda _spec: shared)
+        config = OpenTelemetryV2Config(
+            langfuse_span_scope="llm_only",
+            exporters=[
+                ExporterSpec(
+                    kind="otlp_http",
+                    endpoint=TestRoutingMode.OPERATOR_SINK[0],
+                    headers="authorization=Basic op",
+                    owner=ExporterOwner.LANGFUSE_OTEL,
+                )
+            ],
+        )
+        provider = build_tracer_provider(config, use_simple_processor=True)
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda _d: SimpleSpanProcessor(shared),
+                operator_sinks=operator_sink_scopes(config),
+            )
+        )
+
+        self._run(provider, (self._same_account_destination("full"),))
+
+        whole = {s.name: s for s in shared.get_finished_spans()}
+        assert frozenset(whole) == REQUEST_TREE
+        assert whole["chat claude-haiku"].parent == whole["POST /v1/chat/completions"].context
+        assert "langfuse.trace.name" not in whole["chat claude-haiku"].attributes
+
+    def test_a_kept_generation_becomes_the_root_of_the_request_trace_with_its_trace_controls(self, monkeypatch):
         self._additive(monkeypatch)
         operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
 
         self._run(self._operator_provider(operator, tenant), (LLM_ONLY_DEST,))
 
-        root = next(s for s in operator.get_finished_spans() if s.name == "POST /v1/chat/completions")
+        full = {s.name: s for s in operator.get_finished_spans()}
         kept = {s.name: s for s in tenant.get_finished_spans()}["chat gpt-4"]
-        assert kept.context.trace_id == root.context.trace_id
-        assert kept.parent is not None and kept.parent.span_id == root.context.span_id, "no reparenting"
-        assert {k: kept.attributes[k] for k in TRACE_CONTROLS} == dict(TRACE_CONTROLS)
+        assert kept.context == full["chat gpt-4"].context, "same trace id and span id as the operator's copy"
+        assert kept.parent is None, "its parent is the request span the tenant never receives"
+        assert {k: kept.attributes[k] for k in TRACE_CONTROLS} == dict(TRACE_CONTROLS), "the caller's trace name wins"
+        assert full["chat gpt-4"].parent == full["POST /v1/chat/completions"].context, (
+            "the operator's copy is untouched"
+        )
+
+    def test_a_kept_generation_with_no_trace_name_is_named_after_itself(self, monkeypatch):
+        self._additive(monkeypatch)
+        operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
+
+        self._run(self._operator_provider(operator, tenant, scope="llm_only"), (LLM_ONLY_DEST,))
+
+        for exporter in (operator, tenant):
+            kept = {s.name: s for s in exporter.get_finished_spans()}["chat claude-haiku"]
+            assert kept.parent is None
+            assert kept.attributes["langfuse.trace.name"] == "chat claude-haiku"
+            assert kept.attributes["gen_ai.request.model"] == "claude-haiku", "the rest of the attributes stay"
+
+    def test_narrowing_one_exporter_leaves_the_other_exporters_view_of_the_span_alone(self, monkeypatch):
+        self._additive(monkeypatch)
+        operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
+
+        self._run(self._operator_provider(operator, tenant, scope="llm_only"), (LANGFUSE_DEST,))
+
+        whole = {s.name: s for s in tenant.get_finished_spans()}
+        assert whole["chat claude-haiku"].parent == whole["POST /v1/chat/completions"].context
+        assert "langfuse.trace.name" not in whole["chat claude-haiku"].attributes
+        narrowed = {s.name: s for s in operator.get_finished_spans()}["chat claude-haiku"]
+        assert narrowed.parent is None
+        assert narrowed.attributes["langfuse.trace.name"] == "chat claude-haiku"
+
+    def test_a_full_scope_exporter_gets_the_generation_under_its_request_span_and_unnamed(self, monkeypatch):
+        self._additive(monkeypatch)
+        operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
+
+        self._run(self._operator_provider(operator, tenant), (LANGFUSE_DEST,))
+
+        for exporter in (operator, tenant):
+            whole = {s.name: s for s in exporter.get_finished_spans()}
+            assert whole["chat claude-haiku"].parent == whole["POST /v1/chat/completions"].context
+            assert "langfuse.trace.name" not in whole["chat claude-haiku"].attributes
 
     def test_a_non_langfuse_destination_of_the_same_request_keeps_the_full_tree(self, monkeypatch):
         self._additive(monkeypatch)
