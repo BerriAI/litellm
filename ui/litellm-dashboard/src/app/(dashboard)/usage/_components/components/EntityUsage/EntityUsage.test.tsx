@@ -496,6 +496,20 @@ describe("EntityUsage", () => {
       expect(getGlobalTopKeys(results, 5)[0]?.user).toBe("user-123");
       expect(getTopAPIKeys(results, 5)[0]?.user).toBe("user-123");
     });
+
+    it("carries whether each key still exists for global and entity top keys", () => {
+      const results = [
+        createDailyData("2025-01-01", {
+          "stored-key": createKeyMetrics(20, { key_alias: "Stored", team_id: null, key_exists: true }),
+          "session-key": createKeyMetrics(10, { key_alias: null, team_id: null, key_exists: false }),
+        }),
+      ];
+      const existsByKey = (rows: { api_key: string; key_exists?: boolean | null }[]) =>
+        Object.fromEntries(rows.map((row) => [row.api_key, row.key_exists]));
+
+      expect(existsByKey(getGlobalTopKeys(results, 5))).toEqual({ "stored-key": true, "session-key": false });
+      expect(existsByKey(getTopAPIKeys(results, 5))).toEqual({ "stored-key": true, "session-key": false });
+    });
   });
 
   it("should render with tag entity type and display spend metrics", async () => {
