@@ -346,6 +346,7 @@ def get_credentials_for_model(
     llm_router,  # Router instance
     model_id: str,
     operation_context: str = "file operation",
+    user_api_key_dict: "UserAPIKeyAuth | None" = None,
 ):
     """
     Retrieve API credentials for a model from the LLM Router.
@@ -354,6 +355,8 @@ def get_credentials_for_model(
         llm_router: LiteLLM Router instance
         model_id: Model name or deployment ID
         operation_context: Description for error messages (e.g., "file upload", "batch creation")
+        user_api_key_dict: Caller auth; a model name granted only through deployment IDs
+            resolves to one of those deployments
 
     Returns:
         Dictionary with credentials (api_key, api_base, custom_llm_provider, etc.)
@@ -369,7 +372,9 @@ def get_credentials_for_model(
             detail={"error": "Router not initialized. Cannot use model-based routing."},
         )
 
-    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+    credentials: Final = llm_router.get_deployment_credentials_with_provider(
+        model_id=model_id, user_api_key_auth=user_api_key_dict
+    )
 
     if credentials is None:
         raise HTTPException(
@@ -445,7 +450,9 @@ def get_team_provider_credentials(
         return public_model_name is not None and public_model_name in key_model_allowlist_set
 
     def _provider_credentials(model_id: str) -> dict | None:
-        credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
+        credentials: Final = llm_router.get_deployment_credentials_with_provider(
+            model_id=model_id, team_id=team_id, user_api_key_auth=user_api_key_dict
+        )
         if credentials is not None and credentials.get("custom_llm_provider") == custom_llm_provider:
             return {key: value for key, value in credentials.items() if key != "model"}
         return None
@@ -578,6 +585,7 @@ def handle_model_based_routing(
     llm_router,  # Router instance
     data: dict,
     check_file_id_encoding: bool = True,
+    user_api_key_dict: "UserAPIKeyAuth | None" = None,
 ) -> tuple[bool, str | None, str | None, dict | None]:
     """
     Orchestrate model-based credential routing for file operations.
@@ -588,6 +596,7 @@ def handle_model_based_routing(
         llm_router: LiteLLM Router instance
         data: Request data dictionary
         check_file_id_encoding: Whether to check for embedded model in file_id
+        user_api_key_dict: Caller auth, forwarded to credential resolution
 
     Returns:
         Tuple of (should_use_model_routing, model_used, original_file_id, credentials)
@@ -611,6 +620,7 @@ def handle_model_based_routing(
             llm_router=llm_router,
             model_id=model_from_id,
             operation_context=f"file operation (file created with model '{model_from_id}')",
+            user_api_key_dict=user_api_key_dict,
         )
         original_file_id: Final = get_original_file_id(file_id)
         return True, model_from_id, original_file_id, credentials
@@ -621,6 +631,7 @@ def handle_model_based_routing(
             llm_router=llm_router,
             model_id=model_from_param,
             operation_context="file operation",
+            user_api_key_dict=user_api_key_dict,
         )
         return True, model_from_param, None, credentials
 

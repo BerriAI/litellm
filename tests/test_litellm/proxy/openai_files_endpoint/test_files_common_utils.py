@@ -2,6 +2,7 @@ from types import MappingProxyType
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import litellm
 
 
 from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -437,9 +438,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 )
 
 
-def _completed_batch_for_retire(
-    output_file_id: str | None, counts: BatchRequestCounts | None = None
-) -> LiteLLMBatch:
+def _completed_batch_for_retire(output_file_id: str | None, counts: BatchRequestCounts | None = None) -> LiteLLMBatch:
     kwargs = dict(
         id="batch-1",
         completion_window="24h",
@@ -478,3 +477,77 @@ class TestCompletedBatchSafeToRetire:
 
     def test_no_output_and_unknown_counts_is_not_safe(self):
         assert _completed_batch_safe_to_retire(_completed_batch_for_retire(None)) is False
+
+
+def _same_name_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "openai-key"},
+                "model_info": {"id": "openai-gpt-4-id"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "azure/gpt-4", "api_key": "azure-key", "api_base": "https://x"},
+                "model_info": {"id": "azure-gpt-4-id"},
+            },
+        ]
+    )
+
+
+def test_get_credentials_for_model_honors_a_deployment_id_grant_for_the_public_name():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.openai_files_endpoints.common_utils import get_credentials_for_model
+
+    router = _same_name_router()
+    azure_only_key = UserAPIKeyAuth(api_key="hashed-key", models=["azure-gpt-4-id"], team_models=[])
+
+    assert get_credentials_for_model(llm_router=router, model_id="gpt-4")["api_key"] == "openai-key"
+    assert (
+        get_credentials_for_model(llm_router=router, model_id="gpt-4", user_api_key_dict=azure_only_key)["api_key"]
+        == "azure-key"
+    )
+
+
+def test_handle_model_based_routing_honors_a_deployment_id_grant_for_the_public_name():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.openai_files_endpoints.common_utils import handle_model_based_routing
+
+    router = _same_name_router()
+    azure_only_key = UserAPIKeyAuth(api_key="hashed-key", models=["azure-gpt-4-id"], team_models=[])
+    request = MagicMock()
+    request.query_params = {}
+    request.headers = {}
+
+    should_route, model_used, _, credentials = handle_model_based_routing(
+        file_id="",
+        request=request,
+        llm_router=router,
+        data={"model": "gpt-4"},
+        check_file_id_encoding=False,
+        user_api_key_dict=azure_only_key,
+    )
+
+    assert (should_route, model_used) == (True, "gpt-4")
+    assert credentials is not None and credentials["api_key"] == "azure-key"
+
+
+def test_get_team_provider_credentials_honors_a_deployment_id_grant_for_the_public_name():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.openai_files_endpoints.common_utils import get_team_provider_credentials
+
+    router = _same_name_router()
+    azure_only_key = UserAPIKeyAuth(api_key="hashed-key", models=["azure-gpt-4-id"], team_models=[])
+    name_key = UserAPIKeyAuth(api_key="hashed-key", models=["gpt-4"], team_models=[])
+
+    gated = get_team_provider_credentials(
+        user_api_key_dict=azure_only_key, llm_router=router, custom_llm_provider="azure"
+    )
+    assert gated is not None and gated["api_key"] == "azure-key"
+    assert (
+        get_team_provider_credentials(user_api_key_dict=azure_only_key, llm_router=router, custom_llm_provider="openai")
+        is None
+    )
+    ungated = get_team_provider_credentials(user_api_key_dict=name_key, llm_router=router, custom_llm_provider="openai")
+    assert ungated is not None and ungated["api_key"] == "openai-key"

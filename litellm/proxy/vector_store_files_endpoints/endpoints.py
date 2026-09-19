@@ -115,7 +115,9 @@ async def _update_request_data_with_managed_file_id(
 
                 # Get credentials for the model
                 if llm_router:
-                    credentials = llm_router.get_deployment_credentials_with_provider(model_id=routing_model)
+                    credentials = llm_router.get_deployment_credentials_with_provider(
+                        model_id=routing_model, user_api_key_auth=user_api_key_dict
+                    )
                     if credentials:
                         prepare_data_with_credentials(
                             data=data,
@@ -150,6 +152,7 @@ async def _update_request_data_with_managed_file_id(
         llm_router=llm_router,
         data=data,
         check_file_id_encoding=True,
+        user_api_key_dict=user_api_key_dict,
     )
 
     if should_route:
@@ -258,7 +261,7 @@ async def _update_request_data_with_model_routing_hint(
                     user_api_key_dict=user_api_key_dict,
                 )
             credentials = llm_router.get_deployment_credentials_with_provider(
-                model_id=model_hint, team_id=caller_team_id
+                model_id=model_hint, team_id=caller_team_id, user_api_key_auth=user_api_key_dict
             )
             should_route = credentials is not None
     else:
@@ -279,6 +282,7 @@ async def _update_request_data_with_model_routing_hint(
             llm_router=llm_router,
             data=data,
             check_file_id_encoding=False,
+            user_api_key_dict=user_api_key_dict,
         )
 
     if should_route and credentials is not None:
@@ -307,7 +311,9 @@ async def _update_request_data_with_model_routing_hint(
 
     openai_credentials = None
     for model_name in model_names_to_check:
-        credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_name, team_id=caller_team_id)
+        credentials = llm_router.get_deployment_credentials_with_provider(
+            model_id=model_name, team_id=caller_team_id, user_api_key_auth=user_api_key_dict
+        )
         if credentials is None:
             continue
 
