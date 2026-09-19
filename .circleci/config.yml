@@ -3151,6 +3151,7 @@ workflows:
               only: litellm_internal_staging
     jobs: *migration_jobs
   integration:
+    unless: << pipeline.parameters.run_migration_tests >>
     jobs:
       - integration_contracts:
           name: integration-<< matrix.suite >>
