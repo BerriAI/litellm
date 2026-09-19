@@ -25884,12 +25884,12 @@
         }
       },
       "expected": {
-        "spend": 0.067716,
+        "spend": 0.06569,
         "input_cost": 0.00217,
-        "output_cost": 0.065484,
+        "output_cost": 0.06352,
         "prompt_tokens": 1240,
         "completion_tokens": 4040,
-        "reasoning_cost": 0.05742
+        "reasoning_cost": 0.05568
       }
     },
     {
@@ -26349,6 +26349,7 @@
             }
           ],
           "stop_reason": "end_turn",
+          "stop_sequence": null,
           "usage": {
             "input_tokens": 1840,
             "output_tokens": 412
@@ -26400,6 +26401,7 @@
             }
           ],
           "stop_reason": "end_turn",
+          "stop_sequence": null,
           "usage": {
             "input_tokens": 640,
             "output_tokens": 380,
@@ -26453,6 +26455,7 @@
             }
           ],
           "stop_reason": "end_turn",
+          "stop_sequence": null,
           "usage": {
             "input_tokens": 512,
             "output_tokens": 350,
@@ -26511,6 +26514,7 @@
             }
           ],
           "stop_reason": "end_turn",
+          "stop_sequence": null,
           "usage": {
             "input_tokens": 512,
             "output_tokens": 350,
@@ -26585,6 +26589,7 @@
             }
           ],
           "stop_reason": "end_turn",
+          "stop_sequence": null,
           "usage": {
             "input_tokens": 1840,
             "output_tokens": 412,
@@ -26622,7 +26627,7 @@
       "response": {
         "content_type": "text/event-stream",
         "frames": [
-          "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_$REQUEST_ID\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-5\",\"content\":[],\"stop_reason\":null,\"usage\":{\"input_tokens\":1840}}}",
+          "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_$REQUEST_ID\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1840}}}",
           "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}",
           "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"scripted \"}}",
           "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"response\"}}",
@@ -26658,7 +26663,7 @@
       "response": {
         "content_type": "text/event-stream",
         "frames": [
-          "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_$REQUEST_ID\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-5\",\"content\":[],\"stop_reason\":null,\"usage\":{\"input_tokens\":640,\"cache_read_input_tokens\":12288}}}",
+          "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_$REQUEST_ID\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":640,\"cache_read_input_tokens\":12288}}}",
           "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}",
           "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"scripted \"}}",
           "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"response\"}}",
@@ -26705,6 +26710,7 @@
             }
           ],
           "stop_reason": "end_turn",
+          "stop_sequence": null,
           "usage": {
             "input_tokens": 210000,
             "output_tokens": 620
@@ -26712,9 +26718,9 @@
         }
       },
       "expected": {
-        "spend": 1.2693,
+        "spend": 1.27395,
         "input_cost": 1.26,
-        "output_cost": 0.0093,
+        "output_cost": 0.01395,
         "prompt_tokens": 210000,
         "completion_tokens": 620
       }
@@ -26748,6 +26754,7 @@
             }
           ],
           "stop_reason": "end_turn",
+          "stop_sequence": null,
           "usage": {
             "input_tokens": 1840,
             "output_tokens": 412
