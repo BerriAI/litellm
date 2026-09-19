@@ -7,11 +7,12 @@ use std::{
     time::Duration,
 };
 
-use litellm_http::{ClientVariant, HttpClientConfig, HttpClientPool};
 use reqwest::{
     Url,
     dns::{Addrs, Name, Resolve, Resolving},
 };
+
+use crate::{ClientVariant, HttpClientConfig, HttpClientPool};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -32,7 +33,7 @@ pub enum Error {
     #[error("media download timed out")]
     Timeout,
     #[error("{0}")]
-    Transport(#[from] crate::custom_httpx::transport::Error),
+    Transport(#[from] crate::transport::Error),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -101,7 +102,7 @@ impl MediaFetcher {
         pool: &HttpClientPool,
         config: &HttpClientConfig,
         url_policy: UrlPolicy,
-    ) -> Result<Self, litellm_http::Error> {
+    ) -> Result<Self, crate::Error> {
         let proxies = config.proxies.clone();
         let uses_proxy: ProxyMatch = Arc::new(move |url| proxies.apply_to(url));
         Self::with_resolution(
@@ -119,7 +120,7 @@ impl MediaFetcher {
         url_policy: UrlPolicy,
         address_resolver: Arc<dyn AddressResolver>,
         uses_proxy: ProxyMatch,
-    ) -> Result<Self, litellm_http::Error> {
+    ) -> Result<Self, crate::Error> {
         Ok(Self {
             pinned: pool.client(config, ClientVariant::Media)?,
             unpinned: pool.client(config, ClientVariant::UnpinnedMedia)?,
@@ -164,7 +165,7 @@ impl MediaFetcher {
                 .get(url.clone())
                 .send()
                 .await
-                .map_err(crate::custom_httpx::transport::Error::from)?;
+                .map_err(crate::transport::Error::from)?;
             if response.status().is_redirection() {
                 if redirects_followed == policy.max_redirects {
                     return Err(Error::TooManyRedirects);
@@ -195,7 +196,7 @@ impl MediaFetcher {
             while let Some(chunk) = response
                 .chunk()
                 .await
-                .map_err(crate::custom_httpx::transport::Error::from)?
+                .map_err(crate::transport::Error::from)?
             {
                 enforce_download_size(bytes.len() as u64 + chunk.len() as u64, policy.max_bytes)?;
                 bytes.extend_from_slice(&chunk);
@@ -245,7 +246,7 @@ impl MediaFetcher {
             .address_resolver
             .resolve(host, port)
             .await
-            .map_err(|error| crate::custom_httpx::transport::Error::Network(error.to_string()))?;
+            .map_err(|error| crate::transport::Error::Network(error.to_string()))?;
         validate_addresses(&addresses)
     }
 }
@@ -346,13 +347,13 @@ impl Resolve for PublicDnsResolver {
 mod tests {
     use std::collections::HashSet;
 
-    use litellm_http::{HttpSettings, Resolution};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
 
     use super::*;
+    use crate::{HttpSettings, Resolution};
 
     async fn serve(response: &'static [u8]) -> (Url, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0")

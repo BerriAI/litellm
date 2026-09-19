@@ -14,19 +14,16 @@ use serde_json::{Map, Value};
 use serde_with::serde_as;
 use tokio::time::Instant;
 
-use crate::{
-    base_llm::ocr::{
-        document::InlineDocument,
-        error::Error,
-        transformation::{
-            BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES,
-            OCR_POLL_RETRY_SECS, OcrConnection, OcrCredentialInputs, OcrDocument, OcrPage,
-            OcrPageDimensions, OcrResponseContext, OcrResponseFormat, OcrUsageInfo,
-            PreparedOcrRequest, ResolvedOcrCredentials, credential_env,
-            decode_and_normalize_response, decode_response,
-        },
+use crate::base_llm::ocr::{
+    document::InlineDocument,
+    error::Error,
+    handler::{CallHooks, OcrClient, read_json_response},
+    transformation::{
+        BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES,
+        OCR_POLL_RETRY_SECS, OcrConnection, OcrCredentialInputs, OcrDocument, OcrPage,
+        OcrPageDimensions, OcrResponseContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        ResolvedOcrCredentials, credential_env, decode_and_normalize_response, decode_response,
     },
-    custom_httpx::llm_http_handler::{CallHooks, OcrClient, read_json_response},
 };
 
 const AZURE_DI_API_VERSION: &str = "2024-11-30";
@@ -440,7 +437,7 @@ async fn read_operation_response(
     hooks: &dyn CallHooks<Error>,
 ) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, Error> {
     if response.status() != reqwest::StatusCode::ACCEPTED {
-        let bytes = crate::custom_httpx::llm_http_handler::read_response_bytes(
+        let bytes = crate::base_llm::ocr::handler::read_response_bytes(
             response,
             connection.max_response_bytes,
         )
@@ -462,11 +459,9 @@ async fn read_operation_response(
     {
         return Err(Error::PollOrigin);
     }
-    let bytes = crate::custom_httpx::llm_http_handler::read_response_bytes(
-        response,
-        connection.max_response_bytes,
-    )
-    .await?;
+    let bytes =
+        crate::base_llm::ocr::handler::read_response_bytes(response, connection.max_response_bytes)
+            .await?;
     hooks.response_received(&bytes).await?;
     poll_operation(http_client, operation, headers, connection, native, hooks).await
 }
@@ -491,21 +486,19 @@ async fn poll_operation(
         let builder = http_client
             .get(url.clone())
             .timeout(remaining.min(connection.timeout));
-        let builder = crate::custom_httpx::http_handler::with_headers(
+        let builder = litellm_http::request::with_headers(
             builder,
             headers,
-            crate::custom_httpx::http_handler::HeaderPolicy::Only(&[
+            litellm_http::request::HeaderPolicy::Only(&[
                 AZURE_DI_SUBSCRIPTION_HEADER,
                 "authorization",
             ]),
         );
-        let response = tokio::time::timeout_at(
-            deadline,
-            crate::custom_httpx::http_handler::http_request(builder),
-        )
-        .await
-        .map_err(|_| Error::PollTimeout)?
-        .map_err(crate::custom_httpx::transport::Error::from)?;
+        let response =
+            tokio::time::timeout_at(deadline, litellm_http::request::http_request(builder))
+                .await
+                .map_err(|_| Error::PollTimeout)?
+                .map_err(litellm_http::transport::Error::from)?;
         let retry = response
             .headers()
             .get(reqwest::header::RETRY_AFTER)
@@ -580,8 +573,8 @@ impl AzureDocumentIntelligenceOcrConfig {
         config: &AzureAuthInputs,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<Vec<(String, String)>, Error> {
-        if crate::custom_httpx::http_handler::has_header(&connection.extra_headers, "authorization")
-            || crate::custom_httpx::http_handler::has_header(
+        if litellm_http::request::has_header(&connection.extra_headers, "authorization")
+            || litellm_http::request::has_header(
                 &connection.extra_headers,
                 AZURE_DI_SUBSCRIPTION_HEADER,
             )

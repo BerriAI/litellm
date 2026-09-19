@@ -2,22 +2,20 @@ use bytes::{Bytes, BytesMut};
 use futures_util::future::BoxFuture;
 use litellm_auth_gcp::VertexAuth;
 use litellm_host::event::WireRequest;
-use litellm_http::{ClientVariant, HttpClientConfig, HttpClientPool};
+use litellm_http::{
+    ClientVariant, HttpClientConfig, HttpClientPool,
+    media::{MediaFetcher, UrlPolicy},
+    request::{HeaderPolicy, execute_http_request, with_headers},
+    transport,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::{
-    base_llm::ocr::{
-        error::Error,
-        transformation::{
-            BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OcrDocument, OcrResponseContext,
-            PreparedOcrRequest, decode_request_value, decode_response,
-        },
-    },
-    custom_httpx::{
-        http_handler::{HeaderPolicy, execute_http_request, with_headers},
-        media::{MediaFetcher, UrlPolicy},
-        transport,
+use crate::base_llm::ocr::{
+    error::Error,
+    transformation::{
+        BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OcrDocument, OcrResponseContext,
+        PreparedOcrRequest, decode_request_value, decode_response,
     },
 };
 

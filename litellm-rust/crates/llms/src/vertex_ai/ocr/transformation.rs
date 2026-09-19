@@ -7,12 +7,12 @@ use crate::{
     base_llm::ocr::{
         document::{inline_remote_document, validate_inline_document},
         error::Error,
+        handler::OcrClient,
         transformation::{
             BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrEnvironment,
             OcrRequestContext, OcrResponseFormat, PreparedOcrRequest, credential_env,
         },
     },
-    custom_httpx::llm_http_handler::OcrClient,
     mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
 };
 
@@ -112,7 +112,7 @@ impl BaseOcrConfig for VertexAiOcrConfig {
     }
 
     fn validate_request_body(&self, body: &Value) -> Result<(), Error> {
-        validate_inline_document(&crate::custom_httpx::llm_http_handler::body_document(body)?)
+        validate_inline_document(&crate::base_llm::ocr::handler::body_document(body)?)
     }
 }
 

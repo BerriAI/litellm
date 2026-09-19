@@ -6,16 +6,14 @@ use litellm_host::{
     host::{Host, HostOp, HostResult},
     machine::{HostFailure, Machine, MachineStep},
 };
-use litellm_http::{HttpClientPool, HttpSettings, Resolution};
-use litellm_llms::{
-    base_llm::ocr::{
-        error::Error as OcrError,
-        transformation::{LiteLLMOcrResponse, OCR_RESPONSE_MAX_BYTES, OcrTransportConfig},
-    },
-    custom_httpx::{
-        llm_http_handler::OcrClient,
-        media::{PublicDnsResolver, UrlPolicy},
-    },
+use litellm_http::{
+    HttpClientPool, HttpSettings, Resolution,
+    media::{PublicDnsResolver, UrlPolicy},
+};
+use litellm_llms::base_llm::ocr::{
+    error::Error as OcrError,
+    handler::OcrClient,
+    transformation::{LiteLLMOcrResponse, OCR_RESPONSE_MAX_BYTES, OcrTransportConfig},
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -624,7 +622,7 @@ async fn read_bounded_response(response: Vec<u8>, limit: usize) -> Result<bytes:
         .unwrap();
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        litellm_llms::custom_httpx::llm_http_handler::read_response_bytes(response, limit),
+        litellm_llms::base_llm::ocr::handler::read_response_bytes(response, limit),
     )
     .await;
     server.abort();
@@ -676,10 +674,7 @@ async fn oversized_error_retains_http_status_and_bounded_diagnostics_without_dra
         .await
         .unwrap_err();
     match error {
-        OcrError::Transport(litellm_llms::custom_httpx::transport::Error::Http {
-            status,
-            body,
-        }) => {
+        OcrError::Transport(litellm_http::transport::Error::Http { status, body }) => {
             assert_eq!(status, 429);
             assert_eq!(body, prefix);
         }

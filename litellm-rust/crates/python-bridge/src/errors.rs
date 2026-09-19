@@ -1,7 +1,6 @@
 use litellm_core::{Error, audio_transcription, chat_completions, messages, responses};
-use litellm_llms::{
-    base_llm::ocr::error::Error as OcrError, custom_httpx::transport::Error as TransportError,
-};
+use litellm_http::transport::Error as TransportError;
+use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
     prelude::*,

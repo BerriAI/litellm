@@ -1,18 +1,14 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError, mime::Mime};
+use litellm_http::{
+    media::{DownloadPolicy, Error as MediaError, MediaFetcher},
+    transport::Error as TransportError,
+};
 use reqwest::Url;
 
-use crate::{
-    base_llm::ocr::{
-        error::Error,
-        transformation::{
-            OCR_INLINE_MAX_BYTES, OCR_MAX_FETCH_REDIRECTS, OcrConnection, OcrDocument,
-        },
-    },
-    custom_httpx::{
-        media::{DownloadPolicy, Error as MediaError, MediaFetcher},
-        transport::Error as TransportError,
-    },
+use crate::base_llm::ocr::{
+    error::Error,
+    transformation::{OCR_INLINE_MAX_BYTES, OCR_MAX_FETCH_REDIRECTS, OcrConnection, OcrDocument},
 };
 
 pub struct InlineDocument<'a>(DataUrl<'a>);
@@ -196,10 +192,8 @@ mod tests {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap();
-        let client = crate::custom_httpx::llm_http_handler::OcrClient::for_test(
-            provider_http,
-            document_http,
-        );
+        let client =
+            crate::base_llm::ocr::handler::OcrClient::for_test(provider_http, document_http);
         let converted = inline_remote_document(
             client.document_fetcher(),
             OcrDocument::ImageUrl {

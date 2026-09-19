@@ -7,12 +7,12 @@ use crate::{
     base_llm::ocr::{
         document::{inline_remote_document, validate_inline_document},
         error::Error,
+        handler::OcrClient,
         transformation::{
             BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrRequestContext,
             OcrResponseFormat, PreparedOcrRequest, credential_env,
         },
     },
-    custom_httpx::llm_http_handler::OcrClient,
     mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
 };
 
@@ -107,7 +107,7 @@ impl BaseOcrConfig for AzureAiOcrConfig {
     }
 
     fn validate_request_body(&self, body: &Value) -> Result<(), Error> {
-        validate_inline_document(&crate::custom_httpx::llm_http_handler::body_document(body)?)
+        validate_inline_document(&crate::base_llm::ocr::handler::body_document(body)?)
     }
 }
 
@@ -134,8 +134,7 @@ impl AzureAiOcrConfig {
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<Vec<(String, String)>, Error> {
         Self::resolve_api_base(connection.api_base.as_deref(), env_lookup)?;
-        if crate::custom_httpx::http_handler::has_header(&connection.extra_headers, "authorization")
-        {
+        if litellm_http::request::has_header(&connection.extra_headers, "authorization") {
             if config.azure_ad_token_provider.is_some() {
                 super::common_utils::resolve_entra(config, env_lookup).await?;
             }
