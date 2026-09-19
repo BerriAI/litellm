@@ -15,8 +15,22 @@ import { TagUsage } from "../../types";
 
 const TOP_KEYS_LIMITS = [5, 10, 25, 50] as const;
 
+export interface TopKeyItem {
+  api_key: string;
+  key_alias: string | null;
+  user?: string | null;
+  key_exists?: boolean | null;
+  tags?: TagUsage[] | null;
+  spend: number;
+}
+
+const KEY_NOT_IN_DATABASE_TOOLTIP =
+  "This key is no longer in the database (deleted, or a CLI/SSO session key), so its details can't be opened";
+
+const canOpenKeyInfo = (item: TopKeyItem) => item.key_exists !== false;
+
 interface TopKeyViewProps {
-  topKeys: any[];
+  topKeys: TopKeyItem[];
   teams: any[] | null;
   showTags?: boolean;
   topKeysLimit: number;
@@ -43,8 +57,8 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     });
   };
 
-  const handleKeyClick = async (item: any) => {
-    if (!accessToken) return;
+  const handleKeyClick = async (item: TopKeyItem) => {
+    if (!accessToken || !canOpenKeyInfo(item)) return;
 
     try {
       const keyInfo = await keyInfoV1Call(accessToken, item.api_key);
@@ -88,13 +102,27 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     {
       header: "Key ID",
       accessorKey: "api_key",
-      cell: (info: any) => <IdCell value={info.getValue()} onClick={() => handleKeyClick(info.row.original)} />,
+      cell: (info: any) =>
+        canOpenKeyInfo(info.row.original) ? (
+          <IdCell value={info.getValue()} onClick={() => handleKeyClick(info.row.original)} />
+        ) : (
+          <IdCell value={info.getValue()} variant="plain" tooltip={KEY_NOT_IN_DATABASE_TOOLTIP} />
+        ),
     },
     {
       header: "Key Alias",
       accessorKey: "key_alias",
       cell: (info: any) => info.getValue() || "-",
     },
+    ...(topKeys.some((k) => k.user)
+      ? [
+          {
+            header: "User",
+            accessorKey: "user",
+            cell: (info: any) => info.getValue() || "-",
+          },
+        ]
+      : []),
   ];
 
   const tagsColumn = {

@@ -3247,6 +3247,17 @@
               ],
               "title": "Key Alias"
             },
+            "key_exists": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key Exists"
+            },
             "team_id": {
               "anyOf": [
                 {

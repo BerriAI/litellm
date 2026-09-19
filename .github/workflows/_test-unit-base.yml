@@ -63,6 +63,11 @@ on:
         description: "Unique name for the coverage artifact (must be unique per run)"
         required: true
         type: string
+      legacy-mcp-peer:
+        description: "Install the isolated SDK1 peer for MCP compatibility tests"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -125,10 +130,17 @@ jobs:
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 8
+        env:
+          LEGACY_MCP_PEER: ${{ inputs.legacy-mcp-peer }}
         run: |
           diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
           .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml
           uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
+          if [ "$LEGACY_MCP_PEER" = "true" ]; then
+            uv venv --python "${UV_PYTHON}" .venv-mcp-peer
+            uv pip install --python .venv-mcp-peer 'mcp==1.28.1' 'langchain-mcp-adapters==0.2.1'
+            echo "MCP_TEST_PEER_PYTHON=$GITHUB_WORKSPACE/.venv-mcp-peer/bin/python" >> "$GITHUB_ENV"
+          fi
 
       - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
