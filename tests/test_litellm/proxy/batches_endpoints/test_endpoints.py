@@ -2909,6 +2909,21 @@ async def test_retrieve__unified_batch_id_rejects_key_without_model_grant(retrie
 
 
 @pytest.mark.asyncio
+async def test_retrieve__unified_batch_id_rejects_key_without_model_grant_before_db_terminal_shortcut(
+    retrieve_harness,
+):
+    retrieve_harness.get_batch_from_db.return_value = (MagicMock(), make_batch(id="batch-from-db", status="completed"))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await call_retrieve(retrieve_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=_key_restricted_to("vertex-model"))
+
+    assert exc_info.value.code == "403"
+    retrieve_harness.logging.post_call_success_hook.assert_not_called()
+    retrieve_harness.ensure_managed_files.assert_not_called()
+    retrieve_harness.router_aretrieve.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_cancel__unified_batch_id_rejects_key_without_model_grant(cancel_harness):
     with pytest.raises(ProxyException) as exc_info:
         await call_cancel(cancel_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=_key_restricted_to("vertex-model"))
