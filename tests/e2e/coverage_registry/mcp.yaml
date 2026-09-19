@@ -1,4 +1,4 @@
-# MCP module. Grounded in litellm/proxy/_experimental/mcp_server/. See tests/e2e/CLAUDE.md for the grammar.
+# MCP module. Grounded in litellm/proxy/_experimental/mcp_server/. See tests/e2e/AGENTS.md for the grammar.
 - id: mcp.list_tools.api_key.succeeds
   module: mcp
   tier: P0

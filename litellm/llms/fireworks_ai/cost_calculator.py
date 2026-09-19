@@ -3,10 +3,7 @@ For calculating cost of fireworks ai serverless inference models.
 """
 
 from datetime import datetime
-from typing import (
-    Final,
-    cast,  # noqa: TID251  # the fallback entry is a dict copy of a ReadOnly TypedDict; no cast-free way to retype it
-)
+from typing import Final
 
 from litellm.constants import (
     FIREWORKS_AI_4_B,
@@ -67,28 +64,6 @@ def _resolve_model_info(model: str) -> ModelInfo:
         return get_model_info(model=base_model, custom_llm_provider="fireworks_ai")
 
 
-def _with_cache_read_fallback(model_info: ModelInfo) -> ModelInfo:
-    """Entries without a cache-read rate keep the previous calculator's input-rate fallback for cached
-    reads (LIT-7845 tracks the documented discount); the shared map is never mutated, so a copy carries it."""
-    input_rate: Final = model_info.get("input_cost_per_token")
-    if model_info.get("cache_read_input_token_cost") is not None or input_rate is None:
-        return model_info
-    off_peak: Final = model_info.get("off_peak_pricing")
-    if off_peak is None or "cache_read_input_token_cost" in off_peak:
-        return cast(ModelInfo, {**model_info, "cache_read_input_token_cost": input_rate})
-    return cast(
-        ModelInfo,
-        {
-            **model_info,
-            "cache_read_input_token_cost": input_rate,
-            "off_peak_pricing": {
-                **off_peak,
-                "cache_read_input_token_cost": off_peak.get("input_cost_per_token", input_rate),
-            },
-        },
-    )
-
-
 def cost_per_token(model: str, usage: Usage, current_time: datetime | None = None) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens,
@@ -102,7 +77,7 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    model_info: Final = _with_cache_read_fallback(_resolve_model_info(model))
+    model_info: Final = _resolve_model_info(model)
     return generic_cost_per_token(
         model=model,
         usage=usage,

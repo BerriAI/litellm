@@ -19244,7 +19244,20 @@
         "supports_function_calling": true,
         "supports_anthropic_thinking_payload": true,
         "supports_prompt_caching": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_vision": true,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "databricks/databricks-gemini-2-5-pro": {
         "cache_creation_input_token_cost": 1.24999e-06,
@@ -19265,7 +19278,21 @@
         "supports_function_calling": true,
         "supports_anthropic_thinking_payload": true,
         "supports_prompt_caching": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2026-10-02",
+        "supports_reasoning": true,
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_vision": true,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "databricks/databricks-gemini-3-1-flash-lite": {
         "cache_creation_input_token_cost": 3.1248e-07,
@@ -19285,7 +19312,19 @@
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_vision": true,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "databricks/databricks-gemini-3-1-flash-image": {
         "litellm_provider": "databricks",
@@ -19347,7 +19386,20 @@
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_vision": true,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "databricks/databricks-gemini-3-flash": {
         "cache_creation_input_token_cost": 6.2503e-07,
@@ -19367,7 +19419,19 @@
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_vision": true,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "databricks/databricks-gemini-3-pro": {
         "cache_creation_input_token_cost": 2.49998e-06,
@@ -21433,7 +21497,11 @@
         "mode": "chat",
         "supports_tool_choice": true,
         "supports_function_calling": true,
-        "supports_image_size": false
+        "supports_image_size": false,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_audio_input": true
     },
     "deepinfra/google/gemini-2.5-pro": {
         "max_tokens": 1000000,
@@ -21444,7 +21512,11 @@
         "litellm_provider": "deepinfra",
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_audio_input": true
     },
     "deepinfra/google/gemma-3-12b-it": {
         "max_tokens": 131072,
@@ -29340,26 +29412,6 @@
         "supports_parallel_function_calling": true,
         "supports_vision": true
     },
-    "github_copilot/gemini-2.5-pro": {
-        "litellm_provider": "github_copilot",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 64000,
-        "max_tokens": 64000,
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_vision": true
-    },
-    "github_copilot/gemini-3-pro-preview": {
-        "litellm_provider": "github_copilot",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 64000,
-        "max_tokens": 64000,
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_vision": true
-    },
     "github_copilot/gpt-3.5-turbo": {
         "litellm_provider": "github_copilot",
         "max_input_tokens": 16384,
@@ -30014,17 +30066,6 @@
         "output_cost_per_token": 8.8e-07,
         "supports_function_calling": true
     },
-    "gmi/google/gemini-3-pro-preview": {
-        "input_cost_per_token": 2e-06,
-        "litellm_provider": "gmi",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
-        "max_tokens": 65536,
-        "mode": "chat",
-        "output_cost_per_token": 1.2e-05,
-        "supports_function_calling": true,
-        "supports_vision": true
-    },
     "gmi/google/gemini-3-flash-preview": {
         "input_cost_per_token": 5e-07,
         "litellm_provider": "gmi",
@@ -30034,7 +30075,8 @@
         "mode": "chat",
         "output_cost_per_token": 3e-06,
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_system_messages": true
     },
     "gmi/moonshotai/Kimi-K2-Thinking": {
         "input_cost_per_token": 8e-07,
@@ -40163,7 +40205,12 @@
         "supports_response_schema": true,
         "supports_vision": true,
         "supports_native_streaming": true,
-        "supports_image_size": false
+        "supports_image_size": false,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_pdf_input": true,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "oci/google.gemini-2.5-pro": {
         "input_cost_per_token": 1.25e-06,
@@ -40177,7 +40224,12 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
-        "supports_native_streaming": true
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_pdf_input": true,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "oci/google.gemini-2.5-flash-lite": {
         "input_cost_per_token": 7.5e-08,
@@ -40192,7 +40244,12 @@
         "supports_response_schema": true,
         "supports_vision": true,
         "supports_native_streaming": true,
-        "supports_image_size": false
+        "supports_image_size": false,
+        "supports_reasoning": false,
+        "supports_system_messages": true,
+        "supports_pdf_input": true,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "oci/cohere.command-a-vision": {
         "input_cost_per_token": 1.56e-06,
@@ -41435,7 +41492,7 @@
         "max_tokens": 65535,
         "mode": "chat",
         "output_cost_per_token": 2.5e-06,
-        "supports_audio_output": true,
+        "supports_audio_output": false,
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
@@ -41449,7 +41506,8 @@
         "supports_audio_input": true,
         "supports_pdf_input": true,
         "supports_reasoning": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-2.5-pro": {
         "cache_creation_input_token_cost": 3.75e-07,
@@ -41462,7 +41520,7 @@
         "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
-        "supports_audio_output": true,
+        "supports_audio_output": false,
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
@@ -41478,7 +41536,8 @@
         "supports_audio_input": true,
         "supports_pdf_input": true,
         "supports_reasoning": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-3-pro-preview": {
         "cache_read_input_token_cost": 2e-07,
@@ -41563,7 +41622,8 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": false,
-        "tpm": 800000
+        "tpm": 800000,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-3.1-flash-lite-preview": {
         "cache_creation_input_token_cost": 8.33333333333333e-08,
@@ -41690,7 +41750,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/gryphe/mythomax-l2-13b": {
         "input_cost_per_token": 8e-08,
@@ -44413,12 +44474,16 @@
         "output_cost_per_token": 1.2e-05,
         "litellm_provider": "replicate",
         "mode": "chat",
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
+        "supports_function_calling": false,
+        "supports_parallel_function_calling": false,
         "supports_vision": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_response_schema": true
+        "supports_tool_choice": false,
+        "supports_response_schema": false,
+        "input_cost_per_token_above_200k_tokens": 4e-06,
+        "output_cost_per_token_above_200k_tokens": 1.8e-05,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "replicate/anthropic/claude-4.5-sonnet": {
         "input_cost_per_token": 3e-06,
@@ -44487,17 +44552,19 @@
         "supports_response_schema": true
     },
     "replicate/google/gemini-2.5-flash": {
-        "input_cost_per_token": 2.5e-06,
+        "input_cost_per_token": 3e-07,
         "output_cost_per_token": 2.5e-06,
         "litellm_provider": "replicate",
         "mode": "chat",
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
+        "supports_function_calling": false,
+        "supports_parallel_function_calling": false,
         "supports_vision": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_response_schema": true,
-        "supports_image_size": false
+        "supports_tool_choice": false,
+        "supports_response_schema": false,
+        "supports_image_size": false,
+        "supports_reasoning": true,
+        "supports_video_input": true
     },
     "replicate/openai/gpt-oss-120b": {
         "input_cost_per_token": 1.8e-07,
@@ -48076,10 +48143,15 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_read_input_token_cost": 3e-08,
+        "supports_reasoning": true,
+        "supports_pdf_input": true,
+        "supports_web_search": true,
+        "supports_prompt_caching": true
     },
     "vercel_ai_gateway/google/gemini-2.5-pro": {
-        "input_cost_per_token": 2.5e-06,
+        "input_cost_per_token": 1.25e-06,
         "litellm_provider": "vercel_ai_gateway",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
@@ -48089,7 +48161,15 @@
         "supports_vision": true,
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "input_cost_per_token_above_200k_tokens": 2.5e-06,
+        "output_cost_per_token_above_200k_tokens": 1.5e-05,
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
+        "supports_reasoning": true,
+        "supports_pdf_input": true,
+        "supports_web_search": true,
+        "supports_prompt_caching": true
     },
     "vercel_ai_gateway/google/gemini-embedding-001": {
         "input_cost_per_token": 1.5e-07,
@@ -48825,7 +48905,8 @@
         "mode": "audio_transcription",
         "source": "https://cloud.google.com/speech-to-text/pricing",
         "supported_endpoints": [
-            "/v1/audio/transcriptions"
+            "/v1/audio/transcriptions",
+            "/v1/realtime"
         ]
     },
     "vertex_ai/claude-3-5-haiku": {
@@ -62224,7 +62305,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_vision": true,
-        "source": "https://deepinfra.com/pricing"
+        "source": "https://deepinfra.com/pricing",
+        "supports_audio_input": true
     },
     "deepinfra/XiaomiMiMo/MiMo-V2.5": {
         "max_tokens": 262144,
@@ -62524,7 +62606,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_vision": true,
-        "source": "https://deepinfra.com/pricing"
+        "source": "https://deepinfra.com/pricing",
+        "supports_audio_input": true
     },
     "deepinfra/google/gemini-3.7-flash": {
         "max_tokens": 1000000,
@@ -62538,7 +62621,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_vision": true,
-        "source": "https://deepinfra.com/pricing"
+        "source": "https://deepinfra.com/pricing",
+        "supports_audio_input": true
     },
     "deepinfra/inclusionAI/Ling-3.0-flash": {
         "max_tokens": 131072,
@@ -62970,7 +63054,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_vision": true,
-        "source": "https://deepinfra.com/pricing"
+        "source": "https://deepinfra.com/pricing",
+        "supports_audio_input": true
     },
     "deepinfra/XiaomiMiMo/MiMo-V2.5-Pro": {
         "max_tokens": 1048576,
@@ -63373,6 +63458,34 @@
         ],
         "supported_output_modalities": [
             "video"
+        ]
+    },
+    "xai/grok-voice-transcribe-1.0": {
+        "input_cost_per_second": 2.778e-05,
+        "litellm_provider": "xai",
+        "metadata": {
+            "calculation": "$0.10/3600 seconds = $0.00002778 per second",
+            "original_pricing_per_hour": 0.1
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://docs.x.ai/developers/pricing",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
+    "xai/grok-voice-transcribe-2.0": {
+        "input_cost_per_second": 2.778e-05,
+        "litellm_provider": "xai",
+        "metadata": {
+            "calculation": "$0.10/3600 seconds = $0.00002778 per second",
+            "original_pricing_per_hour": 0.1
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://docs.x.ai/developers/pricing",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
         ]
     },
     "low/1024-x-1024/grok-imagine-image-2.0": {
@@ -65365,7 +65478,8 @@
         "deprecation_date": "2026-10-20",
         "input_cost_per_audio_token": 3e-07,
         "supports_prompt_caching": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-3.5-flash": {
         "cache_creation_input_token_cost": 8.33333333333333e-08,
@@ -65388,7 +65502,8 @@
         "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_audio_token": 3e-06,
         "supports_prompt_caching": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-3.5-flash-lite": {
         "cache_creation_input_token_cost": 8.33333333333333e-08,
@@ -65411,7 +65526,8 @@
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_audio_token": 3e-07,
         "supports_prompt_caching": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-3.6-flash": {
         "cache_creation_input_token_cost": 4.16666666666667e-08,
@@ -65434,7 +65550,8 @@
         "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_audio_token": 7.5e-07,
         "supports_prompt_caching": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-3.7-flash": {
         "cache_creation_input_token_cost": 4.16666666666667e-08,
@@ -65457,7 +65574,8 @@
         "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_audio_token": 7.5e-07,
         "supports_prompt_caching": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-3.8-flash": {
         "cache_creation_input_token_cost": 4.16666666666667e-08,
@@ -65480,7 +65598,8 @@
         "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_audio_token": 7.5e-07,
         "supports_prompt_caching": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/openai/gpt-4o-mini": {
         "input_cost_per_token": 1.5e-07,
@@ -67108,7 +67227,8 @@
         "supports_pdf_input": true,
         "supports_audio_input": true,
         "supports_prompt_caching": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/qwen/qwen3-max-thinking": {
         "input_cost_per_token": 7.8e-07,
@@ -71974,7 +72094,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-2.5-flash:batch": {
         "cache_read_input_audio_token_cost": 1e-07,
@@ -71997,7 +72118,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-2.5-pro:batch": {
         "cache_read_input_audio_token_cost": 1.25e-07,
@@ -72023,7 +72145,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-3-flash-preview:batch": {
         "input_cost_per_audio_token": 5e-07,
@@ -72043,7 +72166,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-3.1-flash-lite:batch": {
         "cache_read_input_audio_token_cost": 2.5e-08,
@@ -72065,7 +72189,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-3.1-pro-preview:batch": {
         "input_cost_per_audio_token": 1e-06,
@@ -72087,7 +72212,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-3.5-flash-lite:batch": {
         "cache_read_input_audio_token_cost": 1.5e-08,
@@ -72109,7 +72235,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-3.5-flash:batch": {
         "cache_read_input_audio_token_cost": 1.5e-07,
@@ -72131,7 +72258,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-3.6-flash:batch": {
         "cache_creation_input_token_cost": 4.16666666666667e-08,
@@ -72154,7 +72282,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-3.7-flash:batch": {
         "cache_creation_input_token_cost": 4.16666666666667e-08,
@@ -72177,7 +72306,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/google/gemini-3.8-flash:batch": {
         "cache_creation_input_token_cost": 4.16666666666667e-08,
@@ -72200,7 +72330,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": false
+        "supports_web_search": false,
+        "supports_video_input": true
     },
     "openrouter/ibm-granite/granite-4.0-h-micro": {
         "input_cost_per_token": 1.7e-08,

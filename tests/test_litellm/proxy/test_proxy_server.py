@@ -14314,6 +14314,29 @@ async def test_update_general_settings_keeps_yaml_openai_websocket_passthrough()
         assert ps.general_settings["enable_openai_websocket_passthrough"] is False
 
 
+def test_settings_store_exposes_dashboard_saved_mcp_client_allowlist_to_the_mcp_gateway() -> None:
+    from litellm.proxy._experimental.mcp_server.client_allowlist import MCPClientAllowlist, load_mcp_client_allowlist
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    settings: Final = ProxyConfig().settings
+    settings.load_yaml({"litellm_jwtauth": {"mcp_client_id_jwt_field": "azp"}})
+    assert load_mcp_client_allowlist(settings) is None
+
+    settings.apply_db_row(
+        "general_settings",
+        {
+            "mcp_allowed_clients": [{"alias": "Antigravity CLI", "value": "antigravity-cli"}],
+            "mcp_client_id_header": "X-MCP-Client",
+        },
+    )
+    assert load_mcp_client_allowlist(settings) == MCPClientAllowlist(
+        aliases_by_value={"antigravity-cli": "Antigravity CLI"}, jwt_field="azp", header="x-mcp-client"
+    )
+
+    settings.apply_db_row("general_settings", {"mcp_client_id_header": "X-MCP-Client"})
+    assert load_mcp_client_allowlist(settings) is None
+
+
 async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_count(monkeypatch):
     from tests.large_text import text
     from tests.test_litellm.litellm_core_utils.event_loop_lag import (
