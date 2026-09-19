@@ -31,7 +31,6 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
-    RequestScanContext,
     StreamingScanKey,
     StreamTransformSink,
 )
@@ -529,26 +528,6 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         return result if result else None
 
-    def request_scan_context(
-        self, data: Mapping[str, object], guardrail_to_apply: "CustomGuardrail"
-    ) -> RequestScanContext:
-        if data.get("messages") is None:
-            return RequestScanContext()
-        translated: Final = self._translate_to_openai(
-            {key: value for key, value in data.items() if key != "system"}  # mutable-ok: API message payload
-        )
-        hoisted_system_message: Final = (
-            None
-            if effective_skip_system_message_for_guardrail(guardrail_to_apply)
-            else self._hoisted_top_level_system_message(data)
-        )
-        return RequestScanContext.scoped(
-            (*(() if hoisted_system_message is None else (hoisted_system_message,)), *translated["messages"]),
-            tuple(tool for tool in translated.get("tools") or () if not is_provider_native_tool_dict(tool)),
-            guardrail_to_apply,
-            skip_system=False,
-        )
-
     async def process_input_messages(
         self,
         data: dict,
@@ -718,7 +697,9 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         return data
 
-    def _hoisted_top_level_system_message(self, data: Mapping[str, object]) -> AllMessageValues | None:
+    def _hoisted_top_level_system_message(
+        self, data: dict
+    ) -> AllMessageValues | None:  # mutable-ok: API message payload
         """Return the system message produced by translating the top-level prompt."""
         system: Final = data.get("system")
         if not system:
@@ -1220,7 +1201,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
 
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-                inputs=self.with_response_context(inputs, request_data, guardrail_to_apply),
+                inputs=inputs,
                 request_data=request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,
@@ -1292,7 +1273,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                         key="response",
                     )
                     _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-                        inputs=self.with_response_context(guardrail_inputs, prepared_request_data, guardrail_to_apply),
+                        inputs=guardrail_inputs,
                         request_data=prepared_request_data,
                         input_type="response",
                         logging_obj=litellm_logging_obj,
@@ -1342,11 +1323,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 key="responses",
             )
             _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-                inputs=self.with_response_context(
-                    GenericGuardrailAPIInputs(texts=[string_so_far]),  # mutable-ok: guardrail inputs want a list
-                    prepared_request_data,
-                    guardrail_to_apply,
-                ),
+                inputs={"texts": [string_so_far]},
                 request_data=prepared_request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,
