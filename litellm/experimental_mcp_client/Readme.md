@@ -18,6 +18,6 @@ See the official [SDK migration guide](https://py.sdk.modelcontextprotocol.io/mi
 
 ## HTTP redirects
 
-The MCP SDK follows redirects within the configured endpoint's origin, so a redirect to another path on the same scheme, host and port works. It also permits an HTTP-to-HTTPS upgrade on the same host using the default ports
+For streamable HTTP POST requests, the MCP SDK follows method-preserving redirects such as HTTP 307/308 within the configured endpoint's origin. Redirects to another path on the same scheme, host and port work. The SDK also permits an HTTP-to-HTTPS upgrade on the same host using the default ports
 
 Redirects to a different origin are rejected before the destination receives a request or credentials. Configure the final MCP endpoint URL directly if the server redirects to a different host or port. Setting the HTTP client's `follow_redirects` option does not override the SDK's policy
