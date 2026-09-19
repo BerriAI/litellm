@@ -159,7 +159,8 @@ def test_same_url_oauth_credentials_and_revocation_are_isolated_by_user_and_serv
                     if generation == 1 and user_index == 0 and server_index == 0:
                         for rejected in (discovery, call):
                             assert rejected.status_code == 401, rejected.text
-                            assert "uthorization required" in rejected.text, rejected.text
+                            assert rejected.json() == {"detail": "Unauthorized"}, rejected.text
+                            assert "resource_metadata=" in rejected.headers["www-authenticate"]
                         assert observed == (), "unusable credentials must not fall back to another user or server"
                     else:
                         assert discovery.status_code == 200, discovery.text
