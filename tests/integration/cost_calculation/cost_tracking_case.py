@@ -143,6 +143,7 @@ class ExactExpected(BaseModel):
     cache_creation_cost: float | None = None
     reasoning_cost: float | None = None
     tool_usage_cost: float | None = None
+    breakdown_persisted: bool = True
 
 
 class RecountRates(BaseModel):

@@ -40,6 +40,7 @@ class CostRow(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     spend: float | None = None
+    status: str | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     metadata: CostMetadata | None = None
@@ -62,10 +63,7 @@ def approx_equal(actual: float, expected: float) -> bool:
     return abs(actual - expected) <= max(1e-9, abs(expected) * 1e-2)
 
 
-def assert_total_is_sum_of_components(row: CostRow, context: str) -> None:
-    breakdown: Final = row.breakdown
-    if breakdown is None:
-        return
+def assert_total_is_sum_of_components(row: CostRow, breakdown: CostBreakdown, context: str) -> None:
     total: Final = sum(
         cost or 0.0
         for cost in (breakdown.input_cost, breakdown.output_cost, breakdown.tool_usage_cost)
@@ -84,7 +82,7 @@ def _row(value: Mapping[str, object]) -> CostRow | None:
     metadata_value: Final = value.get("metadata")
     metadata: Final = json.loads(metadata_value) if isinstance(metadata_value, str) else metadata_value
     parsed: Final = CostRow.model_validate({**value, "metadata": metadata})
-    return parsed
+    return parsed if parsed.metadata is not None or (parsed.spend is not None and parsed.status is not None) else None
 
 
 def poll_cost_row(key: str) -> CostRow:
@@ -92,7 +90,8 @@ def poll_cost_row(key: str) -> CostRow:
 
     def read() -> CostRow | None:
         rows: Final = read_rows(
-            'SELECT spend, metadata, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
+            'SELECT spend, status, metadata, prompt_tokens, completion_tokens '
+            'FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
             (digest,),
         )
         return next((parsed for row in rows if (parsed := _row(row)) is not None), None)

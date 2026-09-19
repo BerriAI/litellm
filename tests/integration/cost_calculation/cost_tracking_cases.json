@@ -26120,7 +26120,8 @@
         "input_cost": 0.04,
         "output_cost": 0,
         "prompt_tokens": 0,
-        "completion_tokens": 0
+        "completion_tokens": 0,
+        "breakdown_persisted": false
       }
     },
     {
@@ -26153,7 +26154,8 @@
         "input_cost": 0.08,
         "output_cost": 0,
         "prompt_tokens": 0,
-        "completion_tokens": 0
+        "completion_tokens": 0,
+        "breakdown_persisted": false
       }
     },
     {
@@ -26186,7 +26188,8 @@
         "input_cost": 0.06,
         "output_cost": 0,
         "prompt_tokens": 0,
-        "completion_tokens": 0
+        "completion_tokens": 0,
+        "breakdown_persisted": false
       }
     },
     {
@@ -26222,7 +26225,8 @@
         "input_cost": 0.08,
         "output_cost": 0,
         "prompt_tokens": 0,
-        "completion_tokens": 0
+        "completion_tokens": 0,
+        "breakdown_persisted": false
       }
     },
     {
@@ -26264,7 +26268,8 @@
         "input_cost": 1.71e-05,
         "output_cost": 0.000102,
         "prompt_tokens": 10,
-        "completion_tokens": 20
+        "completion_tokens": 20,
+        "breakdown_persisted": false
       }
     },
     {
@@ -26292,7 +26297,8 @@
         "input_cost": 0.05,
         "output_cost": 0,
         "prompt_tokens": 0,
-        "completion_tokens": 0
+        "completion_tokens": 0,
+        "breakdown_persisted": false
       }
     },
     {
@@ -26319,7 +26325,8 @@
         "input_cost": 0.045,
         "output_cost": 0,
         "prompt_tokens": 0,
-        "completion_tokens": 0
+        "completion_tokens": 0,
+        "breakdown_persisted": false
       }
     },
     {
@@ -26364,7 +26371,8 @@
         "input_cost": 1.7e-05,
         "output_cost": 0.000102,
         "prompt_tokens": 10,
-        "completion_tokens": 20
+        "completion_tokens": 20,
+        "breakdown_persisted": false
       }
     }
   ]

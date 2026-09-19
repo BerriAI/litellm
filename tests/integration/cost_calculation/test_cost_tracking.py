@@ -15,6 +15,7 @@ import pytest
 
 from integration._support.client import JSON_OBJECT, Gateway
 from integration.cost_calculation.conftest import (
+    CostBreakdown,
     approx_equal,
     assert_total_is_sum_of_components,
     poll_cost_row,
@@ -93,6 +94,76 @@ def _assert_stream_has_no_error(response_text: str) -> None:
         assert "error" not in parsed, f"stream carried an error event: {parsed}"
 
 
+def _assert_breakdown(
+    case: CostTrackingTestCase,
+    expected: ExactExpected,
+    breakdown: CostBreakdown,
+    response: httpx.Response,
+) -> None:
+    assert breakdown.input_cost is not None and approx_equal(breakdown.input_cost, expected.input_cost), (
+        f"{case.name}: input_cost {breakdown.input_cost} != expected {expected.input_cost}"
+    )
+    assert breakdown.output_cost is not None and approx_equal(breakdown.output_cost, expected.output_cost), (
+        f"{case.name}: output_cost {breakdown.output_cost} != expected {expected.output_cost}"
+    )
+    for field, header_name, actual_component, expected_component in (
+        (
+            "cache_read_cost",
+            "x-litellm-response-cost-cache-read",
+            breakdown.cache_read_cost,
+            expected.cache_read_cost,
+        ),
+        (
+            "cache_creation_cost",
+            "x-litellm-response-cost-cache-creation",
+            breakdown.cache_creation_cost,
+            expected.cache_creation_cost,
+        ),
+        (
+            "reasoning_cost",
+            "x-litellm-response-cost-reasoning",
+            breakdown.reasoning_cost,
+            expected.reasoning_cost,
+        ),
+        (
+            "tool_usage_cost",
+            "x-litellm-response-cost-tool-usage",
+            breakdown.tool_usage_cost,
+            expected.tool_usage_cost,
+        ),
+    ):
+        if expected_component is None:
+            continue
+        assert actual_component is not None and approx_equal(actual_component, expected_component), (
+            f"{case.name}: {field} {actual_component} != expected {expected_component}"
+        )
+        if case.response.content_type == "application/json":
+            header: Final = response.headers.get(header_name)
+            assert header is not None and approx_equal(float(header), expected_component), (
+                f"{case.name}: {header_name} {header} != expected {expected_component}"
+            )
+    if case.response.content_type == "application/json" and any(
+        component is not None
+        for component in (
+            expected.cache_read_cost,
+            expected.cache_creation_cost,
+            expected.reasoning_cost,
+            expected.tool_usage_cost,
+        )
+    ):
+        input_header: Final = response.headers.get("x-litellm-response-cost-input")
+        output_header: Final = response.headers.get("x-litellm-response-cost-output")
+        expected_input_header: Final = expected.input_cost - (
+            expected.cache_read_cost or 0.0
+        ) - (expected.cache_creation_cost or 0.0)
+        assert input_header is not None and approx_equal(float(input_header), expected_input_header), (
+            f"{case.name}: x-litellm-response-cost-input {input_header} != expected {expected_input_header}"
+        )
+        assert output_header is not None and approx_equal(float(output_header), expected.output_cost), (
+            f"{case.name}: x-litellm-response-cost-output {output_header} != expected {expected.output_cost}"
+        )
+
+
 @pytest.mark.parametrize("case", _CASES)
 def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) -> None:
     marker: Final = sha256(case.name.encode()).hexdigest()[:12]
@@ -133,7 +204,9 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             assert row.spend is not None and approx_equal(row.spend, recount), (
                 f"{case.name}: spend {row.spend} != recount {recount} at map rates"
             )
-            assert_total_is_sum_of_components(row, case.name)
+            breakdown: Final = row.breakdown
+            assert breakdown is not None, f"{case.name}: no cost_breakdown persisted"
+            assert_total_is_sum_of_components(row, breakdown, case.name)
             return
         expected: Final = case.expected
         assert isinstance(expected, ExactExpected)
@@ -150,76 +223,18 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             )
         assert row.spend is not None and approx_equal(row.spend, expected.spend), (
             f"{case.name}: spend {row.spend} != expected {expected.spend} "
-            f"(breakdown {row.breakdown.model_dump()})"
+            f"(breakdown {row.breakdown.model_dump() if row.breakdown is not None else None})"
         )
         breakdown: Final = row.breakdown
+        if expected.breakdown_persisted:
+            assert breakdown is not None, f"{case.name}: no cost_breakdown persisted"
         if breakdown is not None:
-            assert breakdown.input_cost is not None and approx_equal(breakdown.input_cost, expected.input_cost), (
-                f"{case.name}: input_cost {breakdown.input_cost} != expected {expected.input_cost}"
-            )
-            assert breakdown.output_cost is not None and approx_equal(breakdown.output_cost, expected.output_cost), (
-                f"{case.name}: output_cost {breakdown.output_cost} != expected {expected.output_cost}"
-            )
-            for field, header_name, actual_component, expected_component in (
-                (
-                    "cache_read_cost",
-                    "x-litellm-response-cost-cache-read",
-                    breakdown.cache_read_cost,
-                    expected.cache_read_cost,
-                ),
-                (
-                    "cache_creation_cost",
-                    "x-litellm-response-cost-cache-creation",
-                    breakdown.cache_creation_cost,
-                    expected.cache_creation_cost,
-                ),
-                (
-                    "reasoning_cost",
-                    "x-litellm-response-cost-reasoning",
-                    breakdown.reasoning_cost,
-                    expected.reasoning_cost,
-                ),
-                (
-                    "tool_usage_cost",
-                    "x-litellm-response-cost-tool-usage",
-                    breakdown.tool_usage_cost,
-                    expected.tool_usage_cost,
-                ),
-            ):
-                if expected_component is None:
-                    continue
-                assert actual_component is not None and approx_equal(actual_component, expected_component), (
-                    f"{case.name}: {field} {actual_component} != expected {expected_component}"
-                )
-                if case.response.content_type == "application/json":
-                    header: Final = response.headers.get(header_name)
-                    assert header is not None and approx_equal(float(header), expected_component), (
-                        f"{case.name}: {header_name} {header} != expected {expected_component}"
-                    )
-            if case.response.content_type == "application/json" and any(
-                component is not None
-                for component in (
-                    expected.cache_read_cost,
-                    expected.cache_creation_cost,
-                    expected.reasoning_cost,
-                    expected.tool_usage_cost,
-                )
-            ):
-                input_header: Final = response.headers.get("x-litellm-response-cost-input")
-                output_header: Final = response.headers.get("x-litellm-response-cost-output")
-                expected_input_header: Final = expected.input_cost - (
-                    expected.cache_read_cost or 0.0
-                ) - (expected.cache_creation_cost or 0.0)
-                assert input_header is not None and approx_equal(float(input_header), expected_input_header), (
-                    f"{case.name}: x-litellm-response-cost-input {input_header} != expected {expected_input_header}"
-                )
-                assert output_header is not None and approx_equal(float(output_header), expected.output_cost), (
-                    f"{case.name}: x-litellm-response-cost-output {output_header} != expected {expected.output_cost}"
-                )
+            _assert_breakdown(case, expected, breakdown, response)
         assert row.prompt_tokens == expected.prompt_tokens, (
             f"{case.name}: prompt_tokens {row.prompt_tokens} != expected {expected.prompt_tokens}"
         )
         assert row.completion_tokens == expected.completion_tokens, (
             f"{case.name}: completion_tokens {row.completion_tokens} != expected {expected.completion_tokens}"
         )
-        assert_total_is_sum_of_components(row, case.name)
+        if breakdown is not None:
+            assert_total_is_sum_of_components(row, breakdown, case.name)
