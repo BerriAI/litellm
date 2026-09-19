@@ -207,10 +207,9 @@ class FalAIVideoConfig(BaseVideoConfig):
             api_key
             or (litellm_params.api_key if litellm_params is not None else None)
             or get_secret_str("FAL_AI_API_KEY")
-            or get_secret_str("FAL_KEY")
         )
         if not final_api_key:
-            raise ValueError("fal.ai API key is required")
+            raise ValueError("FAL_AI_API_KEY is not set")
         validated_headers: Final[_VideoHeaders] = {
             **headers,
             "Authorization": f"Key {final_api_key}",
@@ -224,7 +223,7 @@ class FalAIVideoConfig(BaseVideoConfig):
         api_base: str | None,
         litellm_params: _VideoParams,
     ) -> str:
-        return (api_base or get_secret_str("FAL_AI_QUEUE_API_BASE") or "https://queue.fal.run").rstrip("/")
+        return (api_base or "https://queue.fal.run").rstrip("/")
 
     def transform_video_create_request(
         self,

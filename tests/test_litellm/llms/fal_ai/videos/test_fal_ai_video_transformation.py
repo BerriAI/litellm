@@ -91,6 +91,26 @@ class TestFalAIVideoTransformation:
         }
         assert "model" not in body
 
+    def test_get_complete_url_respects_api_base_override(self):
+        url = self.config.get_complete_url(
+            model=MODEL,
+            api_base="https://proxy.internal/",
+            litellm_params={},
+        )
+
+        assert url == "https://proxy.internal"
+
+    def test_validate_environment_requires_fal_ai_api_key(self, monkeypatch):
+        monkeypatch.setattr(fal_video_module, "get_secret_str", lambda _: None)
+
+        with pytest.raises(ValueError, match="FAL_AI_API_KEY is not set"):
+            self.config.validate_environment(
+                headers={},
+                model=MODEL,
+                api_key=None,
+                litellm_params=GenericLiteLLMParams(),
+            )
+
     def test_transform_video_create_response_encodes_model_and_usage(self):
         response = Mock(spec=httpx.Response)
         response.json.return_value = {"request_id": "abc"}
