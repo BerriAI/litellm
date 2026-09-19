@@ -3053,6 +3053,35 @@ async def _add_team_members_to_team(
     return updated_team, updated_users, updated_team_memberships
 
 
+async def _update_team_member_role(
+    prisma_client: PrismaClient,
+    team_id: str,
+    user_id: str,
+    role: Literal["admin", "user"],
+    user_email: str | None,
+) -> tuple[tuple[Member, ...], tuple[Member, ...]]:
+    """Rewrite one member's role from the roster read under the team lock; returns (before, after)."""
+    async with prisma_client.tx() as tx:
+        await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
+
+        locked_members: Final = await TeamRepository(prisma_client).get_members_with_roles_locked(tx, team_id)
+        if locked_members is None:
+            raise HTTPException(status_code=404, detail={"error": f"Team id={team_id} does not exist in db"})
+
+        before: Final = tuple(locked_members)
+        after: Final = tuple(
+            Member(user_id=member.user_id, role=role, user_email=user_email or member.user_email)
+            if member.user_id == user_id
+            else member
+            for member in before
+        )
+        await _team_tx_db(tx).update(
+            where={"team_id": team_id},
+            data={"members_with_roles": json.dumps([m.model_dump() for m in after])},
+        )
+    return before, after
+
+
 def _emit_team_members_metric(team: LiteLLM_TeamTable) -> None:
     """Update the Prometheus team members gauge after a membership change.
 
@@ -3164,7 +3193,7 @@ def _members_audit_value(team_alias: str | None, members: Sequence[Member]) -> s
     )
 
 
-async def _create_team_membership_audit_log(
+def _schedule_team_membership_audit_log(
     team_id: str,
     team_alias: str | None,
     before_members: Sequence[Member],
@@ -3172,21 +3201,29 @@ async def _create_team_membership_audit_log(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
 ) -> None:
-    from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
+    from litellm.proxy.management_helpers.audit_logs import (
+        create_object_audit_log,
+        is_audit_logging_enabled,
+    )
 
-    await create_object_audit_log(
-        object_id=team_id,
-        action="updated",
-        litellm_changed_by=None,
-        user_api_key_dict=user_api_key_dict,
-        litellm_proxy_admin_name=litellm_proxy_admin_name,
-        table_name=LitellmTableNames.TEAM_TABLE_NAME,
-        before_value=_members_audit_value(team_alias, before_members),
-        after_value=_members_audit_value(team_alias, after_members),
+    if not is_audit_logging_enabled() or tuple(before_members) == tuple(after_members):
+        return
+
+    asyncio.create_task(
+        create_object_audit_log(
+            object_id=team_id,
+            action="updated",
+            litellm_changed_by=None,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+            table_name=LitellmTableNames.TEAM_TABLE_NAME,
+            before_value=_members_audit_value(team_alias, before_members),
+            after_value=_members_audit_value(team_alias, after_members),
+        )
     )
 
 
-async def _create_team_member_add_audit_logs(
+def _schedule_team_member_add_audit_logs(
     team_id: str,
     team_alias: str | None,
     updated_users: Sequence[LiteLLM_UserTable],
@@ -3196,29 +3233,32 @@ async def _create_team_member_add_audit_logs(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
 ) -> None:
-    """Record the membership change, and any user row it created, in the audit log.
-
-    The entries are written concurrently so a request adding many members does
-    not pay for them one after another.
-    """
-    from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
-
-    created_user_entries: Final = tuple(
-        create_object_audit_log(
-            object_id=user.user_id,
-            action="created",
-            litellm_changed_by=None,
-            user_api_key_dict=user_api_key_dict,
-            litellm_proxy_admin_name=litellm_proxy_admin_name,
-            table_name=LitellmTableNames.USER_TABLE_NAME,
-            before_value=None,
-            after_value=safe_dumps(user.model_dump(exclude_none=True)),
-        )
-        for user in updated_users
-        if user.user_id is not None and user.user_id not in existing_user_ids
+    """Record the membership change, and any user row it created, in the audit log."""
+    from litellm.proxy.management_helpers.audit_logs import (
+        create_object_audit_log,
+        is_audit_logging_enabled,
     )
 
-    membership_entry: Final = _create_team_membership_audit_log(
+    if not is_audit_logging_enabled():
+        return
+
+    for user in updated_users:
+        if user.user_id is None or user.user_id in existing_user_ids:
+            continue
+        asyncio.create_task(
+            create_object_audit_log(
+                object_id=user.user_id,
+                action="created",
+                litellm_changed_by=None,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                table_name=LitellmTableNames.USER_TABLE_NAME,
+                before_value=None,
+                after_value=safe_dumps(user.model_dump(exclude_none=True)),
+            )
+        )
+
+    _schedule_team_membership_audit_log(
         team_id=team_id,
         team_alias=team_alias,
         before_members=before_members,
@@ -3226,8 +3266,6 @@ async def _create_team_member_add_audit_logs(
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
-
-    await asyncio.gather(*created_user_entries, membership_entry)
 
 
 async def _validate_and_populate_member_user_info(
@@ -3462,7 +3500,7 @@ async def team_member_add(
 
     _emit_team_members_metric(complete_team_data)
 
-    await _create_team_member_add_audit_logs(
+    _schedule_team_member_add_audit_logs(
         team_id=data.team_id,
         team_alias=complete_team_data.team_alias,
         updated_users=updated_users,
@@ -3540,15 +3578,14 @@ async def team_member_delete(
         data=data, user_api_key_dict=user_api_key_dict
     )
 
-    if before_members != after_members:
-        await _create_team_membership_audit_log(
-            team_id=existing_team_row.team_id,
-            team_alias=existing_team_row.team_alias,
-            before_members=before_members,
-            after_members=after_members,
-            user_api_key_dict=user_api_key_dict,
-            litellm_proxy_admin_name=litellm_proxy_admin_name,
-        )
+    _schedule_team_membership_audit_log(
+        team_id=existing_team_row.team_id,
+        team_alias=existing_team_row.team_alias,
+        before_members=before_members,
+        after_members=after_members,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
+    )
 
     return existing_team_row
 
@@ -3858,39 +3895,22 @@ async def team_member_update(
 
     ### update team member role
     if data.role is not None:
-        members_before_role_update: Final = tuple(
-            Member(user_id=member.user_id, user_email=member.user_email, role=member.role)
-            for member in team_table.members_with_roles
+        members_before_role_update, team_members = await _update_team_member_role(
+            prisma_client=prisma_client,
+            team_id=data.team_id,
+            user_id=received_user_id,
+            role=data.role,
+            user_email=data.user_email,
         )
-        team_members: Final[list[Member]] = []
-        for member in members_before_role_update:
-            if member.user_id == received_user_id:
-                team_members.append(
-                    Member(
-                        user_id=member.user_id,
-                        role=data.role,
-                        user_email=data.user_email or member.user_email,
-                    )
-                )
-            else:
-                team_members.append(member)
-
-        team_table.members_with_roles = team_members
-
-        _db_team_members: Final[list[dict]] = [m.model_dump() for m in team_members]
-        await _team_db(prisma_client).update(
-            where={"team_id": data.team_id},
-            data={"members_with_roles": json.dumps(_db_team_members)},
+        team_table.members_with_roles = list(team_members)
+        _schedule_team_membership_audit_log(
+            team_id=data.team_id,
+            team_alias=team_table.team_alias,
+            before_members=members_before_role_update,
+            after_members=team_members,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
         )
-        if members_before_role_update != tuple(team_members):
-            await _create_team_membership_audit_log(
-                team_id=data.team_id,
-                team_alias=team_table.team_alias,
-                before_members=members_before_role_update,
-                after_members=team_members,
-                user_api_key_dict=user_api_key_dict,
-                litellm_proxy_admin_name=litellm_proxy_admin_name,
-            )
 
     return TeamMemberUpdateResponse(
         team_id=data.team_id,
