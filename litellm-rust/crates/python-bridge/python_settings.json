@@ -1,0 +1,12 @@
+{
+  "http_settings": [
+    "ssl_verify",
+    "ssl_certificate",
+    "ssl_security_level",
+    "ssl_ecdh_curve",
+    "force_ipv4",
+    "http2",
+    "aiohttp_trust_env",
+    "user_agent"
+  ]
+}

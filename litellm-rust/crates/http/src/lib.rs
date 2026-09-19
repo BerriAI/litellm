@@ -3,9 +3,11 @@
 //! caches `reqwest::Client`s per resolved configuration.
 
 mod config;
+mod error;
 mod pool;
 mod settings;
 
-pub use config::{Error, HttpClientConfig, Verify};
+pub use config::{HttpClientConfig, Verify};
+pub use error::Error;
 pub use pool::{ClientVariant, HttpClientPool};
 pub use settings::{HttpSettings, SslVerify};

@@ -15,8 +15,6 @@ futures-util.workspace = true
 base64.workspace = true
 litellm-auth.workspace = true
 litellm-auth-aws.workspace = true
-litellm-auth-gcp.workspace = true
-litellm-http.workspace = true
 litellm-llms.workspace = true
 moka.workspace = true
 mime_guess = "2.0.5"
@@ -37,6 +35,8 @@ url.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
+litellm-auth-gcp.workspace = true
+litellm-http.workspace = true
 litellm-llms = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
 rstest_reuse.workspace = true
