@@ -3919,15 +3919,14 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
             is True
         )
 
-# --- URL-bound model must be allowlisted on the LLM handler routes -------------------
+# --- URL-bound model on the LLM handler routes ---------------------------------------
 # chat-completions, completions and embeddings bind ``model`` from the URL
 # (``?model=`` on the plain routes, ``{model:path}`` on the deployment-style
-# routes) and route from it ahead of the body model. Only the body used to be
-# validated, so a key scoped to one model could be served another
-# (BerriAI/litellm#41810).
+# routes) and request processing prefers it over the body model, so it is part
+# of the model candidates the access checks see.
 
 
-def _matched_request(template: str, path_params: dict | None = None) -> Request:
+def _matched_request(template: str, path_params: dict[str, object] | None = None) -> Request:
     """Request as Starlette leaves it after routing: ``scope["route"]`` carries the
     matched template and ``path_params`` the resolved segments."""
 

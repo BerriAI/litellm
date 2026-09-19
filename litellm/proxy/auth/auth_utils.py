@@ -1712,17 +1712,15 @@ _MODEL_ROUTING_COMPLETION_MODEL_ROUTE_MARKERS: Final = ("/evals",)
 # The chat-completions, completions and embeddings handlers (and the queue
 # variant) declare a ``model`` parameter that FastAPI binds from the URL —
 # from ``?model=`` on the plain routes, from ``{model:path}`` on the
-# deployment-style routes — and request processing routes from that value in
-# preference to the body ``model``. The allowlist check therefore has to
-# validate the URL-bound model too: with only the body validated, a key scoped
-# to one model could name an allowed model in the body and a denied one in the
-# URL, and be served the denied model. The two sets below are the exact route
-# templates those handlers are mounted on (proxy_server.py); classification is
-# by matched template, never by substring, so unrelated routes that merely
-# contain ``/completions`` do not get a stray ``?model=`` promoted to an
-# authorization input. On a ``{model:path}`` route FastAPI binds the path
-# value and ignores a same-named query parameter, so only the path value is a
-# candidate there.
+# deployment-style routes — and request processing prefers that value over the
+# body ``model``. Every model a request can resolve to is a candidate for the
+# access checks, so the URL-bound value is collected here alongside the body
+# value. The two sets below are the exact route templates those handlers are
+# mounted on (proxy_server.py); classification is by matched template, never
+# by substring, so unrelated routes that merely contain ``/completions`` do not
+# get a stray ``?model=`` promoted to an authorization input. On a
+# ``{model:path}`` route FastAPI binds the path value and ignores a same-named
+# query parameter, so only the path value is a candidate there.
 _LLM_HANDLER_QUERY_MODEL_ROUTES: Final = frozenset(
     {
         "/v1/chat/completions",
@@ -1995,10 +1993,9 @@ def _extract_model_candidates_from_request(
             _append_model_candidates(candidates, session.get("model"))
     if uses_completion_model_sources and isinstance(request_data.get("completion"), dict):
         _append_model_candidates(candidates, request_data["completion"].get("model"))
-    # URL-bound model on the LLM handler routes: request processing prefers it
-    # over the body model, so it must pass the allowlist as well. The
-    # ``x-litellm-model`` header is deliberately not read: these handlers do
-    # not route from it.
+    # URL-bound model on the LLM handler routes (request processing prefers it
+    # over the body model). The ``x-litellm-model`` header is deliberately not
+    # read: these handlers do not route from it.
     _append_model_candidates(
         candidates,
         _llm_handler_url_model(
