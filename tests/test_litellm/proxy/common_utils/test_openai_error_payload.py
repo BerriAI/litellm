@@ -147,6 +147,22 @@ def test_a_status_carried_by_an_exception_drives_the_type_it_reports():
     assert openai_error_type(exc, error_status_code(exc, 400)) == "permission_error"
 
 
+def test_an_upstream_5xx_body_does_not_relabel_the_internal_server_error():
+    """The upstream body rides along on the exception for the Responses ``response.failed``
+    event, but a 500 keeps answering the proxy's own ``internal_server_error`` label."""
+    from litellm.exceptions import InternalServerError
+
+    carried = InternalServerError(
+        message="Controlled provider failure",
+        model="gpt-5.4-mini",
+        llm_provider="openai",
+        body={"message": "Controlled provider failure", "type": "server_error", "code": "500"},
+    )
+
+    assert carried.body == {"message": "Controlled provider failure", "type": "server_error", "code": "500"}
+    assert openai_error_type(carried, error_status_code(carried, 400)) == "internal_server_error"
+
+
 def test_a_stringified_none_type_or_param_is_treated_as_absent():
     from litellm.exceptions import BadRequestError
 
