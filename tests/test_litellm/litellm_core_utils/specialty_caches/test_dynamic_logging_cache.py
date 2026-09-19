@@ -82,3 +82,37 @@ class TestLangfuseInMemoryCache:
 
         release_langfuse_tracing(sibling, grace_seconds=0.0)
         assert acquire() is not logger.tracing, "eviction did not release the evicted logger's hold"
+
+    @patch("litellm.initialized_langfuse_clients", 3)
+    def test_second_evictor_of_the_same_entry_releases_nothing(self):
+        """Two callers can expire the same entry at once (a request thread and the reaper). Only the one that
+        claims the entry may give its slot and channel hold back, or a sibling logger loses its channel."""
+        from litellm.integrations.langfuse.langfuse import LangFuseLogger
+        from litellm.integrations.langfuse.langfuse_sdk import acquire_langfuse_tracing, release_langfuse_tracing
+
+        def acquire():
+            return acquire_langfuse_tracing(
+                public_key="pk-double-eviction-test",
+                secret_key="sk",
+                base_url="http://127.0.0.1:1",
+                environment=None,
+                release=None,
+                flush_interval=1.0,
+                mock_mode=True,
+            )
+
+        logger = LangFuseLogger.__new__(LangFuseLogger)
+        logger.api_client = MagicMock()
+        logger.tracing = acquire()
+        sibling = acquire()
+        self.cache.cache_dict["test_key"] = logger
+        self.cache.ttl_dict["test_key"] = time.time() + 100
+
+        self.cache._remove_key("test_key")
+        self.cache._remove_key("test_key")
+
+        assert litellm.initialized_langfuse_clients == 2
+        assert "test_key" not in self.cache.cache_dict and "test_key" not in self.cache.ttl_dict
+        assert acquire() is sibling, "the second evictor took the sibling logger's hold on the channel"
+        release_langfuse_tracing(sibling)
+        release_langfuse_tracing(sibling, grace_seconds=0.0)

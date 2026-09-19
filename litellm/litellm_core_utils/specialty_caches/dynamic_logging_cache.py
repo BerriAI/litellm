@@ -30,22 +30,23 @@ class LangfuseInMemoryCache(InMemoryCache):
     def _remove_key(self, key: str) -> None:
         from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
-        if isinstance(self.cache_dict[key], LangFuseLogger):
+        evicted: Final = self.cache_dict.pop(key, None)
+        self.ttl_dict.pop(key, None)
+        if evicted is None:
+            return
+
+        if isinstance(evicted, LangFuseLogger):
             litellm.initialized_langfuse_clients -= 1
 
         # Loggers with a periodic flush task (e.g. NewRelicMetricsLogger) expose
         # stop() so eviction actually ends the task instead of leaking it.
-        _evicted_stop: Final = getattr(self.cache_dict[key], "stop", None)
-        if callable(_evicted_stop):
-            try:
-                _evicted_stop()
-            except Exception:  # noqa: BLE001  # a failing stop() must not block eviction
-                verbose_logger.debug("DynamicLoggingCache: stop() raised during eviction", exc_info=True)
-
-        #########################################################
-        # Call parent class to remove key from cache
-        #########################################################
-        return super()._remove_key(key)
+        _evicted_stop: Final = getattr(evicted, "stop", None)
+        if not callable(_evicted_stop):
+            return
+        try:
+            _evicted_stop()
+        except Exception:  # noqa: BLE001  # a failing stop() must not block eviction
+            verbose_logger.debug("DynamicLoggingCache: stop() raised during eviction", exc_info=True)
 
 
 class DynamicLoggingCache:
