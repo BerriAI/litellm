@@ -1993,3 +1993,35 @@ async def test_v3_a_request_the_envelope_cannot_model_follows_the_failure_policy
     )
     assert out["texts"] == ["hi"]
     assert g.async_handler.post.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_v3_function_schemas_that_name_credential_like_properties_are_relayed_unchanged():
+    schema_tool = {
+        "type": "function",
+        "function": {
+            "name": "rotate_api_key",
+            "description": "Rotate a service credential",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "token": {"type": "string"},
+                    "headers": {"type": "object"},
+                    "api_key": {"type": "string"},
+                    "authorization": {"type": "string"},
+                },
+                "required": ["token"],
+            },
+        },
+    }
+    g = _make_guardrail(api_key=V3_KEY)
+    g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+    await g.apply_guardrail(
+        inputs={"texts": ["hi"]},
+        request_data=_v3_request_data(tools=[schema_tool, OPENAI_MCP_TOOL]),
+        input_type="request",
+        logging_obj=_logging_obj(),
+    )
+    relayed = _posted_payload(g)["tools"]
+    assert relayed[0] == schema_tool
+    assert relayed[1]["headers"] == "[redacted]" and relayed[1]["server_url"] == OPENAI_MCP_TOOL["server_url"]

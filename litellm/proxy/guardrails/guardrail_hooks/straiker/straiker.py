@@ -140,12 +140,11 @@ _V3_PROVIDER_BODY_KEYS: Final = frozenset(
     }
 )
 # Fields on a `tools` or `mcp_servers` entry that carry a credential for the model's own remote
-# calls (an OpenAI `mcp` tool's `headers`, Anthropic's `authorization_token`). Detection reads
-# tool names, descriptions and schemas, never these. They sit directly on the entry, so the
-# scrub is one level deep on purpose: no recursion over caller-controlled nesting.
-_V3_CREDENTIAL_FIELDS: Final = frozenset(
-    {"authorization_token", "authorization", "headers", "api_key", "x-api-key", "token"}
-)
+# calls (an OpenAI `mcp` tool's `headers` and `authorization`, Anthropic's `authorization_token`).
+# Detection reads tool names, descriptions and schemas, never these. They sit directly on the
+# entry, so the scrub is one level deep on purpose: a function schema that defines a `token` or
+# `headers` property lives under `function.parameters` and is relayed exactly as sent.
+_V3_CREDENTIAL_FIELDS: Final = frozenset({"authorization_token", "authorization", "headers"})
 _V3_REDACTED_VALUE: Final = "[redacted]"
 _V3_REDACTED_KEYS: Final = frozenset({"tools", "mcp_servers"})
 # The identity fields Straiker's LiteLLM adapter reads from `metadata`, most specific first.
