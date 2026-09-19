@@ -385,21 +385,21 @@ def test_multiple_function_call():
                     "role": "model",
                     "parts": [
                         {"text": "test"},
-                        {"function_call": {"name": "test", "args": {"arg": "test"}}},
-                        {"function_call": {"name": "test2", "args": {"arg": "test2"}}},
+                        {"functionCall": {"name": "test", "args": {"arg": "test"}}},
+                        {"functionCall": {"name": "test2", "args": {"arg": "test2"}}},
                     ],
                 },
                 {
                     "role": "user",
                     "parts": [
                         {
-                            "function_response": {
+                            "functionResponse": {
                                 "name": "test",
                                 "response": {"content": "42"},
                             }
                         },
                         {
-                            "function_response": {
+                            "functionResponse": {
                                 "name": "test2",
                                 "response": {"content": "15"},
                             }
@@ -493,21 +493,21 @@ def test_multiple_function_call_changed_text_pos():
                 "role": "model",
                 "parts": [
                     {"text": "test"},
-                    {"function_call": {"name": "test", "args": {"arg": "test"}}},
-                    {"function_call": {"name": "test2", "args": {"arg": "test2"}}},
+                    {"functionCall": {"name": "test", "args": {"arg": "test"}}},
+                    {"functionCall": {"name": "test2", "args": {"arg": "test2"}}},
                 ],
             },
             {
                 "role": "user",
                 "parts": [
                     {
-                        "function_response": {
+                        "functionResponse": {
                             "name": "test2",
                             "response": {"content": "15"},
                         }
                     },
                     {
-                        "function_response": {
+                        "functionResponse": {
                             "name": "test",
                             "response": {"content": "42"},
                         }
