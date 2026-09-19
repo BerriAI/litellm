@@ -1786,6 +1786,12 @@ jobs:
           url: http://localhost:4000
           timeout: "300"
       - run:
+          name: Seed the routing strategy through /config/update
+          command: |
+            curl --noproxy '*' -sSf -X POST http://localhost:4000/config/update \
+              -H 'Authorization: Bearer sk-1234' -H 'Content-Type: application/json' \
+              -d '{"router_settings": {"routing_strategy": "usage-based-routing-v2"}}'
+      - run:
           name: Run tests
           command: |
             mkdir -p test-results
@@ -3009,7 +3015,7 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, database, providers, extensions, sdk, browser]
+              suite: [management, accounting, database, providers, extensions, sdk, cost, browser]
           filters:
             branches:
               only:

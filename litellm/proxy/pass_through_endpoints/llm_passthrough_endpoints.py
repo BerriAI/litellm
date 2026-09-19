@@ -45,6 +45,13 @@ from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.azure.passthrough.transformation import foreign_azure_deployment
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.deepgram.common_utils import (
+    deepgram_listen_callback_params,
+    deepgram_listen_is_priced,
+    deepgram_listen_registry_key,
+    deepgram_listen_requested_model,
+    deepgram_listen_websocket_target,
+)
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
@@ -57,6 +64,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     is_no_auth_dev_mode,
     user_api_key_auth,
     user_api_key_auth_websocket,
+    user_api_key_auth_websocket_for_model,
 )
 from litellm.proxy.common_request_processing import open_sse_before_first_byte
 from litellm.proxy.common_utils.http_parsing_utils import (
@@ -2925,7 +2933,7 @@ async def _openai_websocket_refusal(
     return None
 
 
-class _OpenAIWebsocketRelay(Protocol):
+class _WebsocketRelay(Protocol):
     async def __call__(
         self,
         *,
@@ -2939,7 +2947,7 @@ class _OpenAIWebsocketRelay(Protocol):
     ) -> None: ...
 
 
-def _openai_websocket_relay() -> _OpenAIWebsocketRelay:
+def _websocket_relay() -> _WebsocketRelay:
     return websocket_passthrough_request
 
 
@@ -2957,6 +2965,15 @@ def _proxy_model_allowlists() -> _OpenAIWebsocketModelAllowlists:
     return resolve
 
 
+def _negotiated_websocket_subprotocol(websocket: WebSocket) -> str | None:
+    requested_subprotocols: Final = tuple(
+        protocol.strip()
+        for protocol in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if protocol.strip()
+    )
+    return requested_subprotocols[0] if requested_subprotocols else None
+
+
 @router.websocket("/openai_passthrough/{endpoint:path}")
 @router.websocket("/openai/{endpoint:path}")
 async def openai_websocket_proxy_route(
@@ -2964,16 +2981,11 @@ async def openai_websocket_proxy_route(
     endpoint: str,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_websocket)],
     general_settings: Annotated[Mapping[str, object], Depends(_proxy_general_settings)],
-    relay: Annotated[_OpenAIWebsocketRelay, Depends(_openai_websocket_relay)],
+    relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
     model_allowlists: Annotated[_OpenAIWebsocketModelAllowlists, Depends(_proxy_model_allowlists)],
 ) -> None:
     """WebSocket passthrough for OpenAI prefixes (realtime / responses.connect)."""
-    requested_subprotocols: Final = tuple(
-        protocol.strip()
-        for protocol in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
-        if protocol.strip()
-    )
-    negotiated_subprotocol: Final = requested_subprotocols[0] if requested_subprotocols else None
+    negotiated_subprotocol: Final = _negotiated_websocket_subprotocol(websocket)
 
     refusal: Final = await _openai_websocket_refusal(user_api_key_dict, general_settings, model_allowlists)
     if refusal is not None:
@@ -3025,6 +3037,69 @@ async def openai_websocket_proxy_route(
         websocket=websocket,
         target=wss_target,
         custom_headers=custom_headers,
+        user_api_key_dict=user_api_key_dict,
+        forward_headers=False,
+        endpoint=websocket.url.path,
+        accept_websocket=False,
+    )
+
+
+_DEEPGRAM_WS_MISSING_KEY_REASON: Final = (
+    "Required 'DEEPGRAM_API_KEY' in environment to make pass-through calls to Deepgram."
+)
+_DEEPGRAM_WS_CALLBACK_REASON: Final = "Deepgram callback delivery is not supported through the proxy: remove {params}"
+_DEEPGRAM_WS_UNPRICED_REASON: Final = (
+    "No streaming price for '{registry_key}': add it to the model cost map to enable it"
+)
+
+
+async def deepgram_listen_user_api_key_auth(websocket: WebSocket) -> UserAPIKeyAuth:
+    return await user_api_key_auth_websocket_for_model(
+        websocket, model=deepgram_listen_requested_model(websocket.url.query)
+    )
+
+
+@router.websocket("/deepgram/v1/listen")
+@router.websocket("/deepgram/listen")
+async def deepgram_listen_websocket_route(
+    websocket: WebSocket,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(deepgram_listen_user_api_key_auth)],
+    relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
+) -> None:
+    deepgram_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider=litellm.LlmProviders.DEEPGRAM.value,
+        region_name=None,
+    )
+    if deepgram_api_key is None:
+        await websocket.close(code=1011, reason=_DEEPGRAM_WS_MISSING_KEY_REASON)
+        return
+
+    await websocket.accept(subprotocol=_negotiated_websocket_subprotocol(websocket))
+    callback_params: Final = deepgram_listen_callback_params(websocket.url.query)
+    if callback_params:
+        await websocket.close(
+            code=1008,
+            reason=_DEEPGRAM_WS_CALLBACK_REASON.format(params=", ".join(callback_params)),
+        )
+        return
+
+    target: Final = deepgram_listen_websocket_target(
+        api_base=get_secret_str("DEEPGRAM_API_BASE"),
+        query_string=websocket.url.query,
+    )
+    if not deepgram_listen_is_priced(target):
+        await websocket.close(
+            code=1008,
+            reason=_DEEPGRAM_WS_UNPRICED_REASON.format(registry_key=deepgram_listen_registry_key(target)),
+        )
+        return
+
+    await relay(
+        websocket=websocket,
+        target=target,
+        custom_headers={  # mutable-ok: websocket_passthrough_request requires a plain dict of upstream headers
+            "Authorization": f"Token {deepgram_api_key}"
+        },
         user_api_key_dict=user_api_key_dict,
         forward_headers=False,
         endpoint=websocket.url.path,

@@ -1,9 +1,11 @@
+import json
 import os
 import re
 import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
+from functools import reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
@@ -380,9 +382,79 @@ def _model_group_provider(model_group: str, llm_router: "Router | None") -> str 
     return next(iter(providers)) if len(providers) == 1 else None
 
 
+def _is_configured_model_group(model_group: str, llm_router: "Router | None") -> bool:
+    if llm_router is None or not model_group:
+        return False
+    return llm_router.is_recognized_model(model_group) or model_group in llm_router.team_public_model_names
+
+
 def _looks_like_model_name(model: str) -> bool:
     candidate: Final = model.removeprefix(MCP_SPEND_LOG_MODEL_PREFIX)
     return len(candidate) <= MAX_SPEND_LOG_MODEL_NAME_LENGTH and not any(char.isspace() for char in candidate)
+
+
+_TRUNCATION_MARKER: Final = re.compile(
+    rf"\.\.\. \({re.escape(LITELLM_TRUNCATED_PAYLOAD_FIELD)} skipped \d+ chars\. "
+    rf"{re.escape(LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE)}\) \.\.\."
+)
+_SCRUBBED_ERROR_TEXT_FIELDS: Final = frozenset(("error_message", "traceback"))
+
+
+def _raw_model_spellings(raw_model: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys((raw_model, repr(raw_model)[1:-1], json.dumps(raw_model)[1:-1])))
+
+
+def _overlap_at_end(text: str, spelling: str) -> int:
+    lengths: Final = range(min(len(text), len(spelling) - 1), 0, -1)
+    return next((length for length in lengths if text.endswith(spelling[:length])), 0)
+
+
+def _overlap_at_start(text: str, spelling: str) -> int:
+    lengths: Final = range(min(len(text), len(spelling) - 1), 0, -1)
+    return next((length for length in lengths if text.startswith(spelling[-length:])), 0)
+
+
+def _scrub_raw_model_split_by_truncation(text: str, spellings: tuple[str, ...]) -> str:
+    marker: Final = _TRUNCATION_MARKER.search(text)
+    if marker is None:
+        return text
+    head: Final = text[: marker.start()]
+    tail: Final = text[marker.end() :]
+    head_cut: Final = max(_overlap_at_end(head, spelling) for spelling in spellings)
+    tail_cut: Final = max(_overlap_at_start(tail, spelling) for spelling in spellings)
+    return "".join(
+        (
+            head[: len(head) - head_cut],
+            UNKNOWN_MODEL_SPEND_LOG_MODEL if head_cut else "",
+            marker.group(0),
+            UNKNOWN_MODEL_SPEND_LOG_MODEL if tail_cut else "",
+            tail[tail_cut:],
+        )
+    )
+
+
+def _scrub_raw_model_from_error_text(text: str, spellings: tuple[str, ...]) -> str:
+    whole_occurrences_scrubbed: Final = reduce(
+        lambda scrubbed, spelling: scrubbed.replace(spelling, UNKNOWN_MODEL_SPEND_LOG_MODEL), spellings, text
+    )
+    return _scrub_raw_model_split_by_truncation(whole_occurrences_scrubbed, spellings)
+
+
+def _scrub_raw_model_from_error_information(
+    error_information: StandardLoggingPayloadErrorInformation | None, raw_model: str
+) -> StandardLoggingPayloadErrorInformation | None:
+    if error_information is None or not raw_model:
+        return error_information
+    spellings: Final = _raw_model_spellings(raw_model)
+    return cast(
+        StandardLoggingPayloadErrorInformation,
+        {
+            key: _scrub_raw_model_from_error_text(value, spellings)
+            if key in _SCRUBBED_ERROR_TEXT_FIELDS and isinstance(value, str)
+            else value
+            for key, value in error_information.items()
+        },
+    )
 
 
 def get_logging_payload(
@@ -502,13 +574,28 @@ def get_logging_payload(
     )
     failed_with_prompt_shaped_model: Final = (
         _get_status_for_spend_log(metadata=metadata) == "failure"
-        and not _model_group
+        and not _model_id
         and not _looks_like_model_name(resolved_model)
+        and not _is_configured_model_group(_model_group, llm_router)
     )
     model_name: Final = (
         UNKNOWN_MODEL_SPEND_LOG_MODEL
         if rejected_as_unknown_model or failed_with_prompt_shaped_model or model_is_malformed
         else resolved_model
+    )
+    model_is_placeholdered: Final = model_name == UNKNOWN_MODEL_SPEND_LOG_MODEL
+    persisted_model_group: Final = (
+        ""
+        if model_is_placeholdered and _model_group == raw_model and not _looks_like_model_name(raw_model)
+        else _model_group
+    )
+    persisted_metadata: Final = (
+        {
+            **metadata,
+            "error_information": _scrub_raw_model_from_error_information(metadata.get("error_information"), raw_model),
+        }
+        if model_is_placeholdered
+        else metadata
     )
     litellm_call_id: Final = cast(
         str | None,
@@ -517,7 +604,7 @@ def get_logging_payload(
 
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
-        metadata,
+        persisted_metadata,
         applied_guardrails=(
             standard_logging_payload["metadata"].get("applied_guardrails", None)
             if standard_logging_payload is not None
@@ -576,7 +663,7 @@ def get_logging_payload(
         litellm_call_id=litellm_call_id,
         router_metadata=_get_router_metadata_for_spend_log(
             metadata=metadata,
-            requested_model=_model_group,
+            requested_model=persisted_model_group,
             selected_model=model_name,
             selected_provider=custom_llm_provider,
             router_correlation_id=litellm_call_id,
@@ -658,7 +745,7 @@ def get_logging_payload(
             request_tags=request_tags,
             end_user=end_user_id or "",
             api_base=_api_base,
-            model_group=_model_group,
+            model_group=persisted_model_group,
             model_id=_model_id,
             mcp_namespaced_tool_name=mcp_namespaced_tool_name,
             agent_id=agent_id,
@@ -669,7 +756,13 @@ def get_logging_payload(
             ),
             response=_get_response_for_spend_logs_payload(payload=standard_logging_payload, kwargs=kwargs),
             proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
-                metadata=metadata, litellm_params=litellm_params, kwargs=kwargs
+                metadata=metadata,
+                litellm_params=(
+                    _placeholder_stored_request_body(litellm_params, persisted_model_group, raw_model)
+                    if model_is_placeholdered
+                    else litellm_params
+                ),
+                kwargs=kwargs,
             ),
             session_id=_get_session_id_for_spend_log(
                 kwargs=kwargs,
@@ -975,7 +1068,7 @@ def _sanitize_request_body_for_spend_logs_payload(
     visited.add(obj_id)
 
     def _sanitize_value(value: object) -> object:
-        if isinstance(value, dict):
+        if isinstance(value, Mapping):
             return _sanitize_request_body_for_spend_logs_payload(value, visited, max_string_length_prompt_in_db)
         elif isinstance(value, list):
             return [_sanitize_value(item) for item in value]
@@ -1329,9 +1422,65 @@ def _convert_mapping_to_json_serializable(obj: Mapping[str, object]) -> dict[str
     return dict(obj)
 
 
+def _placeholder_stored_request_body_metadata(
+    request_body: Mapping[str, object], persisted_model_group: str, raw_model: str
+) -> Mapping[str, object]:
+    body_metadata: Final = request_body.get("metadata")
+    if not isinstance(body_metadata, Mapping):
+        return request_body
+    error_information: Final = body_metadata.get("error_information")
+    placeholdered_fields: Final = MappingProxyType(
+        {
+            "model_group": persisted_model_group,
+            "error_information": _scrub_raw_model_from_error_information(
+                cast(StandardLoggingPayloadErrorInformation, error_information), raw_model
+            )
+            if isinstance(error_information, Mapping)
+            else error_information,
+        }
+    )
+    return MappingProxyType(
+        {
+            **request_body,
+            "metadata": MappingProxyType(
+                {key: placeholdered_fields.get(key, value) for key, value in body_metadata.items()}
+            ),
+        }
+    )
+
+
+def _placeholder_stored_request_body(
+    litellm_params: Mapping[str, object], persisted_model_group: str, raw_model: str
+) -> Mapping[str, object]:
+    proxy_server_request: Final = litellm_params.get("proxy_server_request")
+    if not isinstance(proxy_server_request, Mapping):
+        return litellm_params
+    request_body: Final = proxy_server_request.get("body")
+    if not isinstance(request_body, Mapping):
+        return litellm_params
+    model_placeholdered: Final = (
+        MappingProxyType({**request_body, "model": UNKNOWN_MODEL_SPEND_LOG_MODEL})
+        if "model" in request_body
+        else request_body
+    )
+    return MappingProxyType(
+        {
+            **litellm_params,
+            "proxy_server_request": MappingProxyType(
+                {
+                    **proxy_server_request,
+                    "body": _placeholder_stored_request_body_metadata(
+                        model_placeholdered, persisted_model_group, raw_model
+                    ),
+                }
+            ),
+        }
+    )
+
+
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
-    litellm_params: dict,
+    litellm_params: Mapping[str, object],
     kwargs: dict | None = None,
 ) -> str:
     """

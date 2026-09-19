@@ -21,6 +21,11 @@ SHORT_AUDIO_URL = (
 )
 BATCH_URL = "https://eastus.api.cognitive.microsoft.com/speechtotext/v3.2/transcriptions"
 FAST_URL = "https://eastus.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe?api-version=2024-11-15"
+PREFIXED_SHORT_AUDIO_URL = (
+    "https://apim.example.com/speech-proxy/speech/recognition/conversation/cognitiveservices/v1?language=en-US"
+)
+PREFIXED_BATCH_URL = "https://apim.example.com/speech/speechtotext/v3.2/transcriptions"
+PREFIXED_FAST_URL = "https://apim.example.com/speech/speechtotext/transcriptions:transcribe?api-version=2024-11-15"
 FAST_BODY = {"durationMilliseconds": 5061, "combinedPhrases": [{"text": "Hello world."}]}
 FAST_AUDIO_SECONDS = 5.061
 TRANSCRIPT_BODY = {
@@ -87,6 +92,9 @@ class TestAzureSpeechPassthroughHandler:
             (FAST_URL, "azure_speech/fast-transcription", FAST_AUDIO_SECONDS * PRICE_PER_SECOND),
             (BATCH_URL, "azure_speech/batch-transcription", 0.0),
             (f"{BATCH_URL}/8a5d3f2c-0b1e-4c7d-9e6f-1234567890ab/files", "azure_speech/batch-transcription", 0.0),
+            (PREFIXED_SHORT_AUDIO_URL, "azure_speech/short-audio", TRANSCRIPT_AUDIO_SECONDS * PRICE_PER_SECOND),
+            (PREFIXED_FAST_URL, "azure_speech/fast-transcription", FAST_AUDIO_SECONDS * PRICE_PER_SECOND),
+            (PREFIXED_BATCH_URL, "azure_speech/batch-transcription", 0.0),
         ],
     )
     def test_records_model_provider_and_cost(self, url_route: str, expected_model: str, expected_cost: float):

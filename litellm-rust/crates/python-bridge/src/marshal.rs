@@ -18,10 +18,6 @@ pub(crate) struct RouteOptions {
     pub(crate) timeout: Option<Duration>,
 }
 
-pub(crate) fn body_argument(value: &Bound<'_, PyAny>) -> PyResult<Map<String, Value>> {
-    required_object("body", from_py_argument(value)?)
-}
-
 pub(crate) fn messages_argument(value: &Bound<'_, PyAny>) -> PyResult<Vec<Value>> {
     match from_py_argument(value)? {
         Value::Array(values) => Ok(values),
@@ -190,18 +186,6 @@ mod tests {
             assert_eq!(
                 Value::Array(messages_argument(&messages).unwrap()),
                 json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}])
-            );
-
-            let body = py
-                .eval(
-                    c"{'model': 'claude', 'metadata': {'user': '1'}}",
-                    None,
-                    None,
-                )
-                .unwrap();
-            assert_eq!(
-                Value::Object(body_argument(&body).unwrap()),
-                json!({"model": "claude", "metadata": {"user": "1"}})
             );
 
             let params = py.eval(c"{'temperature': 0.2}", None, None).unwrap();

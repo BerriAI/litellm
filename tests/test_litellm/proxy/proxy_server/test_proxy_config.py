@@ -16,7 +16,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -2633,6 +2633,113 @@ def test_ProxyConfig_get_model_info_with_id_returns_router_model_info():
     assert snapshot == {"id": "m-1", "db_model": True, "blocked": False}
 
 
+PINNED_MODEL_INFO: Final = MappingProxyType(
+    {
+        "id": "pinned-row",
+        "key": "gpt-5.6",
+        "mode": "chat",
+        "access_groups": ["prod"],
+        "input_cost_per_token": 4e-06,
+        "output_cost_per_token": 2e-05,
+        "cache_read_input_token_cost_above_272k_tokens": 8e-07,
+    }
+)
+
+
+def test_ProxyConfig_get_model_info_with_id_ignores_cost_map_pricing_echoed_into_model_info():
+    """LIT-8064. A pre-1.102 Admin UI save wrote the whole ``/model/info`` response back into
+    the row's ``model_info``, cost-map pricing included. Only that response carries ``key``, so
+    a stored blob with it holds a copy of the map, not a price anyone typed, and the deployment
+    must keep following the live cost map."""
+    pc = ProxyConfig()
+    model = SimpleNamespace(model_id="pinned-row", model_info=dict(PINNED_MODEL_INFO), blocked=False)
+    out = pc.get_model_info_with_id(model=model, db_model=True).model_dump(exclude_none=True)
+    assert out["access_groups"] == ["prod"]
+    assert out["mode"] == "chat"
+    for field in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost_above_272k_tokens"):
+        assert field not in out, f"{field} still pins the deployment to the cost map of the day it was saved"
+
+
+def test_ProxyConfig_get_model_info_with_id_keeps_pricing_typed_into_model_info():
+    """A custom-priced deployment the cost map does not know never got ``key``, so its
+    ``model_info`` pricing is the operator's own and stays."""
+    pc = ProxyConfig()
+    model = SimpleNamespace(
+        model_id="custom-row",
+        model_info={"id": "custom-row", "input_cost_per_token": 7e-06, "output_cost_per_token": 9e-06},
+        blocked=False,
+    )
+    out = pc.get_model_info_with_id(model=model, db_model=True).model_dump(exclude_none=True)
+    assert (out["input_cost_per_token"], out["output_cost_per_token"]) == (7e-06, 9e-06)
+
+
+def test_ProxyConfig__add_deployment_pinned_row_follows_the_cost_map_across_reloads(monkeypatch, local_model_cost_map):
+    """The customer's symptom end to end: a row pinned before 1.102 must bill at the live cost
+    map price on boot and again after Reload Price Data, while a price typed on
+    ``litellm_params`` keeps overriding it."""
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: value,
+    )
+    router = litellm.Router(model_list=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    pinned = SimpleNamespace(
+        model_id="pinned-row",
+        model_name="gpt-5.6",
+        model_info=dict(PINNED_MODEL_INFO),
+        litellm_params={"model": "openai/gpt-5.6", "api_key": "sk-test"},
+        blocked=False,
+    )
+    typed = SimpleNamespace(
+        model_id="typed-row",
+        model_name="gpt-5.6-typed",
+        model_info={"id": "typed-row", "key": "gpt-5.6", "input_cost_per_token": 4e-06},
+        litellm_params={"model": "openai/gpt-5.6", "api_key": "sk-test", "input_cost_per_token": 3e-06},
+        blocked=False,
+    )
+
+    assert ProxyConfig()._add_deployment(db_models=[pinned, typed]) == 2
+
+    monkeypatch.setitem(litellm.model_cost["gpt-5.6"], "input_cost_per_token", 1e-06)
+    router._replay_model_cost_registrations()
+
+    assert litellm.model_cost.get("pinned-row", {}).get("input_cost_per_token") is None
+    assert router.get_deployment(model_id="pinned-row").model_info.input_cost_per_token is None
+    assert litellm.get_model_info("openai/gpt-5.6")["input_cost_per_token"] == 1e-06
+    assert litellm.model_cost["typed-row"]["input_cost_per_token"] == 3e-06
+
+
+def test_ProxyConfig__add_deployment_ptu_row_with_a_cost_map_copy_still_bills_zero(monkeypatch, local_model_cost_map):
+    """A PTU deployment bills nothing per token: the proxy writes zeros to both blobs. When such
+    a row also carries the echoed cost map, dropping the ``model_info`` copy must not send it
+    back to the per-token price, because the ``litellm_params`` zeros are the operator's."""
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: value,
+    )
+    router = litellm.Router(model_list=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    ptu = SimpleNamespace(
+        model_id="ptu-row",
+        model_name="gpt-5.6-ptu",
+        model_info={**PINNED_MODEL_INFO, "id": "ptu-row", "input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+        litellm_params={
+            "model": "openai/gpt-5.6",
+            "api_key": "sk-test",
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+        },
+        blocked=False,
+    )
+
+    assert ProxyConfig()._add_deployment(db_models=[ptu]) == 1
+    router._replay_model_cost_registrations()
+
+    assert litellm.model_cost["ptu-row"]["input_cost_per_token"] == 0.0
+    assert litellm.model_cost["ptu-row"]["output_cost_per_token"] == 0.0
+    assert router.get_deployment(model_id="ptu-row").model_info.input_cost_per_token == 0.0
+
+
 def test_ProxyConfig_get_model_info_with_id_missing_model_id_raises(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
     pc = ProxyConfig()
@@ -3399,9 +3506,8 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
     fake_prisma.db.litellm_config.find_first = AsyncMock(
         return_value=SimpleNamespace(param_value={"timeout": 30, "retries": 2, "fallbacks": []})
     )
-    config_data = {"router_settings": {"timeout": 10}}
+    pc.router_settings.load_yaml({"timeout": 10})
     await pc._add_router_settings_from_db_config(
-        config_data=config_data,
         llm_router=fake_router,
         prisma_client=fake_prisma,
     )
@@ -3421,7 +3527,7 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
 async def test_ProxyConfig__add_router_settings_from_db_config_none_router_noop():
     pc = ProxyConfig()
     # No router and no prisma — should silently return.
-    await pc._add_router_settings_from_db_config(config_data={}, llm_router=None, prisma_client=None)
+    await pc._add_router_settings_from_db_config(llm_router=None, prisma_client=None)
     # Error-style: bad call signature raises.
     with pytest.raises(TypeError):
         await pc._add_router_settings_from_db_config()  # type: ignore[call-arg]
