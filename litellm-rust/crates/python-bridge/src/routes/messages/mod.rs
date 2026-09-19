@@ -17,6 +17,7 @@ const SURFACE: LegacySurface = LegacySurface {
         url_route: "/v1/messages",
         endpoint_type: "anthropic",
     }),
+    updates_logging_before_preparation: false,
 };
 
 fn run_messages(
