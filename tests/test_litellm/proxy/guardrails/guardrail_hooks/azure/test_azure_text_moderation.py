@@ -4,6 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.proxy.guardrails.guardrail_hooks.azure.text_moderation import (
     AzureContentSafetyTextModerationGuardrail,
 )
@@ -463,3 +464,33 @@ async def test_apply_guardrail_handles_missing_texts_key():
 
     mock_post.assert_not_called()
     assert result == {"images": ["x"]}
+
+
+@pytest.mark.asyncio
+async def test_config_without_api_version_calls_documented_azure_api_version():
+    """A config.yaml entry that omits api_version must reach Azure at the documented
+    default. LitellmParams inherits every provider's config model, so a sibling
+    provider's api_version default used to leak into the Azure URL and 404."""
+    handler = InMemoryGuardrailHandler()
+    registered = handler.initialize_guardrail(
+        guardrail={
+            "guardrail_name": "azure-text-moderation-no-api-version",
+            "litellm_params": {
+                "guardrail": "azure/text_moderations",
+                "mode": "pre_call",
+                "api_key": "azure_text_moderation_api_key",
+                "api_base": "https://example.cognitiveservices.azure.com",
+            },
+        }
+    )
+    assert registered is not None
+    guardrail = handler.guardrail_id_to_custom_guardrail[registered["guardrail_id"]]
+    assert isinstance(guardrail, AzureContentSafetyTextModerationGuardrail)
+
+    with patch.object(guardrail.async_handler, "post", return_value=_moderation_response(0)) as mock_post:
+        result = await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    assert result == {"texts": ["hello"]}
+    assert mock_post.call_args.kwargs["url"] == (
+        "https://example.cognitiveservices.azure.com/contentsafety/text:analyze?api-version=2024-09-01"
+    )

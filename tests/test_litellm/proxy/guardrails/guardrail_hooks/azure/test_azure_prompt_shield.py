@@ -7,6 +7,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.azure.prompt_shield import (
     AzureContentSafetyPromptShieldGuardrail,
 )
+from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.types.guardrails import LitellmParams
 
 
@@ -635,3 +636,57 @@ def test_update_in_memory_litellm_params_dead_env_credential_rejected_untouched(
 
     assert guardrail.api_key == "azure_prompt_shield_api_key"
     assert guardrail.price_per_1000_text_records == 0.38
+
+
+@pytest.mark.asyncio
+async def test_config_without_api_version_calls_documented_azure_api_version():
+    """A config.yaml entry that omits api_version must reach Azure at the documented
+    default. LitellmParams inherits every provider's config model, so a sibling
+    provider's api_version default used to leak into the Azure URL and 404."""
+    handler = InMemoryGuardrailHandler()
+    registered = handler.initialize_guardrail(
+        guardrail={
+            "guardrail_name": "azure-prompt-shield-no-api-version",
+            "litellm_params": {
+                "guardrail": "azure/prompt_shield",
+                "mode": "pre_call",
+                "api_key": "azure_prompt_shield_api_key",
+                "api_base": "https://example.cognitiveservices.azure.com",
+            },
+        }
+    )
+    assert registered is not None
+    guardrail = handler.guardrail_id_to_custom_guardrail[registered["guardrail_id"]]
+    assert isinstance(guardrail, AzureContentSafetyPromptShieldGuardrail)
+
+    with patch.object(guardrail.async_handler, "post", return_value=_shield_response(False)) as mock_post:
+        result = await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    assert result == {"texts": ["hello"]}
+    assert mock_post.call_args.kwargs["url"] == (
+        "https://example.cognitiveservices.azure.com/contentsafety/text:shieldPrompt?api-version=2024-09-01"
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_without_api_version_keeps_documented_azure_api_version():
+    """The DB update path copies every LitellmParams attribute onto the live
+    instance, api_version included, so an update that omits it must still leave
+    the request on the documented default rather than a None or leaked value."""
+    guardrail = _shield_guardrail()
+    guardrail.update_in_memory_litellm_params(
+        LitellmParams(
+            guardrail="azure/prompt_shield",
+            mode="pre_call",
+            api_key="azure_prompt_shield_api_key",
+            api_base="https://example.cognitiveservices.azure.com",
+        )
+    )
+
+    with patch.object(guardrail.async_handler, "post", return_value=_shield_response(False)) as mock_post:
+        result = await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    assert result == {"texts": ["hello"]}
+    assert mock_post.call_args.kwargs["url"] == (
+        "https://example.cognitiveservices.azure.com/contentsafety/text:shieldPrompt?api-version=2024-09-01"
+    )

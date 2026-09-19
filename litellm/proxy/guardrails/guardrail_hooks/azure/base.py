@@ -20,6 +20,8 @@ AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH: Final = 10000
 # chunk of N characters consumes ceil(N / 1000) text records.
 AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH: Final = 1000
 
+AZURE_CONTENT_SAFETY_DEFAULT_API_VERSION: Final = "2024-09-01"
+
 
 class AzureGuardrailBase:
     """
@@ -43,7 +45,7 @@ class AzureGuardrailBase:
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.api_key = api_key
         self.api_base = api_base
-        self.api_version: str = kwargs.get("api_version") or "2024-09-01"
+        self.api_version: str | None = kwargs.get("api_version")
 
     async def _post_to_content_safety(self, endpoint_path: str, request_body: dict[str, object]) -> dict[str, Any]:
         """POST to an Azure Content Safety endpoint with standard auth headers.
@@ -56,7 +58,8 @@ class AzureGuardrailBase:
         Returns:
             Parsed JSON response dict.
         """
-        url: Final = f"{self.api_base}/contentsafety/{endpoint_path}?api-version={self.api_version}"
+        api_version: Final = self.api_version or AZURE_CONTENT_SAFETY_DEFAULT_API_VERSION
+        url: Final = f"{self.api_base}/contentsafety/{endpoint_path}?api-version={api_version}"
         headers: Final = {
             "Ocp-Apim-Subscription-Key": self.api_key,
             "Content-Type": "application/json",
