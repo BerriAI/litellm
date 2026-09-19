@@ -7088,6 +7088,7 @@ class MCPServerManager:
             spec_path=server.spec_path,
             transport=server.transport,
             auth_type=server.auth_type,
+            credentials={"scopes": server.scopes} if server.scopes else None,
             created_at=server.created_at,
             updated_at=server.updated_at,
             teams=[],
