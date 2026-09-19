@@ -17,8 +17,6 @@ mod _native {
     #[pymodule_export]
     use crate::errors::{RustBridgeDeclined, RustUpstreamError};
     #[pymodule_export]
-    use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
-    #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
     use crate::routes::chat_completions::{
@@ -32,6 +30,8 @@ mod _native {
     use crate::routes::responses::ResponsesWebSocketConnection;
     #[pymodule_export]
     use crate::token_counter::TokenCounter;
+    #[pymodule_export]
+    use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
 }
 
 use pyo3::prelude::*;
