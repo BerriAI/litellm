@@ -758,7 +758,9 @@ def get_logging_payload(
             proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
                 metadata=metadata,
                 litellm_params=(
-                    _placeholder_stored_request_body_model(litellm_params) if model_is_placeholdered else litellm_params
+                    _placeholder_stored_request_body(litellm_params, persisted_model_group, raw_model)
+                    if model_is_placeholdered
+                    else litellm_params
                 ),
                 kwargs=kwargs,
             ),
@@ -1066,7 +1068,7 @@ def _sanitize_request_body_for_spend_logs_payload(
     visited.add(obj_id)
 
     def _sanitize_value(value: object) -> object:
-        if isinstance(value, dict):
+        if isinstance(value, Mapping):
             return _sanitize_request_body_for_spend_logs_payload(value, visited, max_string_length_prompt_in_db)
         elif isinstance(value, list):
             return [_sanitize_value(item) for item in value]
@@ -1420,20 +1422,56 @@ def _convert_mapping_to_json_serializable(obj: Mapping[str, object]) -> dict[str
     return dict(obj)
 
 
-def _placeholder_stored_request_body_model(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+def _placeholder_stored_request_body_metadata(
+    request_body: Mapping[str, object], persisted_model_group: str, raw_model: str
+) -> Mapping[str, object]:
+    body_metadata: Final = request_body.get("metadata")
+    if not isinstance(body_metadata, Mapping):
+        return request_body
+    error_information: Final = body_metadata.get("error_information")
+    placeholdered_fields: Final = MappingProxyType(
+        {
+            "model_group": persisted_model_group,
+            "error_information": _scrub_raw_model_from_error_information(
+                cast(StandardLoggingPayloadErrorInformation, error_information), raw_model
+            )
+            if isinstance(error_information, Mapping)
+            else error_information,
+        }
+    )
+    return MappingProxyType(
+        {
+            **request_body,
+            "metadata": MappingProxyType(
+                {key: placeholdered_fields.get(key, value) for key, value in body_metadata.items()}
+            ),
+        }
+    )
+
+
+def _placeholder_stored_request_body(
+    litellm_params: Mapping[str, object], persisted_model_group: str, raw_model: str
+) -> Mapping[str, object]:
     proxy_server_request: Final = litellm_params.get("proxy_server_request")
     if not isinstance(proxy_server_request, Mapping):
         return litellm_params
     request_body: Final = proxy_server_request.get("body")
-    if not isinstance(request_body, Mapping) or "model" not in request_body:
+    if not isinstance(request_body, Mapping):
         return litellm_params
+    model_placeholdered: Final = (
+        MappingProxyType({**request_body, "model": UNKNOWN_MODEL_SPEND_LOG_MODEL})
+        if "model" in request_body
+        else request_body
+    )
     return MappingProxyType(
         {
             **litellm_params,
             "proxy_server_request": MappingProxyType(
                 {
                     **proxy_server_request,
-                    "body": MappingProxyType({**request_body, "model": UNKNOWN_MODEL_SPEND_LOG_MODEL}),
+                    "body": _placeholder_stored_request_body_metadata(
+                        model_placeholdered, persisted_model_group, raw_model
+                    ),
                 }
             ),
         }
