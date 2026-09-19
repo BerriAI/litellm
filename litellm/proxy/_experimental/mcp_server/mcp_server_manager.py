@@ -29,7 +29,7 @@ from dataclasses import dataclass, replace
 from functools import lru_cache
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, TypeAlias, TypedDict, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, TypeAlias, TypedDict, TypeVar, cast
 from urllib.parse import ParseResult, urlparse
 
 import anyio
@@ -1413,6 +1413,44 @@ def _extract_upstream_auth_failure(
 def _upstream_failure_suffix(exc: BaseException) -> str:
     detail: Final = describe_upstream_http_failure(exc)
     return f"\n  upstream exchange: {detail}" if detail else ""
+
+
+def _raise_single_server_list_failure(error: Exception, server: MCPServer, catalog: str) -> NoReturn:
+    """Relay a failed single-server catalog fetch: auth challenges (upstream, or a v2 resolver's
+    HTTPException 401/403 raised at client-build time) become ``MCPUpstreamAuthError`` with the
+    ``WWW-Authenticate`` kept (dropped for dcr_bridge servers, whose upstream challenge points at the
+    wrong metadata); anything else becomes a classified ``MCPServerListError``."""
+    match error:
+        case MCPUpstreamAuthError() if server.is_dcr_bridge and error.www_authenticate is not None:
+            raise MCPUpstreamAuthError(
+                status_code=error.status_code,
+                www_authenticate=None,
+                server_name=error.server_name,
+            ) from error
+        case MCPUpstreamAuthError() | MCPServerListError():
+            raise error
+        case HTTPException() if error.status_code in (401, 403):
+            headers: Final = error.headers or {}
+            challenge_header: Final = headers.get("WWW-Authenticate") or headers.get("www-authenticate")
+            raise MCPUpstreamAuthError(
+                status_code=error.status_code,
+                www_authenticate=None if server.is_dcr_bridge else challenge_header,
+                server_name=server.name,
+            ) from error
+        case HTTPException():
+            verbose_logger.warning("Failed to get %s from server %s: %s", catalog, server.name, error)
+            raise MCPServerListError(
+                ServerListFault(tag="internal", status_code=error.status_code), server.name
+            ) from error
+        case _:
+            verbose_logger.warning(
+                "Failed to get %s from server %s: %s%s",
+                catalog,
+                server.name,
+                type(error).__name__,
+                _upstream_failure_suffix(error),
+            )
+            raise_classified_list_failure(error, server.name, suppress_challenge=server.is_dcr_bridge)
 
 
 def _obo_retry_applies(server: MCPServer, subject_token: str | None) -> bool:
@@ -4451,40 +4489,8 @@ class MCPServerManager:
 
             return prefixed_or_original_tools
 
-        except MCPUpstreamAuthError as upstream_auth_error:
-            # Pass-through 401 must surface to single-server routes so the
-            # client triggers the upstream OAuth flow. The multi-server
-            # aggregator catches this explicitly to keep absorbing.
-            if server.is_dcr_bridge and upstream_auth_error.www_authenticate is not None:
-                raise MCPUpstreamAuthError(
-                    status_code=upstream_auth_error.status_code,
-                    www_authenticate=None,
-                    server_name=upstream_auth_error.server_name,
-                ) from upstream_auth_error
-            raise
-        except HTTPException as e:
-            # A v2 resolver auth challenge (token_exchange's RFC 9728 401, authorization_code's
-            # browser-OAuth 401, or a 403) is raised at client-build time, inside this try. Route it
-            # through the same MCPUpstreamAuthError channel as pass-through so single-server routes
-            # surface the challenge (the client re-authenticates) while the aggregator keeps absorbing.
-            # Non-auth HTTP errors stay absorbed so one misconfigured server can't blank the listing.
-            if e.status_code in (401, 403):
-                headers: Final = e.headers or {}
-                challenge_header: Final = headers.get("WWW-Authenticate") or headers.get("www-authenticate")
-                raise MCPUpstreamAuthError(
-                    status_code=e.status_code,
-                    www_authenticate=None if server.is_dcr_bridge else challenge_header,
-                    server_name=server.name,
-                ) from e
-            verbose_logger.warning("Failed to get tools from server %s: %s", server.name, e)
-            raise MCPServerListError(ServerListFault(tag="internal", status_code=e.status_code), server.name) from e
-        except MCPServerListError:
-            raise
         except Exception as e:
-            verbose_logger.warning(
-                "Failed to get tools from server %s: %s%s", server.name, type(e).__name__, _upstream_failure_suffix(e)
-            )
-            raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
+            _raise_single_server_list_failure(e, server, "tools")
 
     def _invalidate_discovery_lists(self, server_id: str) -> None:
         self._prompt_discovery_cache.invalidate(server_id)
@@ -4563,7 +4569,7 @@ class MCPServerManager:
             return self._create_prefixed_prompts(items, server, add_prefix=add_prefix)
         except Exception as error:
             if raise_on_error:
-                raise_classified_list_failure(error, server.name, suppress_challenge=server.is_dcr_bridge)
+                _raise_single_server_list_failure(error, server, "prompts")
             verbose_logger.warning("Failed to get prompts from server %s: %s", server.name, error)
             return []
 
@@ -4609,7 +4615,7 @@ class MCPServerManager:
             return self._create_prefixed_resources(items, server, add_prefix=add_prefix)
         except Exception as error:
             if raise_on_error:
-                raise_classified_list_failure(error, server.name, suppress_challenge=server.is_dcr_bridge)
+                _raise_single_server_list_failure(error, server, "resources")
             verbose_logger.warning("Failed to get resources from server %s: %s", server.name, error)
             return []
 
@@ -4655,7 +4661,7 @@ class MCPServerManager:
             return self._create_prefixed_resource_templates(items, server, add_prefix=add_prefix)
         except Exception as error:
             if raise_on_error:
-                raise_classified_list_failure(error, server.name, suppress_challenge=server.is_dcr_bridge)
+                _raise_single_server_list_failure(error, server, "resource templates")
             verbose_logger.warning("Failed to get resource_templates from server %s: %s", server.name, error)
             return []
 

@@ -29692,7 +29692,7 @@ export interface components {
         /** ListMCPPromptsRestAPIResponse */
         ListMCPPromptsRestAPIResponse: {
             /** Prompts */
-            prompts: components["schemas"]["Prompt"][];
+            prompts: components["schemas"]["MCPCatalogPrompt"][];
         };
         /** ListMCPResourcesRestAPIResponse */
         ListMCPResourcesRestAPIResponse: {
@@ -32639,6 +32639,29 @@ export interface components {
              * @enum {string}
              */
             status?: "healthy" | "unhealthy";
+        };
+        /**
+         * MCPCatalogPrompt
+         * @description An MCP server's prompt as the upstream reports it. Subclassed only so the OpenAPI
+         *     component gets a name distinct from the prompt-management ``Prompt`` request model.
+         */
+        MCPCatalogPrompt: {
+            /** Meta */
+            _meta?: {
+                [key: string]: unknown;
+            } | null;
+            /** Arguments */
+            arguments?: components["schemas"]["PromptArgument"][] | null;
+            /** Description */
+            description?: string | null;
+            /** Icons */
+            icons?: components["schemas"]["Icon"][] | null;
+            /** Name */
+            name: string;
+            /** Title */
+            title?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         /** MCPConnectorEntry */
         MCPConnectorEntry: {
@@ -35683,27 +35706,12 @@ export interface components {
              */
             version_status: string;
         };
-        /**
-         * Prompt
-         * @description A prompt or prompt template that the server offers.
-         */
+        /** Prompt */
         Prompt: {
-            /** Meta */
-            _meta?: {
-                [key: string]: unknown;
-            } | null;
-            /** Arguments */
-            arguments?: components["schemas"]["PromptArgument"][] | null;
-            /** Description */
-            description?: string | null;
-            /** Icons */
-            icons?: components["schemas"]["Icon"][] | null;
-            /** Name */
-            name: string;
-            /** Title */
-            title?: string | null;
-        } & {
-            [key: string]: unknown;
+            litellm_params: components["schemas"]["PromptLiteLLMParams"];
+            /** Prompt Id */
+            prompt_id: string;
+            prompt_info?: components["schemas"]["PromptInfo"] | null;
         };
         /**
          * PromptArgument

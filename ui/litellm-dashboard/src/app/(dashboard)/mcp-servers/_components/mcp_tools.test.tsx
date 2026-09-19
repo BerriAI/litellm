@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import MCPToolsViewer from "./mcp_tools";
@@ -24,8 +24,13 @@ vi.mock("@/utils/mcpTokenStore", () => ({
   removeToken: vi.fn(),
 }));
 
-const { toolsOAuthFlowSpy } = vi.hoisted(() => ({
+const { toolsOAuthFlowSpy, userMcpOAuthFlowSpy } = vi.hoisted(() => ({
   toolsOAuthFlowSpy: vi.fn(() => ({ startOAuthFlow: vi.fn(), status: "idle", error: null })),
+  userMcpOAuthFlowSpy: vi.fn((_options: { onSuccess: () => void }) => ({
+    startOAuthFlow: vi.fn(),
+    status: "idle",
+    error: null,
+  })),
 }));
 
 vi.mock("@/hooks/useToolsOAuthFlow", () => ({
@@ -33,7 +38,7 @@ vi.mock("@/hooks/useToolsOAuthFlow", () => ({
 }));
 
 vi.mock("@/hooks/useUserMcpOAuthFlow", () => ({
-  useUserMcpOAuthFlow: () => ({ startOAuthFlow: vi.fn(), status: "idle", error: null }),
+  useUserMcpOAuthFlow: userMcpOAuthFlowSpy,
 }));
 
 const GATE_TEXT = "Authentication required";
@@ -314,5 +319,29 @@ describe("MCPToolsViewer prompts and resources catalog", () => {
     const resources = await screen.findByRole("region", { name: "Resources" });
     expect(await within(resources).findByText("Error: upstream unreachable")).toBeInTheDocument();
     expect(await screen.findByText("summarize")).toBeInTheDocument();
+  });
+
+  it("reloads prompts and resources together with tools after the user re-authorizes", async () => {
+    const expiredPrompts = {
+      prompts: [],
+      error: "auth_required",
+      message: "upstream credential expired",
+      status: 401,
+    };
+    vi.mocked(listMCPPrompts).mockResolvedValue(expiredPrompts);
+    userMcpOAuthFlowSpy.mockClear();
+
+    renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: false });
+
+    const prompts = await screen.findByRole("region", { name: "Prompts" });
+    expect(await within(prompts).findByText("Error: upstream credential expired")).toBeInTheDocument();
+    expect(vi.mocked(listMCPPrompts)).toHaveBeenCalledTimes(1);
+
+    vi.mocked(listMCPPrompts).mockResolvedValue({ prompts: [{ name: "summarize" }] });
+    act(() => userMcpOAuthFlowSpy.mock.calls.at(-1)?.[0].onSuccess());
+
+    expect(await within(prompts).findByText("summarize")).toBeInTheDocument();
+    expect(vi.mocked(listMCPTools)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(listMCPResources)).toHaveBeenCalledTimes(2);
   });
 });

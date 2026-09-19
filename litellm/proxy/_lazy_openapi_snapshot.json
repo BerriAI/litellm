@@ -21899,7 +21899,7 @@
           "properties": {
             "prompts": {
               "items": {
-                "$ref": "#/components/schemas/Prompt"
+                "$ref": "#/components/schemas/MCPCatalogPrompt"
               },
               "title": "Prompts",
               "type": "array"
@@ -21933,6 +21933,83 @@
             "resource_templates"
           ],
           "title": "ListMCPResourcesRestAPIResponse",
+          "type": "object"
+        },
+        "MCPCatalogPrompt": {
+          "additionalProperties": true,
+          "description": "An MCP server's prompt as the upstream reports it. Subclassed only so the OpenAPI\ncomponent gets a name distinct from the prompt-management ``Prompt`` request model.",
+          "properties": {
+            "_meta": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Meta"
+            },
+            "arguments": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/PromptArgument"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Arguments"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "icons": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/Icon"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Icons"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Title"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "MCPCatalogPrompt",
           "type": "object"
         },
         "MCPCredentials": {
@@ -22744,83 +22821,6 @@
             }
           },
           "title": "NewMCPServerRequest",
-          "type": "object"
-        },
-        "Prompt": {
-          "additionalProperties": true,
-          "description": "A prompt or prompt template that the server offers.",
-          "properties": {
-            "_meta": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Meta"
-            },
-            "arguments": {
-              "anyOf": [
-                {
-                  "items": {
-                    "$ref": "#/components/schemas/PromptArgument"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Arguments"
-            },
-            "description": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Description"
-            },
-            "icons": {
-              "anyOf": [
-                {
-                  "items": {
-                    "$ref": "#/components/schemas/Icon"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Icons"
-            },
-            "name": {
-              "title": "Name",
-              "type": "string"
-            },
-            "title": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Title"
-            }
-          },
-          "required": [
-            "name"
-          ],
-          "title": "Prompt",
           "type": "object"
         },
         "PromptArgument": {
@@ -32168,7 +32168,7 @@
           "properties": {
             "prompts": {
               "items": {
-                "$ref": "#/components/schemas/Prompt"
+                "$ref": "#/components/schemas/MCPCatalogPrompt"
               },
               "title": "Prompts",
               "type": "array"
@@ -32202,6 +32202,83 @@
             "resource_templates"
           ],
           "title": "ListMCPResourcesRestAPIResponse",
+          "type": "object"
+        },
+        "MCPCatalogPrompt": {
+          "additionalProperties": true,
+          "description": "An MCP server's prompt as the upstream reports it. Subclassed only so the OpenAPI\ncomponent gets a name distinct from the prompt-management ``Prompt`` request model.",
+          "properties": {
+            "_meta": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Meta"
+            },
+            "arguments": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/PromptArgument"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Arguments"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "icons": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/Icon"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Icons"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Title"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "MCPCatalogPrompt",
           "type": "object"
         },
         "MCPCredentials": {
@@ -33013,83 +33090,6 @@
             }
           },
           "title": "NewMCPServerRequest",
-          "type": "object"
-        },
-        "Prompt": {
-          "additionalProperties": true,
-          "description": "A prompt or prompt template that the server offers.",
-          "properties": {
-            "_meta": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Meta"
-            },
-            "arguments": {
-              "anyOf": [
-                {
-                  "items": {
-                    "$ref": "#/components/schemas/PromptArgument"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Arguments"
-            },
-            "description": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Description"
-            },
-            "icons": {
-              "anyOf": [
-                {
-                  "items": {
-                    "$ref": "#/components/schemas/Icon"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Icons"
-            },
-            "name": {
-              "title": "Name",
-              "type": "string"
-            },
-            "title": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Title"
-            }
-          },
-          "required": [
-            "name"
-          ],
-          "title": "Prompt",
           "type": "object"
         },
         "PromptArgument": {

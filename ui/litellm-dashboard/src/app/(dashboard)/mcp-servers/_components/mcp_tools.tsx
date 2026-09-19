@@ -201,26 +201,40 @@ const MCPToolsViewer = ({
     },
   });
 
-  const { data: mcpPromptsResponse, isLoading: isLoadingPrompts } = useQuery({
+  const {
+    data: mcpPromptsResponse,
+    isLoading: isLoadingPrompts,
+    refetch: refetchPrompts,
+  } = useQuery({
     queryKey: ["mcpPrompts", serverId, passthroughHeaders, oauthToken],
     queryFn: () => listMCPPrompts(accessToken ?? "", serverId, buildCustomHeaders()),
     enabled: catalogQueriesEnabled,
     staleTime: 30000,
   });
 
-  const { data: mcpResourcesResponse, isLoading: isLoadingResources } = useQuery({
+  const {
+    data: mcpResourcesResponse,
+    isLoading: isLoadingResources,
+    refetch: refetchResources,
+  } = useQuery({
     queryKey: ["mcpResources", serverId, passthroughHeaders, oauthToken],
     queryFn: () => listMCPResources(accessToken ?? "", serverId, buildCustomHeaders()),
     enabled: catalogQueriesEnabled,
     staleTime: 30000,
   });
 
+  const refetchCatalog = useCallback(() => {
+    refetchTools();
+    refetchPrompts();
+    refetchResources();
+  }, [refetchTools, refetchPrompts, refetchResources]);
+
   // authorization_code authorize: same redirect+exchange flow as the admin "Authorize & Fetch"
   // and the chat "Connect" button, but persists the token to the per-user DB.
   const onAuthorizationCodeAuthSuccess = useCallback(() => {
     refetchAuthorizationCodeCred();
-    refetchTools();
-  }, [refetchAuthorizationCodeCred, refetchTools]);
+    refetchCatalog();
+  }, [refetchAuthorizationCodeCred, refetchCatalog]);
 
   const {
     startOAuthFlow: startDbOAuthFlow,
@@ -370,7 +384,7 @@ const MCPToolsViewer = ({
                       <Button
                         size="sm"
                         onClick={() => {
-                          refetchTools();
+                          refetchCatalog();
                           setShowHeaderInput(false);
                         }}
                         disabled={Object.values(passthroughHeaders).every((v) => !v || !v.trim())}

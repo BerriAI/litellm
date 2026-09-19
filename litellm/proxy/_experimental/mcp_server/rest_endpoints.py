@@ -199,8 +199,21 @@ if MCP_AVAILABLE:
         fire_mcp_tool_call_failure_logging,
     )
 
+    class MCPCatalogPrompt(Prompt):
+        """An MCP server's prompt as the upstream reports it. Subclassed only so the OpenAPI
+        component gets a name distinct from the prompt-management ``Prompt`` request model."""
+
     class ListMCPPromptsRestAPIResponse(BaseModel):
-        prompts: list[Prompt]
+        prompts: list[MCPCatalogPrompt]
+
+        @classmethod
+        def from_prompts(cls, prompts: Sequence[Prompt]) -> "ListMCPPromptsRestAPIResponse":
+            return cls(
+                prompts=[
+                    MCPCatalogPrompt.model_validate(prompt.model_dump(by_alias=True, exclude_unset=True))
+                    for prompt in prompts
+                ]
+            )
 
     class ListMCPResourcesRestAPIResponse(BaseModel):
         resources: list[Resource]
@@ -1138,7 +1151,7 @@ if MCP_AVAILABLE:
             raise _relay_upstream_auth_http_exception(e, request) from e
         except MCPServerListError as e:
             raise _catalog_list_http_exception(e, context.server, "prompts") from e
-        return ListMCPPromptsRestAPIResponse(prompts=prompts)
+        return ListMCPPromptsRestAPIResponse.from_prompts(prompts)
 
     @router.get("/resources/list", dependencies=[Depends(user_api_key_auth)])
     async def list_resources_rest_api(

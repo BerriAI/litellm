@@ -3965,6 +3965,39 @@ class TestMCPServerManager:
         assert exc_info.value.server_name == server.name
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "manager_method",
+        ["get_prompts_from_server", "get_resources_from_server", "get_resource_templates_from_server"],
+    )
+    @pytest.mark.parametrize("challenge_carrier", ["resolver_http_exception", "upstream_auth_error"])
+    async def test_catalog_fetch_relays_auth_challenge_like_tools(self, manager_method, challenge_carrier):
+        """An auth challenge raised while building the client (a v2 resolver HTTPException 401) or by
+        the upstream itself must reach a single-server caller as MCPUpstreamAuthError with the
+        WWW-Authenticate intact, exactly as the tools listing relays it, not as a bare fault."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-1",
+            name="alias-server",
+            alias="alias-server",
+            server_name="alias-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+        )
+        challenge = 'Bearer resource_metadata="https://example.com/.well-known/oauth-protected-resource"'
+        raised = (
+            HTTPException(status_code=401, detail="Unauthorized", headers={"WWW-Authenticate": challenge})
+            if challenge_carrier == "resolver_http_exception"
+            else MCPUpstreamAuthError(status_code=401, www_authenticate=challenge, server_name=server.name)
+        )
+
+        with patch.object(manager, "_create_mcp_client", new_callable=AsyncMock, side_effect=raised):
+            with pytest.raises(MCPUpstreamAuthError) as exc_info:
+                await getattr(manager, manager_method)(server, user_api_key_auth=None, raise_on_error=True)
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.www_authenticate == challenge
+
+    @pytest.mark.asyncio
     async def test_read_resource_from_server_success(self):
         manager = MCPServerManager()
 

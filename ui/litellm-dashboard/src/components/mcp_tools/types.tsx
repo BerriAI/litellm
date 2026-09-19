@@ -342,7 +342,7 @@ export interface MCPTool {
 // Define the response structure for the listMCPTools endpoint - now a flat array
 export type ListMCPToolsResponse = MCPTool[];
 
-export type MCPPrompt = components["schemas"]["Prompt"];
+export type MCPPrompt = components["schemas"]["MCPCatalogPrompt"];
 export type MCPResource = components["schemas"]["Resource"];
 export type MCPResourceTemplate = components["schemas"]["ResourceTemplate"];
 
