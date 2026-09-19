@@ -6,6 +6,7 @@ Covers:
 """
 
 import io
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -237,6 +238,448 @@ class TestRagIngestSSRFBlocked:
         assert response.status_code != 400, (
             f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
         )
+
+
+S3_REGISTRY_STORE = {
+    "vector_store_id": "s3-store",
+    "custom_llm_provider": "s3_vectors",
+    "litellm_params": {"aws_region_name": "eu-west-1", "vector_bucket_name": "bkt", "index_name": "docs"},
+}
+DB_MANAGED_STORE = {
+    "vector_store_id": "db-store",
+    "custom_llm_provider": "openai",
+    "litellm_credential_name": None,
+    "litellm_params": {"ttl_days": 7},
+}
+AZURE_REGISTRY_STORE = {
+    "vector_store_id": "my-azure-index",
+    "custom_llm_provider": "azure_ai",
+    "litellm_params": {
+        "api_key": "azure-search-key",
+        "api_base": "https://search.example.net",
+        "api_version": "2024-07-01",
+    },
+}
+BEDROCK_REGISTRY_STORE = {
+    "vector_store_id": "kb-store",
+    "custom_llm_provider": "bedrock",
+    "litellm_params": {
+        "aws_region_name": "eu-west-1",
+        "aws_access_key_id": "AKIA-registry",
+        "aws_secret_access_key": "registry-secret",
+    },
+}
+CREDENTIALED_REGISTRY_STORE = {
+    "vector_store_id": "cred-store",
+    "custom_llm_provider": "openai",
+    "litellm_credential_name": "registry-openai",
+    "litellm_params": {},
+}
+VERTEX_REGISTRY_STORE = {
+    "vector_store_id": "projects/registry-project/locations/us-central1/ragCorpora/42",
+    "custom_llm_provider": "vertex_ai",
+    "litellm_params": {"vertex_project": "registry-project", "vertex_location": "us-central1"},
+}
+UNSUPPORTED_INGEST_PROVIDER_ERROR = (
+    "Provider '{provider}' is not supported for RAG ingestion. "
+    "Supported providers: openai, bedrock, gemini, s3_vectors, vertex_ai"
+)
+
+
+def _registry_with(store):
+    registry = MagicMock()
+    registry.get_litellm_managed_vector_store_from_registry.return_value = store
+    return registry
+
+
+def _ingest_form(vector_store):
+    return {
+        "files": {"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
+        "data": {"request": json.dumps({"ingest_options": {"vector_store": vector_store}})},
+    }
+
+
+def _patched_ingest_boundary(registry_store, aingest_response):
+    return (
+        patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; tests assert the forwarded options
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+            new=AsyncMock(return_value=aingest_response),
+        ),
+        patch.object(  # test-quality-ok: seeds the managed-store registry the merge under test reads
+            litellm,
+            "vector_store_registry",
+            _registry_with(registry_store),
+        ),
+    )
+
+
+def _patched_prisma_client(prisma_client):
+    return patch(  # test-quality-ok: proxy module global, no injection seam
+        "litellm.proxy.proxy_server.prisma_client",
+        prisma_client,
+    )
+
+
+def test_rag_ingest_resolves_registry_store_provider_and_params(client_internal_user):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        S3_REGISTRY_STORE, {"vector_store_id": "s3-store", "file_id": "file_123"}
+    )
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        _patched_prisma_client(None),
+    ):
+        response = client_internal_user.post("/v1/rag/ingest", **_ingest_form({"vector_store_id": "s3-store"}))
+
+    assert response.status_code == 200, response.json()
+    mock_aingest.assert_awaited_once()
+    forwarded = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["vector_store_id"] == "s3-store"
+    assert forwarded["custom_llm_provider"] == "s3_vectors"
+    assert forwarded["aws_region_name"] == "eu-west-1"
+    assert forwarded["vector_bucket_name"] == "bkt"
+    assert forwarded["index_name"] == "docs"
+
+
+def test_rag_ingest_registry_store_wins_over_request_provider_and_params(client_internal_user):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        S3_REGISTRY_STORE, {"vector_store_id": "s3-store", "file_id": "file_123"}
+    )
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        _patched_prisma_client(None),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            **_ingest_form(
+                {"vector_store_id": "s3-store", "custom_llm_provider": "openai", "aws_region_name": "us-east-1"}
+            ),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["custom_llm_provider"] == "s3_vectors"
+    assert forwarded["aws_region_name"] == "eu-west-1"
+
+
+def test_rag_ingest_registry_store_drops_caller_destinations_and_keeps_upload_options(client_internal_user):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        BEDROCK_REGISTRY_STORE, {"vector_store_id": "kb-store", "file_id": "file_123"}
+    )
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        _patched_prisma_client(None),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            **_ingest_form(
+                {
+                    "vector_store_id": "kb-store",
+                    "s3_bucket": "someone-elses-bucket",
+                    "s3_prefix": "other-kb/",
+                    "vector_bucket_name": "someone-elses-vectors",
+                    "index_name": "other-index",
+                    "vertex_project": "other-project",
+                    "data_source_id": "DS2",
+                    "wait_for_ingestion": True,
+                    "ingestion_timeout": 60,
+                }
+            ),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded == {
+        "vector_store_id": "kb-store",
+        "custom_llm_provider": "bedrock",
+        "aws_region_name": "eu-west-1",
+        "aws_access_key_id": "AKIA-registry",
+        "aws_secret_access_key": "registry-secret",
+        "data_source_id": "DS2",
+        "wait_for_ingestion": True,
+        "ingestion_timeout": 60,
+    }
+
+
+def test_rag_ingest_unmanaged_store_keeps_the_callers_full_config(client_internal_user):
+    caller_config = {
+        "vector_store_id": "KB-unmanaged",
+        "custom_llm_provider": "bedrock",
+        "s3_bucket": "callers-bucket",
+        "s3_prefix": "docs/",
+    }
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None, {"vector_store_id": "KB-unmanaged", "file_id": "file_123"}
+    )
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        _patched_prisma_client(None),
+    ):
+        response = client_internal_user.post("/v1/rag/ingest", **_ingest_form(caller_config))
+
+    assert response.status_code == 200, response.json()
+    assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"] == caller_config
+
+
+def test_rag_ingest_db_managed_store_drops_the_callers_credential_name(client_internal_user):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        DB_MANAGED_STORE, {"vector_store_id": "db-store", "file_id": "file_123"}
+    )
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        _patched_prisma_client(None),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            **_ingest_form({"vector_store_id": "db-store", "litellm_credential_name": "team-openai"}),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert "litellm_credential_name" not in forwarded
+    assert forwarded["custom_llm_provider"] == "openai"
+    assert forwarded["ttl_days"] == 7
+
+
+def test_rag_ingest_registry_store_credential_name_beats_the_callers(client_internal_user):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        CREDENTIALED_REGISTRY_STORE, {"vector_store_id": "cred-store", "file_id": "file_123"}
+    )
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        _patched_prisma_client(None),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            **_ingest_form({"vector_store_id": "cred-store", "litellm_credential_name": "team-openai"}),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["litellm_credential_name"] == "registry-openai"
+
+
+def test_rag_ingest_registry_store_keeps_the_callers_vertex_embedding_throttle(client_internal_user):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        VERTEX_REGISTRY_STORE, {"vector_store_id": VERTEX_REGISTRY_STORE["vector_store_id"], "file_id": "file_123"}
+    )
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        _patched_prisma_client(None),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            **_ingest_form(
+                {
+                    "vector_store_id": VERTEX_REGISTRY_STORE["vector_store_id"],
+                    "max_embedding_requests_per_min": 500,
+                    "vector_db_config": {"pinecone": {"index_name": "attacker-index"}},
+                }
+            ),
+        )
+
+    assert response.status_code == 200, response.json()
+    assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"] == {
+        "vector_store_id": VERTEX_REGISTRY_STORE["vector_store_id"],
+        "custom_llm_provider": "vertex_ai",
+        "vertex_project": "registry-project",
+        "vertex_location": "us-central1",
+        "max_embedding_requests_per_min": 500,
+    }
+
+
+def test_rag_ingest_rejects_registry_store_provider_without_ingestion_support(client_internal_user):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        AZURE_REGISTRY_STORE, {"vector_store_id": "my-azure-index", "file_id": "file_123"}
+    )
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        _patched_prisma_client(None),
+    ):
+        response = client_internal_user.post("/v1/rag/ingest", **_ingest_form({"vector_store_id": "my-azure-index"}))
+
+    assert response.status_code == 400, response.json()
+    assert response.json()["detail"]["error"] == UNSUPPORTED_INGEST_PROVIDER_ERROR.format(provider="azure_ai")
+    mock_aingest.assert_not_awaited()
+
+
+def test_rag_ingest_rejects_request_provider_without_ingestion_support(client_internal_user):
+    with (
+        patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; the test asserts it is never reached
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+            new=AsyncMock(return_value={"vector_store_id": "vs_new", "file_id": "file-test"}),
+        ) as mock_aingest,
+        patch("litellm.vector_store_registry", None),  # test-quality-ok: proxy module global, no injection seam
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            json={"file_id": "file-test", "ingest_options": {"vector_store": {"custom_llm_provider": "milvus"}}},
+        )
+
+    assert response.status_code == 400, response.json()
+    assert response.json() == {"detail": {"error": UNSUPPORTED_INGEST_PROVIDER_ERROR.format(provider="milvus")}}
+    mock_aingest.assert_not_awaited()
+
+
+def test_rag_ingest_rejects_non_string_provider(client_internal_user):
+    with (
+        patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; the test asserts it is never reached
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+            new=AsyncMock(return_value={"vector_store_id": "vs_new", "file_id": "file-test"}),
+        ) as mock_aingest,
+        patch("litellm.vector_store_registry", None),  # test-quality-ok: proxy module global, no injection seam
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            json={
+                "file_id": "file-test",
+                "ingest_options": {"vector_store": {"custom_llm_provider": {"provider": "milvus"}}},
+            },
+        )
+
+    assert response.status_code == 400, response.json()
+    assert response.json() == {"detail": {"error": "custom_llm_provider must be a string"}}
+    mock_aingest.assert_not_awaited()
+
+
+def test_rag_ingest_never_creates_db_row_for_registry_store(client_internal_user):
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+    create_in_db = AsyncMock()
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        S3_REGISTRY_STORE, {"vector_store_id": "s3-store", "file_id": "file_123"}
+    )
+    with (
+        aingest_patch,
+        registry_patch,
+        _patched_prisma_client(prisma_client),
+        patch(  # test-quality-ok: the DB write boundary the guard under test must never reach
+            "litellm.proxy.vector_store_endpoints.management_endpoints.create_vector_store_in_db",
+            new=create_in_db,
+        ),
+    ):
+        response = client_internal_user.post("/v1/rag/ingest", **_ingest_form({"vector_store_id": "s3-store"}))
+
+    assert response.status_code == 200, response.json()
+    prisma_client.db.litellm_managedvectorstorestable.find_unique.assert_awaited_once()
+    create_in_db.assert_not_awaited()
+    prisma_client.db.litellm_managedvectorstorestable.update.assert_not_called()
+
+
+def test_rag_ingest_fresh_store_creates_db_row_with_the_requesters_params(client_internal_user):
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+    create_in_db = AsyncMock()
+    with (
+        patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; persistence is what the test asserts
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+            new=AsyncMock(return_value={"vector_store_id": "vs_new", "file_id": "file_123"}),
+        ),
+        patch("litellm.vector_store_registry", None),  # test-quality-ok: proxy module global, no injection seam
+        _patched_prisma_client(prisma_client),
+        patch(  # test-quality-ok: the DB write boundary whose inputs the test asserts
+            "litellm.proxy.vector_store_endpoints.management_endpoints.create_vector_store_in_db",
+            new=create_in_db,
+        ),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            **_ingest_form({"custom_llm_provider": "bedrock", "aws_region_name": "us-east-1"}),
+        )
+
+    assert response.status_code == 200, response.json()
+    create_in_db.assert_awaited_once()
+    created = create_in_db.await_args.kwargs
+    assert created["vector_store_id"] == "vs_new"
+    assert created["custom_llm_provider"] == "bedrock"
+    assert created["litellm_params"] == {"aws_region_name": "us-east-1"}
+
+
+def test_rag_ingest_hands_persistence_the_requesters_options_not_registry_credentials(client_internal_user):
+    save_helper = AsyncMock()
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        BEDROCK_REGISTRY_STORE, {"vector_store_id": "kb-store", "file_id": "file_123"}
+    )
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        _patched_prisma_client(MagicMock()),
+        patch(  # test-quality-ok: the persistence seam whose inputs the test asserts
+            "litellm.proxy.rag_endpoints.endpoints._save_vector_store_to_db_from_rag_ingest",
+            new=save_helper,
+        ),
+    ):
+        response = client_internal_user.post("/v1/rag/ingest", **_ingest_form({"vector_store_id": "kb-store"}))
+
+    assert response.status_code == 200, response.json()
+    forwarded = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["aws_secret_access_key"] == "registry-secret"
+    save_helper.assert_awaited_once()
+    assert save_helper.await_args.kwargs["ingest_options"]["vector_store"] == {"vector_store_id": "kb-store"}
+    assert save_helper.await_args.kwargs["store_is_managed"] is True
+
+
+async def test_save_vector_store_from_rag_ingest_appends_file_to_db_managed_store():
+    from litellm.proxy.rag_endpoints.endpoints import _save_vector_store_to_db_from_rag_ingest
+
+    existing_row = MagicMock()
+    existing_row.vector_store_metadata = {"ingested_files": [{"file_id": "file_old"}]}
+    prisma_client = MagicMock()
+    table = prisma_client.db.litellm_managedvectorstorestable
+    table.find_unique = AsyncMock(return_value=existing_row)
+    table.update = AsyncMock()
+    create_in_db = AsyncMock()
+
+    with patch(  # test-quality-ok: the DB write boundary the append branch must not reach
+        "litellm.proxy.vector_store_endpoints.management_endpoints.create_vector_store_in_db",
+        new=create_in_db,
+    ):
+        await _save_vector_store_to_db_from_rag_ingest(
+            response={"vector_store_id": "vs_db_managed", "file_id": "file_new"},
+            ingest_options={"vector_store": {"vector_store_id": "vs_db_managed"}},
+            prisma_client=prisma_client,
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-1", team_id="team-1"),
+            store_is_managed=True,
+        )
+
+    create_in_db.assert_not_awaited()
+    table.update.assert_awaited_once()
+    stored_metadata = json.loads(table.update.await_args.kwargs["data"]["vector_store_metadata"])
+    assert [entry["file_id"] for entry in stored_metadata["ingested_files"]] == ["file_old", "file_new"]
+
+
+async def test_save_vector_store_from_rag_ingest_still_creates_row_for_fresh_store():
+    from litellm.proxy.rag_endpoints.endpoints import _save_vector_store_to_db_from_rag_ingest
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+    create_in_db = AsyncMock()
+
+    with patch(  # test-quality-ok: the DB write boundary whose inputs the test asserts
+        "litellm.proxy.vector_store_endpoints.management_endpoints.create_vector_store_in_db",
+        new=create_in_db,
+    ):
+        await _save_vector_store_to_db_from_rag_ingest(
+            response={"vector_store_id": "vs_new", "file_id": "file_new"},
+            ingest_options={"vector_store": {"custom_llm_provider": "bedrock", "aws_region_name": "us-east-1"}},
+            prisma_client=prisma_client,
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-1", team_id="team-1"),
+            store_is_managed=False,
+        )
+
+    create_in_db.assert_awaited_once()
+    created = create_in_db.await_args.kwargs
+    assert created["vector_store_id"] == "vs_new"
+    assert created["custom_llm_provider"] == "bedrock"
+    assert created["litellm_params"] == {"aws_region_name": "us-east-1"}
+    assert created["team_id"] == "team-1"
 
 
 def test_rag_query_returns_response_cost_header(client_internal_user):

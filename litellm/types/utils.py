@@ -329,8 +329,10 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_second_720p: ReadOnly[float | None]
     output_cost_per_second_4k: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
+    ocr_cost_per_page_batches: ReadOnly[float | None]
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
     annotation_cost_per_page: float | None  # for OCR models
+    annotation_cost_per_page_batches: ReadOnly[float | None]
     search_context_cost_per_query: SearchContextCostPerQuery | None  # Cost for using web search tool
     web_search_billing_unit: (
         Literal["per_query", "per_prompt"] | None
@@ -2893,6 +2895,7 @@ RoutingDecisionCause = Literal[
     "reasoning_override",
     "llm_classifier",
     "capability_classifier",
+    "jev_classifier",
     "llm_v2_classifier",
     "llm_v2_fallback",
     # classifier_type 'heuristic_first': the local scorer produced at least one signal and landed at
@@ -2987,6 +2990,8 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     escalation_keyword: str
     classifier_model: str
     classifier_cost: float
+    classifier_probabilities: ReadOnly[Mapping[str, float]]
+    classifier_confidence: ReadOnly[float]
     classifier_crux: str  # writable-ok: added only when a capability verdict is available
     classifier_primary_rule: str  # writable-ok: added only when a capability verdict is available
     classifier_capability_boundary: str  # writable-ok: added only when a capability verdict is available
@@ -3030,6 +3035,8 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "score",
         "classifier_model",
         "classifier_cost",
+        "classifier_probabilities",
+        "classifier_confidence",
         "classifier_primary_rule",
         "classifier_capability_boundary",
         "classifier_p_solve",
@@ -3664,8 +3671,10 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_above_512k_tokens: float | None = None
     output_vector_size: int | None = None
     ocr_cost_per_page: float | None = None
+    ocr_cost_per_page_batches: float | None = None
     ocr_cost_per_credit: float | None = None
     annotation_cost_per_page: float | None = None
+    annotation_cost_per_page_batches: float | None = None
     regional_processing_uplift_multiplier_eu: float | None = None
     regional_processing_uplift_multiplier_us: float | None = None
     regional_endpoint_uplift_multiplier: float | None = None
@@ -3722,6 +3731,10 @@ def is_server_derived_pricing_key(key: str) -> bool:
     return key in SERVER_DERIVED_PRICING_FIELDS or ABOVE_THRESHOLD_COST_KEY_PATTERN.search(key) is not None
 
 
+PRICING_OVERRIDES_KEY: Final = "pricing_overrides"
+COST_MAP_LOOKUP_KEY: Final = "key"
+
+
 def without_server_derived_pricing(model_info: Mapping[str, Any]) -> Mapping[str, Any]:
     """Drop the pricing ``/model/info`` derives for display, keeping everything else.
 
@@ -3731,7 +3744,32 @@ def without_server_derived_pricing(model_info: Mapping[str, Any]) -> Mapping[str
     deployment at that day's price where no cost map refresh can reach it. A deployment's
     own pricing belongs on ``litellm_params``, which is unaffected.
     """
-    return MappingProxyType({k: v for k, v in model_info.items() if not is_server_derived_pricing_key(k)})
+    return MappingProxyType(
+        {k: v for k, v in model_info.items() if k != PRICING_OVERRIDES_KEY and not is_server_derived_pricing_key(k)}
+    )
+
+
+def echoed_cost_map_pricing_fields(model_info: Mapping[str, Any]) -> tuple[str, ...]:
+    """Pricing fields a stored ``model_info`` blob copied from a ``/model/info`` response.
+
+    Only ``litellm.get_model_info`` emits ``key`` (the resolved cost-map entry), so a stored
+    blob carrying it alongside pricing fields holds the cost map as it stood on the day the
+    row was saved, not a price anyone typed. Rows saved before 1.102 through the Admin UI
+    edit form look exactly like this, and a price typed into ``litellm_params`` never does.
+    """
+    if COST_MAP_LOOKUP_KEY not in model_info:
+        return ()
+    return tuple(sorted(k for k in model_info if is_server_derived_pricing_key(k)))
+
+
+def pricing_override_fields(*sources: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            frozenset(
+                k for source in sources for k, v in source.items() if v is not None and is_server_derived_pricing_key(k)
+            )
+        )
+    )
 
 
 # Server-controlled fields that bound or drive an interceptor's agentic loop
@@ -3771,6 +3809,7 @@ bedrock_batch_litellm_params: Final = (
     "aws_batch_role_arn",
     "s3_bucket_name",
     "s3_region_name",
+    "s3_endpoint_url",
     "s3_output_bucket_name",
     "bedrock_tags",
 )
@@ -3981,8 +4020,10 @@ class LlmProviders(str, Enum):
     BYTEZ = "bytez"
     REPLICATE = "replicate"
     REDUCTO = "reducto"
+    AWS_TEXTRACT = "aws_textract"
     RUNWAYML = "runwayml"
     AWS_POLLY = "aws_polly"
+    TRANSCRIBE = "transcribe"
     HUGGINGFACE = "huggingface"
     TOGETHER_AI = "together_ai"
     OPENROUTER = "openrouter"
@@ -4069,6 +4110,7 @@ class LlmProviders(str, Enum):
     TOPAZ = "topaz"
     SAP_GENERATIVE_AI_HUB = "sap"
     ASSEMBLYAI = "assemblyai"
+    AZURE_SPEECH = "azure_speech"
     CHARITY_ENGINE = "charity_engine"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
@@ -4131,6 +4173,10 @@ OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
     LlmProviders.HOSTED_VLLM.value,
     LlmProviders.LITELLM_PROXY.value,
 }
+
+FILE_CONTENT_STREAMING_PROVIDERS: Final[frozenset[str]] = frozenset(
+    {*OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders.VERTEX_AI.value}
+)
 
 ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "litellm_proxy", "vertex_ai"]
 

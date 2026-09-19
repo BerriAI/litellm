@@ -264,6 +264,8 @@ export interface TeamMembership {
     budget_duration: string | null;
     budget_reset_at: string | null;
     allowed_models?: string[] | null;
+    temp_budget_increase?: number | null;
+    temp_budget_expiry?: string | null;
   };
 }
 
@@ -676,6 +678,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     }
   };
 
+  const refreshTeamData = async () => {
+    if (!accessToken) return;
+    try {
+      setTeamData(await teamInfoCall(accessToken, teamId));
+    } catch {
+      toast.fromError("Failed to load team information");
+    }
+  };
+
   useEffect(() => {
     fetchTeamInfo();
   }, [teamId, accessToken]);
@@ -799,6 +810,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         rpm_limit: values.rpm_limit,
         budget_duration: values.budget_duration,
         allowed_models: values.allowed_models,
+        temp_budget_increase: values.temp_budget_increase,
+        temp_budget_expiry: values.temp_budget_expiry,
       };
       toast.dismiss(); // Remove all existing toasts
 
@@ -1347,6 +1360,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           teamData={teamData}
           canEditTeam={canEditTeam}
           handleMemberDelete={handleMemberDelete}
+          onMemberSpendReset={refreshTeamData}
           setSelectedEditMember={setSelectedEditMember}
           setIsEditMemberModalVisible={setIsEditMemberModalVisible}
           setIsAddMemberModalVisible={setIsAddMemberModalVisible}
@@ -2305,6 +2319,33 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </span>
               ),
               type: "budget-duration" as const,
+            },
+            {
+              name: "temp_budget_increase",
+              label: (
+                <span>
+                  Temporary Budget Increase (USD){" "}
+                  <SimpleTooltip content="Extra USD added on top of the team member budget until the expiry below. The permanent budget is left unchanged and the increase stops applying at expiry.">
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                  </SimpleTooltip>
+                </span>
+              ),
+              type: "numerical" as const,
+              step: 0.01,
+              min: 0,
+              placeholder: "Extra budget for this member until the expiry",
+            },
+            {
+              name: "temp_budget_expiry",
+              label: (
+                <span>
+                  Temporary Budget Expiry (UTC){" "}
+                  <SimpleTooltip content="When the temporary budget increase stops applying. Required whenever a temporary budget increase is set.">
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                  </SimpleTooltip>
+                </span>
+              ),
+              type: "utc-datetime" as const,
             },
             {
               name: "tpm_limit",

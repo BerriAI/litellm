@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from types import MappingProxyType
 from typing import (
     Final,
@@ -24,13 +24,14 @@ from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._experimental.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.config_resolvers.settings_store import ConfigOwnedKeyError
 from litellm.proxy.config_resolvers.sso import (
     SSO_FIELD_ENV_VARS,
     SSO_SECRET_FIELDS,
     resolve_sso_config,
 )
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
-    SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
+    SUPPORTED_TEAM_ADMIN_PERMISSIONS,
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
@@ -216,7 +217,7 @@ class UIThemeSettingsResponse(SettingsResponse):
     """Response model for UI theme settings"""
 
 
-_TEAM_ADMIN_FIELD_ENUM: Final = tuple(sorted(SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS))
+_TEAM_ADMIN_FIELD_ENUM: Final = tuple(sorted(SUPPORTED_TEAM_ADMIN_PERMISSIONS))
 
 
 class UISettings(BaseModel):
@@ -315,7 +316,8 @@ class UISettings(BaseModel):
         default=(),
         description=(
             "Team settings fields a team admin may change on the teams they administer. "
-            "Empty means team admins cannot edit team settings at all. "
+            "Include 'projects' to let team admins create and update projects for those teams. "
+            "Empty means team admins cannot edit team settings or manage projects at all. "
             "Proxy admins and org admins are not affected."
         ),
         json_schema_extra={  # mutable-ok: pydantic only merges json_schema_extra when it is a plain dict
@@ -488,6 +490,21 @@ async def get_allowed_ips():
     return {"data": _allowed_ip}
 
 
+def _store_allowed_ips(general_settings: MutableMapping[str, object], allowed_ips: Sequence[str]) -> None:
+    try:
+        general_settings["allowed_ips"] = list(allowed_ips)  # mutable-ok: compared against the file's own list
+    except ConfigOwnedKeyError as owned:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: HTTPException serializes its detail as json
+                "error": str(owned),
+                "keys": (owned.key,),
+                "section": owned.section,
+                "stored_database_value_ignored": owned.shadows_db_value,
+            },
+        ) from owned
+
+
 @router.post(
     "/add/allowed_ip",
     tags=["Budget & Spend Tracking"],
@@ -508,12 +525,10 @@ async def add_allowed_ip(
     if prisma_client is None:
         raise Exception("No DB Connected")
 
-    _allowed_ips: Final[list] = general_settings.get("allowed_ips", [])
-    if ip_address.ip not in _allowed_ips:
-        _allowed_ips.append(ip_address.ip)
-        general_settings["allowed_ips"] = _allowed_ips
-    else:
+    _allowed_ips: Final[Sequence[str]] = general_settings.get("allowed_ips") or ()
+    if ip_address.ip in _allowed_ips:
         raise HTTPException(status_code=400, detail="IP address already exists")
+    _store_allowed_ips(general_settings, (*_allowed_ips, ip_address.ip))
 
     if store_model_in_db is not True:
         raise HTTPException(
@@ -567,12 +582,10 @@ async def delete_allowed_ip(
         proxy_config,
     )
 
-    _allowed_ips: Final[list] = general_settings.get("allowed_ips", [])
-    if ip_address.ip in _allowed_ips:
-        _allowed_ips.remove(ip_address.ip)
-        general_settings["allowed_ips"] = _allowed_ips
-    else:
+    _allowed_ips: Final[Sequence[str]] = general_settings.get("allowed_ips") or ()
+    if ip_address.ip not in _allowed_ips:
         raise HTTPException(status_code=404, detail="IP address not found")
+    _store_allowed_ips(general_settings, tuple(ip for ip in _allowed_ips if ip != ip_address.ip))
 
     # Load existing config
     config: Final = await proxy_config.get_config()
@@ -1483,10 +1496,13 @@ _UI_SETTINGS_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 def apply_runtime_general_settings_flags(ui_settings: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
     """Copy the UI settings that gate runtime behavior into ``general_settings``. Returns what was applied."""
+    from litellm.proxy.config_resolvers import SettingsStore
     from litellm.proxy.proxy_server import general_settings
 
     flags: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
-    if flags:
+    if isinstance(general_settings, SettingsStore):
+        general_settings.apply_db_row("ui_settings", flags)
+    elif flags:
         general_settings.update(flags)
     return MappingProxyType(flags)
 
@@ -1623,7 +1639,7 @@ async def update_ui_settings(
         raise HTTPException(status_code=422, detail=e.errors())
 
     unsupported_team_fields: Final = sorted(
-        frozenset(settings.team_admin_editable_team_fields) - SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+        frozenset(settings.team_admin_editable_team_fields) - SUPPORTED_TEAM_ADMIN_PERMISSIONS
     )
     if unsupported_team_fields:
         raise HTTPException(
@@ -1631,7 +1647,7 @@ async def update_ui_settings(
             detail={  # mutable-ok: HTTPException detail must be a plain dict for FastAPI JSON serialization
                 "error": (
                     f"{TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING} does not support {unsupported_team_fields}. "
-                    f"Supported fields: {sorted(SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS)}."
+                    f"Supported fields: {sorted(SUPPORTED_TEAM_ADMIN_PERMISSIONS)}."
                 )
             },
         )
