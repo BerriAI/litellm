@@ -2613,7 +2613,7 @@ def oauth_protected_resource_root(request: Request) -> dict[str, str | tuple[str
     }
 
 
-def _build_aggregate_protected_resource_response(request: Request) -> dict[str, object]:
+def _build_aggregate_protected_resource_response(request: Request) -> dict:
     """RFC 9728 metadata for the aggregate /mcp resource: the gateway itself is
     the authorization server. No per-server names or scopes leak here; access
     is resolved after sign-in from the authenticated user's grants.
