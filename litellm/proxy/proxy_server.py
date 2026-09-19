@@ -11713,6 +11713,7 @@ async def moderations(
 
         return response
     except Exception as e:
+        data["call_type"] = "amoderation"
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
@@ -11859,6 +11860,7 @@ async def audio_speech(
         )
 
     except Exception as e:
+        data["call_type"] = "aspeech"
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -12016,6 +12018,7 @@ async def audio_transcriptions(
 
         return response
     except Exception as e:
+        data["call_type"] = "atranscription"
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )

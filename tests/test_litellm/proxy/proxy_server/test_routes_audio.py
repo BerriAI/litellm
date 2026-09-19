@@ -9,7 +9,10 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import asyncio
 import io
+import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -119,9 +122,7 @@ def patched_transcription(monkeypatch):
         return data
 
     monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
-    monkeypatch.setattr(
-        proxy_server, "check_file_size_under_limit", lambda **kwargs: True
-    )
+    monkeypatch.setattr(proxy_server, "check_file_size_under_limit", lambda **kwargs: True)
 
     async def _form_data(request):
         from starlette.datastructures import FormData, UploadFile
@@ -254,3 +255,179 @@ def test_audio_transcription_error(client, auth_as, patched_transcription_error,
         response = client.post(path, files=files, data=data)
     assert response.status_code == 500
     assert len(response.content) > 0
+
+
+def test_audio_speech_failure_hook_receives_call_type(client, auth_as, patched_speech_error):
+    """LIT-41521: failed /v1/audio/speech calls pass call_type='aspeech' and litellm_call_id to failure hook."""
+    payload: Final = {"model": "tts-1", "input": "Hi", "voice": "alloy"}
+    with auth_as():
+        response: Final = client.post("/v1/audio/speech", json=payload)
+    assert response.status_code == 500
+    call_id: Final = response.headers.get("x-litellm-call-id")
+    assert call_id is not None
+    proxy_server.proxy_logging_obj.post_call_failure_hook.assert_called_once()
+    call_kwargs: Final = proxy_server.proxy_logging_obj.post_call_failure_hook.call_args.kwargs
+    request_data: Final = call_kwargs["request_data"]
+    assert request_data["call_type"] == "aspeech"
+    assert request_data["litellm_call_id"] == call_id
+    assert request_data["model"] == "tts-1"
+
+
+def test_audio_transcription_failure_hook_receives_call_type(client, auth_as, patched_transcription_error):
+    """LIT-41521: failed /v1/audio/transcriptions calls pass call_type='atranscription' to failure hook."""
+    files: Final = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
+    data: Final = {"model": "whisper-1"}
+    with auth_as():
+        response: Final = client.post("/v1/audio/transcriptions", files=files, data=data)
+    assert response.status_code == 500
+    call_id: Final = response.headers.get("x-litellm-call-id")
+    assert call_id is not None
+    proxy_server.proxy_logging_obj.post_call_failure_hook.assert_called_once()
+    call_kwargs: Final = proxy_server.proxy_logging_obj.post_call_failure_hook.call_args.kwargs
+    request_data: Final = call_kwargs["request_data"]
+    assert request_data["call_type"] == "atranscription"
+    assert request_data["litellm_call_id"] == call_id
+    assert request_data["model"] == "whisper-1"
+
+
+def test_audio_speech_failure_spend_log_recorded(client, auth_as, monkeypatch):
+    """LIT-41521: failed audio/speech calls write a failure row with call_type='aspeech' to spend logs."""
+    import litellm
+    from litellm.llms.openai.openai import OpenAIChatCompletion
+    from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.router import Router
+
+    mock_prisma: Final = MagicMock()
+    mock_prisma.spend_log_transactions = []  # mutable-ok: in-memory spend transactions list
+    mock_prisma._spend_log_transactions_lock = asyncio.Lock()
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "tts-1",
+                    "litellm_params": {"model": "tts-1", "api_key": "fake-key"},
+                }
+            ]
+        ),
+    )
+
+    async def _add_data(data, **kwargs):
+        return data
+
+    monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
+
+    async def _mock_async_audio_speech(*args, **kwargs):
+        raise litellm.BadRequestError(
+            message="AzureException - Voice not supported",
+            model="tts-1",
+            llm_provider="openai",
+        )
+
+    monkeypatch.setattr(OpenAIChatCompletion, "async_audio_speech", _mock_async_audio_speech)
+
+    db_logger: Final = _ProxyDBLogger()
+    monkeypatch.setattr(litellm, "callbacks", [db_logger])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=MagicMock()))
+
+    payload: Final = {"model": "tts-1", "input": "Hello", "voice": "invalid-voice"}
+    with auth_as(api_key="sk-test-speech-key", user_id="u-speech-1"):
+        response: Final = client.post("/v1/audio/speech", json=payload)
+
+    assert response.status_code == 400
+    call_id: Final = response.headers.get("x-litellm-call-id")
+    assert call_id is not None
+    assert len(mock_prisma.spend_log_transactions) == 1
+    row: Final = mock_prisma.spend_log_transactions[0]
+    assert row["request_id"] == call_id
+    assert row["call_type"] == "aspeech"
+    assert row["model"] == "tts-1"
+    metadata: Final = json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]
+    assert metadata["status"] == "failure"
+    assert metadata["error_information"]["error_class"] == "BadRequestError"
+    assert "Voice not supported" in metadata["error_information"]["error_message"]
+
+
+def test_audio_speech_does_not_pass_internal_call_type_to_route_request(client, auth_as, monkeypatch):
+    """LIT-41521 regression: keep internal call_type out of request data passed to speech provider."""
+    captured_data: Final[dict] = {}
+
+    async def _llm_call():
+        return HttpxBinaryResponseContent(
+            httpx.Response(status_code=200, headers={"content-type": "audio/mpeg"}, content=b"\x00\x01\x02")
+        )
+
+    async def _capture_route_request(data, **kwargs):
+        captured_data.update(data)
+        return _llm_call()
+
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(
+        proxy_server,
+        "proxy_logging_obj",
+        MagicMock(
+            pre_call_hook=AsyncMock(side_effect=lambda **kw: kw["data"]),
+            post_call_failure_hook=AsyncMock(),
+            post_call_response_headers_hook=AsyncMock(return_value={}),
+            update_request_status=AsyncMock(),
+        ),
+    )
+
+    async def _add_data(data, **kwargs):
+        return data
+
+    monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
+    monkeypatch.setattr(proxy_server, "route_request", _capture_route_request)
+
+    payload: Final = {"model": "tts-1", "input": "Hi", "voice": "alloy"}
+    with auth_as():
+        response: Final = client.post("/v1/audio/speech", json=payload)
+    assert response.status_code == 200
+    assert "call_type" not in captured_data
+
+
+def test_audio_transcription_does_not_pass_internal_call_type_to_route_request(client, auth_as, monkeypatch):
+    """LIT-41521 regression: keep internal call_type out of request data passed to transcription provider."""
+    captured_data: Final[dict] = {}
+
+    async def _llm_call():
+        mock_response = MagicMock()
+        mock_response.text = "hello world"
+        mock_response.json = lambda: {"text": "hello world"}
+        return mock_response
+
+    async def _capture_route_request(data, **kwargs):
+        captured_data.update(data)
+        return _llm_call()
+
+    router = MagicMock()
+    router.model_names = ["whisper-1"]
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(
+        proxy_server,
+        "proxy_logging_obj",
+        MagicMock(
+            pre_call_hook=AsyncMock(side_effect=lambda **kw: kw["data"]),
+            post_call_failure_hook=AsyncMock(),
+            post_call_response_headers_hook=AsyncMock(return_value={}),
+            update_request_status=AsyncMock(),
+        ),
+    )
+
+    async def _add_data(data, **kwargs):
+        return data
+
+    monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
+    monkeypatch.setattr(proxy_server, "check_file_size_under_limit", lambda **kwargs: True)
+    monkeypatch.setattr(proxy_server, "route_request", _capture_route_request)
+
+    files: Final = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
+    data: Final = {"model": "whisper-1"}
+    with auth_as():
+        response: Final = client.post("/v1/audio/transcriptions", files=files, data=data)
+    assert response.status_code == 200
+    assert "call_type" not in captured_data
