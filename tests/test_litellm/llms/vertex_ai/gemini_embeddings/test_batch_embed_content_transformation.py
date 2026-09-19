@@ -8,8 +8,12 @@ Covers:
 - Response processing with correct indices
 """
 
+from typing import Final
+
 import pytest
 
+import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     _build_part_for_input,
@@ -306,6 +310,27 @@ class TestProcessEmbedContentResponseUsage:
     """
 
     MODEL = "gemini-embedding-2"
+
+    @pytest.fixture(autouse=True)
+    def _pin_local_model_cost_entry(self, monkeypatch):
+        """litellm.model_cost is fetched from the main branch at import time, so in CI it may
+        carry a different multimodal-pricing schema than the local backup this branch owns.
+        Pin the local backup entries so the cost assertions test our calculator against the
+        pricing keys the branch actually ships, not whatever main happens to be publishing."""
+        from litellm.utils import _invalidate_model_cost_lowercase_map
+
+        local_cost_map: Final = GetModelCostMap.load_local_model_cost_map()
+        candidate_keys: Final = (self.MODEL, f"vertex_ai/{self.MODEL}", f"gemini/{self.MODEL}")
+        pinned_entries: Final = tuple(
+            (key, local_cost_map[key]) for key in candidate_keys if key in local_cost_map
+        )
+        if not pinned_entries:
+            pytest.skip(f"{self.MODEL} missing from local backup cost map")
+        for key, entry in pinned_entries:
+            monkeypatch.setitem(litellm.model_cost, key, dict(entry))
+        _invalidate_model_cost_lowercase_map()
+        yield
+        _invalidate_model_cost_lowercase_map()
 
     def test_multimodal_image_preserves_usage_metadata(self):
         response_json = {
