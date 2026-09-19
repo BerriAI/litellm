@@ -62,8 +62,17 @@ def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "Prom
     if dotprompt_content and not prompt_data and not prompt_file:
         prompt_data = _get_prompt_data_from_dotprompt_content(dotprompt_content)
 
+    from litellm.proxy.prompts.prompt_registry import get_version_number, parse_prompt_version
+
     from .prompt_manager import strip_version_suffix
 
+    computed_version = prompt_spec.version
+    if computed_version is None and strip_version_suffix(prompt_spec.prompt_id):
+        computed_version = get_version_number(prompt_spec.prompt_id)
+    if computed_version is None:
+        computed_version = parse_prompt_version(getattr(litellm_params, "prompt_version", None))
+
+    prompt_version: Final = computed_version
     registration_prompt_id: Final = prompt_id or strip_version_suffix(prompt_spec.prompt_id) or prompt_spec.prompt_id
 
     try:
@@ -72,6 +81,7 @@ def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "Prom
             prompt_data=prompt_data,
             prompt_file=prompt_file,
             prompt_id=registration_prompt_id,
+            prompt_version=prompt_version,
         )
 
         return dot_prompt_manager

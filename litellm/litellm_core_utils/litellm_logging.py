@@ -1003,6 +1003,7 @@ class Logging(LiteLLMLoggingBaseClass):
             non_default_params=non_default_params,
             prompt_id=prompt_id,
             prompt_spec=prompt_spec,
+            prompt_version=prompt_version,
             dynamic_callback_params=self.standard_callback_dynamic_params,
         )
 
@@ -1055,6 +1056,7 @@ class Logging(LiteLLMLoggingBaseClass):
             non_default_params=non_default_params,
             prompt_id=prompt_id,
             prompt_spec=prompt_spec,
+            prompt_version=prompt_version,
             dynamic_callback_params=self.standard_callback_dynamic_params,
         )
 
@@ -1091,6 +1093,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_id: str,
         prompt_spec: PromptSpec | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_version: int | None = None,
     ) -> CustomLogger | None:
         """
         Auto-detect which prompt management system owns the given prompt_id.
@@ -1100,16 +1103,35 @@ class Logging(LiteLLMLoggingBaseClass):
         Args:
             prompt_id: The prompt ID to check
             dynamic_callback_params: Dynamic callback parameters for should_run_prompt_management checks
+            prompt_version: Optional prompt version to resolve or match
 
         Returns:
             A CustomLogger instance if a matching prompt management system is found, None otherwise
         """
+        try:
+            from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+
+            resolved_spec: Final = prompt_spec or IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec(
+                prompt_id=prompt_id, version=prompt_version
+            )
+            if resolved_spec is not None:
+                cb: Final = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(resolved_spec)
+                if cb is not None:
+                    self.model_call_details["prompt_integration"] = cb.__class__.__name__
+                    return cb
+        except Exception as e:
+            # Prompt registry lookup is best-effort; fall back to litellm.callbacks if unavailable
+            verbose_logger.debug("Prompt registry lookup failed in _auto_detect_prompt_management_logger: %s", e)
+
         prompt_management_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
             callback_type=CustomPromptManagement
         )
 
         for logger in prompt_management_loggers:
             if isinstance(logger, CustomPromptManagement):
+                if prompt_version is not None and getattr(logger, "prompt_version", None) is not None:
+                    if logger.prompt_version != prompt_version:
+                        continue
                 try:
                     if logger.should_run_prompt_management(
                         prompt_id=prompt_id,
@@ -1148,6 +1170,7 @@ class Logging(LiteLLMLoggingBaseClass):
         tools: list[dict] | None = None,
         prompt_id: str | None = None,
         prompt_spec: PromptSpec | None = None,
+        prompt_version: int | None = None,
         dynamic_callback_params: StandardCallbackDynamicParams | None = None,
     ) -> CustomLogger | None:
         """
@@ -1158,6 +1181,7 @@ class Logging(LiteLLMLoggingBaseClass):
             non_default_params: Non-default parameters passed to the completion call
             tools: Optional tools passed to the completion call
             prompt_id: Optional prompt ID to auto-detect which system owns this prompt
+            prompt_version: Optional prompt version to match
             dynamic_callback_params: Dynamic callback parameters for should_run_prompt_management checks
 
         Returns:
@@ -1182,6 +1206,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 prompt_id=prompt_id,
                 prompt_spec=prompt_spec,
                 dynamic_callback_params=dynamic_callback_params,
+                prompt_version=prompt_version,
             )
             if auto_detected_logger is not None:
                 return auto_detected_logger
@@ -1198,6 +1223,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 dynamic_callback_params=dynamic_callback_params,
             ):
                 continue
+            if prompt_version is not None and getattr(logger, "prompt_version", None) is not None:
+                if logger.prompt_version != prompt_version:
+                    continue
             self.model_call_details["prompt_integration"] = logger.__class__.__name__
             return logger
 

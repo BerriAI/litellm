@@ -336,6 +336,7 @@ if TYPE_CHECKING:
         ResponseInputParam,
         ResponsesAPIResponse,
     )
+    from litellm.types.prompts.init_prompts import PromptSpec
 
     Span = _Span
 else:
@@ -4404,6 +4405,7 @@ class Router:
     ):
         litellm_logging_object = kwargs.get("litellm_logging_obj", None)
         if litellm_logging_object is None:
+            kwargs.setdefault("litellm_call_id", str(uuid.uuid4()))
             litellm_logging_object, kwargs = function_setup(
                 **{
                     "original_function": "acompletion",
@@ -4436,6 +4438,37 @@ class Router:
         prompt_label: Final = kwargs.get("prompt_label", None) or prompt_management_deployment["litellm_params"].get(
             "prompt_label", None
         )
+        raw_prompt_version: Final = kwargs.get("prompt_version", None) or prompt_management_deployment[
+            "litellm_params"
+        ].get("prompt_version", None)
+        raw_prompt_environment: Final = kwargs.get("prompt_environment", None) or prompt_management_deployment[
+            "litellm_params"
+        ].get("prompt_environment", None)
+        prompt_environment: Final = raw_prompt_environment if isinstance(raw_prompt_environment, str) else None
+
+        from litellm.proxy.prompts.prompt_registry import (
+            IN_MEMORY_PROMPT_REGISTRY,
+            parse_prompt_version,
+        )
+
+        prompt_version: Final = parse_prompt_version(raw_prompt_version)
+
+        prompt_spec: PromptSpec | None = None
+        prompt_management_logger: CustomLogger | None = None
+        if prompt_id is not None and isinstance(prompt_id, str):
+            try:
+                prompt_spec = IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec(
+                    prompt_id=prompt_id,
+                    version=prompt_version,
+                    environment=prompt_environment,
+                )
+                if prompt_spec is not None:
+                    prompt_management_logger = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(
+                        prompt=prompt_spec
+                    )
+            except Exception as e:
+                # Prompt registry resolution is best-effort; fall back to router prompt management lookup
+                verbose_router_logger.debug("Prompt registry resolution in router prompt management failed: %s", e)
 
         if not is_litellm_agent_model and (prompt_id is None or not isinstance(prompt_id, str)):
             raise ValueError(f"Prompt ID is not set or not a string. Got={prompt_id}, type={type(prompt_id)}")
@@ -4454,7 +4487,10 @@ class Router:
             non_default_params=get_non_default_completion_params(kwargs=kwargs),
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
+            prompt_spec=prompt_spec,
+            prompt_management_logger=prompt_management_logger,
             prompt_label=prompt_label,
+            prompt_version=prompt_version,
             request_kwargs=kwargs,
             injected_for_every_deployment=True,
         )
@@ -4467,6 +4503,7 @@ class Router:
             "prompt_variables",
             "prompt_label",
             "prompt_version",
+            "prompt_environment",
         }
         filtered_data: Final = {k: v for k, v in data.items() if k not in prompt_management_params}
 
@@ -4474,13 +4511,12 @@ class Router:
         kwargs["model"] = model
         kwargs["messages"] = messages
         kwargs["litellm_logging_obj"] = litellm_logging_object
-        kwargs["prompt_id"] = prompt_id
-        kwargs["prompt_variables"] = prompt_variables
-        kwargs["prompt_label"] = prompt_label
+        for param in prompt_management_params:
+            kwargs.pop(param, None)
 
         _model_list: Final = self.get_model_list(model_name=model)
         if _model_list is None or len(_model_list) == 0:  # if direct call to model
-            kwargs.pop("original_function")
+            kwargs.pop("original_function", None)
             return await litellm.acompletion(**kwargs)
 
         return await self.async_function_with_fallbacks(**kwargs)
