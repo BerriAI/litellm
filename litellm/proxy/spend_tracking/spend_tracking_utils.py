@@ -382,6 +382,12 @@ def _model_group_provider(model_group: str, llm_router: "Router | None") -> str 
     return next(iter(providers)) if len(providers) == 1 else None
 
 
+def _is_configured_model_group(model_group: str, llm_router: "Router | None") -> bool:
+    if llm_router is None or not model_group:
+        return False
+    return llm_router.is_recognized_model(model_group) or model_group in llm_router.team_public_model_names
+
+
 def _looks_like_model_name(model: str) -> bool:
     candidate: Final = model.removeprefix(MCP_SPEND_LOG_MODEL_PREFIX)
     return len(candidate) <= MAX_SPEND_LOG_MODEL_NAME_LENGTH and not any(char.isspace() for char in candidate)
@@ -570,6 +576,7 @@ def get_logging_payload(
         _get_status_for_spend_log(metadata=metadata) == "failure"
         and not _model_id
         and not _looks_like_model_name(resolved_model)
+        and not _is_configured_model_group(_model_group, llm_router)
     )
     model_name: Final = (
         UNKNOWN_MODEL_SPEND_LOG_MODEL
