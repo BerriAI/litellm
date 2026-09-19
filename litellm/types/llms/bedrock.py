@@ -2,7 +2,7 @@ import json
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from typing_extensions import Required, TypedDict, override
+from typing_extensions import ReadOnly, Required, TypedDict, override
 
 from .openai import ChatCompletionToolCallChunk
 
@@ -94,6 +94,10 @@ class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
     signature: str
     redactedContent: str
     text: str
+
+
+class BedrockConverseGptReasoningEffortBlock(TypedDict):
+    effort: ReadOnly[str]
 
 
 class GuardrailConverseTextBlock(TypedDict, total=False):
