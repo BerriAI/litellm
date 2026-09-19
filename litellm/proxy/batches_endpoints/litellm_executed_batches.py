@@ -3,7 +3,7 @@ import json
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from itertools import pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, runtime_checkable
@@ -28,11 +28,7 @@ from litellm.models.managed_files import LiteLLM_ManagedFileTable
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
-from litellm.proxy.openai_files_endpoints.common_utils import (
-    LITELLM_EXECUTED_BATCH_ID_PREFIX,
-    convert_b64_uid_to_unified_uid,
-    get_batch_id_from_unified_batch_id,
-)
+from litellm.proxy.openai_files_endpoints.common_utils import LITELLM_EXECUTED_BATCH_ID_PREFIX
 from litellm.proxy.openai_files_endpoints.storage_backend_service import StorageBackendFileService
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.table_repositories import ManagedObjectRepository
@@ -41,6 +37,7 @@ from litellm.types.utils import LITELLM_EXECUTED_BATCH_PROVIDERS, ExtractedFileD
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
+    from prisma import types as prisma_types
 
     from litellm.router import Router
 
@@ -154,7 +151,6 @@ class ManagedBatchStore(Protocol):
         user_api_key_dict: UserAPIKeyAuth,
         request_tags: Sequence[str] | None = None,
         persist_attribution: bool = False,
-        create_if_missing: bool = True,
         batch_processed: bool = False,
     ) -> None: ...
 
@@ -375,10 +371,6 @@ def executed_batch_runner_lost(status: str, updated_at: datetime) -> bool:
     return (datetime.now(timezone.utc) - updated_at).total_seconds() > _STALE_AFTER_SECONDS
 
 
-def _llm_batch_id_of(unified_batch_id: str) -> str:
-    return get_batch_id_from_unified_batch_id(convert_b64_uid_to_unified_uid(unified_batch_id))
-
-
 class _StopWatch:
     def __init__(self, load_status: Callable[[], Awaitable[str | None]], interval_seconds: float) -> None:
         self._load_status = load_status
@@ -488,8 +480,10 @@ class LiteLLMExecutedBatchRunner:
         cancelling: Final = current.model_copy(
             update=MappingProxyType({"status": "cancelling", "cancelling_at": int(time.time())})
         )
-        await self._store(cancelling, user_api_key_dict)
-        return cancelling
+        unchanged: Final[prisma_types.LiteLLM_ManagedObjectTableWhereInput] = {"status": current.status}
+        if await self._store_unless_changed(cancelling, unchanged, user_api_key_dict):
+            return cancelling
+        return await self.cancel(unified_batch_id, user_api_key_dict)
 
     async def fail_abandoned(self, batch: LiteLLMBatch, user_api_key_dict: UserAPIKeyAuth) -> LiteLLMBatch:
         error: Final = BatchError(message=_RUNNER_LOST_MESSAGE, code="runner_lost")
@@ -497,8 +491,16 @@ class LiteLLMExecutedBatchRunner:
         failed: Final = batch.model_copy(
             update=MappingProxyType({"status": "failed", "failed_at": int(time.time()), "errors": errors})
         )
-        await self._store(failed, user_api_key_dict)
-        return failed
+        untouched: Final[prisma_types.DateTimeFilter] = {
+            "lt": datetime.now(timezone.utc) - timedelta(seconds=_STALE_AFTER_SECONDS)
+        }
+        still_abandoned: Final[prisma_types.LiteLLM_ManagedObjectTableWhereInput] = {
+            "status": batch.status,
+            "updated_at": untouched,
+        }
+        if await self._store_unless_changed(failed, still_abandoned, user_api_key_dict):
+            return failed
+        return await self._load_batch(batch.id) or batch
 
     def _body_rejection(self, model: str) -> BodyRejection:
         def reject(body: Mapping[str, object]) -> str | None:
@@ -598,7 +600,9 @@ class LiteLLMExecutedBatchRunner:
             return RowOutcome(custom_id=line.custom_id, status_code=200, body=body, succeeded=True)
 
     async def _dispatch(self, run: _BatchRun, line: BatchInputLine) -> Mapping[str, object]:
-        params: Final = MappingProxyType({**line.body, "model": run.model, "metadata": self._row_metadata(run)})
+        params: Final = MappingProxyType(
+            {**line.body, "model": run.model, "metadata": self._row_metadata(run), "disable_fallbacks": True}
+        )
         return _dump(await self._router_call(run.endpoint)(**params))
 
     def _router_call(self, endpoint: BatchEndpoint) -> _RouterCall:
@@ -651,19 +655,26 @@ class LiteLLMExecutedBatchRunner:
         updated: Final = current.model_copy(
             update=MappingProxyType({**fields, "status": status, f"{status}_at": int(time.time())})
         )
-        await self._store(updated, run.user_api_key_dict)
-        return status
+        unchanged: Final[prisma_types.LiteLLM_ManagedObjectTableWhereInput] = {"status": current.status}
+        if await self._store_unless_changed(updated, unchanged, run.user_api_key_dict):
+            return status
+        return await self._advance(run, requested, fields)
 
-    async def _store(self, batch: LiteLLMBatch, user_api_key_dict: UserAPIKeyAuth) -> None:
-        await self.managed_files.store_unified_object_id(
-            unified_object_id=batch.id,
-            file_object=batch,
-            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-            model_object_id=_llm_batch_id_of(batch.id),
-            file_purpose="batch",
-            user_api_key_dict=user_api_key_dict,
-            create_if_missing=False,
+    async def _store_unless_changed(
+        self,
+        batch: LiteLLMBatch,
+        guard: "prisma_types.LiteLLM_ManagedObjectTableWhereInput",
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> bool:
+        updated_rows: Final = await ManagedObjectRepository(self.prisma_client).table.update_many(
+            where={"unified_object_id": batch.id, **guard},  # mutable-ok: Prisma filter
+            data={  # mutable-ok: Prisma payload
+                "file_object": batch.model_dump_json(),
+                "status": batch.status,
+                "updated_by": user_api_key_dict.user_id,
+            },
         )
+        return updated_rows > 0
 
     async def _find_row(self, unified_batch_id: str) -> "prisma_models.LiteLLM_ManagedObjectTable | None":
         return await ManagedObjectRepository(self.prisma_client).table.find_first(
