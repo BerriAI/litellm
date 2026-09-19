@@ -118,12 +118,14 @@ class HttpJevClassifierClient:
             return
         end_time: Final = datetime.now(timezone.utc)
         parent: Final = request_kwargs or MappingProxyType({})
-        parent_metadata: Final = {
-            key: value
-            for field in ("metadata", "litellm_metadata")
-            if isinstance(metadata := parent.get(field), Mapping)
-            for key, value in TypeAdapter(Mapping[str, object]).validate_python(metadata).items()
-        }
+        parent_metadata: Final = MappingProxyType(
+            {
+                key: value
+                for field in ("metadata", "litellm_metadata")
+                if isinstance(metadata := parent.get(field), Mapping)
+                for key, value in TypeAdapter(Mapping[str, object]).validate_python(metadata).items()
+            }
+        )
         params: Final = {
             "metadata": {
                 **forwarded_internal_call_metadata(parent_metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN),
@@ -158,7 +160,7 @@ class HttpJevClassifierClient:
             start_time=start_time,
             end_time=end_time,
             cache_hit=False,
-            request_body={"model": request.model},
+            request_body=MappingProxyType({"model": request.model}),
             litellm_params=params,
         )
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
