@@ -158,6 +158,23 @@ def test_file_response_with_ocr_purpose_maps_onto_user_data(config):
     assert obj.expires_at == 1_800_000_000
 
 
+@pytest.mark.parametrize("purpose", ["playground", "audio", "code_interpreter"])
+def test_files_with_purposes_mistral_never_lets_us_upload_still_read_back(config, purpose):
+    """Regression: Mistral's live API returns purposes its upload endpoint rejects for files
+    other Mistral products created, and both the unfiltered list and a retrieve of such a file
+    used to fail validation, so one playground file 500'd ``GET /v1/files`` for the whole key."""
+    retrieved = config.transform_retrieve_file_response(
+        raw_response=_response(_file(purpose=purpose)), logging_obj=None, litellm_params={}
+    )
+    assert retrieved.purpose == "user_data"
+    listed = config.transform_list_files_response(
+        raw_response=_response({"data": [_file(purpose=purpose), _file(id="second")], "object": "list", "total": 2}),
+        logging_obj=None,
+        litellm_params={},
+    )
+    assert [(f.id, f.purpose) for f in listed] == [(FILE_ID, "user_data"), ("second", "batch")]
+
+
 @pytest.mark.parametrize(
     "method,suffix",
     [
