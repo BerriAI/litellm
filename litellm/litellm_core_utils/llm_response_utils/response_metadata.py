@@ -1,6 +1,6 @@
 import datetime
 from collections.abc import Mapping
-from typing import Any, Final, cast
+from typing import Any, Final
 
 import httpx
 
@@ -49,8 +49,7 @@ def response_timing_metrics(
         if caching_details is not None and caching_details.get("cache_hit") is True
         else None
     )
-    metadata_value: Final = get_litellm_metadata_from_kwargs(logging_obj.model_call_details)
-    metadata: Final = cast(dict[str, object], metadata_value) if isinstance(metadata_value, dict) else {}
+    metadata: Final[Mapping[str, object]] = get_litellm_metadata_from_kwargs(logging_obj.model_call_details)
     llm_api_duration_ms: Final = logging_obj.model_call_details.get("llm_api_duration_ms")
     if cache_duration_ms is not None:
         overhead_ms: float | None = total_response_time_ms - cache_duration_ms
