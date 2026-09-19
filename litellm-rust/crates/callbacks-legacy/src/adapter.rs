@@ -20,9 +20,9 @@ use crate::{
     PublicCall, PythonLogger, after_deployment_failure, after_deployment_success,
     before_deployment_call,
     deferred::{PendingLogging, PendingSuccess},
-    finalize, is_internal_call, prepare,
+    finalize, is_internal_call,
     legacy_python::Streaming,
-    setup,
+    prepare, setup,
 };
 
 /// What the legacy contract needs to know about the route it is logging.
@@ -124,7 +124,7 @@ impl LegacyPythonLifecycle {
         if self.surface.updates_logging_before_preparation {
             let model = self.call.lookup(py, "model")?;
             let provider = self.call.lookup(py, "custom_llm_provider")?;
-            self.logger()?.update_before_preparation(
+            self.logger()?.initialize_failure_context(
                 py,
                 self.call.kwargs(),
                 model.and_then(|model| model.extract::<String>().ok()),
