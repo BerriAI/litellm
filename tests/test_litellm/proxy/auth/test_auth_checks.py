@@ -6087,6 +6087,54 @@ async def test_organization_budget_check_carries_org_state_on_the_token():
     assert token.org_budget_snapshot == OrgBudgetSnapshot(spend=12.5, max_budget=100.0)
 
 
+@pytest.mark.asyncio
+async def test_get_org_object_for_request_serves_last_known_org_through_db_outage():
+    """A JWT whose team sits in an org resolves the org on every request, and the org row
+    is cached for only DEFAULT_IN_MEMORY_TTL seconds while the team and user rows ride the
+    60s management-object TTL. Without a last-known copy, a DB outage a few seconds old
+    turned that traffic into 503s while the same request through a virtual key kept
+    succeeding on its cached team."""
+    from litellm.proxy.auth.auth_checks import get_org_object_for_request
+
+    org_row = MagicMock()
+    org_row.model_dump = lambda: {
+        "organization_id": "org-1",
+        "organization_alias": "platform-org",
+        "budget_id": "b1",
+        "created_by": "admin",
+        "updated_by": "admin",
+        "litellm_budget_table": {"budget_id": "b1", "max_budget": 50.0, "tpm_limit": 700, "rpm_limit": 7},
+    }
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_organizationtable.find_unique = AsyncMock(
+        side_effect=[org_row, ConnectionRefusedError("db unavailable")]
+    )
+    user_api_key_cache = UserApiKeyCache()
+
+    async def _lookup():
+        return await get_org_object_for_request(
+            org_id="org-1",
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    with patch("litellm.proxy.proxy_server.general_settings", {}):  # test-quality-ok: the outage fallback reads this module global; no dependency injection seam exists
+        warm = await _lookup()
+        assert warm is not None and warm.organization_alias == "platform-org"
+        await user_api_key_cache.async_delete_cache("org_id:org-1:with_budget")
+
+        during_outage = await _lookup()
+
+    assert prisma_client.db.litellm_organizationtable.find_unique.await_count == 2
+    assert during_outage is not None
+    assert during_outage.organization_alias == "platform-org"
+    assert during_outage.litellm_budget_table is not None
+    assert during_outage.litellm_budget_table.rpm_limit == 7
+    assert during_outage.litellm_budget_table.max_budget == 50.0
+
+
 @pytest.mark.parametrize(
     "max_budget, spend, expect_blocked",
     [

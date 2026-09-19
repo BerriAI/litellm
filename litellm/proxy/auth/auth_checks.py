@@ -4008,8 +4008,19 @@ async def get_org_object(
         model_type=LiteLLM_OrganizationTable,
         ttl=DEFAULT_IN_MEMORY_TTL,
     )
+    if include_budget_table:
+        await user_api_key_cache.async_set_cache(
+            key=_last_known_org_cache_key(org_id),
+            value=_org_obj,
+            model_type=LiteLLM_OrganizationTable,
+            ttl=get_management_object_ttl(user_api_key_cache),
+        )
 
     return _org_obj
+
+
+def _last_known_org_cache_key(org_id: str) -> str:
+    return f"org_id:{org_id}:with_budget:last_known"
 
 
 async def get_org_object_for_request(
@@ -4031,13 +4042,18 @@ async def get_org_object_for_request(
     except OrganizationNotFoundError:
         return None
     except Exception as e:  # noqa: BLE001  # only a DB outage may fail auth here, anything else degrades to no org limits
-        if (
-            PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e)
-            and not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
-        ):
-            raise
-        verbose_proxy_logger.debug("org lookup failed, continuing without org limits", exc_info=True)
-        return None
+        if not PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
+            verbose_proxy_logger.debug("org lookup failed, continuing without org limits", exc_info=True)
+            return None
+        last_known_org: Final = await user_api_key_cache.async_get_cache(
+            key=_last_known_org_cache_key(org_id),
+            model_type=LiteLLM_OrganizationTable,
+        )
+        if last_known_org is not None:
+            return last_known_org
+        if PrismaDBExceptionHandler.should_allow_request_on_db_unavailable():
+            return None
+        raise
 
 
 async def _get_resources_from_access_groups(
