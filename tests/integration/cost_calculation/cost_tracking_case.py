@@ -296,7 +296,11 @@ def data_errors() -> tuple[str, ...]:
         for case in CASES
         if (
             isinstance(case.expected, FailureExpected)
-            and (not isinstance(case.response, JsonResponse) or case.response.status < 400)
+            and (
+                not isinstance(case.response, JsonResponse)
+                or not 400 <= case.response.status <= 599
+                or not 400 <= case.expected.failure.status <= 599
+            )
         )
         or (
             not isinstance(case.expected, FailureExpected)
