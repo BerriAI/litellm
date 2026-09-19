@@ -177,12 +177,12 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
 
         input_ = data.get("input")
         if input_ is not None:
-            data["input"] = await self._moderate_input(input_)
+            data["input"] = await self._moderate_text_or_list(input_)
             return data
 
         prompt = data.get("prompt")
-        if isinstance(prompt, str):
-            data["prompt"] = await self.moderation_check(text=prompt)
+        if prompt is not None:
+            data["prompt"] = await self._moderate_text_or_list(prompt)
         return data
 
     async def _moderate_message(self, message: dict) -> dict:
@@ -205,17 +205,17 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             return {**part, "text": await self.moderation_check(text=part["text"])}
         return part
 
-    async def _moderate_input(self, input_: object) -> object:
-        if isinstance(input_, str):
-            return await self.moderation_check(text=input_)
-        if isinstance(input_, list):
+    async def _moderate_text_or_list(self, value: object) -> object:
+        if isinstance(value, str):
+            return await self.moderation_check(text=value)
+        if isinstance(value, list):
             return [
                 await self.moderation_check(text=item)
                 if isinstance(item, str)
                 else item
-                for item in input_
+                for item in value
             ]
-        return input_
+        return value
 
     async def async_post_call_streaming_hook(
         self, user_api_key_dict: UserAPIKeyAuth, response: str
