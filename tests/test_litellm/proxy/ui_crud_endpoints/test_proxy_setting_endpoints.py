@@ -2615,7 +2615,8 @@ def test_add_allowed_ip_hands_save_config_only_the_changed_general_setting(monke
     live general_settings["allowed_ips"] that auth_utils._check_valid_ip reads, so on a
     shared proxy the first call locks every later request out, cleanup included.
     """
-    from copy import deepcopy
+    from types import MappingProxyType
+    from typing import Final
     from unittest.mock import AsyncMock, MagicMock
 
     import litellm.proxy.proxy_server as proxy_server_module
@@ -2624,27 +2625,23 @@ def test_add_allowed_ip_hands_save_config_only_the_changed_general_setting(monke
     from litellm.proxy.config_resolvers.changed_section_keys import changed_section_keys
     from litellm.proxy.config_resolvers.settings_store import SettingsStore
 
-    file_settings = {"max_parallel_requests": 100, "proxy_config_reload_interval_seconds": 7}
-    store = SettingsStore("general_settings")
+    file_settings: Final = MappingProxyType({"max_parallel_requests": 100, "proxy_config_reload_interval_seconds": 7})
+    store: Final = SettingsStore("general_settings")
     store.load_yaml(file_settings)
-    saved = []
 
-    fake_prisma = MagicMock()
+    fake_prisma: Final = MagicMock()
     fake_prisma.db.litellm_auditlog.create = AsyncMock()
+    save_config: Final = AsyncMock(side_effect=lambda new_config: new_config)
 
     async def _get_config():
-        return {"general_settings": deepcopy(file_settings)}
-
-    async def _save_config(new_config=None):
-        saved.append(new_config)
-        return new_config
+        return {"general_settings": dict(file_settings)}
 
     monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
     monkeypatch.setattr(proxy_server_module, "store_model_in_db", True)
     monkeypatch.setattr(proxy_server_module, "premium_user", True)
     monkeypatch.setattr(proxy_server_module, "general_settings", store)
     monkeypatch.setattr(proxy_server_module.proxy_config, "get_config", _get_config)
-    monkeypatch.setattr(proxy_server_module.proxy_config, "save_config", _save_config)
+    monkeypatch.setattr(proxy_server_module.proxy_config, "save_config", save_config)
 
     async def _admin_auth():
         return UserAPIKeyAuth(
@@ -2655,11 +2652,12 @@ def test_add_allowed_ip_hands_save_config_only_the_changed_general_setting(monke
 
     app.dependency_overrides[user_api_key_auth] = _admin_auth
     try:
-        resp = client.post("/add/allowed_ip", json={"ip": "203.0.113.77"})
+        resp: Final = client.post("/add/allowed_ip", json={"ip": "203.0.113.77"})
         assert resp.status_code == 200, resp.text
 
-        assert len(saved) == 1, f"expected exactly one save_config call, got {len(saved)}"
-        changed, removed = changed_section_keys(file_settings, saved[0]["general_settings"])
+        save_config.assert_awaited_once()
+        persisted: Final = save_config.await_args.kwargs["new_config"]["general_settings"]
+        changed, removed = changed_section_keys(file_settings, persisted)
         assert dict(changed) == {"allowed_ips": ["203.0.113.77"]}
         assert removed == frozenset()
         assert store["allowed_ips"] == ["203.0.113.77"]
