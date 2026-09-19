@@ -5517,6 +5517,37 @@ async def test_router_settings_reload_keeps_db_values_writable(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_boot_warns_that_a_shadowed_database_value_will_never_apply(tmp_path, monkeypatch, caplog):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"model_list": [], "general_settings": {"allowed_ips": ["1.2.3.4"], "max_file_size_mb": 5}})
+    )
+    db_row: Final = types.SimpleNamespace(param_value={"allowed_ips": ["1.2.3.4", "5.6.7.8"], "max_parallel_requests": 7})
+
+    async def read_config_row(_prisma_client, param_name):
+        return db_row if param_name == "general_settings" else None
+
+    monkeypatch.setattr(proxy_server_module, "get_config_param", read_config_row)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server_module, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server_module, "user_config_file_path", None)
+    proxy_config: Final = ProxyConfig()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await proxy_config.get_config(config_file_path=str(config_path))
+
+    warnings: Final = " ".join(record.getMessage() for record in caplog.records)
+    assert "allowed_ips" in warnings
+    assert "ignored" in warnings
+    assert "max_parallel_requests" not in warnings
+    assert "max_file_size_mb" not in warnings
+    assert proxy_config.settings["allowed_ips"] == ["1.2.3.4"]
+    assert proxy_config.settings["max_parallel_requests"] == 7
+
+
+@pytest.mark.asyncio
 async def test_model_info_v1_oci_secrets_not_leaked():
     """
     Test that model_info_v1 endpoint properly masks OCI sensitive parameters and does not leak secrets.
