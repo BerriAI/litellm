@@ -258,7 +258,7 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
 
 const STORED_LLM = {
   tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
-  classifier_type: "llm",
+  classifier_type: "llm" as const,
   classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
   classifier_context_window_size: 5,
   classifier_context_per_turn_chars: 300,
