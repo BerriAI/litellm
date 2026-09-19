@@ -2,12 +2,13 @@
 
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { PaginationState } from "@tanstack/react-table";
 import { Plus } from "lucide-react";
-import React, { useCallback, useMemo, useState } from "react";
+import { parseAsString, useQueryState } from "nuqs";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { MemoryRow, createMemory, deleteMemory, fetchMemoryList, updateMemory } from "@/components/networking";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
+import { useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
@@ -22,13 +23,17 @@ interface MemoryViewProps {
   userRole: string | null;
 }
 
-const DEFAULT_PAGE_SIZE = 50;
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: [],
+  defaultSort: { id: "updated_at", desc: true },
+  defaultPageSize: 50,
+  filterColumns: [],
+};
 
 export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
-  const [searchInput, setSearchInput] = useState("");
-  const [debouncedSearch] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
-  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
-  const [detailRow, setDetailRow] = useState<MemoryRow | null>(null);
+  const { search, setSearch, pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
+  const [debouncedSearch] = useDebouncedValue(search, { wait: DEBOUNCE_WAIT_MS });
+  const [detailMemoryId, setDetailMemoryId] = useQueryState("memory", parseAsString.withOptions({ history: "push" }));
   const [editRow, setEditRow] = useState<MemoryRow | null>(null);
   const [deleteRow, setDeleteRow] = useState<MemoryRow | null>(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -39,7 +44,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   // currently-visible page without us needing a manual refetch().
   const MEMORY_LIST_KEY = "memoryList" as const;
 
-  const { data, isLoading, isFetching } = useQuery({
+  const { data, isLoading, isFetching, isError } = useQuery({
     queryKey: [MEMORY_LIST_KEY, debouncedSearch, pagination.pageIndex, pagination.pageSize],
     queryFn: () => {
       if (!accessToken) throw new Error("Access token required");
@@ -54,6 +59,13 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
 
   const rows = useMemo(() => data?.memories ?? [], [data]);
   const total = data?.total ?? 0;
+  const detailRow = rows.find((row) => row.memory_id === detailMemoryId) ?? null;
+  const hasSettledPage = data !== undefined && !isFetching;
+  const isDetailRowMissing = detailMemoryId !== null && !detailRow && hasSettledPage;
+
+  useEffect(() => {
+    if (isDetailRowMissing) void setDetailMemoryId(null, { history: "replace" });
+  }, [isDetailRowMissing, setDetailMemoryId]);
 
   // -- Mutations --------------------------------------------------------
   // All three write endpoints share the same success/error plumbing:
@@ -109,12 +121,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
     },
   });
 
-  const handleSearchChange = useCallback((value: string) => {
-    setSearchInput(value);
-    setPagination((prev) => ({ ...prev, pageIndex: 0 }));
-  }, []);
-
-  const handleView = useCallback((row: MemoryRow) => setDetailRow(row), []);
+  const handleView = useCallback((row: MemoryRow) => void setDetailMemoryId(row.memory_id), [setDetailMemoryId]);
   const handleEdit = useCallback((row: MemoryRow) => setEditRow(row), []);
   const handleDelete = useCallback((row: MemoryRow) => setDeleteRow(row), []);
 
@@ -196,11 +203,12 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
         <MemoryTable
           data={rows}
           isLoading={isLoading}
+          isError={isError}
           rowCount={total}
           pagination={pagination}
-          onPaginationChange={setPagination}
-          searchValue={searchInput}
-          onSearchChange={handleSearchChange}
+          onPaginationChange={onPaginationChange}
+          searchValue={search}
+          onSearchChange={setSearch}
           isRefreshing={isFetching && !isLoading}
           onRefresh={invalidateList}
           hasActiveSearch={!!debouncedSearch}
@@ -211,7 +219,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       </div>
 
       {/* Detail drawer */}
-      <MemoryDetailDrawer row={detailRow} onClose={() => setDetailRow(null)} />
+      <MemoryDetailDrawer row={detailRow} onClose={() => void setDetailMemoryId(null)} />
 
       {/* Create / edit modal */}
       <MemoryEditModal

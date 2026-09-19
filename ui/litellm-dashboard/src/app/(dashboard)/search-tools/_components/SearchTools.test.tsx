@@ -1,8 +1,10 @@
 import * as roles from "@/utils/roles";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import * as networking from "@/components/networking";
 import SearchTools from "./SearchTools";
 import { AvailableSearchProvider, SearchTool } from "./types";
@@ -18,13 +20,21 @@ vi.mock("@/utils/roles", () => ({
   isAdminRole: vi.fn(),
 }));
 
-vi.mock("./SearchToolView", () => {
-  const SearchToolView = ({ searchTool, onBack }: { searchTool: SearchTool; onBack: () => void }) => (
-    <div data-testid="search-tool-view">
-      <div>Search Tool View: {searchTool.search_tool_name}</div>
-      <button onClick={onBack}>Back</button>
-    </div>
-  );
+const searchToolViewMounts = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock("./SearchToolView", async () => {
+  const { useEffect } = await import("react");
+  const SearchToolView = ({ searchTool, onBack }: { searchTool: SearchTool; onBack: () => void }) => {
+    useEffect(() => {
+      searchToolViewMounts.count += 1;
+    }, []);
+    return (
+      <div data-testid="search-tool-view">
+        <div>Search Tool View: {searchTool.search_tool_name}</div>
+        <button onClick={onBack}>Back</button>
+      </div>
+    );
+  };
   SearchToolView.displayName = "SearchToolView";
   return { SearchToolView };
 });
@@ -100,21 +110,6 @@ const mockAvailableProviders: AvailableSearchProvider[] = [
   },
 ];
 
-const createWrapper = () => {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-      },
-    },
-  });
-  const Wrapper = ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-  );
-  Wrapper.displayName = "TestWrapper";
-  return Wrapper;
-};
-
 describe("SearchTools", () => {
   const defaultProps = {
     accessToken: "test-token",
@@ -124,35 +119,37 @@ describe("SearchTools", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    testQueryClient.clear();
+    searchToolViewMounts.count = 0;
     vi.mocked(networking.fetchSearchTools).mockResolvedValue({ search_tools: mockSearchTools });
     vi.mocked(networking.fetchAvailableSearchProviders).mockResolvedValue({ providers: mockAvailableProviders });
     vi.mocked(roles.isAdminRole).mockReturnValue(true);
   });
 
   it("should render", async () => {
-    render(<SearchTools {...defaultProps} />, { wrapper: createWrapper() });
+    renderWithProviders(<SearchTools {...defaultProps} />);
     await waitFor(() => {
       expect(screen.getByText("Search Tools")).toBeInTheDocument();
     });
   });
 
   it("should display missing authentication parameters message when accessToken is missing", () => {
-    render(<SearchTools {...defaultProps} accessToken={null} />, { wrapper: createWrapper() });
+    renderWithProviders(<SearchTools {...defaultProps} accessToken={null} />);
     expect(screen.getByText("Missing required authentication parameters.")).toBeInTheDocument();
   });
 
   it("should display missing authentication parameters message when userRole is missing", () => {
-    render(<SearchTools {...defaultProps} userRole={null} />, { wrapper: createWrapper() });
+    renderWithProviders(<SearchTools {...defaultProps} userRole={null} />);
     expect(screen.getByText("Missing required authentication parameters.")).toBeInTheDocument();
   });
 
   it("should display missing authentication parameters message when userID is missing", () => {
-    render(<SearchTools {...defaultProps} userID={null} />, { wrapper: createWrapper() });
+    renderWithProviders(<SearchTools {...defaultProps} userID={null} />);
     expect(screen.getByText("Missing required authentication parameters.")).toBeInTheDocument();
   });
 
   it("should display search tools table with tools", async () => {
-    render(<SearchTools {...defaultProps} />, { wrapper: createWrapper() });
+    renderWithProviders(<SearchTools {...defaultProps} />);
     await waitFor(() => {
       expect(screen.getByText("Perplexity Search")).toBeInTheDocument();
     });
@@ -162,14 +159,14 @@ describe("SearchTools", () => {
   it("should display empty state when no search tools are available", async () => {
     vi.mocked(networking.fetchSearchTools).mockResolvedValue({ search_tools: [] });
 
-    render(<SearchTools {...defaultProps} />, { wrapper: createWrapper() });
+    renderWithProviders(<SearchTools {...defaultProps} />);
     await waitFor(() => {
       expect(screen.getByText("No search tools configured")).toBeInTheDocument();
     });
   });
 
   it("should show Add New Search Tool button when user is admin", async () => {
-    render(<SearchTools {...defaultProps} />, { wrapper: createWrapper() });
+    renderWithProviders(<SearchTools {...defaultProps} />);
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /add new search tool/i })).toBeInTheDocument();
     });
@@ -178,7 +175,7 @@ describe("SearchTools", () => {
   it("should not show Add New Search Tool button when user is not admin", async () => {
     vi.mocked(roles.isAdminRole).mockReturnValue(false);
 
-    render(<SearchTools {...defaultProps} />, { wrapper: createWrapper() });
+    renderWithProviders(<SearchTools {...defaultProps} />);
     await waitFor(() => {
       expect(screen.getByText("Search Tools")).toBeInTheDocument();
     });
@@ -187,7 +184,7 @@ describe("SearchTools", () => {
 
   it("should open create modal when Add New Search Tool button is clicked", async () => {
     const user = userEvent.setup({ delay: null });
-    render(<SearchTools {...defaultProps} />, { wrapper: createWrapper() });
+    renderWithProviders(<SearchTools {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /add new search tool/i })).toBeInTheDocument();
@@ -201,7 +198,7 @@ describe("SearchTools", () => {
 
   it("should navigate to tool view when tool ID is clicked", async () => {
     const user = userEvent.setup({ delay: null });
-    render(<SearchTools {...defaultProps} />, { wrapper: createWrapper() });
+    renderWithProviders(<SearchTools {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("Perplexity Search")).toBeInTheDocument();
@@ -218,7 +215,7 @@ describe("SearchTools", () => {
 
   it("should navigate back from tool view to table", async () => {
     const user = userEvent.setup({ delay: null });
-    render(<SearchTools {...defaultProps} />, { wrapper: createWrapper() });
+    renderWithProviders(<SearchTools {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("Perplexity Search")).toBeInTheDocument();
@@ -237,6 +234,104 @@ describe("SearchTools", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("search-tool-view")).not.toBeInTheDocument();
       expect(screen.getByText("Perplexity Search")).toBeInTheDocument();
+    });
+  });
+
+  describe("URL state", () => {
+    const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) => onUrlUpdate.mock.calls.at(-1)?.[0];
+
+    const renderWithStableUrl = (searchParams: Record<string, string>, onUrlUpdate: OnUrlUpdateFunction) =>
+      render(
+        <NuqsTestingAdapter
+          searchParams={searchParams}
+          onUrlUpdate={onUrlUpdate}
+          hasMemory
+          resetUrlUpdateQueueOnMount={false}
+        >
+          <QueryClientProvider client={testQueryClient}>
+            <SearchTools {...defaultProps} />
+          </QueryClientProvider>
+        </NuqsTestingAdapter>,
+      );
+
+    it("opens the tool named by search_tool in the URL", async () => {
+      renderWithProviders(<SearchTools {...defaultProps} />, { searchParams: { search_tool: "tool-2" } });
+      expect(await screen.findByText(/Search Tool View: Tavily Search/)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /tool-1/ })).not.toBeInTheDocument();
+    });
+
+    it("falls back to the table and clears search_tool when it names an unknown tool", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithStableUrl({ search_tool: "missing" }, onUrlUpdate);
+
+      expect(await screen.findByRole("button", { name: /tool-1/ })).toBeInTheDocument();
+      expect(screen.queryByTestId("search-tool-view")).not.toBeInTheDocument();
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.has("search_tool")).toBe(false));
+      expect(lastUrl(onUrlUpdate)?.options.history).toBe("replace");
+    });
+
+    it("shows a loading state for a search_tool deep link until the tools arrive", async () => {
+      let resolveTools: (value: { search_tools: SearchTool[] }) => void = () => {};
+      vi.mocked(networking.fetchSearchTools).mockReturnValue(
+        new Promise((resolve) => {
+          resolveTools = resolve;
+        }),
+      );
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithStableUrl({ search_tool: "tool-2" }, onUrlUpdate);
+
+      expect(await screen.findByText("Loading search tool…")).toBeInTheDocument();
+      expect(screen.queryByTestId("search-tool-view")).not.toBeInTheDocument();
+      expect(screen.queryByText("No search tools configured")).not.toBeInTheDocument();
+
+      resolveTools({ search_tools: mockSearchTools });
+
+      expect(await screen.findByText(/Search Tool View: Tavily Search/)).toBeInTheDocument();
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+    });
+
+    it("keeps the open tool view mounted when the page opens a modal", async () => {
+      const user = userEvent.setup({ delay: null });
+      renderWithProviders(<SearchTools {...defaultProps} />, { searchParams: { search_tool: "tool-2" } });
+      await screen.findByText(/Search Tool View: Tavily Search/);
+      expect(searchToolViewMounts.count).toBe(1);
+
+      await user.click(screen.getByRole("button", { name: /add new search tool/i }));
+
+      expect(screen.getByTestId("create-search-tool-modal")).toBeInTheDocument();
+      expect(screen.getByTestId("search-tool-view")).toBeInTheDocument();
+      expect(searchToolViewMounts.count).toBe(1);
+    });
+
+    it("pushes search_tool when a tool ID is clicked and clears it on Back", async () => {
+      const user = userEvent.setup({ delay: null });
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<SearchTools {...defaultProps} />, { onUrlUpdate });
+
+      await user.click(await screen.findByRole("button", { name: /tool-1/ }));
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.get("search_tool")).toBe("tool-1"));
+      expect(lastUrl(onUrlUpdate)?.options.history).toBe("push");
+
+      await user.click(await screen.findByRole("button", { name: "Back" }));
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.has("search_tool")).toBe(false));
+      expect(await screen.findByRole("button", { name: /tool-1/ })).toBeInTheDocument();
+    });
+
+    it("keeps the edit modal out of the URL and on the table", async () => {
+      const user = userEvent.setup({ delay: null });
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<SearchTools {...defaultProps} />, { onUrlUpdate });
+
+      await screen.findByText("Perplexity Search");
+      await user.click(screen.getByTestId("search-tool-actions-tool-1"));
+      await user.click(await screen.findByTestId("search-tool-action-edit"));
+      await waitFor(() => expect(screen.getByLabelText("Search Tool Name")).toHaveValue("Perplexity Search"));
+      expect(screen.queryByTestId("search-tool-view")).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByLabelText("Search Tool Name")).not.toBeInTheDocument());
+      expect(screen.queryByTestId("search-tool-view")).not.toBeInTheDocument();
+      expect(onUrlUpdate).not.toHaveBeenCalled();
     });
   });
 });

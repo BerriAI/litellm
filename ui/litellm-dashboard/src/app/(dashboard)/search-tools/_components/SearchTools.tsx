@@ -1,6 +1,7 @@
 import { isAdminRole } from "@/utils/roles";
 import { useQuery } from "@tanstack/react-query";
-import React, { useState } from "react";
+import { parseAsString, useQueryState } from "nuqs";
+import React, { useEffect, useState } from "react";
 import { z } from "zod/v4";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { toast } from "@/lib/toast";
@@ -49,6 +50,8 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
   const {
     data: searchTools,
     isLoading: isLoadingTools,
+    isFetching: isFetchingTools,
+    isError: isToolsError,
     refetch,
   } = useQuery({
     queryKey: ["searchTools"],
@@ -57,7 +60,13 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
       return fetchSearchTools(accessToken).then((res) => res.search_tools || []);
     },
     enabled: !!accessToken,
-  }) as { data: SearchTool[]; isLoading: boolean; refetch: () => void };
+  }) as {
+    data: SearchTool[] | undefined;
+    isLoading: boolean;
+    isFetching: boolean;
+    isError: boolean;
+    refetch: () => void;
+  };
 
   const { data: providersResponse, isLoading: isLoadingProviders } = useQuery({
     queryKey: ["searchProviders"],
@@ -73,15 +82,16 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
   const [toolIdToDelete, setToolToDelete] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
-  const [editTool, setEditTool] = useState(false);
+  const [selectedToolId, setSelectedToolId] = useQueryState(
+    "search_tool",
+    parseAsString.withOptions({ history: "push" }),
+  );
+  const [editToolId, setEditToolId] = useState<string | null>(null);
   const [isCreateModalVisible, setCreateModalVisible] = useState(false);
-  const [isEditModalVisible, setEditModalVisible] = useState(false);
   const form = useZodForm(editSearchToolSchema, { defaultValues: EMPTY_EDIT_VALUES });
 
   const handleView = (toolId: string) => {
-    setSelectedToolId(toolId);
-    setEditTool(false);
+    void setSelectedToolId(toolId);
   };
 
   const handleEditOpen = (toolId: string) => {
@@ -96,8 +106,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
       description: tool.search_tool_info?.description,
     };
     form.reset(editFormValues);
-    setSelectedToolId(toolId);
-    setEditModalVisible(true);
+    setEditToolId(toolId);
   };
 
   function handleDelete(toolId: string) {
@@ -134,6 +143,11 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
     ? availableProviders.find((p) => p.provider_name === toolToDelete.litellm_params.search_provider)
     : null;
 
+  const closeEditModal = () => {
+    form.reset(EMPTY_EDIT_VALUES);
+    setEditToolId(null);
+  };
+
   const handleCreateSuccess = (newSearchTool: SearchTool) => {
     setCreateModalVisible(false);
     refetch();
@@ -141,14 +155,12 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
 
   const submitEdit = form.handleSubmit(
     async (values) => {
-      if (!accessToken || !selectedToolId) return;
+      if (!accessToken || !editToolId) return;
 
       try {
-        await updateSearchTool(accessToken, selectedToolId, buildSearchToolPayload(values));
+        await updateSearchTool(accessToken, editToolId, buildSearchToolPayload(values));
         toast.success("Search tool updated successfully");
-        setEditModalVisible(false);
-        form.reset(EMPTY_EDIT_VALUES);
-        setSelectedToolId(null);
+        closeEditModal();
         refetch();
       } catch (error) {
         console.error("Failed to update search tool:", error);
@@ -162,9 +174,17 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
   );
 
   const handleEditSubmit = () => {
-    if (!accessToken || !selectedToolId) return;
+    if (!accessToken || !editToolId) return;
     void submitEdit();
   };
+
+  const selectedTool = selectedToolId ? searchTools?.find((tool) => tool.search_tool_id === selectedToolId) : undefined;
+  const hasSettledTools = searchTools !== undefined && !isFetchingTools;
+  const isSelectedToolMissing = selectedToolId !== null && !selectedTool && hasSettledTools;
+
+  useEffect(() => {
+    if (isSelectedToolMissing) void setSelectedToolId(null, { history: "replace" });
+  }, [isSelectedToolMissing, setSelectedToolId]);
 
   const renderEditForm = () => (
     <form onSubmit={(event) => event.preventDefault()}>
@@ -217,32 +237,31 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
     return <div className="p-6 text-center text-muted-foreground">Missing required authentication parameters.</div>;
   }
 
-  const ToolsTab = () =>
-    selectedToolId ? (
-      <SearchToolView
-        searchTool={
-          searchTools?.find((tool: SearchTool) => tool.search_tool_id === selectedToolId) || {
-            search_tool_id: "",
-            search_tool_name: "",
-            litellm_params: {
-              search_provider: "",
-            },
-          }
-        }
-        onBack={() => {
-          setEditTool(false);
-          setSelectedToolId(null);
-          refetch();
-        }}
-        isEditing={editTool}
-        accessToken={accessToken}
-        availableProviders={availableProviders}
-      />
-    ) : (
+  const closeToolView = () => {
+    void setSelectedToolId(null);
+    refetch();
+  };
+
+  const renderToolsContent = () => {
+    if (selectedTool) {
+      return (
+        <SearchToolView
+          searchTool={selectedTool}
+          onBack={closeToolView}
+          accessToken={accessToken}
+          availableProviders={availableProviders}
+        />
+      );
+    }
+    if (selectedToolId && isLoadingTools) {
+      return <div className="p-6 text-center text-muted-foreground">Loading search tool…</div>;
+    }
+    return (
       <div className="w-full h-full">
         <SearchToolTable
           searchTools={searchTools || []}
           isLoading={isLoadingTools}
+          isError={isToolsError}
           availableProviders={availableProviders}
           onView={handleView}
           onEdit={handleEditOpen}
@@ -250,6 +269,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         />
       </div>
     );
+  };
 
   return (
     <div className="w-full h-full p-6">
@@ -285,13 +305,9 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
       />
 
       <Dialog
-        open={isEditModalVisible}
+        open={editToolId !== null}
         onOpenChange={(open) => {
-          if (!open) {
-            setEditModalVisible(false);
-            form.reset(EMPTY_EDIT_VALUES);
-            setSelectedToolId(null);
-          }
+          if (!open) closeEditModal();
         }}
       >
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[600px]">
@@ -300,14 +316,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
           </DialogHeader>
           {renderEditForm()}
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setEditModalVisible(false);
-                form.reset(EMPTY_EDIT_VALUES);
-                setSelectedToolId(null);
-              }}
-            >
+            <Button variant="outline" onClick={closeEditModal}>
               Cancel
             </Button>
             <Button onClick={handleEditSubmit}>OK</Button>
@@ -323,7 +332,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         </Button>
       )}
 
-      <ToolsTab />
+      {renderToolsContent()}
     </div>
   );
 };

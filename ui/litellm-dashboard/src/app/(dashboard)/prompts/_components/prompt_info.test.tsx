@@ -1,7 +1,10 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import PromptInfoView from "./prompt_info";
 import * as networking from "@/components/networking";
 
@@ -31,14 +34,67 @@ const promptWithoutTemplate = {
   environments: [],
 };
 
+const promptWithTemplate = {
+  ...promptWithoutTemplate,
+  prompt_spec: { ...promptWithoutTemplate.prompt_spec, version: 3, environment: "development" },
+  raw_prompt_template: { litellm_prompt_id: "support-reply", content: "Hello {{name}}" },
+  environments: ["development", "production"],
+};
+
+const versionRow = (version: number) => ({
+  ...promptWithoutTemplate.prompt_spec,
+  prompt_id: `support-reply.v${version}`,
+  version,
+  environment: "development",
+});
+
+const renderInfoWithStableUrl = (
+  searchParams: Record<string, string>,
+  onUrlUpdate: OnUrlUpdateFunction,
+  props: { initialEnvironment?: string; onClose?: () => void } = {},
+) =>
+  render(
+    <NuqsTestingAdapter
+      searchParams={searchParams}
+      onUrlUpdate={onUrlUpdate}
+      hasMemory
+      resetUrlUpdateQueueOnMount={false}
+    >
+      <QueryClientProvider client={testQueryClient}>
+        <PromptInfoView
+          promptId="support-reply"
+          initialEnvironment={props.initialEnvironment}
+          onClose={props.onClose ?? vi.fn()}
+          accessToken="sk-test"
+          isAdmin={true}
+        />
+      </QueryClientProvider>
+    </NuqsTestingAdapter>,
+  );
+
+const renderInfo = (searchParams: Record<string, string>, onUrlUpdate?: OnUrlUpdateFunction) =>
+  renderWithProviders(
+    <PromptInfoView
+      promptId="support-reply"
+      initialEnvironment="development"
+      onClose={vi.fn()}
+      accessToken="sk-test"
+      isAdmin={true}
+    />,
+    { searchParams, onUrlUpdate },
+  );
+
+const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) => onUrlUpdate.mock.calls.at(-1)?.[0];
+
 describe("PromptInfoView environment scoping", () => {
   beforeEach(() => {
+    testQueryClient.clear();
     vi.mocked(networking.getPromptInfo).mockReset().mockResolvedValue(promptWithoutTemplate);
     vi.mocked(networking.getPromptVersions).mockReset().mockResolvedValue({ prompts: [] });
   });
 
   it("fetches the initial environment it was opened with", async () => {
-    render(
+    renderWithProviders(
       <PromptInfoView
         promptId="support-reply"
         initialEnvironment="staging"
@@ -53,7 +109,9 @@ describe("PromptInfoView environment scoping", () => {
   });
 
   it("fetches the serve default when opened without an environment", async () => {
-    render(<PromptInfoView promptId="support-reply" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
+    renderWithProviders(
+      <PromptInfoView promptId="support-reply" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />,
+    );
 
     await screen.findByRole("tab", { name: "Raw JSON" });
     expect(networking.getPromptInfo).toHaveBeenCalledWith("sk-test", "support-reply", undefined);
@@ -62,6 +120,7 @@ describe("PromptInfoView environment scoping", () => {
 
 describe("PromptInfoView code snippets", () => {
   beforeEach(() => {
+    testQueryClient.clear();
     vi.mocked(networking.getPromptVersions).mockReset().mockResolvedValue({ prompts: [] });
   });
 
@@ -77,7 +136,7 @@ describe("PromptInfoView code snippets", () => {
         environments,
       });
 
-    render(
+    renderWithProviders(
       <PromptInfoView
         promptId="support-reply"
         initialEnvironment={environment}
@@ -94,13 +153,18 @@ describe("PromptInfoView code snippets", () => {
 
 describe("PromptInfoView tabs", () => {
   beforeEach(() => {
+    testQueryClient.clear();
     vi.mocked(networking.getPromptInfo).mockReset().mockResolvedValue(promptWithoutTemplate);
     vi.mocked(networking.getPromptVersions).mockReset().mockResolvedValue({ prompts: [] });
   });
 
   it("shows the raw API response for a prompt that has no template", async () => {
     const user = userEvent.setup();
-    render(<PromptInfoView promptId="support-reply" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(
+      <PromptInfoView promptId="support-reply" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />,
+      { onUrlUpdate },
+    );
 
     expect(await screen.findByRole("tab", { name: "Raw JSON" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Prompt Template" })).not.toBeInTheDocument();
@@ -109,5 +173,164 @@ describe("PromptInfoView tabs", () => {
 
     expect(screen.getByText("Raw API Response")).toBeVisible();
     expect(screen.getByText(/"prompt_id": "support-reply"/)).toBeVisible();
+    await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.get("tab")).toBe("raw"));
+  });
+
+  it("opens on the tab in the URL", async () => {
+    renderInfo({ tab: "raw" });
+
+    expect(await screen.findByRole("tab", { name: "Raw JSON" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Raw API Response")).toBeVisible();
+  });
+
+  it("opens the template tab from the URL when the prompt has a template", async () => {
+    vi.mocked(networking.getPromptInfo).mockResolvedValue(promptWithTemplate);
+    renderInfo({ tab: "template" });
+
+    expect(await screen.findByRole("tab", { name: "Prompt Template" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Hello {{name}}")).toBeVisible();
+  });
+
+  it("falls back to the overview and clears tab=template when the prompt has no template", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderInfoWithStableUrl({ tab: "template" }, onUrlUpdate);
+
+    expect(await screen.findByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.has("tab")).toBe(false));
+    expect(onUrlUpdate).toHaveBeenCalled();
+  });
+});
+
+describe("PromptInfoView versions and environments in the URL", () => {
+  beforeEach(() => {
+    testQueryClient.clear();
+    vi.mocked(networking.getPromptInfo).mockReset().mockResolvedValue(promptWithTemplate);
+    vi.mocked(networking.getPromptVersions)
+      .mockReset()
+      .mockResolvedValue({ prompts: [versionRow(1), versionRow(2), versionRow(3)] });
+  });
+
+  it("loads the version named in the URL", async () => {
+    vi.mocked(networking.getPromptInfo).mockResolvedValue({
+      ...promptWithTemplate,
+      prompt_spec: { ...promptWithTemplate.prompt_spec, version: 2 },
+    });
+    renderInfo({ version: "2", prompt_env: "development" });
+
+    expect(await screen.findByText("Viewing v2 — not the latest version (v3)")).toBeInTheDocument();
+    expect(networking.getPromptInfo).toHaveBeenCalledWith("sk-test", "support-reply.v2", "development");
+    expect(networking.getPromptInfo).not.toHaveBeenCalledWith("sk-test", "support-reply", "development");
+  });
+
+  it("loads the environment in the URL over the one it was opened with", async () => {
+    renderInfo({ prompt_env: "production" });
+
+    await screen.findByRole("tab", { name: "Raw JSON" });
+    expect(networking.getPromptInfo).toHaveBeenCalledWith("sk-test", "support-reply", "production");
+    expect(networking.getPromptInfo).not.toHaveBeenCalledWith("sk-test", "support-reply", "development");
+    await waitFor(() =>
+      expect(networking.getPromptVersions).toHaveBeenCalledWith("sk-test", "support-reply", "production"),
+    );
+  });
+
+  it("writes the clicked version to the URL and loads it", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderInfo({}, onUrlUpdate);
+
+    await user.click(await screen.findByText("v2"));
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.get("version")).toBe("2"));
+    expect(lastUrl(onUrlUpdate)?.searchParams.get("prompt_env")).toBe("development");
+    await waitFor(() =>
+      expect(networking.getPromptInfo).toHaveBeenCalledWith("sk-test", "support-reply.v2", "development"),
+    );
+  });
+
+  it("writes the clicked environment to the URL and drops the version", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderInfo({ version: "2", prompt_env: "development" }, onUrlUpdate);
+
+    await user.click(await screen.findByRole("button", { name: "production" }));
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.get("prompt_env")).toBe("production"));
+    expect(lastUrl(onUrlUpdate)?.searchParams.has("version")).toBe(false);
+    await waitFor(() =>
+      expect(networking.getPromptInfo).toHaveBeenCalledWith("sk-test", "support-reply", "production"),
+    );
+  });
+
+  it("drops the version from the URL when going back to the latest", async () => {
+    vi.mocked(networking.getPromptInfo).mockResolvedValue({
+      ...promptWithTemplate,
+      prompt_spec: { ...promptWithTemplate.prompt_spec, version: 2 },
+    });
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderInfo({ version: "2", prompt_env: "development" }, onUrlUpdate);
+
+    await user.click(await screen.findByRole("button", { name: "Go to latest" }));
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.has("version")).toBe(false));
+    expect(lastUrl(onUrlUpdate)?.searchParams.get("prompt_env")).toBe("development");
+  });
+});
+
+describe("PromptInfoView load failures", () => {
+  beforeEach(() => {
+    testQueryClient.clear();
+    vi.mocked(networking.getPromptVersions)
+      .mockReset()
+      .mockResolvedValue({ prompts: [versionRow(1), versionRow(2), versionRow(3)] });
+  });
+
+  it("drops a version from the URL that fails to load and shows the latest one", async () => {
+    vi.mocked(networking.getPromptInfo)
+      .mockReset()
+      .mockImplementation((_token, promptId) =>
+        promptId === "support-reply.v9" ? Promise.reject(new Error("404")) : Promise.resolve(promptWithTemplate),
+      );
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderInfoWithStableUrl({ version: "9", prompt_env: "development" }, onUrlUpdate);
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.has("version")).toBe(false));
+    expect(lastUrl(onUrlUpdate)?.searchParams.get("prompt_env")).toBe("development");
+    expect(lastUrl(onUrlUpdate)?.options.history).toBe("replace");
+    expect(await screen.findByRole("tab", { name: "Overview" })).toBeInTheDocument();
+    expect(networking.getPromptInfo).toHaveBeenCalledWith("sk-test", "support-reply.v9", "development");
+    expect(networking.getPromptInfo).toHaveBeenLastCalledWith("sk-test", "support-reply", "development");
+    expect(screen.queryByText("Prompt not found")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the default environment when the one in the URL fails to load", async () => {
+    vi.mocked(networking.getPromptInfo)
+      .mockReset()
+      .mockImplementation((_token, _promptId, environment) =>
+        environment === "qa" ? Promise.reject(new Error("404")) : Promise.resolve(promptWithTemplate),
+      );
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderInfoWithStableUrl({ prompt_env: "qa", tab: "raw" }, onUrlUpdate);
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.has("prompt_env")).toBe(false));
+    expect(lastUrl(onUrlUpdate)?.searchParams.get("tab")).toBe("raw");
+    expect(await screen.findByRole("tab", { name: "Raw JSON" })).toHaveAttribute("aria-selected", "true");
+    expect(networking.getPromptInfo).toHaveBeenLastCalledWith("sk-test", "support-reply", undefined);
+  });
+
+  it("offers a way back when the prompt itself cannot be loaded", async () => {
+    vi.mocked(networking.getPromptInfo).mockReset().mockRejectedValue(new Error("404"));
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderInfoWithStableUrl({}, onUrlUpdate, { onClose });
+
+    expect(await screen.findByText("Prompt not found")).toBeInTheDocument();
+    expect(networking.getPromptInfo).toHaveBeenCalledTimes(1);
+    expect(onUrlUpdate).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /back to prompts/i }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

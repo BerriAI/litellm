@@ -1,22 +1,20 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  getPromptInfo,
-  getPromptVersions,
-  PromptSpec,
-  PromptTemplateBase,
-  deletePromptCall,
-} from "@/components/networking";
+import { PromptSpec, deletePromptCall } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { ArrowLeft, CheckIcon, CopyIcon, Pencil, Trash2 } from "lucide-react";
 import { toast } from "@/lib/toast";
 import PromptCodeSnippets from "./prompt_editor_view/PromptCodeSnippets";
 import { extractModel, extractTemplateVariables, getBasePromptId, getCurrentVersion } from "./prompt_utils";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useUrlTab } from "@/hooks/useUrlTab";
+import { usePromptInfoData, type PromptInfoResponse } from "./usePromptInfoData";
+
+export type PromptEditPayload = Pick<PromptInfoResponse, "prompt_spec" | "raw_prompt_template">;
 
 export interface PromptInfoProps {
   promptId: string;
@@ -25,8 +23,12 @@ export interface PromptInfoProps {
   accessToken: string | null;
   isAdmin: boolean;
   onDelete?: () => void;
-  onEdit?: (promptData: any) => void;
+  onEdit?: (promptData: PromptEditPayload) => void;
 }
+
+const PROMPT_INFO_TABS = ["overview", "template", "raw"] as const;
+type PromptInfoTab = (typeof PROMPT_INFO_TABS)[number];
+const TABS_WITHOUT_TEMPLATE: readonly PromptInfoTab[] = ["overview", "raw"];
 
 const PromptInfoView: React.FC<PromptInfoProps> = ({
   promptId,
@@ -37,93 +39,40 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
   onDelete,
   onEdit,
 }) => {
-  const [promptData, setPromptData] = useState<PromptSpec | null>(null);
-  const [promptTemplate, setPromptTemplate] = useState<PromptTemplateBase | null>(null);
-  const [rawApiResponse, setRawApiResponse] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const {
+    rawApiResponse,
+    promptTemplate,
+    environments,
+    loading,
+    selectedEnv,
+    selectedVersion,
+    versionHistory,
+    loadingVersions,
+    selectEnvironment,
+    selectVersion,
+  } = usePromptInfoData(promptId, accessToken, initialEnvironment);
+  const [tab, setTab] = useUrlTab(loading || promptTemplate ? PROMPT_INFO_TABS : TABS_WITHOUT_TEMPLATE, "overview");
 
-  // Environment and version state
-  const [environments, setEnvironments] = useState<string[]>([]);
-  const [selectedEnv, setSelectedEnv] = useState<string | null>(null);
-  const [versionHistory, setVersionHistory] = useState<PromptSpec[]>([]);
-  const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
-  const [loadingVersions, setLoadingVersions] = useState(false);
-
-  // Fetches the requested environment (or the serve-time default when omitted) plus the environments list
-  const fetchPromptInfo = async (environment?: string) => {
-    try {
-      setLoading(true);
-      if (!accessToken) return;
-      const response = await getPromptInfo(accessToken, promptId, environment);
-      setPromptData(response.prompt_spec);
-      setPromptTemplate(response.raw_prompt_template);
-      setRawApiResponse(response);
-
-      // Set environments from response
-      if (response.environments && response.environments.length > 0) {
-        setEnvironments(response.environments);
-        if (!selectedEnv) {
-          setSelectedEnv(response.prompt_spec.environment || response.environments[0]);
-        }
-      }
-      setSelectedVersion(response.prompt_spec.version || null);
-    } catch (error) {
-      toast.fromError("Failed to load prompt information");
-      console.error("Error fetching prompt info:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Fetch version history for selected environment
-  const fetchVersionHistory = async (env: string) => {
-    if (!accessToken) return;
-    setLoadingVersions(true);
-    try {
-      const response = await getPromptVersions(accessToken, promptId, env);
-      setVersionHistory(response.prompts || []);
-    } catch {
-      setVersionHistory([]);
-    } finally {
-      setLoadingVersions(false);
-    }
-  };
-
-  const isInitialMount = useRef(true);
-
-  useEffect(() => {
-    setSelectedEnv(null);
-    setEnvironments([]);
-    setVersionHistory([]);
-    fetchPromptInfo(initialEnvironment);
-  }, [promptId, accessToken]);
-
-  // When environment changes (user clicks tab), re-fetch — skip initial mount
-  useEffect(() => {
-    if (isInitialMount.current) {
-      isInitialMount.current = false;
-      // Still fetch version history on initial mount once selectedEnv is set
-      if (selectedEnv && accessToken) {
-        fetchVersionHistory(selectedEnv);
-      }
-      return;
-    }
-    if (selectedEnv && accessToken) {
-      fetchPromptInfo(selectedEnv);
-      fetchVersionHistory(selectedEnv);
-    }
-  }, [selectedEnv]);
-
-  if (loading && !promptData) {
+  if (loading && !rawApiResponse) {
     return <div className="p-4">Loading...</div>;
   }
 
-  if (!promptData) {
-    return <div className="p-4">Prompt not found</div>;
+  if (!rawApiResponse) {
+    return (
+      <div className="p-4">
+        <Button variant="ghost" onClick={onClose} className="mb-4">
+          <ArrowLeft className="size-4" />
+          Back to Prompts
+        </Button>
+        <p>Prompt not found</p>
+      </div>
+    );
   }
+
+  const promptData = rawApiResponse.prompt_spec;
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return "-";
@@ -146,7 +95,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
   };
 
   const handleDeleteConfirm = async () => {
-    if (!accessToken || !promptData) return;
+    if (!accessToken) return;
     setIsDeleting(true);
     try {
       await deletePromptCall(accessToken, basePromptId);
@@ -166,23 +115,17 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
     setShowDeleteConfirm(false);
   };
 
-  const handleVersionClick = async (version: PromptSpec) => {
+  const handleVersionClick = (version: PromptSpec) => {
     if (!accessToken || !selectedEnv) return;
-    // Fetch specific version's info
-    const versionNum = version.version || 1;
-    setSelectedVersion(versionNum);
-    try {
-      const versionedId = `${promptId}.v${versionNum}`;
-      const response = await getPromptInfo(accessToken, versionedId, selectedEnv);
-      setPromptData(response.prompt_spec);
-      setPromptTemplate(response.raw_prompt_template);
-      setRawApiResponse(response);
-    } catch {
-      toast.fromError(`Failed to load version v${versionNum}`);
-    }
+    selectVersion(version.version || 1, selectedEnv);
   };
 
-  const promptModel = promptData ? extractModel(promptData) || "gpt-4o" : "gpt-4o";
+  const showLatestVersion = () => {
+    if (!accessToken || !selectedEnv) return;
+    selectVersion(null, selectedEnv);
+  };
+
+  const promptModel = extractModel(promptData) || "gpt-4o";
   const basePromptId = getBasePromptId(promptData);
   const currentVersion = getCurrentVersion(promptData);
   const latestVersion = versionHistory.length > 0 ? Math.max(...versionHistory.map((v) => v.version || 1)) : null;
@@ -248,10 +191,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
             .map((env) => (
               <button
                 key={env}
-                onClick={() => {
-                  setSelectedEnv(env);
-                  setSelectedVersion(null);
-                }}
+                onClick={() => selectEnvironment(env)}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                   selectedEnv === env
                     ? env === "production"
@@ -277,30 +217,23 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
           <p className="text-sm text-warning">
             Viewing v{selectedVersion} — not the latest version (v{latestVersion})
           </p>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              const latest = versionHistory.find((v) => v.version === latestVersion);
-              if (latest) handleVersionClick(latest);
-            }}
-          >
+          <Button variant="ghost" size="sm" onClick={showLatestVersion}>
             Go to latest
           </Button>
         </div>
       )}
 
-      <Tabs defaultValue="overview">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             Overview
           </TabsTrigger>
           {promptTemplate && (
-            <TabsTrigger value="prompt-template" className="flex-none rounded-none px-4 py-2">
+            <TabsTrigger value="template" className="flex-none rounded-none px-4 py-2">
               Prompt Template
             </TabsTrigger>
           )}
-          <TabsTrigger value="raw-json" className="flex-none rounded-none px-4 py-2">
+          <TabsTrigger value="raw" className="flex-none rounded-none px-4 py-2">
             Raw JSON
           </TabsTrigger>
         </TabsList>
@@ -391,11 +324,11 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
                               onClick={(e) => {
                                 e.stopPropagation();
                                 // Build a response-like object for the editor
-                                const editData = {
+                                const editData: PromptEditPayload = {
                                   prompt_spec: {
                                     ...v,
                                     prompt_id: basePromptId,
-                                    environment: selectedEnv,
+                                    environment: selectedEnv ?? undefined,
                                   },
                                   raw_prompt_template: isSelected ? promptTemplate : null,
                                 };
@@ -419,7 +352,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
 
           {/* Prompt Template Panel */}
           {promptTemplate && (
-            <TabsContent value="prompt-template" keepMounted>
+            <TabsContent value="template" keepMounted>
               <Card className="block p-6">
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-lg font-medium">Prompt Template</h3>
@@ -467,7 +400,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
           )}
 
           {/* Raw JSON Panel */}
-          <TabsContent value="raw-json" keepMounted>
+          <TabsContent value="raw" keepMounted>
             <Card className="block p-6">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium">Raw API Response</h3>
