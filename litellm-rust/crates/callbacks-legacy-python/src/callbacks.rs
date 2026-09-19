@@ -6,7 +6,7 @@ use litellm_host::event::{RequestContext, WireRequest};
 use litellm_host_python::to_py;
 use pyo3::{exceptions::PyBaseException, prelude::*, types::PyDict};
 
-use crate::legacy_python::{Logging, Wrapper};
+use crate::python::{Logging, Wrapper};
 use crate::logger::PythonLogger;
 
 pub trait LegacyCallbacks {

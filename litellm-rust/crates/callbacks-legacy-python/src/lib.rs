@@ -13,7 +13,7 @@ mod adapter;
 mod call;
 mod callbacks;
 mod deferred;
-mod legacy_python;
+mod python;
 mod logger;
 mod preparation;
 #[cfg(test)]
