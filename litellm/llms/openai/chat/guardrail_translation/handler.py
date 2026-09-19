@@ -696,11 +696,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     ModelResponse,
                     stream_chunk_builder(
                         chunks=[  # mutable-ok: callee takes a list
-                            response.model_copy(
-                                update=MappingProxyType(
-                                    {"choices": tuple(choice for choice in response.choices if choice.index == index)}
-                                )
-                            )
+                            OpenAIChatCompletionsHandler._narrowed_to_choice(response, index)
                             for response in responses_so_far
                         ],
                         logging_obj=litellm_logging_obj,
@@ -710,16 +706,16 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             for index in choice_indices
         )
         (_, base_response), *_ = rebuilt_by_index
-        return base_response.model_copy(
-            update=MappingProxyType(
-                {
-                    "choices": tuple(
-                        rebuilt.choices[0].model_copy(update=MappingProxyType({"index": index}))
-                        for index, rebuilt in rebuilt_by_index
-                    )
-                }
-            )
-        )
+        stitched_choices: Final = [  # mutable-ok: choices is a List field; a tuple there breaks model_dump round-trips
+            rebuilt.choices[0].model_copy(update=MappingProxyType({"index": index}))
+            for index, rebuilt in rebuilt_by_index
+        ]
+        return base_response.model_copy(update=MappingProxyType({"choices": stitched_choices}))
+
+    @staticmethod
+    def _narrowed_to_choice(response: "ModelResponseStream", index: int) -> "ModelResponseStream":
+        narrowed: Final = [choice for choice in response.choices if choice.index == index]  # mutable-ok: List field
+        return response.model_copy(update=MappingProxyType({"choices": narrowed}))
 
     def build_stream_error_items(
         self,
