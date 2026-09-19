@@ -162,7 +162,7 @@ make format
 
 > **Black formatting is enforced in CI.** All PRs must pass the Black formatting check.
 >
-> - **AI coding agents** (Claude Code, Copilot, Cursor, etc.): `AGENTS.md` and `CLAUDE.md` instruct agents to run `poetry run black .` before committing.
+> - **AI coding agents** (Claude Code, Copilot, Cursor, etc.): `AGENTS.md` instructs agents to run `poetry run black .` before committing.
 > - **VS Code users**: Install the [Black Formatter extension](https://marketplace.visualstudio.com/items?itemName=ms-python.black-formatter) and enable format-on-save:
 >   ```json
 >   {
