@@ -49,7 +49,7 @@ import { cn } from "@/lib/cva.config";
 import UserEnvVarsModal from "./UserEnvVarsModal";
 import { listMCPUserEnvVarStatus } from "@/components/networking";
 
-type SortKey = "created_desc" | "updated_desc" | "name_asc" | "health";
+export type SortKey = "created_desc" | "updated_desc" | "name_asc" | "health";
 
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: "created_desc", label: "Recently created" },
@@ -64,32 +64,33 @@ const HEALTH_RANK: Record<string, number> = {
   healthy: 2,
 };
 
-const compareServers = (a: MCPServer, b: MCPServer, sort: SortKey): number => {
+const compareByName = (a: MCPServer, b: MCPServer): number => {
+  const nameA = (a.server_name || a.alias || a.server_id).toLowerCase();
+  const nameB = (b.server_name || b.alias || b.server_id).toLowerCase();
+  return nameA.localeCompare(nameB) || a.server_id.localeCompare(b.server_id);
+};
+
+const compareByTimestampDesc = (a: string | null | undefined, b: string | null | undefined): number => {
+  const ta = a ? new Date(a).getTime() : 0;
+  const tb = b ? new Date(b).getTime() : 0;
+  return tb - ta;
+};
+
+export const compareServers = (a: MCPServer, b: MCPServer, sort: SortKey): number => {
   switch (sort) {
-    case "name_asc": {
-      const nameA = (a.server_name || a.alias || a.server_id).toLowerCase();
-      const nameB = (b.server_name || b.alias || b.server_id).toLowerCase();
-      return nameA.localeCompare(nameB);
-    }
-    case "updated_desc": {
-      const ta = a.updated_at ? new Date(a.updated_at).getTime() : 0;
-      const tb = b.updated_at ? new Date(b.updated_at).getTime() : 0;
-      return tb - ta;
-    }
+    case "name_asc":
+      return compareByName(a, b);
+    case "updated_desc":
+      return compareByTimestampDesc(a.updated_at, b.updated_at) || compareByName(a, b);
     case "health": {
       const ra = HEALTH_RANK[a.status ?? "unknown"] ?? 1;
       const rb = HEALTH_RANK[b.status ?? "unknown"] ?? 1;
       if (ra !== rb) return ra - rb;
-      const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
-      return tb - ta;
+      return compareByTimestampDesc(a.created_at, b.created_at) || compareByName(a, b);
     }
     case "created_desc":
-    default: {
-      const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
-      return tb - ta;
-    }
+    default:
+      return compareByTimestampDesc(a.created_at, b.created_at) || compareByName(a, b);
   }
 };
 
@@ -301,13 +302,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
           server.mcp_access_groups?.some((g: any) => (typeof g === "string" ? g === group : g && g.name === group)),
         );
       }
-      const sorted = [...filtered].sort((a, b) => {
-        if (!a.created_at && !b.created_at) return 0;
-        if (!a.created_at) return 1;
-        if (!b.created_at) return -1;
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-      });
-      setFilteredServers(sorted);
+      setFilteredServers(filtered);
     },
     [serversWithHealth],
   );
