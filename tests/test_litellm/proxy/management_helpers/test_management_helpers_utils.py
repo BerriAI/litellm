@@ -1389,9 +1389,9 @@ async def test_add_new_member_runs_every_write_on_the_caller_transaction(new_mem
 
 @pytest.mark.asyncio
 async def test_add_new_member_clone_carries_rollover_max_budget():
-    """The member_add clone must copy rollover_max_budget from the team's
-    default member budget, or the new member's private row silently loses
-    unused-allowance rollover."""
+    """A member added with their own budget_duration gets a clone of the team's
+    default member budget; that clone must copy rollover_max_budget, or the
+    member's private row silently loses unused-allowance rollover."""
     from litellm.proxy._types import LitellmUserRoles
 
     new_member = Member(user_id="rollover-member", role="user")
@@ -1440,7 +1440,7 @@ async def test_add_new_member_clone_carries_rollover_max_budget():
         "budget_id": "member-budget",
         "litellm_budget_table": None,
     }
-    mock_prisma_client.db.litellm_teammembership.create = AsyncMock(return_value=mock_membership)
+    mock_prisma_client.db.litellm_teammembership.upsert = AsyncMock(return_value=mock_membership)
 
     await add_new_member(
         new_member=new_member,
@@ -1450,8 +1450,11 @@ async def test_add_new_member_clone_carries_rollover_max_budget():
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name="admin",
         default_team_budget_id="team-default-budget",
+        budget_duration="7d",
     )
 
+    mock_prisma_client.db.litellm_budgettable.create.assert_called_once()
     cloned_create_data = mock_prisma_client.db.litellm_budgettable.create.call_args.kwargs["data"]
     assert cloned_create_data["rollover_max_budget"] == 250.0
     assert cloned_create_data["max_budget"] == 100.0
+    assert cloned_create_data["budget_duration"] == "7d"
