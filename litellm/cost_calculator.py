@@ -948,10 +948,14 @@ def _extract_service_tier(source: object) -> str | None:
 
 
 def _service_tier_from_traffic_type(completion_response: object) -> str | None:
-    hidden_params: Final = cast(Mapping[str, object] | None, getattr(completion_response, "_hidden_params", None))
+    hidden_params: Final = cast(  # cast-ok: _hidden_params is an untyped dict on pydantic response objects
+        Mapping[str, object] | None, getattr(completion_response, "_hidden_params", None)
+    )
     if hidden_params is None:
         return None
-    provider_specific: Final = cast(Mapping[str, object], hidden_params.get("provider_specific_fields") or {})
+    provider_specific: Final = cast(  # cast-ok: provider_specific_fields is untyped provider metadata
+        Mapping[str, object], hidden_params.get("provider_specific_fields") or {}
+    )
     raw_traffic_type: Final = provider_specific.get("traffic_type")
     return _map_traffic_type_to_service_tier(raw_traffic_type if isinstance(raw_traffic_type, str) else None)
 
