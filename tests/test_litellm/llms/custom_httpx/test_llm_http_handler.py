@@ -259,6 +259,147 @@ def test_prepare_fake_stream_request():
     assert result_data["messages"] == [{"role": "user", "content": "Hello"}]
 
 
+def test_response_api_handler_passes_string_input_to_transform_as_user_list():
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
+    config.sign_request.return_value = ({}, None)
+    config.transform_response_api_response.return_value = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        output=[],
+        status="completed",
+        model="gpt-5.3-codex",
+    )
+
+    def transform_responses_api_request(**kwargs):
+        return {
+            "model": kwargs["model"],
+            "input": kwargs["input"],
+        }
+
+    config.transform_responses_api_request.side_effect = transform_responses_api_request
+    client = HTTPHandler(client=httpx.Client())
+    client.post = Mock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+
+    handler.response_api_handler(
+        model="gpt-5.3-codex",
+        input="Reply with exactly ROUTE_OK.",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        client=client,
+    )
+
+    assert config.transform_responses_api_request.call_args.kwargs["input"] == [
+        {"role": "user", "content": "Reply with exactly ROUTE_OK."}
+    ]
+    assert client.post.call_args.kwargs["json"]["input"] == [
+        {"role": "user", "content": "Reply with exactly ROUTE_OK."}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_response_api_handler_passes_string_input_to_transform_as_user_list():
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
+    config.sign_request.return_value = ({}, None)
+    config.should_fake_stream.return_value = False
+    config.transform_response_api_response.return_value = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        output=[],
+        status="completed",
+        model="gpt-5.3-codex",
+    )
+
+    def transform_responses_api_request(**kwargs):
+        return {
+            "model": kwargs["model"],
+            "input": kwargs["input"],
+        }
+
+    config.transform_responses_api_request.side_effect = transform_responses_api_request
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+    logging_obj = Mock()
+    logging_obj.dynamic_success_callbacks = []
+
+    await handler.async_response_api_handler(
+        model="gpt-5.3-codex",
+        input="Reply with exactly ROUTE_OK.",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+        client=client,
+    )
+
+    assert config.transform_responses_api_request.call_args.kwargs["input"] == [
+        {"role": "user", "content": "Reply with exactly ROUTE_OK."}
+    ]
+    assert client.post.call_args.kwargs["json"]["input"] == [
+        {"role": "user", "content": "Reply with exactly ROUTE_OK."}
+    ]
+
+
+def test_response_api_handler_leaves_list_input_untouched():
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
+    config.sign_request.return_value = ({}, None)
+    config.transform_response_api_response.return_value = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        output=[],
+        status="completed",
+        model="gpt-5.3-codex",
+    )
+    list_input = [{"role": "user", "content": "Reply with exactly ROUTE_OK."}]
+
+    def transform_responses_api_request(**kwargs):
+        return {"model": kwargs["model"], "input": kwargs["input"]}
+
+    config.transform_responses_api_request.side_effect = transform_responses_api_request
+    client = HTTPHandler(client=httpx.Client())
+    client.post = Mock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+
+    handler.response_api_handler(
+        model="gpt-5.3-codex",
+        input=list_input,
+        responses_api_provider_config=config,
+        response_api_optional_request_params={},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        client=client,
+    )
+
+    assert config.transform_responses_api_request.call_args.kwargs["input"] is list_input
+
+
 def test_response_api_handler_streams_when_provider_transform_adds_stream():
     handler = BaseLLMHTTPHandler()
     config = Mock()

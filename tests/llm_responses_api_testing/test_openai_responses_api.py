@@ -1204,8 +1204,9 @@ def test_basic_computer_use_preview_tool_call():
         assert request_body["truncation"] == "auto"
 
         # Validate the input format
-        assert isinstance(request_body["input"], str)
-        assert request_body["input"] == "Check the latest OpenAI news on bing.com."
+        assert request_body["input"] == [
+            {"role": "user", "content": "Check the latest OpenAI news on bing.com."}
+        ]
 
 
 def test_mcp_tools_with_responses_api():
@@ -1500,7 +1501,9 @@ async def test_aresponses_service_tier_and_safety_identifier():
             request_body["safety_identifier"] == "123"
         ), "safety_identifier should be '123' in request body"
         assert request_body["model"] == "gpt-5.5"
-        assert request_body["input"] == "Test with service tier and safety identifier"
+        assert request_body["input"] == [
+            {"role": "user", "content": "Test with service tier and safety identifier"}
+        ]
 
         # Validate the response
         print("Response:", json.dumps(response, indent=4, default=str))
@@ -1596,7 +1599,9 @@ async def test_openai_gpt5_reasoning_effort_parameter():
             request_body["reasoning"]["effort"] == "minimal"
         ), "reasoning_effort should be 'minimal' in request body"
         assert request_body["model"] == "gpt-5-mini"
-        assert request_body["input"] == "What is the capital of France?"
+        assert request_body["input"] == [
+            {"role": "user", "content": "What is the capital of France?"}
+        ]
 
         # Validate the response
         print("Response:", json.dumps(response, indent=4, default=str))
@@ -1774,7 +1779,7 @@ async def test_aresponses_extra_body_params_passed(extra_body_mock_response_data
         assert "experimental_feature" in request_body
         assert request_body["experimental_feature"] is True
         assert request_body["model"] == "gpt-5.5"
-        assert request_body["input"] == "Test input"
+        assert request_body["input"] == [{"role": "user", "content": "Test input"}]
 
 
 def test_responses_extra_body_params_passed_sync(extra_body_mock_response_data):
