@@ -513,7 +513,9 @@ class TestResponsesWSFirstFrameModelAuth:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("nested", [False, True])
     @pytest.mark.parametrize("query_model", [None, "gpt-4o-mini"])
-    async def test_endpoint_routes_on_first_frame_input_and_previous_response_id(self, nested, query_model):
+    async def test_endpoint_routes_on_first_frame_input_and_previous_response_id(
+        self, nested: bool, query_model: str | None
+    ):
         from litellm.proxy.response_api_endpoints.endpoints import (
             responses_websocket_endpoint,
         )
@@ -572,7 +574,7 @@ class TestResponsesWSFirstFrameModelAuth:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("provider_rejected", [True, False])
-    async def test_endpoint_books_a_provider_rejected_connection_as_a_failed_request(self, provider_rejected):
+    async def test_endpoint_books_a_provider_rejected_connection_as_a_failed_request(self, provider_rejected: bool):
         from litellm.proxy.response_api_endpoints.endpoints import (
             responses_websocket_endpoint,
         )

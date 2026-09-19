@@ -1503,7 +1503,9 @@ class TestNativeWebSocketDeploymentDefaults:
         assert dict(request_defaults.overrides) == {"provider_default": "configured"}
 
     @pytest.mark.asyncio
-    async def test_aresponses_websocket_keeps_first_frame_routing_hints_out_of_the_defaults(self, monkeypatch):
+    async def test_aresponses_websocket_keeps_first_frame_routing_hints_out_of_the_defaults(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
         import importlib
         from unittest.mock import AsyncMock
 
@@ -2976,7 +2978,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("nested", [False, True])
-    async def test_client_to_backend_restores_wrapped_ids(self, nested):
+    async def test_client_to_backend_restores_wrapped_ids(self, nested: bool):
         from unittest.mock import AsyncMock
 
         from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -3138,7 +3140,9 @@ class TestNativeWebSocketEncryptedContentAffinity:
             ),
         ],
     )
-    async def test_backend_to_client_books_failure_frames_as_failures(self, failure_frame, expected_status):
+    async def test_backend_to_client_books_failure_frames_as_failures(
+        self, failure_frame: dict[str, object], expected_status: int
+    ):
         import asyncio
         from unittest.mock import AsyncMock
 
