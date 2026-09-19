@@ -3243,7 +3243,7 @@ def _schedule_team_member_add_audit_logs(
         return
 
     for user in updated_users:
-        if user.user_id is None or user.user_id in existing_user_ids:
+        if user.user_id in existing_user_ids:
             continue
         asyncio.create_task(
             create_object_audit_log(
