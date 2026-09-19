@@ -58,6 +58,9 @@ describe("AlertingSettings", () => {
     renderWithProviders(<AlertingSettings accessToken="sk-test" premiumUser />);
 
     await screen.findByDisplayValue("60");
+    const numberInputs = screen.getAllByRole("spinbutton");
+    await user.type(numberInputs[1], "5");
+    await user.clear(numberInputs[1]);
     await user.click(screen.getByRole("switch", { name: "slack_alerting" }));
     await user.click(screen.getByRole("button", { name: "Update Settings" }));
 

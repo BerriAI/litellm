@@ -63,7 +63,10 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
     });
 
     const { slack_alerting, ...updatedAlertingArgs } = formValues;
-    const alertingArgs = { ...configuredAlertingArgs, ...updatedAlertingArgs };
+    const alertingArgs = {
+      ...configuredAlertingArgs,
+      ...Object.fromEntries(Object.entries(updatedAlertingArgs).filter(([, value]) => value != null && value !== "")),
+    };
     try {
       await updateConfigFieldSetting(accessToken, "alerting_args", alertingArgs);
       if (typeof slack_alerting === "boolean") {
