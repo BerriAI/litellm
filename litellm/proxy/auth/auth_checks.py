@@ -4008,19 +4008,29 @@ async def get_org_object(
         model_type=LiteLLM_OrganizationTable,
         ttl=DEFAULT_IN_MEMORY_TTL,
     )
-    if include_budget_table:
-        await user_api_key_cache.async_set_cache(
-            key=_last_known_org_cache_key(org_id),
-            value=_org_obj,
-            model_type=LiteLLM_OrganizationTable,
-            ttl=get_management_object_ttl(user_api_key_cache),
-        )
 
     return _org_obj
 
 
 def _last_known_org_cache_key(org_id: str) -> str:
     return f"org_id:{org_id}:with_budget:last_known"
+
+
+async def _keep_last_known_org(
+    org: LiteLLM_OrganizationTable, org_id: str, user_api_key_cache: UserApiKeyCache
+) -> None:
+    cache_key: Final = _last_known_org_cache_key(org_id)
+    held_locally: Final = await user_api_key_cache.async_get_cache(
+        key=cache_key, local_only=True, model_type=LiteLLM_OrganizationTable
+    )
+    if held_locally is not None:
+        return
+    await user_api_key_cache.async_set_cache(
+        key=cache_key,
+        value=org,
+        model_type=LiteLLM_OrganizationTable,
+        ttl=get_management_object_ttl(user_api_key_cache),
+    )
 
 
 async def get_org_object_for_request(
@@ -4031,7 +4041,7 @@ async def get_org_object_for_request(
     proxy_logging_obj: ProxyLogging | None,
 ) -> LiteLLM_OrganizationTable | None:
     try:
-        return await get_org_object(
+        org: Final = await get_org_object(
             org_id=org_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -4054,6 +4064,10 @@ async def get_org_object_for_request(
         if PrismaDBExceptionHandler.should_allow_request_on_db_unavailable():
             return None
         raise
+    if org is None:
+        return None
+    await _keep_last_known_org(org, org_id, user_api_key_cache)
+    return org
 
 
 async def _get_resources_from_access_groups(
