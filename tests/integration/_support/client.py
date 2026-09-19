@@ -58,13 +58,18 @@ class Gateway:
         *,
         key: str | None = None,
         params: Mapping[str, str] | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> httpx.Response:
+        request_headers: Final = {
+            "Authorization": f"Bearer {self.key if key is None else key}",
+            **(headers or {}),
+        }
         return self.client.request(
             method,
             path,
             json=body,
             params=params,
-            headers={"Authorization": f"Bearer {self.key if key is None else key}"},
+            headers=request_headers,
         )
 
     def request_multipart(

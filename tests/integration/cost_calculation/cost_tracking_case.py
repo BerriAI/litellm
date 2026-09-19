@@ -144,6 +144,7 @@ class ExactExpected(BaseModel):
     reasoning_cost: float | None = None
     tool_usage_cost: float | None = None
     breakdown_persisted: bool = True
+    cost_header: bool = True
 
 
 class RecountRates(BaseModel):
@@ -180,19 +181,22 @@ class CostTrackingTestCase(BaseModel):
     name: str
     covers: str
     model: str
-    endpoint: Literal[
-        "/v1/chat/completions",
-        "/v1/responses",
-        "/v1/messages",
-        "/v1/embeddings",
-        "/v1/rerank",
-        "/v1/completions",
-        "/v1/moderations",
-        "/v1/audio/transcriptions",
-        "/v1/audio/speech",
-        "/v1/images/generations",
-        "/v1/images/edits",
-    ] = "/v1/chat/completions"
+    endpoint: (
+        Literal[
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages",
+            "/v1/embeddings",
+            "/v1/rerank",
+            "/v1/completions",
+            "/v1/moderations",
+            "/v1/audio/transcriptions",
+            "/v1/audio/speech",
+            "/v1/images/generations",
+            "/v1/images/edits",
+        ]
+        | Annotated[str, Field(pattern=r"^/(gemini|anthropic|bedrock)/")]
+    ) = "/v1/chat/completions"
     deployment: Deployment | None = None
     upload: Upload | None = None
     request: dict[str, JsonValue]
@@ -234,6 +238,17 @@ class CostTrackingTestCase(BaseModel):
     @property
     def base_model(self) -> str | None:
         return self.deployment.base_model if self.deployment else None
+
+    @property
+    def passthrough_provider(self) -> Literal["gemini", "anthropic", "bedrock"] | None:
+        provider: Final = self.endpoint.removeprefix("/").split("/", 1)[0]
+        if provider == "gemini":
+            return "gemini"
+        if provider == "anthropic":
+            return "anthropic"
+        if provider == "bedrock":
+            return "bedrock"
+        return None
 
 
 class _CasesFile(BaseModel):
@@ -362,6 +377,19 @@ def data_errors() -> tuple[str, ...]:
             and case.response.status != 200
         )
     )
+    invalid_opt_outs: Final = sorted(
+        case.name
+        for case in CASES
+        if isinstance(case.expected, ExactExpected)
+        and (
+            (
+                not case.expected.breakdown_persisted
+                and case.passthrough_provider is None
+                and case.rates.mode != "image_generation"
+            )
+            or (not case.expected.cost_header and case.passthrough_provider is None)
+        )
+    )
     return tuple(
         message
         for message in (
@@ -374,6 +402,7 @@ def data_errors() -> tuple[str, ...]:
             f"failure response statuses are inconsistent: {failure_response_mismatches}"
             if failure_response_mismatches
             else None,
+            f"invalid passthrough opt-outs: {invalid_opt_outs}" if invalid_opt_outs else None,
         )
         if message is not None
     )

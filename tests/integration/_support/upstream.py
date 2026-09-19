@@ -194,9 +194,11 @@ class Provider:
 
     async def scripted(self, request: Request) -> Response:
         segments: Final = tuple(segment for segment in cast(str, request.path_params["path"]).split("/") if segment)
-        if not segments:
-            return JSONResponse({"error": "Unknown scenario"}, status_code=404)
-        scenario_id: Final = segments[0].split(":", 1)[0]
+        scenario_id: Final = (
+            segments[0].split(":", 1)[0]
+            if segments and self.scenario_store.get(segments[0].split(":", 1)[0]) is not None
+            else request.headers.get("x-scripted-scenario", "")
+        )
         response: Final = self.scenario_store.get(scenario_id)
         if response is None:
             return JSONResponse({"error": "Unknown scenario"}, status_code=404)

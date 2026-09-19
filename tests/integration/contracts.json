@@ -1431,6 +1431,24 @@
     ],
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-messages_cache_read]": [
       "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-passthrough-generate_content_priced_via_gemini_key]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-passthrough-stream_generate_content_priced_via_vertex_key]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-passthrough-messages]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-passthrough-messages_cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-passthrough-converse]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-passthrough-converse_stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
     ]
   },
   "browser": {
