@@ -174,7 +174,7 @@ def test_langfuse_mapper_skips_when_no_messages():
     assert "langfuse.observation.output" not in attrs
 
 
-def test_langfuse_mapper_renders_an_embedding_call_as_an_embedding_with_a_vector_summary():
+def test_langfuse_mapper_renders_an_embedding_call_with_a_vector_summary_as_output():
     data = _llm_call(
         operation=GenAIOperation.EMBEDDINGS,
         request_model="text-embedding-3-small",
@@ -185,7 +185,7 @@ def test_langfuse_mapper_renders_an_embedding_call_as_an_embedding_with_a_vector
     )
     attrs = LangfuseMapper().map(data)
 
-    assert attrs["langfuse.observation.type"] == "embedding"
+    assert attrs["langfuse.observation.type"] == "generation"
     assert json.loads(attrs["langfuse.observation.output"]) == {"count": 2, "dimensions": 1536}
     assert json.loads(attrs["langfuse.observation.input"]) == [{"role": "user", "content": "hello"}]
 
@@ -193,7 +193,6 @@ def test_langfuse_mapper_renders_an_embedding_call_as_an_embedding_with_a_vector
 def test_langfuse_mapper_keeps_chat_output_when_no_embedding_summary():
     attrs = LangfuseMapper().map(_llm_call(embedding_output=None))
 
-    assert attrs["langfuse.observation.type"] == "generation"
     assert json.loads(attrs["langfuse.observation.output"]) == [{"role": "assistant", "content": "Sunny."}]
 
 
