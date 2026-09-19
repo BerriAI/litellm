@@ -2,7 +2,7 @@ use litellm_auth_gcp::{self as vertex, VertexConfig};
 use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde_json::Value;
 
-use super::common_utils::validate_destination;
+use super::common_utils::{validate_destination, vertex_config};
 use crate::{
     base_llm::ocr::{
         document::{inline_remote_document, validate_inline_document},
@@ -47,10 +47,7 @@ impl BaseOcrConfig for VertexAiOcrConfig {
         request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<Self::Environment, Error> {
-        let config = VertexConfig::from_sourced_optional_params(
-            &request.optional_params,
-            &request.input_sources,
-        )?;
+        let config = vertex_config(request)?;
         self.resolve_environment(&request.connection, &config, client)
             .await
     }
@@ -61,10 +58,7 @@ impl BaseOcrConfig for VertexAiOcrConfig {
         _optional_params: &Self::OcrParams,
         environment: &Self::Environment,
     ) -> Result<String, Error> {
-        let config = VertexConfig::from_sourced_optional_params(
-            &request.optional_params,
-            &request.input_sources,
-        )?;
+        let config = vertex_config(request)?;
         let location =
             vertex::get_vertex_ai_location(&config, &|name: &str| request.connection.secret(name))
                 .unwrap_or_else(|| DEFAULT_LOCATION.to_string());

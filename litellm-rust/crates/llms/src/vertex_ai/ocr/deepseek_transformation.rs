@@ -1,9 +1,9 @@
-use litellm_auth_gcp::{self as vertex, VertexConfig};
+use litellm_auth_gcp as vertex;
 use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::transformation::VertexAiOcrConfig;
+use super::{common_utils::vertex_config, transformation::VertexAiOcrConfig};
 use crate::base_llm::ocr::{
     error::Error,
     handler::OcrClient,
@@ -122,10 +122,7 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         _params: &Self::OcrParams,
         environment: &Self::Environment,
     ) -> Result<String, Error> {
-        let config = VertexConfig::from_sourced_optional_params(
-            &request.optional_params,
-            &request.input_sources,
-        )?;
+        let config = vertex_config(request)?;
         let location =
             vertex::get_vertex_ai_location(&config, &|name: &str| request.connection.secret(name))
                 .unwrap_or_else(|| DEFAULT_LOCATION.to_string());

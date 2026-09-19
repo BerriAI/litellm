@@ -174,13 +174,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         request: &PreparedOcrRequest,
         _client: &OcrClient,
     ) -> Result<Self::Environment, Error> {
-        let config = AzureAuthInputs {
-            azure_ad_token_provider: request.azure_ad_token_provider.clone(),
-            ..AzureAuthInputs::from_sourced_optional_params(
-                &request.optional_params,
-                &request.input_sources,
-            )?
-        };
+        let config = crate::azure_ai::ocr::common_utils::azure_auth_inputs(request)?;
         self.resolve_headers(&request.connection, &config, &|name: &str| {
             request.connection.secret(name)
         })
