@@ -7714,7 +7714,7 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="semantic_filter_settings"):
             await self._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
 
-        if self._should_load_db_object(object_type="websearch_interception_settings"):
+        if self._should_load_db_object(object_type=SupportedDBObjectType.WEBSEARCH_INTERCEPTION_SETTINGS):
             await self.init_websearch_interception_settings_in_db(prisma_client=prisma_client)
 
         if self._should_load_db_object(object_type="config_overrides"):

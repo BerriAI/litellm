@@ -123,6 +123,7 @@ class SupportedDBObjectType(str, enum.Enum):
     MODEL_COST_MAP = "model_cost_map"
     TOOLS = "tools"
     CONFIG_OVERRIDES = "config_overrides"
+    WEBSEARCH_INTERCEPTION_SETTINGS = "websearch_interception_settings"
 
     def __str__(self):
         return str(self.value)

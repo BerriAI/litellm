@@ -1,4 +1,4 @@
-import { getWebSearchInterceptionSettings } from "@/components/networking";
+import { getWebSearchInterceptionSettings, type WebSearchInterceptionSettingsResponse } from "@/components/networking";
 import { useQuery } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import useAuthorized from "../useAuthorized";
@@ -7,7 +7,7 @@ const webSearchInterceptionSettingsKeys = createQueryKeys("webSearchInterception
 
 export const useWebSearchInterceptionSettings = () => {
   const { accessToken } = useAuthorized();
-  return useQuery<Record<string, any>>({
+  return useQuery<WebSearchInterceptionSettingsResponse>({
     queryKey: webSearchInterceptionSettingsKeys.list({}),
     queryFn: async () => await getWebSearchInterceptionSettings(accessToken),
     enabled: !!accessToken,

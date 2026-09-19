@@ -38068,7 +38068,7 @@ export interface components {
          *     Use in general_settings.supported_db_objects to specify which objects to load from DB.
          * @enum {string}
          */
-        SupportedDBObjectType: "models" | "mcp" | "guardrails" | "policies" | "vector_stores" | "pass_through_endpoints" | "prompts" | "model_cost_map" | "tools" | "config_overrides";
+        SupportedDBObjectType: "models" | "mcp" | "guardrails" | "policies" | "vector_stores" | "pass_through_endpoints" | "prompts" | "model_cost_map" | "tools" | "config_overrides" | "websearch_interception_settings";
         /** SupportedEndpoint */
         SupportedEndpoint: {
             /** Endpoint */

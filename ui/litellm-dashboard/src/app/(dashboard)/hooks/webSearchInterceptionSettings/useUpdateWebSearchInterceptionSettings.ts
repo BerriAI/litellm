@@ -1,4 +1,4 @@
-import { updateWebSearchInterceptionSettings } from "@/components/networking";
+import { updateWebSearchInterceptionSettings, type WebSearchInterceptionSettings } from "@/components/networking";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 
@@ -8,7 +8,7 @@ export const useUpdateWebSearchInterceptionSettings = (accessToken: string) => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (settings: Record<string, any>) => {
+    mutationFn: async (settings: WebSearchInterceptionSettings) => {
       if (!accessToken) {
         throw new Error("Access token is required");
       }
