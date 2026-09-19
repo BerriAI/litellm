@@ -33,12 +33,12 @@ S3_VECTORS_STORE_ID_ERROR: Final = (
 
 
 def split_s3_vectors_store_id(vector_store_id: str, fallback_bucket_name: object) -> tuple[str, str]:
-    if ":" in vector_store_id:
-        bucket_name, index_name = vector_store_id.split(":", 1)
-        return bucket_name, index_name
-    if not isinstance(fallback_bucket_name, str) or not fallback_bucket_name:
+    id_bucket_name, separator, id_index_name = vector_store_id.partition(":")
+    bucket_name: Final = id_bucket_name if separator else fallback_bucket_name
+    index_name: Final = id_index_name if separator else vector_store_id
+    if not isinstance(bucket_name, str) or not bucket_name or not index_name:
         raise ValueError(S3_VECTORS_STORE_ID_ERROR)
-    return fallback_bucket_name, vector_store_id
+    return bucket_name, index_name
 
 
 class S3VectorsVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAWSLLM):
