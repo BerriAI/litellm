@@ -68,6 +68,32 @@ async def test_llm_guard_call_type_aliases(
     )
 
 
+@pytest.mark.parametrize("call_type", ("text_completion", "atext_completion"))
+@pytest.mark.parametrize("is_valid", (True, False))
+@pytest.mark.asyncio
+async def test_llm_guard_scans_list_prompt(
+    call_type: CallTypesLiteral, is_valid: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "llm_guard_mode", "all")
+    llm_guard: Final = _ENTERPRISE_LLMGuard(
+        mock_testing=True,
+        mock_redacted_text={"sanitized_prompt": "[REDACTED]", "is_valid": is_valid},
+    )
+    data: Final = {"prompt": ["email: person@example.com", "say ok", [1, 2, 3]]}
+
+    if not is_valid:
+        with pytest.raises(HTTPException) as exc_info:
+            await llm_guard.async_moderation_hook(data=data, user_api_key_dict=UserAPIKeyAuth(), call_type=call_type)
+        assert exc_info.value.status_code == 400
+        return
+
+    result: Final = await llm_guard.async_moderation_hook(
+        data=data, user_api_key_dict=UserAPIKeyAuth(), call_type=call_type
+    )
+    assert result is data
+    assert data["prompt"] == ["[REDACTED]", "[REDACTED]", [1, 2, 3]]
+
+
 @pytest.mark.parametrize(
     "call_type",
     (
