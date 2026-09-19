@@ -13866,8 +13866,7 @@ async def test_team_member_add_evicts_the_new_members_cached_user_row_on_every_w
             side_effect=fake_add_team_members_to_team,
         ),
         patch(  # test-quality-ok: team_member_add has no injection seam for its prisma-backed helpers
-            "litellm.proxy.management_endpoints.team_endpoints._create_team_member_add_audit_logs",
-            new_callable=AsyncMock,
+            "litellm.proxy.management_endpoints.team_endpoints._schedule_team_member_add_audit_logs",
         ),
     ):
         await team_member_add(
