@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-test-support = []
+test-support = ["litellm-http/test-support"]
 
 [dependencies]
 litellm-types.workspace = true

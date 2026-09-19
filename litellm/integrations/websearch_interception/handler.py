@@ -44,6 +44,7 @@ from litellm.types.integrations.custom_logger import (
 from litellm.types.integrations.websearch_interception import (
     AnthropicSearchQuery,
     AnthropicServerToolUseBlock,
+    RichWebSearchInput,
     SearchFailed,
     SearchOutcome,
     WebSearchInterceptionConfig,
@@ -1144,7 +1145,9 @@ class WebSearchInterceptionLogger(CustomLogger):
         """Execute litellm.asearch() and build a Responses API rerun patch."""
         search_tasks: Final = [
             (
-                self._execute_search(tool_call["input"]["query"], kwargs=kwargs)
+                self._execute_search(
+                    tool_call["input"]["query"], kwargs=kwargs, rich=self._rich_search_input(tool_call["input"])
+                )
                 if isinstance(tool_call.get("input"), dict) and tool_call["input"].get("query")
                 else self._create_empty_search_result()
             )
@@ -1362,7 +1365,9 @@ class WebSearchInterceptionLogger(CustomLogger):
             query = tool_call["input"].get("query")
             if query:
                 verbose_logger.debug("WebSearchInterception: Queuing search for query='%s'", query)
-                search_tasks.append(self._execute_search(query, kwargs=kwargs))
+                search_tasks.append(
+                    self._execute_search(query, kwargs=kwargs, rich=self._rich_search_input(tool_call["input"]))
+                )
             else:
                 verbose_logger.debug("WebSearchInterception: Tool call %s has no query", tool_call["id"])
                 # Add empty result for tools without query
@@ -1431,8 +1436,53 @@ class WebSearchInterceptionLogger(CustomLogger):
             return WebSearchTransformation.search_outcome(e)
         return WebSearchTransformation.search_outcome(result)
 
+    @staticmethod
+    def _rich_search_input(tool_input: object) -> RichWebSearchInput | None:
+        """
+        Extract the optional objective/search_queries pair from a tool input.
+
+        Returns None when the input carries neither, so callers can pass the
+        result straight through as ``_execute_search``'s ``rich`` argument.
+        """
+        if not isinstance(tool_input, Mapping):
+            return None
+        objective = tool_input.get("objective")
+        valid_objective = objective if isinstance(objective, str) and objective.strip() else None
+        raw_queries = tool_input.get("search_queries")
+        valid_queries: list[str] | None = None  # mutable-ok: matches litellm.asearch's list[str] query parameter
+        if isinstance(raw_queries, Sequence) and not isinstance(raw_queries, str):
+            queries = [q for q in raw_queries if isinstance(q, str) and q.strip()]
+            if queries:
+                # Providers cap multi-query requests (Parallel drops queries
+                # past the fifth); trim here so nothing is silently ignored.
+                valid_queries = queries[:5]
+        if valid_objective is not None and valid_queries is not None:
+            return {"objective": valid_objective, "search_queries": valid_queries}
+        if valid_objective is not None:
+            return {"objective": valid_objective}
+        if valid_queries is not None:
+            return {"search_queries": valid_queries}
+        return None
+
+    @staticmethod
+    def _provider_supports_rich_search(search_provider: str | None) -> bool:
+        """Whether the provider's search config accepts objective + multi-query input."""
+        if not search_provider:
+            return False
+        try:
+            from litellm.utils import ProviderConfigManager
+        except ImportError:
+            return False
+        # SearchProviders is a str enum, so an unknown provider string simply
+        # misses the config map and returns None rather than raising.
+        config = ProviderConfigManager.get_provider_search_config(search_provider)  # pyright: ignore[reportArgumentType] -- SearchProviders is a str enum, so the router's provider string hashes to the matching member; unknown strings miss the map and yield None
+        return config is not None and config.supports_rich_search_input()
+
     async def _execute_search(
-        self, query: str, kwargs: Mapping[str, object] | None = None
+        self,
+        query: str,
+        kwargs: Mapping[str, object] | None = None,
+        rich: RichWebSearchInput | None = None,
     ) -> tuple[str, SearchResponse | None]:
         """
         Execute a single web search using router's search tools.
@@ -1490,13 +1540,24 @@ class WebSearchInterceptionLogger(CustomLogger):
                 for key, value in search_litellm_params.items()
                 if key != "search_provider" and value is not None
             }
+            # Forward the model's richer shape (objective + keyword queries)
+            # only to providers whose search API takes it natively; everyone
+            # else keeps the single query string the model also provided.
+            query_arg: str | list[str] = query  # mutable-ok: litellm.asearch declares query as str | list[str]
+            if rich and self._provider_supports_rich_search(search_provider):
+                rich_queries = rich.get("search_queries")
+                if rich_queries:
+                    query_arg = rich_queries
+                rich_objective = rich.get("objective")
+                if rich_objective and "objective" not in search_kwargs:
+                    search_kwargs["objective"] = rich_objective
             result: Final = (
                 await litellm.asearch(
-                    query=query, search_provider=search_provider, **_NO_ASEARCH_NAMED, **search_kwargs
+                    query=query_arg, search_provider=search_provider, **_NO_ASEARCH_NAMED, **search_kwargs
                 )
                 if search_metadata is None
                 else await litellm.asearch(
-                    query=query,
+                    query=query_arg,
                     search_provider=search_provider,
                     litellm_metadata=search_metadata,
                     **_NO_ASEARCH_NAMED,
@@ -1701,18 +1762,21 @@ class WebSearchInterceptionLogger(CustomLogger):
         for tool_call in tool_calls:
             # Handle both Anthropic-style input and OpenAI-style function.arguments
             query = None
+            tool_args: dict | None = None  # mutable-ok: the tool call's own arguments dict
             if "input" in tool_call and isinstance(tool_call["input"], dict):
-                query = tool_call["input"].get("query")
+                tool_args = tool_call["input"]
+                query = tool_args.get("query")
             elif "function" in tool_call:
                 func = tool_call["function"]
                 if isinstance(func, dict):
                     args = func.get("arguments", {})
                     if isinstance(args, dict):
+                        tool_args = args
                         query = args.get("query")
 
             if query:
                 verbose_logger.debug("WebSearchInterception: Queuing search for query='%s'", query)
-                search_tasks.append(self._execute_search(query, kwargs=kwargs))
+                search_tasks.append(self._execute_search(query, kwargs=kwargs, rich=self._rich_search_input(tool_args)))
             else:
                 verbose_logger.debug("WebSearchInterception: Tool call %s has no query", tool_call.get("id"))
                 # Add empty result for tools without query
