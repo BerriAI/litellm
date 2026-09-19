@@ -61,6 +61,53 @@ class TestTryShortCircuitSearch:
         mock_search.assert_called_once_with("Search for Claude Code releases")
 
     @pytest.mark.asyncio
+    async def test_emits_native_blocks_when_tools_already_converted(self):
+        """Pre-request/deployment hooks convert the native tool to the LiteLLM
+        standard shape before the short-circuit runs and record that in
+        WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY; the flag alone must be enough for
+        native blocks to be emitted."""
+        from litellm.integrations.websearch_interception.handler import (
+            WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY,
+        )
+
+        logger = WebSearchInterceptionLogger(enabled_providers=["hosted_vllm"])
+
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.return_value = (
+                "Title: Result\nURL: https://example.com\nSnippet: test",
+                None,
+            )
+
+            result = await logger.try_short_circuit_search(
+                model="hosted_vllm/some-model",
+                messages=[{"role": "user", "content": "Search for something"}],
+                tools=[
+                    {
+                        "name": "litellm_web_search",
+                        "description": "Search the web for information.",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                            "required": ["query"],
+                        },
+                    }
+                ],
+                custom_llm_provider="hosted_vllm",
+                kwargs={WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
+            )
+
+        assert result is not None
+        block_types = [b["type"] for b in result["content"]]
+        assert "server_tool_use" in block_types
+        assert "web_search_tool_result" in block_types
+        server_tool_use = next(
+            b for b in result["content"] if b["type"] == "server_tool_use"
+        )
+        assert server_tool_use["name"] == "web_search"
+
+    @pytest.mark.asyncio
     async def test_does_not_short_circuit_mixed_tools(self):
         """Mix of web_search and other tools → NOT short-circuited"""
         logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
