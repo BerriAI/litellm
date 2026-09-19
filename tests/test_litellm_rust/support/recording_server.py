@@ -26,8 +26,11 @@ class ResponseSpec:
     headers: dict[str, str] = field(default_factory=dict)
     delay: float = 0
     events: tuple[tuple[str, object], ...] = ()
+    raw: bytes | None = None
 
     def payloads(self) -> tuple[bytes, ...]:
+        if self.raw is not None:
+            return (self.raw,)
         if not self.events:
             return (json.dumps(self.body).encode(),)
         return tuple(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in self.events)

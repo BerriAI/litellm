@@ -44,6 +44,24 @@ async def call_native_aocr_with_callbacks(server: RecordingServer, callbacks: li
     return await call_native_aocr(server, callbacks=callbacks, **kwargs)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_ocr_contract_post_call_event_carries_the_api_key_and_only_the_request_body(
+    ocr_server: RecordingServer, ocr_backend: bool, asynchronous: bool
+) -> None:
+    observations: Final = []
+
+    class Observe(CustomLogger):
+        def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+            observations.append((kwargs["api_key"], copy.deepcopy(kwargs["additional_args"])))
+
+    await call_native(ocr_server, asynchronous, callbacks=[Observe()])
+
+    assert observations == [
+        ("test-key", {"complete_input_dict": {"model": "mistral-ocr-latest", "document": OCR_DOCUMENT}})
+    ]
+
+
 def test_native_ocr_pre_call_callback_receives_transformed_provider_request(ocr_server: RecordingServer) -> None:
     observations: Final = []
 

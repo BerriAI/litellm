@@ -24,13 +24,6 @@ from tests.test_litellm_rust.support.requests import (
 pytestmark = pytest.mark.requires_rust_extension
 
 
-@pytest.fixture(params=[False, True], ids=["python", "rust"])
-def ocr_backend(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> bool:
-    enabled: Final = bool(request.param)
-    monkeypatch.setenv("LITELLM_RUST", "1" if enabled else "0")
-    return enabled
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_ocr_contract_upstream_status(
