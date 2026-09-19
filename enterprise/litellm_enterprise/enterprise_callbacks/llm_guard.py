@@ -147,11 +147,6 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             "aembedding",
             "image_generation",
             "aimage_generation",
-            "moderation",
-            "amoderation",
-            "audio_transcription",
-            "transcription",
-            "atranscription",
         )
         if call_type not in accepted_call_types:
             self.print_verbose(
