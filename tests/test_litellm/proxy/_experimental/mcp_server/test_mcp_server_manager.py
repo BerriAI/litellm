@@ -10564,6 +10564,7 @@ async def test_management_view_omits_invalid_or_absent_db_scopes(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("discovery_on_startup", [True, False])
 @pytest.mark.parametrize(
     ("stored_scopes", "runtime_scopes"),
     [
@@ -10576,6 +10577,7 @@ async def test_management_view_omits_invalid_or_absent_db_scopes(
 async def test_management_view_serves_explicitly_configured_scopes_from_db(
     stored_scopes: list[str],
     runtime_scopes: list[str],
+    discovery_on_startup: bool,
     respx_mock: MockRouter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -10591,20 +10593,34 @@ async def test_management_view_serves_explicitly_configured_scopes_from_db(
         updated_at=datetime.now(),
     )
     await _mock_oauth_discovery(respx_mock, monkeypatch, server_url=row.url or "", scopes=["discovered.read"])
-    env: Final[dict[str, str]] = {"LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP": "1"}
+    env: Final[dict[str, str]] = {"LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP": "1"} if discovery_on_startup else {}
     with patch.dict(os.environ, env, clear=True):
         manager: Final[MCPServerManager] = MCPServerManager()
         built: Final[MCPServer] = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+        manager.registry[built.server_id] = built
+        resolved: Final[MCPServer] = await manager.ensure_oauth_metadata_discovered(built)
 
-    assert built.scopes == runtime_scopes
-    view: Final[LiteLLM_MCPServerTable] = manager._build_mcp_server_table(built)
+    assert resolved.scopes == runtime_scopes
+    view: Final[LiteLLM_MCPServerTable] = manager._build_mcp_server_table(resolved)
     assert view.credentials == {"scopes": stored_scopes}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("configured_scopes", [None, ["calendar.read"]])
+@pytest.mark.parametrize("discovery_on_startup", [True, False])
+@pytest.mark.parametrize(
+    ("configured_scopes", "expected_view_scopes"),
+    [
+        (None, None),
+        (["calendar.read"], ["calendar.read"]),
+        ([" "], None),
+        ([""], None),
+        (["calendar.read", " "], ["calendar.read"]),
+    ],
+)
 async def test_management_view_scopes_follow_yaml_config_not_discovery(
     configured_scopes: list[str] | None,
+    expected_view_scopes: list[str] | None,
+    discovery_on_startup: bool,
     respx_mock: MockRouter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -10616,20 +10632,22 @@ async def test_management_view_scopes_follow_yaml_config_not_discovery(
             "oauth2_flow": "authorization_code",
             "client_id": "cid",
             "client_secret": "csec",
-            **({"scopes": configured_scopes} if configured_scopes else {}),
+            **({"scopes": configured_scopes} if configured_scopes is not None else {}),
         }
     }
-    await _mock_oauth_discovery(respx_mock, monkeypatch, server_url="https://up.example.com/mcp", scopes=["discovered.read"])
-    env: Final[dict[str, str]] = {"LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP": "1"}
+    await _mock_oauth_discovery(
+        respx_mock, monkeypatch, server_url="https://up.example.com/mcp", scopes=["discovered.read"]
+    )
+    env: Final[dict[str, str]] = {"LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP": "1"} if discovery_on_startup else {}
     with patch.dict(os.environ, env, clear=True):
         manager: Final[MCPServerManager] = MCPServerManager()
         await manager.load_servers_from_config(config)
+        server: Final[MCPServer] = next(iter(manager.config_mcp_servers.values()))
+        resolved: Final[MCPServer] = await manager.ensure_oauth_metadata_discovered(server)
 
-    server: Final[MCPServer] = next(iter(manager.config_mcp_servers.values()))
-    expected_runtime: Final[list[str]] = configured_scopes or ["discovered.read"]
-    assert server.scopes == expected_runtime
-    view: Final[LiteLLM_MCPServerTable] = manager._build_mcp_server_table(server)
-    assert view.credentials == ({"scopes": configured_scopes} if configured_scopes else None)
+    assert resolved.scopes == (expected_view_scopes or ["discovered.read"])
+    view: Final[LiteLLM_MCPServerTable] = manager._build_mcp_server_table(resolved)
+    assert view.credentials == ({"scopes": expected_view_scopes} if expected_view_scopes else None)
 
 
 @pytest.mark.asyncio
@@ -10647,7 +10665,9 @@ async def test_lazy_yaml_discovery_keeps_configured_scopes_out_of_the_management
             "client_secret": "csec",
         }
     }
-    await _mock_oauth_discovery(respx_mock, monkeypatch, server_url="https://up.example.com/mcp", scopes=["discovered.read"])
+    await _mock_oauth_discovery(
+        respx_mock, monkeypatch, server_url="https://up.example.com/mcp", scopes=["discovered.read"]
+    )
     with patch.dict(os.environ, {}, clear=True):
         manager: Final[MCPServerManager] = MCPServerManager()
         await manager.load_servers_from_config(config)
