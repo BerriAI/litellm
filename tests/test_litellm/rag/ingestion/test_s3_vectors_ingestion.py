@@ -15,11 +15,6 @@ def _ingestion(**vector_store):
 
 
 def test_store_id_alone_names_the_bucket_and_index():
-    """
-    Regression for LIT-7956: a registered S3 Vectors store carries only its
-    "bucket:index" id, and the proxy no longer forwards the caller's bucket and
-    index for a managed store, so the ingestion must read both from the id.
-    """
     ingestion = _ingestion(vector_store_id="my-embeddings:my-index")
 
     assert (ingestion.vector_bucket_name, ingestion.index_name) == ("my-embeddings", "my-index")

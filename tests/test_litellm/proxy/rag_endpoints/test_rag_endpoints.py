@@ -321,12 +321,6 @@ def _patched_prisma_client(prisma_client):
 
 
 def test_rag_ingest_resolves_registry_store_provider_and_params(client_internal_user):
-    """
-    Regression for LIT-7956: naming only a registry store id must ingest into
-    that store's provider with its litellm_params, the way /v1/rag/query and
-    /v1/vector_stores/{id}/search resolve it. Pre-fix the resolved store was
-    thrown away and the pipeline defaulted to OpenAI Files.
-    """
     aingest_patch, registry_patch = _patched_ingest_boundary(
         S3_REGISTRY_STORE, {"vector_store_id": "s3-store", "file_id": "file_123"}
     )
@@ -348,7 +342,6 @@ def test_rag_ingest_resolves_registry_store_provider_and_params(client_internal_
 
 
 def test_rag_ingest_registry_store_wins_over_request_provider_and_params(client_internal_user):
-    """A caller cannot steer a registry store to another provider or region by repeating the keys in the request."""
     aingest_patch, registry_patch = _patched_ingest_boundary(
         S3_REGISTRY_STORE, {"vector_store_id": "s3-store", "file_id": "file_123"}
     )
@@ -371,11 +364,6 @@ def test_rag_ingest_registry_store_wins_over_request_provider_and_params(client_
 
 
 def test_rag_ingest_registry_store_drops_caller_destinations_and_keeps_upload_options(client_internal_user):
-    """
-    The store's registered credentials ride along on the upload, so a caller authorized
-    on the store must not be able to point them at a bucket, index or project the store
-    does not define. Per-upload options still pass through.
-    """
     aingest_patch, registry_patch = _patched_ingest_boundary(
         BEDROCK_REGISTRY_STORE, {"vector_store_id": "kb-store", "file_id": "file_123"}
     )
@@ -416,7 +404,6 @@ def test_rag_ingest_registry_store_drops_caller_destinations_and_keeps_upload_op
 
 
 def test_rag_ingest_unmanaged_store_keeps_the_callers_full_config(client_internal_user):
-    """A store id the proxy does not manage carries no server-side config, so the caller's config is all there is."""
     caller_config = {
         "vector_store_id": "KB-unmanaged",
         "custom_llm_provider": "bedrock",
@@ -438,12 +425,6 @@ def test_rag_ingest_unmanaged_store_keeps_the_callers_full_config(client_interna
 
 
 def test_rag_ingest_db_managed_store_drops_the_callers_credential_name(client_internal_user):
-    """
-    litellm_credential_name expands into api_key and api_base at ingest time, so a
-    caller naming one would point a managed store's upload at a different endpoint.
-    A store synced from the database carries litellm_credential_name=None, and that
-    null must not resurrect the caller's choice either.
-    """
     aingest_patch, registry_patch = _patched_ingest_boundary(
         DB_MANAGED_STORE, {"vector_store_id": "db-store", "file_id": "file_123"}
     )
@@ -514,12 +495,6 @@ def test_rag_ingest_registry_store_keeps_the_callers_vertex_embedding_throttle(c
 
 
 def test_rag_ingest_rejects_registry_store_provider_without_ingestion_support(client_internal_user):
-    """
-    Regression for LIT-7956: a registry store on a provider with no ingestion
-    implementation must be rejected with 400 before anything is uploaded.
-    Pre-fix the document went to OpenAI Files and the proxy answered 200 with
-    status "failed".
-    """
     aingest_patch, registry_patch = _patched_ingest_boundary(
         AZURE_REGISTRY_STORE, {"vector_store_id": "my-azure-index", "file_id": "file_123"}
     )
@@ -536,7 +511,6 @@ def test_rag_ingest_rejects_registry_store_provider_without_ingestion_support(cl
 
 
 def test_rag_ingest_rejects_request_provider_without_ingestion_support(client_internal_user):
-    """A request-supplied provider outside the ingestion registry is a 400, never a 500 from inside the pipeline."""
     with (
         patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; the test asserts it is never reached
             "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
@@ -576,10 +550,6 @@ def test_rag_ingest_rejects_non_string_provider(client_internal_user):
 
 
 def test_rag_ingest_never_creates_db_row_for_registry_store(client_internal_user):
-    """
-    A config-registered store has no DB row; ingesting into it must not create
-    one, since that row would outlive the config and carry request-side params.
-    """
     prisma_client = MagicMock()
     prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
     create_in_db = AsyncMock()
@@ -604,7 +574,6 @@ def test_rag_ingest_never_creates_db_row_for_registry_store(client_internal_user
 
 
 def test_rag_ingest_fresh_store_creates_db_row_with_the_requesters_params(client_internal_user):
-    """A request naming no store id creates a brand new one, whose row must still be written as before the fix."""
     prisma_client = MagicMock()
     prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
     create_in_db = AsyncMock()
@@ -634,10 +603,6 @@ def test_rag_ingest_fresh_store_creates_db_row_with_the_requesters_params(client
 
 
 def test_rag_ingest_hands_persistence_the_requesters_options_not_registry_credentials(client_internal_user):
-    """
-    Persistence only ever sees what the requester sent: the merged options carry
-    the registry's credentials, which must never be written back as litellm_params.
-    """
     save_helper = AsyncMock()
     aingest_patch, registry_patch = _patched_ingest_boundary(
         BEDROCK_REGISTRY_STORE, {"vector_store_id": "kb-store", "file_id": "file_123"}
