@@ -501,7 +501,7 @@ class CreateBatchRequest(TypedDict, total=False):
     """
 
     completion_window: Literal["24h"]
-    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses"]
+    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses", "/v1/ocr"]
     input_file_id: str
     metadata: dict[str, str] | None
     output_expires_after: FileExpiresAfter
@@ -1298,7 +1298,9 @@ class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: int | None = None
     cached_tokens: int = 0
     cached_tokens_details: CachedTokensDetails | None = None
+    image_tokens: int | None = None
     text_tokens: int | None = None
+    video_tokens: int | None = None
 
     model_config = {"extra": "allow"}
 

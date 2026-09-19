@@ -595,7 +595,7 @@ class TestFailedSearchEndsTheTurn:
     async def test_mixed_iteration_keeps_the_follow_up_call(self, monkeypatch):
         monkeypatch.setattr("litellm.anthropic_interface.messages.acreate", self._fake_acreate)
 
-        async def search(query, kwargs=None):
+        async def search(query, kwargs=None, rich=None):
             if query == "fails":
                 raise RateLimitError("slow down", llm_provider="tavily", model="tavily")
             found = SearchResult(title="Result", url="https://example.com", snippet="A result.", date=None)
