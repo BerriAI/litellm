@@ -26,6 +26,8 @@ from proxy_client import ProxyClient, build_proxy_client
 from psycopg.rows import class_row
 from pydantic import BaseModel, SecretStr, TypeAdapter, ValidationError
 
+INHERITED_ENV_PREFIXES: Final = ("REDIS_", "MICROSOFT_", "GOOGLE_", "GENERIC_", "PROXY_")
+
 
 class StoredOAuth(BaseModel):
     type: str
@@ -38,6 +40,7 @@ class CredentialRow:
 
 
 def stored_oauth(user_id: str, server_id: str) -> StoredOAuth:
+    """Read the encrypted credential because management APIs omit the plaintext token."""
     from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 
     with psycopg.Connection[CredentialRow].connect(
@@ -68,14 +71,12 @@ class RpcMethod(BaseModel):
 
 @dataclass(slots=True)
 class OAuthObservation:
-    user_id: str
-    server_id: str = ""
     gateway_token: str = field(default="", repr=False)
-    _seen: tuple[tuple[str, bool, bool], ...] = field(default=(), init=False, repr=False)
+    _seen: tuple[tuple[str, str, bool], ...] = field(default=(), init=False, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def observe(self, url: str, headers: Mapping[str, str], body: bytes | None) -> None:
-        if not self.server_id or body is None or not url.endswith("/mcp"):
+        if body is None or not url.endswith("/mcp"):
             return
         try:
             operation: Final = RpcMethod.model_validate_json(body).method
@@ -83,21 +84,21 @@ class OAuthObservation:
             return
         if operation not in ("tools/list", "tools/call"):
             return
-        credential: Final = stored_oauth(self.user_id, self.server_id)
         received: Final = headers.get("authorization", "")
-        matches: Final = received == f"Bearer {credential.access_token.get_secret_value()}"
-        differs: Final = bool(received) and all(
-            value not in (self.gateway_token, f"Bearer {self.gateway_token}") for value in headers.values()
+        gateway_leaked: Final = any(
+            value in (self.gateway_token, f"Bearer {self.gateway_token}") for value in headers.values()
         )
         with self._lock:
-            self._seen = (*self._seen, (operation, matches, differs))
+            self._seen = (*self._seen, (operation, received, gateway_leaked))
 
-    def assert_forwarded(self) -> None:
+    def assert_forwarded(self, expected: StoredOAuth) -> None:
         with self._lock:
             snapshot: Final = self._seen
             self._seen = ()
         assert {item[0] for item in snapshot} == {"tools/list", "tools/call"}, "missing upstream observations"
-        assert all(item[1] and item[2] for item in snapshot), "upstream bearer did not match the user's stored token"
+        expected_header: Final = f"Bearer {expected.access_token.get_secret_value()}"
+        assert all(item[1] == expected_header for item in snapshot), "upstream bearer did not match the stored token"
+        assert all(not item[2] for item in snapshot), "gateway bearer leaked to the upstream"
 
 
 def available_port() -> int:
@@ -170,7 +171,7 @@ def owned_gateway(idp: Keycloak, directory: Path, cleanup: ExitStack) -> OAuthGa
         "    user_id_upsert: true\n"
     )
     environment: Final = {
-        **{key: value for key, value in os.environ.items() if not key.startswith("REDIS_")},
+        **{key: value for key, value in os.environ.items() if not key.startswith(INHERITED_ENV_PREFIXES)},
         **browser.environment(idp.discovery()),
         "PROXY_BASE_URL": base_url,
         "JWT_PUBLIC_KEY_URL": idp.jwks_url,

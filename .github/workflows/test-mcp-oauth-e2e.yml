@@ -1,23 +1,12 @@
 name: MCP OAuth happy path
 
 on:
-  pull_request:
-    paths:
-      - tests/e2e/idp.py
-      - tests/e2e/provider_edge.py
-      - tests/e2e/models.py
-      - tests/e2e/conftest.py
-      - .github/e2e-stack/assert_tests_ran.py
-      - tests/e2e/mcp/oauth_chat_client.py
-      - tests/e2e/mcp/oauth_gateway.py
-      - tests/e2e/mcp/test_mcp_oauth_happy_path_e2e.py
-      - .github/workflows/test-mcp-oauth-e2e.yml
   workflow_dispatch:
 
 permissions: {}
 
 concurrency:
-  group: mcp-oauth-${{ github.event.pull_request.number || github.ref }}
+  group: mcp-oauth-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -161,6 +150,10 @@ jobs:
         run: |
           uv run --no-sync python .github/e2e-stack/assert_tests_ran.py \
             "${RUNNER_TEMP}/mcp-oauth-private/results.xml" tests/e2e/mcp/test_mcp_oauth_happy_path_e2e.py
+      - name: Publish sanitized summary
+        if: always()
+        run: |
+          grep -E '^(FAILED|PASSED|ERROR|E   AssertionError|=+ .* =+)' "${RUNNER_TEMP}/mcp-oauth-private/pytest.log" || true
       - name: Remove private login and logs
         if: always()
         run: |
