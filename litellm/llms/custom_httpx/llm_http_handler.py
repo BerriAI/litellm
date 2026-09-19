@@ -5906,7 +5906,15 @@ class BaseLLMHTTPHandler:
                         callback.__class__.__name__,
                         plan.stop_reason,
                     )
-                    return self._maybe_wrap_in_fake_stream(response, logging_obj, api_surface)
+                    return self._maybe_wrap_in_fake_stream(
+                        await callback.async_post_agentic_loop_response_hook(
+                            response=self._finalize_refused_agentic_response(response=response, tool_calls=tool_calls),
+                            plan=plan,
+                            kwargs=kwargs_with_provider,
+                        ),
+                        logging_obj,
+                        api_surface,
+                    )
                 if not plan.run_agentic_loop:
                     continue
 
@@ -6279,7 +6287,12 @@ class BaseLLMHTTPHandler:
                 ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
                 ssl_context.check_hostname = False
                 ssl_context.verify_mode = ssl.CERT_NONE
-            backend_ws: Final = await self._open_realtime_backend_ws(websockets, url, headers, ssl_context)
+            provider_backend: Final = await provider_config.open_backend(url, headers)
+            backend_ws: Final = (
+                provider_backend
+                if provider_backend is not None
+                else await self._open_realtime_backend_ws(websockets, url, headers, ssl_context)
+            )
             async with backend_ws:
                 _request_data: Final[dict[str, object]] = {}
                 if litellm_metadata:

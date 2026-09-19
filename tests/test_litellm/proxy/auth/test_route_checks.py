@@ -4038,3 +4038,37 @@ def test_team_key_without_service_account_marker_still_rejected():
             valid_token=valid_token,
             request_data={},
         )
+
+
+@pytest.mark.parametrize("route", ["/project/new", "/project/update"])
+def test_project_write_routes_reach_endpoint_for_internal_user(route):
+    """The route gate lets a non-admin through so /project/new and /project/update can apply the
+    team_admin_editable_team_fields projects permission themselves, instead of a blanket 401."""
+    valid_token = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=None,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+def test_project_delete_route_stays_proxy_admin_only():
+    valid_token = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate, delete, update"):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/project/delete",
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
