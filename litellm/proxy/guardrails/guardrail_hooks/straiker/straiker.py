@@ -139,9 +139,10 @@ _V3_PROVIDER_BODY_KEYS: Final = frozenset(
         "session_id",
     }
 )
-# Fields inside `tools` and `mcp_servers` that carry a credential for the model's own remote
+# Fields on a `tools` or `mcp_servers` entry that carry a credential for the model's own remote
 # calls (an OpenAI `mcp` tool's `headers`, Anthropic's `authorization_token`). Detection reads
-# tool names, descriptions and schemas, never these.
+# tool names, descriptions and schemas, never these. They sit directly on the entry, so the
+# scrub is one level deep on purpose: no recursion over caller-controlled nesting.
 _V3_CREDENTIAL_FIELDS: Final = frozenset(
     {"authorization_token", "authorization", "headers", "api_key", "x-api-key", "token"}
 )
@@ -446,18 +447,18 @@ def _v3_request_body(request_data: Mapping[str, object]) -> Mapping[str, object]
     return _frozen((*provider, *((("metadata", identity),) if identity else ())))
 
 
-def _v3_without_credentials(value: object) -> object:
-    if isinstance(value, Mapping):
-        return _frozen(
-            (
-                str(key),
-                _V3_REDACTED_VALUE if str(key).lower() in _V3_CREDENTIAL_FIELDS else _v3_without_credentials(item),
-            )
-            for key, item in value.items()
+def _v3_without_credentials(entries: object) -> object:
+    if not isinstance(entries, (list, tuple)):
+        return entries
+    return tuple(
+        _frozen(
+            (str(key), _V3_REDACTED_VALUE if str(key).lower() in _V3_CREDENTIAL_FIELDS else item)
+            for key, item in entry.items()
         )
-    if isinstance(value, (list, tuple)):
-        return tuple(_v3_without_credentials(item) for item in value)
-    return value
+        if isinstance(entry, Mapping)
+        else entry
+        for entry in entries
+    )
 
 
 def _v3_anthropic_messages_route(request_data: Mapping[str, object]) -> bool:
