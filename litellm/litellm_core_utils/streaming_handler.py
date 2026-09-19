@@ -232,6 +232,7 @@ class CustomStreamWrapper:
 
         self.system_fingerprint: str | None = None
         self._provider_response_model: str | None = None
+        self._service_tier: str | None = None
         self.received_finish_reason: str | None = None
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
         self.special_tokens = [
@@ -1723,9 +1724,8 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason == "stop" and self.tool_call
         ):  # don't overwrite for other - potential error finish reasons
             model_response.choices[0].finish_reason = "tool_calls"
-        _last_service_tier: Final = getattr(self, "_service_tier", None)
-        if _last_service_tier is not None:
-            setattr(model_response, "service_tier", _last_service_tier)  # noqa: B010  # not a declared field
+        if self._service_tier is not None:
+            setattr(model_response, "service_tier", self._service_tier)  # noqa: B010  # not a declared field
         return model_response
 
     def _record_usage_only_chunk(self, model_response: "ModelResponseStream") -> None:
@@ -1881,8 +1881,8 @@ class CustomStreamWrapper:
                         "usage",
                         getattr(complete_streaming_response, "usage"),
                     )
-                    _stream_service_tier: Final = getattr(complete_streaming_response, "service_tier", None) or getattr(
-                        self, "_service_tier", None
+                    _stream_service_tier: Final = (
+                        getattr(complete_streaming_response, "service_tier", None) or self._service_tier
                     )
                     if _stream_service_tier is not None:
                         setattr(response, "service_tier", _stream_service_tier)  # noqa: B010  # not a declared field
@@ -2137,8 +2137,8 @@ class CustomStreamWrapper:
                     "usage",
                     getattr(complete_streaming_response, "usage"),
                 )
-                _stream_service_tier: Final = getattr(complete_streaming_response, "service_tier", None) or getattr(
-                    self, "_service_tier", None
+                _stream_service_tier: Final = (
+                    getattr(complete_streaming_response, "service_tier", None) or self._service_tier
                 )
                 if _stream_service_tier is not None:
                     setattr(response, "service_tier", _stream_service_tier)  # noqa: B010  # not a declared field
