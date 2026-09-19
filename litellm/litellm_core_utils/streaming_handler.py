@@ -1421,7 +1421,7 @@ class CustomStreamWrapper:
             chunk_service_tier: Final = getattr(chunk, "service_tier", None)
             if chunk_service_tier is not None:
                 self._service_tier = chunk_service_tier
-                setattr(model_response, "service_tier", chunk_service_tier)
+                setattr(model_response, "service_tier", chunk_service_tier)  # noqa: B010  # not a declared field
 
             model_response.model = self.model
             ## FUNCTION CALL PARSING
@@ -1725,7 +1725,7 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = "tool_calls"
         _last_service_tier: Final = getattr(self, "_service_tier", None)
         if _last_service_tier is not None:
-            setattr(model_response, "service_tier", _last_service_tier)
+            setattr(model_response, "service_tier", _last_service_tier)  # noqa: B010  # not a declared field
         return model_response
 
     def _record_usage_only_chunk(self, model_response: "ModelResponseStream") -> None:
@@ -1885,7 +1885,7 @@ class CustomStreamWrapper:
                         self, "_service_tier", None
                     )
                     if _stream_service_tier is not None:
-                        setattr(response, "service_tier", _stream_service_tier)
+                        setattr(response, "service_tier", _stream_service_tier)  # noqa: B010  # not a declared field
                     try:
                         _cache_copy = complete_streaming_response.model_copy(deep=True)
                         _log_copy = complete_streaming_response.model_copy(deep=True)
@@ -2141,7 +2141,7 @@ class CustomStreamWrapper:
                     self, "_service_tier", None
                 )
                 if _stream_service_tier is not None:
-                    setattr(response, "service_tier", _stream_service_tier)
+                    setattr(response, "service_tier", _stream_service_tier)  # noqa: B010  # not a declared field
                 try:
                     _copy = complete_streaming_response.model_copy(deep=True)
                 except RuntimeError:

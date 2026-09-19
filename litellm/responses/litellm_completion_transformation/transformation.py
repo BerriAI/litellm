@@ -2481,7 +2481,7 @@ class LiteLLMCompletionResponsesConfig:
 
         returned_service_tier: Final = getattr(chat_completion_response, "service_tier", None)
         if returned_service_tier is not None:
-            setattr(responses_api_response, "service_tier", returned_service_tier)
+            setattr(responses_api_response, "service_tier", returned_service_tier)  # noqa: B010  # not a declared field
 
         return responses_api_response
 
