@@ -634,3 +634,33 @@ async def test_query_first_with_cached_plan_fallback_reports_the_reader_generati
         "reader_served_the_query": 2,
         "writer_served_the_query": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_get_data_combined_view_projects_every_team_limit_the_limiter_reads(
+    prisma_client: PrismaClient,
+) -> None:
+    row = {
+        "token": "hashed-token-team-limits",
+        "team_id": "team-1",
+        "team_tpm_limit": 1000,
+        "team_rpm_limit": 10,
+        "team_max_parallel_requests": 3,
+        "team_models": None,
+        "team_blocked": None,
+        "team_members_with_roles": None,
+        "user_id": None,
+        "expires": None,
+    }
+    prisma_client.db.query_first = AsyncMock(return_value=row)
+
+    response = await prisma_client.get_data(
+        token="hashed-token-team-limits",
+        table_name="combined_view",
+        query_type="find_unique",
+    )
+
+    assert isinstance(response, LiteLLM_VerificationTokenView)
+    assert response.team_tpm_limit == 1000
+    assert response.team_rpm_limit == 10
+    assert response.team_max_parallel_requests == 3

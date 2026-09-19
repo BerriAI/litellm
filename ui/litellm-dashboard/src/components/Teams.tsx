@@ -79,6 +79,7 @@ const teamCreateFieldsSchema = z.object({
   tpm_limit: numericInputSchema,
   rpm_limit: numericInputSchema,
   tpd_limit: numericInputSchema,
+  max_parallel_requests: numericInputSchema,
   metadata: metadataPairsSchema.optional(),
   team_id: z.string().optional(),
   team_member_budget: z.number().optional(),
@@ -116,6 +117,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
   tpm_limit: undefined,
   rpm_limit: undefined,
   tpd_limit: undefined,
+  max_parallel_requests: undefined,
   metadata: [],
   team_id: undefined,
   team_member_budget: undefined,
@@ -846,6 +848,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       "Daily token budget for batch submissions (/v1/batches). When set, batch input files are charged against this 24h window instead of the team's TPM/RPM limits. Online requests keep using TPM/RPM.",
                     )}
                   >
+                    {({ ref, value, ...field }) => (
+                      <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} width={400} />
+                    )}
+                  </FormField>
+                  <FormField control={form.control} name="max_parallel_requests" label="Max Parallel Requests">
                     {({ ref, value, ...field }) => (
                       <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} width={400} />
                     )}

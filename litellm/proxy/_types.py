@@ -13,6 +13,7 @@ from pydantic import (
     ConfigDict,
     Field,
     Json,
+    NonNegativeInt,
     PositiveInt,
     field_validator,
     model_validator,
@@ -2042,6 +2043,7 @@ RouterSettingsDict = Annotated[
 
 class NewTeamRequest(TeamBase):
     router_settings: RouterSettingsDict | None = None
+    max_parallel_requests: NonNegativeInt | None = None
     model_aliases: dict | None = None
     model_max_budget: GenericBudgetConfigType | None = Field(
         default=None,
@@ -2105,6 +2107,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     metadata: Optional[dict] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+    max_parallel_requests: Optional[int] = None
     max_budget: Optional[float] = None
     models: Optional[list] = None
     blocked: Optional[bool] = None
@@ -2120,6 +2123,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     tpd_limit: int | None = None
+    max_parallel_requests: NonNegativeInt | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
     models: list | None = None
@@ -3124,6 +3128,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_tpm_limit: int | None = None
     team_rpm_limit: int | None = None
     team_tpd_limit: int | None = None
+    team_max_parallel_requests: int | None = None
     team_max_budget: float | None = None
     team_soft_budget: float | None = None
     team_model_max_budget: dict[str, object] | None = None
