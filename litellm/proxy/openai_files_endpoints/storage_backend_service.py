@@ -7,7 +7,7 @@ storage backends (e.g., Azure Blob Storage) and managing associated metadata.
 
 import base64
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Final, cast
 
 from litellm._logging import verbose_proxy_logger
@@ -15,7 +15,7 @@ from litellm._uuid import uuid as uuid_module
 from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.types.llms.openai import OpenAIFileObject, OpenAIFilesPurpose
 from litellm.types.utils import SpecialEnums
 
@@ -35,21 +35,23 @@ class StorageBackendFileService:
     async def upload_file_to_storage_backend(
         file_data: Mapping[str, Any],
         target_storage: str,
-        target_model_names: list[str],
+        target_model_names: Sequence[str],
         purpose: OpenAIFilesPurpose,
         proxy_logging_obj: ProxyLogging,
         user_api_key_dict: UserAPIKeyAuth,
+        prisma_client: PrismaClient | None = None,
     ) -> OpenAIFileObject:
         """
         Upload a file to a storage backend and create a file object.
 
         Args:
             file_data: File data dictionary from extract_file_data()
-            target_storage: Storage backend name (e.g., "azure_storage")
+            target_storage: Storage backend name (e.g., "azure_storage", "litellm_db")
             target_model_names: List of model names for managed files
             purpose: File purpose (e.g., "user_data", "batch")
             proxy_logging_obj: Proxy logging object for accessing hooks
             user_api_key_dict: User API key authentication data
+            prisma_client: The proxy's database client, required by the "litellm_db" backend
 
         Returns:
             OpenAIFileObject: Created file object with storage metadata
@@ -59,7 +61,7 @@ class StorageBackendFileService:
         """
         # Get storage backend instance
         try:
-            storage_backend: Final = get_storage_backend(target_storage)
+            storage_backend: Final = get_storage_backend(target_storage, prisma_client=prisma_client)
         except ValueError as e:
             raise ProxyException(
                 message=str(e),
@@ -164,7 +166,7 @@ class StorageBackendFileService:
     @staticmethod
     def _create_unified_file_id(
         file_type: str,
-        target_model_names: list[str],
+        target_model_names: Sequence[str],
         file_id: str,
     ) -> str:
         """
@@ -194,7 +196,7 @@ class StorageBackendFileService:
     async def _store_in_managed_files(
         file_object: OpenAIFileObject,
         file_data: Mapping[str, Any],
-        target_model_names: list[str],
+        target_model_names: Sequence[str],
         target_storage: str,
         storage_url: str,
         proxy_logging_obj: ProxyLogging,

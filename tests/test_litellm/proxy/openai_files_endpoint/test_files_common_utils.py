@@ -6,6 +6,7 @@ import pytest
 
 from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_unified_file_ids,
+    is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
 )
 from litellm.types.utils import LiteLLMBatch
@@ -478,3 +479,15 @@ class TestCompletedBatchSafeToRetire:
 
     def test_no_output_and_unknown_counts_is_not_safe(self):
         assert _completed_batch_safe_to_retire(_completed_batch_for_retire(None)) is False
+
+
+@pytest.mark.parametrize(
+    "decoded_unified_batch_id, executed",
+    [
+        ("litellm_proxy;model_id:my-vllm;llm_batch_id:litellm_batch_0123abcd", True),
+        ("litellm_proxy;model_id:my-vllm;llm_batch_id:batch_0123abcd", False),
+        ("litellm_proxy;model_id:my-vllm;generic_response_id:resp_0123abcd", False),
+    ],
+)
+def test_is_litellm_executed_batch_reads_the_llm_batch_id_prefix(decoded_unified_batch_id: str, executed: bool):
+    assert is_litellm_executed_batch(decoded_unified_batch_id) is executed

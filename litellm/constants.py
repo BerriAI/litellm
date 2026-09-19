@@ -1694,6 +1694,7 @@ LOGIN_THROTTLE_NOT_BLOCKED: Final = (0, 0)
 LITELLM_PROXY_ADMIN_NAME: Final = "default_user_id"
 LITELLM_PROXY_BUDGET_NAME: Final = "litellm-proxy-budget"
 GLOBAL_PROXY_SPEND_CACHE_KEY: Final = f"{LITELLM_PROXY_ADMIN_NAME}:spend"
+LITELLM_EXECUTED_BATCH_CONCURRENCY: Final = max(1, int(os.getenv("LITELLM_EXECUTED_BATCH_CONCURRENCY", "4")))
 
 ########################### CLI SSO AUTHENTICATION CONSTANTS ###########################
 LITELLM_CLI_SOURCE_IDENTIFIER: Final = "litellm-cli"

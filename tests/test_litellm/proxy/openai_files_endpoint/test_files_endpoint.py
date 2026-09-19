@@ -609,6 +609,121 @@ def test_target_storage_with_target_models(
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
+BATCH_JSONL_LINE = (
+    b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions", '
+    b'"body": {"model": "my-vllm", "messages": [{"role": "user", "content": "hi"}]}}\n'
+)
+
+
+def _router_with_executed_batch_model() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "my-vllm",
+                "litellm_params": {
+                    "model": "hosted_vllm/qwen",
+                    "api_key": "sk-vllm",
+                    "api_base": "http://vllm.test/v1",
+                },
+                "model_info": {"id": "my-vllm-id"},
+            },
+            {
+                "model_name": "gemini-2.0-flash",
+                "litellm_params": {"model": "gemini/gemini-2.0-flash"},
+                "model_info": {"id": "gemini-2.0-flash-id"},
+            },
+        ]
+    )
+
+
+@pytest.fixture
+def batch_upload_seams(mocker: MockerFixture, monkeypatch):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    llm_router = _router_with_executed_batch_model()
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+    uploaded = OpenAIFileObject(
+        id="file-kept",
+        object="file",
+        purpose="batch",
+        created_at=0,
+        bytes=len(BATCH_JSONL_LINE),
+        filename="batch.jsonl",
+        status="uploaded",
+    )
+    stored = mocker.patch(  # test-quality-ok: the route calls the storage service directly with no injection seam
+        "litellm.proxy.openai_files_endpoints.storage_backend_service.StorageBackendFileService.upload_file_to_storage_backend",
+        new=mocker.AsyncMock(return_value=uploaded),
+    )
+    provider_upload = mocker.patch(  # test-quality-ok: the route calls litellm.acreate_file directly with no injection seam
+        "litellm.acreate_file", new=mocker.AsyncMock(return_value=uploaded)
+    )
+    try:
+        yield stored, provider_upload
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def _upload_batch_file(headers: dict[str, str], form: dict[str, str]):
+    return client.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", BATCH_JSONL_LINE, "application/jsonl")},
+        data={"purpose": "batch", **form},
+        headers={"Authorization": "Bearer test-key", **headers},
+    )
+
+
+@pytest.mark.parametrize(
+    "headers, form",
+    [({"x-litellm-model": "my-vllm"}, {}), ({}, {"target_model_names": "my-vllm"})],
+    ids=["x-litellm-model header", "target_model_names form field"],
+)
+def test_batch_upload_for_a_litellm_executed_model_is_kept_by_litellm(
+    batch_upload_seams, headers: dict[str, str], form: dict[str, str]
+):
+    stored, provider_upload = batch_upload_seams
+
+    response = _upload_batch_file(headers, form)
+
+    assert response.status_code == 200, response.text
+    provider_upload.assert_not_awaited()
+    stored.assert_awaited_once()
+    kwargs = stored.call_args.kwargs
+    assert kwargs["target_storage"] == "litellm_db"
+    assert tuple(kwargs["target_model_names"]) == ("my-vllm",)
+    assert kwargs["purpose"] == "batch"
+
+
+def test_batch_upload_naming_an_executed_and_a_provider_model_is_rejected(batch_upload_seams):
+    stored, provider_upload = batch_upload_seams
+
+    response = _upload_batch_file({}, {"target_model_names": "my-vllm,gemini-2.0-flash"})
+
+    assert response.status_code == 400, response.text
+    assert "my-vllm" in response.text
+    assert "target_model_names" in response.text
+    stored.assert_not_awaited()
+    provider_upload.assert_not_awaited()
+
+
+def test_batch_upload_for_a_provider_model_still_goes_to_the_provider(batch_upload_seams):
+    stored, provider_upload = batch_upload_seams
+
+    response = _upload_batch_file({"x-litellm-model": "gemini-2.0-flash"}, {})
+
+    assert response.status_code == 200, response.text
+    stored.assert_not_awaited()
+    provider_upload.assert_awaited_once()
+    assert provider_upload.call_args.kwargs["custom_llm_provider"] == "gemini"
+
+
 @pytest.mark.skip(reason="mock respx fails on ci/cd - unclear why")
 def test_create_file_and_call_chat_completion_e2e(
     mocker: MockerFixture, monkeypatch, llm_router: Router
