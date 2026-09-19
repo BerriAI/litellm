@@ -64,7 +64,7 @@ from litellm.constants import (
     AZURE_OPENAI_AUDIO_PROVIDERS,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
-    OPENAI_COMPATIBLE_PROVIDERS_WITH_NATIVE_AUDIO_TRANSCRIPTION,
+    OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
@@ -7860,10 +7860,7 @@ def transcription(
             litellm_params=litellm_params_dict,
             custom_llm_provider=custom_llm_provider,
         )
-    elif custom_llm_provider == "openai" or (
-        custom_llm_provider in litellm.openai_compatible_providers
-        and custom_llm_provider not in OPENAI_COMPATIBLE_PROVIDERS_WITH_NATIVE_AUDIO_TRANSCRIPTION
-    ):
+    elif custom_llm_provider in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS:
         api_base = (
             api_base
             or litellm.api_base
