@@ -7,7 +7,7 @@ use std::{
 use crate::{
     error::Error,
     settings::{HttpSettings, SslVerify, TcpKeepalive},
-    tls::{self, KeyExchangeGroup, Tls12CipherSuite, Unsupported},
+    tls::{CipherSelection, KeyExchangeGroup, Tls12CipherSuite, Unsupported},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -43,7 +43,7 @@ impl HttpClientConfig {
         let (key_exchange_group, unsupported_curve) = match settings
             .ssl_ecdh_curve
             .as_deref()
-            .map(KeyExchangeGroup::from_openssl_name)
+            .map(str::parse::<KeyExchangeGroup>)
         {
             None => (None, None),
             Some(Ok(group)) => (Some(group), None),
@@ -52,7 +52,7 @@ impl HttpClientConfig {
         let ciphers = settings
             .ssl_security_level
             .as_deref()
-            .map(tls::parse_cipher_string);
+            .map(CipherSelection::from);
         let verify = match &settings.ssl_verify {
             Some(SslVerify::Disabled) => Verify::Disabled,
             Some(SslVerify::CaBundle(path)) => Verify::CaBundle(path.clone()),
@@ -91,7 +91,7 @@ impl HttpClientConfig {
 
     pub fn client_builder(&self) -> Result<reqwest::ClientBuilder, Error> {
         let base = reqwest::Client::builder()
-            .use_preconfigured_tls(tls::client_config(self)?)
+            .use_preconfigured_tls(rustls::ClientConfig::try_from(self)?)
             .connect_timeout(self.connect_timeout)
             .pool_idle_timeout(self.pool_idle_timeout);
         let with_keepalive = match self.tcp_keepalive {
