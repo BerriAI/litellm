@@ -248,6 +248,8 @@ def image_generation(
             "quality",
             "size",
             "style",
+            "extra_headers",
+            "headers",
         ]
         litellm_params: Final = all_litellm_params
         default_params: Final = openai_params + litellm_params
@@ -755,6 +757,8 @@ def image_edit(
             "size",
             "style",
             "async_call",
+            "extra_headers",
+            "headers",
         ]
         litellm_params_list: Final = all_litellm_params
         default_params: Final = openai_params + litellm_params_list
