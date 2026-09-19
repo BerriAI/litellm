@@ -97,7 +97,7 @@ def _modality_flags(input_mods: list) -> dict:
     }
 
 
-def transform_friendli_data(data: list, local_data: dict) -> dict:
+def transform_friendli_data(data: list, local_data: dict) -> dict[str, dict[str, object]]:
     transformed: dict[str, dict] = {}
     if not data:
         return transformed
@@ -165,7 +165,33 @@ def transform_friendli_data(data: list, local_data: dict) -> dict:
     return transformed
 
 # Synchronize local data with remote data
-def sync_local_data_with_remote(local_data, remote_data, replace_keys=frozenset()):
+def _friendli_catalog_keys(data: list | None) -> frozenset[str]:
+    if not data:
+        return frozenset()
+    return frozenset(f"{FRIENDLI_PROVIDER}/{model['id']}" for model in data if "id" in model)
+
+
+def _stale_friendli_keys(
+    local_keys: frozenset[str],
+    friendli_keys_in_remote: frozenset[str],
+) -> frozenset[str]:
+    """friendliai/* keys absent from the transformed Friendli catalog are dead:
+    Friendli delists deprecated serverless models, so a registry entry the
+    catalog no longer returns bills stale prices against a model that fails
+    at the provider. Legacy pre-sync rows (no `source`) are included since
+    scoping is by key prefix, not by provenance"""
+    prefix = f"{FRIENDLI_PROVIDER}/"
+    return frozenset(
+        key for key in local_keys if key.startswith(prefix) and key not in friendli_keys_in_remote
+    )
+
+
+def sync_local_data_with_remote(
+    local_data: dict[str, dict[str, object]],
+    remote_data: dict[str, dict[str, object]],
+    replace_keys: frozenset[str] = frozenset(),
+    catalog_dropped_keys: frozenset[str] = frozenset(),
+) -> None:
     # Update existing keys in local_data with values from remote_data
     # (replace_keys entries are swapped wholesale so a field the remote catalog
     #  dropped, e.g. cache pricing, cannot survive as a stale value)
@@ -178,6 +204,9 @@ def sync_local_data_with_remote(local_data, remote_data, replace_keys=frozenset(
     # Add new keys from remote_data to local_data
     for key in (set(remote_data) - set(local_data)):
         local_data[key] = remote_data[key]
+
+    for key in catalog_dropped_keys:
+        local_data.pop(key, None)
 
 # Write data to the json file
 def write_to_file(file_path, data):
@@ -302,14 +331,32 @@ def main():
     vercel_data = transform_vercel_ai_gateway_data(vercel_data)
 
     friendli_data = asyncio.run(fetch_data(FRIENDLI_API_URL))
+    friendli_catalog_keys = _friendli_catalog_keys(friendli_data)
     friendli_data = transform_friendli_data(friendli_data, local_data)
-    
+
     # Combine both datasets
     all_remote_data = {**openrouter_data, **vercel_data, **friendli_data}
 
+    # Deletion only runs when Friendli returns a non-empty catalog. Catalog rows
+    # with invalid pricing still prove the model is live, so deletion compares
+    # against raw catalog ids instead of transformed priced rows
+    catalog_dropped_keys: frozenset[str] = (
+        frozenset()
+        if not friendli_catalog_keys
+        else _stale_friendli_keys(
+            local_keys=frozenset(local_data or {}),
+            friendli_keys_in_remote=friendli_catalog_keys,
+        )
+    )
+
     # If both local and openrouter data are available, synchronize and save
     if local_data and all_remote_data:
-        sync_local_data_with_remote(local_data, all_remote_data, replace_keys=frozenset(friendli_data))
+        sync_local_data_with_remote(
+            local_data,
+            all_remote_data,
+            replace_keys=frozenset(friendli_data),
+            catalog_dropped_keys=catalog_dropped_keys,
+        )
         write_to_file(local_file_path, local_data)
     else:
         print("Failed to fetch model data from either local file or URL.")
