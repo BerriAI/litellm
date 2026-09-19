@@ -7,6 +7,7 @@
     "force_ipv4",
     "http2",
     "aiohttp_trust_env",
+    "disable_aiohttp_trust_env",
     "disable_aiohttp_transport",
     "user_agent"
   ]

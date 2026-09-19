@@ -12,6 +12,7 @@ class HttpSettings:
     force_ipv4: bool
     http2: bool
     aiohttp_trust_env: bool
+    disable_aiohttp_trust_env: bool
     disable_aiohttp_transport: bool
     user_agent: str
 
@@ -28,6 +29,7 @@ def http_settings() -> HttpSettings:
         force_ipv4=litellm.force_ipv4,
         http2=litellm.http2,
         aiohttp_trust_env=litellm.aiohttp_trust_env,
+        disable_aiohttp_trust_env=litellm.disable_aiohttp_trust_env,
         disable_aiohttp_transport=litellm.disable_aiohttp_transport,
         user_agent=default_user_agent(),
     )

@@ -32,6 +32,7 @@ pub struct HttpSettings {
     pub httpx_transport: bool,
     pub user_agent: Option<String>,
     pub trust_proxy_env: bool,
+    pub ignore_proxy_env: bool,
     pub connect_timeout: Duration,
 }
 
@@ -48,6 +49,7 @@ impl Default for HttpSettings {
             httpx_transport: false,
             user_agent: None,
             trust_proxy_env: false,
+            ignore_proxy_env: false,
             connect_timeout: Duration::from_secs(5),
         }
     }
@@ -78,6 +80,7 @@ impl HttpSettings {
             httpx_transport: self.httpx_transport || enabled("DISABLE_AIOHTTP_TRANSPORT"),
             user_agent: env("LITELLM_USER_AGENT").or(self.user_agent),
             trust_proxy_env: self.trust_proxy_env || enabled("AIOHTTP_TRUST_ENV"),
+            ignore_proxy_env: self.ignore_proxy_env || enabled("DISABLE_AIOHTTP_TRUST_ENV"),
             ..self
         }
     }
@@ -214,14 +217,16 @@ mod tests {
     #[case("1", false)]
     fn boolean_switches_only_turn_on_for_true(#[case] value: &'static str, #[case] expected: bool) {
         let env = move |name: &str| match name {
-            "LITELLM_HTTP2" | "AIOHTTP_TRUST_ENV" | "DISABLE_AIOHTTP_TRANSPORT" => {
-                Some(value.to_string())
-            }
+            "LITELLM_HTTP2"
+            | "AIOHTTP_TRUST_ENV"
+            | "DISABLE_AIOHTTP_TRANSPORT"
+            | "DISABLE_AIOHTTP_TRUST_ENV" => Some(value.to_string()),
             _ => None,
         };
         let settings = HttpSettings::default().with_environment(&env);
         assert_eq!(settings.http2, expected);
         assert_eq!(settings.httpx_transport, expected);
         assert_eq!(settings.trust_proxy_env, expected);
+        assert_eq!(settings.ignore_proxy_env, expected);
     }
 }

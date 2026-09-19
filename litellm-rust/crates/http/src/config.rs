@@ -55,7 +55,10 @@ impl HttpClientConfig {
             force_ipv4: settings.force_ipv4,
             http2: settings.http2,
             user_agent: settings.user_agent.clone(),
-            trust_proxy_env: settings.trust_proxy_env || settings.http2 || settings.httpx_transport,
+            trust_proxy_env: !settings.ignore_proxy_env
+                || settings.trust_proxy_env
+                || settings.http2
+                || settings.httpx_transport,
             connect_timeout: settings.connect_timeout,
         })
     }
@@ -237,11 +240,21 @@ mod tests {
     }
 
     #[rstest]
-    #[case::aiohttp_default(HttpSettings::default(), false)]
-    #[case::aiohttp_trust_env(HttpSettings { trust_proxy_env: true, ..HttpSettings::default() }, true)]
-    #[case::http2_uses_httpx(HttpSettings { http2: true, ..HttpSettings::default() }, true)]
-    #[case::aiohttp_disabled(HttpSettings { httpx_transport: true, ..HttpSettings::default() }, true)]
-    fn environment_proxies_apply_whenever_python_would_use_httpx(
+    #[case::aiohttp_default(HttpSettings::default(), true)]
+    #[case::aiohttp_opted_out(HttpSettings { ignore_proxy_env: true, ..HttpSettings::default() }, false)]
+    #[case::session_trust_env_beats_opt_out(
+        HttpSettings { ignore_proxy_env: true, trust_proxy_env: true, ..HttpSettings::default() },
+        true
+    )]
+    #[case::http2_uses_httpx(
+        HttpSettings { ignore_proxy_env: true, http2: true, ..HttpSettings::default() },
+        true
+    )]
+    #[case::aiohttp_disabled(
+        HttpSettings { ignore_proxy_env: true, httpx_transport: true, ..HttpSettings::default() },
+        true
+    )]
+    fn environment_proxies_apply_unless_the_aiohttp_transport_opts_out(
         #[case] settings: HttpSettings,
         #[case] expected: bool,
     ) {
