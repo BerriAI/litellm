@@ -926,3 +926,32 @@ def test_every_bedrock_config_get_error_class_keeps_provider_headers(config):
 
 def test_bedrock_get_error_class_audit_covers_every_surface():
     assert len(_bedrock_configs_with_get_error_class()) >= 30
+
+
+def test_normalize_json_schema_backfills_missing_type_including_defs():
+    """Bedrock Invoke gets ``input_schema`` with ``$defs`` still in place, so nodes under it
+    need a ``type`` too, not just the inlined Converse tree."""
+    from litellm.llms.bedrock.common_utils import normalize_json_schema_custom_types_to_object
+
+    schema = {
+        "type": "object",
+        "$defs": {
+            "Inner": {"properties": {"a": {"type": "string"}}, "title": "Inner"},
+            "Free": {"title": "Free", "description": "pydantic Any"},
+        },
+        "properties": {
+            "inner": {"$ref": "#/$defs/Inner"},
+            "tags": {"items": {"type": "string"}},
+            "mode": {"enum": ["fast", "slow"]},
+            "legacy": {"type": "custom", "properties": {}},
+        },
+    }
+
+    normalize_json_schema_custom_types_to_object(schema)
+
+    assert schema["$defs"]["Inner"]["type"] == "object"
+    assert schema["$defs"]["Free"]["type"] == "object"
+    assert "type" not in schema["properties"]["inner"]
+    assert schema["properties"]["tags"]["type"] == "array"
+    assert "type" not in schema["properties"]["mode"]
+    assert schema["properties"]["legacy"]["type"] == "object"
