@@ -69,7 +69,7 @@ class ExporterSpec(BaseModel):
 
     kind: str = Field(
         default="console",
-        description="console | in_memory | otlp_http | otlp_grpc | <factory kind>",
+        description="console | in_memory | otlp_http | http/json | otlp_grpc | <factory kind>",
     )
     endpoint: str | None = None
     traces_endpoint: str | None = Field(
@@ -210,7 +210,10 @@ class OpenTelemetryV2Config(BaseSettings):
         validation_alias=AliasChoices("baggage_metadata_keys", "LITELLM_OTEL_BAGGAGE_METADATA_KEYS"),
         description=(
             "Metadata sub-keys promoted under the ``litellm.metadata.*`` "
-            "namespace. Configure via the ``LITELLM_OTEL_BAGGAGE_METADATA_KEYS`` "
+            "namespace. A dotted path such as ``requester_metadata.trace_id`` "
+            "reads the caller's nested ``metadata.trace_id`` and is promoted as "
+            "``litellm.metadata.trace_id``; other dotted keys keep their full path. "
+            "Configure via the ``LITELLM_OTEL_BAGGAGE_METADATA_KEYS`` "
             "env var (comma-separated) or "
             "``callback_settings.otel.baggage_metadata_keys`` in config.yaml."
         ),
@@ -269,7 +272,9 @@ class OpenTelemetryV2Config(BaseSettings):
         if (self.endpoint or self.traces_endpoint) and self.exporter == "console":
             self.exporter = "otlp_http"
         # When no explicit destinations are given, fold the single-destination
-        # shorthand into one spec so the provider always has a destination.
+        # shorthand into one spec so the provider always has a destination. A spec
+        # with no fields set is how the presets tell "nothing configured" from an
+        # operator who asked for the console by name.
         if not self.exporters:
             self.exporters = [
                 ExporterSpec(
@@ -278,6 +283,8 @@ class OpenTelemetryV2Config(BaseSettings):
                     traces_endpoint=self.traces_endpoint,
                     headers=self.headers,
                 )
+                if not self.model_fields_set.isdisjoint(("exporter", "endpoint", "headers"))
+                else ExporterSpec()
             ]
         # Ensure ``genai`` is always present and first.
         names = list(self.mapper_names)

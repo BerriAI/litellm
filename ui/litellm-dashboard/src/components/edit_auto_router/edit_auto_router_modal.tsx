@@ -1,7 +1,21 @@
+import AutoRouterClassifierTabs from "../add_model/AutoRouterClassifierTabs";
+import type { StoredComplexityRouterConfig } from "../add_model/build_complexity_router_config";
+export type { StoredComplexityRouterConfig } from "../add_model/build_complexity_router_config";
+import {
+  getForecastConfigError,
+  isForecastClassifier,
+  capabilitySettingsSchema,
+  fuseSettingsSchema,
+} from "../add_model/forecast_classifier_config";
 import React, { useEffect, useMemo, useState } from "react";
-import { z } from "zod/v4";
+import {
+  complexityRouterSchema,
+  semanticRouterSchema,
+  EMPTY_FORM_VALUES,
+  type EditAutoRouterFormValues,
+} from "./editAutoRouterFormSchema";
 import { toast } from "@/lib/toast";
-import { CircleHelp } from "lucide-react";
+import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
@@ -12,9 +26,9 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import AccessGroupTagsCombobox from "../add_model/AccessGroupTagsCombobox";
 import ModelChoiceCombobox, { type ModelChoice } from "../add_model/ModelChoiceCombobox";
 import { modelAvailableCall, modelPatchUpdateCall, validateAutoRouterConfig } from "../networking";
-import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
-import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
-import { hydrateTierModelParams, normalizeTierModels } from "../add_model/complexity_router_tiers";
+import { fetchAutoRouterModels, fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
+import RouterConfigBuilder, { type RouterConfig, serializeRouterConfig } from "../add_model/RouterConfigBuilder";
+import { hydrateTierModelParams } from "../add_model/complexity_router_tiers";
 import {
   type ActiveTierSet,
   CUSTOM_TIER_OMITTED_KEYS,
@@ -34,6 +48,7 @@ import {
   getSemanticConfigError,
   getPlanModeTierError,
   getTierLabelsError,
+  hydrateBuiltInTiers,
   hydrateCustomTierSet,
   hydratePlanModeMinTier,
   hydrateTierLabels,
@@ -43,7 +58,7 @@ import { KeywordTierRule } from "../add_model/KeywordTierRules";
 import { DEFAULT_MATCH_THRESHOLD } from "../add_model/SemanticKeywordMatching";
 import {
   type AutoRouterCompressionState,
-  buildAutoRouterCompressionParams,
+  buildAutoRouterCompressionPatch,
   DEFAULT_AUTO_ROUTER_COMPRESSION,
   hydrateAutoRouterCompression,
 } from "../add_model/buildAutoRouterCompression";
@@ -56,12 +71,8 @@ import {
   hydrateTokenThresholds,
 } from "../add_model/heuristic_scoring_knobs";
 import ComplexityRouterConfig, {
-  AdaptiveEligible,
-  AdaptiveRouterWeights,
-  ClassifierLLMConfig,
-  ClassifierType,
   ComplexityRouterConfigValue,
-  ComplexityTiers,
+  effectiveClassifierType,
   heuristicScoringRole,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
@@ -84,51 +95,12 @@ interface EditAutoRouterModalProps {
   modelData: any;
   accessToken: string;
   userRole: string;
+  isMemberManaged?: boolean;
 }
 
 // Keys this modal rewrites from its own form state on save. Anything absent from this set is
 // carried through untouched from the stored config, so a key only belongs here once the modal
 // actually renders a control that can set it.
-/** The complexity_router_config as it comes back from the proxy, before any hydration. Fields the
- * hydrators validate themselves stay `unknown`; the ones assigned straight through carry their type. */
-export interface StoredComplexityRouterConfig {
-  tiers?: Partial<Record<keyof ComplexityTiers, unknown>>;
-  tier_model_configs?: unknown;
-  default_model?: string | null;
-  plan_mode_min_tier?: unknown;
-  classification_prompt?: unknown;
-  classification_examples?: unknown;
-  heuristic_first_max_tier?: unknown;
-  hybrid_boundary_margin?: unknown;
-  tier_labels?: unknown;
-  classifier_type?: ClassifierType;
-  classifier_llm_config?: ClassifierLLMConfig;
-  classifier_context_window_size?: unknown;
-  classifier_context_budget_chars?: unknown;
-  classifier_context_include_assistant_turns?: unknown;
-  classifier_fallback?: unknown;
-  classification_mode?: unknown;
-  tier_boundaries?: unknown;
-  token_thresholds?: unknown;
-  dimension_weights?: unknown;
-  custom_dimensions?: unknown;
-  reasoning_override_min_score?: unknown;
-  session_affinity?: unknown;
-  session_affinity_ttl_seconds?: unknown;
-  modality_routing?: unknown;
-  modality_pin_override?: unknown;
-  deployment_affinity?: unknown;
-  adaptive?: boolean;
-  adaptive_weights?: AdaptiveRouterWeights;
-  tier_distance_penalty?: number;
-  adaptive_eligible?: AdaptiveEligible;
-  return_raw_model_name?: boolean;
-  enable_context_window_escalation?: unknown;
-  context_window_escalation_buffer?: unknown;
-  stall_escalation_enabled?: unknown;
-  stall_escalation_window?: unknown;
-  stall_escalation_repeat_threshold?: unknown;
-}
 
 /**
  * The stored complexity_router_config as form state. Every key in MANAGED_COMPLEXITY_ROUTER_KEYS is
@@ -138,18 +110,14 @@ export const hydrateComplexityRouterConfig = (
   parsedConfig: StoredComplexityRouterConfig,
   complexityRouterDefaultModel: string | null | undefined,
 ): ComplexityRouterConfigValue => {
-  const hydratedTiers: ComplexityTiers = {
-    SIMPLE: normalizeTierModels(parsedConfig.tiers?.SIMPLE),
-    MEDIUM: normalizeTierModels(parsedConfig.tiers?.MEDIUM),
-    COMPLEX: normalizeTierModels(parsedConfig.tiers?.COMPLEX),
-    REASONING: normalizeTierModels(parsedConfig.tiers?.REASONING),
-  };
-
+  const builtIn = hydrateBuiltInTiers(parsedConfig.tiers, parsedConfig.enable_non_reasoning_tier);
+  const { tiers: hydratedTiers, enable_non_reasoning_tier } = builtIn;
   const custom_tier_set = hydrateCustomTierSet(parsedConfig);
-  const activeTiers = { tiers: hydratedTiers, custom_tier_set };
+  const activeTiers = { ...builtIn, custom_tier_set };
 
   return {
     tiers: hydratedTiers,
+    enable_non_reasoning_tier,
     custom_tier_set,
     tier_model_params: tierParamsByRowId(
       hydrateTierModelParams(parsedConfig.tiers, parsedConfig.tier_model_configs),
@@ -159,6 +127,8 @@ export const hydrateComplexityRouterConfig = (
     plan_mode_min_tier: hydratePlanModeMinTier(parsedConfig.plan_mode_min_tier, custom_tier_set),
     tier_labels: hydrateTierLabels(parsedConfig.tier_labels),
     classifier_type: parsedConfig.classifier_type || "heuristic",
+    capability_classifier_config: capabilitySettingsSchema.safeParse(parsedConfig.capability_classifier_config).data,
+    llm_v2_config: fuseSettingsSchema.safeParse(parsedConfig.llm_v2_config).data,
     classifier_llm_config: parsedConfig.classifier_llm_config,
     classifier_context_window_size:
       typeof parsedConfig.classifier_context_window_size === "number"
@@ -238,6 +208,7 @@ export const hydrateComplexityRouterConfig = (
 
 export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tiers",
+  "enable_non_reasoning_tier",
   "tier_definitions",
   "fallback_tier",
   "tier_model_configs",
@@ -245,6 +216,8 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "plan_mode_min_tier",
   "tier_labels",
   "classifier_type",
+  "capability_classifier_config",
+  "llm_v2_config",
   "classifier_llm_config",
   "classifier_context_window_size",
   "classifier_context_budget_chars",
@@ -334,6 +307,7 @@ export const buildUpdatedComplexityRouterConfig = (
 ): Record<string, unknown> => {
   const isManaged = (key: string): boolean => {
     if (MANAGED_COMPLEXITY_ROUTER_KEYS.has(key)) return true;
+    if (key === "escalation_keywords" && isForecastClassifier(effectiveClassifierType(value))) return true;
     if (keywordMatching !== undefined && KEYWORD_MATCHING_KEYS.has(key)) return true;
     return customTechnicalKeywords !== undefined && key === "custom_technical_keywords";
   };
@@ -344,6 +318,7 @@ export const buildUpdatedComplexityRouterConfig = (
 
   const builderParams: BuildComplexityRouterConfigParams = {
     tiers: value.tiers,
+    enableNonReasoningTier: value.enable_non_reasoning_tier,
     customTierSet: value.custom_tier_set,
     defaultModel: value.default_model,
     planModeMinTier: value.plan_mode_min_tier,
@@ -354,6 +329,8 @@ export const buildUpdatedComplexityRouterConfig = (
     classificationMode: value.classification_mode,
     tierLabels: value.tier_labels,
     classifierType: value.classifier_type,
+    capabilityClassifierConfig: value.capability_classifier_config,
+    llmV2Config: value.llm_v2_config,
     classifierLlmConfig: value.classifier_llm_config,
     classifierContextWindowSize: value.classifier_context_window_size,
     classifierContextBudgetChars: value.classifier_context_budget_chars,
@@ -391,7 +368,7 @@ export const buildUpdatedComplexityRouterConfig = (
 
   // Keys this call does not own stay as the stored config left them.
   const unowned: readonly string[] = [
-    ...(keywordMatching === undefined ? KEYWORD_MATCHING_KEYS : []),
+    ...(keywordMatching === undefined ? [...KEYWORD_MATCHING_KEYS].filter((key) => !isManaged(key)) : []),
     ...(customTechnicalKeywords === undefined ? ["custom_technical_keywords"] : []),
   ];
   return {
@@ -400,45 +377,6 @@ export const buildUpdatedComplexityRouterConfig = (
   };
 };
 
-const sharedShape = {
-  auto_router_name: z.string().min(1, "Auto router name is required"),
-  model_access_group: z.array(z.string()),
-};
-
-const complexityRouterShape = {
-  ...sharedShape,
-  auto_router_default_model: z.string(),
-  auto_router_embedding_model: z.string(),
-};
-
-const semanticRouterShape = {
-  ...sharedShape,
-  auto_router_default_model: z.string().min(1, "Default model is required"),
-  auto_router_embedding_model: z.string().min(1, "Embedding model is required"),
-};
-
-const complexityRouterSchema = z.object(complexityRouterShape);
-const semanticRouterSchema = z.object(semanticRouterShape);
-
-type EditAutoRouterFormValues = z.infer<typeof semanticRouterSchema>;
-
-const EMPTY_FORM_VALUES: EditAutoRouterFormValues = {
-  auto_router_name: "",
-  auto_router_default_model: "",
-  auto_router_embedding_model: "",
-  model_access_group: [],
-};
-
-const labelWithHint = (label: string, hint: string): React.ReactNode => (
-  <>
-    {label}
-    <Tooltip>
-      <TooltipTrigger render={<CircleHelp className="size-3.5 shrink-0 cursor-help text-muted-foreground" />} />
-      <TooltipContent>{hint}</TooltipContent>
-    </Tooltip>
-  </>
-);
-
 const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   isVisible,
   onCancel,
@@ -446,13 +384,14 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   modelData,
   accessToken,
   userRole,
+  isMemberManaged = false,
 }) => {
   const [loading, setLoading] = useState(false);
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
   const [editingTiers, setEditingTiers] = useState(false);
-  const [routerConfig, setRouterConfig] = useState<any>(null);
+  const [routerConfig, setRouterConfig] = useState<RouterConfig | null>(null);
   const [customTechnicalKeywords, setCustomTechnicalKeywords] = useState<string[]>([]);
   const [keywordTierRules, setKeywordTierRules] = useState<KeywordTierRule[]>([]);
   const [escalationKeywords, setEscalationKeywords] = useState<string[]>([]);
@@ -488,6 +427,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       getPlanModeTierError(complexityRouterConfig.plan_mode_min_tier, activeTierRows(complexityRouterConfig)) ??
       getKeywordTierRulesError(keywordTierRules, activeTierRows(complexityRouterConfig)) ??
       getClassifierModelError(complexityRouterConfig) ??
+      getForecastConfigError(complexityRouterConfig) ??
       (heuristicScoringRole(complexityRouterConfig) === "decides"
         ? customDimensionsError(complexityRouterConfig.custom_dimensions)
         : null);
@@ -499,6 +439,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   }, [isVisible, modelData]);
 
   useEffect(() => {
+    let active = true;
     const fetchModelAccessGroups = async () => {
       if (!accessToken) return;
       try {
@@ -511,9 +452,12 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
     const loadModels = async () => {
       if (!accessToken) return;
+      setModelInfo([]);
       try {
-        const uniqueModels = await fetchAvailableModels(accessToken);
-        setModelInfo(uniqueModels);
+        const uniqueModels = isMemberManaged
+          ? await fetchAutoRouterModels(accessToken, modelData?.model_info?.team_id)
+          : await fetchAvailableModels(accessToken);
+        if (active) setModelInfo(uniqueModels);
       } catch (error) {
         console.error("Error fetching model info:", error);
       }
@@ -523,7 +467,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       fetchModelAccessGroups();
       loadModels();
     }
-  }, [isVisible, accessToken]);
+    return () => {
+      active = false;
+    };
+  }, [isVisible, accessToken, isMemberManaged, modelData?.model_info?.team_id]);
 
   const initializeForm = () => {
     setEditingTiers(false);
@@ -587,8 +534,8 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       // Set form values
       form.reset({
         auto_router_name: modelData.model_name,
-        auto_router_default_model: modelData.litellm_params?.auto_router_default_model || "",
-        auto_router_embedding_model: modelData.litellm_params?.auto_router_embedding_model || "",
+        auto_router_default_model: modelData.litellm_params?.auto_router_default_model || null,
+        auto_router_embedding_model: modelData.litellm_params?.auto_router_embedding_model || null,
         model_access_group: modelData.model_info?.access_groups || [],
       });
     } catch (error) {
@@ -612,6 +559,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       }
       const classifierError =
         getClassifierModelError(complexityRouterConfig) ??
+        getForecastConfigError(complexityRouterConfig) ??
         (heuristicScoringRole(complexityRouterConfig) === "decides"
           ? customDimensionsError(complexityRouterConfig.custom_dimensions)
           : null);
@@ -679,7 +627,9 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         ...modelData.litellm_params,
         complexity_router_config: updatedConfig,
         complexity_router_default_model: defaultModel,
-        ...buildAutoRouterCompressionParams(autoRouterCompression),
+        ...(isMemberManaged
+          ? {}
+          : buildAutoRouterCompressionPatch(autoRouterCompression, modelData.litellm_params ?? {})),
       };
       const updatedModelInfo = {
         ...modelData.model_info,
@@ -688,7 +638,14 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
       await modelPatchUpdateCall(
         accessToken,
-        { model_name: values.auto_router_name, litellm_params: updatedLitellmParams, model_info: updatedModelInfo },
+        isMemberManaged
+          ? {
+              litellm_params: {
+                complexity_router_config: updatedConfig,
+                complexity_router_default_model: defaultModel,
+              },
+            }
+          : { model_name: values.auto_router_name, litellm_params: updatedLitellmParams, model_info: updatedModelInfo },
         modelData.model_info.id,
       );
 
@@ -706,7 +663,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
     // Prepare the updated litellm_params
     const updatedLitellmParams = {
       ...modelData.litellm_params,
-      auto_router_config: JSON.stringify(routerConfig),
+      auto_router_config: serializeRouterConfig(routerConfig),
       auto_router_default_model: values.auto_router_default_model,
       auto_router_embedding_model: values.auto_router_embedding_model || undefined,
     };
@@ -745,7 +702,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       })();
     } catch (error) {
       console.error("Error updating auto router:", error);
-      toast.fromError("Failed to update auto router configuration");
+      toast.fromError(error);
     } finally {
       setLoading(false);
     }
@@ -755,6 +712,14 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
     ...modelInfo.map((model) => ({ value: model.model_group, label: model.model_group })),
     { value: "custom", label: "Enter custom model name" },
   ];
+
+  const routerNameField = (
+    <FormField control={form.control} name="auto_router_name" label="Auto Router Name">
+      {({ ref, ...field }) => (
+        <Input {...field} ref={ref} readOnly={isMemberManaged} placeholder="e.g., auto_router_1, smart_routing" />
+      )}
+    </FormField>
+  );
 
   return (
     <Dialog open={isVisible} onOpenChange={(open) => !open && onCancel()}>
@@ -769,41 +734,41 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
           <form onSubmit={(event) => event.preventDefault()} noValidate>
             <FieldGroup>
-              <FormField control={form.control} name="auto_router_name" label="Auto Router Name">
-                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g., auto_router_1, smart_routing" />}
-              </FormField>
+              {routerNameField}
 
               {isComplexityRouterModel ? (
                 /* Complexity Router Configuration */
                 <div className="w-full">
-                  <ComplexityRouterConfig
-                    editingTiers={editingTiers}
-                    onEditingTiersChange={setEditingTiers}
-                    showValidationErrors={showValidationErrors}
-                    modelInfo={modelInfo}
-                    value={complexityRouterConfig}
-                    onChange={(config) => {
-                      setComplexityRouterConfig(config);
-                    }}
-                    customTechnicalKeywords={customTechnicalKeywords}
-                    onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
-                    keywordTierRules={keywordTierRules}
-                    onKeywordTierRulesChange={setKeywordTierRules}
-                    keywordRulesError={getKeywordTierRulesError(
-                      keywordTierRules,
-                      activeTierRows(complexityRouterConfig),
-                    )}
-                    semanticMatchingEnabled={semanticMatchingEnabled}
-                    onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
-                    embeddingModel={embeddingModel}
-                    onEmbeddingModelChange={setEmbeddingModel}
-                    matchThreshold={matchThreshold}
-                    onMatchThresholdChange={setMatchThreshold}
-                    escalationKeywords={escalationKeywords}
-                    onEscalationKeywordsChange={setEscalationKeywords}
-                    autoRouterCompression={autoRouterCompression}
-                    onAutoRouterCompressionChange={setAutoRouterCompression}
-                  />
+                  <AutoRouterClassifierTabs value={complexityRouterConfig} onChange={setComplexityRouterConfig}>
+                    <ComplexityRouterConfig
+                      editingTiers={editingTiers}
+                      onEditingTiersChange={setEditingTiers}
+                      showValidationErrors={showValidationErrors}
+                      modelInfo={modelInfo}
+                      value={complexityRouterConfig}
+                      onChange={(config) => {
+                        setComplexityRouterConfig(config);
+                      }}
+                      customTechnicalKeywords={customTechnicalKeywords}
+                      onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
+                      keywordTierRules={keywordTierRules}
+                      onKeywordTierRulesChange={setKeywordTierRules}
+                      keywordRulesError={getKeywordTierRulesError(
+                        keywordTierRules,
+                        activeTierRows(complexityRouterConfig),
+                      )}
+                      semanticMatchingEnabled={semanticMatchingEnabled}
+                      onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
+                      embeddingModel={embeddingModel}
+                      onEmbeddingModelChange={setEmbeddingModel}
+                      matchThreshold={matchThreshold}
+                      onMatchThresholdChange={setMatchThreshold}
+                      escalationKeywords={escalationKeywords}
+                      onEscalationKeywordsChange={setEscalationKeywords}
+                      autoRouterCompression={autoRouterCompression}
+                      onAutoRouterCompressionChange={isMemberManaged ? undefined : setAutoRouterCompression}
+                    />
+                  </AutoRouterClassifierTabs>
                 </div>
               ) : (
                 <>
@@ -848,7 +813,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                 </>
               )}
 
-              {userRole === "Admin" && (
+              {userRole === "Admin" && !isMemberManaged && (
                 <FormField
                   control={form.control}
                   name="model_access_group"

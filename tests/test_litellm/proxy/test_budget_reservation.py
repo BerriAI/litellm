@@ -22,6 +22,7 @@ from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     Litellm_EntityType,
     LiteLLM_OrganizationTable,
+    LiteLLM_ProjectTableCachedObj,
     LiteLLM_TagTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
@@ -629,6 +630,154 @@ async def test_should_reserve_team_member_and_org_budget_counters(spend_counter_
     ) == pytest.approx(0.4)
 
     await release_budget_reservation(reservation)
+
+
+def _project_scoped_token() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        token="key-project-scoped",
+        spend=0.0,
+        user_id="user-proj",
+        team_id="team-proj",
+        project_id="proj-1",
+    )
+
+
+async def _seed_project_scoped_budgets(
+    key_cache: DualCache,
+    team_member_spend: float,
+    team_member_max_budget: float,
+    project_spend: float,
+    project_max_budget: float,
+) -> None:
+    await key_cache.async_set_cache(
+        key="team_membership:user-proj:team-proj",
+        value=LiteLLM_TeamMembership(
+            user_id="user-proj",
+            team_id="team-proj",
+            spend=team_member_spend,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=team_member_max_budget),
+        ).model_dump(),
+    )
+    await key_cache.async_set_cache(
+        key="project_id:proj-1",
+        value=LiteLLM_ProjectTableCachedObj(
+            project_id="proj-1",
+            team_id="team-proj",
+            budget_id="project-budget-id",
+            spend=project_spend,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=project_max_budget),
+        ).model_dump(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_should_reserve_project_and_team_member_counters_for_project_scoped_key(spend_counter_state):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    await _seed_project_scoped_budgets(
+        key_cache,
+        team_member_spend=0.1,
+        team_member_max_budget=1.0,
+        project_spend=0.2,
+        project_max_budget=1.0,
+    )
+
+    estimated = estimate_request_max_cost(request_body=_request_body(), route="/chat/completions", llm_router=None)
+    assert estimated is not None and estimated > 0
+
+    reservation = await reserve_budget_for_request(
+        request_body=_request_body(),
+        route="/chat/completions",
+        llm_router=None,
+        valid_token=_project_scoped_token(),
+        team_object=LiteLLM_TeamTable(team_id="team-proj", spend=0.0, max_budget=None),
+        user_object=LiteLLM_UserTable(user_id="user-proj", spend=0.0),
+        prisma_client=None,
+        user_api_key_cache=key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    assert reservation is not None
+    assert counter_cache.in_memory_cache.get_cache(key="spend:team_member:user-proj:team-proj") == pytest.approx(
+        0.1 + estimated
+    )
+    assert counter_cache.in_memory_cache.get_cache(key="spend:project:proj-1") == pytest.approx(0.2 + estimated)
+
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    await increment_spend_counters(
+        token="key-project-scoped",
+        team_id="team-proj",
+        user_id="user-proj",
+        response_cost=0.05,
+        budget_reservation=reservation,
+        project_id="proj-1",
+    )
+
+    assert counter_cache.in_memory_cache.get_cache(key="spend:project:proj-1") == pytest.approx(0.25)
+    assert counter_cache.in_memory_cache.get_cache(key="spend:team_member:user-proj:team-proj") == pytest.approx(0.15)
+
+
+@pytest.mark.asyncio
+async def test_exhausted_team_member_budget_still_blocks_project_scoped_key(spend_counter_state):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    await _seed_project_scoped_budgets(
+        key_cache,
+        team_member_spend=1.0,
+        team_member_max_budget=1.0,
+        project_spend=0.0,
+        project_max_budget=100.0,
+    )
+
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=_project_scoped_token(),
+            team_object=LiteLLM_TeamTable(team_id="team-proj", spend=0.0, max_budget=None),
+            user_object=LiteLLM_UserTable(user_id="user-proj", spend=0.0),
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert "TeamMember=user-proj:team-proj" in str(exc_info.value)
+    assert counter_cache.in_memory_cache.get_cache(key="spend:project:proj-1") in (None, pytest.approx(0.0))
+
+
+@pytest.mark.asyncio
+async def test_exhausted_project_budget_blocks_project_scoped_key(spend_counter_state):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    await _seed_project_scoped_budgets(
+        key_cache,
+        team_member_spend=0.0,
+        team_member_max_budget=100.0,
+        project_spend=5.0,
+        project_max_budget=5.0,
+    )
+
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=_project_scoped_token(),
+            team_object=LiteLLM_TeamTable(team_id="team-proj", spend=0.0, max_budget=None),
+            user_object=LiteLLM_UserTable(user_id="user-proj", spend=0.0),
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert "Project=proj-1" in str(exc_info.value)
+    assert exc_info.value.entity_type == Litellm_EntityType.PROJECT.value
+    assert counter_cache.in_memory_cache.get_cache(key="spend:team_member:user-proj:team-proj") in (
+        None,
+        pytest.approx(0.0),
+    )
 
 
 @pytest.mark.asyncio
@@ -2220,6 +2369,26 @@ class _ExpiringRedisCache:
     async def async_delete_cache(self, key: str, *args: object, **kwargs: object) -> None:
         self.store.pop(key, None)
 
+    async def async_increment_pipeline(self, increment_list, **kwargs):
+        results = []
+        for op in increment_list:
+            results.append(await self.async_increment(op["key"], op["increment_value"]))
+        return results
+
+    def get_ttl(self, **kwargs) -> None:
+        return None
+
+
+class _TeamMembershipFloorDb:
+    """Stands in for `prisma_client.db`: only the team-membership row exists and its spend is the DB floor."""
+
+    def __init__(self, spend: float) -> None:
+        self.spend = spend
+
+    def __getattr__(self, table_name: str) -> SimpleNamespace:
+        row = SimpleNamespace(spend=self.spend) if table_name == "litellm_teammembership" else None
+        return SimpleNamespace(find_unique=AsyncMock(return_value=row))
+
 
 @pytest.mark.asyncio
 async def test_reconcile_after_redis_counter_expiry_keeps_request_cost_enforced(
@@ -2263,6 +2432,59 @@ async def test_reconcile_after_redis_counter_expiry_keeps_request_cost_enforced(
 
     assert redis_cache.store[counter_key] == pytest.approx(0.35)
     assert counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(0.35)
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_reconcile_before_db_update_does_not_double_count_when_flush_lands_between_passes(
+    spend_counter_state,
+):
+    """The early reconcile (before the spend row is enqueued) reseeds from a DB
+    floor that cannot yet include this request. When the periodic flush commits
+    the row before increment_spend_counters runs its second reconcile, the
+    applied_adjustment early-return must keep the counter from adding the cost
+    a second time."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.spend_tracking.budget_reservation import reconcile_budget_reservation
+
+    counter_cache, _ = spend_counter_state
+    counter_key = "spend:team_member:user-flush:team-flush"
+    redis_cache = _ExpiringRedisCache()
+    counter_cache.redis_cache = redis_cache
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.6)
+    db_floor = _TeamMembershipFloorDb(spend=0.3)
+    ps.prisma_client = SimpleNamespace(db=db_floor)
+
+    reservation = {
+        "reserved_cost": 0.6,
+        "entries": [
+            {
+                "counter_key": counter_key,
+                "entity_type": "TeamMember",
+                "entity_id": "user-flush:team-flush",
+                "reserved_cost": 0.6,
+                "applied_adjustment": 0.0,
+            }
+        ],
+        "finalized": False,
+    }
+
+    await reconcile_budget_reservation(budget_reservation=reservation, actual_cost=0.05, finalize=False)
+
+    assert redis_cache.store[counter_key] == pytest.approx(0.35)
+    assert reservation["entries"][0]["applied_adjustment"] == pytest.approx(-0.55)
+    assert reservation["finalized"] is False
+
+    db_floor.spend = 0.35
+    await ps.increment_spend_counters(
+        token="key-flush",
+        team_id="team-flush",
+        user_id="user-flush",
+        response_cost=0.05,
+        budget_reservation=reservation,
+    )
+
+    assert redis_cache.store[counter_key] == pytest.approx(0.35)
     assert reservation["finalized"] is True
 
 

@@ -109,6 +109,10 @@ class Capability:
         return f"{self.provider}-{self.scenario}"
 
     @property
+    def file_provider(self) -> str | None:
+        return self.provider if self.scenario in {"model_param", "provider_fallback"} else None
+
+    @property
     def jsonl_model(self) -> str:
         # Always the provider deployment name. Unified routes via
         # target_model_names; the JSONL body.model must still be a name Azure /
@@ -216,6 +220,13 @@ def _b64_decode(value: str) -> str:
 
 def is_managed_id(id_str: str) -> bool:
     return _b64_decode(id_str).startswith("litellm_proxy")
+
+
+CLOUD_STORAGE_SCHEMES: Final = ("s3://", "gs://")
+
+
+def is_cloud_storage_id(id_str: str) -> bool:
+    return id_str.startswith(CLOUD_STORAGE_SCHEMES)
 
 
 def is_model_encoded_id(id_str: str) -> bool:
