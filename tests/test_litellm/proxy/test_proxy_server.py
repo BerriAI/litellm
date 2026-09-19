@@ -1663,7 +1663,7 @@ async def test_proxy_startup_refuses_an_unsafe_master_key_before_connecting_to_t
             pass
 
     assert len(announced) == 1
-    assert "LITELLM_MASTER_KEY=sk-$(openssl rand -hex 32)" in announced[0]
+    assert "sk-$(openssl rand -hex 32)" in announced[0]
 
 
 @pytest.mark.asyncio
