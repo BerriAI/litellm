@@ -4700,3 +4700,17 @@ def test_init_websearch_interception_honors_enabled_providers(monkeypatch):
     registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
     assert len(registered) == 1
     assert registered[0].enabled_providers == ["bedrock", "vertex_ai"]
+
+
+def test_websearch_interception_settings_can_be_named_in_supported_db_objects(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ConfigGeneralSettings
+
+    allowlist = ConfigGeneralSettings(supported_db_objects=["websearch_interception_settings"]).supported_db_objects
+    assert allowlist
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": allowlist})
+    assert proxy_server.should_load_db_object(object_type="websearch_interception_settings") is True
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["models"]})
+    assert proxy_server.should_load_db_object(object_type="websearch_interception_settings") is False

@@ -3667,17 +3667,26 @@ export const updateMCPSemanticFilterSettings = async (accessToken: string, setti
   }
 };
 
-export const getWebSearchInterceptionSettings = async (accessToken: string) => {
+export type WebSearchInterceptionSettings = components["schemas"]["WebSearchInterceptionSettings"];
+export type WebSearchInterceptionSettingsResponse = components["schemas"]["WebSearchInterceptionSettingsResponse"];
+
+export const getWebSearchInterceptionSettings = async (
+  accessToken: string,
+): Promise<WebSearchInterceptionSettingsResponse> => {
   try {
-    const data = await apiClient.get(`/get/websearch_interception_settings`, { accessToken });
-    return data;
+    return await apiClient.get<WebSearchInterceptionSettingsResponse>(`/get/websearch_interception_settings`, {
+      accessToken,
+    });
   } catch (error) {
     console.error("Failed to get web search interception settings:", error);
     throw error;
   }
 };
 
-export const updateWebSearchInterceptionSettings = async (accessToken: string, settings: Record<string, any>) => {
+export const updateWebSearchInterceptionSettings = async (
+  accessToken: string,
+  settings: WebSearchInterceptionSettings,
+) => {
   try {
     return await apiClient.patch(`/update/websearch_interception_settings`, { accessToken, body: settings });
   } catch (error) {
