@@ -627,6 +627,7 @@ def test_virtual_key_llm_api_routes_denies_spend_logs_v2():
         "/mcp/tools/call",
         "/mcp-rest/tools/call",
         "/mcp/tools/list",
+        "/token",
     ],
 )
 def test_mcp_inference_routes_classified_as_llm_api(route):

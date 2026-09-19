@@ -23684,6 +23684,17 @@
               ],
               "title": "Refresh Token"
             },
+            "requested_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Requested Token Type"
+            },
             "resource": {
               "anyOf": [
                 {
@@ -23705,6 +23716,28 @@
                 }
               ],
               "title": "Scope"
+            },
+            "subject_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token"
+            },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
             }
           },
           "required": [
@@ -23758,6 +23791,17 @@
               ],
               "title": "Refresh Token"
             },
+            "requested_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Requested Token Type"
+            },
             "resource": {
               "anyOf": [
                 {
@@ -23779,6 +23823,28 @@
                 }
               ],
               "title": "Scope"
+            },
+            "subject_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token"
+            },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
             }
           },
           "required": [
