@@ -165,6 +165,29 @@ class TestModelRateLimitingCheck:
         assert "test-id:gpt-4:tpm:" in kwarg_params["key"]
         assert kwarg_params["value"] == 50
 
+    def test_log_success_event_streaming_fallback_model_name(self):
+        """Test that log_success_event correctly increments the cache when litellm_model_name is None in hidden_params (e.g. streaming)."""
+        mock_cache = MagicMock()
+        check = ModelRateLimitingCheck(dual_cache=mock_cache)
+
+        kwargs = {
+            "standard_logging_object": {
+                "model_id": "test-id",
+                "model": "gpt-4",
+                "total_tokens": 50,
+                "hidden_params": {"litellm_model_name": None},
+            },
+            "litellm_params": {"model": "gpt-4"},
+        }
+
+        check.log_success_event(kwargs, None, None, None)
+
+        mock_cache.increment_cache.assert_called_once()
+        _, kwarg_params = mock_cache.increment_cache.call_args
+        assert "test-id:gpt-4:tpm:" in kwarg_params["key"]
+        assert kwarg_params["value"] == 50
+
+
 
 class TestModelRateLimitingCheckAsync:
     """Test async methods of ModelRateLimitingCheck."""
@@ -267,6 +290,31 @@ class TestModelRateLimitingCheckAsync:
         _, kwarg_params = mock_cache.async_increment_cache.call_args
         assert "test-id:gpt-4:tpm:" in kwarg_params["key"]
         assert kwarg_params["value"] == 50
+
+    @pytest.mark.asyncio
+    async def test_async_log_success_event_streaming_fallback_model_name(self):
+        """Test that async_log_success_event correctly increments the cache when litellm_model_name is None in hidden_params (e.g. streaming)."""
+        mock_cache = MagicMock()
+        mock_cache.async_increment_cache = AsyncMock()
+        check = ModelRateLimitingCheck(dual_cache=mock_cache)
+
+        kwargs = {
+            "standard_logging_object": {
+                "model_id": "test-id",
+                "model": "gpt-4",
+                "total_tokens": 75,
+                "hidden_params": {"litellm_model_name": None},
+            },
+            "model": "gpt-4",
+        }
+
+        await check.async_log_success_event(kwargs, None, None, None)
+
+        mock_cache.async_increment_cache.assert_called_once()
+        _, kwarg_params = mock_cache.async_increment_cache.call_args
+        assert "test-id:gpt-4:tpm:" in kwarg_params["key"]
+        assert kwarg_params["value"] == 75
+
 
 
 class TestRouterWithEnforceModelRateLimits:
