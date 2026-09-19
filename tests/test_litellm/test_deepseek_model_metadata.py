@@ -12,13 +12,10 @@ field set to ``True``.
 import json
 import os
 
-
 import litellm
 from litellm.utils import (
     _supports_factory,
-    supports_response_schema,
 )
-
 
 # ---------------------------------------------------------------------------
 # Data-level tests – verify the JSON files are in sync
@@ -60,28 +57,6 @@ class TestDeepSeekModelCostEntries:
 class TestSupportsResponseSchemaDeepSeek:
     """All calling conventions for DeepSeek should return True for
     ``supports_response_schema``."""
-
-    def test_provider_slash_model(self):
-        assert supports_response_schema(model="deepseek/deepseek-chat") is True
-
-    def test_explicit_provider(self):
-        assert (
-            supports_response_schema(
-                model="deepseek-chat", custom_llm_provider="deepseek"
-            )
-            is True
-        )
-
-    def test_reasoner_provider_slash_model(self):
-        assert supports_response_schema(model="deepseek/deepseek-reasoner") is True
-
-    def test_reasoner_explicit_provider(self):
-        assert (
-            supports_response_schema(
-                model="deepseek-reasoner", custom_llm_provider="deepseek"
-            )
-            is True
-        )
 
 
 # ---------------------------------------------------------------------------

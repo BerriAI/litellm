@@ -9,11 +9,14 @@ import asyncio
 import datetime
 from unittest.mock import MagicMock
 
+import pytest
+
 import litellm.litellm_core_utils.llm_response_utils.response_metadata as response_metadata_mod
 import litellm.proxy.common_request_processing as common_request_processing_mod
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     ResponseMetadata,
+    _union_duration_ms,
     response_timing_metrics,
     update_response_metadata,
 )
@@ -70,9 +73,7 @@ class TestCallbackDurationMs:
     def test_update_response_metadata_includes_callback_duration(self):
         """End-to-end: update_response_metadata should propagate callback_duration_ms."""
         result = ModelResponse()
-        logging_obj = self._make_logging_obj(
-            callback_duration_ms=5.5, llm_api_duration_ms=800.0
-        )
+        logging_obj = self._make_logging_obj(callback_duration_ms=5.5, llm_api_duration_ms=800.0)
         logging_obj._response_cost_calculator = MagicMock(return_value=0.001)
         logging_obj.litellm_call_id = "test-call-id"
 
@@ -231,11 +232,24 @@ class TestResponseTimingMetrics:
     START = datetime.datetime(2025, 1, 1, 0, 0, 0)
     END = datetime.datetime(2025, 1, 1, 0, 0, 1)
 
-    def _make_logging_obj(self, llm_api_duration_ms=None, caching_details=None):
+    def _make_logging_obj(
+        self,
+        llm_api_duration_ms: float | None = None,
+        llm_api_timing_windows: object = None,
+        caching_details: dict[str, object] | None = None,
+        received_at: datetime.datetime | str | None = None,
+    ) -> MagicMock:
         logging_obj = MagicMock()
         logging_obj.model_call_details = {}
         if llm_api_duration_ms is not None:
             logging_obj.model_call_details["llm_api_duration_ms"] = llm_api_duration_ms
+        if received_at is not None or llm_api_timing_windows is not None:
+            metadata = {}
+            if received_at is not None:
+                metadata["litellm_received_at"] = received_at
+            if llm_api_timing_windows is not None:
+                metadata["llm_api_timing_windows"] = llm_api_timing_windows
+            logging_obj.model_call_details["litellm_params"] = {"metadata": metadata}
         logging_obj.caching_details = caching_details
         return logging_obj
 
@@ -245,6 +259,104 @@ class TestResponseTimingMetrics:
             "_response_ms": 1000.0,
             "litellm_overhead_time_ms": 100.0,
         }
+
+    def test_window_starts_at_proxy_receive_when_stamped(self):
+        received_at = self.START.astimezone(datetime.timezone.utc) - datetime.timedelta(seconds=3)
+        logging_obj = self._make_logging_obj(llm_api_duration_ms=900.0, received_at=received_at)
+
+        result = response_timing_metrics(self.START, self.END, logging_obj)
+
+        assert result["_response_ms"] == pytest.approx(4000.0)
+        assert result["litellm_overhead_time_ms"] == pytest.approx(3100.0)
+
+    def test_receive_anchored_window_subtracts_all_provider_attempts(self):
+        logging_obj = self._make_logging_obj(
+            llm_api_duration_ms=300.0,
+            llm_api_timing_windows=(
+                (self.START.timestamp(), self.START.timestamp() + 0.3),
+                (self.START.timestamp() + 0.4, self.START.timestamp() + 0.8),
+            ),
+            received_at=self.START,
+        )
+
+        result = response_timing_metrics(self.START, self.END, logging_obj)
+
+        assert result["_response_ms"] == pytest.approx(1000.0)
+        assert result["litellm_overhead_time_ms"] == pytest.approx(300.0)
+
+    def test_sdk_window_subtracts_current_provider_attempt(self):
+        logging_obj = self._make_logging_obj(
+            llm_api_duration_ms=300.0,
+            llm_api_timing_windows=((self.START.timestamp(), self.START.timestamp() + 0.3),),
+        )
+
+        result = response_timing_metrics(self.START, self.END, logging_obj)
+
+        assert result["_response_ms"] == pytest.approx(1000.0)
+        assert result["litellm_overhead_time_ms"] == pytest.approx(700.0)
+
+    def test_receive_anchored_window_unions_nested_and_retry_windows(self):
+        windows = (
+            (self.START.timestamp(), self.START.timestamp() + 0.3),
+            (self.START.timestamp(), self.START.timestamp() + 0.3),
+            (self.START.timestamp() + 0.4, self.START.timestamp() + 0.7),
+        )
+        logging_obj = self._make_logging_obj(
+            llm_api_duration_ms=300.0,
+            llm_api_timing_windows=windows,
+            received_at=self.START,
+        )
+
+        result = response_timing_metrics(self.START, self.END, logging_obj)
+
+        assert result["litellm_overhead_time_ms"] == pytest.approx(400.0)
+        assert _union_duration_ms(windows, self.START.timestamp(), self.END.timestamp()) == pytest.approx(600.0)
+
+    def test_receive_anchored_window_ignores_seeded_windows_outside_window(self):
+        windows = (
+            (self.START.timestamp() - 10.0, self.START.timestamp() - 1.0),
+            (self.END.timestamp() + 1.0, self.END.timestamp() + 2.0),
+        )
+        logging_obj = self._make_logging_obj(
+            llm_api_duration_ms=300.0,
+            llm_api_timing_windows=windows,
+            received_at=self.START,
+        )
+
+        result = response_timing_metrics(self.START, self.END, logging_obj)
+
+        assert result["litellm_overhead_time_ms"] == pytest.approx(700.0)
+
+    def test_receive_anchored_window_falls_back_to_current_provider_attempt(self):
+        logging_obj = self._make_logging_obj(
+            llm_api_duration_ms=300.0,
+            received_at=self.START,
+        )
+
+        result = response_timing_metrics(self.START, self.END, logging_obj)
+
+        assert result["_response_ms"] == pytest.approx(1000.0)
+        assert result["litellm_overhead_time_ms"] == pytest.approx(700.0)
+
+    def test_cache_hit_window_starts_at_proxy_receive_when_stamped(self):
+        received_at = self.START.astimezone(datetime.timezone.utc) - datetime.timedelta(seconds=3)
+        logging_obj = self._make_logging_obj(
+            caching_details={"cache_hit": True, "cache_duration_ms": 250.0},
+            received_at=received_at,
+        )
+
+        result = response_timing_metrics(self.START, self.END, logging_obj)
+
+        assert result["_response_ms"] == pytest.approx(4000.0)
+        assert result["litellm_overhead_time_ms"] == pytest.approx(3750.0)
+
+    def test_non_datetime_proxy_receive_falls_back_to_start_time(self):
+        logging_obj = self._make_logging_obj(llm_api_duration_ms=900.0, received_at="bad")
+
+        result = response_timing_metrics(self.START, self.END, logging_obj)
+
+        assert result["_response_ms"] == pytest.approx(1000.0)
+        assert result["litellm_overhead_time_ms"] == pytest.approx(100.0)
 
     def test_overhead_omitted_when_no_provider_or_cache_duration_recorded(self):
         logging_obj = self._make_logging_obj()
@@ -358,6 +470,28 @@ class TestDetailedTiming:
         assert hidden.get("timing_pre_processing_ms") == 20.0
         assert hidden.get("timing_post_processing_ms") == 10.0  # 530 - 20 - 500
 
+    def test_detailed_timing_pre_processing_uses_receive_anchor(self, monkeypatch):
+        monkeypatch.setattr(response_metadata_mod, "LITELLM_DETAILED_TIMING", True)
+
+        result = ModelResponse()
+        received_at = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+        start = received_at + datetime.timedelta(milliseconds=200)
+        api_call_start = start.replace(tzinfo=None)
+        end = start + datetime.timedelta(milliseconds=530)
+        logging_obj = self._make_logging_obj(
+            llm_api_duration_ms=500.0,
+            api_call_start_time=api_call_start,
+        )
+        logging_obj.model_call_details["litellm_params"] = {"metadata": {"litellm_received_at": received_at}}
+
+        metadata = ResponseMetadata(result)
+        metadata.set_timing_metrics(start, end, logging_obj)
+        metadata.apply()
+
+        hidden = result._hidden_params
+        assert hidden.get("timing_pre_processing_ms") == pytest.approx(200.0)
+        assert hidden.get("timing_post_processing_ms") == pytest.approx(30.0)
+
     def test_detailed_timing_absent_when_disabled(self, monkeypatch):
         """When LITELLM_DETAILED_TIMING is false, no detailed timing keys."""
         monkeypatch.setattr(response_metadata_mod, "LITELLM_DETAILED_TIMING", False)
@@ -377,9 +511,7 @@ class TestDetailedTiming:
 
     def test_detailed_timing_headers_in_custom_headers(self, monkeypatch):
         """When LITELLM_DETAILED_TIMING is true, headers flow to get_custom_headers."""
-        monkeypatch.setattr(
-            common_request_processing_mod, "LITELLM_DETAILED_TIMING", True
-        )
+        monkeypatch.setattr(common_request_processing_mod, "LITELLM_DETAILED_TIMING", True)
 
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         hidden_params = {
@@ -402,9 +534,7 @@ class TestDetailedTiming:
 
     def test_detailed_timing_headers_absent_when_disabled(self, monkeypatch):
         """When LITELLM_DETAILED_TIMING is false, no timing headers emitted."""
-        monkeypatch.setattr(
-            common_request_processing_mod, "LITELLM_DETAILED_TIMING", False
-        )
+        monkeypatch.setattr(common_request_processing_mod, "LITELLM_DETAILED_TIMING", False)
 
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         hidden_params = {

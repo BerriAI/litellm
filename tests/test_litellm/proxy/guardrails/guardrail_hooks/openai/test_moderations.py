@@ -149,6 +149,46 @@ async def test_openai_moderation_guardrail_safe_content():
 
 
 @pytest.mark.asyncio
+async def test_openai_moderation_response_scan_moderates_output_not_user_prompt():
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(guardrail_name="test-openai-moderation", event_hook="post_call")
+        mock_response = OpenAIModerationResponse(
+            id="modr-ctx",
+            model="omni-moderation-latest",
+            results=[
+                OpenAIModerationResult(
+                    flagged=False,
+                    categories={"hate": False},
+                    category_scores={"hate": 0.001},
+                    category_applied_input_types={"hate": []},
+                )
+            ],
+        )
+        request_messages = [{"role": "user", "content": "What is the capital of France?"}]
+
+        with patch.object(guardrail, "async_make_request", return_value=mock_response) as mock_request:
+            await guardrail.apply_guardrail(
+                inputs=GenericGuardrailAPIInputs(
+                    texts=["Paris."],
+                    structured_messages=[*request_messages, {"role": "assistant", "content": "Paris."}],
+                ),
+                request_data={"messages": request_messages},
+                input_type="response",
+            )
+            mock_request.assert_called_once_with(input_text="Paris.")
+
+            mock_request.reset_mock()
+            await guardrail.apply_guardrail(
+                inputs=GenericGuardrailAPIInputs(texts=[], structured_messages=request_messages),
+                request_data={"messages": request_messages},
+                input_type="response",
+            )
+            mock_request.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_openai_moderation_guardrail_apply_guardrail():
     """Test OpenAI moderation guardrail apply_guardrail method (unified guardrail interface)"""
     from litellm.types.utils import GenericGuardrailAPIInputs
@@ -329,6 +369,7 @@ async def test_openai_moderation_guardrail_streaming_safe_content():
             chunk1.choices[0].delta = MagicMock()
             chunk1.choices[0].delta.content = "Hello "
             chunk1.choices[0].finish_reason = None
+            chunk1.choices[0].index = 0
 
             chunk2 = MagicMock()
             chunk2.model = "gpt-4"
@@ -336,6 +377,7 @@ async def test_openai_moderation_guardrail_streaming_safe_content():
             chunk2.choices[0].delta = MagicMock()
             chunk2.choices[0].delta.content = "world"
             chunk2.choices[0].finish_reason = None
+            chunk2.choices[0].index = 0
 
             # Last chunk with finish_reason
             chunk3 = MagicMock()
@@ -344,6 +386,7 @@ async def test_openai_moderation_guardrail_streaming_safe_content():
             chunk3.choices[0].delta = MagicMock()
             chunk3.choices[0].delta.content = "!"
             chunk3.choices[0].finish_reason = "stop"
+            chunk3.choices[0].index = 0
 
             for chunk in [chunk1, chunk2, chunk3]:
                 yield chunk
@@ -440,6 +483,7 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
             chunk1.choices[0].delta = MagicMock()
             chunk1.choices[0].delta.content = "This is "
             chunk1.choices[0].finish_reason = None
+            chunk1.choices[0].index = 0
 
             # Last chunk - with finish_reason to signal end of stream
             chunk2 = MagicMock()
@@ -448,6 +492,7 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
             chunk2.choices[0].delta = MagicMock()
             chunk2.choices[0].delta.content = "harmful content"
             chunk2.choices[0].finish_reason = "stop"
+            chunk2.choices[0].index = 0
 
             for chunk in [chunk1, chunk2]:
                 yield chunk

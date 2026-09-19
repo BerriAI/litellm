@@ -10,10 +10,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, cast
 from urllib.parse import urlsplit
 
-from litellm.integrations.otel.model.metadata import (
-    RequestContext,
-    RequestIdentity,
-)
+from litellm.integrations.otel.model.metadata import RequestContext, RequestIdentity
 from litellm.integrations.otel.model.semconv import (
     GenAIOperation,
     GenAIOutputType,
@@ -22,6 +19,7 @@ from litellm.integrations.otel.model.semconv import (
     resolve_output_type,
     resolve_provider,
 )
+from litellm.integrations.otel.model.trace_controls import TraceControls
 from litellm.integrations.otel.model.utils import (
     as_bool,
     as_float,
@@ -387,6 +385,7 @@ class LLMCallSpanData:
     output_type: GenAIOutputType | None = None
     call_type: str | None = None
     request_route: str | None = None
+    trace: TraceControls = field(default_factory=TraceControls)
 
     @classmethod
     def from_standard_logging_payload(
@@ -395,6 +394,7 @@ class LLMCallSpanData:
         capture_content: bool = False,
         time_to_first_chunk_seconds: float | None = None,
         request_route: str | None = None,
+        trace: TraceControls | None = None,
     ) -> LLMCallSpanData:
         params: Final = cast(Mapping[str, object], payload.get("model_parameters") or {})
         # The single parse of the request's metadata — the request-vs-provider
@@ -436,6 +436,7 @@ class LLMCallSpanData:
             output_type=resolve_output_type(call_type),
             call_type=call_type or None,
             request_route=request_route or context.identity.request_route,
+            trace=trace or TraceControls(),
         )
 
 

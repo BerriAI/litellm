@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
 )
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+from litellm.llms.base_llm.managed_resources.isolation import build_list_page
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -68,7 +69,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_team_provider_credentials,
     encode_file_id_with_model,
     extract_file_creation_params,
-    get_credentials_for_model,
+    get_authorized_credentials_for_model,
     handle_model_based_routing,
     prepare_data_with_credentials,
     validate_file_list_limit,
@@ -77,6 +78,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 )
 from litellm.proxy.openai_files_endpoints.general_upload_validation import (
     MB,
+    check_allowed_extension,
     check_blocked_extension,
     check_unsafe_filename,
     check_upload_file_size,
@@ -90,6 +92,7 @@ from litellm.router import Router
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
     FileExpiresAfter,
+    FileListPage,
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
@@ -97,6 +100,7 @@ from litellm.types.llms.openai import (
 router: Final = APIRouter()
 
 _MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
+_LISTED_FILES_ADAPTER: Final = TypeAdapter(list[OpenAIFileObject])
 
 
 class UploadedFileInfo(TypedDict):
@@ -267,9 +271,10 @@ async def route_create_file(
     # NEW: Handle model-based routing (no DB required)
     if model is not None:
         # Get credentials from model_list via router
-        credentials: Final = get_credentials_for_model(
+        credentials: Final = await get_authorized_credentials_for_model(
             llm_router=llm_router,
             model_id=model,
+            user_api_key_dict=user_api_key_dict,
             operation_context="file upload",
         )
 
@@ -469,6 +474,11 @@ async def create_file(
         general_size_failure: Final = check_upload_file_size(file_source, max_file_size_mb)
         if general_size_failure is not None:
             raise_upload_validation_failure(general_size_failure)
+
+        allowed_extensions: Final = coerce_optional_str_list_setting(general_settings.get("allowed_file_extensions"))
+        allowed_extension_failure: Final = check_allowed_extension(file.filename, allowed_extensions)
+        if allowed_extension_failure is not None:
+            raise_upload_validation_failure(allowed_extension_failure)
 
         blocked_extensions: Final = coerce_optional_str_list_setting(general_settings.get("blocked_file_extensions"))
         blocked_extension_failure: Final = check_blocked_extension(file.filename, blocked_extensions)
@@ -907,11 +917,12 @@ async def get_file_content(
                 model_used,
                 original_file_id,
                 credentials,
-            ) = handle_model_based_routing(
+            ) = await handle_model_based_routing(
                 file_id=file_id,
                 request=request,
                 llm_router=llm_router,
                 data=data,
+                user_api_key_dict=user_api_key_dict,
                 check_file_id_encoding=True,
             )
 
@@ -1122,15 +1133,16 @@ async def get_file(
             model_used,
             original_file_id,
             credentials,
-        ) = handle_model_based_routing(
+        ) = await handle_model_based_routing(
             file_id=file_id,
             request=request,
             llm_router=llm_router,
             data=data,
+            user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=True,
         )
 
-        if should_route:
+        if should_route and credentials is not None:
             # Use model-based routing with credentials from config
             prepare_data_with_credentials(
                 data=data,
@@ -1139,7 +1151,10 @@ async def get_file(
                 include_internal_credentials=True,
             )
 
-            response = await litellm.afile_retrieve(**data)
+            response = await litellm.afile_retrieve(
+                custom_llm_provider=credentials["custom_llm_provider"],
+                **data,
+            )
 
             # Keep the encoded ID in response if it was originally encoded
             if original_file_id and response and hasattr(response, "id") and response.id:
@@ -1287,6 +1302,11 @@ async def delete_file(
             user_api_key_dict=user_api_key_dict,
             managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
         )
+        if is_managed_cloud_storage_uri(file_id) and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail="Raw cloud storage file ids can only be deleted by a proxy admin key. Use the LiteLLM managed file id returned when the file was created.",
+            )
 
         custom_llm_provider: Final = (
             provider
@@ -1327,11 +1347,12 @@ async def delete_file(
             model_used,
             original_file_id,
             credentials,
-        ) = handle_model_based_routing(
+        ) = await handle_model_based_routing(
             file_id=file_id,
             request=request,
             llm_router=llm_router,
             data=data,
+            user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=True,
         )
 
@@ -1446,6 +1467,12 @@ async def delete_file(
             )
 
 
+def _as_file_list_page(response: object) -> object:
+    if not isinstance(response, list):
+        return response
+    return FileListPage(**build_list_page(_LISTED_FILES_ADAPTER.validate_python(response)))
+
+
 @router.get(
     "/{provider}/v1/files",
     dependencies=[Depends(user_api_key_auth)],
@@ -1514,17 +1541,18 @@ async def list_files(
         response: Any | None = None
 
         # Check for model-based credential routing (no file_id encoding check for list)
-        should_route, model_used, _, credentials = handle_model_based_routing(
+        should_route, model_used, _, credentials = await handle_model_based_routing(
             file_id="",  # No file_id for list endpoint
             request=request,
             llm_router=llm_router,
             data=data,
+            user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=False,
         )
 
         if should_route and credentials is not None:
             # Use model-based routing with credentials from config
-            prepare_data_with_credentials(data=data, credentials=credentials)
+            prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)
             response = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
@@ -1545,12 +1573,13 @@ async def list_files(
                     status_code=500,
                     detail="LLM Router not initialized. Ensure models added to proxy.",
                 )
-            credentials = get_credentials_for_model(
+            credentials = await get_authorized_credentials_for_model(
                 llm_router=llm_router,
                 model_id=target_model_names_list[0],
+                user_api_key_dict=user_api_key_dict,
                 operation_context="file list",
             )
-            prepare_data_with_credentials(data=data, credentials=credentials)
+            prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)
             response = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
@@ -1592,6 +1621,7 @@ async def list_files(
                 status_code=500,
                 detail="Either 'provider' or 'target_model_names' must be provided e.g. `?target_model_names=gpt-4o`",
             )
+        response = _as_file_list_page(response)  # rebind-ok: each dispatch branch above binds response
 
         ## POST CALL HOOKS ###
         _response: Final = await proxy_logging_obj.post_call_success_hook(

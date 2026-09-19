@@ -119,6 +119,63 @@ class TestResponsesAPIRequestUtils:
         assert result["max_output_tokens"] == 100
         assert result["prompt"] == {"id": "pmpt_456"}
 
+    def test_get_requested_response_api_optional_param_drops_nested_path(self):
+        """Nested additional_drop_params paths like reasoning.summary must be honored"""
+        params = {
+            "temperature": 0.1,
+            "reasoning": {"effort": "high", "summary": "auto"},
+            "additional_drop_params": ["reasoning.summary"],
+        }
+
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+
+        assert result["reasoning"] == {"effort": "high"}
+        assert result["temperature"] == 0.1
+
+    def test_get_requested_response_api_optional_param_drops_array_path(self):
+        """Array wildcard paths like tools[*].input_examples must be honored"""
+        params = {
+            "tools": [{"type": "function", "name": "t", "input_examples": ["x"]}],
+            "additional_drop_params": ["tools[*].input_examples"],
+        }
+
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+
+        assert result["tools"] == [{"type": "function", "name": "t"}]
+
+    def test_get_requested_response_api_optional_param_drops_top_level(self):
+        """Top-level additional_drop_params keys must still be honored"""
+        params = {
+            "reasoning": {"effort": "high", "summary": "auto"},
+            "additional_drop_params": ["reasoning"],
+        }
+
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+
+        assert "reasoning" not in result
+
+    def test_get_requested_response_api_optional_param_non_matching_nested_path(self):
+        """A nested path that does not match anything leaves params untouched"""
+        params = {
+            "reasoning": {"effort": "high", "summary": "auto"},
+            "additional_drop_params": ["reasoning.nope"],
+        }
+
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+
+        assert result["reasoning"] == {"effort": "high", "summary": "auto"}
+
+    def test_get_requested_response_api_optional_param_none_drop_params(self):
+        """additional_drop_params=None is a no-op"""
+        params = {
+            "reasoning": {"effort": "high", "summary": "auto"},
+            "additional_drop_params": None,
+        }
+
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+
+        assert result["reasoning"] == {"effort": "high", "summary": "auto"}
+
     def test_decode_previous_response_id_to_original_previous_response_id(self):
         """Test decoding a LiteLLM encoded previous_response_id to the original previous_response_id"""
         # Setup
@@ -576,6 +633,47 @@ class TestResponseAPILoggingUtils:
         assert result.prompt_tokens_details.cached_tokens == 8
         assert result.completion_tokens_details is not None
         assert result.completion_tokens_details.reasoning_tokens == 4
+
+    def test_transform_realtime_usage_dict_keeps_cached_tokens_details(self):
+        usage = {
+            "input_tokens": 283,
+            "output_tokens": 0,
+            "total_tokens": 283,
+            "input_token_details": {
+                "text_tokens": 116,
+                "audio_tokens": 167,
+                "cached_tokens": 192,
+                "cached_tokens_details": {"text_tokens": 64, "audio_tokens": 128},
+            },
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cached_tokens == 192
+        assert result.prompt_tokens_details.cached_tokens_details is not None
+        assert result.prompt_tokens_details.cached_tokens_details.audio_tokens == 128
+        assert result.prompt_tokens_details.cached_tokens_details.text_tokens == 64
+
+    def test_transform_response_api_usage_object_keeps_cached_tokens_details(self):
+        usage = ResponseAPIUsage(
+            input_tokens=283,
+            output_tokens=0,
+            total_tokens=283,
+            input_tokens_details={
+                "text_tokens": 116,
+                "audio_tokens": 167,
+                "cached_tokens": 192,
+                "cached_tokens_details": {"text_tokens": 64, "audio_tokens": 128},
+            },
+        )
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cached_tokens_details is not None
+        assert result.prompt_tokens_details.cached_tokens_details.audio_tokens == 128
+        assert result.prompt_tokens_details.cached_tokens_details.text_tokens == 64
 
 
 class TestResponsesAPIProviderSpecificParams:

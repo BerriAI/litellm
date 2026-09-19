@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -29,12 +30,15 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     end_user_cache_key,
     model_access_group_cache_key,
     model_access_group_spend_counter_key,
+    project_cache_key,
+    project_spend_counter_key,
     tag_cache_key,
     team_membership_reservation_cache_key,
 )
+from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
-from litellm.rust_bridge.token_counter import count_anthropic_input_tokens, uses_anthropic_tokenizer
+from litellm.rust_bridge.token_counter import RustTokenizer, count_input_tokens, rust_tokenizer
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
 
@@ -61,6 +65,7 @@ _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
     "Tag": Litellm_EntityType.TAG.value,
     "Model access group": Litellm_EntityType.MODEL_ACCESS_GROUP.value,
     "Organization": Litellm_EntityType.ORGANIZATION.value,
+    "Project": Litellm_EntityType.PROJECT.value,
 }
 
 
@@ -257,46 +262,47 @@ async def reserve_budget_for_request(
 
     applied_entries: Final[list[dict[str, float | str]]] = []
     try:
-        for counter in counters:
-            entry = _counter_to_reservation_entry(
-                counter=counter,
-                reserved_cost=reservation_cost,
-            )
-            applied_entries.append(entry)
-            try:
-                reserved_value = await _reserve_counter(
+        with _counters_batch_scope(frozenset(counter.counter_key for counter in counters)):
+            for counter in counters:
+                entry = _counter_to_reservation_entry(
                     counter=counter,
-                    reservation_cost=reservation_cost,
+                    reserved_cost=reservation_cost,
                 )
-            except _CounterReservationUnavailable as exc:
-                if exc.touched_counter and not exc.counter_invalidated:
-                    await _release_applied_entries_best_effort(
-                        entries=[entry],
-                        default_reserved_cost=reservation_cost,
+                applied_entries.append(entry)
+                try:
+                    reserved_value = await _reserve_counter(
+                        counter=counter,
+                        reservation_cost=reservation_cost,
                     )
-                applied_entries.remove(entry)
-                if fail_closed_budget_enforcement:
-                    _raise_reservation_unavailable(counter_key=counter.counter_key)
-                continue
+                except _CounterReservationUnavailable as exc:
+                    if exc.touched_counter and not exc.counter_invalidated:
+                        await _release_applied_entries_best_effort(
+                            entries=[entry],
+                            default_reserved_cost=reservation_cost,
+                        )
+                    applied_entries.remove(entry)
+                    if fail_closed_budget_enforcement:
+                        _raise_reservation_unavailable(counter_key=counter.counter_key)
+                    continue
 
-            if reserved_value is not None:
-                current_spend = reserved_value
-            else:
-                cached_spend = current_spend_by_counter_key.get(counter.counter_key)
-                if cached_spend is None:
-                    cached_spend = await _get_current_counter_value(counter=counter)
-                current_spend = cached_spend + reservation_cost
-            if current_spend > counter.max_budget:
-                reservation_cost = await _apply_over_budget_reservation_policy(
-                    counter=counter,
-                    valid_token=valid_token,
-                    entry=entry,
-                    applied_entries=applied_entries,
-                    reservation_cost=reservation_cost,
-                    current_spend=current_spend,
-                    fail_closed_budget_enforcement=fail_closed_budget_enforcement,
-                )
-                continue
+                if reserved_value is not None:
+                    current_spend = reserved_value
+                else:
+                    cached_spend = current_spend_by_counter_key.get(counter.counter_key)
+                    if cached_spend is None:
+                        cached_spend = await _get_current_counter_value(counter=counter)
+                    current_spend = cached_spend + reservation_cost
+                if current_spend > counter.max_budget:
+                    reservation_cost = await _apply_over_budget_reservation_policy(
+                        counter=counter,
+                        valid_token=valid_token,
+                        entry=entry,
+                        applied_entries=applied_entries,
+                        reservation_cost=reservation_cost,
+                        current_spend=current_spend,
+                        fail_closed_budget_enforcement=fail_closed_budget_enforcement,
+                    )
+                    continue
     except Exception:
         await _release_applied_entries_best_effort(
             entries=applied_entries,
@@ -540,6 +546,13 @@ async def _get_budget_counters(
     if org_counter is not None:
         counters.append(org_counter)
 
+    project_counter: Final = await _get_project_budget_counter(
+        valid_token=valid_token,
+        user_api_key_cache=user_api_key_cache,
+    )
+    if project_counter is not None:
+        counters.append(project_counter)
+
     return counters
 
 
@@ -686,16 +699,22 @@ async def _get_team_member_budget_counter(
     elif isinstance(cached_team_membership, dict):
         team_membership = LiteLLM_TeamMembership(**cached_team_membership)
 
+    member_budget_row: Final = team_membership.litellm_budget_table if team_membership is not None else None
+    now: Final = datetime.now(timezone.utc)
     team_member_budget: float | None = None
-    if team_membership is not None and team_membership.litellm_budget_table is not None:
-        team_member_budget = team_membership.litellm_budget_table.max_budget
+    if member_budget_row is not None and member_budget_row.max_budget is not None:
+        team_member_budget = member_budget_row.effective_max_budget(now=now)
     else:
         default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
         if isinstance(default_budget_id, str):
             default_budget: Final = await user_api_key_cache.async_get_cache(
                 key=f"team_member_default_budget:{default_budget_id}",
             )
-            team_member_budget = _to_float(_get_value(default_budget, "max_budget"))
+            default_cap: Final = _to_float(_get_value(default_budget, "max_budget"))
+            if default_cap is not None and default_cap > 0:
+                team_member_budget = default_cap + (
+                    member_budget_row.active_temp_budget_increase(now=now) if member_budget_row is not None else 0.0
+                )
 
     if team_member_budget is None or team_member_budget <= 0:
         return None
@@ -746,6 +765,36 @@ async def _get_org_budget_counter(
         fallback_spend=org_spend,
         entity_type="Organization",
         entity_id=org_id,
+    )
+
+
+async def _get_project_budget_counter(
+    valid_token: UserAPIKeyAuth,
+    user_api_key_cache: UserApiKeyCache,
+) -> _BudgetCounter | None:
+    if valid_token.project_id is None:
+        return None
+
+    source_cache_key: Final = project_cache_key(valid_token.project_id)
+    project_object: Final = await user_api_key_cache.async_get_cache(key=source_cache_key)
+    if project_object is None:
+        return None
+
+    project_budget_table: Final = _get_value(project_object, "litellm_budget_table")
+    if project_budget_table is None:
+        return None
+
+    project_max_budget: Final = _to_float(_get_value(project_budget_table, "max_budget"))
+    if project_max_budget is None or project_max_budget <= 0 or not math.isfinite(project_max_budget):
+        return None
+
+    return _BudgetCounter(
+        counter_key=project_spend_counter_key(valid_token.project_id),
+        source_cache_key=source_cache_key,
+        max_budget=project_max_budget,
+        fallback_spend=_to_float(_get_value(project_object, "spend")) or 0.0,
+        entity_type="Project",
+        entity_id=valid_token.project_id,
     )
 
 
@@ -878,67 +927,93 @@ async def _get_current_counter_value(counter: _BudgetCounter) -> float:
     )
 
 
+def _counters_batch_scope(counter_keys: frozenset[str]) -> spend_counter_batch_scope:
+    """Each counter is read once, then written, so one MGET up front serves every read in the loop."""
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    return spend_counter_batch_scope(spend_counter_cache.redis_cache, counter_keys=counter_keys)
+
+
+@dataclass(frozen=True, slots=True)
+class _EntryAdjustment:
+    entry: dict[str, float | str]
+    counter_key: str
+    target_adjustment: float
+    adjustment: float
+
+
+def _entry_adjustment(
+    entry: dict[str, float | str], actual_cost: float, default_reserved_cost: float
+) -> _EntryAdjustment | None:
+    counter_key: Final = entry.get("counter_key")
+    if counter_key is None:
+        return None
+    target_adjustment: Final = actual_cost - _get_entry_reserved_cost(
+        entry=entry, default_reserved_cost=default_reserved_cost
+    )
+    adjustment: Final = target_adjustment - float(entry.get("applied_adjustment") or 0.0)
+    if adjustment == 0:
+        return None
+    return _EntryAdjustment(
+        entry=entry, counter_key=str(counter_key), target_adjustment=target_adjustment, adjustment=adjustment
+    )
+
+
 async def _set_reserved_entries_actual_cost(
     entries: list[dict],
     actual_cost: float,
     default_reserved_cost: float,
     reseed_on_inconsistent: bool = True,
 ) -> None:
-    for entry in entries:
-        await _set_reserved_entry_actual_cost(
-            entry=entry,
-            actual_cost=actual_cost,
-            default_reserved_cost=default_reserved_cost,
-            reseed_on_inconsistent=reseed_on_inconsistent,
+    """Every reserved counter is read from one MGET and the consistent adjustments go out in one pipeline.
+    A counter that was flushed or reseeded since reservation is settled on its own after the pipeline."""
+    from litellm.proxy.proxy_server import increment_spend_counters_pipeline
+
+    with _counters_batch_scope(frozenset(str(entry["counter_key"]) for entry in entries if "counter_key" in entry)):
+        adjustments: Final = tuple(
+            adjustment
+            for entry in entries
+            if (adjustment := _entry_adjustment(entry, actual_cost, default_reserved_cost)) is not None
         )
-
-
-async def _set_reserved_entry_actual_cost(
-    entry: dict,
-    actual_cost: float,
-    default_reserved_cost: float,
-    reseed_on_inconsistent: bool = True,
-) -> None:
-    from litellm.proxy.proxy_server import (
-        _increment_spend_counter_cache,
-        reseed_spend_counter_from_db,
-    )
-
-    counter_key: Final = entry.get("counter_key")
-    if counter_key is None:
-        return
-    reserved_cost: Final = _get_entry_reserved_cost(
-        entry=entry,
-        default_reserved_cost=default_reserved_cost,
-    )
-    target_adjustment: Final = actual_cost - reserved_cost
-    applied_adjustment: Final = float(entry.get("applied_adjustment") or 0.0)
-    adjustment: Final = target_adjustment - applied_adjustment
-    if adjustment == 0:
-        return
-    if await _counter_can_apply_adjustment(
-        counter_key=counter_key,
-        adjustment=adjustment,
-    ):
-        await _increment_spend_counter_cache(
-            counter_key=counter_key,
-            increment=adjustment,
+        consistent: Final = tuple(
+            await asyncio.gather(
+                *(
+                    _counter_can_apply_adjustment(counter_key=item.counter_key, adjustment=item.adjustment)
+                    for item in adjustments
+                )
+            )
         )
-    elif reseed_on_inconsistent:
-        # Post-call reconcile / release: the counter was flushed, expired or reseeded
-        # between reservation and reconcile, so the optimistic delta no longer applies.
-        # Reseed from the DB floor (which cannot include this request's cost yet) and
-        # add the settled cost, since increment_spend_counters skips reserved keys.
-        reseeded: Final = await reseed_spend_counter_from_db(counter_key=counter_key)
-        if reseeded and actual_cost > 0:
-            await _increment_spend_counter_cache(counter_key=counter_key, increment=actual_cost)
-    else:
-        # Pre-call admission resize: the in-flight reservation cost is not yet
-        # persisted, so the DB floor would discard it. Keep the original
-        # fail-closed behavior (raise -> reserve_budget_for_request releases and
-        # denies) rather than admitting against an inconsistent counter.
-        raise RuntimeError(f"Cannot resize budget reservation against inconsistent counter {counter_key}")
-    entry["applied_adjustment"] = target_adjustment
+        inconsistent: Final = tuple(item for item, ok in zip(adjustments, consistent) if not ok)
+        if inconsistent and not reseed_on_inconsistent:
+            # Pre-call admission resize: the in-flight reservation cost is not yet
+            # persisted, so the DB floor would discard it. Keep the original
+            # fail-closed behavior (raise -> reserve_budget_for_request releases and
+            # denies) rather than admitting against an inconsistent counter.
+            raise RuntimeError(
+                f"Cannot resize budget reservation against inconsistent counter {inconsistent[0].counter_key}"
+            )
+        applicable: Final = tuple(item for item, ok in zip(adjustments, consistent) if ok)
+        await increment_spend_counters_pipeline(
+            pending=tuple(
+                PendingSpendIncrement(counter_key=item.counter_key, increment=item.adjustment) for item in applicable
+            )
+        )
+        for item in inconsistent:
+            await _reseed_reserved_entry(item=item, actual_cost=actual_cost)
+        for item in adjustments:
+            item.entry["applied_adjustment"] = item.target_adjustment
+
+
+async def _reseed_reserved_entry(item: _EntryAdjustment, actual_cost: float) -> None:
+    """Post-call reconcile / release of a counter that was flushed, expired or reseeded between reservation and
+    reconcile: the optimistic delta no longer applies, so reseed from the DB floor and add the settled cost, since
+    increment_spend_counters skips reserved keys. The reconcile runs before this request's spend is enqueued to the
+    DB, so the reseeded floor excludes it."""
+    from litellm.proxy.proxy_server import _increment_spend_counter_cache, reseed_spend_counter_from_db
+
+    reseeded: Final = await reseed_spend_counter_from_db(counter_key=item.counter_key)
+    if reseeded and actual_cost > 0:
+        await _increment_spend_counter_cache(counter_key=item.counter_key, increment=actual_cost)
 
 
 async def _counter_can_apply_adjustment(
@@ -963,8 +1038,8 @@ async def _release_applied_entries_best_effort(
 ) -> None:
     for entry in entries:
         try:
-            await _set_reserved_entry_actual_cost(
-                entry=entry,
+            await _set_reserved_entries_actual_cost(
+                entries=[entry],  # mutable-ok: the reconcile takes the reservation's list of entries
                 actual_cost=0.0,
                 default_reserved_cost=default_reserved_cost,
             )
@@ -1365,8 +1440,9 @@ async def count_request_input_tokens(
 
     Tokenizing is the reservation path's dominant CPU cost and is O(prompt), so
     counting a large prompt inline stalls every other request on the worker.
-    Models on the Anthropic tokenizer are counted from the raw body by the Rust
-    bridge when it is enabled, which parses and tokenizes with the GIL released.
+    Models whose tokenizer the Rust bridge ports (Anthropic, tiktoken cl100k_base
+    and o200k_base) are counted from the raw body by the bridge when it is enabled, once per
+    distinct tokenizer, which parses and tokenizes with the GIL released.
     Everything it declines is counted in Python, large prompts in a worker
     thread. The counts are reused by both the max-cost and the input-cost
     estimate.
@@ -1374,23 +1450,31 @@ async def count_request_input_tokens(
     models: Final = _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
     if not models:
         return MappingProxyType({})
-    rust_count: Final = (
-        await count_anthropic_input_tokens(raw_body)
-        if raw_body is not None and any(uses_anthropic_tokenizer(model) for model in models)
-        else None
+    tokenizers: Final[Mapping[str, RustTokenizer | None]] = MappingProxyType(
+        {model: rust_tokenizer(model) for model in models}
+    )
+    distinct_tokenizers: Final[tuple[RustTokenizer, ...]] = tuple(
+        dict.fromkeys(tokenizer for tokenizer in tokenizers.values() if tokenizer is not None)
+    )
+    rust_counts_by_tokenizer: Final[Mapping[RustTokenizer, int]] = MappingProxyType(
+        {
+            tokenizer: count.input_tokens
+            for tokenizer in distinct_tokenizers
+            if raw_body is not None and (count := await count_input_tokens(raw_body, tokenizer)) is not None
+        }
     )
     rust_counts: Final = MappingProxyType(
         {
-            model: rust_count.input_tokens
-            for model in models
-            if rust_count is not None and uses_anthropic_tokenizer(model)
+            model: rust_counts_by_tokenizer[tokenizer]
+            for model, tokenizer in tokenizers.items()
+            if tokenizer is not None and tokenizer in rust_counts_by_tokenizer
         }
     )
     python_models: Final = tuple(model for model in models if model not in rust_counts)
-    if not python_models:
-        return rust_counts
     python_counts: Final = (
-        _count_input_tokens_for_models(request_body=request_body, models=python_models)
+        MappingProxyType({})
+        if not python_models
+        else _count_input_tokens_for_models(request_body=request_body, models=python_models)
         if _approximate_input_size(request_body) < TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS
         else await asyncio.to_thread(
             _count_input_tokens_for_models,
@@ -1398,6 +1482,7 @@ async def count_request_input_tokens(
             models=python_models,
         )
     )
+    verbose_proxy_logger.debug("input token counts: rust=%s python=%s", dict(rust_counts), dict(python_counts))
     return MappingProxyType({**rust_counts, **python_counts})
 
 

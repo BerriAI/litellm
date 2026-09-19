@@ -97,6 +97,16 @@ tests:
                 name: RELEASE-NAME-litellm-gateway
                 port:
                   number: 4000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /debug/memory/summary
+            pathType: Exact
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
       - equal:
           path: spec.rules[0].http.paths[-1]
           value:

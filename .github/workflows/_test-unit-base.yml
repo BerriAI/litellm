@@ -37,6 +37,18 @@ on:
         required: false
         type: number
         default: 60
+      test-timeout-seconds:
+        description: >-
+          Per-test ceiling enforced by pytest-timeout, covering fixture setup and
+          teardown as well as the test body. A test that hangs fails with a
+          traceback of where it was stuck instead of idling the shard until
+          `timeout-minutes` cancels it. Timed-out tests are excluded from reruns
+          because pytest-timeout arms its timer once per test and
+          pytest-rerunfailures reruns inside that same window, so a rerun of a
+          timed-out test would run with no timer at all.
+        required: false
+        type: number
+        default: 120
       max-failures:
         description: "Stop after this many failures"
         required: false
@@ -57,6 +69,7 @@ permissions:
 
 env:
   UV_PYTHON: "3.12"
+  LITELLM_LOCAL_MODEL_COST_MAP: "True"
 
 jobs:
   run:
@@ -113,6 +126,7 @@ jobs:
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 8
         run: |
+          diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
           .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml
           uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
 
@@ -135,6 +149,7 @@ jobs:
           MAX_FAILURES: ${{ inputs.max-failures }}
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
+          TEST_TIMEOUT_SECONDS: ${{ inputs.test-timeout-seconds }}
           DIST: ${{ inputs.dist }}
           COVERAGE_CORE: sysmon
         run: |
@@ -144,6 +159,8 @@ jobs:
               --maxfail="${MAX_FAILURES}" \
               --reruns "${RERUNS}" \
               --reruns-delay 1 \
+              --timeout="${TEST_TIMEOUT_SECONDS}" \
+              --rerun-except "from pytest-timeout" \
               --durations=20 \
               --cov=./litellm --cov=./enterprise/litellm_enterprise \
               --cov-report=xml:coverage.xml \
@@ -155,6 +172,8 @@ jobs:
               -n "${WORKERS}" \
               --reruns "${RERUNS}" \
               --reruns-delay 1 \
+              --timeout="${TEST_TIMEOUT_SECONDS}" \
+              --rerun-except "from pytest-timeout" \
               --dist="${DIST}" \
               --durations=20 \
               --cov=./litellm --cov=./enterprise/litellm_enterprise \

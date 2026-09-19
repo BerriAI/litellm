@@ -70,6 +70,7 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import (
     OutputCodeInterpreterCall,
     build_code_interpreter_log_outputs,
+    build_web_search_call,
 )
 from litellm.types.utils import (
     CacheCreationTokenDetails,
@@ -93,6 +94,7 @@ from litellm.utils import (
 from ..common_utils import (
     AnthropicError,
     AnthropicModelInfo,
+    eager_input_streaming_flag,
     process_anthropic_headers,
     strip_advisor_blocks_from_messages,
 )
@@ -731,10 +733,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
             input_anthropic_schema: Final = sanitize_input_schema_for_anthropic(_input_schema)
 
-            _tool: Final = AnthropicMessagesTool(
-                name=tool["function"]["name"],
-                input_schema=input_anthropic_schema,
-                type="custom",
+            _eager_input_streaming: Final = eager_input_streaming_flag(tool)
+            _tool: Final = (
+                AnthropicMessagesTool(
+                    name=tool["function"]["name"],
+                    input_schema=input_anthropic_schema,
+                    type="custom",
+                )
+                if _eager_input_streaming is None
+                else AnthropicMessagesTool(
+                    name=tool["function"]["name"],
+                    input_schema=input_anthropic_schema,
+                    type="custom",
+                    eager_input_streaming=_eager_input_streaming,
+                )
             )
 
             _description: Final = tool["function"].get("description")
@@ -2464,6 +2476,35 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         return code_interpreter_results
 
+    def _build_web_search_calls(
+        self,
+        web_search_results: Sequence[object],
+        completion_response: Mapping[str, object],
+    ) -> list[object]:
+        content: Final = completion_response.get("content")
+        blocks: Final = content if isinstance(content, Sequence) else ()
+        inputs: Final = {  # mutable-ok: indexes provider server inputs
+            call_id: tool_input
+            for block in blocks
+            if isinstance(block, Mapping)
+            and block.get("type") == "server_tool_use"
+            and block.get("name") == "web_search"
+            and isinstance((call_id := block.get("id")), str)
+            and isinstance((tool_input := block.get("input")), Mapping)
+        }
+        return [  # mutable-ok: provider-neutral response items
+            build_web_search_call(
+                tool_id=tool_use_id,
+                tool_input=inputs.get(tool_use_id, {}),  # mutable-ok: empty provider input
+                result=result,
+            )
+            for result in web_search_results
+            if isinstance(result, dict)
+            and result.get("type") == "web_search_tool_result"
+            and isinstance((tool_use_id := result.get("tool_use_id")), str)
+            and tool_use_id in inputs
+        ]
+
     def _build_provider_specific_fields(
         self,
         completion_response: dict,
@@ -2485,6 +2526,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if web_search_results is not None:
             provider_specific_fields["web_search_results"] = web_search_results
+            provider_specific_fields["web_search_calls"] = self._build_web_search_calls(
+                web_search_results,
+                completion_response,
+            )
 
         if tool_results is not None:
             provider_specific_fields["tool_results"] = tool_results

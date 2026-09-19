@@ -1,34 +1,121 @@
 use std::sync::{Arc, Mutex};
 
+use futures_util::future::BoxFuture;
+use litellm_host::event::WireRequest;
+use litellm_llms::base_llm::ocr::{
+    error::Error,
+    handler::{CallHooks, OcrClient},
+    transformation::LiteLLMOcrResponse,
+};
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+};
 
-use crate::ocr::wire::{OcrWireRequest, decode_request};
-use crate::ocr::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient};
+use crate::ocr::{
+    route::{LocalOcrHost, ocr_machine},
+    types::LiteLLMOcrRequest,
+    wire::{OcrWireRequest, decode_request},
+};
 
-pub(crate) fn ocr_client() -> OcrClient {
-    OcrClient::for_test(reqwest::Client::new())
+/// Stands in for a host with no hooks registered: the wire request goes out unchanged
+/// and response events go nowhere.
+pub(crate) struct NoHooks;
+
+impl CallHooks<Error> for NoHooks {
+    fn before_send(&self, wire: WireRequest) -> BoxFuture<'_, Result<WireRequest, Error>> {
+        Box::pin(async move { Ok(wire) })
+    }
+
+    fn response_received<'a>(&'a self, _body: &'a [u8]) -> BoxFuture<'a, Result<(), Error>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
-pub(crate) async fn perform_ocr(
-    request: LiteLLMOcrRequest,
-) -> Result<LiteLLMOcrResponse, crate::Error> {
-    ocr_client().perform(request).await
+pub(crate) fn ocr_client() -> OcrClient {
+    let document_http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("test document client builds");
+    OcrClient::for_test(reqwest::Client::new(), document_http)
+}
+
+pub(crate) async fn perform_ocr(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
+    crate::ocr::client::perform(&ocr_client(), request).await
+}
+
+pub(crate) async fn perform_ocr_with(host: LocalOcrHost) -> Result<LiteLLMOcrResponse, Error> {
+    litellm_host::run::run(ocr_machine(ocr_client()), &host).await
 }
 
 pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> LiteLLMOcrRequest {
+    wire_request_with_document(
+        model,
+        base,
+        json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
+        options,
+    )
+}
+
+pub(crate) fn wire_request_with_document(
+    model: &str,
+    base: &str,
+    document: Value,
+    options: Value,
+) -> LiteLLMOcrRequest {
     decode_request(OcrWireRequest {
         model: model.into(),
-        document: json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
-        api_key: Some("test-key".into()),
+        document,
+        api_key: Some(litellm_auth::SecretValue::new("test-key")),
         api_base: Some(base.into()),
         custom_llm_provider: None,
         extra_headers: None,
         optional_params: options.as_object().unwrap().clone(),
+        input_sources: Default::default(),
         timeout_seconds: Some(2.0),
     })
     .unwrap()
+}
+
+pub(crate) fn resolved_request(
+    request: LiteLLMOcrRequest,
+) -> crate::ocr::types::ResolvedOcrRequest {
+    request
+        .map_document(crate::ocr::document::prepare_document)
+        .unwrap()
+}
+
+pub(crate) fn with_source(request: LiteLLMOcrRequest, source: &str) -> LiteLLMOcrRequest {
+    let request = resolved_request(request);
+    let document = request.document.clone().with_source(source.into());
+    request.with_document(document.into())
+}
+
+pub(crate) fn request_body(request: &str) -> Value {
+    serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
+}
+
+pub(crate) const SERVED_DOCUMENT: &[u8] = b"\x89PNG served document";
+
+/// Serves [`SERVED_DOCUMENT`] as `image/png` to every connection until aborted.
+pub(crate) async fn document_server() -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0u8; 4096];
+            let _ = socket.read(&mut buffer).await.unwrap();
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                SERVED_DOCUMENT.len()
+            );
+            socket.write_all(head.as_bytes()).await.unwrap();
+            socket.write_all(SERVED_DOCUMENT).await.unwrap();
+        }
+    });
+    (base, task)
 }
 
 pub(crate) struct MockResponse {
@@ -103,4 +190,14 @@ pub(crate) async fn mock_server(
         }
     });
     (base, requests, task)
+}
+
+pub(crate) fn header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
+    request
+        .lines()
+        .take_while(|line| !line.is_empty())
+        .find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.eq_ignore_ascii_case(name).then(|| value.trim())
+        })
 }

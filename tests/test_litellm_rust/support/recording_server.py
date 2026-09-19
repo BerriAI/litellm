@@ -25,6 +25,12 @@ class ResponseSpec:
     status: int = 200
     headers: dict[str, str] = field(default_factory=dict)
     delay: float = 0
+    events: tuple[tuple[str, object], ...] = ()
+
+    def payloads(self) -> tuple[bytes, ...]:
+        if not self.events:
+            return (json.dumps(self.body).encode(),)
+        return tuple(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in self.events)
 
 
 @dataclass
@@ -58,7 +64,9 @@ def recording_service() -> Iterator[RecordingServer]:
         def _handle(self) -> None:
             content_length: Final = int(self.headers.get("Content-Length", "0"))
             raw_body: Final = self.rfile.read(content_length) if content_length else b""
-            body: Final = json.loads(raw_body) if raw_body else None
+            body: Final = (
+                json.loads(raw_body) if raw_body and self.headers.get_content_type() == "application/json" else None
+            )
             requests.append(
                 RecordedRequest(
                     method=self.command,
@@ -71,19 +79,22 @@ def recording_service() -> Iterator[RecordingServer]:
             response: Final = responses.pop(0) if responses else copy.deepcopy(recording_server.default_response)
             if response.delay:
                 time.sleep(response.delay)
-            payload: Final = json.dumps(response.body).encode()
+            payloads: Final = response.payloads()
             self.send_response(response.status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Content-Type", "text/event-stream" if response.events else "application/json")
+            self.send_header("Content-Length", str(sum(len(payload) for payload in payloads)))
             for name, value in response.headers.items():
                 self.send_header(name, value)
             self.end_headers()
             try:
-                self.wfile.write(payload)
+                for payload in payloads:
+                    self.wfile.write(payload)
+                    self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
         do_POST = _handle
+        do_GET = _handle
 
         def log_message(self, format: str, *args: object) -> None:
             pass
