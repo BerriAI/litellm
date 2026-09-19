@@ -225,6 +225,15 @@ def _message_role(message: AllMessageValues) -> str:
     return str((message or {}).get("role") or "").lower()
 
 
+def effective_skip_assistant_message_for_guardrail(guardrail_to_apply: object) -> bool:
+    per: Final = getattr(guardrail_to_apply, "skip_assistant_message_in_guardrail", None)
+    if isinstance(per, bool):
+        return per
+    import litellm
+
+    return litellm.skip_assistant_message_in_guardrail
+
+
 def openai_messages_without_system(
     messages: Sequence[AllMessageValues],
 ) -> tuple[AllMessageValues, ...]:
@@ -240,15 +249,20 @@ def openai_messages_without_tool(
 def filter_messages_by_skip_flags(
     guardrail_to_apply: object, messages: Sequence[AllMessageValues]
 ) -> tuple[tuple[AllMessageValues, ...], bool]:
-    system_filtered = (
+    system_filtered: Final = (
         openai_messages_without_system(messages)
         if effective_skip_system_message_for_guardrail(guardrail_to_apply)
         else tuple(messages)
     )
-    fully_filtered = (
+    tool_filtered: Final = (
         openai_messages_without_tool(system_filtered)
         if effective_skip_tool_message_for_guardrail(guardrail_to_apply)
         else system_filtered
+    )
+    fully_filtered: Final = (
+        tuple(message for message in tool_filtered if _message_role(message) != "assistant")
+        if effective_skip_assistant_message_for_guardrail(guardrail_to_apply)
+        else tool_filtered
     )
     return fully_filtered, len(fully_filtered) != len(messages)
 
@@ -263,10 +277,13 @@ def role_out_of_guardrail_scope(
     skip_system_message: bool,
     skip_tool_message: bool,
     scan_only_tool_results: bool = False,
+    skip_assistant_message: bool = False,
 ) -> bool:
     if skip_system_message and role == "system":
         return True
     if skip_tool_message and role == "tool":
+        return True
+    if skip_assistant_message and role == "assistant":
         return True
     return scan_only_tool_results and role not in ("tool", "function")
 
@@ -277,6 +294,7 @@ def scoped_structured_message_indices(
     scan_only_tool_results: bool,
     skip_system: bool,
     skip_tool: bool,
+    skip_assistant: bool = False,
 ) -> tuple[int, ...]:
     return tuple(
         index
@@ -285,6 +303,7 @@ def scoped_structured_message_indices(
             _message_role(message),
             skip_system_message=skip_system,
             skip_tool_message=skip_tool,
+            skip_assistant_message=skip_assistant,
             scan_only_tool_results=scan_only_tool_results,
         )
     )
