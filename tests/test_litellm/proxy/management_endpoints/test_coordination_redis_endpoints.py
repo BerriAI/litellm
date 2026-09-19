@@ -623,7 +623,7 @@ def _real_proxy_config(file_general_settings: dict) -> "object":
 
     proxy_config = ProxyConfig()
     proxy_config._load_yaml_settings_stores({"general_settings": file_general_settings})
-    proxy_config.get_config_state = MagicMock(  # type: ignore[method-assign]
+    proxy_config.get_config_state = MagicMock(
         return_value={"general_settings": file_general_settings}
     )
     return proxy_config
