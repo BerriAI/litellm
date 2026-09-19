@@ -11,6 +11,7 @@ import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.llms.custom_httpx.http_handler import default_user_agent
 from litellm.rust_bridge import settings
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
 CONTRACT_PATH: Final = Path(__file__).parents[3] / "litellm-rust/crates/python-bridge/python_settings.json"
@@ -23,6 +24,7 @@ def test_the_rust_contract_matches_the_returned_fields() -> None:
         "http_settings": [field.name for field in dataclasses.fields(settings.http_settings())],
         "url_policy": [field.name for field in dataclasses.fields(settings.url_policy())],
         "provider_defaults": [field.name for field in dataclasses.fields(settings.provider_defaults())],
+        "secret_manager": [field.name for field in dataclasses.fields(settings.secret_manager())],
     }
 
 
@@ -101,25 +103,26 @@ class _VaultSecrets(CustomSecretManager):
         return self.secrets.get(secret_name)
 
 
-def test_secret_prefers_the_secret_manager_and_falls_back_to_the_environment_on_a_miss(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("access_mode", "readable"),
+    [("read_only", True), ("read_and_write", True), ("write_only", False)],
+)
+def test_secret_manager_is_readable_only_when_litellm_would_read_secrets_from_it(
+    monkeypatch: pytest.MonkeyPatch, access_mode: str, readable: bool
 ) -> None:
-    monkeypatch.setenv("MISTRAL_API_KEY", "stale-env-key")
-    monkeypatch.setenv("REDUCTO_API_KEY", "env-only-key")
+    monkeypatch.setenv("MISTRAL_API_KEY", "env-key")
     monkeypatch.setattr(litellm, "secret_manager_client", _VaultSecrets({"MISTRAL_API_KEY": "vault-key"}))
     monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
-    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode=access_mode))
 
-    assert settings.secret("MISTRAL_API_KEY") == "vault-key"
-    assert settings.secret("REDUCTO_API_KEY") == "env-only-key"
-    assert settings.secret("ABSENT_KEY") is None
+    assert settings.secret_manager() == settings.SecretManager(readable=readable)
+    assert (get_secret_str("MISTRAL_API_KEY") == "vault-key") is readable
 
 
-def test_secret_reads_the_environment_without_a_secret_manager(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MISTRAL_API_KEY", "env-key")
+def test_secret_manager_is_not_readable_without_a_client(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "secret_manager_client", None)
 
-    assert settings.secret("MISTRAL_API_KEY") == "env-key"
+    assert settings.secret_manager() == settings.SecretManager(readable=False)
 
 
 def test_provider_defaults_read_the_litellm_globals(monkeypatch: pytest.MonkeyPatch) -> None:
