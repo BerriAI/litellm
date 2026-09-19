@@ -50,7 +50,7 @@ impl Default for HttpSettings {
             user_agent: None,
             trust_proxy_env: false,
             ignore_proxy_env: false,
-            connect_timeout: Duration::from_secs(5),
+            connect_timeout: Duration::from_secs(10),
         }
     }
 }
