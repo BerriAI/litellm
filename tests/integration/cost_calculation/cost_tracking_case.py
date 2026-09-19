@@ -209,7 +209,10 @@ class CostTrackingTestCase(BaseModel):
         prefix: Final = (
             "openai"
             if provider == "openai"
-            and self.rates.mode in {"chat", "audio_transcription", "audio_speech", "image_generation"}
+            and (
+                self.endpoint == "/v1/responses"
+                or self.rates.mode in {"chat", "audio_transcription", "audio_speech", "image_generation"}
+            )
             else "openai/responses"
             if provider == "openai"
             else _PROVIDER_PREFIXES.get(provider)
