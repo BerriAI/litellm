@@ -1,9 +1,9 @@
 import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -53,9 +53,7 @@ _NATIVE_CONTRACT = textwrap.dedent(
 def test_compiled_extension_forbids_the_master_and_frees_its_workers() -> None:
     env = {**os.environ, "OBJC_DISABLE_INITIALIZE_FORK_SAFETY": "YES"}
 
-    result = subprocess.run(
-        [sys.executable, "-I", "-c", _NATIVE_CONTRACT], capture_output=True, text=True, timeout=60, env=env
-    )
+    result = run_child_interpreter(_NATIVE_CONTRACT, env=env, timeout=60)
 
     assert result.returncode == 0, result.stderr
 
@@ -143,8 +141,6 @@ def test_sdk_call_in_a_child_forked_after_native_use_raises_instead_of_hanging()
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
     }
 
-    result = subprocess.run(
-        [sys.executable, "-I", "-c", _SDK_CONTRACT], capture_output=True, text=True, timeout=120, env=env
-    )
+    result = run_child_interpreter(_SDK_CONTRACT, env=env, timeout=120)
 
     assert result.returncode == 0, result.stderr

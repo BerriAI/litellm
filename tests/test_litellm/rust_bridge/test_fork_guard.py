@@ -11,11 +11,11 @@ def _reserve_with(monkeypatch: pytest.MonkeyPatch, native: object) -> None:
 
 
 def test_missing_extension_has_nothing_to_reserve(monkeypatch: pytest.MonkeyPatch) -> None:
-    _reserve_with(monkeypatch, None)
+    assert _reserve_with(monkeypatch, None) is None
 
 
 def test_extension_built_before_reservation_existed_passes(monkeypatch: pytest.MonkeyPatch) -> None:
-    _reserve_with(monkeypatch, SimpleNamespace())
+    assert _reserve_with(monkeypatch, SimpleNamespace()) is None
 
 
 def test_unused_extension_is_reserved(monkeypatch: pytest.MonkeyPatch) -> None:
