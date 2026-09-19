@@ -3,6 +3,7 @@ from collections.abc import Callable
 from typing import Any, Final
 
 from pydantic import BaseModel
+from pydantic_core import PydanticSerializationError
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
@@ -10,6 +11,16 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 def strip_null_bytes(value: str) -> str:
     """Strip NUL bytes, which PostgreSQL text/jsonb columns reject (error 22P05)."""
     return value.replace("\x00", "")
+
+
+def _dump_model(model: BaseModel) -> dict[str, object] | str:
+    try:
+        return model.model_dump()
+    except (PydanticSerializationError, TypeError):
+        try:
+            return model.model_dump(mode="json")
+        except (PydanticSerializationError, TypeError):
+            return "Unserializable Pydantic Model"
 
 
 def safe_dumps(
@@ -66,7 +77,7 @@ def safe_dumps(
             seen.remove(id(obj))
             return result
         elif isinstance(obj, BaseModel):
-            dumped: Final = obj.model_dump()
+            dumped: Final = _dump_model(obj)
             result = _serialize(dumped, seen, depth + 1, key)
             seen.remove(id(obj))
             return result
