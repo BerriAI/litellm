@@ -534,7 +534,8 @@
         "input_cost": 0.00616704,
         "output_cost": 0.00627,
         "prompt_tokens": 12928,
-        "completion_tokens": 380
+        "completion_tokens": 380,
+        "cache_read_cost": 0.00405504
       }
     },
     {
@@ -605,7 +606,8 @@
         "input_cost": 0.0397056,
         "output_cost": 0.005775,
         "prompt_tokens": 9728,
-        "completion_tokens": 350
+        "completion_tokens": 350,
+        "cache_creation_cost": 0.038016
       }
     },
     {
@@ -681,7 +683,8 @@
         "input_cost": 0.0574464,
         "output_cost": 0.005775,
         "prompt_tokens": 9728,
-        "completion_tokens": 350
+        "completion_tokens": 350,
+        "cache_creation_cost": 0.0557568
       }
     },
     {
@@ -3417,7 +3420,8 @@
         "input_cost": 0.002232,
         "output_cost": 0.065484,
         "prompt_tokens": 1240,
-        "completion_tokens": 4040
+        "completion_tokens": 4040,
+        "reasoning_cost": 0.05742
       }
     },
     {
@@ -3638,7 +3642,8 @@
         "input_cost": 0.003312,
         "output_cost": 0.0059328,
         "prompt_tokens": 1840,
-        "completion_tokens": 412
+        "completion_tokens": 412,
+        "tool_usage_cost": 0.0125
       }
     },
     {
@@ -4494,7 +4499,8 @@
         "input_cost": 0.0018688,
         "output_cost": 0.0019,
         "prompt_tokens": 12928,
-        "completion_tokens": 380
+        "completion_tokens": 380,
+        "cache_read_cost": 0.0012288
       }
     },
     {
@@ -16955,7 +16961,8 @@
         "input_cost": 0.00276,
         "output_cost": 0.004944,
         "prompt_tokens": 1840,
-        "completion_tokens": 412
+        "completion_tokens": 412,
+        "tool_usage_cost": 0.0025
       }
     },
     {
@@ -21795,6 +21802,120 @@
         "output_cost": 0.042568,
         "prompt_tokens": 8314,
         "completion_tokens": 1592
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_native_json",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "responses native fixture",
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "object": "response",
+          "status": "completed",
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 11,
+            "output_tokens": 7,
+            "total_tokens": 18,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.00011725,
+        "input_cost": 1.925e-05,
+        "output_cost": 9.8e-05,
+        "prompt_tokens": 11,
+        "completion_tokens": 7
+      }
+    },
+    {
+      "name": "gpt-5.6-upstream_500_zero_spend",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "scripted upstream failure 500"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "status": 500,
+        "body": {
+          "error": {
+            "message": "scripted upstream failure",
+            "type": "server_error",
+            "code": "500"
+          }
+        }
+      },
+      "expected": {
+        "failure": {
+          "status": 500
+        }
+      }
+    },
+    {
+      "name": "gpt-5.6-upstream_429_zero_spend",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "scripted upstream failure 429"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "status": 429,
+        "body": {
+          "error": {
+            "message": "scripted upstream failure",
+            "type": "rate_limit_error",
+            "code": "429"
+          }
+        }
+      },
+      "expected": {
+        "failure": {
+          "status": 429
+        }
       }
     },
     {

@@ -6,18 +6,19 @@ from hashlib import sha256
 from typing import Final, cast
 
 import pytest
-
 from integration._support.client import JSON_OBJECT, Gateway
 from integration.cost_calculation.conftest import (
     approx_equal,
     assert_total_is_sum_of_components,
     poll_cost_row,
+    poll_failure_row,
     register_scenario_deployment,
 )
 from integration.cost_calculation.cost_tracking_case import (
     CASES,
     CostTrackingTestCase,
     ExactExpected,
+    FailureExpected,
     RecountExpected,
     data_errors,
 )
@@ -51,10 +52,22 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
         model_name: Final = register_scenario_deployment(scenario, case, marker, key)
         response: Final = gateway.request(
             "POST",
-            "/v1/chat/completions",
+            case.endpoint,
             {**case.request, "model": model_name},
             key=key,
         )
+        if isinstance(case.expected, FailureExpected):
+            assert response.status_code == case.expected.failure.status, (
+                f"{case.name}: proxy returned {response.status_code}, expected {case.expected.failure.status}: "
+                f"{response.text[:400]}"
+            )
+            response_cost: Final = response.headers.get("x-litellm-response-cost")
+            assert response_cost is None or approx_equal(float(response_cost), 0.0), (
+                f"{case.name}: failure response cost was {response_cost}"
+            )
+            row: Final = poll_failure_row(key)
+            assert row.spend == 0, f"{case.name}: failure spend was {row.spend}"
+            return
         assert response.is_success, f"{case.name}: proxy returned {response.status_code}: {response.text[:400]}"
         if case.response.content_type == "text/event-stream":
             _assert_stream_has_no_error(response.text)
@@ -92,6 +105,43 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
         assert breakdown.output_cost is not None and approx_equal(breakdown.output_cost, expected.output_cost), (
             f"{case.name}: output_cost {breakdown.output_cost} != expected {expected.output_cost}"
         )
+        for field, header_name, expected_component in (
+            ("cache_read_cost", "x-litellm-response-cost-cache-read", expected.cache_read_cost),
+            ("cache_creation_cost", "x-litellm-response-cost-cache-creation", expected.cache_creation_cost),
+            ("reasoning_cost", "x-litellm-response-cost-reasoning", expected.reasoning_cost),
+            ("tool_usage_cost", "x-litellm-response-cost-tool-usage", expected.tool_usage_cost),
+        ):
+            if expected_component is None:
+                continue
+            actual_component: Final = getattr(breakdown, field)
+            assert actual_component is not None and approx_equal(actual_component, expected_component), (
+                f"{case.name}: {field} {actual_component} != expected {expected_component}"
+            )
+            if case.response.content_type == "application/json":
+                header: Final = response.headers.get(header_name)
+                assert header is not None and approx_equal(float(header), expected_component), (
+                    f"{case.name}: {header_name} {header} != expected {expected_component}"
+                )
+        if case.response.content_type == "application/json" and any(
+            component is not None
+            for component in (
+                expected.cache_read_cost,
+                expected.cache_creation_cost,
+                expected.reasoning_cost,
+                expected.tool_usage_cost,
+            )
+        ):
+            input_header: Final = response.headers.get("x-litellm-response-cost-input")
+            output_header: Final = response.headers.get("x-litellm-response-cost-output")
+            expected_input_header: Final = expected.input_cost - (
+                expected.cache_read_cost or 0.0
+            ) - (expected.cache_creation_cost or 0.0)
+            assert input_header is not None and approx_equal(float(input_header), expected_input_header), (
+                f"{case.name}: x-litellm-response-cost-input {input_header} != expected {expected_input_header}"
+            )
+            assert output_header is not None and approx_equal(float(output_header), expected.output_cost), (
+                f"{case.name}: x-litellm-response-cost-output {output_header} != expected {expected.output_cost}"
+            )
         assert row.prompt_tokens == expected.prompt_tokens, (
             f"{case.name}: prompt_tokens {row.prompt_tokens} != expected {expected.prompt_tokens}"
         )

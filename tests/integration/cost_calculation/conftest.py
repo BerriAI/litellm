@@ -9,12 +9,11 @@ from typing import Final
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from pydantic import BaseModel, ConfigDict
-
 from integration._support.client import JSON_OBJECT, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import CostTrackingTestCase
+from pydantic import BaseModel, ConfigDict
 
 
 class CostBreakdown(BaseModel):
@@ -48,6 +47,15 @@ class CostRow(BaseModel):
     def breakdown(self) -> CostBreakdown:
         assert self.metadata is not None and self.metadata.cost_breakdown is not None
         return self.metadata.cost_breakdown
+
+
+class FailureRow(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    spend: float
+    status: str
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
 
 
 def approx_equal(actual: float, expected: float) -> bool:
@@ -86,6 +94,28 @@ def poll_cost_row(key: str) -> CostRow:
             (digest,),
         )
         return next((parsed for row in rows if (parsed := _row(row)) is not None), None)
+
+    result: Final = eventually(read, lambda row: row is not None, seconds=60)
+    assert result is not None
+    return result
+
+
+def poll_failure_row(key: str) -> FailureRow:
+    digest: Final = sha256(key.encode()).hexdigest()
+
+    def read() -> FailureRow | None:
+        rows: Final = read_rows(
+            'SELECT spend, status, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
+            (digest,),
+        )
+        return next(
+            (
+                parsed
+                for row in rows
+                if (parsed := FailureRow.model_validate(row)).status == "failure"
+            ),
+            None,
+        )
 
     result: Final = eventually(read, lambda row: row is not None, seconds=60)
     assert result is not None
