@@ -164,6 +164,18 @@ def register_scenario_deployment(
         "api_base": handle.api_base(),
         **case.litellm_params,
         **(
+            {
+                key: value
+                for key, value in (
+                    ("input_cost_per_token", case.deployment.input_cost_per_token),
+                    ("output_cost_per_token", case.deployment.output_cost_per_token),
+                )
+                if value is not None
+            }
+            if case.deployment is not None
+            else {}
+        ),
+        **(
             {"vertex_credentials": _vertex_service_account_json(control_url)}
             if case.rates.litellm_provider.startswith("vertex_ai")
             else {}

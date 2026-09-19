@@ -83,6 +83,8 @@ class Deployment(BaseModel):
 
     model: str | None = None
     base_model: str | None = None
+    input_cost_per_token: float | None = None
+    output_cost_per_token: float | None = None
 
 
 class WavUpload(BaseModel):
@@ -128,6 +130,7 @@ class EventStreamResponse(BaseModel):
 
     content_type: Literal["application/vnd.amazon.eventstream"]
     events: tuple[EventStreamEvent, ...]
+    framing: Literal["converse", "invoke"] = "converse"
 
 
 class BinaryResponse(BaseModel):
@@ -235,9 +238,11 @@ class CostTrackingTestCase(BaseModel):
         )
         if prefix is None:
             raise ValueError(f"unsupported cost-map provider {provider} for {self.model}")
-        return self.deployment.model if self.deployment and self.deployment.model is not None else (
-            self.model if prefix == "" else f"{prefix}/{self.model}"
-        )
+        if self.deployment and self.deployment.model is not None:
+            return self.deployment.model
+        if prefix == "" or self.model.startswith(f"{prefix}/"):
+            return self.model
+        return f"{prefix}/{self.model}"
 
     @property
     def litellm_params(self) -> Mapping[str, str]:
@@ -294,6 +299,10 @@ _PROVIDER_PREFIXES: Final[Mapping[str, str]] = MappingProxyType(
         "perplexity": "",
         "deepseek": "",
         "xai": "",
+        "azure_ai": "azure_ai",
+        "groq": "groq",
+        "mistral": "mistral",
+        "cohere_chat": "cohere_chat",
     }
 )
 _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
@@ -330,6 +339,10 @@ _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
         "perplexity": MappingProxyType({}),
         "deepseek": MappingProxyType({}),
         "xai": MappingProxyType({}),
+        "azure_ai": MappingProxyType({}),
+        "groq": MappingProxyType({}),
+        "mistral": MappingProxyType({}),
+        "cohere_chat": MappingProxyType({}),
     }
 )
 

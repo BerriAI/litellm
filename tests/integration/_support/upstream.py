@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from collections import deque
 from collections.abc import Mapping
 import json
@@ -23,6 +24,7 @@ from starlette.routing import Route
 from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
 from integration.cost_calculation.cost_tracking_case import (
     BinaryResponse,
+    EventStreamEvent,
     EventStreamResponse,
     JsonResponse,
     SseResponse,
@@ -226,8 +228,25 @@ class Provider:
                 )
                 return Response(content=stream_body.encode(), media_type=response.content_type)
             case EventStreamResponse():
+                events: Final = (
+                    tuple(
+                        EventStreamEvent(
+                            event_type="chunk",
+                            payload={
+                                "bytes": base64.b64encode(
+                                    json.dumps(event.payload, separators=(",", ":"))
+                                    .replace("$REQUEST_ID", scenario_id)
+                                    .encode()
+                                ).decode(),
+                            },
+                        )
+                        for event in response.events
+                    )
+                    if response.framing == "invoke"
+                    else response.events
+                )
                 event_body: Final = b"".join(
-                    _aws_event_frame(event.event_type, event.payload, scenario_id) for event in response.events
+                    _aws_event_frame(event.event_type, event.payload, scenario_id) for event in events
                 )
                 return Response(content=event_body, media_type=response.content_type)
 
