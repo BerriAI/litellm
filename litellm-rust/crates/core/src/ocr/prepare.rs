@@ -19,7 +19,10 @@ pub(crate) fn prepare_request(
             Some("MISTRAL_AZURE_API_BASE"),
         ),
         OcrProvider::AzureAi => (None, Some("AZURE_AI_API_BASE")),
-        OcrProvider::Cohere | OcrProvider::Reducto | OcrProvider::VertexAi => (None, None),
+        OcrProvider::AwsTextract
+        | OcrProvider::Cohere
+        | OcrProvider::Reducto
+        | OcrProvider::VertexAi => (None, None),
     };
     let secret = |name: &str| client.secrets().truthy(name);
     let dynamic_api_key = credentials.dynamic_api_key.or_else(|| {

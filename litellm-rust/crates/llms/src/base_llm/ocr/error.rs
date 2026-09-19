@@ -100,6 +100,8 @@ pub enum Error {
     Params(#[from] litellm_core_utils::params::Error),
     #[error(transparent)]
     Headers(#[from] litellm_http::request::HeaderError),
+    #[error(transparent)]
+    Http(#[from] litellm_http::Error),
 }
 
 impl From<litellm_host::machine::MachineFault> for Error {
@@ -155,6 +157,7 @@ impl Error {
                 | Self::InvalidProvider(_)
                 | Self::Params(_)
                 | Self::Headers(_)
+                | Self::Http(_)
         )
     }
 
