@@ -63,6 +63,10 @@ class XAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def custom_llm_provider(self) -> str:
         return litellm.LlmProviders.XAI.value
 
+    @property
+    def has_native_transcription_endpoint(self) -> bool:
+        return True
+
     def get_supported_openai_params(
         self, model: str
     ) -> list[OpenAIAudioTranscriptionOptionalParams]:  # mutable-ok: base class signature returns list
