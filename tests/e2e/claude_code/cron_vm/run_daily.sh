@@ -288,7 +288,7 @@ else
     # Download the tarball and Astral's official .sha256 sidecar to disk
     # and verify the digest before extracting/executing anything. This
     # closes the supply-chain trust gap of piping a remote binary
-    # straight into `tar -xzO ... > file ; chmod +x` (see CLAUDE.md
+    # straight into `tar -xzO ... > file ; chmod +x` (see AGENTS.md
     # "CI Supply-Chain Safety").
     curl -fsSL --output "${UV_TMPDIR}/${UV_TARBALL_NAME}" "${UV_DOWNLOAD_URL}"
     curl -fsSL --output "${UV_TMPDIR}/${UV_TARBALL_NAME}.sha256" "${UV_DOWNLOAD_URL}.sha256"

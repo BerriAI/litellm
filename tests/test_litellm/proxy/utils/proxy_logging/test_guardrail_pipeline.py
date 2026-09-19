@@ -527,17 +527,19 @@ def test_handle_pipeline_result_block_enriches_with_guardrail_name_and_mode():
     result.step_results = [MagicMock(guardrail_name="g")]
     result.original_exception = original
 
+    data: dict[str, object] = {"model": "m"}
     saved = litellm.callbacks
     litellm.callbacks = [cb]
     try:
         with pytest.raises(HTTPException) as info:
-            ProxyLogging._handle_pipeline_result(result=result, data={"model": "m"}, policy_name="p")
+            ProxyLogging._handle_pipeline_result(result=result, data=data, policy_name="p")
     finally:
         litellm.callbacks = saved
 
     assert info.value is original
     assert info.value.detail["guardrail_name"] == "g"
     assert info.value.detail["guardrail_mode"] == GuardrailEventHooks.pre_call
+    assert data["metadata"] == {"applied_guardrails": ["g"]}
 
 
 def test_handle_pipeline_result_block_does_not_reraise_sensitive_data_route():
@@ -549,14 +551,23 @@ def test_handle_pipeline_result_block_does_not_reraise_sensitive_data_route():
         session_id="sess-1",
         guardrail_name="pii-router",
     )
+    cb = _make_guardrail()
+    cb.guardrail_name = "pii-router"
     result = MagicMock()
     result.terminal_action = "block"
     result.step_results = [MagicMock(guardrail_name="pii-router")]
     result.original_exception = original
-    with pytest.raises(HTTPException) as info:
-        ProxyLogging._handle_pipeline_result(result=result, data={"model": "m"}, policy_name="p")
+    data: dict[str, object] = {"model": "m"}
+    saved = litellm.callbacks
+    litellm.callbacks = [cb]
+    try:
+        with pytest.raises(HTTPException) as info:
+            ProxyLogging._handle_pipeline_result(result=result, data=data, policy_name="p")
+    finally:
+        litellm.callbacks = saved
     assert info.value.status_code == 400
     assert info.value.detail["error"]["type"] == "guardrail_pipeline_error"
+    assert data["metadata"] == {"applied_guardrails": ["pii-router"]}
 
 
 def test_handle_pipeline_result_block_does_not_reraise_modify_response():
@@ -569,14 +580,23 @@ def test_handle_pipeline_result_block_does_not_reraise_modify_response():
         request_data={"model": "m"},
         guardrail_name="masker",
     )
+    cb = _make_guardrail()
+    cb.guardrail_name = "masker"
     result = MagicMock()
     result.terminal_action = "block"
     result.step_results = [MagicMock(guardrail_name="masker")]
     result.original_exception = original
-    with pytest.raises(HTTPException) as info:
-        ProxyLogging._handle_pipeline_result(result=result, data={"model": "m"}, policy_name="p")
+    data: dict[str, object] = {"model": "m"}
+    saved = litellm.callbacks
+    litellm.callbacks = [cb]
+    try:
+        with pytest.raises(HTTPException) as info:
+            ProxyLogging._handle_pipeline_result(result=result, data=data, policy_name="p")
+    finally:
+        litellm.callbacks = saved
     assert info.value.status_code == 400
     assert info.value.detail["error"]["type"] == "guardrail_pipeline_error"
+    assert data["metadata"] == {"applied_guardrails": ["masker"]}
 
 
 def test_handle_pipeline_result_modify_response_raises_modify_exception():
@@ -617,7 +637,7 @@ async def test_run_guardrail_with_metrics_passes_result_and_records_success(monk
     monkeypatch.setattr(litellm, "callbacks", [prom])
 
     out = await ProxyLogging._run_guardrail_with_metrics(
-        callback=MagicMock(guardrail_name="g"), coro=task(), hook_type="during_call"
+        callback=MagicMock(guardrail_name="g"), coro=task(), hook_type="during_call", request_data={}
     )
 
     assert out == {"a": 1, "b": 2, "c": 3}
@@ -643,7 +663,7 @@ async def test_run_guardrail_with_metrics_records_error_and_enriches(monkeypatch
     monkeypatch.setattr(litellm, "callbacks", [prom])
 
     with pytest.raises(HTTPException):
-        await ProxyLogging._run_guardrail_with_metrics(callback=cb, coro=task(), hook_type="post_call")
+        await ProxyLogging._run_guardrail_with_metrics(callback=cb, coro=task(), hook_type="post_call", request_data={})
 
     assert detail["guardrail_name"] == "presidio"
     recorded = prom._record_guardrail_metrics.call_args.kwargs
@@ -687,6 +707,36 @@ async def test_during_call_hook_records_latency_metric(proxy_logging, make_user_
     assert recorded["hook_type"] == "during_call"
     assert recorded["guardrail_name"] == "g"
     assert recorded["status"] == "success"
+
+
+class _RecordingApplyGuardrail(CustomGuardrail):
+    def __init__(self, guardrail_name: str, applied: list[str]) -> None:
+        super().__init__(
+            guardrail_name=guardrail_name,
+            event_hook=GuardrailEventHooks.during_call,
+            default_on=True,
+        )
+        self._applied = applied
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        await asyncio.sleep(0)
+        self._applied.append(self.guardrail_name or "")
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_runs_every_unified_guardrail(proxy_logging, make_user_api_key_auth, monkeypatch):
+    applied: list[str] = []
+    guardrails = [_RecordingApplyGuardrail(f"judge-{i}", applied) for i in range(3)]
+    monkeypatch.setattr(litellm, "callbacks", guardrails)
+
+    await proxy_logging.during_call_hook(
+        data={"model": "m", "messages": [{"role": "user", "content": "hi"}], "metadata": {}},
+        user_api_key_dict=make_user_api_key_auth(),
+        call_type="completion",
+    )
+
+    assert sorted(applied) == ["judge-0", "judge-1", "judge-2"]
 
 
 @pytest.mark.asyncio

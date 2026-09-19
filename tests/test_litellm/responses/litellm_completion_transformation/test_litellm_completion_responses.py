@@ -1900,6 +1900,38 @@ class TestToolTransformation:
         assert "defer_loading" not in result_tool
         assert "allowed_callers" not in result_tool
         assert "input_examples" not in result_tool
+        assert "eager_input_streaming" not in result_tool
+
+    @pytest.mark.parametrize("eager_input_streaming", [True, False])
+    def test_transform_function_tools_forwards_eager_input_streaming(self, eager_input_streaming: bool) -> None:
+        function_tool: Final = {
+            "type": "function",
+            "name": "write_file",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+            "eager_input_streaming": eager_input_streaming,
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[function_tool]
+        )
+
+        assert result_tools[0]["eager_input_streaming"] is eager_input_streaming
+
+    @pytest.mark.parametrize("eager_input_streaming", [True, False])
+    def test_chat_completion_tools_to_responses_tools_keeps_eager_input_streaming(
+        self, eager_input_streaming: bool
+    ) -> None:
+        chat_tool: Final = {
+            "type": "function",
+            "function": {"name": "write_file", "parameters": {"type": "object"}},
+            "eager_input_streaming": eager_input_streaming,
+        }
+
+        result_tools: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(
+            [chat_tool]
+        )
+
+        assert result_tools[0]["eager_input_streaming"] is eager_input_streaming
 
     def test_transform_code_execution_tools(self):
         """Test that code_execution tools are passed through as-is"""
@@ -2506,6 +2538,7 @@ class TestToolTransformation:
             "tools": [
                 "ignored",
                 {"type": "namespace", "name": "ignored"},
+                {"type": "web_search", "name": "ignored"},
                 {
                     "type": "function",
                     "name": "spawn_agent",
@@ -2526,6 +2559,210 @@ class TestToolTransformation:
             "properties": {"task_name": {"type": "string"}},
             "type": "object",
         }
+
+    def test_transform_nested_namespace_custom_tool_becomes_a_content_function_under_its_short_name(self):
+        namespace_tool = {
+            "type": "namespace",
+            "name": "functions",
+            "description": "Codex shell tools.",
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "exec",
+                    "description": "Runs a shell command.",
+                    "format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"},
+                },
+            ],
+        }
+
+        result_tools, _ = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[namespace_tool]
+            )
+        )
+
+        assert len(result_tools) == 1
+        function = result_tools[0]["function"]
+        assert function["name"] == "exec"
+        assert function["description"].startswith("Codex shell tools.")
+        assert "Runs a shell command." in function["description"]
+        assert "start: /.+/" in function["description"]
+        assert function["parameters"]["required"] == ["content"]
+        assert function["parameters"]["properties"]["content"]["type"] == "string"
+
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider",
+        [
+            ("bedrock/converse/global.anthropic.claude-sonnet-5", "bedrock_converse"),
+            ("anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock"),
+            ("claude-sonnet-5", "vertex_ai"),
+            ("gemini-3.1-pro-preview", "vertex_ai"),
+            ("moonshotai.kimi-k2-thinking", "bedrock_mantle"),
+        ],
+    )
+    def test_reasoning_summary_still_yields_a_string_reasoning_effort(self, model, custom_llm_provider):
+        """
+        A Responses request carrying ``reasoning.summary`` must still reach a chat provider as a
+        plain ``reasoning_effort`` string. ``summary`` is Responses-only, and forwarding the whole
+        object turns reasoning off: Bedrock Converse and Vertex silently discard a non-string
+        ``reasoning_effort``, and Bedrock Mantle rejects the request outright.
+        """
+        responses_api_request = {"reasoning": {"effort": "medium", "summary": "auto"}}
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        assert result["reasoning_effort"] == "medium"
+
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider",
+        [
+            ("gpt-5.4-pro", "azure_ai"),
+            ("gpt-5", "openai"),
+            ("gpt-5.1", "openai"),
+            ("gpt-5", "azure"),
+        ],
+    )
+    def test_bridged_model_carries_the_summary_as_an_alias(self, model, custom_llm_provider):
+        """
+        ``summary`` reaches a bridged model through the ``reasoning_summary`` alias, never smuggled
+        inside ``reasoning_effort``. ``litellm.completion`` reads that alias back with
+        ``peek_reasoning_summary_aliases`` and reassembles ``{effort, summary}``, so the far end
+        gets the same object it always did while no chat provider ever sees a non-string effort.
+        """
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        assert result["reasoning_effort"] == "medium"
+        assert result["reasoning_summary"] == "auto"
+
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider",
+        [
+            ("gpt-5", "openai"),
+            ("gpt-5.1", "openai"),
+            ("gpt-5", "azure"),
+        ],
+    )
+    def test_gpt_5_summary_survives_the_bridge_it_claims_to_take(self, model, custom_llm_provider):
+        """
+        Regression for the probe disagreeing with the real decision. The transform asked
+        ``responses_api_bridge_check`` with ``reasoning_summary`` taken straight off the Responses
+        object, but ``litellm.completion`` reads it from ``optional_params`` via
+        ``peek_reasoning_summary_aliases``, which the bridged request never populated. So these
+        models answered "bridging" to the probe and "not bridging" for real, and the object landed
+        on Chat Completions, which only takes a string. Emitting the alias makes the two agree.
+        """
+        from litellm.main import responses_api_bridge_check
+        from litellm.utils import get_optional_params, peek_reasoning_summary_aliases
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
+            custom_llm_provider=custom_llm_provider,
+        )
+        optional_params = get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            reasoning_effort=result["reasoning_effort"],
+            reasoning_summary=result["reasoning_summary"],
+        )
+        model_info, _ = responses_api_bridge_check(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            reasoning_effort=result["reasoning_effort"],
+            reasoning_summary=peek_reasoning_summary_aliases(optional_params),
+        )
+
+        assert model_info.get("mode") == "responses"
+
+    def test_a_failing_bridge_probe_falls_back_to_the_string_effort(self, monkeypatch):
+        """
+        The probe is a capability question, so a model-info lookup blowing up must not fail the
+        request. It degrades to the chat-safe form: a string effort and no alias.
+        """
+        import litellm.main
+
+        def _boom(**_kwargs):
+            raise RuntimeError("model info unavailable")
+
+        monkeypatch.setattr(litellm.main, "responses_api_bridge_check", _boom)
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="gpt-5.4-pro",
+            input="hi",
+            responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
+            custom_llm_provider="azure_ai",
+        )
+
+        assert result["reasoning_effort"] == "medium"
+        assert "reasoning_summary" not in result
+
+    @pytest.mark.parametrize(
+        "reasoning, expected",
+        [
+            ({"effort": "high"}, "high"),
+            ("low", "low"),
+            ({"summary": "auto"}, None),
+            ({}, None),
+            (None, None),
+        ],
+    )
+    def test_reasoning_param_shapes_map_to_reasoning_effort(self, reasoning, expected):
+        """
+        An object without ``effort`` carries nothing Chat Completions can use, so no
+        ``reasoning_effort`` is sent at all (the bridge drops None-valued params).
+        """
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            input="hi",
+            responses_api_request={"reasoning": reasoning},
+            custom_llm_provider="bedrock",
+        )
+
+        assert result.get("reasoning_effort") == expected
+        assert ("reasoning_effort" in result) is (expected is not None)
+
+    @pytest.mark.parametrize(
+        "model, expected_thinking",
+        [
+            ("global.anthropic.claude-sonnet-5", {"type": "adaptive"}),
+            (
+                "anthropic.claude-sonnet-4-5-20250929-v1:0",
+                {"type": "enabled", "budget_tokens": 2048},
+            ),
+        ],
+    )
+    def test_reasoning_summary_still_enables_thinking_on_bedrock(self, model, expected_thinking):
+        """
+        End to end through Bedrock Converse's own param mapping: the effort a Responses request asks
+        for must survive into ``thinking``, whether the model takes an adaptive effort or a legacy
+        token budget. Forwarding the object instead leaves ``thinking`` unset and the model never
+        reasons, which is the failure this guards.
+        """
+        from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+        bridged = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
+            custom_llm_provider="bedrock",
+        )
+
+        mapped = AmazonConverseConfig().map_openai_params(
+            {"reasoning_effort": bridged["reasoning_effort"]}, {}, model, True
+        )
+
+        assert expected_thinking.items() <= mapped["thinking"].items()
 
     def test_bedrock_anthropic_responses_tools_yield_only_function_toolspec(self):
         """
@@ -2615,6 +2852,7 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details is not None
         assert response_usage.input_tokens_details.cached_tokens == 5
         assert response_usage.input_tokens_details.text_tokens == 8
+        assert "cache_write_tokens" not in response_usage.input_tokens_details.model_dump()
 
     def test_transform_usage_with_cached_tokens_gemini(self):
         """Test that cached_tokens from Gemini are properly transformed to input_tokens_details"""
@@ -2677,6 +2915,7 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details is not None
         assert response_usage.input_tokens_details.cached_tokens == 100
         assert getattr(response_usage.input_tokens_details, "cache_write_tokens", None) == 800
+        assert response_usage.input_tokens_details.model_dump()["cache_write_tokens"] == 800
 
     def test_transform_usage_with_reasoning_tokens_gemini(self):
         """Test that reasoning_tokens from Gemini are properly transformed to output_tokens_details"""
@@ -3611,6 +3850,143 @@ class TestEnsureOutputItemContentPartAdded:
         added = iterator._pending_tool_events[0]
         assert added.item.name == "spawn_agent"
         assert added.item.namespace == "collaboration"
+
+    def test_streaming_nested_custom_tool_call_comes_back_as_custom_tool_call(self):
+        from litellm.responses.litellm_completion_transformation.custom_tools import extract_custom_tool_names
+
+        iterator = self._make_iterator()
+        iterator.responses_api_request = {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "functions",
+                    "tools": [
+                        {
+                            "type": "custom",
+                            "name": "exec",
+                            "format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"},
+                        }
+                    ],
+                }
+            ]
+        }
+        iterator._custom_tool_names = extract_custom_tool_names(iterator.responses_api_request.get("tools"))
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            iterator.responses_api_request.get("tools")
+        )
+
+        iterator._queue_tool_call_delta_events(
+            [{"index": 0, "id": "call_exec", "function": {"name": "exec", "arguments": '{"content":"ls"}'}}]
+        )
+        iterator._queue_final_tool_call_done_events(
+            ModelResponse(
+                id="chatcmpl-exec",
+                created=1,
+                model="us.openai.gpt-5.6",
+                object="chat.completion",
+                choices=[
+                    Choices(
+                        finish_reason="tool_calls",
+                        index=0,
+                        message=Message(
+                            content=None,
+                            role="assistant",
+                            tool_calls=[
+                                ChatCompletionMessageToolCall(
+                                    id="call_exec",
+                                    type="function",
+                                    function=Function(name="exec", arguments='{"content":"ls"}'),
+                                )
+                            ],
+                        ),
+                    )
+                ],
+            )
+        )
+
+        added = iterator._pending_tool_events[0]
+        assert added.item.type == "custom_tool_call"
+        assert added.item.name == "exec"
+        done = iterator._pending_tool_events[-1]
+        assert done.item.type == "custom_tool_call"
+        assert done.item.input == "ls"
+
+    def test_streaming_namespaced_function_sharing_a_nested_custom_short_name_stays_a_function_call(self):
+        from litellm.responses.litellm_completion_transformation.custom_tools import extract_custom_tool_names
+
+        iterator = self._make_iterator()
+        iterator.responses_api_request = {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "alpha",
+                    "tools": [
+                        {
+                            "type": "custom",
+                            "name": "run",
+                            "format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"},
+                        }
+                    ],
+                },
+                {
+                    "type": "namespace",
+                    "name": "beta",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "run",
+                            "parameters": {"type": "object", "properties": {"job_id": {"type": "string"}}},
+                        }
+                    ],
+                },
+            ]
+        }
+        iterator._custom_tool_names = extract_custom_tool_names(iterator.responses_api_request.get("tools"))
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            iterator.responses_api_request.get("tools")
+        )
+        function_call = {"id": "call_fn", "function": {"name": "beta__run", "arguments": '{"job_id":"42"}'}}
+        custom_call = {"id": "call_custom", "function": {"name": "run", "arguments": '{"content":"echo hi"}'}}
+
+        iterator._queue_tool_call_delta_events([{"index": 0, **function_call}, {"index": 1, **custom_call}])
+        iterator._queue_final_tool_call_done_events(
+            ModelResponse(
+                id="chatcmpl-run",
+                created=1,
+                model="us.openai.gpt-5.6",
+                object="chat.completion",
+                choices=[
+                    Choices(
+                        finish_reason="tool_calls",
+                        index=0,
+                        message=Message(
+                            content=None,
+                            role="assistant",
+                            tool_calls=[
+                                ChatCompletionMessageToolCall(
+                                    id=call["id"], type="function", function=Function(**call["function"])
+                                )
+                                for call in (function_call, custom_call)
+                            ],
+                        ),
+                    )
+                ],
+            )
+        )
+
+        items = [
+            event.item
+            for event in iterator._pending_tool_events
+            if event.type in ("response.output_item.added", "response.output_item.done")
+        ]
+        function_items = [item for item in items if item.call_id == "call_fn"]
+        custom_items = [item for item in items if item.call_id == "call_custom"]
+        assert len(function_items) == 2 and len(custom_items) == 2
+        assert all((item.type, item.name, item.namespace) == ("function_call", "run", "beta") for item in function_items)
+        assert function_items[-1].arguments == '{"job_id":"42"}'
+        assert all(item.type == "custom_tool_call" and item.name == "run" for item in custom_items)
+        assert all(getattr(item, "namespace", None) is None for item in custom_items)
+        assert custom_items[-1].input == "echo hi"
 
     def test_streaming_unqualified_namespace_tool_calls_restore_namespace(self):
         """A unique nested tool name without the namespace still maps back."""
@@ -4562,3 +4938,65 @@ class TestStreamingSnapshotItemIds:
         reasoning_items = _bridged_output_items(completed_event.response, "reasoning")
         assert len(reasoning_items) == 1
         assert reasoning_items[0].id == streamed_event.item_id
+
+
+def test_transform_chat_completion_response_incomplete_details():
+    from litellm.types.llms.openai import IncompleteDetails
+
+    resp_length = ModelResponse(
+        id="resp-length",
+        choices=[Choices(index=0, finish_reason="length", message=Message(content="cutoff", role="assistant"))],
+        model="gpt-4o",
+    )
+    result_length = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_length,
+    )
+    assert result_length.status == "incomplete"
+    assert result_length.incomplete_details is not None
+    assert result_length.incomplete_details.reason == "max_output_tokens"
+
+    resp_filter = ModelResponse(
+        id="resp-filter",
+        choices=[Choices(index=0, finish_reason="content_filter", message=Message(content=None, role="assistant"))],
+        model="gpt-4o",
+    )
+    result_filter = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_filter,
+    )
+    assert result_filter.status == "incomplete"
+    assert result_filter.incomplete_details is not None
+    assert result_filter.incomplete_details.reason == "content_filter"
+
+    resp_refusal = ModelResponse(
+        id="resp-refusal",
+        choices=[Choices(index=0, finish_reason="refusal", message=Message(content=None, role="assistant"))],
+        model="gpt-4o",
+    )
+    result_refusal = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_refusal,
+    )
+    assert result_refusal.status == "incomplete"
+    assert result_refusal.incomplete_details is not None
+    assert result_refusal.incomplete_details.reason == "content_filter"
+
+    existing_details = IncompleteDetails(reason="content_filter")
+    resp_existing = ModelResponse(
+        id="resp-existing",
+        choices=[Choices(index=0, finish_reason="length", message=Message(content="cutoff", role="assistant"))],
+        model="gpt-4o",
+    )
+    resp_existing.incomplete_details = existing_details
+    result_existing = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_existing,
+    )
+    assert result_existing.status == "incomplete"
+    assert result_existing.incomplete_details == existing_details
+
