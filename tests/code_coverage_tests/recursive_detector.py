@@ -67,6 +67,7 @@ IGNORE_FUNCTIONS = [
     "_restore_redacted_nested_value",  # max depth set (default 10), mirrors _redact_agent_params_tree on the write side.
     "_unqualified",  # bounded by the qualifier depth of a static TypedDict annotation (Annotated, Required/NotRequired, ReadOnly around one type, no cycles possible).
     "completion_cost",  # max depth 1: recursion only fires for mixed-tier Responses WS logging objects, and each split part carries a single service_tier so _split_responses_ws_logging_object_by_service_tier returns None.
+    "_is_json_value",  # walks a tree that already passed json.dumps(allow_nan=False): finite, acyclic, and bounded by JSON nesting depth.
 ]
 
 
