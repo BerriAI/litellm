@@ -41343,6 +41343,12 @@ export interface components {
          * @description Response model for web search interception settings
          */
         WebSearchInterceptionSettingsResponse: {
+            /**
+             * Active On This Pod
+             * @description Whether the process answering this request has the interception callback registered. Read-only: it reports what is running here, while values.enabled is the cluster-wide setting, and the two disagree while a pod is still applying a change or failed to apply it.
+             * @default false
+             */
+            active_on_this_pod: boolean;
             /** Field Schema */
             field_schema: {
                 [key: string]: unknown;
