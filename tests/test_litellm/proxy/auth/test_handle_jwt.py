@@ -38,7 +38,11 @@ from litellm.proxy.auth.handle_jwt import (
     NoMatchingJWTPublicKeyError,
 )
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.router import Router
 from litellm.types.agents import AgentResponse
+from opentelemetry.trace import Span
 
 
 @pytest.mark.asyncio
@@ -308,45 +312,59 @@ async def test_find_team_with_model_access_preserves_team_claim_order():
     handler = JWTHandler()
     handler.litellm_jwtauth = LiteLLM_JWTAuth()
 
-    async def mock_get_team_object(team_id: str, **kwargs: object) -> LiteLLM_TeamTable:
+    async def mock_team_lookup(
+        *,
+        team_id: str,
+        prisma_client: PrismaClient | None,
+        user_api_key_cache: UserApiKeyCache,
+        parent_otel_span: Span | None,
+        proxy_logging_obj: ProxyLogging,
+    ) -> LiteLLM_TeamTable:
         return LiteLLM_TeamTable(team_id=team_id, models=["gpt-4"])
 
-    with (
-        patch(  # test-quality-ok: find_team_with_model_access has no injected team lookup seam
-            "litellm.proxy.auth.handle_jwt.get_team_object",
-            new_callable=AsyncMock,
-            side_effect=mock_get_team_object,
-        ),
-        patch(  # test-quality-ok: find_team_with_model_access has no injected model-access seam
-            "litellm.proxy.auth.handle_jwt.can_team_access_model",
-            new_callable=AsyncMock,
-            return_value=True,
-        ),
-        patch(  # test-quality-ok: find_team_with_model_access has no injected route-check seam
-            "litellm.proxy.auth.handle_jwt.allowed_routes_check",
-            return_value=True,
-        ),
-    ):
-        first_team_id, _ = await JWTAuthManager.find_team_with_model_access(
-            team_ids=("team-b", "team-a"),
-            requested_model="gpt-4",
-            route="/chat/completions",
-            jwt_handler=handler,
-            prisma_client=None,
-            user_api_key_cache=MagicMock(),
-            parent_otel_span=None,
-            proxy_logging_obj=MagicMock(),
-        )
-        reversed_team_id, _ = await JWTAuthManager.find_team_with_model_access(
-            team_ids=("team-a", "team-b"),
-            requested_model="gpt-4",
-            route="/chat/completions",
-            jwt_handler=handler,
-            prisma_client=None,
-            user_api_key_cache=MagicMock(),
-            parent_otel_span=None,
-            proxy_logging_obj=MagicMock(),
-        )
+    async def mock_model_access_check(
+        *,
+        model: str,
+        team_object: LiteLLM_TeamTable,
+        llm_router: Router | None,
+        team_model_aliases: dict[str, str] | None,
+    ) -> bool:
+        return True
+
+    def mock_route_check(
+        *,
+        user_role: LitellmUserRoles,
+        user_route: str,
+        litellm_proxy_roles: LiteLLM_JWTAuth,
+    ) -> bool:
+        return True
+
+    first_team_id, _ = await JWTAuthManager.find_team_with_model_access(
+        team_ids=("team-b", "team-a"),
+        requested_model="gpt-4",
+        route="/chat/completions",
+        jwt_handler=handler,
+        prisma_client=None,
+        user_api_key_cache=MagicMock(),
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
+        team_lookup=mock_team_lookup,
+        model_access_check=mock_model_access_check,
+        route_check=mock_route_check,
+    )
+    reversed_team_id, _ = await JWTAuthManager.find_team_with_model_access(
+        team_ids=("team-a", "team-b"),
+        requested_model="gpt-4",
+        route="/chat/completions",
+        jwt_handler=handler,
+        prisma_client=None,
+        user_api_key_cache=MagicMock(),
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
+        team_lookup=mock_team_lookup,
+        model_access_check=mock_model_access_check,
+        route_check=mock_route_check,
+    )
 
     assert first_team_id == "team-b"
     assert reversed_team_id == "team-a"

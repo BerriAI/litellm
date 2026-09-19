@@ -16,7 +16,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Final, Literal, NoReturn, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Protocol, TypeVar, cast
 
 import httpx
 import jwt
@@ -83,6 +83,9 @@ from .auth_checks import (
     get_team_object_by_alias,
     get_user_object,
 )
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 
 class NoMatchingJWTPublicKeyError(Exception):
@@ -155,6 +158,50 @@ class AgentLookup(Protocol):
 
     def get_agent_by_name(self, agent_name: str) -> AgentResponse | None:
         """The agent registered under ``agent_name``, if any."""
+
+
+class TeamLookup(Protocol):
+    """The team lookup used by JWT team selection."""
+
+    def __call__(
+        self,
+        *,
+        team_id: str,
+        prisma_client: PrismaClient | None,
+        user_api_key_cache: UserApiKeyCache,
+        parent_otel_span: Span | None,
+        proxy_logging_obj: ProxyLogging,
+    ) -> Awaitable[LiteLLM_TeamTable | None]: ...
+
+
+class TeamModelAccessCheck(Protocol):
+    """The model access check used by JWT team selection."""
+
+    def __call__(
+        self,
+        *,
+        model: str,
+        team_object: LiteLLM_TeamTable,
+        llm_router: Router | None,
+        team_model_aliases: dict[str, str] | None,
+    ) -> Awaitable[bool]: ...
+
+
+class RouteCheck(Protocol):
+    """The route access check used by JWT team selection."""
+
+    def __call__(
+        self,
+        *,
+        user_role: LitellmUserRoles,
+        user_route: str,
+        litellm_proxy_roles: LiteLLM_JWTAuth,
+    ) -> bool: ...
+
+
+_DEFAULT_TEAM_LOOKUP: Final[TeamLookup] = get_team_object
+_DEFAULT_MODEL_ACCESS_CHECK: Final[TeamModelAccessCheck] = can_team_access_model
+_DEFAULT_ROUTE_CHECK: Final[RouteCheck] = allowed_routes_check
 
 
 class _NoRegisteredAgents:
@@ -1636,10 +1683,23 @@ class JWTAuthManager:
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
         request_method: str | None = None,
+        *,
+        team_lookup: TeamLookup = get_team_object,
+        model_access_check: TeamModelAccessCheck = can_team_access_model,
+        route_check: RouteCheck = allowed_routes_check,
     ) -> tuple[str | None, LiteLLM_TeamTable | None]:
         """Find first team with access to the requested model"""
         from litellm.proxy.proxy_server import llm_router
 
+        effective_team_lookup: Final[TeamLookup] = (
+            get_team_object if team_lookup is _DEFAULT_TEAM_LOOKUP else team_lookup
+        )
+        effective_model_access_check: Final[TeamModelAccessCheck] = (
+            can_team_access_model if model_access_check is _DEFAULT_MODEL_ACCESS_CHECK else model_access_check
+        )
+        effective_route_check: Final[RouteCheck] = (
+            allowed_routes_check if route_check is _DEFAULT_ROUTE_CHECK else route_check
+        )
         denied_auth_enforced_pass_through_route = False
 
         if not team_ids:
@@ -1656,7 +1716,7 @@ class JWTAuthManager:
         any_claim_team_resolved = False
         for team_id in team_ids:
             try:
-                team_object = await get_team_object(
+                team_object = await effective_team_lookup(
                     team_id=team_id,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
@@ -1671,14 +1731,18 @@ class JWTAuthManager:
                     team_models = team_object.models
                     if isinstance(team_models, list) and (
                         not requested_model
-                        or await can_team_access_model(
+                        or await effective_model_access_check(
                             model=requested_model,
                             team_object=team_object,
                             llm_router=llm_router,
-                            team_model_aliases=team_model_aliases(team_object),
+                            team_model_aliases=(
+                                dict(team_aliases)
+                                if (team_aliases := team_model_aliases(team_object)) is not None
+                                else None
+                            ),
                         )
                     ):
-                        is_allowed = allowed_routes_check(
+                        is_allowed = effective_route_check(
                             user_role=LitellmUserRoles.TEAM,
                             user_route=route,
                             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
