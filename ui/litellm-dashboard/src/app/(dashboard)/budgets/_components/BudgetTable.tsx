@@ -6,6 +6,8 @@ import React, { useMemo, useState } from "react";
 import {
   BUDGET_DURATION_FILTER_OPTIONS,
   BUDGET_DURATION_UNSET,
+  normalizeCreatedAt,
+  normalizeMaxBudget,
   type CreatedAtFilterValue,
   type MaxBudgetFilterValue,
 } from "@/app/(dashboard)/hooks/budgets/budgetFilters";
@@ -16,6 +18,7 @@ import {
   DataTableFilterDrawer,
   DataTableFilterField,
   DataTableToolbar,
+  usePersistedColumnVisibility,
   type FilterDraft,
 } from "@/components/shared/DataTable";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -56,28 +59,6 @@ const formatFilterValue = (columnId: string, value: unknown): string => {
     return `${from || "any"} to ${to || "any"}`;
   }
   return String(value);
-};
-
-/** The drawer keeps any non-empty object as an active filter, so collapse a blank draft to nothing. */
-const normalizeMaxBudget = (draft: MaxBudgetFilterValue): MaxBudgetFilterValue | undefined => {
-  if (draft.unlimitedOnly === true) {
-    return { unlimitedOnly: true };
-  }
-  const min = draft.min?.trim() ?? "";
-  const max = draft.max?.trim() ?? "";
-  if (min === "" && max === "") {
-    return undefined;
-  }
-  return { ...(min === "" ? {} : { min }), ...(max === "" ? {} : { max }) };
-};
-
-const normalizeCreatedAt = (draft: CreatedAtFilterValue): CreatedAtFilterValue | undefined => {
-  const from = draft.from ?? "";
-  const to = draft.to ?? "";
-  if (from === "" && to === "") {
-    return undefined;
-  }
-  return { ...(from === "" ? {} : { from }), ...(to === "" ? {} : { to }) };
 };
 
 function EmptyState({ hasQuery }: { hasQuery: boolean }) {
@@ -211,6 +192,10 @@ function BudgetFilterFields({ get, set }: FilterDraft) {
 
 const BudgetTable: React.FC<BudgetTableProps> = ({ list, canModify, onEditClick, onDeleteClick }) => {
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility(
+    "budgets",
+    BUDGET_TABLE_HIDDEN_COLUMNS,
+  );
 
   const columns = useMemo(
     () => getBudgetTableColumns({ canModify, onEditClick, onDeleteClick }),
@@ -225,7 +210,8 @@ const BudgetTable: React.FC<BudgetTableProps> = ({ list, canModify, onEditClick,
       data={list.rows}
       columns={columns}
       getRowId={(budget, index) => budget.budget_id || String(index)}
-      defaultColumnVisibility={BUDGET_TABLE_HIDDEN_COLUMNS}
+      columnVisibility={columnVisibility}
+      onColumnVisibilityChange={onColumnVisibilityChange}
       fillHeight
       sortingMode="server"
       sorting={list.sorting}
@@ -239,6 +225,7 @@ const BudgetTable: React.FC<BudgetTableProps> = ({ list, canModify, onEditClick,
       columnFilters={list.columnFilters}
       onColumnFiltersChange={list.onColumnFiltersChange}
       isLoading={list.isLoading}
+      isError={list.error !== null}
       loadingMessage="Loading budgets…"
       noDataMessage={emptyMessage}
       size="compact"

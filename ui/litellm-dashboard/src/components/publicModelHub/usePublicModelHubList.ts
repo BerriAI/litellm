@@ -8,6 +8,7 @@ import {
   type ResourceListPage,
   type ResourceListQuery,
   type ResourceListResult,
+  type ResourceListUrlState,
 } from "@/app/(dashboard)/hooks/common/useResourceList";
 import { apiClient } from "@/components/networking";
 import type { ModelGroupInfo } from "@/components/PublicModelHubTableColumns";
@@ -16,6 +17,7 @@ import {
   FEATURE_FILTER_ID,
   MODE_FILTER_ID,
   PROVIDER_FILTER_ID,
+  PUBLIC_MODEL_HUB_SORTABLE_FIELDS,
   readFilterValues,
   serializePublicModelHubFilters,
   withFilterValue,
@@ -26,6 +28,12 @@ export const PUBLIC_MODEL_HUB_PAGE_SIZE = 50;
 
 const QUERY_KEY = ["publicModelHub", "list"] as const;
 const DEFAULT_SORTING: SortingState = [{ id: "model_group", desc: false }];
+const FILTER_COLUMNS = [PROVIDER_FILTER_ID, MODE_FILTER_ID, FEATURE_FILTER_ID];
+const URL_STATE: ResourceListUrlState = {
+  sortFields: PUBLIC_MODEL_HUB_SORTABLE_FIELDS,
+  filterColumns: FILTER_COLUMNS,
+  arrayFilterColumns: FILTER_COLUMNS,
+};
 
 export interface PublicModelHubListResult extends ResourceListResult<ModelGroupInfo> {
   providerValues: string[];
@@ -56,6 +64,7 @@ export const usePublicModelHubList = (enabled: boolean): PublicModelHubListResul
     defaultSorting: DEFAULT_SORTING,
     defaultPageSize: PUBLIC_MODEL_HUB_PAGE_SIZE,
     enabled,
+    urlState: URL_STATE,
   };
   const list = useResourceList<ModelGroupInfo>(listOptions);
 
