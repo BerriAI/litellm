@@ -1440,8 +1440,6 @@ async def test_get_session_iterator_thread_safety(presidio_guardrail):
     print("✓ Session iterator thread safety test passed")
 
 
-from litellm.types.utils import ModelResponseStream
-
 
 @pytest.mark.asyncio
 async def test_streaming_with_bytes_chunks_does_not_crash(mock_user_api_key):
@@ -2860,7 +2858,6 @@ def test_unmask_sse_bytes_chunk_handles_crlf_line_endings():
 
 @pytest.mark.asyncio
 async def test_stream_pii_unmasking_unmaskes_bytes_chunks(mock_user_api_key):
-    import json
 
     guardrail = _OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
@@ -2921,7 +2918,6 @@ def test_new_entities_pass_through_analyze_payload():
     Newly added upstream entities (e.g. German DE_*) must reach the analyzer
     payload as their exact recognizer names, whether configured as enum or str.
     """
-    import json
 
     guardrail = _OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
