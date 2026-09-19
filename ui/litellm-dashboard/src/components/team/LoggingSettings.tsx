@@ -170,7 +170,9 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
           width={400}
           placeholder={`os.environ/${paramName.toUpperCase()}`}
           value={config.callback_vars[paramName] || ""}
-          onChange={(e: any) => updateCallbackVar(configIndex, paramName, e.target.value)}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+            updateCallbackVar(configIndex, paramName, e.target.value)
+          }
         />
       );
     }
