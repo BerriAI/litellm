@@ -37,7 +37,10 @@ from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.llms.base_llm.managed_resources.isolation import build_list_page
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.batches_endpoints.litellm_executed_batches import resolve_litellm_executed_provider
+from litellm.proxy.batches_endpoints.litellm_executed_batches import (
+    litellm_executed_provider_of,
+    resolve_litellm_executed_provider,
+)
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
@@ -69,6 +72,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     add_internal_model_credentials,
     apply_team_provider_credentials,
+    authorize_model_for_key,
     encode_file_id_with_model,
     extract_file_creation_params,
     get_authorized_credentials_for_model,
@@ -102,16 +106,29 @@ from litellm.types.llms.openai import (
 router: Final = APIRouter()
 
 
+def _names_a_litellm_executed_provider(llm_router: Router, candidate: str, team_id: str | None) -> bool:
+    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=candidate, team_id=team_id)
+    return credentials is not None and litellm_executed_provider_of(credentials) is not None
+
+
 async def _litellm_executed_batch_input_model(
     llm_router: Router | None,
     purpose: OpenAIFilesPurpose,
     model: str | None,
     target_model_names_list: Sequence[str],
-    team_id: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
 ) -> str | None:
     if llm_router is None:
         return None
     candidates: Final = (model,) if model is not None else tuple(target_model_names_list)
+    team_id: Final = user_api_key_dict.team_id
+    await asyncio.gather(
+        *(
+            authorize_model_for_key(model_id=candidate, llm_router=llm_router, user_api_key_dict=user_api_key_dict)
+            for candidate in candidates
+            if _names_a_litellm_executed_provider(llm_router, candidate, team_id)
+        )
+    )
     providers: Final = await asyncio.gather(
         *(resolve_litellm_executed_provider(llm_router, candidate, team_id) for candidate in candidates)
     )
@@ -289,7 +306,7 @@ async def route_create_file(
     """
 
     executed_model: Final = await _litellm_executed_batch_input_model(
-        llm_router, purpose, model, target_model_names_list, user_api_key_dict.team_id
+        llm_router, purpose, model, target_model_names_list, user_api_key_dict
     )
     explicit_storage: Final = target_storage if target_storage and target_storage != "default" else None
     storage: Final = explicit_storage or (LITELLM_DB_STORAGE_BACKEND_NAME if executed_model is not None else None)
