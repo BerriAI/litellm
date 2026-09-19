@@ -161,6 +161,57 @@ def _invalid_choices_message(response_object: Mapping[str, object]) -> str:
     )
 
 
+def _coerce_missing_choices_status(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 100 <= value <= 599 else None
+    if isinstance(value, str) and value.strip().isdecimal():
+        status_code = int(value.strip())
+        return status_code if 100 <= status_code <= 599 else None
+    return None
+
+
+def _get_missing_choices_error_args(response_object: Mapping[str, object]) -> tuple[int, str]:
+    error = response_object.get("error")
+    top_level_status_values = tuple(response_object.get(field) for field in ("status", "status_code"))
+    nested_status_values = (
+        tuple(error.get(field) for field in ("code", "status", "status_code")) if isinstance(error, Mapping) else ()
+    )
+    status_values = (
+        *(value for value in top_level_status_values if isinstance(value, int) and not isinstance(value, bool)),
+        *(value for value in top_level_status_values if isinstance(value, str)),
+        *nested_status_values,
+    )
+    status_code = next(
+        (value for candidate in status_values if (value := _coerce_missing_choices_status(candidate)) is not None),
+        500,
+    )
+    nested_message_values = (
+        tuple(error.get(field) for field in ("message", "response"))
+        if isinstance(error, Mapping)
+        else (error,)
+        if isinstance(error, str)
+        else ()
+    )
+    message_values = (
+        *(response_object.get(field) for field in ("response", "message")),
+        *nested_message_values,
+    )
+    message = next(
+        (value for value in message_values if isinstance(value, str) and value.strip()),
+        _invalid_choices_message(response_object),
+    )
+    return status_code, message
+
+
+def _get_choices_error_args(response_object: Mapping[str, object]) -> tuple[int, str]:
+    choices = response_object.get("choices")
+    if "choices" in response_object and choices is not None and not isinstance(choices, list):
+        return 500, _invalid_choices_message(response_object)
+    return _get_missing_choices_error_args(response_object)
+
+
 async def convert_to_streaming_response_async(
     response_object: dict | None = None,
 ):
@@ -192,9 +243,10 @@ async def convert_to_streaming_response_async(
     if not isinstance(response_object.get("choices"), list):
         from litellm.exceptions import APIError
 
+        status_code, message = _get_choices_error_args(response_object)
         raise APIError(
-            status_code=500,
-            message=_invalid_choices_message(response_object),
+            status_code=status_code,
+            message=message,
             llm_provider="",
             model="",
         )
@@ -298,9 +350,10 @@ def convert_to_streaming_response(
     if not isinstance(response_object.get("choices"), list):
         from litellm.exceptions import APIError
 
+        status_code, message = _get_choices_error_args(response_object)
         raise APIError(
-            status_code=500,
-            message=_invalid_choices_message(response_object),
+            status_code=status_code,
+            message=message,
             llm_provider="",
             model="",
         )
@@ -586,7 +639,12 @@ def convert_to_model_response_object(
     ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
     # Some OpenAI-compatible providers (e.g., Apertis) return empty error objects
     # even on success. Only raise if the error contains meaningful data.
-    if response_object is not None and "error" in response_object and response_object["error"] is not None:
+    if (
+        response_object is not None
+        and "error" in response_object
+        and response_object["error"] is not None
+        and not (response_type == "completion" and not response_object.get("choices"))
+    ):
         error_obj: Final = response_object["error"]
         has_meaningful_error = False
 
@@ -632,9 +690,10 @@ def convert_to_model_response_object(
             if not isinstance(response_object.get("choices"), list):
                 from litellm.exceptions import APIError
 
+                status_code, message = _get_choices_error_args(response_object)
                 raise APIError(
-                    status_code=500,
-                    message=_invalid_choices_message(response_object),
+                    status_code=status_code,
+                    message=message,
                     llm_provider="",
                     model="",
                 )
