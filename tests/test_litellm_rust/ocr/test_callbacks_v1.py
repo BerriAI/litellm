@@ -103,7 +103,7 @@ async def test_native_ocr_runs_legacy_and_v1_callbacks_on_the_same_call(
     assert {envelope["call_id"] for envelope in observer.envelopes} == set(legacy.call_ids)
 
 
-def test_native_ocr_v1_interceptor_sees_the_wire_as_the_legacy_callback_left_it(
+def test_native_ocr_v1_interceptor_does_not_expose_the_wire_body(
     ocr_server: RecordingServer, interceptor: Interceptor
 ) -> None:
     class Edit(CustomLogger):
@@ -114,8 +114,7 @@ def test_native_ocr_v1_interceptor_sees_the_wire_as_the_legacy_callback_left_it(
 
     assert len(interceptor.bodies) == 1
     body: Final = interceptor.bodies[0]
-    assert isinstance(body, dict)
-    assert body["include_image_base64"] is True
+    assert body == "[REDACTED]"
     request: Final = ocr_server.requests[-1]
     assert request.headers["x-v1-interceptor"] == "seen"
 
