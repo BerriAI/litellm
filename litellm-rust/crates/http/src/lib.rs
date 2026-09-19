@@ -10,4 +10,4 @@ pub use error::Error;
 pub use pool::{ClientVariant, HttpClientPool};
 pub use proxy::EnvironmentProxies;
 pub use settings::{HttpSettings, SslVerify, TcpKeepalive};
-pub use tls::{KeyExchangeGroup, Tls12CipherSuite, Unsupported, client_config};
+pub use tls::{KeyExchangeGroup, Tls12CipherSuite, Unsupported};

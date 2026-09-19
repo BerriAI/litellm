@@ -1,4 +1,4 @@
-use std::{fmt, path::Path, sync::Arc};
+use std::{fmt, path::Path, str::FromStr, sync::Arc};
 
 use rustls::{
     CipherSuite, ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
@@ -19,8 +19,10 @@ pub enum KeyExchangeGroup {
     Secp384r1,
 }
 
-impl KeyExchangeGroup {
-    pub(crate) fn from_openssl_name(name: &str) -> Result<Self, Unsupported> {
+impl FromStr for KeyExchangeGroup {
+    type Err = Unsupported;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
         match name.trim().to_ascii_lowercase().as_str() {
             "x25519" => Ok(Self::X25519),
             "prime256v1" | "secp256r1" | "p-256" => Ok(Self::Secp256r1),
@@ -28,7 +30,9 @@ impl KeyExchangeGroup {
             _ => Err(Unsupported::EcdhCurve(name.to_owned())),
         }
     }
+}
 
+impl KeyExchangeGroup {
     fn supported(self) -> &'static dyn SupportedKxGroup {
         match self {
             Self::X25519 => ring::kx_group::X25519,
@@ -48,19 +52,23 @@ pub enum Tls12CipherSuite {
     EcdheRsaChacha20,
 }
 
-impl Tls12CipherSuite {
-    fn from_openssl_name(name: &str) -> Option<Self> {
+impl FromStr for Tls12CipherSuite {
+    type Err = Unsupported;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
         match name {
-            "ECDHE-ECDSA-AES128-GCM-SHA256" => Some(Self::EcdheEcdsaAes128Gcm),
-            "ECDHE-ECDSA-AES256-GCM-SHA384" => Some(Self::EcdheEcdsaAes256Gcm),
-            "ECDHE-ECDSA-CHACHA20-POLY1305" => Some(Self::EcdheEcdsaChacha20),
-            "ECDHE-RSA-AES128-GCM-SHA256" => Some(Self::EcdheRsaAes128Gcm),
-            "ECDHE-RSA-AES256-GCM-SHA384" => Some(Self::EcdheRsaAes256Gcm),
-            "ECDHE-RSA-CHACHA20-POLY1305" => Some(Self::EcdheRsaChacha20),
-            _ => None,
+            "ECDHE-ECDSA-AES128-GCM-SHA256" => Ok(Self::EcdheEcdsaAes128Gcm),
+            "ECDHE-ECDSA-AES256-GCM-SHA384" => Ok(Self::EcdheEcdsaAes256Gcm),
+            "ECDHE-ECDSA-CHACHA20-POLY1305" => Ok(Self::EcdheEcdsaChacha20),
+            "ECDHE-RSA-AES128-GCM-SHA256" => Ok(Self::EcdheRsaAes128Gcm),
+            "ECDHE-RSA-AES256-GCM-SHA384" => Ok(Self::EcdheRsaAes256Gcm),
+            "ECDHE-RSA-CHACHA20-POLY1305" => Ok(Self::EcdheRsaChacha20),
+            _ => Err(Unsupported::CipherToken(name.to_owned())),
         }
     }
+}
 
+impl Tls12CipherSuite {
     fn suite(self) -> CipherSuite {
         match self {
             Self::EcdheEcdsaAes128Gcm => CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
@@ -101,46 +109,47 @@ enum CipherToken {
     Unsupported(Unsupported),
 }
 
-fn cipher_token(token: &str) -> CipherToken {
-    if let Some(suite) = Tls12CipherSuite::from_openssl_name(token) {
-        return CipherToken::Suite(suite);
-    }
-    match token {
-        "DEFAULT" | "ALL" | "HIGH" => CipherToken::EverySuite,
-        "@STRENGTH" | "@SECLEVEL=2" => CipherToken::Ordering,
-        level if level.starts_with("@SECLEVEL=") => {
-            CipherToken::Unsupported(Unsupported::SecurityLevel(level.to_owned()))
+impl From<&str> for CipherToken {
+    fn from(token: &str) -> Self {
+        match token {
+            "DEFAULT" | "ALL" | "HIGH" => Self::EverySuite,
+            "@STRENGTH" | "@SECLEVEL=2" => Self::Ordering,
+            level if level.starts_with("@SECLEVEL=") => {
+                Self::Unsupported(Unsupported::SecurityLevel(level.to_owned()))
+            }
+            name => name.parse().map_or_else(Self::Unsupported, Self::Suite),
         }
-        other => CipherToken::Unsupported(Unsupported::CipherToken(other.to_owned())),
     }
 }
 
-pub(crate) fn parse_cipher_string(value: &str) -> CipherSelection {
-    let tokens: Vec<CipherToken> = tokenize(value)
-        .iter()
-        .map(|token| cipher_token(token))
-        .collect();
-    let every_suite = tokens
-        .iter()
-        .any(|token| matches!(token, CipherToken::EverySuite));
-    let mut suites: Vec<Tls12CipherSuite> = tokens
-        .iter()
-        .filter_map(|token| match token {
-            CipherToken::Suite(suite) => Some(*suite),
-            _ => None,
-        })
-        .collect();
-    suites.sort_unstable();
-    suites.dedup();
-    CipherSelection {
-        tls12_cipher_suites: (!every_suite && !suites.is_empty()).then_some(suites),
-        unsupported: tokens
-            .into_iter()
+impl From<&str> for CipherSelection {
+    fn from(value: &str) -> Self {
+        let tokens: Vec<CipherToken> = tokenize(value)
+            .iter()
+            .map(|token| CipherToken::from(token.as_str()))
+            .collect();
+        let every_suite = tokens
+            .iter()
+            .any(|token| matches!(token, CipherToken::EverySuite));
+        let mut suites: Vec<Tls12CipherSuite> = tokens
+            .iter()
             .filter_map(|token| match token {
-                CipherToken::Unsupported(unsupported) => Some(unsupported),
+                CipherToken::Suite(suite) => Some(*suite),
                 _ => None,
             })
-            .collect(),
+            .collect();
+        suites.sort_unstable();
+        suites.dedup();
+        CipherSelection {
+            tls12_cipher_suites: (!every_suite && !suites.is_empty()).then_some(suites),
+            unsupported: tokens
+                .into_iter()
+                .filter_map(|token| match token {
+                    CipherToken::Unsupported(unsupported) => Some(unsupported),
+                    _ => None,
+                })
+                .collect(),
+        }
     }
 }
 
@@ -155,57 +164,56 @@ fn tokenize(value: &str) -> Vec<String> {
         .collect()
 }
 
-pub fn client_config(config: &HttpClientConfig) -> Result<ClientConfig, Error> {
-    let base = ring::default_provider();
-    let provider = Arc::new(CryptoProvider {
-        kx_groups: config
-            .key_exchange_group
-            .map_or_else(|| base.kx_groups.clone(), |group| vec![group.supported()]),
-        cipher_suites: base
-            .cipher_suites
-            .iter()
-            .copied()
-            .filter(|suite| {
-                suite.tls13().is_some()
-                    || config
-                        .tls12_cipher_suites
-                        .as_ref()
-                        .is_none_or(|allowed| allowed.iter().any(|a| a.suite() == suite.suite()))
-            })
-            .collect(),
-        ..base
-    });
-    let builder = ClientConfig::builder_with_provider(Arc::clone(&provider))
-        .with_safe_default_protocol_versions()
-        .map_err(|error| Error::Client(error.to_string()))?;
-    let verified = match &config.verify {
-        Verify::Disabled => builder
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(NoVerification(provider))),
-        Verify::BuiltInRoots => builder.with_root_certificates(built_in_roots()),
-        Verify::CaBundle(path) => builder.with_root_certificates(bundle_roots(path)?),
-    };
-    let mut tls = match &config.client_certificate {
-        None => verified.with_no_client_auth(),
-        Some(path) => {
-            let (chain, key) = identity(path)?;
-            verified
-                .with_client_auth_cert(chain, key)
-                .map_err(|error| invalid_pem(path, error))?
-        }
-    };
-    tls.alpn_protocols = if config.http2 {
-        vec![b"h2".to_vec(), b"http/1.1".to_vec()]
-    } else {
-        vec![b"http/1.1".to_vec()]
-    };
-    Ok(tls)
-}
+impl TryFrom<&HttpClientConfig> for ClientConfig {
+    type Error = Error;
 
-fn built_in_roots() -> RootCertStore {
-    let mut store = RootCertStore::empty();
-    store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    store
+    fn try_from(config: &HttpClientConfig) -> Result<Self, Self::Error> {
+        let base = ring::default_provider();
+        let provider = Arc::new(CryptoProvider {
+            kx_groups: config
+                .key_exchange_group
+                .map_or_else(|| base.kx_groups.clone(), |group| vec![group.supported()]),
+            cipher_suites: base
+                .cipher_suites
+                .iter()
+                .copied()
+                .filter(|suite| {
+                    suite.tls13().is_some()
+                        || config.tls12_cipher_suites.as_ref().is_none_or(|allowed| {
+                            allowed.iter().any(|a| a.suite() == suite.suite())
+                        })
+                })
+                .collect(),
+            ..base
+        });
+        let builder = ClientConfig::builder_with_provider(Arc::clone(&provider))
+            .with_safe_default_protocol_versions()
+            .map_err(|error| Error::Client(error.to_string()))?;
+        let verified = match &config.verify {
+            Verify::Disabled => builder
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(NoVerification(provider))),
+            Verify::BuiltInRoots => builder.with_root_certificates(RootCertStore {
+                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+            }),
+            Verify::CaBundle(path) => builder.with_root_certificates(bundle_roots(path)?),
+        };
+        let mut tls = match &config.client_certificate {
+            None => verified.with_no_client_auth(),
+            Some(path) => {
+                let (chain, key) = identity(path)?;
+                verified
+                    .with_client_auth_cert(chain, key)
+                    .map_err(|error| invalid_pem(path, error))?
+            }
+        };
+        tls.alpn_protocols = if config.http2 {
+            vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+        } else {
+            vec![b"http/1.1".to_vec()]
+        };
+        Ok(tls)
+    }
 }
 
 fn bundle_roots(path: &Path) -> Result<RootCertStore, Error> {
@@ -327,7 +335,7 @@ mod tests {
         #[case] curve: &str,
         #[case] expected: NamedGroup,
     ) {
-        let tls = client_config(&config(HttpSettings {
+        let tls = ClientConfig::try_from(&config(HttpSettings {
             ssl_ecdh_curve: Some(curve.into()),
             ..HttpSettings::default()
         }))
@@ -337,7 +345,7 @@ mod tests {
 
     #[test]
     fn default_settings_offer_every_group_and_suite_of_the_provider() {
-        let tls = client_config(&config(HttpSettings::default())).unwrap();
+        let tls = ClientConfig::try_from(&config(HttpSettings::default())).unwrap();
         let provider = ring::default_provider();
         assert_eq!(offered_groups(&tls).len(), provider.kx_groups.len());
         assert_eq!(
@@ -348,7 +356,7 @@ mod tests {
 
     #[test]
     fn named_suites_are_the_only_tls12_suites_offered_and_tls13_stays() {
-        let tls = client_config(&config(HttpSettings {
+        let tls = ClientConfig::try_from(&config(HttpSettings {
             ssl_security_level: Some("ECDHE-RSA-AES256-GCM-SHA384".into()),
             ..HttpSettings::default()
         }))
@@ -369,7 +377,7 @@ mod tests {
     #[case(true, &[b"h2".as_slice(), b"http/1.1".as_slice()])]
     #[case(false, &[b"http/1.1".as_slice()])]
     fn alpn_offers_h2_only_when_http2_is_on(#[case] http2: bool, #[case] expected: &[&[u8]]) {
-        let tls = client_config(&config(HttpSettings {
+        let tls = ClientConfig::try_from(&config(HttpSettings {
             http2,
             ..HttpSettings::default()
         }))
@@ -388,7 +396,7 @@ mod tests {
             b"-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n",
         )
         .unwrap();
-        let result = client_config(&HttpClientConfig {
+        let result = ClientConfig::try_from(&HttpClientConfig {
             client_certificate: Some(path.clone()),
             ..config(HttpSettings::default())
         })
