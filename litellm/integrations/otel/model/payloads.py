@@ -7,8 +7,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Final, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, cast
 from urllib.parse import urlsplit
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.integrations.otel.model.metadata import RequestContext, RequestIdentity
 from litellm.integrations.otel.model.semconv import (
@@ -25,6 +27,7 @@ from litellm.integrations.otel.model.utils import (
     as_float,
     as_int,
     as_str,
+    as_str_mapping,
     as_str_tuple,
 )
 
@@ -424,7 +427,7 @@ class LLMCallSpanData:
         # plain ``.get`` — no repeated ``isinstance`` guards.
         raw_response: Final = payload.get("response")
         response: Final = cast(Mapping[str, object], raw_response if isinstance(raw_response, dict) else {})
-        choices_out: Final = _dicts(response.get("choices"))
+        choices_out: Final = _dicts(response.get("choices")) or _responses_choices(response)
         # ``finish_reasons`` is metadata, not content, so derive it from
         # ``choices_out`` before gating. The raw message/choice bodies are only
         # retained when content capture is enabled (see ``capture_span_content``);
@@ -701,6 +704,81 @@ def _dicts(value: object) -> tuple[Mapping[str, object], ...]:
 def _finish_reasons(choices: tuple[Mapping[str, object], ...]) -> tuple[str, ...]:
     """Non-empty ``finish_reason`` of each response choice."""
     return tuple(r for c in choices if (r := as_str(c.get("finish_reason"))))
+
+
+class _ToolFunction(TypedDict):
+    name: ReadOnly[str]
+    arguments: ReadOnly[str]
+
+
+class _ToolCall(TypedDict):
+    id: ReadOnly[str]
+    type: ReadOnly[Literal["function"]]
+    function: ReadOnly[_ToolFunction]
+
+
+class _AssistantMessage(TypedDict):
+    role: ReadOnly[str]
+    content: ReadOnly[str | None]
+    tool_calls: ReadOnly[tuple[_ToolCall, ...] | None]
+
+
+class _Choice(TypedDict):
+    message: ReadOnly[_AssistantMessage]
+    finish_reason: ReadOnly[str | None]
+
+
+_RESPONSES_TOOL_CALL_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
+
+
+def _responses_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
+    """A Responses API ``output`` folded into one chat-shaped assistant choice."""
+    items: Final = _dicts(response.get("output"))
+    messages: Final = tuple(item for item in items if item.get("type") == "message")
+    content: Final = "".join(
+        text
+        for item in messages
+        for part in _dicts(item.get("content"))
+        if part.get("type") == "output_text"
+        if (text := as_str(part.get("text"))) is not None
+    )
+    tool_calls: Final = tuple(
+        _responses_tool_call(item) for item in items if item.get("type") in _RESPONSES_TOOL_CALL_TYPES
+    )
+    if not messages and not tool_calls:
+        return ()
+    message: Final[_AssistantMessage] = {
+        "role": next((role for item in messages if (role := as_str(item.get("role")))), "assistant"),
+        "content": content if messages else None,
+        "tool_calls": tool_calls or None,
+    }
+    choice: Final[_Choice] = {"message": message, "finish_reason": _responses_finish_reason(response, bool(tool_calls))}
+    return (choice,)
+
+
+def _responses_tool_call(item: Mapping[str, object]) -> _ToolCall:
+    custom: Final = item.get("type") == "custom_tool_call"
+    function: Final[_ToolFunction] = {
+        "name": as_str(item.get("name")) or "",
+        "arguments": as_str(item.get("input" if custom else "arguments")) or "",
+    }
+    tool_call: Final[_ToolCall] = {
+        "id": as_str(item.get("call_id")) or as_str(item.get("id")) or "",
+        "type": "function",
+        "function": function,
+    }
+    return tool_call
+
+
+def _responses_finish_reason(response: Mapping[str, object], has_tool_calls: bool) -> str | None:
+    status: Final = as_str(response.get("status"))
+    if status == "completed":
+        return "tool_calls" if has_tool_calls else "stop"
+    if status != "incomplete":
+        return None
+    details: Final = as_str_mapping(response.get("incomplete_details"))
+    reason: Final = details.get("reason") if details is not None else None
+    return "content_filter" if reason == "content_filter" else "length"
 
 
 def _parse_error(payload: StandardLoggingPayload) -> SpanError | None:
