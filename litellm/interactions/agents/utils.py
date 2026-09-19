@@ -50,4 +50,8 @@ def get_provider_agents_api_config(
         from litellm.llms.gemini.agents.transformation import GeminiAgentsConfig
 
         return GeminiAgentsConfig()
+    if custom_llm_provider == LlmProviders.ANTHROPIC.value:
+        from litellm.llms.anthropic.agents.transformation import AnthropicAgentsConfig
+
+        return AnthropicAgentsConfig()
     return None

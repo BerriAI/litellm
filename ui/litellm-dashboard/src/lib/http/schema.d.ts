@@ -21365,7 +21365,7 @@ export interface paths {
          *     Pass per-request Gemini credentials via the JSON-encoded
          *     ``litellm_params_template`` query parameter. Flat query parameters
          *     (e.g. ``?api_key=AIza...``) are intentionally ignored — see
-         *     ``_merge_query_params_into_data`` for the rationale.
+         *     ``_query_template`` for the rationale.
          *
          *     ```bash
          *     curl "http://localhost:4000/v1beta/agents?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D" \
@@ -21418,7 +21418,7 @@ export interface paths {
          *     Pass per-request Gemini credentials via the JSON-encoded
          *     ``litellm_params_template`` query parameter. Flat query parameters
          *     (e.g. ``?api_key=AIza...``) are intentionally ignored — see
-         *     ``_merge_query_params_into_data`` for the rationale.
+         *     ``_query_template`` for the rationale.
          *
          *     ```bash
          *     curl "http://localhost:4000/v1beta/agents/my-custom-slides-agent?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D" \
@@ -21435,7 +21435,7 @@ export interface paths {
          *     Pass per-request Gemini credentials via the JSON-encoded
          *     ``litellm_params_template`` query parameter. Flat query parameters
          *     (e.g. ``?api_key=AIza...``) are intentionally ignored — see
-         *     ``_merge_query_params_into_data`` for the rationale.
+         *     ``_query_template`` for the rationale.
          *
          *     ```bash
          *     curl -X DELETE "http://localhost:4000/v1beta/agents/my-custom-slides-agent?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D" \
@@ -21462,7 +21462,7 @@ export interface paths {
          *     Pass per-request Gemini credentials via the JSON-encoded
          *     ``litellm_params_template`` query parameter. Flat query parameters
          *     (e.g. ``?api_key=AIza...``) are intentionally ignored — see
-         *     ``_merge_query_params_into_data`` for the rationale.
+         *     ``_query_template`` for the rationale.
          *
          *     ```bash
          *     curl "http://localhost:4000/v1beta/agents/my-custom-slides-agent/versions?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D" \
