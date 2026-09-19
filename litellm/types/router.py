@@ -109,6 +109,7 @@ class RetryPolicy(BaseModel):
     ContentPolicyViolationErrorRetries: int | None = None
     InternalServerErrorRetries: int | None = None
     ServiceUnavailableErrorRetries: int | None = None
+    NotFoundErrorRetries: int | None = None
     DefaultRetries: int | None = None
 
 
