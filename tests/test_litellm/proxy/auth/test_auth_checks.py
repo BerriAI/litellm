@@ -8935,7 +8935,6 @@ def _make_same_name_deployments_router():
 
 
 def test_can_object_call_model_with_granted_deployment_id():
-    """A key holding a deployment ID may call that deployment's public model name"""
     from litellm.proxy.auth.auth_checks import _can_object_call_model
 
     router = _make_same_name_deployments_router()

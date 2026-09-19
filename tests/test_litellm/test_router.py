@@ -16857,10 +16857,6 @@ def _same_name_router_for_deployment_id_grants():
 
 
 def test_deployment_id_grant_restricts_routing_to_granted_deployment():
-    """
-    A key or team granted a specific deployment ID for a public model name
-    should only be routed to that deployment when requesting the public name.
-    """
     from litellm.proxy._types import UserAPIKeyAuth
 
     router = _same_name_router_for_deployment_id_grants()
