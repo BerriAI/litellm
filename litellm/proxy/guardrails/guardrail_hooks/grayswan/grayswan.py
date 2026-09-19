@@ -39,7 +39,7 @@ class _GraySwanMonitorResponse(TypedDict):
 
 
 class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
-    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+    pass
 
 
 class _GraySwanMonitorHTTPResponse(Protocol):
