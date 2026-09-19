@@ -2479,6 +2479,10 @@ class LiteLLMCompletionResponsesConfig:
         if provider_fields:
             setattr(responses_api_response, "provider_specific_fields", provider_fields)
 
+        returned_service_tier: Final = getattr(chat_completion_response, "service_tier", None)
+        if returned_service_tier is not None:
+            setattr(responses_api_response, "service_tier", returned_service_tier)
+
         return responses_api_response
 
     @staticmethod
