@@ -72,6 +72,7 @@ else:
 
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+_EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
@@ -706,6 +707,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             model_response_object=model_response,
             hidden_params={"headers": raw_response_headers},
             _response_headers=raw_response_headers,
+            convert_tool_call_to_json_mode=json_mode,
         )
 
         return cast(ModelResponse, final_response_obj)
@@ -838,6 +840,15 @@ class OpenAIUnknownModelConfig(OpenAIGPTConfig):
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
+    def __init__(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        sync_stream: bool,
+        json_mode: bool | None = False,
+    ) -> None:
+        super().__init__(streaming_response, sync_stream, json_mode=json_mode)
+        self._last_function_name: str | None = None
+
     def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
         """
         Map 'reasoning' field to 'reasoning_content' field in delta.
@@ -883,6 +894,28 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                 )
             choices = chunk.get("choices", [])
             choices = self._map_reasoning_to_reasoning_content(choices)
+
+            if choices and self.json_mode:
+                from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+
+                for choice in choices:
+                    delta = choice.get("delta", _EMPTY_MAPPING)
+                    tool_calls = delta.get("tool_calls")
+                    if tool_calls:
+                        function_name = tool_calls[0].get("function", _EMPTY_MAPPING).get("name")
+                        if function_name is not None:
+                            self._last_function_name = function_name
+
+                        if (
+                            self._last_function_name == RESPONSE_FORMAT_TOOL_NAME
+                            or function_name == RESPONSE_FORMAT_TOOL_NAME
+                        ):
+                            args = tool_calls[0].get("function", _EMPTY_MAPPING).get("arguments")
+                            if args is not None:
+                                delta["content"] = args
+                            delta["tool_calls"] = None
+                    if choice.get("finish_reason") == "tool_calls":
+                        choice["finish_reason"] = "stop"
 
             kwargs: Final[dict[str, Any]] = {
                 "id": chunk.get("id"),

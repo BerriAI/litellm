@@ -15760,7 +15760,7 @@
         "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
@@ -15782,7 +15782,7 @@
         "supports_parallel_function_calling": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": false
     },
@@ -21873,7 +21873,7 @@
         "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
@@ -21926,7 +21926,7 @@
         "supports_parallel_function_calling": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": false
     },
@@ -59591,7 +59591,7 @@
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -59645,7 +59645,7 @@
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -59699,7 +59699,7 @@
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -59753,7 +59753,7 @@
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
@@ -59807,7 +59807,7 @@
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -59861,7 +59861,7 @@
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -59915,7 +59915,7 @@
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -59969,7 +59969,7 @@
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
