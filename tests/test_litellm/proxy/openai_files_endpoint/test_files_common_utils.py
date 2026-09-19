@@ -487,6 +487,8 @@ class TestCompletedBatchSafeToRetire:
         ("litellm_proxy;model_id:my-vllm;llm_batch_id:litellm_batch_0123abcd", True),
         ("litellm_proxy;model_id:my-vllm;llm_batch_id:batch_0123abcd", False),
         ("litellm_proxy;model_id:my-vllm;generic_response_id:resp_0123abcd", False),
+        ("litellm_proxy;model_id:my-vllm;llm_output_file_id:file-0123abcd", False),
+        ("batch_0123abcd", False),
     ],
 )
 def test_is_litellm_executed_batch_reads_the_llm_batch_id_prefix(decoded_unified_batch_id: str, executed: bool):
