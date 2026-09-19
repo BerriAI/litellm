@@ -1,10 +1,14 @@
 use hyper_util::client::proxy::matcher::Matcher;
 use litellm_core_utils::settings::Lookup;
+use veil::Redact;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Redact, Default, PartialEq, Eq, Hash)]
 pub struct EnvironmentProxies {
+    #[redact]
     all: String,
+    #[redact]
     http: String,
+    #[redact]
     https: String,
     no: String,
 }
@@ -25,16 +29,18 @@ impl EnvironmentProxies {
         }
     }
 
-    pub fn apply_to(&self, url: &reqwest::Url) -> bool {
+    pub(crate) fn matcher(&self) -> impl Fn(&reqwest::Url) -> bool + Send + Sync + use<> {
         let matcher = Matcher::builder()
             .all(self.all.clone())
             .http(self.http.clone())
             .https(self.https.clone())
             .no(self.no.clone())
             .build();
-        url.as_str()
-            .parse::<http::Uri>()
-            .is_ok_and(|uri| matcher.intercept(&uri).is_some())
+        move |url| {
+            url.as_str()
+                .parse::<http::Uri>()
+                .is_ok_and(|uri| matcher.intercept(&uri).is_some())
+        }
     }
 
     pub(crate) fn reqwest_proxies(&self) -> Vec<reqwest::Proxy> {
@@ -82,7 +88,7 @@ mod tests {
         #[case] expected: bool,
     ) {
         let proxies = EnvironmentProxies::from_environment(&env_of(env));
-        assert_eq!(proxies.apply_to(&url(target)), expected);
+        assert_eq!(proxies.matcher()(&url(target)), expected);
     }
 
     #[rstest]
@@ -110,7 +116,19 @@ mod tests {
             ("REQUEST_METHOD", "GET"),
             ("HTTPS_PROXY", "http://proxy:3128"),
         ]));
-        assert!(proxies.apply_to(&url("https://api.test/")));
+        assert!(proxies.matcher()(&url("https://api.test/")));
+    }
+
+    #[test]
+    fn debug_output_hides_proxy_credentials_but_shows_which_variables_are_set() {
+        let proxies = EnvironmentProxies::from_environment(&env_of(&[
+            ("HTTPS_PROXY", "http://operator:hunter2@proxy.corp:3128"),
+            ("NO_PROXY", "internal.test"),
+        ]));
+        let debug = format!("{proxies:?}");
+        assert!(!debug.contains("hunter2") && !debug.contains("operator"));
+        assert!(debug.contains("internal.test"));
+        assert_ne!(debug, format!("{:?}", EnvironmentProxies::default()));
     }
 
     #[test]
