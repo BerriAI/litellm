@@ -43,22 +43,22 @@ resource "litellm_team" "dev_team" {
 
 The LiteLLM provider supports the following resources:
 
-* [`litellm_model`](./resources/model) - Manage LiteLLM model configurations
-* [`litellm_team`](./resources/team) - Manage teams and their permissions
-* [`litellm_team_member`](./resources/team_member) - Manage team member configurations
-* [`litellm_team_member_add`](./resources/team_member_add) - Add members to teams
-* [`litellm_key`](./resources/key) - Manage API keys
-* [`litellm_mcp_server`](./resources/mcp_server) - Manage MCP (Model Context Protocol) servers
-* [`litellm_credential`](./resources/credential) - Manage credentials for various providers
-* [`litellm_vector_store`](./resources/vector_store) - Manage vector stores
-* [`litellm_jwt_key_mapping`](./resources/jwt_key_mapping) - Map JWT claim values to virtual keys
+* [`litellm_model`](https://registry.terraform.io/providers/BerriAI/litellm/latest/docs/resources/model) - Manage LiteLLM model configurations
+* [`litellm_team`](https://registry.terraform.io/providers/BerriAI/litellm/latest/docs/resources/team) - Manage teams and their permissions
+* [`litellm_team_member`](https://registry.terraform.io/providers/BerriAI/litellm/latest/docs/resources/team_member) - Manage team member configurations
+* [`litellm_team_member_add`](https://registry.terraform.io/providers/BerriAI/litellm/latest/docs/resources/team_member_add) - Add members to teams
+* [`litellm_key`](https://registry.terraform.io/providers/BerriAI/litellm/latest/docs/resources/key) - Manage API keys
+* [`litellm_mcp_server`](https://registry.terraform.io/providers/BerriAI/litellm/latest/docs/resources/mcp_server) - Manage MCP (Model Context Protocol) servers
+* [`litellm_credential`](https://registry.terraform.io/providers/BerriAI/litellm/latest/docs/resources/credential) - Manage credentials for various providers
+* [`litellm_vector_store`](https://registry.terraform.io/providers/BerriAI/litellm/latest/docs/resources/vector_store) - Manage vector stores
+* [`litellm_jwt_key_mapping`](https://registry.terraform.io/providers/BerriAI/litellm/latest/docs/resources/jwt_key_mapping) - Map JWT claim values to virtual keys
 
 ## Available Data Sources
 
 The LiteLLM provider supports the following data sources:
 
-* [`litellm_credential`](./data-sources/credential) - Retrieve credential information
-* [`litellm_vector_store`](./data-sources/vector_store) - Retrieve vector store information
+* [`litellm_credential`](https://registry.terraform.io/providers/BerriAI/litellm/latest/docs/data-sources/credential) - Retrieve credential information
+* [`litellm_vector_store`](https://registry.terraform.io/providers/BerriAI/litellm/latest/docs/data-sources/vector_store) - Retrieve vector store information
 
 ## Authentication
 
