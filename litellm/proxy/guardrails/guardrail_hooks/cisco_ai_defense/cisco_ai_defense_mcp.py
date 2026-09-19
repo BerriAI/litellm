@@ -34,7 +34,7 @@ def _serialize_mcp_content_item(item: object) -> dict[str, object]:
     model_dump: Final = getattr(item, "model_dump", None)
     if callable(model_dump):
         try:
-            dumped: Final[dict[str, object]] = model_dump(exclude_none=True)
+            dumped: Final[dict[str, object]] = model_dump(exclude_none=True, by_alias=True)
             return dict(dumped)
         except TypeError:
             dumped_fallback: Final[dict[str, object]] = model_dump()
@@ -498,7 +498,7 @@ class _CiscoAIDefenseMcpMixin:
         model_dump: Final = getattr(response, "model_dump", None)
         if callable(model_dump):
             try:
-                dumped = model_dump(exclude_none=True)
+                dumped = model_dump(exclude_none=True, by_alias=True)
             except TypeError:
                 dumped = model_dump()
             if isinstance(dumped, dict):
