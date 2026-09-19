@@ -7,14 +7,15 @@ repository.workspace = true
 autotests = false
 
 [dependencies]
+litellm-types.workspace = true
+litellm-core-utils.workspace = true
+litellm-host.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 base64.workspace = true
-data-url = "0.3.2"
 litellm-auth.workspace = true
 litellm-auth-aws.workspace = true
-litellm-auth-azure.workspace = true
-litellm-auth-gcp.workspace = true
+litellm-llms.workspace = true
 moka.workspace = true
 mime_guess = "2.0.5"
 rand.workspace = true
@@ -22,16 +23,20 @@ reqwest.workspace = true
 rustls.workspace = true
 rustls-native-certs.workspace = true
 serde.workspace = true
-serde_json.workspace = true
-serde_path_to_error = "0.1"
+serde_json = { workspace = true, features = ["preserve_order"] }
 strum.workspace = true
 subtle.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tokio-tungstenite.workspace = true
 thiserror.workspace = true
+time.workspace = true
 sha2.workspace = true
 url.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
+litellm-auth-gcp.workspace = true
+litellm-http.workspace = true
+litellm-llms = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
+rstest_reuse.workspace = true

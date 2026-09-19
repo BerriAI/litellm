@@ -1,30 +1,44 @@
 //! The Anthropic Messages call, the Rust equivalent of Python's
 //! `litellm.messages()`.
 //!
-//! [`messages`] is the top-level entrypoint: give it a model, a body, and
-//! credentials, and it resolves the provider, transforms the request, calls the
-//! provider, and returns a typed non-streaming response. [`messages_stream`]
-//! is the streaming variant; it hands the raw upstream response back so a host
-//! can splice the event stream to its own caller.
+//! [`route`] is the call as a machine a host drives, streaming or not. [`messages`] runs
+//! it in process for a caller that already holds the request and wants the message.
 
 mod error;
+pub mod types;
 pub use error::Error;
 mod client;
 mod common_utils;
 mod handler;
 mod prepare;
-pub mod transformation;
-pub mod types;
+pub mod route;
+use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
+use route::{LocalMessagesHost, MessagesCall, MessagesOutput, messages_machine};
+use serde_json::Value;
 
-use handler::{execute_messages_provider_call, execute_messages_provider_stream};
-use types::{AnthropicMessagesResponse, MessagesRequest};
+use crate::messages::types::MessagesRequest;
 
 pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesResponse, Error> {
-    execute_messages_provider_call(request).await
-}
-
-pub async fn messages_stream(request: MessagesRequest<'_>) -> Result<reqwest::Response, Error> {
-    execute_messages_provider_stream(request).await
+    let Value::Object(body) = request.body else {
+        return Err(Error::InvalidRequest(
+            "messages body must be an object".into(),
+        ));
+    };
+    let call = MessagesCall {
+        model: request.model.into(),
+        body,
+        api_key: request.api_key.map(Into::into),
+        api_base: request.api_base.map(Into::into),
+        custom_llm_provider: request.custom_llm_provider.map(Into::into),
+        extra_headers: request.extra_headers,
+        timeout: request.timeout,
+    };
+    match litellm_host::run::run(messages_machine(), &LocalMessagesHost::new(call)).await? {
+        MessagesOutput::Message(message) => Ok(*message),
+        MessagesOutput::Streamed => Err(Error::Unsupported(
+            "streamed responses need a streaming host",
+        )),
+    }
 }
 
 #[cfg(test)]

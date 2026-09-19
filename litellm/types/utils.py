@@ -348,6 +348,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "audio_transcription",
             "audio_speech",
             "responses",
+            "evaluation",
             "ocr",
             "realtime",
         ]
@@ -2892,6 +2893,7 @@ RoutingDecisionCause = Literal[
     "reasoning_override",
     "llm_classifier",
     "capability_classifier",
+    "jev_classifier",
     "llm_v2_classifier",
     "llm_v2_fallback",
     # classifier_type 'heuristic_first': the local scorer produced at least one signal and landed at
@@ -2986,6 +2988,8 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     escalation_keyword: str
     classifier_model: str
     classifier_cost: float
+    classifier_probabilities: ReadOnly[Mapping[str, float]]
+    classifier_confidence: ReadOnly[float]
     classifier_crux: str  # writable-ok: added only when a capability verdict is available
     classifier_primary_rule: str  # writable-ok: added only when a capability verdict is available
     classifier_capability_boundary: str  # writable-ok: added only when a capability verdict is available
@@ -3029,6 +3033,8 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "score",
         "classifier_model",
         "classifier_cost",
+        "classifier_probabilities",
+        "classifier_confidence",
         "classifier_primary_rule",
         "classifier_capability_boundary",
         "classifier_p_solve",
@@ -3073,6 +3079,12 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     cold_storage_object_key: str | None  # S3/GCS object key for cold storage retrieval
     team_alias: str | None
     team_id: str | None
+
+
+class AzureSpillover(TypedDict):
+    """Spillover Azure reports in its response headers for a request it served from pay-as-you-go capacity."""
+
+    from_deployment: ReadOnly[str | None]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -3715,6 +3727,10 @@ def is_server_derived_pricing_key(key: str) -> bool:
     return key in SERVER_DERIVED_PRICING_FIELDS or ABOVE_THRESHOLD_COST_KEY_PATTERN.search(key) is not None
 
 
+PRICING_OVERRIDES_KEY: Final = "pricing_overrides"
+COST_MAP_LOOKUP_KEY: Final = "key"
+
+
 def without_server_derived_pricing(model_info: Mapping[str, Any]) -> Mapping[str, Any]:
     """Drop the pricing ``/model/info`` derives for display, keeping everything else.
 
@@ -3724,7 +3740,32 @@ def without_server_derived_pricing(model_info: Mapping[str, Any]) -> Mapping[str
     deployment at that day's price where no cost map refresh can reach it. A deployment's
     own pricing belongs on ``litellm_params``, which is unaffected.
     """
-    return MappingProxyType({k: v for k, v in model_info.items() if not is_server_derived_pricing_key(k)})
+    return MappingProxyType(
+        {k: v for k, v in model_info.items() if k != PRICING_OVERRIDES_KEY and not is_server_derived_pricing_key(k)}
+    )
+
+
+def echoed_cost_map_pricing_fields(model_info: Mapping[str, Any]) -> tuple[str, ...]:
+    """Pricing fields a stored ``model_info`` blob copied from a ``/model/info`` response.
+
+    Only ``litellm.get_model_info`` emits ``key`` (the resolved cost-map entry), so a stored
+    blob carrying it alongside pricing fields holds the cost map as it stood on the day the
+    row was saved, not a price anyone typed. Rows saved before 1.102 through the Admin UI
+    edit form look exactly like this, and a price typed into ``litellm_params`` never does.
+    """
+    if COST_MAP_LOOKUP_KEY not in model_info:
+        return ()
+    return tuple(sorted(k for k in model_info if is_server_derived_pricing_key(k)))
+
+
+def pricing_override_fields(*sources: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            frozenset(
+                k for source in sources for k, v in source.items() if v is not None and is_server_derived_pricing_key(k)
+            )
+        )
+    )
 
 
 # Server-controlled fields that bound or drive an interceptor's agentic loop
@@ -3754,6 +3795,8 @@ agentic_loop_internal_litellm_params: Final = [
 # the provider.
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 
+ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
+
 # Bedrock managed-batch deployment config, read from litellm_params by the batch and
 # files transformations. Listed for the same reason as the fields above: these sit on
 # a deployment that also serves chat, so leaking them into extra_body makes Bedrock
@@ -3762,13 +3805,14 @@ bedrock_batch_litellm_params: Final = (
     "aws_batch_role_arn",
     "s3_bucket_name",
     "s3_region_name",
+    "s3_endpoint_url",
     "s3_output_bucket_name",
     "bedrock_tags",
 )
 
 all_litellm_params = (
     agentic_loop_internal_litellm_params
-    + [TRUSTED_CALLBACK_VARS_FIELD, *bedrock_batch_litellm_params]
+    + [TRUSTED_CALLBACK_VARS_FIELD, ADDRESSED_RESPONSE_ID_FIELD, *bedrock_batch_litellm_params]
     + [
         "metadata",
         "litellm_metadata",
@@ -4060,6 +4104,7 @@ class LlmProviders(str, Enum):
     TOPAZ = "topaz"
     SAP_GENERATIVE_AI_HUB = "sap"
     ASSEMBLYAI = "assemblyai"
+    AZURE_SPEECH = "azure_speech"
     CHARITY_ENGINE = "charity_engine"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
@@ -4124,6 +4169,10 @@ OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
     LlmProviders.HOSTED_VLLM.value,
     LlmProviders.LITELLM_PROXY.value,
 }
+
+FILE_CONTENT_STREAMING_PROVIDERS: Final[frozenset[str]] = frozenset(
+    {*OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders.VERTEX_AI.value}
+)
 
 ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "litellm_proxy", "vertex_ai"]
 

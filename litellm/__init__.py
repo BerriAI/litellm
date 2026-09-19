@@ -267,10 +267,6 @@ route_all_chat_openai_to_responses: bool = (
 # When True, Gemini/Vertex Live setup is deferred until client `session.update`.
 # Default False preserves historical behavior (auto-send setup on connect).
 gemini_live_defer_setup: bool = os.getenv("LITELLM_GEMINI_LIVE_DEFER_SETUP", "false").lower() == "true"
-use_legacy_interactions_schema: bool = (
-    os.getenv("LITELLM_USE_LEGACY_INTERACTIONS_SCHEMA", "false").lower() == "true"
-)  # When True, sends Api-Revision: 2026-05-07 to Google so responses use the legacy `outputs`
-# schema instead of the new `steps` schema. Remove this flag after June 8, 2026.
 retry = True
 ### AUTH ###
 api_key: Optional[str] = None
@@ -1420,8 +1416,22 @@ from .images.main import *
 from .videos.main import *
 from .batch_completion.main import *
 from .rerank_api.main import *
-from .llms.anthropic.experimental_pass_through.messages.handler import *
-from .responses.main import *
+from .messages.dispatch import *
+from .responses.dispatch import *
+from .responses.main import (
+    acancel_responses,
+    acompact_responses,
+    adelete_responses,
+    aget_responses,
+    alist_input_items,
+    aresponses_api_with_mcp,
+    cancel_responses,
+    compact_responses,
+    delete_responses,
+    get_responses,
+    list_input_items,
+    mock_responses_api_response,
+)
 
 # Interactions API is available as litellm.interactions module
 # Usage: litellm.interactions.create(), litellm.interactions.get(), etc.
@@ -1449,7 +1459,8 @@ from .skills.main import (
     adelete_skill,
 )
 from .containers.main import *
-from .ocr.main import *
+from .ocr.dispatch import *
+from .chat_completions.dispatch import *
 from .rust_bridge import rust
 from .rag.main import *
 from .sandbox.main import *
@@ -1709,6 +1720,9 @@ if TYPE_CHECKING:
     )
     from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
         VertexAIAi21Config as VertexAIAi21Config,
+    )
+    from .llms.vertex_ai.vertex_ai_partner_models.mistral.transformation import (
+        VertexAIMistralConfig as VertexAIMistralConfig,
     )
     from .llms.bedrock.chat.invoke_handler import (
         AmazonCohereChatConfig as AmazonCohereChatConfig,

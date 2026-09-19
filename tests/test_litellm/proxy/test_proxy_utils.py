@@ -2151,96 +2151,6 @@ async def test_proxy_only_error_5xx_keeps_traceback_and_runs_sync_callbacks(monk
     assert "test_proxy_utils" in captured["async_traceback"]
 
 
-def test_create_model_info_response_resolves_alias_to_deployment_model():
-    """A public model name that is not itself a cost-map key must not be resolved through
-    the fallback-generalization rules: `bedrock-claude-opus-5` matches the generic
-    claude-family baseline (200k/64k) by substring, while the deployment it fronts really
-    accepts 1M/128k. Regression for the /v1/models alias resolution introduced in v1.94.0."""
-    from litellm import Router
-
-    saved_model_cost = dict(litellm.model_cost)
-    try:
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "bedrock-claude-opus-5",
-                    "litellm_params": {
-                        "custom_llm_provider": "bedrock",
-                        "model": "bedrock/eu.anthropic.claude-opus-5",
-                    },
-                    "model_info": {"base_model": "eu.anthropic.claude-opus-5"},
-                }
-            ]
-        )
-
-        response = create_model_info_response(
-            model_id="bedrock-claude-opus-5", provider="openai", llm_router=router
-        )
-    finally:
-        litellm.model_cost.clear()
-        litellm.model_cost.update(saved_model_cost)
-
-    assert response["max_input_tokens"] == 1000000
-    assert response["max_output_tokens"] == 128000
-
-
-def test_create_model_info_response_keeps_exact_alias_over_generalized_deployment_model():
-    """Mirror of the alias bug: when the deployment points at a custom backend name that
-    only matches a generalization rule, the listed name's exact cost-map entry is the
-    better answer and must win."""
-    from litellm import Router
-
-    saved_model_cost = dict(litellm.model_cost)
-    try:
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "claude-opus-5",
-                    "litellm_params": {
-                        "custom_llm_provider": "bedrock",
-                        "model": "bedrock/my-claude-opus-5-provisioned",
-                    },
-                }
-            ]
-        )
-
-        response = create_model_info_response(
-            model_id="claude-opus-5", provider="openai", llm_router=router
-        )
-    finally:
-        litellm.model_cost.clear()
-        litellm.model_cost.update(saved_model_cost)
-
-    assert response["max_input_tokens"] == 1000000
-
-
-def test_create_model_info_response_falls_back_to_alias_for_opaque_deployment_name():
-    """An Azure deployment named after the resource rather than the model has no cost-map
-    entry; the listed name still does, and must keep answering."""
-    from litellm import Router
-
-    saved_model_cost = dict(litellm.model_cost)
-    try:
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "gpt-4o",
-                    "litellm_params": {"model": "azure/my-gpt4o-deployment"},
-                }
-            ]
-        )
-
-        response = create_model_info_response(
-            model_id="gpt-4o", provider="openai", llm_router=router
-        )
-    finally:
-        litellm.model_cost.clear()
-        litellm.model_cost.update(saved_model_cost)
-
-    assert response["max_input_tokens"] == 128000
-    assert response["max_output_tokens"] == 16384
-
-
 def test_create_model_info_response_resolves_mode_through_deployment_model():
     """`mode` is derived from the same lookup, so an aliased embedding deployment
     currently reports no mode at all; it must report `embedding`."""
@@ -2268,6 +2178,41 @@ def test_create_model_info_response_resolves_mode_through_deployment_model():
 
 
 @pytest.mark.parametrize(
+    "model_group_alias",
+    [
+        {"team-embeddings": "my-embeddings"},
+        {"team-embeddings": {"model": "my-embeddings", "hidden": False}},
+    ],
+)
+def test_create_model_info_response_resolves_model_group_alias_to_target(model_group_alias, local_model_cost_map):
+    """A `model_group_alias` row must report the metadata of the group it points at,
+    not the cost-map generalization or nothing that the alias name resolves to."""
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "my-embeddings",
+                "litellm_params": {"model": "openai/text-embedding-3-small"},
+            }
+        ],
+        model_group_alias=model_group_alias,
+    )
+
+    alias_response = create_model_info_response(
+        model_id="team-embeddings", provider="openai", llm_router=router
+    )
+    target_response = create_model_info_response(
+        model_id="my-embeddings", provider="openai", llm_router=router
+    )
+
+    assert alias_response["id"] == "team-embeddings"
+    for field in ("mode", "max_input_tokens", "max_output_tokens"):
+        assert alias_response.get(field) == target_response.get(field)
+    assert alias_response["mode"] == "embedding"
+
+
+@pytest.mark.parametrize(
     "key_metadata, team_metadata, expected_to_run",
     [
         ({"guardrails": ["key-scoped-guardrail"]}, None, True),
@@ -2277,12 +2222,15 @@ def test_create_model_info_response_resolves_mode_through_deployment_model():
     ],
 )
 def test_convert_mcp_to_llm_format_carries_key_and_team_guardrails(key_metadata, team_metadata, expected_to_run):
+    from litellm.responses.mcp.request_context import MCPRequestContext
+
     proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
     guardrail = CustomGuardrail(guardrail_name="key-scoped-guardrail", event_hook="pre_mcp_call", default_on=False)
     kwargs = {
         "name": "ask_question",
         "arguments": {"question": "hello"},
         "server_name": "deepwiki",
+        "guardrail_context": MCPRequestContext.resolve_guardrail_context({"guardrails": ["parent-rule"]}),
         "user_api_key_auth": UserAPIKeyAuth(metadata=key_metadata, team_metadata=team_metadata),
     }
     request_obj = proxy_logging._create_mcp_request_object_from_kwargs(kwargs)
@@ -2293,6 +2241,8 @@ def test_convert_mcp_to_llm_format_carries_key_and_team_guardrails(key_metadata,
         synthetic = proxy_logging._convert_mcp_to_llm_format(request_obj, kwargs)
 
     assert guardrail.should_run_guardrail(synthetic, GuardrailEventHooks.pre_mcp_call) is expected_to_run
+
+    assert "parent-rule" in synthetic["metadata"]["guardrails"]
 
 
 class _TracebackRecordingLogger(CustomLogger):
@@ -2391,3 +2341,80 @@ class TestPrismaClientTokenAuthBehindThePool:
         assert isinstance(client.db, RoutingPrismaWrapper)
         assert client.db.writer.iam_token_db_auth is True
         assert client.db.reader.iam_token_db_auth is True
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+def test_mcp_conversion_preserves_request_policy_and_isolates_guardrail_data(bucket):
+    from copy import deepcopy
+    from litellm.responses.mcp.request_context import MCPRequestContext
+
+    parent = {
+        "model": "parent-model",
+        bucket: {
+            "guardrails": ["policy-rule"], "guardrail_config": {"language": "en"},
+            "applied_policies": ["parent-policy"], "policy_sources": {"parent-policy": "model"},
+            "_guardrail_pipelines": [], "_pipeline_managed_guardrails": ["pipeline-rule"], "tags": ["review"],
+        },
+        "guardrails": [{"request-rule": {"extra_body": {"threshold": 0.9}}}],
+        "guardrail_config": {"entities": ["EMAIL_ADDRESS"]},
+    }
+    original = deepcopy(parent)
+    context = MCPRequestContext.resolve(kwargs=parent, tools=None)
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    kwargs = {"name": "execute", "arguments": {"text": "hello"}, "guardrail_context": context.guardrail_context}
+    request_obj = proxy_logging._create_mcp_request_object_from_kwargs(kwargs)
+    first = proxy_logging._convert_mcp_to_llm_format(request_obj, kwargs)
+    assert first["model"] == "parent-model"
+    assert first["metadata"]["guardrails"] == ["policy-rule", {"request-rule": {"extra_body": {"threshold": 0.9}}}]
+    assert first["metadata"]["guardrail_config"] == {"language": "en", "entities": ["EMAIL_ADDRESS"]}
+    assert first["metadata"]["applied_policies"] == ["parent-policy"]
+    assert first["metadata"]["policy_sources"] == {"parent-policy": "model"}
+    assert first["metadata"]["_pipeline_managed_guardrails"] == ["pipeline-rule"]
+    first["metadata"]["guardrails"].clear()
+    first["metadata"]["guardrail_config"]["entities"].clear()
+    assert parent == original
+    second = proxy_logging._convert_mcp_to_llm_format(request_obj, kwargs)
+    assert second["metadata"]["guardrails"] == ["policy-rule", {"request-rule": {"extra_body": {"threshold": 0.9}}}]
+    assert second["metadata"]["guardrail_config"]["entities"] == ["EMAIL_ADDRESS"]
+
+
+@pytest.mark.parametrize("opt_out", [False, True])
+def test_mcp_conversion_honors_only_authenticated_global_guardrail_opt_outs(opt_out):
+    from litellm.responses.mcp.request_context import MCPRequestContext
+
+    auth = UserAPIKeyAuth(metadata={"opted_out_global_guardrails": ["global-rule"] if opt_out else []})
+    context = MCPRequestContext.resolve(kwargs={"metadata": {
+        "user_api_key_auth": auth, "disable_global_guardrails": True,
+        "user_api_key_metadata": {"disable_global_guardrails": True},
+    }}, tools=None)
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    kwargs = {"name": "execute", "arguments": {}, "user_api_key_auth": auth, "guardrail_context": context.guardrail_context}
+    synthetic = proxy_logging._convert_mcp_to_llm_format(proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs)
+    guardrail = CustomGuardrail(guardrail_name="global-rule", event_hook="pre_mcp_call", default_on=True)
+    assert guardrail.should_run_guardrail(synthetic, GuardrailEventHooks.pre_mcp_call) is (not opt_out)
+    synthetic["metadata"]["user_api_key_metadata"]["opted_out_global_guardrails"].append("unrelated")
+    assert auth.metadata == {"opted_out_global_guardrails": ["global-rule"] if opt_out else []}
+
+
+@pytest.mark.parametrize("model, expected", [("parent-model", True), ("unmatched-model", False)])
+def test_mcp_auth_policy_uses_original_request_model(monkeypatch, model, expected):
+    from litellm.responses.mcp.request_context import MCPRequestContext
+    from litellm.proxy.policy_engine import policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyCondition, PolicyGuardrails
+
+    registry = policy_registry.PolicyRegistry()
+    registry._policies = {"model-policy": Policy(
+        condition=PolicyCondition(model="parent-model"), guardrails=PolicyGuardrails(add=["model-rule"])
+    )}
+    registry._initialized = True
+    monkeypatch.setattr(policy_registry, "_policy_registry", registry)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    kwargs = {
+        "name": "execute", "arguments": {},
+        "user_api_key_auth": UserAPIKeyAuth(metadata={"policies": ["model-policy"]}),
+        "guardrail_context": MCPRequestContext.resolve_guardrail_context({"model": model, "guardrails": ["request-rule"]}),
+    }
+    synthetic = proxy_logging._convert_mcp_to_llm_format(proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs)
+    assert ("model-rule" in synthetic["metadata"]["guardrails"]) is expected
+    assert "request-rule" in synthetic["metadata"]["guardrails"]

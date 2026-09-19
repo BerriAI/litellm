@@ -64,6 +64,7 @@ from litellm.constants import (
     AZURE_OPENAI_AUDIO_PROVIDERS,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+    OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
@@ -206,7 +207,7 @@ from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
-from .llms.deprecated_providers import aleph_alpha, palm
+from .llms.deprecated_providers import aleph_alpha
 from .llms.gdc.chat.transformation import GDCGeminiConfig
 from .llms.gemini.common_utils import get_api_key_from_env
 from .llms.groq.chat.handler import GroqChatCompletion
@@ -999,12 +1000,15 @@ def mock_completion(
             ),
         )
 
-        try:
-            _, custom_llm_provider, _, _ = litellm.utils.get_llm_provider(model=model)
+        if custom_llm_provider is not None:
             model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
-        except Exception:
-            # dont let setting a hidden param block a mock_respose
-            pass
+        else:
+            try:
+                _, inferred_provider, _, _ = litellm.utils.get_llm_provider(model=model)
+                model_response._hidden_params["custom_llm_provider"] = inferred_provider
+            except Exception:
+                # dont let setting a hidden param block a mock_respose
+                pass
 
         if logging is not None:
             logging.post_call(
@@ -1159,37 +1163,35 @@ def responses_api_bridge_check(
     return model_info, model
 
 
-def _should_allow_input_examples(custom_llm_provider: str | None, model: str) -> bool:
+_ANTHROPIC_ONLY_TOOL_KEYS: Final = frozenset({"input_examples", "eager_input_streaming"})
+
+
+def _is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
     if custom_llm_provider == "anthropic":
         return True
-    if custom_llm_provider == "azure_ai" or custom_llm_provider == "bedrock" or custom_llm_provider == "vertex_ai":
-        return "claude" in model.lower()
+    model_lower: Final = model.lower()
+    if custom_llm_provider == "bedrock":
+        return "claude" in model_lower or ("arn:" in model_lower and ":bedrock:" in model_lower)
+    if custom_llm_provider == "azure_ai" or custom_llm_provider == "vertex_ai":
+        return "claude" in model_lower
     return False
 
 
-def _drop_input_examples_from_tool(tool: dict) -> dict:
-    tool_copy: Final = tool.copy()
-    tool_copy.pop("input_examples", None)
-    function = tool_copy.get("function")
-    if isinstance(function, dict):
-        function = function.copy()
-        function.pop("input_examples", None)
-        tool_copy["function"] = function
-    return tool_copy
+def _without_anthropic_only_tool_keys(tool: dict) -> dict:
+    kept: Final = {key: value for key, value in tool.items() if key not in _ANTHROPIC_ONLY_TOOL_KEYS}
+    function: Final = tool.get("function")
+    if not isinstance(function, dict):
+        return kept
+    return {
+        **kept,
+        "function": {key: value for key, value in function.items() if key not in _ANTHROPIC_ONLY_TOOL_KEYS},
+    }
 
 
-def _drop_input_examples_from_tools(
-    tools: list[dict] | None,
-) -> list[dict] | None:
+def _drop_anthropic_only_tool_keys(tools: list[dict] | None) -> list[dict] | None:
     if tools is None:
         return None
-    cleaned_tools: Final[list[dict]] = []
-    for tool in tools:
-        if isinstance(tool, dict):
-            cleaned_tools.append(_drop_input_examples_from_tool(tool))
-        else:
-            cleaned_tools.append(tool)
-    return cleaned_tools
+    return [_without_anthropic_only_tool_keys(tool) if isinstance(tool, dict) else tool for tool in tools]
 
 
 class _ProxyAuthHeadersProvider(Protocol):
@@ -2206,7 +2208,7 @@ def _complete_a2a(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
         api_key,
         headers,
     ) = litellm.A2AConfig.resolve_agent_config_from_registry(
-        model=model,
+        agent_name=model,
         api_base=api_base,
         api_key=api_key,
         headers=headers,
@@ -5401,8 +5403,8 @@ def completion(
             api_base=api_base,
         )
 
-        if not _should_allow_input_examples(custom_llm_provider=custom_llm_provider, model=model):
-            tools = _drop_input_examples_from_tools(tools=tools)
+        if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
+            tools = _drop_anthropic_only_tool_keys(tools=tools)
 
         if provider_specific_header is not None:
             headers.update(
@@ -6014,7 +6016,7 @@ def responses_with_retries(*args, **kwargs):
     except Exception as e:
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
 
-    from litellm.responses.main import responses
+    from litellm.responses.dispatch import responses
 
     num_retries: Final = kwargs.pop("num_retries", 3)
     # reset retries in .responses()
@@ -6044,7 +6046,7 @@ async def aresponses_with_retries(*args, **kwargs):
     except Exception as e:
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
 
-    from litellm.responses.main import aresponses
+    from litellm.responses.dispatch import aresponses
 
     num_retries: Final = kwargs.pop("num_retries", 3)
     kwargs["max_retries"] = 0
@@ -7875,6 +7877,10 @@ def transcription(
         provider=LlmProviders(custom_llm_provider),
     )
 
+    uses_openai_transport: Final = custom_llm_provider in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS and not (
+        provider_config is not None and provider_config.has_native_transcription_endpoint
+    )
+
     if custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS and provider_config is None:
         # azure configs
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
@@ -7904,7 +7910,7 @@ def transcription(
             litellm_params=litellm_params_dict,
             custom_llm_provider=custom_llm_provider,
         )
-    elif custom_llm_provider == "openai" or (custom_llm_provider in litellm.openai_compatible_providers):
+    elif uses_openai_transport:
         api_base = (
             api_base
             or litellm.api_base

@@ -158,6 +158,8 @@ DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL: Final = str(
 )
 DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD = float(os.getenv("DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD", 0.75))
 
+DEFAULT_OPENAI_MODERATIONS_MODEL: Final = "omni-moderation-latest"
+
 # MCP OAuth2 Client Credentials Defaults
 MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS: Final = int(os.getenv("MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS", "60"))
 MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE: Final = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE", "200"))
@@ -183,6 +185,9 @@ MCP_TOOL_LISTING_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIME
 MCP_METADATA_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
 MCP_TOOL_LISTING_MAX_PAGES: Final = 1000
+MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH: Final = 8
+MCP_BYOK_CREDENTIAL_CACHE_TTL_SECONDS: Final = 60
+MCP_BYOK_CREDENTIAL_CACHE_MAX_SIZE: Final = 4096
 
 # Allowlist of commands permitted for MCP stdio transport.
 # Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
@@ -317,9 +322,14 @@ REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = float(
 # RFC 6455 caps the close frame payload at 125 bytes, 2 of which carry the status code
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
 
+DEEPGRAM_DEFAULT_API_BASE: Final = "https://api.deepgram.com/v1"
+DEEPGRAM_LISTEN_DEFAULT_MODEL: Final = "nova-3"
+
 BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_session_update"
 BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY: Final = "litellm.bedrock_realtime.session_committed"
 BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY: Final = "litellm.bedrock_realtime.committed_failure"
+BEDROCK_REALTIME_SDK_DISTRIBUTION: Final = "aws-sdk-bedrock-runtime"
+BEDROCK_REALTIME_SDK_SUPPORTED_RANGE: Final = ">=0.10.0,<0.12.0"
 CLIENT_REQUESTED_MODEL_SCOPE_KEY: Final = "litellm.client_requested_model"
 MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY: Final = "litellm.model_group_alias_resolved"
 REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
@@ -568,6 +578,9 @@ FIREWORKS_AI_176_B_MOE: Final = int(os.getenv("FIREWORKS_AI_176_B_MOE", 176))
 FIREWORKS_AI_4_B: Final = int(os.getenv("FIREWORKS_AI_4_B", 4))
 FIREWORKS_AI_16_B: Final = int(os.getenv("FIREWORKS_AI_16_B", 16))
 FIREWORKS_AI_80_B: Final = int(os.getenv("FIREWORKS_AI_80_B", 80))
+# https://docs.fireworks.ai/guides/prompt-caching (accessed 2026-09-19): serverless cached prompt tokens
+# default to a 50% discount off the input rate
+FIREWORKS_AI_DEFAULT_CACHE_READ_RATE_RATIO: Final = 0.5
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING: Final = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS: Final = int(os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50))
@@ -603,6 +616,7 @@ LOGGING_EXECUTOR_MAX_THREADS: Final = get_env_int("LOGGING_EXECUTOR_MAX_THREADS"
 LOGGING_EXECUTOR_MAX_PENDING_TASKS: Final = get_env_int("LOGGING_EXECUTOR_MAX_PENDING_TASKS", 10_000)
 LOGGING_EXECUTOR_DROPPED_TASK_LOG_INTERVAL_SECONDS: Final = 30.0
 AWS_SIGNING_MAX_THREADS: Final = 16
+PROMPT_INJECTION_HEURISTICS_MAX_THREADS: Final = max(1, get_env_int("PROMPT_INJECTION_HEURISTICS_MAX_THREADS", 1))
 DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE: Final = os.getenv(
     "DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE", "streaming.chunk.yield"
 )
@@ -989,6 +1003,9 @@ openai_compatible_providers: Final[list] = [
     "cognition",
     "scx-ai",
 ]
+
+OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
+
 openai_text_completion_compatible_providers: Final[list] = [  # providers that support `/v1/completions`
     "together_ai",
     "fireworks_ai",
@@ -1572,7 +1589,31 @@ ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS: Final = {
 # Works for all LLM pass-through endpoints (Vertex AI, Anthropic, Bedrock, etc.)
 PASS_THROUGH_HEADER_PREFIX: Final = "x-pass-"
 
+AZURE_SPEECH_CUSTOM_LLM_PROVIDER: Final = "azure_speech"
+AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX: Final = "/azure_speech"
+AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX: Final = "/speech/"
+AZURE_SPEECH_BATCH_PATH_PREFIX: Final = "/speechtotext/"
+AZURE_SPEECH_FAST_TRANSCRIPTION_PATH: Final = "/speechtotext/transcriptions:transcribe"
+AZURE_SPEECH_STT_DOMAIN: Final = "stt.speech.microsoft.com"
+AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN: Final = "api.cognitive.microsoft.com"
+AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER: Final = "Ocp-Apim-Subscription-Key"
+AZURE_SPEECH_SHORT_AUDIO_MODEL: Final = "short-audio"
+AZURE_SPEECH_BATCH_MODEL: Final = "batch-transcription"
+AZURE_SPEECH_FAST_TRANSCRIPTION_MODEL: Final = "fast-transcription"
+AZURE_SPEECH_PRICING_MODEL: Final = "azure/speech/azure-stt"
+AZURE_SPEECH_TICKS_PER_SECOND: Final = 10_000_000
+AZURE_SPEECH_MILLISECONDS_PER_SECOND: Final = 1_000
+
 BASE_MCP_ROUTE: Final = "/mcp"
+
+TRANSCRIBE_JOB_POLLING_INTERVAL_SECONDS: Final = 10.0
+TRANSCRIBE_JOB_MAX_POLLING_ATTEMPTS: Final = 720  # 2 hours
+TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS: Final = 28800  # Amazon Transcribe quota: maximum audio file length
+TRANSCRIBE_MAX_MEDIA_BYTES: Final = 2 * 1024**3  # Amazon Transcribe quota: maximum audio file size
+TRANSCRIBE_MEDIA_DOWNLOAD_CONCURRENCY: Final = 1
+TRANSCRIBE_MEDIA_FETCH_ATTEMPTS: Final = 3
+TRANSCRIBE_MEDIA_LAST_MODIFIED_TOLERANCE_SECONDS: Final = 1.0  # S3 Last-Modified carries whole seconds only
+TRANSCRIBE_MEASURABLE_MEDIA_FORMATS: Final = frozenset({"flac", "mp3", "ogg", "wav"})  # what libsndfile can read
 
 BATCH_STATUS_POLL_INTERVAL_SECONDS: Final = int(os.getenv("BATCH_STATUS_POLL_INTERVAL_SECONDS", 3600))  # 1 hour
 BATCH_STATUS_POLL_MAX_ATTEMPTS: Final = int(os.getenv("BATCH_STATUS_POLL_MAX_ATTEMPTS", 24))  # for 24 hours
@@ -1647,6 +1688,11 @@ LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS: Final = int(
 LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE: Final = int(
     os.getenv("LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE", 1000)
 )
+LOGIN_THROTTLE_CACHE_KEY_PREFIX: Final = "login_fail"
+LOGIN_THROTTLE_UNKNOWN_SOURCE: Final = "unknown"
+LOGIN_THROTTLE_MAX_TRACKED_COUNTERS: Final = 20_000
+LOGIN_THROTTLE_MAX_TRACKED_BLOCKS: Final = 10_000
+LOGIN_THROTTLE_NOT_BLOCKED: Final = (0, 0)
 LITELLM_PROXY_ADMIN_NAME: Final = "default_user_id"
 LITELLM_PROXY_BUDGET_NAME: Final = "litellm-proxy-budget"
 GLOBAL_PROXY_SPEND_CACHE_KEY: Final = f"{LITELLM_PROXY_ADMIN_NAME}:spend"
@@ -2039,12 +2085,16 @@ MCP_SPEND_LOG_MODEL_PREFIX: Final[str] = "MCP: "
 PTU_SENTINEL_API_KEY: Final[str] = "__ptu_flat_cost__"
 PTU_ROLLUP_JOB_ID: Final[str] = "ptu_flat_cost_rollup_job"
 PTU_ROLLUP_LOCK_TTL_SECONDS: Final[int] = 900
+USAGE_TOP_API_KEYS_LIMIT: Final[int] = int(os.getenv("USAGE_TOP_API_KEYS_LIMIT", "100"))
 # Furthest back the catch-up pass looks for unpriced PTU days when a deployment
 # declares no ptu_effective_from, bounding the scan for an open-ended window.
 PTU_ROLLUP_MAX_BACKFILL_DAYS: Final[int] = 90
 # Deployments named in the lapsed-window alert before it is truncated, so a fleet-wide
 # expiry cannot produce an alert too large for the channel delivering it.
 PTU_LAPSED_ALERT_LIMIT: Final[int] = 10
+DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID: Final[str] = "daily_global_spend_reconcile_job"
+DAILY_GLOBAL_SPEND_RECONCILE_LOCK_TTL_SECONDS: Final[int] = 3600
+DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM: Final[str] = "daily_global_spend_reconciled_through"
 # Slack allowed when deciding a sentinel row is stale. The row's updated_at and the
 # run's cutoff are stamped by different hosts, so clock skew between them must not let
 # one run delete a charge another just wrote. A stale row is hours old and a concurrent

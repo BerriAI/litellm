@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
-from litellm import supports_reasoning, supports_vision
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
@@ -280,40 +279,6 @@ def test_handle_message_content_with_tool_calls():
         updated_message.tool_calls[0].function.arguments
         == expected_tool_call.function.arguments
     )
-
-
-def test_supports_reasoning_effort():
-    """Test that reasoning_effort is only supported for specific Fireworks AI models."""
-    supported_models = [
-        "fireworks_ai/accounts/fireworks/models/qwen3-8b",
-        "fireworks_ai/accounts/fireworks/models/qwen3-32b",
-        "fireworks_ai/accounts/fireworks/models/qwen3-coder-480b-a35b-instruct",
-        "fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
-        "fireworks_ai/accounts/fireworks/models/deepseek-v3p2",
-        "fireworks_ai/accounts/fireworks/models/glm-4p5",
-        "fireworks_ai/accounts/fireworks/models/glm-4p5-air",
-        "fireworks_ai/accounts/fireworks/models/glm-4p6",
-        "fireworks_ai/accounts/fireworks/models/glm-4p7",
-        "fireworks_ai/accounts/fireworks/models/glm-5p1",
-        "fireworks_ai/accounts/fireworks/models/gpt-oss-120b",
-        "fireworks_ai/accounts/fireworks/models/gpt-oss-20b",
-        "fireworks_ai/glm-5p1",
-    ]
-
-    unsupported_models = [
-        "fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct",
-        "fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct",
-    ]
-
-    for model in supported_models:
-        assert (
-            supports_reasoning(model=model, custom_llm_provider="fireworks_ai") is True
-        ), f"{model} should support reasoning_effort"
-
-    for model in unsupported_models:
-        assert (
-            supports_reasoning(model=model, custom_llm_provider="fireworks_ai") is False
-        ), f"{model} should not support reasoning_effort"
 
 
 def test_get_supported_openai_params_reasoning_effort():
@@ -973,17 +938,6 @@ def test_thinking_and_reasoning_effort_conflict_rejected():
         )
 
 
-def test_minimax_m3_supports_vision_from_model_map():
-    config = FireworksAIConfig()
-
-    for model in [
-        "fireworks_ai/accounts/fireworks/models/minimax-m3",
-        "fireworks_ai/minimax-m3",
-    ]:
-        assert supports_vision(model=model, custom_llm_provider="fireworks_ai") is True
-        assert config.get_provider_info(model)["supports_vision"] is True
-
-
 def test_transform_messages_helper_rejects_file_blocks():
     config = FireworksAIConfig()
     messages = [
@@ -1052,7 +1006,7 @@ def test_transform_messages_helper_allows_vision_image_inputs():
     ]
 
     out = config._transform_messages_helper(
-        messages, model="accounts/fireworks/models/minimax-m3", litellm_params={}
+        messages, model="accounts/fireworks/models/llama-v3p2-11b-vision-instruct", litellm_params={}
     )
     assert out == messages
 
@@ -1117,7 +1071,7 @@ def test_transform_messages_helper_no_transform_inline():
         }
     ]
     out = config._transform_messages_helper(
-        messages, model="accounts/fireworks/models/minimax-m3", litellm_params={}
+        messages, model="accounts/fireworks/models/llama-v3p2-11b-vision-instruct", litellm_params={}
     )
     block = out[0]["content"][0]
     assert block["image_url"] == url

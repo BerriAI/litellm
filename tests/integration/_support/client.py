@@ -3,16 +3,16 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from hashlib import sha256
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Final, TypeVar
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
 
-from integration._support.database import read_rows
+from tests.integration._support.database import read_rows
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 T = TypeVar("T")
@@ -124,6 +124,16 @@ class Scenario:
         assert response.status_code == 200, response.text
         assert read_rows('SELECT project_id FROM "LiteLLM_ProjectTable" WHERE project_id = %s', (identity,)) == []
 
+    def budget(self, **fields: JsonValue) -> str:
+        created: Final = self.gateway.post("/budget/new", fields)
+        identity: Final = string_value(created["budget_id"])
+        self.cleanups.callback(self.delete_budget, identity)
+        return identity
+
+    def delete_budget(self, identity: str) -> None:
+        self.gateway.post("/budget/delete", {"id": identity})
+        assert read_rows('SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id = %s', (identity,)) == []
+
     def user(self, **fields: JsonValue) -> str:
         created: Final = self.gateway.post(
             "/user/new", {"user_id": f"integration-{uuid.uuid4().hex}", "auto_create_key": False, **fields}
@@ -151,7 +161,7 @@ class Scenario:
         assert all(object_value(object_value(entry)["model_info"])["id"] != identity for entry in entries)
         assert read_rows('SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)) == []
 
-    def model(self, **parameters: JsonValue) -> str:
+    def model(self, *, model_info: Mapping[str, JsonValue] | None = None, **parameters: JsonValue) -> str:
         name: Final = f"integration-{uuid.uuid4().hex}"
         created: Final = self.gateway.post(
             "/model/new",
@@ -163,7 +173,7 @@ class Scenario:
                     "api_base": f"{self.gateway.upstream_url}/v1",
                     **parameters,
                 },
-                "model_info": {},
+                "model_info": dict(model_info) if model_info is not None else {},
             },
         )
         identity: Final = string_value(object_value(created["model_info"])["id"])

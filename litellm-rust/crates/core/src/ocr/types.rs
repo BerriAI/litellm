@@ -1,57 +1,17 @@
-use std::collections::BTreeMap;
-use std::convert::Infallible;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use bytes::Bytes;
-use serde::{Deserialize, Serialize};
+use litellm_auth::{InputSource, SecretValue, TokenProviderHandle};
+use litellm_core_utils::call_arguments::CallArguments;
+use litellm_llms::base_llm::ocr::{
+    error::Error,
+    transformation::{
+        OcrCredentialInputs, OcrDocument, OcrResponseFormat, OcrTransportConfig, response_format,
+    },
+};
 use serde_json::{Map, Value};
 
-use super::hooks::{NoopOcrHooks, OcrHooks};
-use super::registry::{OcrAdapterKind, resolve_wire_adapter};
-use crate::constants::OCR_HTTP_TIMEOUT_SECS;
-use crate::ocr::Error;
-use litellm_auth::{InputSource, TokenProviderHandle};
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum OcrDocument {
-    #[serde(rename = "document_url")]
-    DocumentUrl {
-        document_url: String,
-        #[serde(flatten)]
-        extra_fields: Map<String, Value>,
-    },
-    #[serde(rename = "image_url")]
-    ImageUrl {
-        image_url: String,
-        #[serde(flatten)]
-        extra_fields: Map<String, Value>,
-    },
-}
-
-impl OcrDocument {
-    pub(crate) fn source(&self) -> &str {
-        match self {
-            Self::DocumentUrl { document_url, .. } => document_url,
-            Self::ImageUrl { image_url, .. } => image_url,
-        }
-    }
-
-    pub(crate) fn with_source(self, source: String) -> Self {
-        match self {
-            Self::DocumentUrl { extra_fields, .. } => Self::DocumentUrl {
-                document_url: source,
-                extra_fields,
-            },
-            Self::ImageUrl { extra_fields, .. } => Self::ImageUrl {
-                image_url: source,
-                extra_fields,
-            },
-        }
-    }
-}
+use super::provider_config::{OcrConfigKind, resolve_provider_config};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum OcrDocumentInput {
@@ -76,114 +36,109 @@ impl From<OcrDocument> for OcrDocumentInput {
     }
 }
 
+impl From<PathBuf> for OcrDocumentInput {
+    fn from(path: PathBuf) -> Self {
+        Self::Path {
+            path,
+            mime_type: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OcrFileContent {
     pub bytes: Bytes,
     pub file_name: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum OcrResponseFormat {
-    #[default]
-    Litellm,
-    Native,
-}
-
-#[derive(Clone)]
-pub struct OcrConnection {
-    pub api_key: Option<String>,
-    pub api_key_source: InputSource,
+/// Caller-supplied connection overrides for a [`LiteLLMOcrRequest`], in the
+/// shape hosts receive them: JSON-ish headers, optional timeout, optional
+/// credentials, and per-field provenance in `input_sources`.
+#[derive(Clone, Debug, Default)]
+pub struct OcrConnectionInputs {
+    pub api_key: Option<SecretValue>,
     pub api_base: Option<String>,
-    pub api_base_source: InputSource,
-    pub extra_headers: Vec<(String, String)>,
-    pub extra_headers_source: InputSource,
-    pub timeout: Duration,
-    pub max_download_bytes: u64,
-    pub max_response_bytes: usize,
-    pub poll_timeout: Duration,
+    pub extra_headers: Map<String, Value>,
+    pub timeout: Option<Duration>,
+    pub input_sources: BTreeMap<String, InputSource>,
 }
 
-impl Default for OcrConnection {
-    fn default() -> Self {
-        Self {
-            api_key: None,
-            api_key_source: InputSource::Deployment,
-            api_base: None,
-            api_base_source: InputSource::Deployment,
-            extra_headers: Vec::new(),
-            extra_headers_source: InputSource::Deployment,
-            timeout: Duration::from_secs(OCR_HTTP_TIMEOUT_SECS),
-            max_download_bytes: crate::constants::OCR_DOWNLOAD_MAX_BYTES,
-            max_response_bytes: crate::constants::OCR_RESPONSE_MAX_BYTES,
-            poll_timeout: Duration::from_secs(crate::constants::OCR_POLL_TIMEOUT_SECS),
-        }
+impl OcrConnectionInputs {
+    fn source(&self, name: &str) -> InputSource {
+        self.input_sources.get(name).copied().unwrap_or_default()
+    }
+
+    fn header_pairs(&self) -> Result<Vec<(String, String)>, Error> {
+        self.extra_headers
+            .iter()
+            .map(|(name, value)| {
+                value
+                    .as_str()
+                    .map(|value| (name.clone(), value.to_string()))
+                    .ok_or_else(|| Error::RequestField {
+                        path: format!("extra_headers.{name}"),
+                    })
+            })
+            .collect()
     }
 }
 
-pub struct LiteLLMOcrRequest<D = OcrDocument> {
+pub struct LiteLLMOcrRequest<D = OcrDocumentInput> {
     pub model: String,
     pub document: D,
-    pub connection: OcrConnection,
-    pub hooks: Arc<dyn OcrHooks>,
-    pub litellm_call_id: Option<String>,
-    pub optional_params: Map<String, Value>,
+    pub credentials: OcrCredentialInputs,
+    pub transport: OcrTransportConfig,
+    pub optional_params: CallArguments,
     pub input_sources: BTreeMap<String, InputSource>,
     pub azure_ad_token_provider: Option<TokenProviderHandle>,
-    pub(crate) adapter: OcrAdapterKind,
+    pub(crate) config: OcrConfigKind,
 }
 
-impl<D> LiteLLMOcrRequest<D> {
+impl LiteLLMOcrRequest {
     pub fn new(
         model: String,
-        document: D,
+        document: impl Into<OcrDocumentInput>,
         custom_llm_provider: Option<&str>,
-        optional_params: Map<String, Value>,
+        optional_params: CallArguments,
     ) -> Result<Self, Error> {
-        let (model, adapter_kind) = resolve_wire_adapter(&model, custom_llm_provider)?;
+        let (model, config) = resolve_provider_config(&model, custom_llm_provider)?;
+        let default_transport = OcrTransportConfig::default();
+        let max_response_bytes = optional_params
+            .get("max_response_bytes")
+            .map(|value| {
+                value
+                    .as_u64()
+                    .and_then(|value| usize::try_from(value).ok())
+                    .filter(|value| *value > 0 && *value <= default_transport.max_response_bytes)
+                    .ok_or_else(|| Error::RequestField {
+                        path: "max_response_bytes".into(),
+                    })
+            })
+            .transpose()?
+            .unwrap_or(default_transport.max_response_bytes);
+        let transport = OcrTransportConfig {
+            max_response_bytes,
+            ..default_transport
+        };
+        let optional_params = optional_params
+            .into_iter()
+            .filter(|(name, _)| name != "max_response_bytes")
+            .collect();
 
         Ok(Self {
             model,
-            document,
-            connection: OcrConnection::default(),
-            hooks: Arc::new(NoopOcrHooks),
-            litellm_call_id: None,
+            document: document.into(),
+            credentials: OcrCredentialInputs::default(),
+            transport,
             optional_params,
             input_sources: BTreeMap::new(),
             azure_ad_token_provider: None,
-            adapter: adapter_kind,
+            config,
         })
     }
+}
 
-    pub(crate) fn response_format(
-        &self,
-    ) -> Result<OcrResponseFormat, super::error::OcrRequestError> {
-        self.optional_params
-            .get("req_format")
-            .map(|value| {
-                serde_json::from_value(value.clone())
-                    .map_err(|_| super::error::OcrRequestError::RequestFormat)
-            })
-            .transpose()
-            .map(|format| format.unwrap_or_default())
-    }
-
-    pub fn provider_name(&self) -> &'static str {
-        self.adapter.provider().as_str()
-    }
-
-    pub fn with_host_hooks(
-        self,
-        hooks: Arc<dyn OcrHooks>,
-        litellm_call_id: Option<String>,
-    ) -> Self {
-        Self {
-            hooks,
-            litellm_call_id,
-            ..self
-        }
-    }
-
+impl<D> LiteLLMOcrRequest<D> {
     pub fn map_document<T, E>(
         self,
         map: impl FnOnce(D) -> Result<T, E>,
@@ -191,111 +146,175 @@ impl<D> LiteLLMOcrRequest<D> {
         Ok(LiteLLMOcrRequest {
             model: self.model,
             document: map(self.document)?,
-            connection: self.connection,
-            hooks: self.hooks,
-            litellm_call_id: self.litellm_call_id,
+            credentials: self.credentials,
+            transport: self.transport,
             optional_params: self.optional_params,
             input_sources: self.input_sources,
             azure_ad_token_provider: self.azure_ad_token_provider,
-            adapter: self.adapter,
+            config: self.config,
         })
     }
 
     pub fn with_document<T>(self, document: T) -> LiteLLMOcrRequest<T> {
-        let Ok(request) = self.map_document(|_| Ok::<T, Infallible>(document));
-        request
-    }
-}
-
-impl From<LiteLLMOcrRequest> for LiteLLMOcrRequest<OcrDocumentInput> {
-    fn from(request: LiteLLMOcrRequest) -> Self {
-        let Ok(request) = request
-            .map_document(|document| Ok::<_, Infallible>(OcrDocumentInput::Document(document)));
-        request
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct LiteLLMOcrResponse {
-    pub pages: Vec<Value>,
-    pub model: String,
-    pub document_annotation: Option<Value>,
-    pub usage_info: Option<Value>,
-    pub object: String,
-    #[serde(flatten)]
-    pub extra_fields: Map<String, Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider_native_response: Option<Value>,
-}
-
-impl LiteLLMOcrResponse {
-    pub fn into_json(self) -> Value {
-        serde_json::to_value(self).expect("OCR response fields are JSON-compatible")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn document_variants_preserve_provider_fields_when_rewriting_sources() {
-        for (value, original, replacement, expected) in [
-            (
-                json!({
-                    "type":"document_url",
-                    "document_url":"https://example.com/input.pdf",
-                    "document_name":"input.pdf"
-                }),
-                "https://example.com/input.pdf",
-                "data:application/pdf;base64,AA==",
-                json!({
-                    "type":"document_url",
-                    "document_url":"data:application/pdf;base64,AA==",
-                    "document_name":"input.pdf"
-                }),
-            ),
-            (
-                json!({
-                    "type":"image_url",
-                    "image_url":"https://example.com/input.png",
-                    "detail":"high"
-                }),
-                "https://example.com/input.png",
-                "data:image/png;base64,AA==",
-                json!({
-                    "type":"image_url",
-                    "image_url":"data:image/png;base64,AA==",
-                    "detail":"high"
-                }),
-            ),
-        ] {
-            let document: OcrDocument = serde_json::from_value(value).unwrap();
-            assert_eq!(document.source(), original);
-            assert_eq!(
-                serde_json::to_value(document.with_source(replacement.into())).unwrap(),
-                expected
-            );
+        LiteLLMOcrRequest {
+            model: self.model,
+            document,
+            credentials: self.credentials,
+            transport: self.transport,
+            optional_params: self.optional_params,
+            input_sources: self.input_sources,
+            azure_ad_token_provider: self.azure_ad_token_provider,
+            config: self.config,
         }
     }
 
+    pub(crate) fn response_format(&self) -> Result<OcrResponseFormat, Error> {
+        response_format(&self.optional_params)
+    }
+
+    pub fn provider_name(&self) -> &'static str {
+        self.config.provider().into()
+    }
+
+    pub fn with_connection_inputs(
+        self,
+        credentials: OcrCredentialInputs,
+        transport: OcrTransportConfig,
+        input_sources: BTreeMap<String, InputSource>,
+    ) -> Self {
+        Self {
+            credentials,
+            transport,
+            input_sources,
+            ..self
+        }
+    }
+}
+
+impl LiteLLMOcrRequest {
+    /// Builds a request from host-shaped inputs in one step: provider
+    /// resolution, optional-param validation, header/timeout overrides and
+    /// sourced credentials. Hosts should prefer this over sequencing
+    /// [`Self::new`], [`OcrTransportConfig::with_overrides`] and
+    /// [`Self::with_connection_inputs`] by hand.
+    pub fn from_inputs(
+        model: String,
+        document: impl Into<OcrDocumentInput>,
+        custom_llm_provider: Option<&str>,
+        optional_params: CallArguments,
+        connection: OcrConnectionInputs,
+    ) -> Result<Self, Error> {
+        let request = Self::new(model, document, custom_llm_provider, optional_params)?;
+        let transport = request.transport.clone().with_overrides(
+            connection.header_pairs()?,
+            connection.source("extra_headers"),
+            connection.timeout,
+        );
+        let (api_key_source, api_base_source) =
+            (connection.source("api_key"), connection.source("api_base"));
+        let credentials = OcrCredentialInputs::new(
+            connection.api_key,
+            api_key_source,
+            connection.api_base,
+            api_base_source,
+        );
+        Ok(request.with_connection_inputs(credentials, transport, connection.input_sources))
+    }
+}
+
+pub(crate) type ResolvedOcrRequest = LiteLLMOcrRequest<OcrDocument>;
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn document() -> OcrDocument {
+        OcrDocument::try_from(
+            json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
+        )
+        .unwrap()
+    }
+
     #[test]
-    fn response_serialization_flattens_extra_fields_and_omits_absent_native_response() {
-        let response = LiteLLMOcrResponse {
-            pages: vec![],
-            model: "model".into(),
-            document_annotation: None,
-            usage_info: None,
-            object: "ocr".into(),
-            extra_fields: json!({"provider_field":"kept"})
-                .as_object()
-                .unwrap()
-                .clone(),
-            provider_native_response: None,
+    fn connection_inputs_debug_hides_the_api_key() {
+        let inputs = OcrConnectionInputs {
+            api_key: Some(SecretValue::new("caller-api-key")),
+            ..OcrConnectionInputs::default()
         };
-        let serialized = response.into_json();
-        assert_eq!(serialized["provider_field"], "kept");
-        assert!(serialized.get("provider_native_response").is_none());
+
+        assert!(!format!("{inputs:?}").contains("caller-api-key"));
+    }
+
+    #[test]
+    fn from_inputs_applies_connection_overrides_with_field_sources() {
+        let request = LiteLLMOcrRequest::from_inputs(
+            "mistral/model".into(),
+            document(),
+            None,
+            Default::default(),
+            OcrConnectionInputs {
+                api_key: Some(SecretValue::new(" key ")),
+                api_base: Some("".into()),
+                extra_headers: json!({"x-a": "1"}).as_object().unwrap().clone(),
+                timeout: Some(Duration::from_secs(7)),
+                input_sources: [
+                    ("api_key".to_string(), InputSource::Request),
+                    ("extra_headers".to_string(), InputSource::Request),
+                ]
+                .into(),
+            },
+        )
+        .unwrap();
+
+        let api_key = request.credentials.api_key.as_ref().unwrap();
+        assert_eq!(api_key.value().expose(), "key");
+        assert_eq!(api_key.source(), InputSource::Request);
+        assert!(request.credentials.api_base.is_none());
+        assert_eq!(
+            request.transport.extra_headers,
+            vec![("x-a".to_string(), "1".to_string())]
+        );
+        assert_eq!(request.transport.extra_headers_source, InputSource::Request);
+        assert_eq!(request.transport.timeout, Duration::from_secs(7));
+        assert_eq!(request.input_sources.len(), 2);
+
+        let defaulted = LiteLLMOcrRequest::from_inputs(
+            "mistral/model".into(),
+            document(),
+            None,
+            Default::default(),
+            OcrConnectionInputs::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            defaulted.transport.timeout,
+            OcrTransportConfig::default().timeout
+        );
+        assert_eq!(
+            defaulted.transport.extra_headers_source,
+            InputSource::Deployment
+        );
+    }
+
+    #[test]
+    fn from_inputs_rejects_non_string_header_values_by_path() {
+        let Err(error) = LiteLLMOcrRequest::from_inputs(
+            "mistral/model".into(),
+            document(),
+            None,
+            Default::default(),
+            OcrConnectionInputs {
+                extra_headers: json!({"x-a": 1}).as_object().unwrap().clone(),
+                ..Default::default()
+            },
+        ) else {
+            panic!("non-string header value accepted");
+        };
+        assert!(matches!(
+            error,
+            Error::RequestField { ref path } if path == "extra_headers.x-a"
+        ));
     }
 }
