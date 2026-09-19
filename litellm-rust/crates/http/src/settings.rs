@@ -5,6 +5,8 @@ use std::{
 
 use litellm_core_utils::settings::{Layer, Lookup, merge};
 
+use crate::proxy::EnvironmentProxies;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SslVerify {
     Enabled,
@@ -44,6 +46,7 @@ pub struct HttpSettingsLayer {
     pub user_agent: Option<String>,
     pub tcp_keepalive: Option<TcpKeepalive>,
     pub pool_idle_timeout: Option<Duration>,
+    pub proxies: Option<EnvironmentProxies>,
 }
 
 impl HttpSettingsLayer {
@@ -71,6 +74,8 @@ impl HttpSettingsLayer {
             pool_idle_timeout: env
                 .parsed::<u32>("AIOHTTP_KEEPALIVE_TIMEOUT")
                 .map(|timeout| Duration::from_secs(u64::from(timeout))),
+            proxies: Some(EnvironmentProxies::from_environment(env))
+                .filter(|proxies| *proxies != EnvironmentProxies::default()),
         }
     }
 }
@@ -95,6 +100,7 @@ impl Layer for HttpSettingsLayer {
             user_agent: self.user_agent.or(lower.user_agent),
             tcp_keepalive: self.tcp_keepalive.or(lower.tcp_keepalive),
             pool_idle_timeout: self.pool_idle_timeout.or(lower.pool_idle_timeout),
+            proxies: self.proxies.or(lower.proxies),
         }
     }
 }
@@ -110,6 +116,7 @@ pub struct HttpSettings {
     pub http2: bool,
     pub user_agent: Option<String>,
     pub trust_proxy_env: bool,
+    pub proxies: EnvironmentProxies,
     pub connect_timeout: Duration,
     pub tcp_keepalive: Option<TcpKeepalive>,
     pub pool_idle_timeout: Duration,
@@ -127,6 +134,7 @@ impl Default for HttpSettings {
             http2: false,
             user_agent: None,
             trust_proxy_env: true,
+            proxies: EnvironmentProxies::default(),
             connect_timeout: Duration::from_secs(10),
             tcp_keepalive: None,
             pool_idle_timeout: Duration::from_secs(120),
@@ -160,6 +168,7 @@ impl HttpSettings {
             pool_idle_timeout: merged
                 .pool_idle_timeout
                 .unwrap_or(defaults.pool_idle_timeout),
+            proxies: merged.proxies.unwrap_or_default(),
             ..defaults
         }
     }

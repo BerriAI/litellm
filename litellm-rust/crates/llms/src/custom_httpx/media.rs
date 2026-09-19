@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use litellm_http::{ClientVariant, EnvironmentProxies, HttpClientConfig, HttpClientPool};
+use litellm_http::{ClientVariant, HttpClientConfig, HttpClientPool};
 use reqwest::{
     Url,
     dns::{Addrs, Name, Resolve, Resolving},
@@ -102,12 +102,8 @@ impl MediaFetcher {
         config: &HttpClientConfig,
         url_policy: UrlPolicy,
     ) -> Result<Self, litellm_http::Error> {
-        let uses_proxy: ProxyMatch = if config.trust_proxy_env {
-            let proxies = EnvironmentProxies::from_environment();
-            Arc::new(move |url| proxies.apply_to(url))
-        } else {
-            Arc::new(|_| false)
-        };
+        let proxies = config.proxies.clone();
+        let uses_proxy: ProxyMatch = Arc::new(move |url| proxies.apply_to(url));
         Self::with_resolution(
             pool,
             config,
@@ -443,10 +439,7 @@ mod tests {
         url_policy: UrlPolicy,
         uses_proxy: bool,
     ) -> MediaFetcher {
-        let direct = HttpClientConfig {
-            trust_proxy_env: false,
-            ..Resolution::from(&HttpSettings::default()).config
-        };
+        let direct = Resolution::from(&HttpSettings::default()).config;
         MediaFetcher::with_resolution(
             &HttpClientPool::new(Arc::new(LoopbackDnsResolver(pinned_address))),
             &direct,
