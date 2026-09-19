@@ -1,6 +1,7 @@
 """Tests for the OTel v2 sources of truth: span registry, semconv keys, config,
 and the typed StandardLoggingPayload adapter. These need no OTel SDK."""
 
+import json
 import logging
 import re
 from pathlib import Path
@@ -12,11 +13,11 @@ import litellm
 from litellm.integrations.otel import (
     BAGGAGE_PROMOTED_KEYS,
     DB,
+    HTTP,
     Error,
     GenAI,
     GenAIOperation,
     GenAIOutputType,
-    HTTP,
     LiteLLM,
     OpenTelemetryV2Config,
     Server,
@@ -29,8 +30,8 @@ from litellm.integrations.otel import (
 from litellm.integrations.otel.mappers.genai import GenAIMapper
 from litellm.integrations.otel.model import spans as spans_mod
 from litellm.integrations.otel.model.metadata import LLMCallEvent
-from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.payloads import (
+    EmbeddingOutput,
     LLMCallSpanData,
     RequestIdentity,
     _upstream_address_port,
@@ -43,6 +44,7 @@ from litellm.integrations.otel.model.spans import (
     root_roles,
     validate_registry,
 )
+from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 
 
 @pytest.fixture(autouse=True)
@@ -694,6 +696,46 @@ def test_content_capture_gated_off_by_default():
     assert data.messages_in == ()
     assert data.choices_out == ()
     assert data.finish_reasons == ("stop",)
+
+
+def _embedding_payload(vectors: list[object], **overrides):
+    rows = [{"object": "embedding", "index": i, "embedding": vector} for i, vector in enumerate(vectors)]
+    return _sample_payload(
+        call_type="aembedding",
+        model="text-embedding-3-small",
+        response={"model": "text-embedding-3-small", "object": "list", "data": rows},
+        **overrides,
+    )
+
+
+def test_embedding_response_is_summarized_as_vector_count_and_width():
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _embedding_payload([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]), capture_content=True
+    )
+
+    assert data.embedding_output == EmbeddingOutput(count=2, dimensions=3)
+    assert json.loads(data.embedding_output.as_json()) == {"count": 2, "dimensions": 3}
+    assert data.choices_out == ()
+
+
+def test_embedding_summary_follows_the_content_capture_gate():
+    assert LLMCallSpanData.from_standard_logging_payload(_embedding_payload([[0.1]])).embedding_output is None
+
+
+def test_embedding_summary_leaves_width_unknown_for_base64_vectors():
+    data = LLMCallSpanData.from_standard_logging_payload(_embedding_payload(["AAAA"]), capture_content=True)
+
+    assert data.embedding_output == EmbeddingOutput(count=1, dimensions=None)
+
+
+def test_embedding_summary_is_absent_without_vectors_and_for_chat_data_lists():
+    empty = LLMCallSpanData.from_standard_logging_payload(_embedding_payload([]), capture_content=True)
+    chat = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(response={"data": [{"embedding": [0.1]}]}), capture_content=True
+    )
+
+    assert empty.embedding_output is None
+    assert chat.embedding_output is None
 
 
 def test_request_identity_prefers_canonical_team_keys():
