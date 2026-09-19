@@ -57920,6 +57920,8 @@ export interface operations {
                 sort_by?: string;
                 /** @description Sort order: asc or desc */
                 sort_order?: string | null;
+                /** @description Filter field for date range: 'startTime' (default) or 'endTime' */
+                filter_time_by?: string | null;
                 /** @description Exclude LiteLLM internal health check requests from results */
                 exclude_internal_health_checks?: boolean;
                 /** @description Paginate over sessions instead of raw logs: one representative row per session, total counts sessions */
@@ -58038,6 +58040,8 @@ export interface operations {
                 sort_by?: string;
                 /** @description Sort order: asc or desc */
                 sort_order?: string | null;
+                /** @description Filter field for date range: 'startTime' (default) or 'endTime' */
+                filter_time_by?: string | null;
                 /** @description Exclude LiteLLM internal health check requests from results */
                 exclude_internal_health_checks?: boolean;
                 /** @description Paginate over sessions instead of raw logs: one representative row per session, total counts sessions */
