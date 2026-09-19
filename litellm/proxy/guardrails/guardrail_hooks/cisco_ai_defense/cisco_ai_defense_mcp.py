@@ -7,7 +7,7 @@ while preserving the existing public import path.
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Final, Optional, cast
+from typing import TYPE_CHECKING, Final, Optional
 
 from fastapi import HTTPException
 
@@ -43,15 +43,6 @@ def _serialize_mcp_content_item(item: object) -> dict[str, object]:
     if isinstance(text, str):
         return {"type": getattr(item, "type", "text"), "text": text}
     return {"type": "text", "text": str(item)}
-
-
-def _coerce_pair_list_source(source: object) -> object:
-    if not isinstance(source, list):
-        return source
-    try:
-        return dict(cast("Sequence[tuple[str, object]]", source))  # pyright: ignore[reportUnknownArgumentType]  # response_obj arrives untyped; dict() rejects non-pair shapes
-    except (TypeError, ValueError):
-        return source
 
 
 def _source_field(source: object, key: str, snake_key: str) -> object:
@@ -526,10 +517,9 @@ class _CiscoAIDefenseMcpMixin:
         content: Sequence[object],
         source: object = None,
     ) -> dict[str, object]:
-        source_map: Final[object] = _coerce_pair_list_source(source)
         result: Final[dict[str, object]] = {"content": [_serialize_mcp_content_item(item) for item in content]}
         for key, snake_key in (("structuredContent", "structured_content"), ("isError", "is_error")):
-            value = _source_field(source_map, key, snake_key)
+            value = _source_field(source, key, snake_key)
             if value is not None and (key != "isError" or isinstance(value, bool)):
                 result[key] = value
         return result

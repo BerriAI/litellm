@@ -57,6 +57,13 @@ jobs:
           uv lock --check
           .github/scripts/uv_sync_with_retries.sh --frozen --group proxy-dev --extra proxy --extra semantic-router
 
+      - name: Install the unchanged SDK1 peer
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          uv venv --python 3.12 .venv-mcp-peer
+          uv pip install --python .venv-mcp-peer 'mcp==1.28.1' 'langchain-mcp-adapters==0.2.1'
+          echo "MCP_TEST_PEER_PYTHON=$GITHUB_WORKSPACE/.venv-mcp-peer/bin/python" >> "$GITHUB_ENV"
+
       - name: Run MCP tests
         if: steps.changes.outputs.decision != 'skip'
         run: |

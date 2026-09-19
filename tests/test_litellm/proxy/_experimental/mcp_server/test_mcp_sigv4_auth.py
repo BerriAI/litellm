@@ -380,7 +380,7 @@ class TestMCPServerManagerSigV4:
     """Tests for MCPServerManager config loading with SigV4."""
 
     @pytest.mark.asyncio
-    async def test_load_config_with_aws_sigv4(self):
+    async def test_load_config_with_aws_sigv4(self, config_only_mcp_manager_factory):
         """Config loading correctly parses aws_sigv4 auth type and AWS fields."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             MCPServerManager,
@@ -398,7 +398,7 @@ class TestMCPServerManagerSigV4:
             }
         }
 
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
         await manager.load_servers_from_config(config)
 
         server = next(iter(manager.config_mcp_servers.values()))

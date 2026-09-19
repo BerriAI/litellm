@@ -14,6 +14,8 @@ from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypeVar
 
 import httpx2
+from httpx2._client import UseClientDefault
+from httpx2._types import AuthTypes
 from mcp import ClientSession, MCPError, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
@@ -145,6 +147,23 @@ def as_mcp_read_timeout(exc: BaseException) -> TimeoutError | None:
 
 
 TSessionResult = TypeVar("TSessionResult")
+
+
+class _MCPHTTPClient(httpx2.AsyncClient):
+    async def send(
+        self,
+        request: httpx2.Request,
+        *,
+        stream: bool = False,
+        auth: AuthTypes | UseClientDefault | None = httpx2.USE_CLIENT_DEFAULT,
+        follow_redirects: bool | UseClientDefault = httpx2.USE_CLIENT_DEFAULT,
+    ) -> httpx2.Response:
+        response: Final = await super().send(request, stream=stream, auth=auth, follow_redirects=follow_redirects)
+        # Check after the auth flow completes so a refreshable 401 can still be retried.
+        if request.method == "POST" and response.is_error:
+            await response.aclose()
+            response.raise_for_status()
+        return response
 
 
 class MCPSigV4Auth(httpx2.Auth):
@@ -448,7 +467,7 @@ class MCPClient:
             async def receive_message(
                 message: ServerNotification | Exception,
             ) -> None:
-                if not isinstance(message, (ValueError, httpx2.RequestError, OSError)):
+                if not isinstance(message, (ValueError, httpx2.HTTPError, OSError)):
                     return
                 if not stream_error.done():
                     stream_error.set_result(message)
@@ -592,7 +611,9 @@ class MCPClient:
             headers.update(injected or {})
         return _strip_header_whitespace(headers)
 
-    def _create_httpx_client_factory(self) -> Callable[..., httpx2.AsyncClient]:
+    def _create_httpx_client_factory(
+        self, *, transport: httpx2.AsyncBaseTransport | None = None
+    ) -> Callable[..., httpx2.AsyncClient]:
         """
         Create a custom httpx2 client factory that uses LiteLLM's SSL configuration.
         This factory follows the same CA bundle path logic as http_handler.py:
@@ -618,7 +639,8 @@ class MCPClient:
             fallback_auth: Final = self._resolved_auth if self._resolved_auth is not None else self._aws_auth
             effective_auth: Final = auth if auth is not None else fallback_auth
             guard: Final = credential_redirect_hook(self.server_url, self._credential_slot)
-            return httpx2.AsyncClient(
+            return _MCPHTTPClient(
+                transport=transport,
                 headers=headers,
                 timeout=timeout,
                 auth=effective_auth,

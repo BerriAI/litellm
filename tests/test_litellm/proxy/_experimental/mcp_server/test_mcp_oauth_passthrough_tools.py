@@ -332,7 +332,7 @@ async def test_aggregate_list_tools_absorbs_one_unauthenticated_server():
         "s1", "delegate_docs", auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True
     )
     working = _http_server("s2", "working_docs", auth_type=MCPAuth.none)
-    good_tool = MCPTool(name="working_docs-read", description="d", input_schema={"type": "object"})
+    good_tool = MCPTool(name="working_docs-read", description="d", inputSchema={"type": "object"})
 
     async def fake_get_tools(server, **kwargs):
         if server.server_id == delegate.server_id:

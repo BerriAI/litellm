@@ -1,6 +1,15 @@
 # LiteLLM MCP Client
 
-LiteLLM MCP Client is a client that allows you to use MCP tools with LiteLLM.
+LiteLLM MCP Client allows you to use MCP tools with LiteLLM
 
+## MCP Python SDK compatibility
 
+The `mcp` and `proxy` extras require MCP Python SDK 2.2 or newer within the 2.x release line. Installing core LiteLLM without these extras does not require MCP
 
+Existing MCP SDK1 clients can continue connecting to the gateway over the supported legacy MCP protocols. The client and gateway can use different SDK versions in separate Python environments. Modern protocol advertisement remains disabled during the Phase 0 upgrade
+
+Code sharing the gateway's Python environment must support SDK2. Its Python API has breaking changes, including renamed imports and snake_case model attributes such as `input_schema`, `is_error`, and `structured_content`. This also applies to callers consuming SDK objects returned by LiteLLM's experimental MCP client. MCP JSON fields retain their protocol spelling, such as `inputSchema` and `isError`
+
+Upgrade SDK1-dependent libraries before installing them alongside `litellm[mcp]` or `litellm[proxy]`, or keep those clients in a separate environment and connect over the network. For example, `langchain-mcp-adapters==0.2.1` uses SDK1 Python APIs and is tested as a separate legacy client, not as a shared SDK2 dependency
+
+See the official [SDK migration guide](https://py.sdk.modelcontextprotocol.io/migration/) for Python API changes

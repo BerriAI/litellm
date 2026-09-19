@@ -32,7 +32,7 @@ def mock_mcp_tool():
     return MCPTool(
         name="test_tool",
         description="A test tool",
-        input_schema={"type": "object", "properties": {"test": {"type": "string"}}},
+        inputSchema={"type": "object", "properties": {"test": {"type": "string"}}},
     )
 
 
@@ -51,7 +51,7 @@ def mock_list_tools_result():
             MCPTool(
                 name="test_tool",
                 description="A test tool",
-                input_schema={
+                inputSchema={
                     "type": "object",
                     "properties": {"test": {"type": "string"}},
                 },
@@ -113,12 +113,12 @@ async def test_load_mcp_tools_follows_pagination(mock_session):
     mock_session.list_tools.side_effect = [
         ListToolsResult(
             tools=[
-                MCPTool(name="tool_a", description="a", input_schema={}),
-                MCPTool(name="tool_b", description="b", input_schema={}),
+                MCPTool(name="tool_a", description="a", inputSchema={}),
+                MCPTool(name="tool_b", description="b", inputSchema={}),
             ],
             nextCursor="page-2",
         ),
-        ListToolsResult(tools=[MCPTool(name="tool_c", description="c", input_schema={})]),
+        ListToolsResult(tools=[MCPTool(name="tool_c", description="c", inputSchema={})]),
     ]
     result = await load_mcp_tools(mock_session, format="mcp")
     assert [tool.name for tool in result] == ["tool_a", "tool_b", "tool_c"]
@@ -133,14 +133,14 @@ async def test_pagination_walk_stops_at_page_cap(mock_session, monkeypatch):
     monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_TOOL_LISTING_MAX_PAGES", 2)
     mock_session.list_tools.side_effect = [
         ListToolsResult(
-            tools=[MCPTool(name="tool_0", description="0", input_schema={})],
+            tools=[MCPTool(name="tool_0", description="0", inputSchema={})],
             nextCursor="page-2",
         ),
         ListToolsResult(
-            tools=[MCPTool(name="tool_1", description="1", input_schema={})],
+            tools=[MCPTool(name="tool_1", description="1", inputSchema={})],
             nextCursor="page-3",
         ),
-        ListToolsResult(tools=[MCPTool(name="tool_2", description="2", input_schema={})]),
+        ListToolsResult(tools=[MCPTool(name="tool_2", description="2", inputSchema={})]),
     ]
     result = await list_tools_with_pagination(mock_session)
     assert [tool.name for tool in result] == ["tool_0", "tool_1"]
@@ -151,11 +151,11 @@ async def test_pagination_walk_stops_at_page_cap(mock_session, monkeypatch):
 async def test_pagination_walk_stops_on_repeated_cursor(mock_session):
     mock_session.list_tools.side_effect = [
         ListToolsResult(
-            tools=[MCPTool(name="tool_0", description="0", input_schema={})],
+            tools=[MCPTool(name="tool_0", description="0", inputSchema={})],
             nextCursor="same-cursor",
         ),
         ListToolsResult(
-            tools=[MCPTool(name="tool_1", description="1", input_schema={})],
+            tools=[MCPTool(name="tool_1", description="1", inputSchema={})],
             nextCursor="same-cursor",
         ),
     ]
@@ -168,7 +168,7 @@ async def test_pagination_walk_stops_on_repeated_cursor(mock_session):
 async def test_pagination_walk_treats_empty_cursor_as_terminal(mock_session):
     mock_session.list_tools.side_effect = [
         ListToolsResult(
-            tools=[MCPTool(name="tool_0", description="0", input_schema={})],
+            tools=[MCPTool(name="tool_0", description="0", inputSchema={})],
             nextCursor="",
         ),
     ]
@@ -190,7 +190,7 @@ async def test_pagination_walk_stops_at_whole_walk_deadline(mock_session, monkey
         await anyio.sleep(0.15)
         idx = int(params.cursor) if params is not None else 0
         return ListToolsResult(
-            tools=[MCPTool(name=f"tool_{idx}", description=str(idx), input_schema={})],
+            tools=[MCPTool(name=f"tool_{idx}", description=str(idx), inputSchema={})],
             nextCursor=str(idx + 1),
         )
 
@@ -212,7 +212,7 @@ async def test_pagination_walk_honors_explicit_deadline_over_globals(mock_sessio
     async def slow_page(params=None):
         await anyio.sleep(0.15)
         idx = int(params.cursor) if params is not None else 0
-        tools = [MCPTool(name=f"tool_{idx}", description=str(idx), input_schema={})]
+        tools = [MCPTool(name=f"tool_{idx}", description=str(idx), inputSchema={})]
         if idx == 0:
             return ListToolsResult(tools=tools, nextCursor="1")
         return ListToolsResult(tools=tools)
@@ -227,10 +227,10 @@ async def test_pagination_walk_honors_explicit_deadline_over_globals(mock_sessio
 async def test_load_mcp_tools_openai_format_spans_pages(mock_session):
     mock_session.list_tools.side_effect = [
         ListToolsResult(
-            tools=[MCPTool(name="tool_a", description="a", input_schema={})],
+            tools=[MCPTool(name="tool_a", description="a", inputSchema={})],
             nextCursor="page-2",
         ),
-        ListToolsResult(tools=[MCPTool(name="tool_b", description="b", input_schema={})]),
+        ListToolsResult(tools=[MCPTool(name="tool_b", description="b", inputSchema={})]),
     ]
     result = await load_mcp_tools(mock_session, format="openai")
     assert [t["function"]["name"] for t in result] == ["tool_a", "tool_b"]
@@ -349,7 +349,7 @@ def test_transform_mcp_tool_to_openai_responses_api_tool():
     minimal_tool = MCPTool(
         name="GitMCP-fetch_litellm_documentation",
         description="Fetch entire documentation file from GitHub repository",
-        input_schema={"type": "object"},  # This was causing the error
+        inputSchema={"type": "object"},  # This was causing the error
     )
 
     openai_tool = transform_mcp_tool_to_openai_responses_api_tool(minimal_tool)
@@ -364,7 +364,7 @@ def test_transform_mcp_tool_to_openai_responses_api_tool():
     complete_tool = MCPTool(
         name="test_tool_complete",
         description="A test tool with complete schema",
-        input_schema={
+        inputSchema={
             "type": "object",
             "properties": {"query": {"type": "string", "description": "Search query"}},
             "required": ["query"],
@@ -395,7 +395,7 @@ def test_transform_mcp_tool_to_anthropic_tool():
     tool = MCPTool(
         name="read_wiki_structure",
         description="Get a list of documentation topics",
-        input_schema={
+        inputSchema={
             "type": "object",
             "properties": {"repoName": {"type": "string"}},
             "required": ["repoName"],
@@ -417,7 +417,7 @@ def test_transform_mcp_tool_to_anthropic_tool():
 def test_transform_mcp_tool_to_anthropic_tool_normalizes_empty_schema():
     """A tool with no declared arguments must still present a valid object schema."""
     anthropic_tool = transform_mcp_tool_to_anthropic_tool(
-        MCPTool(name="noargs", description=None, input_schema={})
+        MCPTool(name="noargs", description=None, inputSchema={})
     )
 
     assert anthropic_tool["name"] == "noargs"
@@ -445,7 +445,7 @@ def test_transform_mcp_tool_to_anthropic_tool_strips_keys_anthropic_rejects():
     tool = MCPTool(
         name="rich",
         description="tool with a dirty schema",
-        input_schema={
+        inputSchema={
             "type": "object",
             "properties": {"q": {"type": "string"}},
             "required": ["q"],

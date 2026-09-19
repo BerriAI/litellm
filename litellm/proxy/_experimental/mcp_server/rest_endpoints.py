@@ -166,7 +166,8 @@ def _known_connection_error_message(exc: BaseException, url: str | None, timeout
             )
         if exc.error.code == -32700 or exc.error.message.startswith("Failed to parse"):
             return (
-                "Failed to connect to MCP server: the endpoint returned invalid JSON or an invalid MCP response. "
+                f"Failed to connect to MCP server: the endpoint returned invalid JSON or an invalid MCP response "
+                f"(JSON-RPC code {exc.error.code}). "
                 "Check the MCP endpoint URL and the server's protocol implementation."
             )
         if exc.error.code == -32000 and exc.error.message == "Connection closed":
@@ -1652,7 +1653,7 @@ if MCP_AVAILABLE:
                     "message": f"Timed out listing tools after {listing_deadline} seconds. "
                     "The MCP server may be responding slowly or paginating excessively.",
                 }
-            model_dumped_tools: Final[list[dict]] = [tool.model_dump() for tool in list_tools_result]
+            model_dumped_tools: Final[list[dict]] = [tool.model_dump(by_alias=True) for tool in list_tools_result]
             return {
                 "tools": model_dumped_tools,
                 "error": None,

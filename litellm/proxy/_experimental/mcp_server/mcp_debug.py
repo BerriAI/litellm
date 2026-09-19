@@ -100,6 +100,8 @@ Usage with curl::
          http://localhost:4000/mcp/atlassian_mcp
 """
 
+from __future__ import annotations
+
 import asyncio
 import base64
 import io
@@ -109,7 +111,7 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from http.cookies import CookieError, SimpleCookie
 from itertools import islice
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from urllib.parse import parse_qsl, quote, quote_plus, unquote_plus, urlencode
 
 import httpx
@@ -120,7 +122,9 @@ from starlette.types import Message, Send
 
 from litellm.litellm_core_utils.secret_redaction import REDACTED, redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-from litellm.proxy._experimental.mcp_server.outbound_credentials.types import AuthResolution
+
+if TYPE_CHECKING:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.types import AuthResolution
 
 # Header the client sends to opt into debug mode
 MCP_DEBUG_REQUEST_HEADER: Final = "x-litellm-mcp-debug"
@@ -151,6 +155,8 @@ class MCPAuthDiagnostics:
         self._outcomes = tuple(item for item in self._outcomes if item[0] != server_id) + ((server_id, resolution),)
 
     def resolution(self) -> str:
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import AuthResolution
+
         match self._outcomes:
             case ():
                 return AuthResolution.unresolved.value
@@ -160,6 +166,8 @@ class MCPAuthDiagnostics:
                 return AuthResolution.multiple.value
 
     def headers(self) -> Mapping[str, str]:
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import AuthResolution
+
         if len(self._outcomes) <= 1:
             return MappingProxyType({"x-mcp-debug-auth-resolution": self.resolution()})
         return MappingProxyType(
@@ -373,6 +381,8 @@ class MCPDebug:
 
         server_url: str | None = None
         server_auth_type: str | None = None
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import AuthResolution
+
         auth_resolution: Final = AuthResolution.unresolved.value
 
         for server_name in mcp_servers or []:

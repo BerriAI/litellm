@@ -262,23 +262,6 @@ class TestDescribeUpstreamHttpFailure:
         assert describe_upstream_http_failure(ConnectionError("refused")) is None
 
 
-def _mcp_request_ctx(**overrides):
-    from types import SimpleNamespace
-
-    from mcp.server.context import ServerRequestContext
-
-    kwargs = {
-        "session": SimpleNamespace(),
-        "lifespan_context": {},
-        "protocol_version": "2025-06-18",
-        "method": "",
-        "params": None,
-        "request_id": 1,
-        "meta": None,
-        "request": None,
-    }
-    kwargs.update(overrides)
-    return ServerRequestContext(**kwargs)
 
 @pytest.mark.parametrize("body", [
     b'{"password":"first second","token":"demo-secret"}',
@@ -479,7 +462,7 @@ def test_diagnostics_keep_requests_separate_and_do_not_collapse_multiple_servers
 
 
 @pytest.mark.asyncio
-async def test_concurrent_mcp_messages_record_on_their_own_http_scope() -> None:
+async def test_concurrent_mcp_messages_record_on_their_own_http_scope(_mcp_request_ctx) -> None:
     from unittest.mock import MagicMock
 
     from starlette.requests import Request
@@ -557,7 +540,6 @@ def test_oversized_request_omits_potentially_reflected_response_credentials():
 @pytest.mark.asyncio
 async def test_streamed_error_redacts_reflected_credentials_before_capture():
     import json
-
     from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
 
     secret = "generic-credential-123"

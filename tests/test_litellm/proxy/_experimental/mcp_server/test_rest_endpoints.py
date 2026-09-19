@@ -963,7 +963,7 @@ class TestTestToolsList:
 
         class QuickClient:
             async def list_tools(self, raise_on_error=False):
-                return [MCPTool(name="quick_tool", description="q", input_schema={})]
+                return [MCPTool(name="quick_tool", description="q", inputSchema={})]
 
         async def fake_execute(
             request,
@@ -1008,7 +1008,7 @@ class TestTestToolsList:
 
             async def list_tools(self, raise_on_error=False):
                 await asyncio.sleep(0.2)
-                return [MCPTool(name="slow_tool", description="s", input_schema={})]
+                return [MCPTool(name="slow_tool", description="s", inputSchema={})]
 
         async def fake_execute(
             request,
@@ -1512,7 +1512,7 @@ class TestListToolsRestAPI:
                     MCPTool(
                         name="first_page_tool",
                         description="First page tool",
-                        input_schema={},
+                        inputSchema={},
                     )
                 ],
                 nextCursor="page-2",
@@ -1522,7 +1522,7 @@ class TestListToolsRestAPI:
                     MCPTool(
                         name="second_page_tool",
                         description="Second page tool",
-                        input_schema={},
+                        inputSchema={},
                     )
                 ]
             ),
@@ -3198,7 +3198,7 @@ class TestGetToolsForSingleServer:
             def __init__(self, name, description):
                 self.name = name
                 self.description = description
-                self.input_schema= {}
+                self.input_schema = {}
 
         mock_tools = [
             MockTool("tool1", "First tool"),
@@ -3259,7 +3259,7 @@ class TestGetToolsForSingleServer:
             def __init__(self, name, description):
                 self.name = name
                 self.description = description
-                self.input_schema= {}
+                self.input_schema = {}
 
         mock_tools = [
             MockTool("tool1", "First tool"),
@@ -3307,7 +3307,7 @@ class TestGetToolsForSingleServer:
             def __init__(self, name, description):
                 self.name = name
                 self.description = description
-                self.input_schema= {}
+                self.input_schema = {}
 
         mock_tools = [
             MockTool("tool1", "First tool"),
@@ -3360,7 +3360,7 @@ class TestGetToolsForSingleServer:
             def __init__(self, name, description):
                 self.name = name
                 self.description = description
-                self.input_schema= {}
+                self.input_schema = {}
 
         mock_tools = [
             MockTool("tool1", "First tool"),
@@ -3413,7 +3413,7 @@ class TestGetToolsForSingleServer:
             def __init__(self, name, description):
                 self.name = name
                 self.description = description
-                self.input_schema= {}
+                self.input_schema = {}
 
         mock_tools = [
             MockTool("tool1", "First tool"),
@@ -3475,7 +3475,7 @@ class TestGetToolsForSingleServer:
             def __init__(self, name):
                 self.name = name
                 self.description = name
-                self.input_schema= {}
+                self.input_schema = {}
 
         mock_tools = [MockTool("tool1"), MockTool("tool2"), MockTool("tool3")]
 
@@ -4138,7 +4138,7 @@ class TestToolResponseMcpInfoEnrichment:
             MCPTool(
                 name="get_issue",
                 description="Fetch a Jira issue",
-                input_schema={"type": "object"},
+                inputSchema={"type": "object"},
             )
         ]
 
@@ -4149,6 +4149,12 @@ class TestToolResponseMcpInfoEnrichment:
             "server_id": "a1b2c3d4",
             "alias": "atlassian",
         }
+
+        from fastapi.encoders import jsonable_encoder
+
+        wire = jsonable_encoder(result[0])
+        assert wire["inputSchema"] == {"type": "object"}
+        assert wire["mcp_info"] == result[0].mcp_info
 
     def test_alias_none_is_explicit_in_mcp_info(self):
         from mcp.types import Tool as MCPTool
@@ -4168,7 +4174,7 @@ class TestToolResponseMcpInfoEnrichment:
             MCPTool(
                 name="ping",
                 description="Ping",
-                input_schema={"type": "object"},
+                inputSchema={"type": "object"},
             )
         ]
 
@@ -4210,8 +4216,8 @@ class TestRestListToolsetFiltering:
         stub_server.mcp_info = {"server_name": "stubtools"}
 
         upstream_tools = [
-            MCPTool(name="lookup_status", input_schema={"type": "object"}),
-            MCPTool(name="delete_everything", input_schema={"type": "object"}),
+            MCPTool(name="lookup_status", inputSchema={"type": "object"}),
+            MCPTool(name="delete_everything", inputSchema={"type": "object"}),
         ]
 
         key_object_permission = MagicMock()

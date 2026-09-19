@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from pydantic import AnyUrl, ConfigDict, TypeAdapter, ValidationError
+from pydantic import AnyUrl, ConfigDict, Field, TypeAdapter, ValidationError
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import JSONResponse
 from starlette.types import Message, Receive, Scope, Send
@@ -541,7 +541,7 @@ if MCP_AVAILABLE:
         Object returned by the /tools/list REST API route.
         """
 
-        mcp_info: MCPInfo | None = None
+        mcp_info: MCPInfo | None = Field(default=None, alias="mcp_info")
         model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def _gateway_create_initialization_options(
@@ -910,7 +910,7 @@ if MCP_AVAILABLE:
 
         if not (host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta):
             return None
-        host_token: Final = getattr(host_ctx.meta, "progress_token", None)
+        host_token: Final = host_ctx.meta.get("progress_token")
         if host_token is None or not (hasattr(host_ctx, "session") and host_ctx.session):
             return None
         host_session: Final = host_ctx.session
@@ -3790,7 +3790,7 @@ if MCP_AVAILABLE:
 
     def _extract_initialize_client_info(body: bytes) -> Implementation | None:
         try:
-            return InitializeRequest.model_validate_json(body).params.clientInfo
+            return InitializeRequest.model_validate_json(body, by_name=False).params.client_info
         except ValidationError:
             return None
 

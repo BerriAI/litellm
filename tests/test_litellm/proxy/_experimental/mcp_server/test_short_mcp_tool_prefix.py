@@ -268,8 +268,8 @@ class TestIsToolNamePrefixedBoundary:
 
 def _stub_tools() -> List[MCPTool]:
     return [
-        MCPTool(name="get_repo", description="", input_schema={"type": "object"}),
-        MCPTool(name="list_issues", description="", input_schema={"type": "object"}),
+        MCPTool(name="get_repo", description="", inputSchema={"type": "object"}),
+        MCPTool(name="list_issues", description="", inputSchema={"type": "object"}),
     ]
 
 

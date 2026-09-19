@@ -44,7 +44,7 @@ async def test_mcp_server_manager_https_server():
         MCPTool(
             name="gmail_send_email",
             description="Send an email via Gmail",
-            input_schema={
+            inputSchema={
                 "type": "object",
                 "properties": {
                     "body": {"type": "string"},
@@ -58,7 +58,7 @@ async def test_mcp_server_manager_https_server():
 
     mock_result = CallToolResult(
         content=[TextContent(type="text", text="Email sent successfully")],
-        is_error=False,
+        isError=False,
     )
 
     # Create a mock MCPClient
@@ -143,7 +143,7 @@ async def test_mcp_http_transport_list_tools_mock():
         MCPTool(
             name="gmail_send_email",
             description="Send an email via Gmail",
-            input_schema={
+            inputSchema={
                 "type": "object",
                 "properties": {
                     "to": {"type": "string"},
@@ -156,7 +156,7 @@ async def test_mcp_http_transport_list_tools_mock():
         MCPTool(
             name="calendar_create_event",
             description="Create a calendar event",
-            input_schema={
+            inputSchema={
                 "type": "object",
                 "properties": {
                     "title": {"type": "string"},
@@ -242,7 +242,7 @@ async def test_mcp_http_transport_call_tool_mock():
         content=[
             TextContent(type="text", text="Email sent successfully to test@example.com")
         ],
-        is_error=False,
+        isError=False,
     )
 
     # Create a mock MCPClient that returns our test result
@@ -308,7 +308,7 @@ async def test_mcp_http_transport_call_tool_error_mock():
     # Mock tool call error result
     mock_error_result = CallToolResult(
         content=[TextContent(type="text", text="Error: Invalid email address")],
-        is_error=True,
+        isError=True,
     )
 
     # Create a mock MCPClient that returns our test error result
@@ -361,11 +361,11 @@ async def test_mcp_http_transport_call_tool_error_mock():
 
 
 @pytest.mark.asyncio
-async def test_mcp_http_transport_tool_not_found():
+async def test_mcp_http_transport_tool_not_found(config_only_mcp_manager_factory):
     """Test calling a tool that doesn't exist"""
 
     # Create a fresh manager for testing
-    test_manager = MCPServerManager()
+    test_manager = config_only_mcp_manager_factory()
 
     # Load server config
     await test_manager.load_servers_from_config(
@@ -892,8 +892,8 @@ async def test_get_tools_from_mcp_servers():
         transport=MCPTransport.http,
         access_groups=["group-a"],
     )
-    mock_tool_1 = MCPTool(name="tool1", description="test tool 1", input_schema={})
-    mock_tool_2 = MCPTool(name="tool2", description="test tool 2", input_schema={})
+    mock_tool_1 = MCPTool(name="tool1", description="test tool 1", inputSchema={})
+    mock_tool_2 = MCPTool(name="tool2", description="test tool 2", inputSchema={})
 
     # Test Case 1: With specific MCP servers
     try:
@@ -1058,14 +1058,14 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
         MCPTool(
             name="send_email",
             description="Send an email via Server A",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         )
     ]
     mock_tools_b = [
         MCPTool(
             name="create_event",
             description="Create an event via Server B",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         )
     ]
 
@@ -1097,11 +1097,11 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_manager_access_groups_from_config():
+async def test_mcp_server_manager_access_groups_from_config(config_only_mcp_manager_factory):
     """
     Test that access_groups are loaded from config and can be resolved.
     """
-    test_manager = MCPServerManager()
+    test_manager = config_only_mcp_manager_factory()
     await test_manager.load_servers_from_config(
         {
             "config_server": {
@@ -1168,7 +1168,7 @@ async def test_mcp_server_manager_access_groups_from_config():
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_manager_config_integration_with_database():
+async def test_mcp_server_manager_config_integration_with_database(config_only_mcp_manager_factory):
     """
     Test that config-based servers properly integrate with database servers,
     specifically testing access_groups and description fields.
@@ -1176,7 +1176,7 @@ async def test_mcp_server_manager_config_integration_with_database():
     import datetime
     from litellm.proxy._types import LiteLLM_MCPServerTable
 
-    test_manager = MCPServerManager()
+    test_manager = config_only_mcp_manager_factory()
 
     # Test 1: Load config with access_groups and description
     await test_manager.load_servers_from_config(
@@ -1365,7 +1365,7 @@ async def test_mcp_server_manager_alias_tool_prefixing():
         MCPTool(
             name="send_email",
             description="Send an email",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         )
     ]
 
@@ -1425,7 +1425,7 @@ async def test_mcp_server_manager_server_name_tool_prefixing():
         MCPTool(
             name="send_email",
             description="Send an email",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         )
     ]
 
@@ -1485,7 +1485,7 @@ async def test_mcp_server_manager_server_id_tool_prefixing():
         MCPTool(
             name="send_email",
             description="Send an email",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         )
     ]
 
@@ -1904,12 +1904,12 @@ def test_create_tool_response_objects():
         MCPTool(
             name="send_email",
             description="Send an email",
-            input_schema={"type": "object", "properties": {"to": {"type": "string"}}},
+            inputSchema={"type": "object", "properties": {"to": {"type": "string"}}},
         ),
         MCPTool(
             name="create_event",
             description="Create a calendar event",
-            input_schema={"type": "object", "properties": {"title": {"type": "string"}}},
+            inputSchema={"type": "object", "properties": {"title": {"type": "string"}}},
         ),
     ]
 
@@ -1962,7 +1962,7 @@ async def test_get_tools_for_single_server():
         MCPTool(
             name="send_email",
             description="Send an email",
-            input_schema={"type": "object", "properties": {"to": {"type": "string"}}},
+            inputSchema={"type": "object", "properties": {"to": {"type": "string"}}},
         )
     ]
 
@@ -2016,12 +2016,12 @@ async def test_get_tools_for_single_server_applies_disallowed_tools_without_allo
         MCPTool(
             name="send_email",
             description="Send an email",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
         MCPTool(
             name="read_email",
             description="Read an email",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
     ]
 
@@ -2069,7 +2069,7 @@ async def test_rest_listing_hides_key_grants_dispatch_would_refuse():
         MCPTool(
             name="read_wiki_contents",
             description="Read a wiki",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
     ]
 
@@ -2430,22 +2430,22 @@ async def test_filter_tools_by_allowed_tools_integration():
         MCPTool(
             name="allowed_tool_1",
             description="This tool should be allowed",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
         MCPTool(
             name="allowed_tool_2",
             description="This tool should also be allowed",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
         MCPTool(
             name="blocked_tool_1",
             description="This tool should be blocked",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
         MCPTool(
             name="blocked_tool_2",
             description="This tool should also be blocked",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
     ]
 
@@ -2545,22 +2545,22 @@ async def test_filter_tools_by_disallowed_tools_integration():
         MCPTool(
             name="safe_tool_1",
             description="This tool should be allowed",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
         MCPTool(
             name="safe_tool_2",
             description="This tool should also be allowed",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
         MCPTool(
             name="dangerous_tool_1",
             description="This tool should be blocked",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
         MCPTool(
             name="dangerous_tool_2",
             description="This tool should also be blocked",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
     ]
 
@@ -2659,12 +2659,12 @@ async def test_filter_tools_no_restrictions_integration():
         MCPTool(
             name="tool_1",
             description="Tool 1",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
         MCPTool(
             name="tool_2",
             description="Tool 2",
-            input_schema={"type": "object"},
+            inputSchema={"type": "object"},
         ),
     ]
 
@@ -2811,7 +2811,7 @@ async def test_mcp_access_group_permission_intersection_integration():
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_manager_with_access_groups_integration():
+async def test_mcp_server_manager_with_access_groups_integration(config_only_mcp_manager_factory):
     """Integration test for MCPServerManager with access group filtering"""
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
@@ -2820,7 +2820,7 @@ async def test_mcp_server_manager_with_access_groups_integration():
     from litellm.proxy._types import UserAPIKeyAuth
 
     # Create a test manager
-    test_manager = MCPServerManager()
+    test_manager = config_only_mcp_manager_factory()
 
     # Load servers with access groups
     await test_manager.load_servers_from_config(
@@ -2863,13 +2863,13 @@ async def test_mcp_server_manager_with_access_groups_integration():
 
 
 @pytest.mark.asyncio
-async def test_get_allowed_mcp_servers_returns_registry_for_admin():
+async def test_get_allowed_mcp_servers_returns_registry_for_admin(config_only_mcp_manager_factory):
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
 
-    test_manager = MCPServerManager()
+    test_manager = config_only_mcp_manager_factory()
     await test_manager.load_servers_from_config(
         {
             "alpha_server": {
@@ -2898,14 +2898,14 @@ async def test_get_allowed_mcp_servers_returns_registry_for_admin():
 
 
 @pytest.mark.asyncio
-async def test_get_allowed_mcp_servers_returns_empty_for_non_admin_without_permissions():
+async def test_get_allowed_mcp_servers_returns_empty_for_non_admin_without_permissions(config_only_mcp_manager_factory):
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
         MCPServerAccess,
     )
 
-    test_manager = MCPServerManager()
+    test_manager = config_only_mcp_manager_factory()
     await test_manager.load_servers_from_config(
         {
             "alpha_server": {

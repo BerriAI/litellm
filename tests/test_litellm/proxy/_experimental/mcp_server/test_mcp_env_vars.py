@@ -1714,7 +1714,7 @@ async def test_missing_user_env_vars_error_renders_in_mcp_call_tool():
 
     result = CallToolResult(
         content=[TextContent(text=str(err), type="text")],
-        is_error=True,
+        isError=True,
     )
     assert result.is_error is True
     text = result.content[0].text  # type: ignore[union-attr]

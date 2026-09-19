@@ -38,7 +38,7 @@ class TestMCPMetadataPreservation:
         tool_with_metadata = MCPTool(
             name="hello_widget",
             description="Display a greeting widget",
-            input_schema={"type": "object", "properties": {}},
+            inputSchema={"type": "object", "properties": {}},
             meta={
                 "openai/outputTemplate": "ui://widget/hello.html",
                 "openai/widgetDescription": "A greeting widget",

@@ -169,7 +169,7 @@ class TestMCPClientUnitTests:
             MCPTool(
                 name="test_tool",
                 description="Test tool",
-                input_schema={
+                inputSchema={
                     "type": "object",
                     "properties": {"arg1": {"type": "string"}},
                     "required": ["arg1"],
@@ -207,12 +207,12 @@ class TestMCPClientUnitTests:
         mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
 
         first_page_tools = [
-            MCPTool(name=f"tool_{idx}", description=f"Tool {idx}", input_schema={}) for idx in range(100)
+            MCPTool(name=f"tool_{idx}", description=f"Tool {idx}", inputSchema={}) for idx in range(100)
         ]
         second_page_tool = MCPTool(
             name="tool_100",
             description="Tool 100",
-            input_schema={},
+            inputSchema={},
         )
         mock_session_instance.list_tools.side_effect = [
             ListToolsResult(tools=first_page_tools, nextCursor="page-2"),
@@ -249,7 +249,7 @@ class TestMCPClientUnitTests:
 
         mock_session_instance.list_tools.side_effect = [
             ListToolsResult(
-                tools=[MCPTool(name="tool_0", description="Tool 0", input_schema={})],
+                tools=[MCPTool(name="tool_0", description="Tool 0", inputSchema={})],
                 nextCursor="page-2",
             ),
             RuntimeError("transient upstream failure"),

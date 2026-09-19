@@ -1,3 +1,4 @@
+import argparse
 import importlib
 import importlib.metadata
 import sys
@@ -20,7 +21,10 @@ def _version_tuple(distribution: str) -> tuple[int, ...]:
 
 
 def main() -> int:
-    for module_name in IMPORTED_MODULES:
+    parser: Final = argparse.ArgumentParser()
+    parser.add_argument("--extra", choices=("mcp", "proxy"), default="proxy")
+    extra: Final = parser.parse_args().extra
+    for module_name in IMPORTED_MODULES if extra == "proxy" else IMPORTED_MODULES[:3]:
         try:
             importlib.import_module(module_name)
         except Exception as exc:
@@ -39,22 +43,23 @@ def main() -> int:
             sys.stderr.write(f"HANDSHAKE_PROTOCOL_VERSIONS missing {required}\n")
             return 1
 
-    scope: Final = {
-        "type": "http",
-        "method": "POST",
-        "path": "/mcp",
-        "headers": [(b"mcp-protocol-version", b"2026-07-28")],
-    }
-    mcp_server: Final = sys.modules["litellm.proxy._experimental.mcp_server.server"]
-    if mcp_server.unsupported_protocol_version(scope) != "2026-07-28":
-        sys.stderr.write("unsupported_protocol_version accepted a modern-only version\n")
-        return 1
-    if (
-        mcp_server.unsupported_protocol_version(dict(scope, headers=[(b"mcp-protocol-version", b"2025-06-18")]))
-        is not None
-    ):
-        sys.stderr.write("unsupported_protocol_version rejected a handshake version\n")
-        return 1
+    if extra == "proxy":
+        scope: Final = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [(b"mcp-protocol-version", b"2026-07-28")],
+        }
+        mcp_server: Final = sys.modules["litellm.proxy._experimental.mcp_server.server"]
+        if mcp_server.unsupported_protocol_version(scope) != "2026-07-28":
+            sys.stderr.write("unsupported_protocol_version accepted a modern-only version\n")
+            return 1
+        if (
+            mcp_server.unsupported_protocol_version(dict(scope, headers=[(b"mcp-protocol-version", b"2025-06-18")]))
+            is not None
+        ):
+            sys.stderr.write("unsupported_protocol_version rejected a handshake version\n")
+            return 1
 
     sys.stdout.write(
         "python {} mcp {} httpx2 {} pydantic {} litellm {}\n".format(

@@ -1326,6 +1326,7 @@ def test_a_differently_cased_injected_header_cannot_shadow_the_slot() -> None:
         ("application/json", b"", MCPError),
         ("application/json", b'{"secret":"invalid-rpc"}', MCPError),
         ("application/json", b'{"jsonrpc":"2.0","id":0}', MCPError),
+        ("application/json", b'{"jsonrpc":"2.0","id":0,"result":{"secret":"bad-schema"}}', ValidationError),
     ],
 )
 async def test_invalid_http_response_surfaces_without_waiting_for_timeout(
@@ -1334,6 +1335,8 @@ async def test_invalid_http_response_surfaces_without_waiting_for_timeout(
     from litellm.proxy._experimental.mcp_server.rest_endpoints import _connection_error_message
 
     def respond(request: httpx2.Request) -> httpx2.Response:
+        if expected_type is ValidationError:
+            return httpx2.Response(200, json={**json.loads(body), "id": json.loads(request.content)["id"]})
         return httpx2.Response(200, headers={"Content-Type": content_type}, content=body)
 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http_client:
@@ -1354,7 +1357,7 @@ async def test_invalid_http_response_surfaces_without_waiting_for_timeout(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status_code", [200, 401, 503])
+@pytest.mark.parametrize("status_code", [200, 401, 403, 429, 503])
 async def test_http_response_handler_preserves_success_and_http_errors(status_code: int) -> None:
     def respond(request: httpx2.Request) -> httpx2.Response:
         if request.method == "DELETE":
@@ -1373,8 +1376,8 @@ async def test_http_response_handler_preserves_success_and_http_errors(status_co
         )
         return httpx2.Response(status_code, json={"jsonrpc": "2.0", "id": payload["id"], "result": result})
 
-    async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http_client:
-        client: Final = MCPClient(server_url="https://example.com/mcp", timeout=30)
+    client: Final = MCPClient(server_url="https://example.com/mcp", timeout=30)
+    async with client._create_httpx_client_factory(transport=httpx2.MockTransport(respond))() as http_client:
         operation: Final = client._execute_session_operation(
             streamable_http_client(client.server_url, http_client=http_client), lambda session: session.list_tools()
         )
@@ -1382,9 +1385,33 @@ async def test_http_response_handler_preserves_success_and_http_errors(status_co
             result: Final = await asyncio.wait_for(operation, timeout=3)
             assert result.tools == []
         else:
-            with pytest.raises(MCPError) as caught:
+            with pytest.raises(httpx2.HTTPStatusError) as caught:
                 await asyncio.wait_for(operation, timeout=3)
-            assert caught.value.error.code == INTERNAL_ERROR
+            assert caught.value.response.status_code == status_code
+
+
+@pytest.mark.asyncio
+async def test_http_status_check_allows_auth_refresh_before_rejecting() -> None:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import ClientCredentialsBearerAuth
+
+    seen = []
+
+    async def refresh(failed):
+        assert failed == "stale"
+        return "fresh"
+
+    def respond(request):
+        seen.append(request.headers["authorization"])
+        return httpx2.Response(401 if len(seen) == 1 else 200, json={"ok": True})
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.types import ClientCredentialsConfig
+
+    auth = ClientCredentialsBearerAuth("stale", refresh, ClientCredentialsConfig())
+    client = MCPClient(server_url="https://example.com/mcp", resolved_auth=auth)
+    async with client._create_httpx_client_factory(transport=httpx2.MockTransport(respond))() as http_client:
+        response = await http_client.post(client.server_url, json={"method": "tools/list"})
+        assert response.status_code == 200
+    assert seen == ["Bearer stale", "Bearer fresh"]
 
 
 @pytest.mark.asyncio
@@ -1619,7 +1646,6 @@ async def test_sse_read_failure_is_preserved() -> None:
 @pytest.mark.parametrize("mode", ["ok", "closed", "silent"])
 async def test_transport_completion_and_normal_messages(transport: MCPTransport, mode: str) -> None:
     from mcp import ClientSession
-
     from litellm.proxy._experimental.mcp_server.rest_endpoints import _connection_error_message
 
     logging_callback: Final = AsyncMock()

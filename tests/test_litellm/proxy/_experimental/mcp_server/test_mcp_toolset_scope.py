@@ -285,7 +285,7 @@ class TestToolsetPrefixResolution:
         live_tools = [
             MCPTool(
                 name=add_server_prefix_to_name(name, prefix),
-                input_schema={"type": "object"},
+                inputSchema={"type": "object"},
             )
             for name in ("read_wiki_contents", "read_wiki_structure", "not_granted")
         ]
@@ -414,7 +414,7 @@ class TestToolsetPrefixResolution:
         live_tools = [
             MCPTool(
                 name=add_server_prefix_to_name(name, prefix),
-                input_schema={"type": "object"},
+                inputSchema={"type": "object"},
             )
             for name in (granted, sibling)
         ]
@@ -472,7 +472,7 @@ class TestToolsetPrefixResolution:
         live_tools = [
             MCPTool(
                 name=add_server_prefix_to_name(granted, prefix),
-                input_schema={"type": "object"},
+                inputSchema={"type": "object"},
             )
         ]
 

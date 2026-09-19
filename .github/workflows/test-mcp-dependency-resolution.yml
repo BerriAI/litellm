@@ -7,14 +7,6 @@ on:
       - litellm_internal_staging
       - litellm_oss_staging
       - "litellm_**"
-    paths:
-      - "pyproject.toml"
-      - "uv.lock"
-      - "litellm/experimental_mcp_client/**"
-      - "litellm/proxy/_experimental/mcp_server/**"
-      - "litellm/types/mcp.py"
-      - "scripts/check_mcp_sdk_install.py"
-      - ".github/workflows/test-mcp-dependency-resolution.yml"
 
 permissions:
   contents: read
@@ -63,28 +55,42 @@ jobs:
         run: |
           uv lock --check
 
-      - name: Install locked dependencies
+      - name: Check locked runtime installations
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          .github/scripts/uv_sync_with_retries.sh --frozen --python ${{ matrix.python-version }} --extra mcp --extra proxy
+          for extra in core mcp proxy; do
+            args=()
+            if [ "$extra" != core ]; then args=(--extra "$extra"); fi
+            UV_PROJECT_ENVIRONMENT=".venv-$extra" .github/scripts/uv_sync_with_retries.sh --frozen --no-dev --no-editable --python ${{ matrix.python-version }} "${args[@]}"
+            uv pip check --python ".venv-$extra"
+            if [ "$extra" = core ]; then
+              checker=("$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py")
+            else
+              checker=("$GITHUB_WORKSPACE/scripts/check_mcp_sdk_install.py" --extra "$extra")
+            fi
+            (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-$extra/bin/python" "${checker[@]}")
+          done
 
-      - name: Check locked MCP SDK installation
+      - name: Build the public wheel
         if: steps.changes.outputs.decision != 'skip'
-        run: |
-          uv run --no-sync python scripts/check_mcp_sdk_install.py
+        run: uv build --all-packages --wheel --out-dir dist/mcp-check
 
-      - name: Resolve lowest direct dependencies
+      - name: Check lowest direct runtime installations
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          uv pip compile pyproject.toml --python-version ${{ matrix.python-version }} --extra mcp --extra proxy --resolution lowest-direct -o lowest-direct.txt
-
-      - name: Install lowest direct dependencies
-        if: steps.changes.outputs.decision != 'skip'
-        run: |
-          uv venv --python ${{ matrix.python-version }} .venv-lowest
-          uv pip install --python .venv-lowest -r lowest-direct.txt -e .
-
-      - name: Check lowest-direct MCP SDK installation
-        if: steps.changes.outputs.decision != 'skip'
-        run: |
-          .venv-lowest/bin/python scripts/check_mcp_sdk_install.py
+          wheel=$(realpath dist/mcp-check/litellm-[0-9]*.whl)
+          for extra in core mcp proxy; do
+            args=()
+            if [ "$extra" != core ]; then args=(--extra "$extra"); fi
+            uv pip compile pyproject.toml --no-sources --find-links dist/mcp-check "${args[@]}" --python-version ${{ matrix.python-version }} --resolution lowest-direct -o "lowest-$extra.txt"
+            uv venv --python ${{ matrix.python-version }} ".venv-lowest-$extra"
+            uv pip sync --find-links dist/mcp-check --python ".venv-lowest-$extra" "lowest-$extra.txt"
+            uv pip install --python ".venv-lowest-$extra" --no-deps "$wheel"
+            uv pip check --python ".venv-lowest-$extra"
+            if [ "$extra" = core ]; then
+              checker=("$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py")
+            else
+              checker=("$GITHUB_WORKSPACE/scripts/check_mcp_sdk_install.py" --extra "$extra")
+            fi
+            (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-lowest-$extra/bin/python" "${checker[@]}")
+          done
