@@ -307,6 +307,7 @@ class McpClient:
         server_id: str,
         name: str,
         arguments: McpToolArguments,
+        headers: AuthHeaders | None = None,
     ) -> McpCallToolResponse:
         """Poll tools/call until the result is not a multi-worker registry miss.
 
@@ -317,7 +318,7 @@ class McpClient:
         deadline = time.monotonic() + self.proxy.poll_timeout
         last: Result[McpCallToolResponse] | None = None
         while True:
-            last = self.call_tool(key, server_id=server_id, name=name, arguments=arguments)
+            last = self.call_tool(key, server_id=server_id, name=name, arguments=arguments, headers=headers)
             if not _is_mcp_not_synced(last, tool_name=name):
                 return unwrap(last)
             if time.monotonic() >= deadline:

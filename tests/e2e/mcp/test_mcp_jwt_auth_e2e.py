@@ -12,7 +12,7 @@ from idp import SHORT_LIVED_CLIENT_ID, Identity, Keycloak, token_claims
 from lifecycle import ResourceManager
 from management.management_client import build_client as build_management_client
 from mcp_client import McpClient
-from models import KeyGenerateBody, ObjectPermission, UserScimMetadata, UserUpdateBody
+from models import KeyGenerateBody, ObjectPermission, TeamUpdateBody, UserScimMetadata, UserUpdateBody
 
 pytestmark = pytest.mark.e2e
 
@@ -29,14 +29,12 @@ def _allowed(client: McpClient, access: GrantedMcp, headers: AuthHeaders) -> Non
     listing: Final = unwrap(client.list_tools(access.token, headers=headers))
     assert listing.tool_names_for_server(access.server_id) == frozenset((access.tool,))
     assert listing.tool_names_for_server(access.other_server_id) == frozenset()
-    result: Final = unwrap(
-        client.call_tool(
-            access.token,
-            server_id=access.server_id,
-            name=access.tool,
-            arguments={"query": f"lit4506-{unique_marker()}", "from": DD_SEARCH_FROM, "to": "now", "max_tokens": 1000},
-            headers=headers,
-        )
+    result: Final = client.await_call_tool(
+        access.token,
+        server_id=access.server_id,
+        name=access.tool,
+        arguments={"query": f"lit4506-{unique_marker()}", "from": DD_SEARCH_FROM, "to": "now", "max_tokens": 1000},
+        headers=headers,
     )
     assert result.is_error is False, result
     assert result.all_text.strip(), "The successful control must return a real tool result"
@@ -64,6 +62,13 @@ def granted_mcp(client: McpClient, resources: ResourceManager, jwt_identity: Ide
     client.await_registered(server_id)
     client.await_registered(other_server_id)
     management: Final = build_management_client(client.proxy)
+    management.update_team(
+        TeamUpdateBody(
+            team_id=jwt_identity.group,
+            team_alias=jwt_identity.group,
+            object_permission=ObjectPermission(mcp_servers=[server_id]),
+        )
+    )
     management.update_user(
         UserUpdateBody(
             user_id=jwt_identity.user_id,

@@ -1174,6 +1174,7 @@ class TeamUpdateBody(BaseModel):
     team_id: str
     team_alias: str
     models: list[str] | None = None
+    object_permission: ObjectPermission | None = None
 
 
 class TeamInfoParams(BaseModel):
