@@ -132,9 +132,7 @@ class TestManagedAgentsModelParam:
 
         mock_process.assert_called_once()
         kwargs = mock_process.call_args.kwargs
-        assert (
-            kwargs["model"] is None
-        ), f"get_gemini_agent must not pass model={kwargs['model']!r}"
+        assert kwargs["model"] is None, f"get_gemini_agent must not pass model={kwargs['model']!r}"
         assert kwargs["route_type"] == "aget_agent"
 
     def test_delete_agent_passes_model_none(self):
@@ -153,9 +151,7 @@ class TestManagedAgentsModelParam:
 
         mock_process.assert_called_once()
         kwargs = mock_process.call_args.kwargs
-        assert (
-            kwargs["model"] is None
-        ), f"delete_gemini_agent must not pass model={kwargs['model']!r}"
+        assert kwargs["model"] is None, f"delete_gemini_agent must not pass model={kwargs['model']!r}"
         assert kwargs["route_type"] == "adelete_agent"
 
     def test_list_agent_versions_passes_model_none(self):
@@ -174,9 +170,7 @@ class TestManagedAgentsModelParam:
 
         mock_process.assert_called_once()
         kwargs = mock_process.call_args.kwargs
-        assert (
-            kwargs["model"] is None
-        ), f"list_gemini_agent_versions must not pass model={kwargs['model']!r}"
+        assert kwargs["model"] is None, f"list_gemini_agent_versions must not pass model={kwargs['model']!r}"
         assert kwargs["route_type"] == "alist_agent_versions"
 
     def test_list_agents_already_passes_model_none(self):

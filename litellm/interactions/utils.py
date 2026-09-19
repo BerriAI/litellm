@@ -36,7 +36,9 @@ def get_provider_interactions_api_config(
         model: Optional model name
 
     Returns:
-        The provider-specific interactions API config, or None if not supported
+        The provider-specific interactions API config, or None if not supported.
+        Anthropic only serves agent interactions (no ``model``): a model interaction
+        keeps bridging to the Responses API.
     """
     from litellm.types.utils import LlmProviders
 
@@ -53,6 +55,13 @@ def get_provider_interactions_api_config(
         )
 
         return VertexAIInteractionsConfig()
+
+    if provider == LlmProviders.ANTHROPIC.value and model is None:
+        from litellm.llms.anthropic.interactions.transformation import (
+            AnthropicSessionsInteractionsConfig,
+        )
+
+        return AnthropicSessionsInteractionsConfig()
 
     return None
 

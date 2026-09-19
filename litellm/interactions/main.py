@@ -44,12 +44,15 @@ from litellm.interactions.background_cost_polling import (
     maybe_schedule_background_interaction_cost_polling,
     maybe_settle_background_interaction_before_delete,
 )
-from litellm.interactions.http_handler import interactions_http_handler
+from litellm.interactions.http_handler import InteractionsHTTPHandler, interactions_http_handler
+from litellm.interactions.sessions.http_handler import session_interactions_http_handler
 from litellm.interactions.utils import (
     InteractionsAPIRequestUtils,
     get_provider_interactions_api_config,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.interactions.session_transformation import BaseSessionInteractionsConfig
+from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.types.interactions import (
     CancelInteractionResult,
     DeleteInteractionResult,
@@ -61,6 +64,15 @@ from litellm.types.interactions import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import client
+
+
+def _handler_for(config: BaseInteractionsAPIConfig) -> InteractionsHTTPHandler:
+    return (
+        session_interactions_http_handler
+        if isinstance(config, BaseSessionInteractionsConfig)
+        else interactions_http_handler
+    )
+
 
 # ============================================================
 # SDK Methods - CREATE INTERACTION
@@ -433,7 +445,7 @@ def get(
             custom_llm_provider=custom_llm_provider,
         )
 
-        return interactions_http_handler.get_interaction(
+        return _handler_for(interactions_api_config).get_interaction(
             interaction_id=interaction_id,
             interactions_api_config=interactions_api_config,
             custom_llm_provider=custom_llm_provider,
@@ -639,7 +651,7 @@ def cancel(
             custom_llm_provider=custom_llm_provider,
         )
 
-        return interactions_http_handler.cancel_interaction(
+        return _handler_for(interactions_api_config).cancel_interaction(
             interaction_id=interaction_id,
             interactions_api_config=interactions_api_config,
             custom_llm_provider=custom_llm_provider,
