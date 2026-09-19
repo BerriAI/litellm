@@ -1,36 +1,25 @@
-use litellm_host::{machine::Machine, route::Route};
-use litellm_host_python::{RouteHost, run_call};
+//! What a route tells the v1 contract about itself, and the one constructor callers get.
+
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 
 use crate::adapter::V1PythonLifecycle;
-use crate::registry::snapshot;
+use crate::subscribers::snapshot;
 
 #[derive(Clone, Copy, Debug)]
 pub struct V1PythonSurface {
     pub call_type: &'static str,
 }
 
-pub fn run_v1_python_call<H, M>(
-    py: Python<'_>,
-    surface: V1PythonSurface,
-    kwargs: &Bound<'_, PyDict>,
-    machine: M,
-    route: H,
-    asynchronous: bool,
-) -> PyResult<Py<PyAny>>
-where
-    H: RouteHost + 'static,
-    M: Machine<Route = H::Route, Complete = <H::Route as Route>::Response> + 'static,
-{
-    let subscribers = snapshot(py, asynchronous)?;
-    let arguments = kwargs.clone().unbind();
-    run_call(
-        py,
-        machine,
-        route,
-        Box::new(V1PythonLifecycle::new(surface, subscribers, asynchronous)),
-        arguments,
-        asynchronous,
-    )
+impl V1PythonLifecycle {
+    /// The lifecycle for one call, over the subscribers registered right now; later
+    /// registrations do not reach that call. `None` when nothing is subscribed, so an
+    /// unobserved call builds no envelope at all.
+    pub fn subscribed(
+        py: Python<'_>,
+        surface: V1PythonSurface,
+        asynchronous: bool,
+    ) -> PyResult<Option<Self>> {
+        let subscribers = snapshot(py, asynchronous)?;
+        Ok((!subscribers.is_empty()).then(|| Self::new(surface, subscribers, asynchronous)))
+    }
 }

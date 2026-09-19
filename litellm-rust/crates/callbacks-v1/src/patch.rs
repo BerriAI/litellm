@@ -1,3 +1,7 @@
+//! The v1 patch: the only way an interceptor changes a request. A [`WirePatch`] removes
+//! and sets headers and may replace the body; it cannot name the URL, and [`apply`]
+//! rejects any credential header.
+
 use litellm_host::event::WireRequest;
 use serde::Deserialize;
 use serde_json::Value;

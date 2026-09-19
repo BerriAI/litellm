@@ -6,6 +6,7 @@
 mod adapter;
 mod argument;
 mod callable;
+mod chain;
 mod driver;
 mod execution;
 mod fork_gate;
@@ -14,10 +15,12 @@ mod handle;
 mod marshal;
 
 pub use adapter::{
-    InvokeError, LifecycleEvent, LifecycleStep, PythonLifecycle, RouteHost, missing_state,
+    InvokeError, LifecycleEvent, LifecycleStep, PythonLifecycle, RouteHost, is_cancellation,
+    missing_state,
 };
 pub use argument::lookup;
 pub use callable::wrap_failure;
+pub use chain::LifecycleChain;
 pub use driver::run_call;
 pub use execution::{
     ForkedAfterNativeRuntimeStarted, ProcessReservedForForking, poll_async_value,

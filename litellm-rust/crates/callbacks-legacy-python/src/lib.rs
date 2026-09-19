@@ -6,8 +6,8 @@
 //! core never learn which Python object is on the other end.
 //!
 //! Legacy callbacks receive the caller's own objects and may mutate them. [`PublicCall`]
-//! is where those objects live, and [`run_legacy_python_call`] is how a route hands them over
-//! without keeping a copy.
+//! is where those objects live; the bridge hands it to [`LegacyPythonLifecycle::new`] and
+//! keeps no copy.
 
 mod adapter;
 mod call;
@@ -20,9 +20,11 @@ mod python;
 #[path = "../tests/support.rs"]
 mod test_support;
 
-pub(crate) use adapter::LegacyPythonLifecycle;
-pub use adapter::{LegacyPythonSurface, PassThroughStream};
-pub use call::{PublicCall, run_legacy_python_call};
-pub(crate) use callbacks::{LegacyCallbacks, is_internal_call};
-pub(crate) use logger::{DeploymentHooks, PythonLogger, finalize, setup};
+pub use adapter::{LegacyPythonLifecycle, LegacyPythonSurface, PassThroughStream};
+pub use call::PublicCall;
+pub(crate) use callbacks::is_internal_call;
+pub(crate) use logger::{
+    PythonLogger, after_deployment_failure, after_deployment_success, before_deployment_call,
+    finalize, setup,
+};
 pub(crate) use preparation::prepare;
