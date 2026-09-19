@@ -1070,9 +1070,6 @@ async def test_arealtime_marks_litellm_params_async(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_aresponses_websocket_hands_back_the_provider_failure_without_a_success_log(monkeypatch):
-    """A native Responses WebSocket connection the provider rejected comes back from the ``@client``
-    wrapper as the mapped failure, and the wrapper books no success for it: the relay's own dispatch
-    is the connection's single log, so the proxy can record the connection as a failed request."""
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
     from litellm.responses.main import base_llm_http_handler
 

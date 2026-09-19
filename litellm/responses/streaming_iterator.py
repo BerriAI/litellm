@@ -2329,7 +2329,6 @@ class ResponsesWebSocketStreaming:
             verbose_logger.debug("Responses WS client_to_backend ended: %s", e)
 
     async def bidirectional_forward(self) -> Exception | None:
-        """Run both forwarding directions concurrently and return the provider failure that ended the connection."""
         forward_task: Final = asyncio.create_task(self.backend_to_client())
         try:
             await self.client_to_backend()
