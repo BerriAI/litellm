@@ -23,7 +23,7 @@ from litellm.proxy.batches_endpoints.litellm_executed_batches import (
     LITELLM_EXECUTED_BATCH_UPLOAD_GUIDANCE,
     LiteLLMExecutedBatchRunner,
     ManagedBatchStore,
-    batch_http_error,
+    batch_error,
     litellm_executed_provider_of,
     resolve_litellm_executed_provider,
 )
@@ -83,7 +83,7 @@ def _litellm_executed_batch_runner(llm_router: Router, proxy_logging_obj: ProxyL
 
     managed_files: Final = proxy_logging_obj.get_proxy_hook("managed_files")
     if prisma_client is None or not isinstance(managed_files, ManagedBatchStore):
-        raise batch_http_error(
+        raise batch_error(
             400,
             "LiteLLM-executed batches need a database: set DATABASE_URL so LiteLLM can keep the batch and its files",
         )
@@ -98,7 +98,7 @@ def _litellm_executed_batch_runner(llm_router: Router, proxy_logging_obj: ProxyL
 def _raise_when_input_file_must_be_managed(model: str, credentials: Mapping[str, object]) -> None:
     if litellm_executed_provider_of(credentials) is None:
         return
-    raise batch_http_error(
+    raise batch_error(
         400,
         f"Batches for {model} run inside LiteLLM, so the input file must be a LiteLLM managed file: "
         f"{LITELLM_EXECUTED_BATCH_UPLOAD_GUIDANCE}",
@@ -556,7 +556,7 @@ async def retrieve_batch(
 
         executed_batch: Final = isinstance(unified_batch_id, str) and is_litellm_executed_batch(unified_batch_id)
         if executed_batch and response is None:
-            raise batch_http_error(404, f"No batch found with id '{batch_id}'.")
+            raise batch_error(404, f"No batch found with id '{batch_id}'.")
 
         # If batch is in a terminal state, return immediately.
         # Include "complete" (DB-normalized form of "completed").
@@ -1067,7 +1067,7 @@ async def cancel_batch(
         # SCENARIO 2: target_model_names based routing
         elif unified_batch_id and is_litellm_executed_batch(unified_batch_id):
             if llm_router is None:
-                raise batch_http_error(500, "LLM Router not initialized. Ensure models added to proxy.")
+                raise batch_error(500, "LLM Router not initialized. Ensure models added to proxy.")
             response = await _litellm_executed_batch_runner(  # rebind-ok: each cancel path sets the route's response
                 llm_router, proxy_logging_obj
             ).cancel(batch_id, user_api_key_dict)

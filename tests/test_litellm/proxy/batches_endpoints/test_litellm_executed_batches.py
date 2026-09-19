@@ -6,12 +6,11 @@ from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import HTTPException
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from openai.types.batch_request_counts import BatchRequestCounts
 
 from litellm.models.managed_files import LiteLLM_ManagedFileTable
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.batches_endpoints import litellm_executed_batches
 from litellm.proxy.batches_endpoints.litellm_executed_batches import (
     BatchEndpoint,
@@ -547,10 +546,11 @@ async def test_create_splits_failed_rows_into_the_error_file() -> None:
 
 async def test_create_rejects_an_unsupported_endpoint() -> None:
     harness = make_runner()
-    with pytest.raises(HTTPException) as raised:
+    with pytest.raises(ProxyException) as raised:
         await harness.create(endpoint="/v1/moderations")
-    assert raised.value.status_code == 400
-    assert "/v1/moderations" in raised.value.detail["error"]
+    assert raised.value.code == "400"
+    assert raised.value.type == "invalid_request_error"
+    assert "/v1/moderations" in raised.value.message
     assert harness.store.calls == []
     assert harness.storage_factory.calls == []
 
@@ -564,30 +564,30 @@ async def test_create_rejects_an_input_file_litellm_does_not_hold(
     files: Mapping[str, LiteLLM_ManagedFileTable],
 ) -> None:
     harness = make_runner(files=files)
-    with pytest.raises(HTTPException) as raised:
+    with pytest.raises(ProxyException) as raised:
         await harness.create()
-    assert raised.value.status_code == 400
-    assert "POST /v1/files" in raised.value.detail["error"]
+    assert raised.value.code == "400"
+    assert "POST /v1/files" in raised.value.message
     assert harness.storage_factory.calls == []
     assert harness.store.calls == []
 
 
 async def test_create_rejects_an_invalid_input_file() -> None:
     harness = make_runner(content=jsonl(chat_row("a", "hi"), chat_row("a", "again")))
-    with pytest.raises(HTTPException) as raised:
+    with pytest.raises(ProxyException) as raised:
         await harness.create()
-    assert raised.value.status_code == 400
-    assert raised.value.detail["error"].startswith("Invalid batch input file:")
-    assert "'a'" in raised.value.detail["error"]
+    assert raised.value.code == "400"
+    assert raised.value.message.startswith("Invalid batch input file:")
+    assert "'a'" in raised.value.message
     assert harness.store.calls == []
 
 
 async def test_create_surfaces_a_storage_backend_error_as_a_400() -> None:
     harness = make_runner(storage_error=ValueError("Unknown storage backend 's3'"))
-    with pytest.raises(HTTPException) as raised:
+    with pytest.raises(ProxyException) as raised:
         await harness.create()
-    assert raised.value.status_code == 400
-    assert raised.value.detail["error"] == "Unknown storage backend 's3'"
+    assert raised.value.code == "400"
+    assert raised.value.message == "Unknown storage backend 's3'"
     assert harness.store.calls == []
 
 
@@ -617,18 +617,18 @@ async def test_each_endpoint_awaits_only_its_router_method(
 
 async def test_cancel_unknown_batch_is_404() -> None:
     harness = make_runner()
-    with pytest.raises(HTTPException) as raised:
+    with pytest.raises(ProxyException) as raised:
         await harness.runner.cancel("missing-batch", harness.user)
-    assert raised.value.status_code == 404
+    assert raised.value.code == "404"
 
 
 async def test_cancel_terminal_batch_is_400() -> None:
     harness = make_runner()
     batch = seeded_batch(harness.store, "completed")
-    with pytest.raises(HTTPException) as raised:
+    with pytest.raises(ProxyException) as raised:
         await harness.runner.cancel(batch.id, harness.user)
-    assert raised.value.status_code == 400
-    assert "completed" in raised.value.detail["error"]
+    assert raised.value.code == "400"
+    assert "completed" in raised.value.message
     assert harness.store.calls == []
 
 
