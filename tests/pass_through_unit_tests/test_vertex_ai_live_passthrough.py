@@ -996,5 +996,55 @@ class TestVertexAILivePassthroughErrorHandling:
         assert "kwargs" in result
 
 
+def test_extract_model_from_vertex_ai_setup_with_alias() -> None:
+    from typing import Final
+
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _extract_model_from_vertex_ai_setup,
+    )
+
+    mock_router: Final = MagicMock()
+    mock_router.get_model_list.return_value = [
+        {
+            "model_name": "transcribe_live",
+            "litellm_params": {"model": "vertex_ai/gemini-3.5-transcribe-live-preview"},
+        }
+    ]
+
+    full_path_setup: Final = {
+        "setup": {
+            "model": "projects/my-proj/locations/us-central1/publishers/google/models/gemini-2.0-flash-exp"
+        }
+    }
+    assert _extract_model_from_vertex_ai_setup(full_path_setup) == "gemini-2.0-flash-exp"
+
+    alias_setup: Final = {"setup": {"model": "transcribe_live"}}
+    assert (
+        _extract_model_from_vertex_ai_setup(alias_setup, llm_router=mock_router)
+        == "gemini-3.5-transcribe-live-preview"
+    )
+
+    prefixed_alias_setup: Final = {"setup": {"model": "models/transcribe_live"}}
+    assert (
+        _extract_model_from_vertex_ai_setup(prefixed_alias_setup, llm_router=mock_router)
+        == "gemini-3.5-transcribe-live-preview"
+    )
+
+    direct_setup: Final = {
+        "model": "projects/my-proj/locations/us-central1/publishers/google/models/gemini-2.0-flash-exp"
+    }
+    assert _extract_model_from_vertex_ai_setup(direct_setup) == "gemini-2.0-flash-exp"
+
+    unaliased_setup: Final = {"setup": {"model": "gemini-2.0-flash-exp"}}
+    assert _extract_model_from_vertex_ai_setup(unaliased_setup) == "gemini-2.0-flash-exp"
+    assert (
+        _extract_model_from_vertex_ai_setup(unaliased_setup, llm_router=mock_router)
+        == "gemini-2.0-flash-exp"
+    )
+
+    empty_setup: Final = {}
+    assert _extract_model_from_vertex_ai_setup(empty_setup) is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
