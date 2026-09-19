@@ -167,6 +167,9 @@ class InMemoryCache(BaseCache):
         if not self.check_value_size(value):
             return
 
+        if key not in self.cache_dict and len(self.cache_dict) >= self.max_size_in_memory:
+            self.evict_cache()
+
         self.cache_dict[key] = value
         if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
             if "ttl" in kwargs and kwargs["ttl"] is not None:
