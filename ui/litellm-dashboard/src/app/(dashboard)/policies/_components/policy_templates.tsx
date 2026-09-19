@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { parseAsArrayOf, parseAsString, useQueryState } from "nuqs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -91,6 +92,8 @@ interface PolicyTemplatesProps {
   accessToken: string | null;
 }
 
+const templateTagsParser = parseAsArrayOf(parseAsString).withDefault([]);
+
 // Map icon names from JSON to actual icon components
 const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   ShieldCheckIcon: ShieldCheck,
@@ -108,7 +111,8 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
 }) => {
   const [templates, setTemplates] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
+  const [selectedTagList, setSelectedTagList] = useQueryState("template_tags", templateTagsParser);
+  const selectedTags = useMemo(() => new Set(selectedTagList), [selectedTagList]);
 
   // Compute all unique tags with counts
   const tagCounts = useMemo(() => {
@@ -133,19 +137,13 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
   }, [templates, selectedTags]);
 
   const handleTagToggle = (tag: string) => {
-    setSelectedTags((prev) => {
-      const next = new Set(prev);
-      if (next.has(tag)) {
-        next.delete(tag);
-      } else {
-        next.add(tag);
-      }
-      return next;
-    });
+    void setSelectedTagList((prev) =>
+      prev.includes(tag) ? prev.filter((selected) => selected !== tag) : [...prev, tag],
+    );
   };
 
   const handleClearAll = () => {
-    setSelectedTags(new Set());
+    void setSelectedTagList(null);
   };
 
   useEffect(() => {

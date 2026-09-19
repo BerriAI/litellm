@@ -9,6 +9,7 @@ import TagTable from "./TagTable";
 import { toast } from "@/lib/toast";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import CreateTagModal from "./components/CreateTagModal";
+import { useTagUrlState } from "./useTagUrlState";
 
 interface ModelInfo {
   model_name: string;
@@ -30,8 +31,7 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
   const [tags, setTags] = useState<Tag[]>([]);
   const [isLoadingTags, setIsLoadingTags] = useState(true);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
-  const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
-  const [editTag, setEditTag] = useState<boolean>(false);
+  const [{ tag: selectedTagId }, setTagUrl] = useTagUrlState();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [tagToDelete, setTagToDelete] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -130,13 +130,9 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
       {selectedTagId ? (
         <TagInfoView
           tagId={selectedTagId}
-          onClose={() => {
-            setSelectedTagId(null);
-            setEditTag(false);
-          }}
+          onClose={() => void setTagUrl({ tag: null, edit: null })}
           accessToken={accessToken}
           is_admin={userRole === "Admin"}
-          editTag={editTag}
         />
       ) : (
         <div className="flex h-full w-full flex-col p-8 pt-10">
@@ -170,12 +166,9 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
             <TagTable
               data={tags}
               isLoading={isLoadingTags}
-              onEdit={(tag) => {
-                setSelectedTagId(tag.name);
-                setEditTag(true);
-              }}
+              onEdit={(tag) => void setTagUrl({ tag: tag.name, edit: true })}
               onDelete={handleDelete}
-              onSelectTag={setSelectedTagId}
+              onSelectTag={(tagName) => void setTagUrl({ tag: tagName, edit: null })}
             />
           </div>
 

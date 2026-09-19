@@ -1,10 +1,12 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { tagInfoCall, tagUpdateCall } from "@/components/networking";
 import type { Tag } from "@/components/tag_management/types";
 
+import { renderWithProviders } from "@/../tests/test-utils";
 import TagInfoView from "./tag_info";
 
 vi.mock("@/components/networking", () => ({
@@ -34,9 +36,19 @@ const tag: Tag = {
   litellm_budget_table: { max_budget: 10, budget_duration: "7d", tpm_limit: 1000, rpm_limit: 60 },
 };
 
-const renderEditor = async () => {
+type UrlUpdateMock = ReturnType<typeof vi.fn<OnUrlUpdateFunction>>;
+
+const lastUrlUpdate = (onUrlUpdate: UrlUpdateMock) => onUrlUpdate.mock.calls.at(-1)?.[0];
+
+const renderTagInfo = (searchParams: string, onUrlUpdate?: UrlUpdateMock) =>
+  renderWithProviders(<TagInfoView tagId="prod-tag" onClose={vi.fn()} accessToken="sk-test" is_admin />, {
+    searchParams,
+    onUrlUpdate,
+  });
+
+const renderEditor = async (onUrlUpdate?: UrlUpdateMock) => {
   const user = userEvent.setup();
-  render(<TagInfoView tagId="prod-tag" onClose={vi.fn()} accessToken="sk-test" is_admin editTag />);
+  renderTagInfo("?tag=prod-tag&edit=true", onUrlUpdate);
   const nameInput = await screen.findByLabelText("Tag Name");
   return { user, nameInput };
 };
@@ -138,7 +150,8 @@ describe("TagInfoView save payload", () => {
   });
 
   it("leaves the tag untouched and returns to the detail view when Cancel is clicked", async () => {
-    const { user } = await renderEditor();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    const { user } = await renderEditor(onUrlUpdate);
 
     const descriptionInput = screen.getByLabelText("Description");
     await user.clear(descriptionInput);
@@ -148,5 +161,110 @@ describe("TagInfoView save payload", () => {
 
     expect(await screen.findByText("Tag Details")).toBeInTheDocument();
     expect(mockTagUpdateCall).not.toHaveBeenCalled();
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("edit")).toBe(false);
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("tag")).toBe("prod-tag");
+  });
+});
+
+describe("TagInfoView unknown ?tag=", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTagUpdateCall.mockResolvedValue(undefined);
+  });
+
+  it("shows a not-found message with a working Back button when the tag does not exist", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    mockTagInfoCall.mockResolvedValue({});
+    renderWithProviders(<TagInfoView tagId="deleted-tag" onClose={onClose} accessToken="sk-test" is_admin />, {
+      searchParams: "?tag=deleted-tag",
+    });
+
+    expect(await screen.findByText("Tag not found")).toBeInTheDocument();
+    expect(screen.queryByText("Loading...")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Back to Tags/ }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the not-found message when the first lookup fails", async () => {
+    mockTagInfoCall.mockRejectedValue(new Error("network down"));
+    renderTagInfo("?tag=prod-tag");
+
+    expect(await screen.findByText("Tag not found")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Back to Tags/ })).toBeInTheDocument();
+  });
+
+  it("keeps showing the loaded tag when a refresh after saving fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const refreshError = new Error("network down");
+    mockTagInfoCall.mockResolvedValueOnce({ "prod-tag": tag }).mockRejectedValueOnce(refreshError);
+    const { user } = await renderEditor();
+
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(consoleError).toHaveBeenCalledWith("Error fetching tag details:", refreshError));
+    expect(await screen.findByText("Tag Details")).toBeInTheDocument();
+    expect(screen.queryByText("Tag not found")).not.toBeInTheDocument();
+    consoleError.mockRestore();
+  });
+});
+
+describe("TagInfoView ?edit= mode", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTagInfoCall.mockResolvedValue({ "prod-tag": tag });
+    mockTagUpdateCall.mockResolvedValue(undefined);
+  });
+
+  it("shows the read-only details when ?edit= is absent", async () => {
+    renderTagInfo("?tag=prod-tag");
+
+    expect(await screen.findByText("Tag Details")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Tag Name")).not.toBeInTheDocument();
+  });
+
+  it("writes ?edit=true without a new history entry when Edit Tag is clicked", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderTagInfo("?tag=prod-tag", onUrlUpdate);
+
+    await user.click(await screen.findByRole("button", { name: "Edit Tag" }));
+
+    expect(await screen.findByLabelText("Tag Name")).toHaveValue("prod-tag");
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("edit")).toBe("true"));
+    expect(lastUrlUpdate(onUrlUpdate)?.options.history).toBe("replace");
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("tag")).toBe("prod-tag");
+  });
+
+  it("seeds the saved budget when the link opens straight into edit mode", async () => {
+    const { user } = await renderEditor();
+
+    await user.click(screen.getByRole("button", { name: /Budget & Rate Limits/ }));
+
+    expect(await screen.findByLabelText("Max Budget (USD)")).toHaveValue(10);
+  });
+
+  it("leaves the budget unseeded when edit mode is entered from the detail view", async () => {
+    const user = userEvent.setup();
+    renderTagInfo("?tag=prod-tag");
+
+    await user.click(await screen.findByRole("button", { name: "Edit Tag" }));
+    await user.click(await screen.findByRole("button", { name: /Budget & Rate Limits/ }));
+
+    expect(await screen.findByLabelText("Max Budget (USD)")).toHaveValue(null);
+  });
+
+  it("clears ?edit= after a successful save", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    const { user } = await renderEditor(onUrlUpdate);
+
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockTagUpdateCall).toHaveBeenCalled());
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("edit")).toBe(false));
+    expect(await screen.findByText("Tag Details")).toBeInTheDocument();
   });
 });

@@ -899,9 +899,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
