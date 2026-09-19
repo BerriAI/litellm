@@ -318,9 +318,6 @@ def _nested_under_levels(leaf: object, levels: int) -> object:
 
 
 def test_mask_credentials_in_payload_keeps_a_shared_dict_shared():
-    """One dict referenced twice comes back as one masked dict referenced
-    twice. Rebuilding each reference separately is what turned an aliased
-    retry breadcrumb graph exponential in the v1.100.0 OOM."""
     from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 
     shared: Final = {"api_key": "sk-shared-1234567890abcdef", "model": "gpt-4o-mini"}
@@ -332,8 +329,6 @@ def test_mask_credentials_in_payload_keeps_a_shared_dict_shared():
 
 
 def test_mask_credentials_in_payload_walks_each_dag_node_once():
-    """A DAG of 9 dicts where every level references the level below three
-    times stays 9 dicts after masking, instead of fanning out to 3**8."""
     from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 
     root: Final = reduce(
@@ -347,10 +342,21 @@ def test_mask_credentials_in_payload_walks_each_dag_node_once():
     assert "sk-leaf-1234567890abcdef" not in str(result)
 
 
+def test_mask_credentials_in_payload_cuts_a_cycle_at_its_first_back_edge():
+    from litellm.litellm_core_utils.secret_redaction import REDACTED
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    node: Final[dict[str, object]] = {"api_key": "sk-cycle-1234567890abcdef"}
+    node["kids"] = [node] * 3
+
+    result: Final = mask_credentials_in_payload(node)
+
+    assert result["kids"] == [REDACTED, REDACTED, REDACTED]
+    assert result["api_key"] != "sk-cycle-1234567890abcdef"
+    assert len(_unique_dict_ids(result)) == 1
+
+
 def test_mask_credentials_in_payload_masks_a_shared_list_only_under_a_sensitive_key():
-    """The same list reached under a plain key and under a sensitive key is
-    masked in the sensitive spot only, whichever reference the walk meets
-    first, so the memo can neither leak a secret nor mask a plain value."""
     from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 
     shared: Final = ["sk-list-1234567890abcdef"]
@@ -365,9 +371,6 @@ def test_mask_credentials_in_payload_masks_a_shared_list_only_under_a_sensitive_
 
 
 def test_mask_credentials_in_payload_masks_a_shared_root_model_list_only_under_a_sensitive_key():
-    """A pydantic model that dumps to a list is a list once walked, so the
-    memo must keep its plain and sensitive rebuilds apart the same way, or
-    the reference met first decides what the other one shows."""
     from pydantic import RootModel
 
     from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
@@ -383,11 +386,21 @@ def test_mask_credentials_in_payload_masks_a_shared_root_model_list_only_under_a
     assert sensitive_first["tags"] == ["sk-root-1234567890abcdef"]
 
 
+def test_mask_credentials_in_payload_masks_a_root_model_string_as_one_string():
+    from pydantic import RootModel
+
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    result: Final = mask_credentials_in_payload(
+        {"api_key": RootModel[str]("sk-root-1234567890abcdef"), "model": RootModel[str]("gpt-5.4-mini")}
+    )
+
+    assert result["model"] == "gpt-5.4-mini"
+    assert result["api_key"] != "sk-root-1234567890abcdef"
+    assert result["api_key"].startswith("sk-r")
+
+
 def test_mask_credentials_in_payload_hides_containers_past_the_depth_cap():
-    """A dict nested past DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER is
-    replaced by the REDACTED marker instead of coming back unmasked, while the
-    strings sitting exactly at the cap still get the normal per-key treatment:
-    a sensitive one is masked and a plain one survives verbatim."""
     from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
     from litellm.litellm_core_utils.secret_redaction import REDACTED
     from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
@@ -401,6 +414,14 @@ def test_mask_credentials_in_payload_hides_containers_past_the_depth_cap():
     at_cap: Final = reduce(lambda node, level: node[f"l{level}"], range(1, cap), result)
     assert at_cap == {f"l{cap}": REDACTED}
 
+
+def test_mask_credentials_in_payload_treats_strings_at_the_depth_cap_per_key():
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    secret: Final = "sk-deep-1234567890abcdef"
+    cap: Final = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+
     strings_at_cap: Final = reduce(
         lambda node, level: node[f"l{level}"],
         range(1, cap),
@@ -412,9 +433,7 @@ def test_mask_credentials_in_payload_hides_containers_past_the_depth_cap():
 
 
 def test_mask_credentials_in_payload_keeps_sibling_models_apart():
-    """Two models of the same shape dump into temporaries whose ids CPython
-    reuses as soon as the first is freed, so an id-keyed memo that does not
-    pin what it keys hands the second model the first one's masked copy."""
+    """CPython reuses a freed temporary's id, so an id-keyed memo has to pin what it keys."""
     from pydantic import BaseModel
 
     from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
