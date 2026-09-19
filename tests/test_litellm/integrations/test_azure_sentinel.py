@@ -329,6 +329,12 @@ def _no_authority_host_env(monkeypatch):
         ("https://login.microsoftonline.us", "https://login.microsoftonline.us", "https://monitor.azure.us/.default"),
         ("https://login.microsoftonline.us/", "https://login.microsoftonline.us", "https://monitor.azure.us/.default"),
         ("login.microsoftonline.us", "https://login.microsoftonline.us", "https://monitor.azure.us/.default"),
+        (
+            "https://login.partner.microsoftonline.cn",
+            "https://login.partner.microsoftonline.cn",
+            "https://monitor.azure.cn/.default",
+        ),
+        ("login.chinacloudapi.cn", "https://login.chinacloudapi.cn", "https://monitor.azure.cn/.default"),
         ("https://adfs.contoso.example", "https://adfs.contoso.example", "https://monitor.azure.com/.default"),
     ],
 )
@@ -344,6 +350,16 @@ def test_azure_sentinel_resolves_authority_host_and_audience_together(
 
     assert logger.authority_host == expected_authority
     assert logger.oauth_scope == expected_scope
+
+
+@pytest.mark.parametrize(
+    "authority_host", ["http://login.microsoftonline.us", "https://login.microsoftonline.us/tenant"]
+)
+def test_azure_sentinel_rejects_an_authority_host_that_is_not_an_https_origin(_no_authority_host_env, authority_host):
+    """The client secret is posted to this URL, so a plaintext scheme or a path that could redirect the
+    token request somewhere else must fail at construction instead of at the first flush."""
+    with pytest.raises(ValueError, match="https origin with no path"):
+        _build_logger(authority_host=authority_host)
 
 
 def test_azure_sentinel_authority_host_from_env_var(_no_authority_host_env, monkeypatch):

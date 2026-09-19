@@ -454,6 +454,28 @@ async def test_get_user_groups_uses_configured_graph_endpoint(monkeypatch):
     assert requested_urls == ["https://graph.microsoft.us/v1.0/me/memberOf"]
 
 
+@pytest.mark.parametrize(
+    "authority_host, expected_url",
+    [
+        ("https://login.microsoftonline.us", "https://graph.microsoft.us/v1.0/me/memberOf"),
+        ("login.partner.microsoftonline.cn", "https://microsoftgraph.chinacloudapi.cn/v1.0/me/memberOf"),
+        ("https://login.chinacloudapi.cn/", "https://microsoftgraph.chinacloudapi.cn/v1.0/me/memberOf"),
+    ],
+)
+def test_user_groups_endpoint_derives_graph_host_from_authority_host(monkeypatch, authority_host, expected_url):
+    monkeypatch.delenv("MICROSOFT_GRAPH_ENDPOINT", raising=False)
+    monkeypatch.setenv("AZURE_AUTHORITY_HOST", authority_host)
+
+    assert MicrosoftSSOHandler.get_graph_api_user_groups_endpoint() == expected_url
+
+
+def test_get_graph_api_base_url_prefers_explicit_endpoint_over_authority_host(monkeypatch):
+    monkeypatch.setenv("MICROSOFT_GRAPH_ENDPOINT", "https://graph.example.test/beta")
+    monkeypatch.setenv("AZURE_AUTHORITY_HOST", "https://login.microsoftonline.us")
+
+    assert MicrosoftSSOHandler.get_graph_api_base_url() == "https://graph.example.test/beta"
+
+
 @pytest.mark.asyncio
 async def test_get_group_ids_from_service_principal_uses_configured_graph_endpoint(monkeypatch):
     monkeypatch.setenv("MICROSOFT_GRAPH_ENDPOINT", "https://graph.microsoft.us/v1.0")
@@ -6521,6 +6543,73 @@ class TestCustomMicrosoftSSO:
             assert (
                 discovery["userinfo_endpoint"] == "https://graph.microsoft.com/v1.0/me"
             )
+
+    @pytest.mark.parametrize(
+        "authority_host, expected_authority, expected_graph_base",
+        [
+            ("https://login.microsoftonline.us", "https://login.microsoftonline.us", "https://graph.microsoft.us"),
+            ("login.microsoftonline.us/", "https://login.microsoftonline.us", "https://graph.microsoft.us"),
+            (
+                "https://login.chinacloudapi.cn",
+                "https://login.chinacloudapi.cn",
+                "https://microsoftgraph.chinacloudapi.cn",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_custom_microsoft_sso_builds_default_endpoints_on_azure_authority_host(
+        self, monkeypatch, authority_host, expected_authority, expected_graph_base
+    ):
+        """One AZURE_AUTHORITY_HOST has to move all three endpoints to the same cloud; before, a sovereign
+        tenant had to spell out three full override URLs to stop the login from going to the commercial cloud."""
+        for key in ("MICROSOFT_AUTHORIZATION_ENDPOINT", "MICROSOFT_TOKEN_ENDPOINT", "MICROSOFT_USERINFO_ENDPOINT"):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("AZURE_AUTHORITY_HOST", authority_host)
+        sso = CustomMicrosoftSSO(
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+            tenant="test-tenant",
+            redirect_uri="http://localhost:4000/sso/callback",
+        )
+
+        discovery = await sso.get_discovery_document()
+
+        assert discovery["authorization_endpoint"] == f"{expected_authority}/test-tenant/oauth2/v2.0/authorize"
+        assert discovery["token_endpoint"] == f"{expected_authority}/test-tenant/oauth2/v2.0/token"
+        assert discovery["userinfo_endpoint"] == f"{expected_graph_base}/v1.0/me"
+
+    @pytest.mark.asyncio
+    async def test_custom_microsoft_sso_explicit_endpoint_outranks_azure_authority_host(self, monkeypatch):
+        custom_token_endpoint = "https://custom.example.com/oauth2/v2.0/token"
+        monkeypatch.delenv("MICROSOFT_AUTHORIZATION_ENDPOINT", raising=False)
+        monkeypatch.setenv("MICROSOFT_TOKEN_ENDPOINT", custom_token_endpoint)
+        monkeypatch.setenv("AZURE_AUTHORITY_HOST", "https://login.microsoftonline.us")
+        sso = CustomMicrosoftSSO(
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+            tenant="test-tenant",
+            redirect_uri="http://localhost:4000/sso/callback",
+        )
+
+        discovery = await sso.get_discovery_document()
+
+        assert discovery["token_endpoint"] == custom_token_endpoint
+        assert (
+            discovery["authorization_endpoint"] == "https://login.microsoftonline.us/test-tenant/oauth2/v2.0/authorize"
+        )
+
+    @pytest.mark.asyncio
+    async def test_custom_microsoft_sso_rejects_an_authority_host_that_is_not_an_https_origin(self, monkeypatch):
+        monkeypatch.setenv("AZURE_AUTHORITY_HOST", "http://login.microsoftonline.us")
+        sso = CustomMicrosoftSSO(
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+            tenant="test-tenant",
+            redirect_uri="http://localhost:4000/sso/callback",
+        )
+
+        with pytest.raises(ValueError, match="https origin with no path"):
+            await sso.get_discovery_document()
 
     def test_custom_microsoft_sso_uses_common_tenant_when_none(self):
         """
