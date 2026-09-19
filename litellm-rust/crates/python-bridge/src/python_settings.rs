@@ -6,16 +6,25 @@ const MODULE: &str = "litellm.rust_bridge.settings";
 pub(crate) enum PythonSettings {
     Http,
     UrlPolicy,
+    ProviderDefaults,
+    SecretManager,
 }
 
 impl PythonSettings {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 2] = [Self::Http, Self::UrlPolicy];
+    pub(crate) const ALL: [Self; 4] = [
+        Self::Http,
+        Self::UrlPolicy,
+        Self::ProviderDefaults,
+        Self::SecretManager,
+    ];
 
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Http => "http_settings",
             Self::UrlPolicy => "url_policy",
+            Self::ProviderDefaults => "provider_defaults",
+            Self::SecretManager => "secret_manager",
         }
     }
 

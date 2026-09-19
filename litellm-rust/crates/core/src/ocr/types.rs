@@ -277,7 +277,7 @@ mod tests {
             vec![("x-a".to_string(), "1".to_string())]
         );
         assert_eq!(request.transport.extra_headers_source, InputSource::Request);
-        assert_eq!(request.transport.timeout, Duration::from_secs(7));
+        assert_eq!(request.transport.timeout, Some(Duration::from_secs(7)));
         assert_eq!(request.input_sources.len(), 2);
 
         let defaulted = LiteLLMOcrRequest::from_inputs(

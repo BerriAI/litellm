@@ -1,10 +1,12 @@
 use litellm_host::event::{CallEvent, MachineEvent};
-use litellm_llms::base_llm::ocr::error::Error;
+use litellm_llms::base_llm::ocr::{error::Error, settings::OcrSettings};
 use rstest::rstest;
 use serde_json::{Value, json};
 
 use super::{
-    test_support::{MockResponse, mock_server, perform_ocr, perform_ocr_with, wire_request},
+    test_support::{
+        MockResponse, mock_server, ocr_client, perform_ocr, perform_ocr_with, wire_request,
+    },
     wire::{OcrWireRequest, decode_request},
 };
 use crate::ocr::route::LocalOcrHost;
@@ -197,6 +199,42 @@ async fn immediate_response_normalizes_pages_and_preserves_native() {
     assert_eq!(
         result.provider_native_response.map(Value::Object),
         Some(operation)
+    );
+}
+
+#[tokio::test]
+async fn client_settings_choose_the_api_version_and_the_inch_to_pixel_dpi() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({
+        "status":"succeeded",
+        "analyzeResult":{"pages":[{"pageNumber":1,"width":8.5,"height":11,"unit":"inch"}]}
+    }))])
+    .await;
+    let client = ocr_client().with_settings(OcrSettings {
+        document_intelligence_api_version: "2099-01-01".into(),
+        document_intelligence_dpi: 72,
+        ..OcrSettings::default()
+    });
+
+    let result = crate::ocr::client::perform(
+        &client,
+        wire_request("azure_ai/doc-intelligence/prebuilt-read", &base, json!({})),
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+
+    let target = seen.lock().unwrap()[0]
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        query_value(&format!("{base}{target}"), "api-version").as_deref(),
+        Some("2099-01-01")
+    );
+    assert_eq!(
+        serde_json::to_value(&result.pages[0].dimensions).unwrap(),
+        json!({"width":612,"height":792,"dpi":72})
     );
 }
 
@@ -425,13 +463,19 @@ async fn polling_deadline_bounds_retry_delay() {
         },
     ])
     .await;
-    let mut request = wire_request("azure_ai/doc-intelligence/prebuilt-read", &base, json!({}));
-    request.transport.poll_timeout = std::time::Duration::from_millis(100);
+    let request = wire_request("azure_ai/doc-intelligence/prebuilt-read", &base, json!({}));
+    let client = ocr_client().with_settings(OcrSettings {
+        poll_timeout: std::time::Duration::from_millis(100),
+        ..OcrSettings::default()
+    });
 
-    let error = tokio::time::timeout(std::time::Duration::from_secs(1), perform_ocr(request))
-        .await
-        .unwrap()
-        .unwrap_err();
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        crate::ocr::client::perform(&client, request),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
     server.await.unwrap();
     assert!(error.to_string().contains("timed out"));
 }
