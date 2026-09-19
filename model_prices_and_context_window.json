@@ -63459,6 +63459,34 @@
             "video"
         ]
     },
+    "xai/grok-voice-transcribe-1.0": {
+        "input_cost_per_second": 2.778e-05,
+        "litellm_provider": "xai",
+        "metadata": {
+            "calculation": "$0.10/3600 seconds = $0.00002778 per second",
+            "original_pricing_per_hour": 0.1
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://docs.x.ai/developers/pricing",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
+    "xai/grok-voice-transcribe-2.0": {
+        "input_cost_per_second": 2.778e-05,
+        "litellm_provider": "xai",
+        "metadata": {
+            "calculation": "$0.10/3600 seconds = $0.00002778 per second",
+            "original_pricing_per_hour": 0.1
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://docs.x.ai/developers/pricing",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
     "low/1024-x-1024/grok-imagine-image-2.0": {
         "input_cost_per_image": 0.04,
         "litellm_provider": "xai",
