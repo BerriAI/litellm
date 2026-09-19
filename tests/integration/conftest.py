@@ -1,21 +1,20 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
-from collections.abc import Sequence
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from importlib.metadata import version
 from pathlib import Path
 from typing import Final
 
-import pytest
 import httpx
+import pytest
 from redis import Redis
 
 from tests.integration._support.client import Gateway, eventually, gateway_from_environment
-from tests.integration._support.manifest import OWNED_DIRECTORIES, contracts
 from tests.integration._support.generation import LIFECYCLE_SETTINGS
+from tests.integration._support.manifest import OWNED_DIRECTORIES, contracts
 
 COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
 REPORTS: Final = pytest.StashKey[list[pytest.TestReport]]()
@@ -41,14 +40,12 @@ class IntegrationReportPlugin:
 
     @pytest.hookimpl(optionalhook=True)
     def pytest_xdist_node_collection_finished(self, node: object, ids: Sequence[str]) -> None:
-        owned_prefix: Final = "tests/integration/"
-        self.config.stash[COLLECTED] = tuple(
-            nodeid
-            for nodeid in ids
-            if nodeid.split("::", 1)[0].startswith(owned_prefix)
-            and len(Path(nodeid.split("::", 1)[0]).parts) > 2
-            and Path(nodeid.split("::", 1)[0]).parts[2] in OWNED_DIRECTORIES
-        )
+        self.config.stash[COLLECTED] = tuple(nodeid for nodeid in ids if _owned(nodeid))
+
+
+def _owned(nodeid: str) -> bool:
+    parts: Final = Path(nodeid.split("::", 1)[0]).parts
+    return parts[:2] == ("tests", "integration") and len(parts) > 3 and parts[2] in OWNED_DIRECTORIES
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
