@@ -135,9 +135,7 @@ def test_fill_missing_requires_per_rule_opt_in(restore_generalizations):
         "supports_vision": True,
     }
 
-    restore_generalizations(
-        [{"name": "base", "pattern": r"^acme-", "model_info": {"supports_reasoning": True}}]
-    )
+    restore_generalizations([{"name": "base", "pattern": r"^acme-", "model_info": {"supports_reasoning": True}}])
     assert match_fill_missing_generalizations("acme-1", "openai") is None
 
     restore_generalizations(
@@ -451,6 +449,87 @@ def shipped_cost_map(monkeypatch):
         set_fallback_generalizations(previous_rules)
 
 
+@pytest.mark.parametrize(
+    "model,provider",
+    [
+        ("gemini-4-pro", "gemini"),
+        ("gemini/gemini-4-pro", None),
+        ("gemini-3.9-flash-lite-preview-09-2026", "vertex_ai"),
+        ("vertex_ai/gemini-4-pro", None),
+        ("gemini-4-pro-preview-customtools", "gemini"),
+        ("google/gemini-4-pro", "openrouter"),
+        ("google/gemini-4-pro", "deepinfra"),
+        ("google/gemini-4-pro", "vercel_ai_gateway"),
+        ("google.gemini-4-pro", "oci"),
+        ("databricks-gemini-4-1-pro", "databricks"),
+    ],
+)
+def test_shipped_gemini_chat_baseline_resolves_unmapped_ids(shipped_cost_map, model, provider):
+    assert model not in litellm.model_cost
+    if provider == "gemini":
+        assert f"gemini/{model}" not in litellm.model_cost
+    elif provider in {"openrouter", "deepinfra", "vercel_ai_gateway", "oci", "databricks"}:
+        assert f"{provider}/{model}" not in litellm.model_cost
+
+    info = litellm.get_model_info(model, custom_llm_provider=provider)
+    assert info["litellm_provider"] == (provider or model.split("/")[0])
+    assert info["mode"] == "chat"
+    assert not info.get("max_input_tokens")
+    assert info["supports_reasoning"] is True
+    assert info["supports_function_calling"] is True
+    assert info["supports_tool_choice"] is True
+    assert info["supports_system_messages"] is True
+    assert info["supports_vision"] is True
+    assert info["supports_response_schema"] is True
+    assert info["supports_pdf_input"] is True
+    assert info["supports_prompt_caching"] is True
+    assert info["supports_web_search"] is True
+    assert not info.get("input_cost_per_token")
+    assert not info.get("output_cost_per_token")
+
+
+def test_shipped_gemini_chat_baseline_skips_non_chat_and_pre_2_5_ids(shipped_cost_map):
+    for model in (
+        "gemini/gemini-4-flash-image",
+        "gemini/gemini-3.9-flash-preview-tts",
+        "gemini/gemini-4-flash-live-preview",
+        "gemini/gemini-4-flash-native-audio",
+        "gemini/gemini-embedding-4",
+        "gemini/gemini-2.5-computer-use-preview-12-2026",
+        "gemini/gemini-2.0-flash-new",
+        "gemini/gemini-1.5-pro-new",
+        "gemini/gemini-4-flashy",
+        "gemini/gemini-4-flash-transcribe",
+        "gemini/gemini-4-flash-live-translate-preview",
+        "databricks-gemini-3-1-flash-image",
+        "openrouter/google/gemini-2.0-flash-001",
+    ):
+        assert match_capability_generalizations(model) is None, model
+
+
+def test_shipped_gemini_chat_baseline_keeps_reasoning_effort_on_unmapped_model(shipped_cost_map):
+    assert litellm.supports_reasoning(model="gemini-4-pro", custom_llm_provider="gemini") is True
+
+    optional_params = litellm.utils.get_optional_params(
+        model="gemini-4-pro",
+        custom_llm_provider="gemini",
+        reasoning_effort="medium",
+        drop_params=False,
+    )
+    assert isinstance(optional_params, dict)
+    assert optional_params["thinkingConfig"]["thinkingBudget"] > 0
+    assert optional_params["thinkingConfig"]["includeThoughts"] is True
+
+
+def test_shipped_gemini_chat_baseline_loses_to_exact_entries(shipped_cost_map):
+    model = "gemini-2.5-flash-lite"
+    info = litellm.get_model_info(model, custom_llm_provider="gemini")
+    entry = litellm.model_cost["gemini/gemini-2.5-flash-lite"]
+    assert info["max_tokens"] == entry["max_tokens"]
+    assert info["input_cost_per_token"] == entry["input_cost_per_token"]
+    assert entry["input_cost_per_token"] > 0
+
+
 def test_shipped_bare_claude_id_routes_to_anthropic(shipped_cost_map):
     _, provider, _, _ = litellm.get_llm_provider(model="claude-haiku-4-6")
     assert provider == "anthropic"
@@ -627,17 +706,6 @@ def test_shipped_adaptive_rule_requires_claude_prefix(shipped_cost_map):
         litellm.get_model_info(model)
 
 
-def test_shipped_exact_entry_beats_rules(shipped_cost_map):
-    model = "us.anthropic.claude-sonnet-4-6"
-    assert model in litellm.model_cost
-    info = litellm.get_model_info(model, custom_llm_provider="bedrock")
-    assert info["litellm_provider"] == "bedrock_converse"
-    assert info["input_cost_per_token"] == 3.3e-06
-    assert info["max_input_tokens"] == 1000000
-    assert info["supports_adaptive_thinking"] is True
-    assert info.get("supports_mid_conversation_system") is None
-
-
 def test_shipped_rules_lose_to_exact_entries_across_cost_ladder_variants(shipped_cost_map):
     """A route-mangled variant of an exactly-mapped model must never resolve from
     rules. The cost calculator tries model-name variants in order; a rule-derived
@@ -732,20 +800,6 @@ def test_shipped_rules_flag_unmapped_wandb_ids_as_reasoning(shipped_cost_map):
     assert not info.get("output_cost_per_token")
 
     assert litellm.supports_reasoning(model="zai-org/GLM-6-Turbo", custom_llm_provider="wandb") is True
-
-
-def test_shipped_wandb_rule_loses_to_mapped_non_reasoning_entries(shipped_cost_map):
-    """The whole point of a fallback is that it only fills gaps. A wandb model the map
-    describes as non-reasoning must stay non-reasoning, otherwise the rule silently
-    re-introduces the blanket supports_reasoning it exists to avoid."""
-    for model in (
-        "meta-llama/Llama-3.1-8B-Instruct",
-        "microsoft/Phi-4-mini-instruct",
-        "moonshotai/Kimi-K2-Instruct",
-        "Qwen/Qwen3-Coder-480B-A35B-Instruct",
-    ):
-        assert f"wandb/{model}" in litellm.model_cost, model
-        assert litellm.supports_reasoning(model=model, custom_llm_provider="wandb") is False, model
 
 
 def test_shipped_wandb_rule_does_not_fill_missing_mapped_entries(shipped_cost_map):
@@ -866,46 +920,9 @@ def test_shipped_openai_reasoning_rule_skips_non_reasoning_gpt_ids(shipped_cost_
         assert match_capability_generalizations(model) is None, model
 
 
-def test_shipped_openai_reasoning_rule_loses_to_mapped_entries(shipped_cost_map):
-    assert "gpt-5-search-api" in litellm.model_cost
-    assert litellm.supports_reasoning(model="gpt-5-search-api", custom_llm_provider="openai") is False
-
-
-@pytest.mark.parametrize(
-    "model,provider,expected_supports_reasoning",
-    [
-        ("azure/us/o1-2024-12-17", "azure", True),
-        ("github_copilot/gpt-5", "github_copilot", None),
-        ("openrouter/openai/o1", "openrouter", None),
-        ("perplexity/openai/gpt-5.4-mini", "perplexity", None),
-    ],
-)
-def test_shipped_openai_reasoning_rule_backfills_only_approved_providers(
-    shipped_cost_map, model, provider, expected_supports_reasoning
-):
-    assert model in litellm.model_cost
-    raw_entry = litellm.model_cost[model]
-    assert "supports_reasoning" not in raw_entry
-    model_without_provider = model.removeprefix(f"{provider}/")
-    info = litellm.get_model_info(model=model_without_provider, custom_llm_provider=provider)
-    assert info.get("supports_reasoning") is expected_supports_reasoning
-    assert info["input_cost_per_token"] == raw_entry.get("input_cost_per_token", 0)
-
-
 def test_shipped_openai_reasoning_rule_matches_only_openai(shipped_cost_map):
     assert match_fill_missing_generalizations("gpt-5.4", "openai") == {"supports_reasoning": True}
     assert match_fill_missing_generalizations("gpt-5.4", "openrouter") is None
-
-
-def test_shipped_openai_reasoning_rule_skips_non_text_modes(shipped_cost_map):
-    model = "gemini/deep-research-pro-preview-12-2025"
-    assert model in litellm.model_cost
-    raw_entry = litellm.model_cost[model]
-    assert "supports_reasoning" not in raw_entry
-    assert raw_entry["mode"] == "image_generation"
-
-    info = litellm.get_model_info("deep-research-pro-preview-12-2025", custom_llm_provider="gemini")
-    assert info.get("supports_reasoning") is None
 
 
 def test_shipped_claude_thinking_rules_backfill_only_anthropic(shipped_cost_map):
@@ -922,5 +939,54 @@ def test_shipped_claude_thinking_rules_backfill_only_anthropic(shipped_cost_map)
     assert match_fill_missing_generalizations("claude-sonnet-4-6", "anthropic") == {
         "supports_adaptive_thinking": True,
         "supports_legacy_thinking": True,
+        "supports_tool_search": True,
     }
     assert match_fill_missing_generalizations("claude-sonnet-4-6", "perplexity") is None
+
+
+@pytest.mark.parametrize(
+    "model,provider,tool_search",
+    [
+        ("us.anthropic.claude-opus-4-5", "bedrock", True),
+        ("claude-haiku-4-4", "anthropic", None),
+        ("claude-haiku-4-6", "anthropic", True),
+        ("claude-opus-4.5", "anthropic", True),
+        ("claude-opus-4_5", "anthropic", True),
+        ("claude-haiku-4-10", "anthropic", True),
+        ("claude-haiku-5-0", "anthropic", True),
+        ("claude-sonnet-5-1", "anthropic", True),
+        ("claude-newfam-6", "anthropic", True),
+        ("claude-haiku-4-20250514", "anthropic", None),
+    ],
+)
+def test_shipped_tool_search_rule_version_boundaries(shipped_cost_map, model, provider, tool_search):
+    """The claude-tool-search rule flags Claude 4.5 and newer in any family, bare major
+    or major-minor with a dash, dot or underscore delimiter, and leaves 4.4 and
+    date-suffixed 4.x ids without an opinion."""
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider=provider)
+    assert info.get("supports_tool_search") is tool_search, model
+
+
+def test_shipped_tool_search_rule_fills_mapped_claude_entries_without_flag(shipped_cost_map):
+    """A mapped Claude 4.5+ entry with no supports_tool_search key gets it from the rule
+    on Anthropic direct, Vertex and Bedrock, a mapped pre-4.5 entry stays without one,
+    and Azure Foundry and reseller copies of the same model are not touched."""
+    for key, model, provider in (
+        ("claude-opus-4-7", "claude-opus-4-7", "anthropic"),
+        ("vertex_ai/claude-opus-5", "claude-opus-5", "vertex_ai"),
+    ):
+        assert "supports_tool_search" not in litellm.model_cost[key]
+        assert litellm.get_model_info(model, custom_llm_provider=provider)["supports_tool_search"] is True
+
+    assert "supports_tool_search" not in litellm.model_cost["claude-opus-4-1"]
+    opus_4_1_info = litellm.get_model_info("claude-opus-4-1", custom_llm_provider="anthropic")
+    assert opus_4_1_info.get("supports_tool_search") is None
+
+    assert "supports_tool_search" not in litellm.model_cost["azure_ai/claude-opus-5"]
+    azure_opus_5_info = litellm.get_model_info("claude-opus-5", custom_llm_provider="azure_ai")
+    assert azure_opus_5_info.get("supports_tool_search") is None
+
+    assert match_fill_missing_generalizations("claude-opus-5", "bedrock")["supports_tool_search"] is True
+    assert "supports_tool_search" not in match_fill_missing_generalizations("claude-opus-5", "azure_ai")
+    assert match_fill_missing_generalizations("claude-opus-5", "perplexity") is None

@@ -3,6 +3,7 @@ Tests for Fireworks AI rerank transformation functionality.
 """
 
 import json
+import uuid
 from unittest.mock import MagicMock
 
 import httpx
@@ -181,8 +182,7 @@ class TestFireworksAIRerankTransform:
         )
 
         # Verify response structure
-        # Fireworks AI doesn't return "id", so it uses "model" as the id
-        assert result.id == "accounts/fireworks/models/qwen3-reranker-8b"
+        assert uuid.UUID(result.id).version == 4
         assert len(result.results) == 2
         assert result.results[0]["index"] == 0
         assert result.results[0]["relevance_score"] == 0.95
@@ -229,16 +229,14 @@ class TestFireworksAIRerankTransform:
             logging_obj=mock_logging,
         )
 
-        # Fireworks AI doesn't return "id", so it uses "model" as the id
-        assert result.id == "accounts/fireworks/models/qwen3-reranker-8b"
+        assert uuid.UUID(result.id).version == 4
         assert len(result.results) == 2
         assert result.results[0]["index"] == 0
         assert result.results[0]["relevance_score"] == 0.95
         # Document should not be present
         assert "document" not in result.results[0]
 
-    def test_transform_rerank_response_missing_id(self):
-        """Test response transformation when id is missing (should use model name or generate UUID)."""
+    def test_transform_rerank_response_missing_id_stamps_a_fresh_id_per_call(self):
         response_data = {
             "object": "list",
             "model": "accounts/fireworks/models/qwen3-reranker-8b",
@@ -248,23 +246,22 @@ class TestFireworksAIRerankTransform:
             "usage": {"total_tokens": 10},
         }
 
-        mock_response = MagicMock(spec=httpx.Response)
-        mock_response.json.return_value = response_data
-        mock_response.status_code = 200
-        mock_response.headers = {}
+        def transform() -> str:
+            mock_response = MagicMock(spec=httpx.Response)
+            mock_response.json.return_value = response_data
+            mock_response.status_code = 200
+            mock_response.headers = {}
+            return self.config.transform_rerank_response(
+                model=self.model,
+                raw_response=mock_response,
+                model_response=RerankResponse(),
+                logging_obj=MagicMock(),
+            ).id
 
-        mock_logging = MagicMock()
-        model_response = RerankResponse()
+        first, second = transform(), transform()
 
-        result = self.config.transform_rerank_response(
-            model=self.model,
-            raw_response=mock_response,
-            model_response=model_response,
-            logging_obj=mock_logging,
-        )
-
-        # Should use model name when id is missing
-        assert result.id == "accounts/fireworks/models/qwen3-reranker-8b"
+        assert first != second
+        assert "accounts/fireworks/models/qwen3-reranker-8b" not in (first, second)
 
     def test_transform_rerank_response_missing_results(self):
         """Test that missing results raises ValueError."""

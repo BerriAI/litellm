@@ -10,12 +10,24 @@ Verifies that:
 Regression tests for https://github.com/BerriAI/litellm/issues/21343
 """
 
+import asyncio
+import datetime
+from collections.abc import Awaitable, Callable
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import litellm
 from litellm import Router
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+    _union_duration_ms,
+    response_timing_metrics,
+)
+from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.rules import Rules
+from litellm.utils import function_setup
 
 
 def _make_rate_limit_error(message="Rate limited"):
@@ -274,3 +286,74 @@ async def test_not_found_error_in_retry_loop_raises_immediately():
 
         # Only 2 calls: initial + first retry that hits non-retryable
         assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_attempts_accumulate_timing_in_shared_request_metadata():
+    received_at: Final = datetime.datetime.now()
+    metadata: dict[str, object] = {
+        "model_group": "test-model",
+        "litellm_received_at": received_at,
+    }
+    logging_obj_raw, _ = function_setup(
+        "acompletion",
+        Rules(),
+        datetime.datetime.now(),
+        model="test-model",
+        messages=[{"role": "user", "content": "test"}],
+        metadata=metadata,
+        litellm_call_id="retry-timing-test",
+        is_async_call=True,
+    )
+    assert isinstance(logging_obj_raw, Logging)
+    logging_obj: Final[Logging] = logging_obj_raw
+    attempt_numbers: list[int] = []
+    metadata_ids: list[int] = []
+
+    @track_llm_api_timing()
+    async def timed_attempt(*, logging_obj: Logging, **kwargs: object) -> str:
+        del kwargs
+        attempt_numbers.append(len(attempt_numbers) + 1)
+        metadata_ids.append(id(logging_obj.model_call_details["litellm_params"]["metadata"]))
+        await asyncio.sleep(0.01)
+        if len(attempt_numbers) == 1:
+            raise _make_rate_limit_error()
+        return "success"
+
+    async def invoke(original_function: Callable[..., Awaitable[str]], *args: object, **kwargs: object) -> str:
+        return await original_function(*args, **kwargs)
+
+    router = _create_router(num_retries=1)
+    with (
+        patch.object(router, "make_call", new=AsyncMock(side_effect=invoke)),
+        patch.object(
+            router,
+            "_async_get_healthy_deployments",
+            new=AsyncMock(return_value=(["d1"], ["d1"])),
+        ),
+        patch.object(router, "_time_to_sleep_before_retry", return_value=0),
+    ):
+        result = await router.async_function_with_retries(
+            original_function=timed_attempt,
+            model="test-model",
+            messages=[{"role": "user", "content": "test"}],
+            metadata=metadata,
+            logging_obj=logging_obj,
+            num_retries=1,
+        )
+
+    request_metadata: Final = logging_obj.model_call_details["litellm_params"]["metadata"]
+    windows: Final = request_metadata["llm_api_timing_windows"]
+    end_time: Final = datetime.datetime.fromtimestamp(max(window[1] for window in windows))
+    timing_metrics: Final = response_timing_metrics(received_at, end_time, logging_obj)
+    assert result == "success"
+    assert attempt_numbers == [1, 2]
+    assert request_metadata is metadata
+    assert metadata_ids == [id(metadata), id(metadata)]
+    assert len(windows) == 2
+    union_duration_ms: Final = _union_duration_ms(windows, received_at.timestamp(), end_time.timestamp())
+    assert union_duration_ms is not None
+    total_response_time_ms: Final = (end_time.timestamp() - received_at.timestamp()) * 1000
+    assert timing_metrics["litellm_overhead_time_ms"] == pytest.approx(
+        round(total_response_time_ms - union_duration_ms, 4)
+    )

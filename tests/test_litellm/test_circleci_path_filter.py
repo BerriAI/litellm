@@ -49,6 +49,20 @@ CI = [".github/workflows/test-litellm-ui-unit.yml"]
 @pytest.mark.parametrize(
     "category,changed,expected",
     [
+        ("provider-harness", ["tests/e2e/provider_cache.py"], "run"),
+        ("provider-harness", ["tests/e2e/conftest.py"], "run"),
+        ("provider-harness", ["tests/e2e/e2e_http.py"], "run"),
+        ("provider-harness", ["tests/code_coverage_tests/test_provider_cache.py"], "run"),
+        ("provider-harness", ["tests/code_coverage_tests/test_provider_replay_harness.py"], "run"),
+        ("provider-harness", [".circleci/config.yml"], "run"),
+        ("provider-harness", [".circleci/scripts/classify_changes.sh"], "run"),
+        ("provider-harness", ["pyproject.toml"], "run"),
+        ("provider-harness", ["uv.lock"], "run"),
+        ("provider-harness", ["tests/e2e/PROVIDER_CACHE.md"], "skip"),
+        ("provider-harness", ["tests/e2e/ui/test_example.py"], "skip"),
+        ("provider-harness", ["tests/e2e/quota_management/test_quota.py"], "skip"),
+        ("provider-harness", ["litellm/main.py"], "skip"),
+        ("provider-harness", ["ui/litellm-dashboard/src/App.tsx"], "skip"),
         # docs-only: skip everything
         ("backend", DOCS, "skip"),
         ("client", DOCS, "skip"),
@@ -73,6 +87,29 @@ CI = [".github/workflows/test-litellm-ui-unit.yml"]
         ("backend", BACKEND + CLIENT, "run"),
         ("client", BACKEND + CLIENT, "run"),
         ("ui", BACKEND + CLIENT, "run"),
+        ("cost-map-only", ["model_prices_and_context_window.json"], "run"),
+        ("cost-map-only", ["litellm/model_prices_and_context_window_backup.json"], "run"),
+        ("cost-map-only", ["model_prices_and_context_window.schema.json"], "run"),
+        (
+            "cost-map-only",
+            ["model_prices_and_context_window.json", "tests/test_litellm/test_x.py"],
+            "run",
+        ),
+        (
+            "cost-map-only",
+            ["model_prices_and_context_window.json", "tests/proxy_unit_tests/test_y.py"],
+            "run",
+        ),
+        (
+            "cost-map-only",
+            ["model_prices_and_context_window.json", "litellm/utils.py"],
+            "skip",
+        ),
+        ("cost-map-only", ["tests/test_litellm/test_x.py"], "skip"),
+        ("cost-map-only", ["model_prices_and_context_window.json", "docs/pricing.md"], "skip"),
+        ("cost-map-only", ["model_prices_and_context_window.json", "docs/foo.mdx"], "skip"),
+        ("cost-map-only", [], "skip"),
+        ("cost-map-only", DOCS, "skip"),
     ],
 )
 def test_classify_decisions(category: str, changed: list[str], expected: str) -> None:
