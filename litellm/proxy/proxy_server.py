@@ -1012,6 +1012,28 @@ async def flush_spend_counters_on_shutdown() -> None:
         verbose_proxy_logger.exception("Error flushing spend counters on shutdown: %s", e)
 
 
+async def _await_logging_callbacks_on_shutdown() -> None:
+    """Let detached stream success callbacks finish before spend drain.
+
+    Streaming paths enqueue spend via ``GLOBAL_LOGGING_WORKER``. If we drain
+    spend queues (and disconnect Prisma) while those coroutines are still
+    queued, the callback can enqueue after the final drain and the row is
+    lost. Bound the wait so a stuck callback cannot hang shutdown forever.
+    """
+    from litellm.constants import MAX_TIME_TO_CLEAR_QUEUE
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    try:
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=MAX_TIME_TO_CLEAR_QUEUE)
+    except asyncio.TimeoutError:
+        verbose_proxy_logger.warning(
+            "Timed out waiting for logging callbacks on shutdown after %ss; continuing spend drain",
+            MAX_TIME_TO_CLEAR_QUEUE,
+        )
+    except Exception as e:  # noqa: BLE001  # shutdown must continue even if callback flush fails
+        verbose_proxy_logger.exception("Error awaiting logging callbacks on shutdown: %s", e)
+
+
 async def _flush_spend_logs_queue_on_shutdown() -> None:
     if prisma_client is None:
         return
@@ -1034,7 +1056,18 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
     if worker_heartbeat is not None and prisma_client:
         await worker_heartbeat.deregister()
     if prisma_client:
-        # Drain the SGR fold first: it lives in memory, so an un-drained interval
+        # Detached streaming callbacks can still enqueue spend after an earlier
+        # lifespan drain. Await them first so the drain below sees those rows.
+        await _await_logging_callbacks_on_shutdown()
+        # Request-time spend queues live in this process. A worker recycle
+        # (`--max_requests_before_restart`) or deploy otherwise drops whatever
+        # the periodic flush has not written. Drain while Prisma is still
+        # connected; a write after disconnect is ClientNotConnectedError and
+        # the rows never reach LiteLLM_SpendLogs. The same emptiness owner
+        # (`_total_queued_spend_transactions`) also covers
+        # tool_usage_transactions and autorouter_turn_transactions.
+        await _flush_spend_logs_queue_on_shutdown()
+        # Drain the SGR fold next: it lives in memory, so an un-drained interval
         # is lost, and a write attempted after disconnect raises
         # ClientNotConnectedError rather than persisting anything. Ordering this
         # inside the same guard is what keeps the two from drifting apart.
@@ -1463,6 +1496,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             await prisma_client.stop_db_health_watchdog_task()
         except Exception as e:
             verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
+
+    # Streaming spend callbacks enqueue through GLOBAL_LOGGING_WORKER; await
+    # them before draining the producer/queues so late rows are not dropped.
+    await _await_logging_callbacks_on_shutdown()
 
     await _drain_spend_event_producer_on_shutdown()
 
