@@ -19,9 +19,9 @@ use serde_json::Value;
 use crate::{
     DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger,
     deferred::{PendingLogging, PendingSuccess},
-    finalize, is_internal_call,
-    legacy_python::Streaming,
-    prepare, setup,
+    finalize, is_internal_call, prepare,
+    python::Streaming,
+    setup,
 };
 
 /// What the legacy contract needs to know about the route it is logging.

@@ -5,7 +5,7 @@ use pyo3::{
     types::{PyDict, PyTuple},
 };
 
-use crate::legacy_python::{self, Wrapper};
+use crate::python::{self, Wrapper};
 
 /// The `Logging` instance one call fans out through.
 pub struct PythonLogger {
@@ -90,7 +90,7 @@ impl DeploymentHooks {
         kwargs: &Py<PyDict>,
         call_type: &str,
     ) -> PyResult<Py<PyAny>> {
-        legacy_python::DeploymentHooks::BeforeDeploymentCall
+        python::DeploymentHooks::BeforeDeploymentCall
             .call(py, (kwargs, call_type))
             .map(Bound::unbind)
     }
@@ -101,7 +101,7 @@ impl DeploymentHooks {
         response: &Option<Py<PyAny>>,
         call_type: &str,
     ) -> PyResult<Py<PyAny>> {
-        legacy_python::DeploymentHooks::AfterDeploymentSuccess
+        python::DeploymentHooks::AfterDeploymentSuccess
             .call(py, (kwargs, response, call_type))
             .map(Bound::unbind)
     }
@@ -112,7 +112,7 @@ impl DeploymentHooks {
         error: &Py<PyBaseException>,
         call_type: &str,
     ) -> PyResult<Py<PyAny>> {
-        legacy_python::DeploymentHooks::AfterDeploymentFailure
+        python::DeploymentHooks::AfterDeploymentFailure
             .call(py, (kwargs, error, call_type))
             .map(Bound::unbind)
     }
