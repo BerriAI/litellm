@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Final, Optional
 
 import jsonschema
 
@@ -19,8 +19,8 @@ NONNEG_NUMBER: JsonSchema = {"type": "number", "minimum": 0}
 NONNEG_INTEGER: JsonSchema = {"type": "integer", "minimum": 0}
 BOOLEAN: JsonSchema = {"type": "boolean"}
 STRING: JsonSchema = {"type": "string"}
-TIME_WINDOW: JsonSchema = {"type": "string", "pattern": r"^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$"}
-WEEKDAY_PATTERN = (
+TIME_WINDOW: Final[JsonSchema] = {"type": "string", "pattern": r"^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$"}
+WEEKDAY_PATTERN: Final = (
     r"(?i)^(mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)$"
 )
 
@@ -35,12 +35,12 @@ EXTRA_BOOLEAN_KEYS = frozenset(
     }
 )
 
-HOURS_UTC: JsonSchema = {
+HOURS_UTC: Final[JsonSchema] = {
     "description": 'UTC "HH:MM-HH:MM" window, or a list of them; a window may wrap past midnight.',
     "oneOf": [TIME_WINDOW, {"type": "array", "items": TIME_WINDOW, "minItems": 1}],
 }
 
-OFF_PEAK_WINDOW: JsonSchema = {
+OFF_PEAK_WINDOW: Final[JsonSchema] = {
     "type": "object",
     "properties": {
         "hours_utc": HOURS_UTC,
