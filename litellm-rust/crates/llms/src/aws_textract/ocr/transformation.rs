@@ -2,19 +2,18 @@ use litellm_core_utils::call_arguments::CallArguments;
 use serde::{Deserialize, Serialize};
 
 use super::common_utils::{
-    Block, DocumentMetadata, HEALTH_CHECK_IMAGE_DATA_URI, TextractDocument, TextractEnvironment,
-    document_bytes, endpoint, environment, error_class, inline_document, lines_by_page,
+    TextractDocument, TextractEnvironment, TextractOperation, TextractResponse, document_bytes,
+    endpoint, environment, error_class, health_check_document, inline_document, lines_by_page,
+    ocr_response,
 };
 use crate::base_llm::ocr::{
     error::Error,
     handler::OcrClient,
     transformation::{
-        BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrPage, OcrRequestContext,
-        OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest, decode_and_normalize_response,
+        BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrRequestContext, OcrResponseFormat,
+        PreparedOcrRequest, decode_and_normalize_response,
     },
 };
-
-const DETECT_DOCUMENT_TEXT_TARGET: &str = "Textract.DetectDocumentText";
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DetectDocumentTextRequest {
@@ -22,15 +21,6 @@ pub struct DetectDocumentTextRequest {
     pub document: TextractDocument,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct DetectDocumentTextResponse {
-    #[serde(default)]
-    blocks: Vec<Block>,
-    document_metadata: Option<DocumentMetadata>,
-}
-
-/// Synchronous `DetectDocumentText`: plain lines from one image or single-page document.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TextractDetectTextConfig;
 
@@ -40,10 +30,7 @@ impl BaseOcrConfig for TextractDetectTextConfig {
     type Environment = TextractEnvironment;
 
     fn get_health_check_document(&self) -> OcrDocument {
-        OcrDocument::ImageUrl {
-            image_url: HEALTH_CHECK_IMAGE_DATA_URI.into(),
-            extra_fields: Default::default(),
-        }
+        health_check_document()
     }
 
     fn map_ocr_params(
@@ -59,7 +46,7 @@ impl BaseOcrConfig for TextractDetectTextConfig {
         request: &PreparedOcrRequest,
         _client: &OcrClient,
     ) -> Result<TextractEnvironment, Error> {
-        environment(request, DETECT_DOCUMENT_TEXT_TARGET).await
+        environment(request, TextractOperation::DetectDocumentText).await
     }
 
     fn get_complete_url(
@@ -116,48 +103,36 @@ impl BaseOcrConfig for TextractDetectTextConfig {
 
 fn normalize_response(
     model: &str,
-    response: DetectDocumentTextResponse,
+    response: TextractResponse,
 ) -> Result<LiteLLMOcrResponse, Error> {
-    let pages: Vec<OcrPage> = lines_by_page(&response.blocks)
-        .into_iter()
-        .map(|(page, markdown)| OcrPage {
-            index: page - 1,
-            markdown,
-            ..Default::default()
-        })
-        .collect();
-    let pages_processed = response
-        .document_metadata
-        .and_then(|metadata| metadata.pages)
-        .or_else(|| i64::try_from(pages.len()).ok());
-    Ok(LiteLLMOcrResponse {
-        usage_info: Some(OcrUsageInfo {
-            pages_processed,
-            ..Default::default()
-        }),
-        ..LiteLLMOcrResponse::new(model, pages)
-    })
+    Ok(ocr_response(
+        model,
+        lines_by_page(&response.blocks),
+        response.document_metadata,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use rstest::{fixture, rstest};
+    use serde_json::{Value, json};
 
     use super::*;
 
-    fn normalize(response: serde_json::Value) -> LiteLLMOcrResponse {
-        TextractDetectTextConfig
-            .transform_ocr_response(
-                "detect-document-text",
-                &serde_json::to_vec(&response).unwrap(),
-                OcrResponseFormat::Litellm,
-            )
-            .unwrap()
+    const MODEL: &str = "detect-document-text";
+
+    #[fixture]
+    fn document(#[default("data:image/png;base64,aGVsbG8=")] source: &str) -> OcrDocument {
+        OcrDocument::DocumentUrl {
+            document_url: source.into(),
+            extra_fields: Default::default(),
+        }
     }
 
-    #[test]
-    fn lines_become_one_markdown_page_and_words_are_not_repeated() {
-        let response = normalize(json!({
+    #[rstest]
+    #[case::one_page_without_page_numbers(
+        json!({
+            "DetectDocumentTextModelVersion": "1.0",
             "DocumentMetadata": {"Pages": 1},
             "Blocks": [
                 {"BlockType": "PAGE"},
@@ -166,35 +141,90 @@ mod tests {
                 {"BlockType": "WORD", "Text": "12345"},
                 {"BlockType": "LINE", "Text": "total 67.89"}
             ]
-        }));
-
-        assert_eq!(response.pages.len(), 1);
-        assert_eq!(response.pages[0].index, 0);
-        assert_eq!(response.pages[0].markdown, "Invoice 12345\ntotal 67.89");
-        assert_eq!(response.usage_info.unwrap().pages_processed, Some(1));
-    }
-
-    #[test]
-    fn lines_are_grouped_by_their_page_in_page_order() {
-        let response = normalize(json!({
+        }),
+        vec![(0, "Invoice 12345\ntotal 67.89")],
+        Some(1)
+    )]
+    #[case::pages_out_of_order(
+        json!({
             "DocumentMetadata": {"Pages": 2},
             "Blocks": [
                 {"BlockType": "LINE", "Text": "second", "Page": 2},
                 {"BlockType": "LINE", "Text": "first", "Page": 1},
                 {"BlockType": "LINE", "Text": "also second", "Page": 2}
             ]
-        }));
+        }),
+        vec![(0, "first"), (1, "second\nalso second")],
+        Some(2)
+    )]
+    #[case::missing_metadata_counts_the_pages_with_text(
+        json!({"Blocks": [{"BlockType": "LINE", "Text": "only"}]}),
+        vec![(0, "only")],
+        Some(1)
+    )]
+    #[case::blank_document(json!({"DocumentMetadata": {"Pages": 1}}), vec![], Some(1))]
+    fn response_lines_become_one_markdown_page_per_document_page(
+        #[case] raw_response: Value,
+        #[case] expected_pages: Vec<(i64, &str)>,
+        #[case] expected_pages_processed: Option<i64>,
+    ) {
+        let response = TextractDetectTextConfig
+            .transform_ocr_response(
+                MODEL,
+                &serde_json::to_vec(&raw_response).unwrap(),
+                OcrResponseFormat::Litellm,
+            )
+            .unwrap();
 
         let pages: Vec<(i64, &str)> = response
             .pages
             .iter()
             .map(|page| (page.index, page.markdown.as_str()))
             .collect();
-        assert_eq!(pages, vec![(0, "first"), (1, "second\nalso second")]);
+        assert_eq!(pages, expected_pages);
+        assert_eq!(response.model, MODEL);
+        assert_eq!(
+            response.usage_info.unwrap().pages_processed,
+            expected_pages_processed
+        );
     }
 
-    #[test]
-    fn a_multi_page_rejection_is_explained_to_the_caller() {
+    #[rstest]
+    fn the_request_is_only_the_document_bytes(document: OcrDocument) {
+        let request = TextractDetectTextConfig
+            .transform_ocr_request(MODEL, document, &(), &[])
+            .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            json!({"Document": {"Bytes": "aGVsbG8="}})
+        );
+    }
+
+    #[rstest]
+    fn a_remote_url_is_refused_by_the_sync_transform(
+        #[with("https://example.com/a.pdf")] document: OcrDocument,
+    ) {
+        let error = TextractDetectTextConfig
+            .transform_ocr_request(MODEL, document, &(), &[])
+            .unwrap_err();
+
+        assert!(matches!(error, Error::InvalidDataUri));
+    }
+
+    #[rstest]
+    fn the_health_check_document_is_an_inline_image_the_request_accepts() {
+        let document = TextractDetectTextConfig.get_health_check_document();
+
+        assert!(
+            TextractDetectTextConfig
+                .transform_ocr_request(MODEL, document, &(), &[])
+                .is_ok()
+        );
+    }
+
+    #[rstest]
+    fn provider_errors_go_through_the_shared_textract_error_class() {
         let error = TextractDetectTextConfig.get_error_class(
             r#"{"__type":"UnsupportedDocumentException","Message":"Request has unsupported document format"}"#.into(),
             400,
@@ -206,42 +236,5 @@ mod tests {
                 .to_string()
                 .contains("multi-page documents are not supported")
         );
-    }
-
-    #[test]
-    fn the_request_carries_the_document_bytes_without_the_data_uri_envelope() {
-        let request = TextractDetectTextConfig
-            .transform_ocr_request(
-                "detect-document-text",
-                OcrDocument::ImageUrl {
-                    image_url: "data:image/png;base64,aGVsbG8=".into(),
-                    extra_fields: Default::default(),
-                },
-                &(),
-                &[],
-            )
-            .unwrap();
-
-        assert_eq!(
-            serde_json::to_value(request).unwrap(),
-            json!({"Document": {"Bytes": "aGVsbG8="}})
-        );
-    }
-
-    #[test]
-    fn a_remote_url_is_refused_by_the_sync_transform() {
-        let error = TextractDetectTextConfig
-            .transform_ocr_request(
-                "detect-document-text",
-                OcrDocument::DocumentUrl {
-                    document_url: "https://example.com/a.pdf".into(),
-                    extra_fields: Default::default(),
-                },
-                &(),
-                &[],
-            )
-            .unwrap_err();
-
-        assert!(matches!(error, Error::InvalidDataUri));
     }
 }

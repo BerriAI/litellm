@@ -1,7 +1,7 @@
 use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
 use litellm_llms::{
     aws_textract::ocr::{
-        analyze_transformation::TextractAnalyzeDocumentConfig,
+        analyze_transformation::TextractAnalyzeDocumentConfig, common_utils::TextractOperation,
         transformation::TextractDetectTextConfig,
     },
     azure_ai::ocr::{
@@ -178,10 +178,10 @@ pub(crate) fn resolve_provider_config(
         .parse::<OcrProvider>()
         .map_err(|_| Error::InvalidProvider(provider.custom_llm_provider.to_string()))?;
     let config = match ocr_provider {
-        OcrProvider::AwsTextract if provider.model.eq_ignore_ascii_case("analyze-document") => {
-            OcrConfigKind::AwsTextractAnalyze
-        }
-        OcrProvider::AwsTextract => OcrConfigKind::AwsTextract,
+        OcrProvider::AwsTextract => match TextractOperation::from_model(provider.model)? {
+            TextractOperation::DetectDocumentText => OcrConfigKind::AwsTextract,
+            TextractOperation::AnalyzeDocument => OcrConfigKind::AwsTextractAnalyze,
+        },
         OcrProvider::Cohere => OcrConfigKind::Cohere,
         OcrProvider::Mistral => OcrConfigKind::Mistral,
         OcrProvider::AzureAi if is_document_intelligence_model(provider.model) => {
@@ -436,6 +436,19 @@ mod tests {
         let (model, config) = resolve_provider_config(qualified_model, None).unwrap();
         assert_eq!(model, expected_model);
         assert_eq!(config, expected_config);
+    }
+
+    #[rstest]
+    #[case::misspelled_operation("aws_textract/analyse-document")]
+    #[case::operation_name_from_the_api("aws_textract/AnalyzeDocument")]
+    fn textract_models_outside_its_two_operations_are_refused(#[case] model: &str) {
+        assert!(matches!(
+            resolve_provider_config(model, None),
+            Err(Error::InvalidModel {
+                provider: "aws_textract",
+                ..
+            })
+        ));
     }
 
     #[rstest]
