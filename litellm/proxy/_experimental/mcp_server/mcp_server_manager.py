@@ -2500,9 +2500,8 @@ class MCPServerManager:
             # Filter blank scopes (e.g. YAML ``scopes: [""]``) the same way the DB-build path does, so
             # an all-blank list normalizes to None rather than a ``("",)`` tuple that skips the
             # entra_obo fail-closed scope precondition and POSTs an empty scope to the IdP.
-            resolved_scopes = self._extract_scopes(server_config.get("scopes")) or (
-                gated_oauth_metadata.scopes if gated_oauth_metadata else None
-            )
+            configured_scopes = self._extract_scopes(server_config.get("scopes"))
+            resolved_scopes = configured_scopes or (gated_oauth_metadata.scopes if gated_oauth_metadata else None)
             resolved_authorization_url = manual_authorization_url or (
                 gated_oauth_metadata.authorization_url if gated_oauth_metadata else None
             )
@@ -2579,6 +2578,7 @@ class MCPServerManager:
                 client_secret=server_config.get("client_secret", None),
                 oauth2_flow=self._explicit_oauth2_flow(config_oauth2_flow),
                 scopes=resolved_scopes,
+                configured_scopes=tuple(configured_scopes) if configured_scopes else None,
                 issuer=effective_issuer,
                 issuer_is_anchored=use_issuer_anchor,
                 authorization_url=resolved_authorization_url,
@@ -3041,6 +3041,18 @@ class MCPServerManager:
             if scopes_value is not None:
                 scopes = self._extract_scopes(scopes_value)
 
+        stored_scopes: Final[object] = credentials_dict.get("scopes") if credentials_dict else None
+        scopes_as_objects: Final = (
+            cast(Sequence[object], stored_scopes)  # cast-ok: list shape validated below
+            if isinstance(stored_scopes, list)
+            else ()
+        )
+        configured_scopes: Final = (
+            tuple(scope for scope in scopes_as_objects if isinstance(scope, str))
+            if scopes_as_objects and all(isinstance(scope, str) and scope for scope in scopes_as_objects)
+            else None
+        )
+
         name_for_prefix: Final = mcp_server.alias or mcp_server.server_name or mcp_server.server_id
 
         mcp_info: Final[MCPInfo] = _mcp_info.copy()
@@ -3115,6 +3127,7 @@ class MCPServerManager:
             client_secret=client_secret_value or getattr(mcp_server, "client_secret", None),
             oauth2_flow=self._explicit_oauth2_flow(getattr(mcp_server, "oauth2_flow", None)),
             scopes=resolved_scopes,
+            configured_scopes=configured_scopes,
             issuer=effective_issuer,
             issuer_is_anchored=use_issuer_anchor,
             authorization_url=manual_authorization_url or getattr(gated_oauth_metadata, "authorization_url", None),
@@ -7088,7 +7101,11 @@ class MCPServerManager:
             spec_path=server.spec_path,
             transport=server.transport,
             auth_type=server.auth_type,
-            credentials={"scopes": server.scopes} if server.scopes else None,
+            credentials=(
+                {"scopes": list(server.configured_scopes)}  # mutable-ok: MCPCredentials requires a JSON-array list
+                if server.configured_scopes
+                else None
+            ),
             created_at=server.created_at,
             updated_at=server.updated_at,
             teams=[],

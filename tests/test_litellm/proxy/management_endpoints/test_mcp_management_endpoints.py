@@ -4582,13 +4582,9 @@ class TestMCPApprovalWorkflow:
         assert result.total == 1
         assert result.pending_review == 1
 
+    @pytest.mark.parametrize("allowed_routes", [None, [], ["llm_api_routes"], ["mcp_routes"]])
     @pytest.mark.asyncio
-    async def test_get_submissions_sanitizes_for_view_only_admin(self):
-        """PROXY_ADMIN_VIEW_ONLY reviewing the submission queue must go through
-        the non-admin sanitizer that fetch/list endpoints use: url,
-        static_headers, env, env_vars, and credentials are all dropped. A
-        mutation swapping the gate back to the old partial-blank pattern (which
-        left url/static_headers/env and env-var names intact) would fail this."""
+    async def test_get_submissions_sanitizes_for_view_only_admin(self, allowed_routes: list[str] | None):
         from litellm.proxy._types import MCPSubmissionsSummary
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             get_mcp_server_submissions,
@@ -4596,6 +4592,7 @@ class TestMCPApprovalWorkflow:
 
         item = _leaky_list_server()
         item.approval_status = "pending_review"
+        item.spec_path = "https://example.com/spec.json?key=private"
         summary = MCPSubmissionsSummary(total=1, pending_review=1, active=0, rejected=0, items=[item])
 
         with (
@@ -4609,11 +4606,15 @@ class TestMCPApprovalWorkflow:
             ),
         ):
             result = await get_mcp_server_submissions(
-                user_api_key_dict=generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, allowed_routes=allowed_routes
+                ),
             )
 
+        assert (result.total, result.pending_review, result.active, result.rejected) == (1, 1, 0, 0)
         assert len(result.items) == 1
         sanitized = result.items[0]
+        assert sanitized.spec_path is None
         assert sanitized.url is None
         assert sanitized.static_headers is None
         assert sanitized.env == {}
@@ -4624,11 +4625,9 @@ class TestMCPApprovalWorkflow:
         assert item.url == "https://leaky.example.com/mcp?api_key=sk-embedded-in-url"
         assert item.static_headers == {"Authorization": "Bearer sk-secret-header"}
 
+    @pytest.mark.parametrize("allowed_routes", [None, [], ["llm_api_routes"], ["mcp_routes"]])
     @pytest.mark.asyncio
-    async def test_get_submissions_full_admin_still_sees_secrets(self):
-        """The view-only redaction must not over-redact for a full PROXY_ADMIN,
-        who needs url/static_headers/env/env_vars to review the pending
-        submission. Only the explicit credentials field is cleared."""
+    async def test_get_submissions_full_admin_preserves_review_fields(self, allowed_routes: list[str] | None):
         from litellm.proxy._types import MCPSubmissionsSummary
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             get_mcp_server_submissions,
@@ -4636,6 +4635,7 @@ class TestMCPApprovalWorkflow:
 
         item = _leaky_list_server()
         item.approval_status = "pending_review"
+        item.spec_path = "https://example.com/spec.json?key=private"
         summary = MCPSubmissionsSummary(total=1, pending_review=1, active=0, rejected=0, items=[item])
 
         with (
@@ -4649,11 +4649,14 @@ class TestMCPApprovalWorkflow:
             ),
         ):
             result = await get_mcp_server_submissions(
-                user_api_key_dict=generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, allowed_routes=allowed_routes),
             )
 
+        assert (result.total, result.pending_review, result.active, result.rejected) == (1, 1, 0, 0)
         assert len(result.items) == 1
         raw = result.items[0]
+        assert raw.spec_path == item.spec_path
+        assert raw.approval_status == "pending_review"
         assert raw.url == "https://leaky.example.com/mcp?api_key=sk-embedded-in-url"
         assert raw.static_headers == {"Authorization": "Bearer sk-secret-header"}
         assert raw.env == {"UPSTREAM_TOKEN": "sk-secret-env"}
