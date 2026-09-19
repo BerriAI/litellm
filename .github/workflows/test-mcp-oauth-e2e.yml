@@ -145,15 +145,11 @@ jobs:
             --rootdir=. --reruns 0 --tb=short -o junit_family=xunit1 \
             --junitxml="${RUNNER_TEMP}/mcp-oauth-private/results.xml" \
             > "${RUNNER_TEMP}/mcp-oauth-private/pytest.log" 2>&1
-      - name: Reject skipped or missing cases
+      - name: Report JUnit results and reject skipped or missing cases
         if: always()
         run: |
           uv run --no-sync python .github/e2e-stack/assert_tests_ran.py \
             "${RUNNER_TEMP}/mcp-oauth-private/results.xml" tests/e2e/mcp/test_mcp_oauth_happy_path_e2e.py
-      - name: Publish sanitized summary
-        if: always()
-        run: |
-          grep -E '^(FAILED|PASSED|ERROR|E   AssertionError|=+ .* =+)' "${RUNNER_TEMP}/mcp-oauth-private/pytest.log" || true
       - name: Remove private login and logs
         if: always()
         run: |
