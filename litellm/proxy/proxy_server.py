@@ -17708,8 +17708,8 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
         "type": "Boolean",
         "tab": "prompt_caching",
         "description": (
-            "Auto-adds cache_control to the system prompt and trailing turn for supported Anthropic "
-            "and Bedrock Claude models. The cache is shared across callers on the same upstream credentials."
+            "Auto-adds cache_control to the system prompt and trailing turn for supported Claude models on "
+            "Anthropic, Bedrock, Vertex AI, and Azure AI. The cache is shared across callers on the same upstream credentials."
         ),
     },
     "anthropic_prompt_caching_ttl": {
