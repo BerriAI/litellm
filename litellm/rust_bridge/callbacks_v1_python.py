@@ -178,7 +178,7 @@ def _validate_kind(name: str, handler: object | None, asynchronous: bool) -> Non
         return
     if not callable(handler):
         raise HandlerKindMismatch(f"{name} must be callable")
-    is_async: Final = inspect.iscoroutinefunction(handler)
+    is_async: Final = inspect.iscoroutinefunction(handler) or inspect.iscoroutinefunction(handler.__call__)
     if is_async != asynchronous:
         expected: Final = "async" if asynchronous else "sync"
         raise HandlerKindMismatch(f"{name} must be {expected}")

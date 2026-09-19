@@ -111,6 +111,22 @@ def test_register_rejects_coroutine_in_sync_slot() -> None:
         callbacks.register(cast(callbacks.Callback, WrongSyncKind()))
 
 
+class AsyncHandler:
+    async def __call__(self, event: callbacks.EnvelopeV1) -> None:
+        del event
+
+
+class AsyncCallableObserver:
+    name: str = "async-callable-observer"
+    schema: int = 1
+    events: frozenset[str] = frozenset({"call.started"})
+    async_on_event: AsyncHandler = AsyncHandler()
+
+
+def test_register_accepts_async_callable_objects() -> None:
+    callbacks.register(cast(callbacks.Callback, AsyncCallableObserver()))
+
+
 class AsyncObserver:
     name: str = "async-observer"
     schema: int = 1

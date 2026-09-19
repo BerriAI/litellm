@@ -137,4 +137,5 @@ def test_native_ocr_failure_reaches_both_contracts_once(
         envelope for envelope in observer.envelopes if envelope["event"]["type"] in {"call.succeeded", "call.failed"}
     ]
     assert [envelope["event"]["type"] for envelope in terminal] == ["call.failed"]
+    assert terminal[0]["event"]["error"]["message"] == "[REDACTED]"
     assert observer.envelopes[-1] is terminal[0]

@@ -226,7 +226,7 @@ impl V1PythonLifecycle {
         V1Python::NewCallId.call(py, ())?.extract()
     }
 
-    fn error_facts(py: Python<'_>, error: &PyErr) -> PyResult<ErrorFacts> {
+    fn error_facts(py: Python<'_>, error: &PyErr, redact_payloads: bool) -> PyResult<ErrorFacts> {
         let class = error.get_type(py);
         let module = class.getattr("__module__")?.extract::<String>()?;
         let qualified = class.getattr("__qualname__")?.extract::<String>()?;
@@ -237,7 +237,11 @@ impl V1PythonLifecycle {
             .and_then(|value| value.extract::<u16>().ok());
         Ok(ErrorFacts {
             class: format!("{module}.{qualified}"),
-            message: error.value(py).str()?.to_string(),
+            message: if redact_payloads {
+                litellm_callbacks_v1::REDACTED.to_string()
+            } else {
+                error.value(py).str()?.to_string()
+            },
             status_code,
         })
     }
@@ -312,7 +316,7 @@ impl PythonLifecycle for V1PythonLifecycle {
                 origin,
                 error,
             } => {
-                let facts = Self::error_facts(py, error)?;
+                let facts = Self::error_facts(py, error, self.surface.redact_payloads)?;
                 let envelope = self.envelope(Event::CallFailed {
                     timing: timing.into(),
                     streamed: self.streamed,
