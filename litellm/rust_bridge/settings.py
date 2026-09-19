@@ -43,7 +43,9 @@ def warn(message: str) -> None:
 
 
 def secret_manager() -> SecretManager:
-    from litellm.secret_managers.main import _should_read_secret_from_secret_manager
+    from litellm.secret_managers.main import (
+        _should_read_secret_from_secret_manager,  # pyright: ignore[reportPrivateUsage]  # canonical resolver is private
+    )
 
     return SecretManager(readable=_should_read_secret_from_secret_manager())
 
