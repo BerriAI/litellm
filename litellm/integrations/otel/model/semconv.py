@@ -243,8 +243,14 @@ class GenAIEvent:
     (severity WARN) carrying the ``exception.*`` trio, correlated to the failed
     span via the trace/span ids — the semconv-compliant home for GenAI failure
     details, unlike the deprecated ``error.message`` span attribute.
+
+    ``NAME_KEY`` is the log attribute the event name rides in. The removed Events
+    API wrote it, and it is the only home the name has on the OpenTelemetry line
+    this package pins; the ``event_name`` log record field that replaces it only
+    exists from 1.44.0.
     """
 
+    NAME_KEY: Final = "event.name"
     OPERATION_EXCEPTION: Final = "gen_ai.client.operation.exception"
 
 

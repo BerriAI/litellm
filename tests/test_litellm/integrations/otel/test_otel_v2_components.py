@@ -1281,6 +1281,51 @@ def test_operation_exception_log_event_always_carries_required_pair():
     assert ExceptionEvent.STACKTRACE not in attributes
 
 
+def test_operation_exception_log_event_records_without_the_events_api():
+    """OpenTelemetry removed ``opentelemetry._events`` in 1.44.0, so the plumbing
+    has to build and emit this event through the logs API alone. Importing it with
+    both Events modules absent stands in for that release."""
+    import importlib
+    import sys
+    from unittest.mock import patch
+
+    from opentelemetry._logs.severity import SeverityNumber
+    from opentelemetry.sdk._logs.export import InMemoryLogExporter
+    from opentelemetry.trace import INVALID_SPAN_CONTEXT
+
+    from litellm.integrations.otel.model.semconv import ExceptionEvent, GenAIEvent
+
+    plumbing = ("litellm.integrations.otel.plumbing.events", "litellm.integrations.otel.plumbing.providers")
+    without_events_api = {
+        **{name: module for name, module in sys.modules.items() if name not in plumbing},
+        "opentelemetry._events": None,
+        "opentelemetry.sdk._events": None,
+    }
+    with patch.dict(sys.modules, without_events_api, clear=True):
+        events_mod = importlib.import_module(plumbing[0])
+        providers_mod = importlib.import_module(plumbing[1])
+
+        log_exporter = InMemoryLogExporter()
+        cfg = OpenTelemetryV2Config(exporter="in_memory", enable_events=True)
+        logger_provider = providers_mod.build_logger_provider(cfg, log_exporter=log_exporter)
+        recorder = events_mod.GenAIEventRecorder(providers_mod.get_event_logger(logger_provider))
+        recorder.record_operation_exception(
+            span_context=INVALID_SPAN_CONTEXT,
+            error_type="RateLimitError",
+            message="rate limited",
+            stack_trace=None,
+            timestamp_ns=None,
+        )
+
+    (log,) = log_exporter.get_finished_logs()
+    record = log.log_record
+    assert record.attributes[GenAIEvent.NAME_KEY] == GenAIEvent.OPERATION_EXCEPTION
+    assert record.attributes[ExceptionEvent.TYPE] == "RateLimitError"
+    assert record.attributes[ExceptionEvent.MESSAGE] == "rate limited"
+    assert record.severity_number == SeverityNumber.WARN
+    assert record.timestamp is not None
+
+
 def test_operation_exception_log_event_not_emitted_on_success():
     engine, span_exporter, log_exporter = _engine_with_event_recorder()
     engine.emit(SpanRole.LLM_CALL, _llm_call_data(None))
