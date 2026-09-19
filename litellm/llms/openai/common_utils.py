@@ -10,7 +10,8 @@ import ssl
 import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Optional
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Optional, cast
 from urllib.parse import urlsplit
 
 import httpx
@@ -34,6 +35,45 @@ from litellm.llms.custom_httpx.http_handler import (
     get_ssl_configuration,
     http2_enabled,
 )
+
+
+def with_openai_project_header(
+    data: Mapping[str, object],
+    provider: str,
+    header_project: str | None = None,
+    query_project: str | None = None,
+    body_project: str | None = None,
+) -> Mapping[str, object]:
+    if provider != "openai":
+        return data
+    configured_project: Final = data.get("project")
+    raw_headers: Final = data.get("extra_headers")
+    extra_headers: Final[Mapping[str, str]] = (
+        cast(Mapping[str, str], raw_headers)  # cast-ok: file and batch APIs type headers as string pairs
+        if isinstance(raw_headers, Mapping)
+        else MappingProxyType({})
+    )
+    project: Final = (
+        (configured_project if isinstance(configured_project, str) else None)
+        or next((value for key, value in extra_headers.items() if key.lower() == "openai-project"), None)
+        or body_project
+        or header_project
+        or query_project
+    )
+    request_data: Final = MappingProxyType({key: value for key, value in data.items() if key != "project"})
+    if not project:
+        return dict(request_data)  # mutable-ok: file endpoint hooks consume dict request payloads
+    return {  # mutable-ok: file endpoint hooks consume dict request payloads
+        **request_data,
+        "extra_headers": MappingProxyType(
+            {
+                **MappingProxyType(
+                    {key: value for key, value in extra_headers.items() if key.lower() != "openai-project"}
+                ),
+                "OpenAI-Project": project,
+            }
+        ),
+    }
 
 
 def _get_client_init_params(cls: type) -> tuple[str, ...]:

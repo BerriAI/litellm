@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.llms.base_llm.managed_resources.isolation import build_list_page
+from litellm.llms.openai.common_utils import with_openai_project_header
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -66,7 +67,6 @@ from litellm.proxy.openai_files_endpoints.batch_guardrails import (
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     add_internal_model_credentials,
-    add_openai_project_header,
     apply_team_provider_credentials,
     encode_file_id_with_model,
     extract_file_creation_params,
@@ -234,6 +234,7 @@ async def route_create_file(
     model: str | None = None,
     target_storage: str | None = "default",
     request: Request | None = None,
+    request_project: str | None = None,
 ) -> OpenAIFileObject:
     """
     Route file creation request to the appropriate provider.
@@ -285,18 +286,20 @@ async def route_create_file(
             credentials=credentials,
         )
 
-        if request is not None:
-            add_openai_project_header(
-                cast(dict[str, object], _create_file_request),  # cast-ok: TypedDict is a dict at runtime
-                request,
-                cast(  # cast-ok: router credentials identify the provider
-                    str, credentials["custom_llm_provider"]
-                ),
-            )
+        model_file_request: Final = cast(  # cast-ok: conversion preserves file request fields
+            CreateFileRequest,
+            with_openai_project_header(
+                _create_file_request,
+                cast(str, credentials["custom_llm_provider"]),  # cast-ok: router credentials identify the provider
+                request.headers.get("openai-project") if request is not None else None,
+                request.query_params.get("project") if request is not None else None,
+                body_project=request_project,
+            ),
+        )
 
         # Create the file with model credentials
         response = await litellm.acreate_file(
-            **_create_file_request,
+            **model_file_request,
             custom_llm_provider=credentials["custom_llm_provider"],
         )
 
@@ -334,32 +337,40 @@ async def route_create_file(
                 param=None,
                 code=500,
             )
-        if request is not None:
-            add_openai_project_header(
-                cast(dict[str, object], _create_file_request),  # cast-ok: TypedDict is a dict at runtime
-                request,
+        managed_file_request: Final = cast(  # cast-ok: conversion preserves file request fields
+            CreateFileRequest,
+            with_openai_project_header(
+                _create_file_request,
                 custom_llm_provider,
-            )
+                request.headers.get("openai-project") if request is not None else None,
+                request.query_params.get("project") if request is not None else None,
+                body_project=request_project,
+            ),
+        )
         # Managed files internally calls llm_router.acreate_file() which includes loadbalancing
         response = await managed_files_obj.acreate_file(
             llm_router=llm_router,
-            create_file_request=_create_file_request,
+            create_file_request=managed_file_request,
             target_model_names_list=target_model_names_list,
             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             user_api_key_dict=user_api_key_dict,
         )
     # EXISTING: Deprecated loadbalancing approach (for backwards compatibility when not using managed files)
     elif litellm.enable_loadbalancing_on_batch_endpoints is True and is_router_model and router_model is not None:
-        if request is not None:
-            add_openai_project_header(
-                cast(dict[str, object], _create_file_request),  # cast-ok: TypedDict is a dict at runtime
-                request,
+        loadbalanced_file_request: Final = cast(  # cast-ok: conversion preserves file request fields
+            CreateFileRequest,
+            with_openai_project_header(
+                _create_file_request,
                 custom_llm_provider,
-            )
+                request.headers.get("openai-project") if request is not None else None,
+                request.query_params.get("project") if request is not None else None,
+                body_project=request_project,
+            ),
+        )
         response = await _deprecated_loadbalanced_create_file(
             llm_router=llm_router,
             router_model=router_model,
-            _create_file_request=_create_file_request,
+            _create_file_request=loadbalanced_file_request,
         )
     else:
         apply_team_provider_credentials(
@@ -374,14 +385,18 @@ async def route_create_file(
             # add llm_provider_config to data
             _create_file_request.update(llm_provider_config)
         _create_file_request.pop("custom_llm_provider", None)
-        if request is not None:
-            add_openai_project_header(
-                cast(dict[str, object], _create_file_request),  # cast-ok: TypedDict is a dict at runtime
-                request,
+        direct_file_request: Final = cast(  # cast-ok: conversion preserves file request fields
+            CreateFileRequest,
+            with_openai_project_header(
+                _create_file_request,
                 custom_llm_provider,
-            )
+                request.headers.get("openai-project") if request is not None else None,
+                request.query_params.get("project") if request is not None else None,
+                body_project=request_project,
+            ),
+        )
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-        response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)
+        response = await litellm.acreate_file(**direct_file_request, custom_llm_provider=custom_llm_provider)
 
     return response
 
@@ -695,11 +710,7 @@ async def create_file(
             **data,
         )
 
-        project_in_body = cast(dict[str, object], request_body).get("project")  # cast-ok: parsed form fields are a dict
-        if isinstance(project_in_body, str):
-            cast(dict[str, object], _create_file_request)["project"] = (  # cast-ok: TypedDict is a dict at runtime
-                project_in_body
-            )
+        project_in_body: Final = cast(Mapping[str, object], request_body).get("project")  # cast-ok: parsed form fields
 
         response = await route_create_file(
             llm_router=llm_router,
@@ -714,6 +725,7 @@ async def create_file(
             model=model_param,
             target_storage=target_storage,
             request=request,
+            request_project=project_in_body if isinstance(project_in_body, str) else None,
         )
 
         if response is None:

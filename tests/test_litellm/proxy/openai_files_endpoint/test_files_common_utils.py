@@ -1,12 +1,10 @@
 from types import MappingProxyType
-from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from starlette.requests import Request
+
 
 from litellm.proxy.openai_files_endpoints.common_utils import (
-    add_openai_project_header,
     apply_unified_file_ids,
     map_raw_file_ids_to_unified,
 )
@@ -480,12 +478,3 @@ class TestCompletedBatchSafeToRetire:
 
     def test_no_output_and_unknown_counts_is_not_safe(self):
         assert _completed_batch_safe_to_retire(_completed_batch_for_retire(None)) is False
-
-
-def test_project_header_preserves_other_configured_headers() -> None:
-    request: Final = Request({"type": "http", "headers": [(b"openai-project", b"proj-request")], "query_string": b""})
-    data: Final[dict[str, object]] = {"extra_headers": {"X-Custom": "keep", "openai-project": "proj-config"}}
-
-    add_openai_project_header(data, request, "openai")
-
-    assert data["extra_headers"] == {"X-Custom": "keep", "OpenAI-Project": "proj-config"}

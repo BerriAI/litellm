@@ -5230,16 +5230,18 @@ def test_get_file_content_keeps_the_status_of_a_rejection_raised_inside_the_rout
 
 
 @pytest.mark.parametrize(
-    ("form_fields", "expected_project"),
+    ("form_fields", "configured_headers", "expected_project"),
     [
-        ({}, "proj-request"),
-        ({"project": "proj-form"}, "proj-form"),
-        ({"model": "gpt-4o"}, "proj-request"),
+        ({}, {}, "proj-request"),
+        ({"project": "proj-form"}, {}, "proj-form"),
+        ({"model": "gpt-4o"}, {}, "proj-request"),
+        ({"project": "proj-form"}, {"openai-project": "proj-config", "X-Deployment": "keep"}, "proj-config"),
     ],
 )
 def test_upload_forwards_openai_project(
     monkeypatch: pytest.MonkeyPatch,
     form_fields: dict[str, str],
+    configured_headers: dict[str, str],
     expected_project: str,
 ) -> None:
     router = Router(
@@ -5258,7 +5260,9 @@ def test_upload_forwards_openai_project(
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "master_key", None)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
-    monkeypatch.setattr(files_endpoints, "files_config", [])
+    monkeypatch.setattr(
+        files_endpoints, "files_config", [{"custom_llm_provider": "openai", "extra_headers": configured_headers}]
+    )
 
     captured_kwargs: dict[str, object] = {}
 
@@ -5292,7 +5296,10 @@ def test_upload_forwards_openai_project(
         proxy_server.app.dependency_overrides.pop(proxy_server.user_api_key_auth, None)
 
     assert response.status_code == 200, response.text
-    assert captured_kwargs["extra_headers"] == {"OpenAI-Project": expected_project}
+    assert captured_kwargs["extra_headers"] == {
+        **{key: value for key, value in configured_headers.items() if key.lower() != "openai-project"},
+        "OpenAI-Project": expected_project,
+    }
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
 
 

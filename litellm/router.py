@@ -714,14 +714,25 @@ def _merged_file_batch_headers(
 ) -> Mapping[str, object]:
     deployment_headers: Final = deployment_params.get("extra_headers")
     request_headers: Final = request_kwargs.get("extra_headers")
-    if not isinstance(deployment_headers, Mapping) or not isinstance(request_headers, Mapping):
+    if not isinstance(deployment_headers, Mapping):
         return MappingProxyType({})
+    configured_headers: Final = cast(Mapping[str, object], deployment_headers)  # cast-ok: validated header mapping
+    if not isinstance(request_headers, Mapping):
+        return MappingProxyType({"extra_headers": configured_headers})
+    caller_headers: Final = cast(Mapping[str, object], request_headers)  # cast-ok: validated header mapping
+    deployment_header_names: Final = frozenset(key.lower() for key in configured_headers)
     return MappingProxyType(
         {
             "extra_headers": MappingProxyType(
                 {
-                    **cast(Mapping[str, object], deployment_headers),  # cast-ok: validated header mapping
-                    **cast(Mapping[str, object], request_headers),  # cast-ok: validated header mapping
+                    **MappingProxyType(
+                        {
+                            key: value
+                            for key, value in caller_headers.items()
+                            if key.lower() not in deployment_header_names
+                        }
+                    ),
+                    **configured_headers,
                 }
             )
         }

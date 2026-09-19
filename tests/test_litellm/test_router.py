@@ -442,7 +442,13 @@ async def test_async_router_acreate_file():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["file", "batch"])
-async def test_routed_file_and_batch_keep_deployment_headers(operation: str) -> None:
+@pytest.mark.parametrize("project_header", [None, "OpenAI-Project", "openai-project"])
+async def test_routed_file_and_batch_keep_deployment_headers(operation: str, project_header: str | None) -> None:
+    deployment_headers: Final = {
+        "X-Deployment": "keep",
+        **({project_header: "proj-deployment"} if project_header else {}),
+    }
+    request_headers: Final = {"OpenAI-Project": "proj-request", "x-deployment": "override", "X-Caller": "keep"}
     router: Final = Router(
         model_list=[
             {
@@ -450,7 +456,7 @@ async def test_routed_file_and_batch_keep_deployment_headers(operation: str) -> 
                 "litellm_params": {
                     "model": "openai/gpt-4o-mini",
                     "api_key": "sk-test",
-                    "extra_headers": {"X-Deployment": "keep"},
+                    "extra_headers": deployment_headers,
                 },
             }
         ]
@@ -462,7 +468,7 @@ async def test_routed_file_and_batch_keep_deployment_headers(operation: str) -> 
                 model="openai-batch",
                 purpose="batch",
                 file=MagicMock(),
-                extra_headers={"OpenAI-Project": "proj-request"},
+                extra_headers=request_headers,
             )
         else:
             await router.acreate_batch(
@@ -470,12 +476,18 @@ async def test_routed_file_and_batch_keep_deployment_headers(operation: str) -> 
                 input_file_id="file-123",
                 endpoint="/v1/chat/completions",
                 completion_window="24h",
-                extra_headers={"OpenAI-Project": "proj-request"},
+                extra_headers=request_headers,
             )
 
     assert provider_call.call_args.kwargs["extra_headers"] == {
         "X-Deployment": "keep",
-        "OpenAI-Project": "proj-request",
+        "X-Caller": "keep",
+        project_header or "OpenAI-Project": "proj-deployment" if project_header else "proj-request",
+    }
+    assert request_headers == {"OpenAI-Project": "proj-request", "x-deployment": "override", "X-Caller": "keep"}
+    assert deployment_headers == {
+        "X-Deployment": "keep",
+        **({project_header: "proj-deployment"} if project_header else {}),
     }
 
 
@@ -486,7 +498,9 @@ def test_merged_file_batch_headers_keeps_unrelated_deployment_headers() -> None:
     assert _merged_file_batch_headers(deployment, request) == {
         "extra_headers": {"X-Deployment": "keep", "OpenAI-Project": "proj-request"}
     }
-    assert _merged_file_batch_headers(deployment, {}) == {}
+    assert _merged_file_batch_headers(deployment, {}) == deployment
+    assert _merged_file_batch_headers(deployment, {"extra_headers": None}) == deployment
+    assert _merged_file_batch_headers({}, request) == {}
     assert deployment["extra_headers"] == {"X-Deployment": "keep"}
 
 

@@ -40,35 +40,6 @@ FILE_LIST_CONTINUATION_CHUNK_SIZE: Final = 500
 BATCH_CREATE_HIDDEN_PARAM: Final = "batch_create"
 
 
-def add_openai_project_header(data: dict[str, object], request: "Request", provider: str) -> None:
-    """Forward an OpenAI project selection using the SDK's per-request headers."""
-    if provider != "openai":
-        return
-
-    configured_project = data.pop("project", None)
-    project = configured_project if isinstance(configured_project, str) else None
-    raw_headers = data.get("extra_headers")
-    if isinstance(raw_headers, dict):
-        extra_headers = cast(  # cast-ok: request API types extra_headers as string pairs
-            dict[str, str], raw_headers
-        )
-    else:
-        extra_headers = {}  # mutable-ok: the SDK requires a per-request header dict
-    if project is None:
-        project = next(
-            (value for key, value in extra_headers.items() if key.lower() == "openai-project"),
-            None,
-        )
-    project = project or request.headers.get("openai-project") or request.query_params.get("project")
-    if project:
-        data["extra_headers"] = {  # mutable-ok: the SDK requires a per-request header dict
-            **{  # mutable-ok: remove duplicate casing from request headers
-                key: value for key, value in extra_headers.items() if key.lower() != "openai-project"
-            },
-            "OpenAI-Project": project,
-        }
-
-
 def validate_file_list_limit(limit: int | None) -> None:
     """Reject a ``limit`` outside the range OpenAI documents for GET /v1/files."""
     if limit is None or 1 <= limit <= MAX_FILE_LIST_LIMIT:
