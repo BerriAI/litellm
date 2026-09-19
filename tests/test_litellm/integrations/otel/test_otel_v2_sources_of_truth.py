@@ -761,7 +761,7 @@ def test_responses_output_text_becomes_one_assistant_choice_with_stop():
 
     assert json.loads(json.dumps(data.choices_out)) == [
         {
-            "message": {"role": "assistant", "content": "pong", "tool_calls": None},
+            "message": {"role": "assistant", "content": "pong", "refusal": None, "tool_calls": None},
             "finish_reason": "stop",
         }
     ]
@@ -835,6 +835,23 @@ def test_responses_content_only_reads_output_text_parts():
     data = LLMCallSpanData.from_standard_logging_payload(_responses_payload([item]), capture_content=True)
 
     assert data.choices_out[0]["message"]["content"] == "ok"
+    assert data.choices_out[0]["message"]["refusal"] == "no"
+
+
+def test_responses_refusal_only_output_keeps_the_refusal_text():
+    item = {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "refusal", "refusal": "I can't "}, {"type": "refusal", "refusal": "help with that."}],
+    }
+    data = LLMCallSpanData.from_standard_logging_payload(_responses_payload([item]), capture_content=True)
+
+    assert json.loads(json.dumps(data.choices_out)) == [
+        {
+            "message": {"role": "assistant", "content": None, "refusal": "I can't help with that.", "tool_calls": None},
+            "finish_reason": "stop",
+        }
+    ]
 
 
 def test_responses_output_without_messages_or_tool_calls_stays_empty():
