@@ -34,6 +34,7 @@ from litellm.constants import (
 )
 from litellm.proxy.anthropic_endpoints.endpoints import anthropic_response, count_tokens
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import _safe_set_request_parsed_body
 
 GATEWAY_PREFIX: Final = "/claude_code_gateway"
 _DEVICE_CODE_GRANT: Final = "urn:ietf:params:oauth:grant-type:device_code"
@@ -349,21 +350,28 @@ async def managed_settings(request: Request) -> Response:
     return Response(content=body.model_dump_json(), media_type="application/json", headers=headers)
 
 
+async def _skip_otlp_body_parsing(request: Request) -> None:
+    _safe_set_request_parsed_body(request=request, parsed_body={})
+
+
+_OTLP_AUTHENTICATED: Final = (Depends(_skip_otlp_body_parsing), *_AUTHENTICATED)
+
+
 def _accept_otlp() -> Response:
     ensure_gateway_enabled()
     return Response(status_code=200)
 
 
-@router.post("/v1/metrics", include_in_schema=False, dependencies=_AUTHENTICATED)
+@router.post("/v1/metrics", include_in_schema=False, dependencies=_OTLP_AUTHENTICATED)
 async def otlp_metrics() -> Response:
     return _accept_otlp()
 
 
-@router.post("/v1/logs", include_in_schema=False, dependencies=_AUTHENTICATED)
+@router.post("/v1/logs", include_in_schema=False, dependencies=_OTLP_AUTHENTICATED)
 async def otlp_logs() -> Response:
     return _accept_otlp()
 
 
-@router.post("/v1/traces", include_in_schema=False, dependencies=_AUTHENTICATED)
+@router.post("/v1/traces", include_in_schema=False, dependencies=_OTLP_AUTHENTICATED)
 async def otlp_traces() -> Response:
     return _accept_otlp()
