@@ -1320,6 +1320,126 @@
     ],
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-stream_full_usage]": [
       "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-embedding-4-small-single]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-embedding-4-small-batch]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-embedding-4-small-token-array]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-embedding-4-large-dimensions]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-text-embedding-4-large-deployment]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[cohere-embed-v5]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[bedrock-titan-embed-v3]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[bedrock-cohere-embed-v4]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[vertex-text-embedding-006]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-embedding-002]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together-embedding-v1]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks-embedding-v1]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-completion-openai-basic]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-completion-openai-stream-usage]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-completion-openai-n-best]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together-completions]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[omni-moderation-next-single]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[omni-moderation-next-list]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-text-embeddings-4-large-deployment]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[bedrock-cohere-embeddings-v4]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[bedrock-cohere-rerank-v4]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[bedrock-embeddings-titan-v2]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[cohere-embeddings-v5]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[cohere-rerank-v4-one]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[cohere-rerank-v4-three]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[cohere-rerank-v4-total-tokens-fallback]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks-embeddings-v1]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-embeddings-002]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[omni-moderations-next-list]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[omni-moderations-next-single]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-completions-openai-basic]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-completions-openai-n-best]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-completions-openai-stream-usage]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-embeddings-3-large-dimensions]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-embeddings-4-small-batch]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-embeddings-4-small-single]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-embeddings-4-small-token-array]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together-completions-v1]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together-embeddings-v1]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[vertex-embeddings-text-006]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
     ]
   },
   "browser": {
