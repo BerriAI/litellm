@@ -28262,7 +28262,7 @@
       "expected": {
         "spend": 0.0135964,
         "input_cost": 0.002484,
-        "output_cost": 0.0011224,
+        "output_cost": 0.0011124,
         "tool_usage_cost": 0.01,
         "prompt_tokens": 1840,
         "completion_tokens": 412
