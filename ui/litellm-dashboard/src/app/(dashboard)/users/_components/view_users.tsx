@@ -1,4 +1,4 @@
-import { parseAsString, useQueryState } from "nuqs";
+import { useQueryStates } from "nuqs";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import BulkEditUserModal from "./BulkEditUsers";
@@ -7,6 +7,8 @@ import { CreateUserButton } from "@/components/CreateUserButton";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import {
   getPossibleUserRoles,
   getProxyBaseUrl,
@@ -33,6 +35,7 @@ import { modelAvailableCall, userDeleteCall } from "@/components/networking";
 import { DefaultUserSettingsForm } from "./default-user-settings/DefaultUserSettingsForm";
 import { UsersTable } from "./view_users/UsersTable";
 import UserInfoView from "./view_users/user_info_view";
+import { USER_DETAIL_URL_PARSERS } from "./view_users/useUserDetailUrlState";
 import { UserInfo } from "@/components/networking";
 
 interface ViewUserDashboardProps {
@@ -44,11 +47,23 @@ interface ViewUserDashboardProps {
   orgAdminOrgIds?: Array<{ organization_id: string; organization_alias: string }> | null;
 }
 
-const DEFAULT_PAGE_SIZE = 25;
+type UserFilterColumn = "user_id" | "sso_user_id" | "user_role" | "team";
 
-const DEFAULT_SORT_BY = "created_at";
+const USER_TABLE_STATE_OPTIONS: UrlTableStateOptions<UserFilterColumn> = {
+  sortFields: ["user_id", "user_email", "user_role", "spend", "created_at"],
+  defaultSort: { id: "created_at", desc: true },
+  defaultPageSize: 25,
+  filterColumns: ["user_id", "sso_user_id", "user_role", "team"],
+  urlKeys: {
+    search: "user_search",
+    filter_sso_user_id: "filter_sso_id",
+    filter_user_role: "filter_role",
+  },
+};
 
-const DEFAULT_SORTING: SortingState = [{ id: DEFAULT_SORT_BY, desc: true }];
+const ADMIN_TABS = ["users", "default-settings"] as const;
+type UsersPageTab = (typeof ADMIN_TABS)[number];
+const MEMBER_TABS: readonly UsersPageTab[] = ["users"];
 
 const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   accessToken,
@@ -61,18 +76,24 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const isProxyAdmin = userRole ? isProxyAdminRole(userRole) : false;
   const queryClient = useQueryClient();
 
-  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
-  const [searchInput, setSearchInput] = useState("");
+  const {
+    search: searchInput,
+    setSearch,
+    sorting,
+    onSortingChange,
+    pagination,
+    onPaginationChange,
+    columnFilters,
+    onColumnFiltersChange,
+  } = useUrlTableState(USER_TABLE_STATE_OPTIONS);
   const [searchQuery] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
+  const [activeTab, setActiveTab] = useUrlTab<UsersPageTab>(isProxyAdmin ? ADMIN_TABS : MEMBER_TABS, "users");
 
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [selectionMode, setSelectionMode] = useState(false);
   const [isBulkEditModalVisible, setIsBulkEditModalVisible] = useState(false);
 
-  const [selectedUserId, setSelectedUserId] = useQueryState("user", parseAsString.withOptions({ history: "push" }));
-  const [openInEditMode, setOpenInEditMode] = useState(false);
+  const [{ user: selectedUserId }, setUserDetail] = useQueryStates(USER_DETAIL_URL_PARSERS);
 
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
@@ -113,41 +134,50 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     [columnFilters],
   );
 
-  const handleSearchChange = useCallback((value: string) => {
-    setSearchInput(value);
-    setPagination((previous) => ({ ...previous, pageIndex: 0 }));
-    setRowSelection({});
-  }, []);
+  const handleSearchChange = useCallback(
+    (value: string) => {
+      setSearch(value);
+      setRowSelection({});
+    },
+    [setSearch],
+  );
 
-  const handleSortingChange = useCallback<OnChangeFn<SortingState>>((updaterOrValue) => {
-    setSorting(updaterOrValue);
-    setPagination((previous) => ({ ...previous, pageIndex: 0 }));
-    setRowSelection({});
-  }, []);
+  const handleSortingChange = useCallback<OnChangeFn<SortingState>>(
+    (updaterOrValue) => {
+      onSortingChange(updaterOrValue);
+      setRowSelection({});
+    },
+    [onSortingChange],
+  );
 
-  const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>((updaterOrValue) => {
-    setColumnFilters(updaterOrValue);
-    setPagination((previous) => ({ ...previous, pageIndex: 0 }));
-    setRowSelection({});
-  }, []);
+  const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>(
+    (updaterOrValue) => {
+      onColumnFiltersChange(updaterOrValue);
+      setRowSelection({});
+    },
+    [onColumnFiltersChange],
+  );
 
-  const handlePaginationChange = useCallback<OnChangeFn<PaginationState>>((updaterOrValue) => {
-    setPagination(updaterOrValue);
-    setRowSelection({});
-  }, []);
+  const handlePaginationChange = useCallback<OnChangeFn<PaginationState>>(
+    (updaterOrValue) => {
+      onPaginationChange(updaterOrValue);
+      setRowSelection({});
+    },
+    [onPaginationChange],
+  );
 
   const handleUserClick = useCallback(
     (userId: string, openInEdit: boolean = false) => {
-      void setSelectedUserId(userId);
-      setOpenInEditMode(openInEdit);
+      void setUserDetail(
+        openInEdit ? { user: userId, user_tab: "details", edit: true } : { user: userId, user_tab: null, edit: null },
+      );
     },
-    [setSelectedUserId],
+    [setUserDetail],
   );
 
   const handleCloseUserInfo = useCallback(() => {
-    void setSelectedUserId(null);
-    setOpenInEditMode(false);
-  }, [setSelectedUserId]);
+    void setUserDetail(null);
+  }, [setUserDetail]);
 
   const handleDelete = useCallback((user: UserInfo) => {
     setUserToDelete(user);
@@ -214,9 +244,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     setSelectionMode(false);
   };
 
-  const activeSort = sorting[0];
-  const sortBy = activeSort?.id ?? DEFAULT_SORT_BY;
-  const sortOrder: "asc" | "desc" = activeSort?.desc ?? true ? "desc" : "asc";
+  const [activeSort] = sorting;
+  const sortBy = activeSort.id;
+  const sortOrder: "asc" | "desc" = activeSort.desc ? "desc" : "asc";
 
   const userIdFilter = getFilterValue("user_id");
   const ssoUserIdFilter = getFilterValue("sso_user_id");
@@ -285,8 +315,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         accessToken={accessToken}
         userRole={userRole}
         possibleUIRoles={possibleUIRoles}
-        initialTab={openInEditMode ? 1 : 0}
-        startInEditMode={openInEditMode}
       />
     );
   }
@@ -296,6 +324,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       data={users}
       rowCount={totalUserCount}
       isLoading={userListQuery.isLoading || userListQuery.isPlaceholderData}
+      isError={userListQuery.isError}
       possibleUIRoles={possibleUIRoles}
       teams={teams}
       sorting={sorting}
@@ -363,7 +392,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       </div>
 
       {isProxyAdmin ? (
-        <Tabs defaultValue="users" className="gap-0">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-0">
           <TabsList variant="line" className="mb-4">
             <TabsTrigger value="users" className="flex-none data-active:text-primary after:bg-primary">
               Users

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 
 import { AreaChart, BarChart, CustomLegend } from "@/components/shared/charts";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
@@ -14,7 +14,6 @@ import {
   MAX_POINTS_WITH_DOTS,
   SAVINGS_COLORS,
   SAVINGS_SERIES,
-  SavingsAccumulation,
   SavingsPoint,
   savingsSeriesOf,
   shortDate,
@@ -26,6 +25,7 @@ import {
   useScopedDailyActivityRange,
   type ActivityDateRange,
 } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
+import { useKeySavingsView } from "./useKeyDetailUrlState";
 
 interface KeySavingsTabProps {
   accessToken: string | null;
@@ -49,7 +49,7 @@ const KeySavingsTab: React.FC<KeySavingsTabProps> = ({ accessToken, keyToken, us
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
 
-  const [accumulation, setAccumulation] = useState<SavingsAccumulation>("cumulative");
+  const [accumulation, setAccumulation] = useKeySavingsView();
 
   const perInterval = useMemo<SavingsPoint[]>(() => savingsSeriesOf(results), [results]);
 
@@ -101,7 +101,7 @@ const KeySavingsTab: React.FC<KeySavingsTabProps> = ({ accessToken, keyToken, us
           <CardDescription>{savingsSubtitle}</CardDescription>
           <CardAction className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
             <CustomLegend categories={SAVINGS_SERIES} colors={SAVINGS_COLORS} />
-            <Tabs value={accumulation} onValueChange={(value) => setAccumulation(value as SavingsAccumulation)}>
+            <Tabs value={accumulation} onValueChange={setAccumulation}>
               <TabsList>
                 <TabsTrigger value="cumulative">Cumulative</TabsTrigger>
                 <TabsTrigger value="per-interval">{intervalLabel}</TabsTrigger>

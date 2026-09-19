@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { render, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import KeySavingsTab from "./KeySavingsTab";
 import { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import * as useScopedDailyActivityRangeModule from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
@@ -52,17 +54,24 @@ const activity = {
   onDateChange: vi.fn(),
 };
 
-const renderTab = (props: Partial<React.ComponentProps<typeof KeySavingsTab>> = {}) =>
-  render(
-    <KeySavingsTab
-      accessToken="test-token"
-      keyToken="key-abc123"
-      userId="user-123"
-      userRole="Internal User"
-      activity={activity}
-      {...props}
-    />,
-  );
+const savingsTab = (props: Partial<React.ComponentProps<typeof KeySavingsTab>> = {}) => (
+  <KeySavingsTab
+    accessToken="test-token"
+    keyToken="key-abc123"
+    userId="user-123"
+    userRole="Internal User"
+    activity={activity}
+    {...props}
+  />
+);
+
+const renderTab = (
+  props: Partial<React.ComponentProps<typeof KeySavingsTab>> = {},
+  urlOptions: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction } = {},
+) => renderWithProviders(savingsTab(props), urlOptions);
+
+const lastSavingsView = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+  onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("key_savings_view");
 
 describe("KeySavingsTab", () => {
   beforeEach(() => {
@@ -141,5 +150,53 @@ describe("KeySavingsTab", () => {
 
     expect(hook).toHaveBeenCalledWith("test-token", { userId: "org-admin-1", apiKey: "key-abc123" }, activity);
     expect(screen.getByTestId("key-savings-scope-note")).toHaveTextContent("Showing your own requests");
+  });
+
+  describe("cumulative or per-day view in the URL", () => {
+    it("opens on the per-day view named by ?key_savings_view=", () => {
+      scopedRange().mockReturnValue(mockActivity());
+
+      renderTab({}, { searchParams: "?key_savings_view=per-interval" });
+
+      expect(screen.getByRole("tab", { name: "Per day" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByText(/^Saved per day/)).toBeInTheDocument();
+    });
+
+    it("writes the chosen view to the URL and drops it again for the cumulative default", async () => {
+      scopedRange().mockReturnValue(mockActivity());
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      const user = userEvent.setup();
+      renderTab({}, { onUrlUpdate });
+
+      await user.click(screen.getByRole("tab", { name: "Per day" }));
+
+      await waitFor(() => expect(lastSavingsView(onUrlUpdate)).toBe("per-interval"));
+      expect(screen.getByText(/^Saved per day/)).toBeInTheDocument();
+
+      await user.click(screen.getByRole("tab", { name: "Cumulative" }));
+
+      await waitFor(() => expect(lastSavingsView(onUrlUpdate)).toBeNull());
+      expect(screen.getByText(/^Running total saved/)).toBeInTheDocument();
+    });
+
+    it("shows the cumulative view for an unknown value and removes it from the URL", async () => {
+      scopedRange().mockReturnValue(mockActivity());
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      render(
+        <NuqsTestingAdapter
+          searchParams="?key_savings_view=weekly&key_tab=savings"
+          onUrlUpdate={onUrlUpdate}
+          hasMemory
+          resetUrlUpdateQueueOnMount={false}
+        >
+          {savingsTab()}
+        </NuqsTestingAdapter>,
+      );
+
+      expect(screen.getByRole("tab", { name: "Cumulative" })).toHaveAttribute("aria-selected", "true");
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("key_savings_view")).toBe(false);
+      expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("key_tab")).toBe("savings");
+    });
   });
 });
