@@ -10,8 +10,9 @@ from hashlib import sha256
 from typing import Final, TypeVar
 
 import httpx
-from integration._support.database import read_rows
 from pydantic import JsonValue, TypeAdapter
+
+from tests.integration._support.database import read_rows
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 T = TypeVar("T")
@@ -160,7 +161,7 @@ class Scenario:
         assert all(object_value(object_value(entry)["model_info"])["id"] != identity for entry in entries)
         assert read_rows('SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)) == []
 
-    def model(self, **parameters: JsonValue) -> str:
+    def model(self, *, model_info: Mapping[str, JsonValue] | None = None, **parameters: JsonValue) -> str:
         name: Final = f"integration-{uuid.uuid4().hex}"
         created: Final = self.gateway.post(
             "/model/new",
@@ -172,7 +173,7 @@ class Scenario:
                     "api_base": f"{self.gateway.upstream_url}/v1",
                     **parameters,
                 },
-                "model_info": {},
+                "model_info": dict(model_info) if model_info is not None else {},
             },
         )
         identity: Final = string_value(object_value(created["model_info"])["id"])

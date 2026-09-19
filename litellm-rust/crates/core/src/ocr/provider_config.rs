@@ -1,41 +1,66 @@
+use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
+use litellm_llms::{
+    azure_ai::ocr::{
+        cohere_parse_transformation::AzureAICohereParseConfig,
+        document_intelligence::transformation::AzureDocumentIntelligenceOcrConfig,
+        transformation::AzureAiOcrConfig,
+    },
+    base_llm::ocr::{
+        error::Error,
+        transformation::{
+            BaseOcrConfig, LiteLLMOcrResponse, OcrCredentialInputs, OcrDocument,
+            PreparedOcrRequest, ResolvedOcrCredentials,
+        },
+    },
+    cohere::ocr::transformation::CohereParseConfig,
+    custom_httpx::llm_http_handler::{self, CallHooks, OcrClient},
+    mistral::ocr::transformation::MistralOcrConfig,
+    reducto::ocr::transformation::{ReductoParseLegacyConfig, ReductoParseV3Config},
+    vertex_ai::ocr::{
+        deepseek_transformation::VertexAIDeepSeekOCRConfig, transformation::VertexAiOcrConfig,
+    },
+};
 use strum::{EnumString, IntoStaticStr};
 
-use super::OcrClient;
-use super::types::{
-    LiteLLMOcrResponse, OcrCredentialInputs, OcrDocument, PreparedOcrRequest,
-    ResolvedOcrCredentials,
-};
-use crate::litellm_core_utils::get_llm_provider_logic::{
-    CustomLlmProvider, get_custom_llm_provider,
-};
-use crate::llms::azure_ai::ocr::cohere_parse_transformation::AzureAICohereParseConfig;
-use crate::llms::azure_ai::ocr::document_intelligence::transformation::AzureDocumentIntelligenceOcrConfig;
-use crate::llms::azure_ai::ocr::transformation::AzureAiOcrConfig;
-use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrResponseContext};
-use crate::llms::cohere::ocr::transformation::CohereParseConfig;
-use crate::llms::mistral::ocr::transformation::MistralOcrConfig;
-use crate::llms::reducto::ocr::transformation::{ReductoParseLegacyConfig, ReductoParseV3Config};
-use crate::llms::vertex_ai::ocr::deepseek_transformation::VertexAIDeepSeekOCRConfig;
-use crate::llms::vertex_ai::ocr::transformation::VertexAiOcrConfig;
-
-macro_rules! dispatch_config {
-    ($config:expr, $method:ident($($argument:expr),* $(,)?)) => {
-        dispatch_config!(@arms $config, $method($($argument),*), )
-    };
-    ($config:expr, $method:ident($($argument:expr),* $(,)?).await) => {
-        dispatch_config!(@arms $config, $method($($argument),*), .await)
-    };
-    (@arms $config:expr, $method:ident($($argument:expr),*), $($suffix:tt)*) => {
-        match $config {
-            OcrConfigKind::Cohere => CohereParseConfig.$method($($argument),*)$($suffix)*,
-            OcrConfigKind::Mistral => MistralOcrConfig.$method($($argument),*)$($suffix)*,
-            OcrConfigKind::AzureAi => AzureAiOcrConfig.$method($($argument),*)$($suffix)*,
-            OcrConfigKind::AzureCohere => AzureAICohereParseConfig.$method($($argument),*)$($suffix)*,
-            OcrConfigKind::AzureDocumentIntelligence => AzureDocumentIntelligenceOcrConfig.$method($($argument),*)$($suffix)*,
-            OcrConfigKind::ReductoLegacy => ReductoParseLegacyConfig.$method($($argument),*)$($suffix)*,
-            OcrConfigKind::ReductoV3 => ReductoParseV3Config.$method($($argument),*)$($suffix)*,
-            OcrConfigKind::VertexAi => VertexAiOcrConfig.$method($($argument),*)$($suffix)*,
-            OcrConfigKind::VertexDeepSeek => VertexAIDeepSeekOCRConfig.$method($($argument),*)$($suffix)*,
+macro_rules! with_config {
+    ($kind:expr, $config:ident => $body:expr) => {
+        match $kind {
+            OcrConfigKind::Cohere => {
+                let $config = CohereParseConfig;
+                $body
+            }
+            OcrConfigKind::Mistral => {
+                let $config = MistralOcrConfig;
+                $body
+            }
+            OcrConfigKind::AzureAi => {
+                let $config = AzureAiOcrConfig;
+                $body
+            }
+            OcrConfigKind::AzureCohere => {
+                let $config = AzureAICohereParseConfig;
+                $body
+            }
+            OcrConfigKind::AzureDocumentIntelligence => {
+                let $config = AzureDocumentIntelligenceOcrConfig;
+                $body
+            }
+            OcrConfigKind::ReductoLegacy => {
+                let $config = ReductoParseLegacyConfig;
+                $body
+            }
+            OcrConfigKind::ReductoV3 => {
+                let $config = ReductoParseV3Config;
+                $body
+            }
+            OcrConfigKind::VertexAi => {
+                let $config = VertexAiOcrConfig;
+                $body
+            }
+            OcrConfigKind::VertexDeepSeek => {
+                let $config = VertexAIDeepSeekOCRConfig;
+                $body
+            }
         }
     };
 }
@@ -67,58 +92,38 @@ impl OcrConfigKind {
     }
 
     pub(crate) fn get_supported_ocr_params(self, model: &str) -> &'static [&'static str] {
-        dispatch_config!(self, get_supported_ocr_params(model))
+        with_config!(self, config => config.get_supported_ocr_params(model))
     }
 
     pub(crate) fn get_api_key_env_var(self) -> Option<&'static str> {
-        dispatch_config!(self, get_api_key_env_var())
+        with_config!(self, config => config.get_api_key_env_var())
     }
 
     pub(crate) fn get_health_check_document(self) -> OcrDocument {
-        dispatch_config!(self, get_health_check_document())
+        with_config!(self, config => config.get_health_check_document())
     }
 
     pub(crate) fn resolve_connection_params(
         self,
         inputs: OcrCredentialInputs,
     ) -> ResolvedOcrCredentials {
-        dispatch_config!(self, resolve_connection_params(inputs))
+        with_config!(self, config => config.resolve_connection_params(inputs))
     }
 
-    pub(crate) fn get_error_class(
+    pub(crate) async fn ocr(
         self,
-        message: String,
-        status: u16,
-        headers: Vec<(String, String)>,
-    ) -> super::Error {
-        dispatch_config!(self, get_error_class(message, status, headers))
-    }
-
-    pub(crate) async fn prepare_request(
-        self,
-        request: &PreparedOcrRequest,
         client: &OcrClient,
-    ) -> Result<reqwest::Request, super::Error> {
-        dispatch_config!(self, prepare_request(request, client).await)
-    }
-
-    pub(crate) async fn async_transform_ocr_response(
-        self,
-        model: &str,
-        raw_response: reqwest::Response,
-        context: OcrResponseContext<'_>,
-    ) -> Result<LiteLLMOcrResponse, super::Error> {
-        dispatch_config!(
-            self,
-            async_transform_ocr_response(model, raw_response, context).await
-        )
+        request: &PreparedOcrRequest,
+        hooks: &dyn CallHooks<Error>,
+    ) -> Result<LiteLLMOcrResponse, Error> {
+        with_config!(self, config => llm_http_handler::ocr(&config, client, request, hooks).await)
     }
 }
 
 pub fn get_api_key_env_var(
     model: &str,
     custom_llm_provider: Option<&str>,
-) -> Result<Option<&'static str>, super::Error> {
+) -> Result<Option<&'static str>, Error> {
     Ok(resolve_provider_config(model, custom_llm_provider)?
         .1
         .get_api_key_env_var())
@@ -127,7 +132,7 @@ pub fn get_api_key_env_var(
 pub fn get_health_check_document(
     model: &str,
     custom_llm_provider: Option<&str>,
-) -> Result<OcrDocument, super::Error> {
+) -> Result<OcrDocument, Error> {
     Ok(resolve_provider_config(model, custom_llm_provider)?
         .1
         .get_health_check_document())
@@ -146,7 +151,7 @@ pub(crate) enum OcrProvider {
 pub(crate) fn resolve_provider_config(
     model: &str,
     custom_llm_provider: Option<&str>,
-) -> Result<(String, OcrConfigKind), super::Error> {
+) -> Result<(String, OcrConfigKind), Error> {
     let provider =
         get_custom_llm_provider(model, custom_llm_provider).unwrap_or(CustomLlmProvider {
             model,
@@ -155,7 +160,7 @@ pub(crate) fn resolve_provider_config(
     let ocr_provider = provider
         .custom_llm_provider
         .parse::<OcrProvider>()
-        .map_err(|_| super::Error::InvalidProvider(provider.custom_llm_provider.to_string()))?;
+        .map_err(|_| Error::InvalidProvider(provider.custom_llm_provider.to_string()))?;
     let config = match ocr_provider {
         OcrProvider::Cohere => OcrConfigKind::Cohere,
         OcrProvider::Mistral => OcrConfigKind::Mistral,
@@ -189,6 +194,9 @@ fn is_document_intelligence_model(model: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use litellm_auth::{InputSource, Sourced};
+    use litellm_llms::{
+        base_llm::ocr::document::InlineDocument, cohere::ocr::transformation::validate_document,
+    };
     use rstest::rstest;
 
     use super::*;
@@ -211,7 +219,7 @@ mod tests {
     fn invalid_provider_names_are_rejected(#[case] provider: &str) {
         assert!(matches!(
             resolve_provider_config("model", Some(provider)),
-            Err(crate::ocr::Error::InvalidProvider(value)) if value == provider
+            Err(Error::InvalidProvider(value)) if value == provider
         ));
     }
 
@@ -225,9 +233,7 @@ mod tests {
     fn pdf_health_check_documents_are_valid(#[case] model: &str) {
         let document = get_health_check_document(model, None).unwrap();
         assert!(matches!(document, OcrDocument::DocumentUrl { .. }));
-        let inline = crate::ocr::document::InlineDocument::parse(document.source())
-            .unwrap()
-            .unwrap();
+        let inline = InlineDocument::parse(document.source()).unwrap().unwrap();
         assert_eq!(inline.mime_type().to_string(), "application/pdf");
         assert!(inline.decode(4096).unwrap().starts_with(b"%PDF-"));
     }
@@ -237,10 +243,8 @@ mod tests {
     #[case("azure_ai/cohere-parse")]
     fn png_health_check_documents_are_valid(#[case] model: &str) {
         let document = get_health_check_document(model, None).unwrap();
-        crate::llms::cohere::ocr::validate_document(&document).unwrap();
-        let inline = crate::ocr::document::InlineDocument::parse(document.source())
-            .unwrap()
-            .unwrap();
+        validate_document(&document).unwrap();
+        let inline = InlineDocument::parse(document.source()).unwrap().unwrap();
         assert_eq!(inline.mime_type().to_string(), "image/png");
         assert!(
             inline
@@ -273,12 +277,18 @@ mod tests {
     #[test]
     fn connection_resolution_preserves_dynamic_precedence_and_input_sources() {
         let connection = OcrConfigKind::Mistral.resolve_connection_params(OcrCredentialInputs {
-            api_key: Some(Sourced::new("explicit-key".into(), InputSource::Deployment)),
+            api_key: Some(Sourced::new(
+                litellm_auth::SecretValue::new("explicit-key"),
+                InputSource::Deployment,
+            )),
             api_base: Some(Sourced::new(
                 "https://explicit.test".into(),
                 InputSource::Deployment,
             )),
-            dynamic_api_key: Some(Sourced::new("dynamic-key".into(), InputSource::Environment)),
+            dynamic_api_key: Some(Sourced::new(
+                litellm_auth::SecretValue::new("dynamic-key"),
+                InputSource::Environment,
+            )),
             dynamic_api_base: Some(Sourced::new(
                 "https://dynamic.test".into(),
                 InputSource::Request,
@@ -288,7 +298,7 @@ mod tests {
             connection
                 .api_key
                 .as_ref()
-                .map(|value| value.value().as_str()),
+                .map(|value| value.value().expose()),
             Some("dynamic-key")
         );
         assert_eq!(
@@ -314,22 +324,31 @@ mod tests {
     fn empty_or_missing_dynamic_credentials_preserve_explicit_values(
         #[case] dynamic_value: Option<&str>,
     ) {
-        let dynamic =
+        let dynamic_key = dynamic_value.map(|value| {
+            Sourced::new(
+                litellm_auth::SecretValue::new(value),
+                InputSource::Environment,
+            )
+        });
+        let dynamic_base =
             dynamic_value.map(|value| Sourced::new(value.into(), InputSource::Environment));
         let connection = OcrConfigKind::Mistral.resolve_connection_params(OcrCredentialInputs {
-            api_key: Some(Sourced::new("explicit-key".into(), InputSource::Deployment)),
+            api_key: Some(Sourced::new(
+                litellm_auth::SecretValue::new("explicit-key"),
+                InputSource::Deployment,
+            )),
             api_base: Some(Sourced::new(
                 "https://explicit.test".into(),
                 InputSource::Deployment,
             )),
-            dynamic_api_key: dynamic.clone(),
-            dynamic_api_base: dynamic,
+            dynamic_api_key: dynamic_key,
+            dynamic_api_base: dynamic_base,
         });
         assert_eq!(
             connection
                 .api_key
                 .as_ref()
-                .map(|value| value.value().as_str()),
+                .map(|value| value.value().expose()),
             Some("explicit-key")
         );
         assert_eq!(
@@ -352,11 +371,18 @@ mod tests {
     ) {
         let connection = OcrConfigKind::AzureDocumentIntelligence.resolve_connection_params(
             OcrCredentialInputs {
-                api_key: explicit_key
-                    .map(|value| Sourced::new(value.into(), InputSource::Deployment)),
+                api_key: explicit_key.map(|value| {
+                    Sourced::new(
+                        litellm_auth::SecretValue::new(value),
+                        InputSource::Deployment,
+                    )
+                }),
                 api_base: explicit_base
                     .map(|value| Sourced::new(value.into(), InputSource::Deployment)),
-                dynamic_api_key: Some(Sourced::new("dynamic-key".into(), InputSource::Environment)),
+                dynamic_api_key: Some(Sourced::new(
+                    litellm_auth::SecretValue::new("dynamic-key"),
+                    InputSource::Environment,
+                )),
                 dynamic_api_base: Some(Sourced::new(
                     "https://dynamic.test".into(),
                     InputSource::Deployment,
@@ -367,7 +393,7 @@ mod tests {
             connection
                 .api_key
                 .as_ref()
-                .map(|value| value.value().as_str()),
+                .map(|value| value.value().expose()),
             explicit_key.map(|_| "dynamic-key")
         );
         assert_eq!(
@@ -428,9 +454,7 @@ mod tests {
         #[case] provider: Option<&str>,
     ) {
         let error = resolve_provider_config(model, provider).unwrap_err();
-        assert!(
-            matches!(&error, crate::ocr::Error::InvalidProvider(provider) if provider == "not_a_provider")
-        );
+        assert!(matches!(&error, Error::InvalidProvider(provider) if provider == "not_a_provider"));
         assert_eq!(error.http_status_code(), Some(400));
     }
 }
