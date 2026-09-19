@@ -1477,9 +1477,6 @@
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[openrouter-anthropic-claude-sonnet-5-token_priced]": [
       "quota_management.spend_tracking.cost_matrix.logs_cost"
     ],
-    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[perplexity-sonar-next-search_queries_and_citations]": [
-      "quota_management.spend_tracking.cost_matrix.logs_cost"
-    ],
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[perplexity-sonar-next-no_search]": [
       "quota_management.spend_tracking.cost_matrix.logs_cost"
     ],

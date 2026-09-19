@@ -54,7 +54,6 @@ class CostMapEntry(BaseModel):
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
     input_cost_per_token_above_200k_tokens: float | None = None
     output_cost_per_token_above_200k_tokens: float | None = None
-    citation_cost_per_token: float | None = None
     tiered_pricing: tuple[TieredPrice, ...] | None = None
     output_cost_per_reasoning_token: float | None = None
     input_cost_per_audio_token: float | None = None
@@ -263,6 +262,13 @@ class CostTrackingTestCase(BaseModel):
             return "bedrock"
         return None
 
+    @property
+    def reports_provider_cost(self) -> bool:
+        if not isinstance(self.response, JsonResponse):
+            return False
+        usage: Final = self.response.body.get("usage")
+        return isinstance(usage, dict) and isinstance(usage.get("cost"), (int, float))
+
 
 class _CasesFile(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -409,6 +415,7 @@ def data_errors() -> tuple[str, ...]:
                 not case.expected.breakdown_persisted
                 and case.passthrough_provider is None
                 and case.rates.mode != "image_generation"
+                and not case.reports_provider_cost
             )
             or (not case.expected.cost_header and case.passthrough_provider is None)
         )

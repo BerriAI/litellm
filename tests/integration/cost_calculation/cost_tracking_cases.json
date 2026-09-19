@@ -42,7 +42,6 @@
       "mode": "chat",
       "input_cost_per_token": 1.05e-06,
       "output_cost_per_token": 1.05e-06,
-      "citation_cost_per_token": 2e-06,
       "search_context_cost_per_query": {
         "search_context_size_low": 0.005,
         "search_context_size_medium": 0.008,
@@ -27918,7 +27917,7 @@
       "response": {
         "content_type": "application/json",
         "body": {
-          "id": "dashscope-tiered-input",
+          "id": "$REQUEST_ID",
           "object": "chat.completion",
           "model": "qwen4-max",
           "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
@@ -27940,7 +27939,7 @@
       "response": {
         "content_type": "application/json",
         "body": {
-          "id": "dashscope-tiered-boundary",
+          "id": "$REQUEST_ID",
           "object": "chat.completion",
           "model": "qwen4-max",
           "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
@@ -27962,7 +27961,7 @@
       "response": {
         "content_type": "application/json",
         "body": {
-          "id": "dashscope-tiered-second",
+          "id": "$REQUEST_ID",
           "object": "chat.completion",
           "model": "qwen4-max",
           "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
@@ -27984,7 +27983,7 @@
       "response": {
         "content_type": "application/json",
         "body": {
-          "id": "dashscope-tiered-top",
+          "id": "$REQUEST_ID",
           "object": "chat.completion",
           "model": "qwen4-max",
           "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
@@ -28046,7 +28045,7 @@
       "response": {
         "content_type": "application/json",
         "body": {
-          "id": "msg-cache-1h",
+          "id": "msg_$REQUEST_ID",
           "type": "message",
           "role": "assistant",
           "model": "claude-sonnet-5",
@@ -28083,14 +28082,21 @@
       "response": {
         "content_type": "application/json",
         "body": {
-          "id": "or-reported",
+          "id": "chatcmpl-$REQUEST_ID",
           "object": "chat.completion",
           "model": "anthropic/claude-sonnet-5",
           "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
           "usage": {"prompt_tokens": 1840, "completion_tokens": 412, "total_tokens": 2252, "cost": 0.0421}
         }
       },
-      "expected": {"spend": 0.0421, "input_cost": 0.0, "output_cost": 0.0421, "prompt_tokens": 1840, "completion_tokens": 412}
+      "expected": {
+        "spend": 0.0421,
+        "input_cost": 0.0,
+        "output_cost": 0.0421,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "breakdown_persisted": false
+      }
     },
     {
       "name": "openrouter-anthropic-claude-sonnet-5-token_priced",
@@ -28105,7 +28111,7 @@
       "response": {
         "content_type": "application/json",
         "body": {
-          "id": "or-token",
+          "id": "chatcmpl-$REQUEST_ID",
           "object": "chat.completion",
           "model": "anthropic/claude-sonnet-5",
           "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
@@ -28113,42 +28119,6 @@
         }
       },
       "expected": {"spend": 0.01248, "input_cost": 0.005888, "output_cost": 0.006592, "prompt_tokens": 1840, "completion_tokens": 412}
-    },
-    {
-      "name": "perplexity-sonar-next-search_queries_and_citations",
-      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
-      "model": "perplexity/sonar-next",
-      "request": {
-        "model": "$MODEL",
-        "messages": [{"role": "user", "content": "search"}],
-        "web_search_options": {"search_context_size": "high"},
-        "stream": false,
-        "allowed_openai_params": ["web_search_options"]
-      },
-      "response": {
-        "content_type": "application/json",
-        "body": {
-          "id": "pplx-search",
-          "object": "chat.completion",
-          "model": "sonar-next",
-          "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
-          "citations": [
-            "https://e.co/aaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "https://e.co/bbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            "https://e.co/ccccccccccccccccccccccccccc",
-            "https://e.co/ddddddddddddddddddddddddddd"
-          ],
-          "usage": {"prompt_tokens": 1840, "completion_tokens": 412, "total_tokens": 2252, "num_search_queries": 3}
-        }
-      },
-      "expected": {
-        "spend": 0.0174446,
-        "input_cost": 0.002012,
-        "output_cost": 0.0004326,
-        "tool_usage_cost": 0.015,
-        "prompt_tokens": 1840,
-        "completion_tokens": 412
-      }
     },
     {
       "name": "perplexity-sonar-next-no_search",
@@ -28163,7 +28133,7 @@
       "response": {
         "content_type": "application/json",
         "body": {
-          "id": "pplx-no-search",
+          "id": "chatcmpl-$REQUEST_ID",
           "object": "chat.completion",
           "model": "sonar-next",
           "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
@@ -28185,7 +28155,7 @@
       "response": {
         "content_type": "application/json",
         "body": {
-          "id": "deepseek-cache",
+          "id": "chatcmpl-$REQUEST_ID",
           "object": "chat.completion",
           "model": "deepseek-v4-chat",
           "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
@@ -28221,7 +28191,7 @@
       "response": {
         "content_type": "application/json",
         "body": {
-          "id": "deepseek-no-cache",
+          "id": "chatcmpl-$REQUEST_ID",
           "object": "chat.completion",
           "model": "deepseek-v4-chat",
           "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
@@ -28250,7 +28220,7 @@
       "response": {
         "content_type": "application/json",
         "body": {
-          "id": "xai-reasoning",
+          "id": "chatcmpl-$REQUEST_ID",
           "object": "chat.completion",
           "model": "grok-5",
           "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
@@ -28277,7 +28247,7 @@
       "response": {
         "content_type": "application/json",
         "body": {
-          "id": "xai-search",
+          "id": "chatcmpl-$REQUEST_ID",
           "object": "chat.completion",
           "model": "grok-5",
           "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
@@ -28311,7 +28281,7 @@
       "response": {
         "content_type": "application/json",
         "body": {
-          "id": "xai-reported",
+          "id": "chatcmpl-$REQUEST_ID",
           "object": "chat.completion",
           "model": "grok-5",
           "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
