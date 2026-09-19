@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, PoisonError},
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 
 use reqwest::dns::Resolve;
@@ -38,13 +38,15 @@ impl HttpClientPool {
         variant: ClientVariant,
     ) -> Result<reqwest::Client, Error> {
         let key = (config.clone(), variant);
-        let mut clients = self.clients.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(client) = clients.get(&key) {
+        if let Some(client) = self.lock().get(&key) {
             return Ok(client.clone());
         }
         let client = self.apply(variant, config.client_builder()?).build()?;
-        clients.insert(key, client.clone());
-        Ok(client)
+        Ok(self.lock().entry(key).or_insert(client).clone())
+    }
+
+    fn lock(&self) -> MutexGuard<'_, HashMap<(HttpClientConfig, ClientVariant), reqwest::Client>> {
+        self.clients.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn apply(
