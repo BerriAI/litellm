@@ -50,3 +50,16 @@ def test_bucket_alone_leaves_the_index_to_be_generated():
 def test_no_bucket_anywhere_is_rejected(vector_store):
     with pytest.raises(ValueError, match=STORE_ID_FORMAT_ERROR):
         _ingestion(**vector_store)
+
+
+@pytest.mark.parametrize(
+    "vector_store",
+    [
+        {"vector_store_id": "my-embeddings:"},
+        {"vector_store_id": ":my-index"},
+        {"vector_store_id": "my-embeddings:", "vector_bucket_name": "my-embeddings"},
+    ],
+)
+def test_an_empty_bucket_or_index_in_the_store_id_is_rejected_instead_of_generating_an_index(vector_store):
+    with pytest.raises(ValueError, match=STORE_ID_FORMAT_ERROR):
+        _ingestion(**vector_store)
