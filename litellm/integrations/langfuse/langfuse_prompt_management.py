@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prompt_management_base import PromptManagementClient
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.integrations.langfuse import LangfuseLoggedEvent
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionSystemMessage
 from litellm.types.prompts.init_prompts import PromptSpec
@@ -92,20 +93,7 @@ def langfuse_client_init(
     raise_if_unsupported_langfuse_version(installed_langfuse_version())
     warn_if_upstream_langfuse_configured()
 
-    import httpx
-
-    import litellm
-
-    from ...llms.custom_httpx.http_handler import get_ssl_configuration
-
-    httpx_client: Final = (
-        create_mock_langfuse_client()
-        if should_use_langfuse_mock()
-        else httpx.Client(
-            verify=get_ssl_configuration(),
-            cert=os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate),
-        )
-    )
+    httpx_client: Final = create_mock_langfuse_client() if should_use_langfuse_mock() else HTTPHandler().client
     return build_langfuse_client(
         public_key=public_key,
         secret_key=secret_key,

@@ -21,6 +21,7 @@ from langfuse import LangfuseOtelSpanAttributes
 from langfuse.api import LangfuseAPI, Prompt, Prompt_Chat
 from langfuse.model import BasePromptClient, ChatPromptClient, PromptClient, TextPromptClient
 from opentelemetry.context import Context
+from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
@@ -28,18 +29,18 @@ from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
 from opentelemetry.sdk.trace.sampling import ALWAYS_ON, Decision, Sampler, SamplingResult
 from opentelemetry.trace import Link, NonRecordingSpan, Span, SpanContext, SpanKind, TraceFlags, Tracer, TraceState
 from opentelemetry.util.types import Attributes, AttributeValue
-from requests import PreparedRequest, RequestException, Response, Session
-from requests.adapters import HTTPAdapter
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
 
 __all__ = (
     "DiscardingSpanExporter",
     "LangfuseApiClient",
     "LangfuseObservation",
+    "LangfuseSpanExporter",
     "LangfuseTracing",
-    "RetryingSpanExporter",
     "TraceIdHashSampler",
     "acquire_langfuse_tracing",
     "build_langfuse_client",
@@ -461,90 +462,78 @@ class DiscardingSpanExporter(SpanExporter):
         return True
 
 
-@dataclass(frozen=True, slots=True)
-class RetryingSpanExporter(SpanExporter):
-    """Retry a batch whose HTTP round trip raised, as the v2 ingestion consumer did.
+_RETRYABLE_EXPORT_STATUSES: Final = frozenset({408, 429, 500, 502, 503, 504})
+_ExportOutcome = Literal["delivered", "retry", "rejected"]
 
-    The OTLP http exporter only retries 429 and 5xx responses; a connect or
-    read timeout propagates, and ``BatchSpanProcessor`` drops the whole batch
-    on any exception. A destination that stalls for a few seconds therefore
-    lost every observation in flight, where v2 backed off three times first.
+
+@dataclass(frozen=True, slots=True)
+class LangfuseSpanExporter(SpanExporter):
+    """OTLP/HTTP protobuf export through litellm's own HTTP handler.
+
+    The handler carries litellm's TLS material (``ssl_verify``, CA bundle, client certificate) exactly
+    as v2's injected httpx client did. A connect or read failure and a retryable status are re-sent after
+    each delay, matching the v2 ingestion consumer; ``BatchSpanProcessor`` would otherwise drop the whole
+    batch on the first exception.
     """
 
-    exporter: SpanExporter
+    handler: HTTPHandler
+    endpoint: str
+    headers: Mapping[str, str]
+    timeout: float
     delays: Sequence[float] = (1.0, 2.0, 4.0)
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        body: Final = encode_spans(spans).SerializeToString()
         for delay in self.delays:
-            try:
-                return self.exporter.export(spans)
-            except RequestException as error:
-                verbose_logger.warning("Langfuse export raised %s, retrying in %ss", error, delay)
-                sleep(delay)
+            outcome: _ExportOutcome = self._post(body)
+            if outcome != "retry":
+                return SpanExportResult.SUCCESS if outcome == "delivered" else SpanExportResult.FAILURE
+            verbose_logger.warning("Langfuse export to %s failed, retrying in %ss", self.endpoint, delay)
+            sleep(delay)
+        last: Final = self._post(body)
+        if last == "retry":
+            verbose_logger.error("Langfuse export to %s failed after %d retries", self.endpoint, len(self.delays))
+        return SpanExportResult.SUCCESS if last == "delivered" else SpanExportResult.FAILURE
+
+    def _post(self, body: bytes) -> _ExportOutcome:
         try:
-            return self.exporter.export(spans)
-        except RequestException as error:
-            verbose_logger.error("Langfuse export failed after %d retries: %s", len(self.delays), error)
-            return SpanExportResult.FAILURE
+            self.handler.post(self.endpoint, data=body, headers=dict(self.headers), timeout=self.timeout)
+        except httpx.HTTPStatusError as error:
+            status: Final = error.response.status_code
+            if status in _RETRYABLE_EXPORT_STATUSES:
+                return "retry"
+            verbose_logger.error("Langfuse rejected an export to %s with HTTP %d", self.endpoint, status)
+            return "rejected"
+        except (httpx.TransportError, litellm.Timeout) as error:
+            verbose_logger.warning("Langfuse export to %s raised %s", self.endpoint, error)
+            return "retry"
+        return "delivered"
 
     def shutdown(self) -> None:
-        self.exporter.shutdown()
+        return None
 
     def force_flush(self, timeout_millis: int = 30_000) -> bool:
-        return self.exporter.force_flush(timeout_millis)
+        return True
 
 
-class _UnverifiedTlsAdapter(HTTPAdapter):
-    """Honour ``ssl_verify=False``: the exporter passes ``verify`` per request, which outranks ``Session.verify``."""
-
-    def send(  # pyright: ignore[reportIncompatibleMethodOverride]  # the stub types verify as bool | str, the base accepts both
-        self,
-        request: PreparedRequest,
-        stream: bool = False,
-        timeout: float | tuple[float, float] | tuple[float, None] | None = None,
-        verify: bool | str = True,
-        cert: str | tuple[str, str] | None = None,
-        proxies: Mapping[str, str] | None = None,
-    ) -> Response:
-        return super().send(request, stream=stream, timeout=timeout, verify=False, cert=cert, proxies=proxies)
-
-
-def _build_span_exporter(*, public_key: str, secret_key: str, base_url: str) -> RetryingSpanExporter:
-    """Build the OTLP export channel with litellm's TLS material and v2's retry behaviour.
-
-    v2 ingested through the injected httpx client, which carried litellm's CA
-    bundle and client certificate. Endpoint, headers and timeout mirror the SDK's
-    own span processor so the server treats the spans as v4 SDK traffic.
-    """
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-
-    import litellm
-    from litellm.llms.custom_httpx.http_handler import get_ssl_verify
-
-    ssl_verify: Final = get_ssl_verify()
-    ca_bundle: Final = ssl_verify if isinstance(ssl_verify, str) and os.path.exists(ssl_verify) else None
-    configured_certificate: Final = os.getenv("SSL_CERTIFICATE") or litellm.ssl_certificate
-    client_certificate: Final = configured_certificate if isinstance(configured_certificate, str) else None
+def _build_span_exporter(*, public_key: str, secret_key: str, base_url: str) -> LangfuseSpanExporter:
+    """Endpoint, headers and timeout mirror the SDK's span processor so the server treats the spans as v4 SDK traffic."""
     export_path: Final = os.getenv("LANGFUSE_OTEL_TRACES_EXPORT_PATH") or "/api/public/otel/v1/traces"
-    endpoint: Final = f"{base_url.rstrip('/')}/{export_path.lstrip('/')}"
     encoded_auth: Final = b64encode(f"{public_key}:{secret_key}".encode()).decode("ascii")
-    session: Final = Session()
-    if ssl_verify is False:
-        session.mount("https://", _UnverifiedTlsAdapter())
-    exporter: Final = OTLPSpanExporter(
-        session=session,
-        endpoint=endpoint,
-        headers={  # mutable-ok: the exporter copies these into its session headers
-            "Authorization": "Basic " + encoded_auth,
-            "x-langfuse-sdk-name": "python",
-            "x-langfuse-sdk-version": version("langfuse"),
-            "x-langfuse-public-key": public_key,
-        },
-        timeout=int(os.getenv("LANGFUSE_TIMEOUT", "5")),
-        certificate_file=ca_bundle,
-        client_certificate_file=client_certificate,
+    return LangfuseSpanExporter(
+        handler=_get_httpx_client(),
+        endpoint=f"{base_url.rstrip('/')}/{export_path.lstrip('/')}",
+        headers=MappingProxyType(
+            {
+                "Authorization": "Basic " + encoded_auth,
+                "Content-Type": "application/x-protobuf",
+                "x-langfuse-sdk-name": "python",
+                "x-langfuse-sdk-version": version("langfuse"),
+                "x-langfuse-public-key": public_key,
+            }
+        ),
+        timeout=float(os.getenv("LANGFUSE_TIMEOUT", "5")),
     )
-    return RetryingSpanExporter(exporter)
 
 
 def _resource(*, environment: str | None, release: str | None) -> Resource:

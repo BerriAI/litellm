@@ -29,8 +29,8 @@ from litellm.integrations.langfuse.langfuse import (
 )
 from litellm.integrations.langfuse.langfuse_sdk import (
     DiscardingSpanExporter,
+    LangfuseSpanExporter,
     LangfuseTracing,
-    RetryingSpanExporter,
     _build_span_exporter,
     acquire_langfuse_tracing,
     build_langfuse_client,
@@ -843,28 +843,117 @@ def test_rest_client_does_not_take_over_the_process_tracer_provider():
     assert otel_trace.get_tracer_provider() is provider_before
 
 
-def test_ssl_exporter_carries_litellm_tls_material(monkeypatch, tmp_path):
-    """The channel is litellm's own OTLP client, so litellm's CA bundle must be rebuilt onto it."""
-    import litellm
+def _finished_span():
+    provider = TracerProvider()
+    span = provider.get_tracer("t").start_span("generation")
+    span.end()
+    return span
 
-    for name in ("SSL_CERTIFICATE", "SSL_VERIFY", "SSL_CERT_FILE", "LANGFUSE_TIMEOUT"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(litellm, "ssl_verify", True)
-    monkeypatch.setattr(litellm, "ssl_certificate", None)
-    default = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example").exporter
-    assert default._certificate_file is True
-    assert default._timeout == 5
 
-    ca_path = tmp_path / "private-ca.pem"
-    ca_path.write_text("dummy")
-    monkeypatch.setattr(litellm, "ssl_verify", str(ca_path))
+def _exporter_over(responses, *, delays=(0.5, 1.5), timeout=5.0):
+    """A LangfuseSpanExporter whose litellm HTTPHandler talks to a scripted transport instead of the network."""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    seen = []
+    script = list(responses)
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        step = script.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return httpx.Response(step, request=request)
+
+    handler = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(transport)))
+    exporter = LangfuseSpanExporter(
+        handler=handler,
+        endpoint="https://lf.internal.example/api/public/otel/v1/traces",
+        headers=MappingProxyType({"Authorization": "Basic cGs6c2s=", "Content-Type": "application/x-protobuf"}),
+        timeout=timeout,
+        delays=delays,
+    )
+    return exporter, seen
+
+
+def test_exporter_posts_the_otlp_batch_through_litellm_http_handler(monkeypatch):
+    """Traces travel through litellm's own handler, so litellm's TLS and proxy settings apply to them."""
+    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+
+    slept = []
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.sleep", slept.append)
+    exporter, seen = _exporter_over([200])
+    span = _finished_span()
+
+    assert exporter.export((span,)) is SpanExportResult.SUCCESS
+
+    (request,) = seen
+    assert request.method == "POST"
+    assert str(request.url) == "https://lf.internal.example/api/public/otel/v1/traces"
+    assert request.headers["Authorization"] == "Basic cGs6c2s="
+    assert request.headers["Content-Type"] == "application/x-protobuf"
+    decoded = ExportTraceServiceRequest()
+    decoded.ParseFromString(request.content)
+    exported = decoded.resource_spans[0].scope_spans[0].spans[0]
+    assert exported.name == "generation"
+    assert exported.span_id == span.context.span_id.to_bytes(8, "big")
+    assert slept == []
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [httpx.ReadTimeout("stalled"), httpx.ConnectError("refused"), 503, 429],
+    ids=["read-timeout", "connect-error", "http-503", "http-429"],
+)
+def test_exporter_retries_a_failed_round_trip_and_then_succeeds(monkeypatch, failure):
+    """A stalled or restarting destination used to drop the batch outright; v2 backed off and re-sent it."""
+    slept = []
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.sleep", slept.append)
+    exporter, seen = _exporter_over([failure, failure, 200], delays=(0.5, 1.5, 2.5))
+
+    assert exporter.export((_finished_span(),)) is SpanExportResult.SUCCESS
+    assert len(seen) == 3
+    assert len({request.content for request in seen}) == 1
+    assert slept == [0.5, 1.5]
+
+
+def test_exporter_gives_up_after_the_last_delay(monkeypatch):
+    slept = []
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.sleep", slept.append)
+    exporter, seen = _exporter_over([httpx.ConnectError("refused")] * 3, delays=(1.0, 2.0))
+
+    assert exporter.export((_finished_span(),)) is SpanExportResult.FAILURE
+    assert len(seen) == 3
+    assert slept == [1.0, 2.0]
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404])
+def test_exporter_does_not_retry_a_rejected_batch(monkeypatch, status):
+    """Bad credentials or a bad payload will not get better on the next attempt, so retrying only delays the flush."""
+    slept = []
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.sleep", slept.append)
+    exporter, seen = _exporter_over([status, 200])
+
+    assert exporter.export((_finished_span(),)) is SpanExportResult.FAILURE
+    assert len(seen) == 1
+    assert slept == []
+
+
+def test_built_exporter_uses_the_shared_litellm_handler_and_langfuse_headers(monkeypatch):
+    """No private requests session or TLS adapter: the channel is the same handler the rest of litellm uses."""
+    from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+
+    monkeypatch.delenv("LANGFUSE_TIMEOUT", raising=False)
+    default = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example")
+    assert default.handler is _get_httpx_client()
+    assert default.timeout == 5
+
     monkeypatch.setenv("LANGFUSE_TIMEOUT", "20")
-    exporter = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example").exporter
-    assert exporter._endpoint == "https://lf.internal.example/api/public/otel/v1/traces"
-    assert exporter._certificate_file == str(ca_path)
-    assert exporter._timeout == 20
-    assert exporter._headers["x-langfuse-public-key"] == "pk"
-    assert exporter._headers["x-langfuse-sdk-version"] == installed_langfuse_version()
+    exporter = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example")
+    assert exporter.endpoint == "https://lf.internal.example/api/public/otel/v1/traces"
+    assert exporter.timeout == 20
+    assert exporter.headers["Authorization"] == "Basic " + b64encode(b"pk:sk").decode()
+    assert exporter.headers["x-langfuse-public-key"] == "pk"
+    assert exporter.headers["x-langfuse-sdk-version"] == installed_langfuse_version()
 
 
 @pytest.mark.parametrize(
@@ -902,122 +991,6 @@ def test_export_endpoint_never_doubles_the_slash_or_leaves_the_configured_host(
     else:
         monkeypatch.setenv("LANGFUSE_OTEL_TRACES_EXPORT_PATH", export_path)
 
-    exporter = _build_span_exporter(public_key="pk", secret_key="sk", base_url=base_url).exporter
+    exporter = _build_span_exporter(public_key="pk", secret_key="sk", base_url=base_url)
 
-    assert exporter._endpoint == expected
-
-
-def test_retrying_exporter_retries_a_raised_export_and_then_succeeds(monkeypatch):
-    """A read timeout used to drop the batch outright; v2 backed off and re-sent it."""
-    from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
-    from requests import ReadTimeout
-
-    attempts = []
-    slept = []
-
-    class Flaky(SpanExporter):
-        def export(self, spans):
-            attempts.append(spans)
-            if len(attempts) < 3:
-                raise ReadTimeout("destination stalled")
-            return SpanExportResult.SUCCESS
-
-    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.sleep", slept.append)
-    result = RetryingSpanExporter(Flaky(), delays=(0.5, 1.5, 2.5)).export(("span",))
-
-    assert result is SpanExportResult.SUCCESS
-    assert attempts == [("span",)] * 3
-    assert slept == [0.5, 1.5]
-
-
-def test_retrying_exporter_gives_up_after_the_last_delay(monkeypatch):
-    from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
-    from requests import ConnectionError as RequestsConnectionError
-
-    attempts = []
-    slept = []
-
-    class Down(SpanExporter):
-        def export(self, spans):
-            attempts.append(spans)
-            raise RequestsConnectionError("refused")
-
-    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.sleep", slept.append)
-    result = RetryingSpanExporter(Down(), delays=(1.0, 2.0)).export(("span",))
-
-    assert result is SpanExportResult.FAILURE
-    assert len(attempts) == 3
-    assert slept == [1.0, 2.0]
-
-
-@pytest.mark.parametrize("switch", ["attribute", "env"])
-def test_ssl_exporter_disables_verification_when_litellm_does(monkeypatch, switch):
-    """v2 exported through the httpx client, so ``ssl_verify=False`` reached ingestion; the OTLP channel must match."""
-    from requests.adapters import HTTPAdapter
-
-    import litellm
-
-    for name in ("SSL_CERTIFICATE", "SSL_VERIFY", "SSL_CERT_FILE"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(litellm, "ssl_certificate", None)
-    if switch == "attribute":
-        monkeypatch.setattr(litellm, "ssl_verify", False)
-    else:
-        monkeypatch.setattr(litellm, "ssl_verify", True)
-        monkeypatch.setenv("SSL_VERIFY", "False")
-
-    exporter = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example").exporter
-
-    sent = []
-
-    def send(self, request, **kwargs):
-        sent.append((request.url, kwargs["verify"]))
-        raise ConnectionError("stop before the network")
-
-    monkeypatch.setattr(HTTPAdapter, "send", send)
-    with pytest.raises(ConnectionError):
-        exporter._export(b"payload")
-    assert sent[0] == ("https://lf.internal.example/api/public/otel/v1/traces", False)
-
-
-def test_ssl_exporter_verifies_by_default(monkeypatch):
-    from requests.adapters import HTTPAdapter
-
-    import litellm
-
-    for name in ("SSL_CERTIFICATE", "SSL_VERIFY", "SSL_CERT_FILE"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(litellm, "ssl_certificate", None)
-    monkeypatch.setattr(litellm, "ssl_verify", True)
-    exporter = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example").exporter
-
-    sent = []
-
-    def send(self, request, **kwargs):
-        sent.append(kwargs["verify"])
-        raise ConnectionError("stop before the network")
-
-    monkeypatch.setattr(HTTPAdapter, "send", send)
-    with pytest.raises(ConnectionError):
-        exporter._export(b"payload")
-    assert sent == [True]
-
-
-@pytest.mark.parametrize("with_client_certificate", [False, True])
-def test_ssl_exporter_falls_back_to_default_ca_when_the_bundle_path_is_missing(
-    monkeypatch, tmp_path, with_client_certificate
-):
-    """The httpx client ignores a CA path that does not exist; handing it to requests would fail every export."""
-    import litellm
-
-    for name in ("SSL_CERTIFICATE", "SSL_VERIFY", "SSL_CERT_FILE"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(litellm, "ssl_verify", True)
-    monkeypatch.setenv("SSL_VERIFY", str(tmp_path / "missing-ca.pem"))
-    client_cert = tmp_path / "client.pem"
-    client_cert.write_text("dummy")
-    monkeypatch.setattr(litellm, "ssl_certificate", str(client_cert) if with_client_certificate else None)
-
-    exporter = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example").exporter
-    assert exporter._certificate_file is True
-    assert exporter._client_cert == (str(client_cert) if with_client_certificate else None)
+    assert exporter.endpoint == expected
