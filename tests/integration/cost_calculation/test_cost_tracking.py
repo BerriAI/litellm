@@ -42,7 +42,9 @@ def _assert_stream_has_no_error(response_text: str) -> None:
         if payload == "[DONE]":
             continue
         parsed = JSON_OBJECT.validate_json(payload)
-        assert "error" not in parsed, f"stream carried an error event: {parsed}"
+        assert (
+            "error" not in parsed and parsed.get("type") not in {"error", "response.failed"}
+        ), f"stream carried an error event: {parsed}"
 
 
 @pytest.mark.parametrize("case", _CASES)
