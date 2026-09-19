@@ -3,6 +3,7 @@ import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -148,6 +149,26 @@ def test_in_memory_cache_max_size_with_ttl():
     assert "key_1" in in_memory_cache.cache_dict
     assert "key_2" in in_memory_cache.cache_dict
     assert "key_3" in in_memory_cache.cache_dict
+
+
+@pytest.mark.parametrize("updated_key", ["first", "second"])
+def test_updating_full_cache_preserves_entries_and_expiration(updated_key: Literal["first", "second"]) -> None:
+    clock: Final = MagicMock(return_value=0.0)
+    cache: Final = InMemoryCache(max_size_in_memory=2, clock=clock)
+    cache.set_cache("first", "original-a", ttl=10)
+    cache.set_cache("second", "original-b", ttl=30)
+
+    cache.set_cache(updated_key, "updated", ttl=60)
+
+    assert cache.get_cache("first") == ("updated" if updated_key == "first" else "original-a")
+    assert cache.get_cache("second") == ("updated" if updated_key == "second" else "original-b")
+
+    clock.return_value = 11.0
+    assert cache.get_cache("first") is None
+    assert cache.get_cache("second") == ("updated" if updated_key == "second" else "original-b")
+
+    clock.return_value = 31.0
+    assert cache.get_cache("second") is None
 
 
 def test_in_memory_cache_expired_items_evicted_first():
