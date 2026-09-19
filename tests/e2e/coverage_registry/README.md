@@ -120,7 +120,7 @@ pending. Integration contract IDs belong in `tests/integration/contracts.json`, 
 
 | Requirement | Existing regression or owning suite | Remaining acceptance and owner | Required before |
 |---|---|---|---|
-| Principal discovery | `mcp/test_mcp_key_access_e2e.py`, `mcp/test_mcp_access_group_e2e.py`, `mcp/test_mcp_toolset_enforcement_e2e.py` | Run key/team/org/user controls on every configured replica; native/REST parity remains LIT-4506 | Phase 0 and affected authorization changes |
+| Principal discovery | `mcp/test_mcp_key_access_e2e.py`, `mcp/test_mcp_access_group_e2e.py`, `mcp/test_mcp_toolset_enforcement_e2e.py` | Run key/team/org/user controls on every configured replica; the E2E health check intersects with test-owned servers and proves grant visibility only, non-disclosure of unrelated servers is proven by integration contract other.mcp.health.restricted_keys_intersect_grants_in_both_modes (#41731); native/REST parity remains LIT-4506 | Phase 0 and affected authorization changes |
 | No self-attached unauthorized grants | Management key authorization tests | Read back unchanged server/toolset/access-group grants after rejected writes, LIT-4502 | Affected grant capability activation |
 | UI/API parity | Admin MCP UI suite | Same non-admin actor and permissions across both surfaces, LIT-3644 / LIT-4506 | Affected UI capability activation |
 | Server identity routing | Saved-server lifecycle integration and resolver tests | Cold routing, duplicate/unprefixed names, LIT-4500 | Routing changes |
