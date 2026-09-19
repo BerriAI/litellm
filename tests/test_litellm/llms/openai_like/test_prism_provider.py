@@ -52,17 +52,17 @@ def test_prism_provider_keeps_explicit_credentials(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.parametrize(
-    ("model", "input_cost", "output_cost", "max_output_tokens"),
+    ("model", "input_cost", "output_cost", "supports_vision"),
     [
-        ("prism/deepseek-v4.1-flash", 0.30, 1.20, 384_000),
-        ("prism/deepseek-v4-flash", 0.14, 0.28, 393_216),
+        ("prism/deepseek-v4.1-flash", 0.17, 0.63, True),
+        ("prism/deepseek-v4-flash", 0.17, 0.21, False),
     ],
 )
 def test_prism_model_cost_and_capabilities(
     model: str,
     input_cost: float,
     output_cost: float,
-    max_output_tokens: int,
+    supports_vision: bool,
 ):
     from litellm.cost_calculator import cost_per_token
 
@@ -78,11 +78,12 @@ def test_prism_model_cost_and_capabilities(
     assert completion_cost == pytest.approx(output_cost)
     assert model_info["cache_read_input_token_cost"] == pytest.approx(7e-08)
     assert model_info["max_input_tokens"] == 1_000_000
-    assert model_info["max_output_tokens"] == max_output_tokens
+    assert model_info["max_output_tokens"] == 384_000
     assert model_info["supports_function_calling"] is True
     assert model_info["supports_native_streaming"] is True
     assert model_info["supports_reasoning"] is True
     assert model_info["supports_response_schema"] is True
+    assert litellm.supports_vision(model) is supports_vision
 
 
 def test_prism_is_available_in_add_model_form():

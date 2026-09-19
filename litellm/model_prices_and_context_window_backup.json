@@ -74785,13 +74785,13 @@
     },
     "prism/deepseek-v4.1-flash": {
         "cache_read_input_token_cost": 7e-08,
-        "input_cost_per_token": 3e-07,
+        "input_cost_per_token": 1.7e-07,
         "litellm_provider": "prism",
         "max_input_tokens": 1000000,
         "max_output_tokens": 384000,
         "max_tokens": 384000,
         "mode": "chat",
-        "output_cost_per_token": 1.2e-06,
+        "output_cost_per_token": 6.3e-07,
         "source": "https://prisminference.com/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -74805,17 +74805,18 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "prism/deepseek-v4-flash": {
         "cache_read_input_token_cost": 7e-08,
-        "input_cost_per_token": 1.4e-07,
+        "input_cost_per_token": 1.7e-07,
         "litellm_provider": "prism",
         "max_input_tokens": 1000000,
-        "max_output_tokens": 393216,
-        "max_tokens": 393216,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
         "mode": "chat",
-        "output_cost_per_token": 2.8e-07,
+        "output_cost_per_token": 2.1e-07,
         "source": "https://prisminference.com/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -74829,6 +74830,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": false
     }
 }
