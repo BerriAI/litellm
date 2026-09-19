@@ -307,7 +307,10 @@ def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> 
         _get_masked_values,  # pyright: ignore[reportPrivateUsage]  # the shared header-masking helper has no public name
     )
 
-    return {**transformed_request, "headers": _get_masked_values(request_headers)}
+    return {  # mutable-ok: logging's curl and raw-request builders take dict
+        **transformed_request,
+        "headers": _get_masked_values(request_headers),
+    }
 
 
 def _aws_signing_overrides(optional_params: Mapping[str, Any], litellm_params: Mapping[str, Any]) -> Mapping[str, Any]:

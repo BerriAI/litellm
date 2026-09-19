@@ -2146,8 +2146,8 @@ def ocr_batch_cost(
     if resolved_info is None:
         verbose_logger.warning(
             "OCR batch cost: model=%s custom_llm_provider=%s has no pricing entry; returning 0.0 cost.",
-            model,
-            custom_llm_provider,
+            _single_log_line(model),
+            _single_log_line(custom_llm_provider),
         )
         return 0.0, 0.0
 
@@ -2159,12 +2159,16 @@ def ocr_batch_cost(
         verbose_logger.warning(
             "OCR batch cost: model=%s custom_llm_provider=%s reported pages_processed=%s but no "
             "ocr_cost_per_page is configured; returning 0.0 cost for those pages.",
-            model,
-            custom_llm_provider,
+            _single_log_line(model),
+            _single_log_line(custom_llm_provider),
             pages_processed,
         )
     effective_annotation_rate: Final = annotation_rate if annotation_rate is not None else page_rate
     return (page_rate or 0.0) * pages_processed + (effective_annotation_rate or 0.0) * annotation_pages, 0.0
+
+
+def _single_log_line(value: str | None) -> str:
+    return str(value).replace("\n", "").replace("\r", "")
 
 
 def _lookup_model_info_or_none(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
