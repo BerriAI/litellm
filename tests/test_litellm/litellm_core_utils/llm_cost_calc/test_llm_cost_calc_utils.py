@@ -3743,6 +3743,27 @@ def test_get_batch_cost_rates_crosses_a_tier_declared_without_an_input_tier_key(
     assert rates.input == 1e-6
 
 
+@pytest.mark.parametrize(
+    ("prompt_tokens", "expected_input", "expected_output"),
+    [(200_000, 1e-6, 4e-6), (250_000, 1e-6, 5e-6), (300_000, 2e-6, 5e-6)],
+)
+def test_get_batch_cost_rates_crosses_each_components_own_tier(prompt_tokens, expected_input, expected_output):
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches=1e-6,
+            input_cost_per_token_above_272k_tokens_batches=2e-6,
+            output_cost_per_token_batches=4e-6,
+            output_cost_per_token_above_200k_tokens_batches=5e-6,
+        ),
+        Usage(prompt_tokens=prompt_tokens, completion_tokens=1, total_tokens=prompt_tokens + 1),
+        "openai",
+    )
+
+    assert (rates.input, rates.output) == (expected_input, expected_output)
+
+
 def test_get_batch_cost_rates_has_no_cache_write_rate_without_a_cache_write_batch_key():
     from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
 
