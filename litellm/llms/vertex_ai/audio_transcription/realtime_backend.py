@@ -87,10 +87,16 @@ class _TurnResult:
 
 @dataclass(frozen=True, slots=True)
 class _TurnDiscarded:
-    pass
+    turn: int
 
 
-_OutboxItem = str | _TurnResult | _StreamFailure | _Closed
+@dataclass(frozen=True, slots=True)
+class _TurnDiscardedEvent:
+    turn: int
+    event: str
+
+
+_OutboxItem = str | _TurnResult | _TurnDiscardedEvent | _StreamFailure | _Closed
 
 
 def open_speech_client(target: SpeechStreamingTarget, access_token: str) -> SpeechStreamingClient:
@@ -304,6 +310,9 @@ class SpeechStreamingBackend:
                 raise _normal_closure()
             case _TurnResult():
                 return None if item.turn in self._discarded_turns else item.event
+            case _TurnDiscardedEvent():
+                self._discarded_turns -= {item.turn}
+                return item.event
             case str():
                 return item
             case _:
@@ -345,7 +354,10 @@ class SpeechStreamingBackend:
                 self._billed_before += await link.relay(self._outbox, self._billed_before)
             case _TurnDiscarded():
                 await self._outbox.put(
-                    VertexSpeechStreamingTurnDiscarded(billed_seconds=self._billed_before).model_dump_json()
+                    _TurnDiscardedEvent(
+                        turn=link.turn,
+                        event=VertexSpeechStreamingTurnDiscarded(billed_seconds=self._billed_before).model_dump_json(),
+                    )
                 )
             case _:
                 assert_never(link)
@@ -396,10 +408,11 @@ class SpeechStreamingBackend:
         await self._link(_TURN_FINISHED_EVENT)
 
     async def _discard_turn(self) -> None:
-        turn: Final = self._turn
+        streams: Final = self._turn
+        turn: Final = self._turn_index
         self._turn = ()
-        self._discarded_turns |= {self._turn_index}
+        self._discarded_turns |= {turn}
         self._turn_index += 1
-        for stream in turn:
+        for stream in streams:
             stream.cancel()
-        await self._link(_TurnDiscarded())
+        await self._link(_TurnDiscarded(turn=turn))

@@ -260,6 +260,7 @@ async def test_discard_turn_drops_its_queued_results_and_keeps_google_billed_sec
         await _until(lambda: len(client.streams[0]) == 3)
         await backend.send(DISCARD_TURN)
         assert await _recv(backend) == {"kind": "turn_discarded", "billed_seconds": 2.0}
+        assert backend._discarded_turns == frozenset()
         await backend.send(b"\x03\x03")
         fresh = await _recv(backend)
     assert fresh["results"] == [{"transcript": "fresh", "is_final": True}]
