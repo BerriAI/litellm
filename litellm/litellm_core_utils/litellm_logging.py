@@ -2396,7 +2396,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if self.model_call_details.get("cache_hit") is True:
             self.model_call_details["response_cost"] = 0.0
-        elif "response_cost" in hidden_params:
+        elif hidden_params.get("response_cost") is not None:
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
             self._record_zero_cost_diagnostic(logging_result, hidden_params["response_cost"])
         elif (existing_cost := self.model_call_details.get("response_cost")) is not None and existing_cost != 0:
