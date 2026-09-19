@@ -232,8 +232,7 @@ class AktoGuardrail(CustomGuardrail):
         """
         request_path: Final = self.extract_request_path(request_data)
         request_headers: Final = self.build_request_headers(request_data)
-        request_inputs: Final = GenericGuardrailAPIInputs(model=inputs.get("model")) if include_response else inputs
-        request_body: Final = self.build_request_body(request_inputs, request_data)
+        request_body: Final = self.build_request_body(inputs, request_data)
         tag: Final = self.build_tag_metadata(request_data)
 
         response_payload = json.dumps({})  # Empty body wrapper when no response yet

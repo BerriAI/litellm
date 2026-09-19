@@ -129,7 +129,7 @@ class PromptGuardGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         texts: Final = inputs.get("texts", [])
         images: Final = inputs.get("images", [])
-        structured_messages: Final = inputs.get("structured_messages") if input_type == "request" else None
+        structured_messages: Final = inputs.get("structured_messages", [])
         model: Final = inputs.get("model")
 
         if structured_messages:
