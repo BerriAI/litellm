@@ -3321,6 +3321,46 @@ async def test_failed_team_spend_commit_from_redis_still_commits_org_spend():
 
 
 @pytest.mark.asyncio
+async def test_cache_invalidation_failure_after_team_member_commit_does_not_requeue_the_rows():
+    """A cache outage after a team-member commit must not retry the already committed spend."""
+    db_writer = DBSpendUpdateWriter()
+    await db_writer.spend_update_queue.add_update(
+        {
+            "entity_type": Litellm_EntityType.TEAM_MEMBER,
+            "entity_id": "team_id::team-1::user_id::user-1",
+            "response_cost": 0.5,
+        }
+    )
+    await db_writer.spend_update_queue.add_update(
+        {"entity_type": Litellm_EntityType.ORGANIZATION, "entity_id": "org-1", "response_cost": 0.5}
+    )
+    mock_batcher = MagicMock()
+    mock_transaction = _good_tx(mock_batcher)
+    mock_prisma = _WindowSpendFakePrisma(_WindowSpendFakeDB())
+    mock_prisma.db.tx = MagicMock(return_value=mock_transaction)
+    cache = MagicMock()
+    cache.async_delete_cache = AsyncMock(side_effect=RuntimeError("redis down"))
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.call_details = {"user_api_key_cache": cache}
+    proxy_logging_obj.failure_handler = AsyncMock()
+    db_writer._flush_tool_discovery_queue = AsyncMock()
+
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=mock_prisma,
+        n_retry_times=0,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    assert mock_transaction.execute_raw.await_count == 2
+    mock_batcher.litellm_organizationtable.update_many.assert_called_once_with(
+        where={"organization_id": "org-1"},
+        data={"spend": {"increment": 0.5}},
+    )
+    cache.async_delete_cache.assert_awaited_once_with(key="team_membership:user-1:team-1")
+    assert db_writer.spend_update_queue.update_queue.empty()
+
+
+@pytest.mark.asyncio
 async def test_failed_window_spend_commit_from_redis_is_restored_to_redis():
     """The Redis drain is destructive, so a failed window commit has to push
     the popped increments back exactly like the other spend categories."""

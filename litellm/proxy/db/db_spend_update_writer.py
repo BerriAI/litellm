@@ -1898,17 +1898,10 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                     )
 
-            # Invalidate cache for updated team memberships
-            # This ensures budget checks read fresh spend data from the database
-            if team_memberships_to_invalidate and proxy_logging_obj is not None:
-                user_api_key_cache: Final = proxy_logging_obj.call_details.get("user_api_key_cache")
-                if user_api_key_cache is not None:
-                    for user_id, team_id in team_memberships_to_invalidate:
-                        cache_key = f"team_membership:{user_id}:{team_id}"
-                        await user_api_key_cache.async_delete_cache(key=cache_key)
-                        verbose_proxy_logger.debug(
-                            "Invalidated team membership cache for user_id=%s, team_id=%s", user_id, team_id
-                        )
+            await DBSpendUpdateWriter._invalidate_team_membership_caches(
+                memberships=team_memberships_to_invalidate,
+                proxy_logging_obj=proxy_logging_obj,
+            )
 
         ### UPDATE ORG TABLE ###
         org_list_transactions: Final = db_spend_update_transactions["org_list_transactions"]
@@ -2019,8 +2012,34 @@ class DBSpendUpdateWriter:
         user_api_key_cache: Final = proxy_logging_obj.call_details.get("user_api_key_cache")
         if user_api_key_cache is None:
             return
-        for project_id in project_ids:
-            await user_api_key_cache.async_delete_cache(key=project_cache_key(project_id))
+        try:
+            for project_id in project_ids:
+                await user_api_key_cache.async_delete_cache(key=project_cache_key(project_id))
+        except Exception as e:  # noqa: BLE001  # a stale cache entry must not requeue spend that already committed
+            verbose_proxy_logger.warning(
+                "Spend tracking - failed to invalidate %s cache after spend commit: %s", "project", e
+            )
+
+    @staticmethod
+    async def _invalidate_team_membership_caches(
+        memberships: Sequence[tuple[str, str]], proxy_logging_obj: ProxyLogging | None
+    ) -> None:
+        if not memberships or proxy_logging_obj is None:
+            return
+        user_api_key_cache: Final = proxy_logging_obj.call_details.get("user_api_key_cache")
+        if user_api_key_cache is None:
+            return
+        try:
+            for user_id, team_id in memberships:
+                cache_key = f"team_membership:{user_id}:{team_id}"
+                await user_api_key_cache.async_delete_cache(key=cache_key)
+                verbose_proxy_logger.debug(
+                    "Invalidated team membership cache for user_id=%s, team_id=%s", user_id, team_id
+                )
+        except Exception as e:  # noqa: BLE001  # a stale cache entry must not requeue spend that already committed
+            verbose_proxy_logger.warning(
+                "Spend tracking - failed to invalidate %s cache after spend commit: %s", "team membership", e
+            )
 
     @staticmethod
     async def _update_entity_spend_in_db(
