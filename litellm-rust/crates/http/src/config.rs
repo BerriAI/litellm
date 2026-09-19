@@ -38,84 +38,80 @@ pub struct Resolution {
     pub unsupported: Vec<Unsupported>,
 }
 
-impl HttpClientConfig {
-    pub fn resolve(settings: &HttpSettings) -> Resolution {
-        let (key_exchange_group, unsupported_curve) = match settings
-            .ssl_ecdh_curve
-            .as_deref()
-            .map(str::parse::<KeyExchangeGroup>)
-        {
-            None => (None, None),
-            Some(Ok(group)) => (Some(group), None),
-            Some(Err(unsupported)) => (None, Some(unsupported)),
-        };
-        let ciphers = settings
-            .ssl_security_level
-            .as_deref()
-            .map(CipherSelection::from);
-        let verify = match &settings.ssl_verify {
-            Some(SslVerify::Disabled) => Verify::Disabled,
-            Some(SslVerify::CaBundle(path)) => Verify::CaBundle(path.clone()),
+impl From<&HttpSettings> for Verify {
+    fn from(settings: &HttpSettings) -> Self {
+        match &settings.ssl_verify {
+            Some(SslVerify::Disabled) => Self::Disabled,
+            Some(SslVerify::CaBundle(path)) => Self::CaBundle(path.clone()),
             Some(SslVerify::Enabled) | None => settings
                 .ssl_cert_file
                 .clone()
-                .map_or(Verify::BuiltInRoots, Verify::CaBundle),
-        };
-        let (tls12_cipher_suites, unsupported_ciphers) = ciphers
-            .map_or((None, Vec::new()), |ciphers| {
-                (ciphers.tls12_cipher_suites, ciphers.unsupported)
-            });
-        Resolution {
-            config: Self {
-                verify,
+                .map_or(Self::BuiltInRoots, Self::CaBundle),
+        }
+    }
+}
+
+impl From<&HttpSettings> for Resolution {
+    fn from(settings: &HttpSettings) -> Self {
+        let curve = settings
+            .ssl_ecdh_curve
+            .as_deref()
+            .map(str::parse::<KeyExchangeGroup>)
+            .transpose();
+        let ciphers = settings
+            .ssl_security_level
+            .as_deref()
+            .map(CipherSelection::from)
+            .unwrap_or_default();
+        Self {
+            config: HttpClientConfig {
+                verify: Verify::from(settings),
                 client_certificate: settings.ssl_certificate.clone(),
-                key_exchange_group,
-                tls12_cipher_suites,
+                key_exchange_group: curve.clone().ok().flatten(),
+                tls12_cipher_suites: ciphers.tls12_cipher_suites,
                 force_ipv4: settings.force_ipv4,
                 http2: settings.http2,
                 user_agent: settings.user_agent.clone(),
-                trust_proxy_env: !settings.ignore_proxy_env
-                    || settings.trust_proxy_env
-                    || settings.http2
-                    || settings.httpx_transport,
+                trust_proxy_env: settings.trusts_proxy_env(),
                 connect_timeout: settings.connect_timeout,
                 tcp_keepalive: settings.tcp_keepalive,
                 pool_idle_timeout: settings.pool_idle_timeout,
             },
-            unsupported: unsupported_curve
-                .into_iter()
-                .chain(unsupported_ciphers)
-                .collect(),
+            unsupported: curve.err().into_iter().chain(ciphers.unsupported).collect(),
         }
     }
+}
 
-    pub fn client_builder(&self) -> Result<reqwest::ClientBuilder, Error> {
+impl TryFrom<&HttpClientConfig> for reqwest::ClientBuilder {
+    type Error = Error;
+
+    fn try_from(config: &HttpClientConfig) -> Result<Self, Self::Error> {
         let base = reqwest::Client::builder()
-            .use_preconfigured_tls(rustls::ClientConfig::try_from(self)?)
-            .connect_timeout(self.connect_timeout)
-            .pool_idle_timeout(self.pool_idle_timeout);
-        let with_keepalive = match self.tcp_keepalive {
+            .use_preconfigured_tls(rustls::ClientConfig::try_from(config)?)
+            .connect_timeout(config.connect_timeout)
+            .pool_idle_timeout(config.pool_idle_timeout);
+        let with_keepalive = match config.tcp_keepalive {
             None => base,
             Some(keepalive) => base
                 .tcp_keepalive(keepalive.idle)
                 .tcp_keepalive_interval(keepalive.interval)
                 .tcp_keepalive_retries(keepalive.retries),
         };
-        let with_address = if self.force_ipv4 {
+        let with_address = if config.force_ipv4 {
             with_keepalive.local_address(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
         } else {
             with_keepalive
         };
-        let with_protocol = if self.http2 {
+        let with_protocol = if config.http2 {
             with_address
         } else {
             with_address.http1_only()
         };
-        let with_agent = match &self.user_agent {
+        let with_agent = match &config.user_agent {
             Some(agent) => with_protocol.user_agent(agent),
             None => with_protocol,
         };
-        Ok(if self.trust_proxy_env {
+        Ok(if config.trust_proxy_env {
             with_agent
         } else {
             with_agent.no_proxy()
@@ -161,7 +157,7 @@ mod tests {
         #[case] settings: HttpSettings,
         #[case] expected: Verify,
     ) {
-        let config = HttpClientConfig::resolve(&settings).config;
+        let config = Resolution::from(&settings).config;
         assert_eq!(config.verify, expected);
     }
 
@@ -172,7 +168,7 @@ mod tests {
             ..HttpSettings::default()
         }
         .with_environment(&|name: &str| (name == "SSL_VERIFY").then(|| "true".to_string()));
-        let config = HttpClientConfig::resolve(&settings).config;
+        let config = Resolution::from(&settings).config;
         assert_eq!(config.verify, Verify::BuiltInRoots);
     }
 
@@ -188,7 +184,7 @@ mod tests {
             ssl_ecdh_curve: Some(curve.into()),
             ..HttpSettings::default()
         };
-        let resolution = HttpClientConfig::resolve(&settings);
+        let resolution = Resolution::from(&settings);
         assert_eq!(resolution.config.key_exchange_group, expected);
         assert_eq!(resolution.unsupported, []);
     }
@@ -199,7 +195,7 @@ mod tests {
             ssl_ecdh_curve: Some("secp521r1".into()),
             ..HttpSettings::default()
         };
-        let resolution = HttpClientConfig::resolve(&settings);
+        let resolution = Resolution::from(&settings);
         assert_eq!(resolution.config.key_exchange_group, None);
         assert_eq!(
             resolution.unsupported,
@@ -213,7 +209,7 @@ mod tests {
             ssl_security_level: Some("DEFAULT@SECLEVEL=1".into()),
             ..HttpSettings::default()
         };
-        let resolution = HttpClientConfig::resolve(&settings);
+        let resolution = Resolution::from(&settings);
         assert_eq!(resolution.config.tls12_cipher_suites, None);
         assert_eq!(
             resolution.unsupported,
@@ -230,7 +226,7 @@ mod tests {
             ),
             ..HttpSettings::default()
         };
-        let resolution = HttpClientConfig::resolve(&settings);
+        let resolution = Resolution::from(&settings);
         assert_eq!(
             resolution.config.tls12_cipher_suites,
             Some(vec![
@@ -265,7 +261,7 @@ mod tests {
             pool_idle_timeout: Duration::from_secs(45),
             ..HttpSettings::default()
         };
-        let config = HttpClientConfig::resolve(&settings).config;
+        let config = Resolution::from(&settings).config;
         assert_eq!(
             config,
             HttpClientConfig {
@@ -303,7 +299,7 @@ mod tests {
         #[case] settings: HttpSettings,
         #[case] expected: bool,
     ) {
-        let config = HttpClientConfig::resolve(&settings).config;
+        let config = Resolution::from(&settings).config;
         assert_eq!(config.trust_proxy_env, expected);
     }
 
@@ -312,10 +308,10 @@ mod tests {
         let path = std::env::temp_dir().join("litellm-http-missing-bundle.pem");
         let config = HttpClientConfig {
             verify: Verify::CaBundle(path.clone()),
-            ..HttpClientConfig::resolve(&HttpSettings::default()).config
+            ..Resolution::from(&HttpSettings::default()).config
         };
         assert!(matches!(
-            config.client_builder(),
+            reqwest::ClientBuilder::try_from(&config),
             Err(Error::Read { path: reported, .. }) if reported == path
         ));
     }
@@ -327,9 +323,9 @@ mod tests {
         std::fs::write(&path, b"not a certificate").unwrap();
         let config = HttpClientConfig {
             verify: Verify::CaBundle(path.clone()),
-            ..HttpClientConfig::resolve(&HttpSettings::default()).config
+            ..Resolution::from(&HttpSettings::default()).config
         };
-        let result = config.client_builder().map(drop);
+        let result = reqwest::ClientBuilder::try_from(&config).map(drop);
         std::fs::remove_file(&path).unwrap();
         assert!(matches!(
             result,
