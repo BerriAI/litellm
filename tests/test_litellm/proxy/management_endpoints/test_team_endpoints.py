@@ -3,6 +3,7 @@ import json
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from collections.abc import Sequence
 from typing import Final, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
@@ -148,11 +149,11 @@ def _wire_member_add_tx(prisma_client):
 
 
 def _wire_member_delete_tx(prisma_client):
-    """/team/member_delete's four cleanups, plus the advisory-lock re-read that now guards
-    them, run inside one transaction, so a mocked client has to hand back its own table
-    mocks (and a `query_raw` that answers the locked re-read from the same team row the
-    test already configured on `find_unique`) out of `tx()` for the existing per-table
-    assertions to keep seeing the calls."""
+    """/team/member_delete's four cleanups and /team/member_update's role rewrite, plus the
+    advisory-lock re-read that guards them, run inside one transaction, so a mocked client
+    has to hand back its own table mocks (and a `query_raw` that answers the locked re-read
+    from the same team row the test already configured on `find_unique`) out of `tx()` for
+    the existing per-table assertions to keep seeing the calls."""
 
     async def _query_raw(sql, team_id):
         if sql != TEAM_ADVISORY_LOCK_SQL:
@@ -168,10 +169,12 @@ def _wire_member_delete_tx(prisma_client):
             return getattr(prisma_client.db, table_name)
 
     tx = _Tx()
+    tx.query_raw = AsyncMock(side_effect=_query_raw)
     tx_cm = MagicMock()
     tx_cm.__aenter__ = AsyncMock(return_value=tx)
     tx_cm.__aexit__ = AsyncMock(return_value=None)
     prisma_client.tx = MagicMock(return_value=tx_cm)
+    return tx
 
 
 def _wire_team_delete_tx(prisma_client):
@@ -13311,8 +13314,7 @@ async def test_team_member_add_audits_a_user_created_from_a_list_payload(monkeyp
             side_effect=fake_add_team_members_to_team,
         ),
         patch(
-            "litellm.proxy.management_endpoints.team_endpoints._create_team_member_add_audit_logs",
-            new_callable=AsyncMock,
+            "litellm.proxy.management_endpoints.team_endpoints._schedule_team_member_add_audit_logs",
         ) as mock_audit,
     ):
         await team_member_add(
@@ -13517,12 +13519,10 @@ async def test_team_member_update_role_change_emits_a_roster_audit_event(monkeyp
         }
 
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
-    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=team_row)
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(side_effect=_roster_writer(team_row))
     mock_prisma_client.db.litellm_auditlog.create = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    mock_tx = AsyncMock()
-    mock_prisma_client.tx.return_value.__aenter__ = AsyncMock(return_value=mock_tx)
-    mock_prisma_client.tx.return_value.__aexit__ = AsyncMock(return_value=None)
+    _wire_member_delete_tx(mock_prisma_client)
 
     with (
         patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
@@ -13560,6 +13560,197 @@ async def test_team_member_update_role_change_emits_a_roster_audit_event(monkeyp
 
     assert len(_team_roster_events(audit_logger, "updated")) == 1, (
         "re-sending the role a member already holds leaves the roster as it was, so no roster event"
+    )
+
+
+def _roster_writer(team_row: LiteLLM_TeamTable):
+    """An `update` side effect that lands `members_with_roles` on the team row later reads see."""
+
+    async def _update(where, data):
+        team_row.members_with_roles = [Member(**m) for m in json.loads(data["members_with_roles"])]
+        return team_row
+
+    return _update
+
+
+def _member_update_patches(team_snapshot: LiteLLM_TeamTable):
+    return (
+        patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+            "litellm.proxy.management_endpoints.team_endpoints.team_info",
+            AsyncMock(
+                return_value={
+                    "team_info": TeamInfoResponseObjectTeamTable(**team_snapshot.model_dump()),
+                    "team_memberships": [
+                        LiteLLM_TeamMembership(user_id="bob", team_id=team_snapshot.team_id, budget_id=None)
+                    ],
+                }
+            ),
+        ),
+        patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+            "litellm.proxy.management_endpoints.team_endpoints._upsert_budget_and_membership",
+            AsyncMock(),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_member_update_role_change_rewrites_the_roster_it_read_under_the_lock(monkeypatch):
+    """Regression: a member added between /team/member_update's permission checks and its write
+    was dropped, because the new roster was built from the pre-check snapshot."""
+    audit_logger = _wire_audit_log_callback(monkeypatch)
+
+    stale_snapshot = LiteLLM_TeamTable(
+        team_id="team-race",
+        team_alias="race",
+        metadata={},
+        members_with_roles=[Member(user_id="alice", role="admin"), Member(user_id="bob", role="user")],
+    )
+    team_row = LiteLLM_TeamTable(
+        **{
+            **stale_snapshot.model_dump(),
+            "members_with_roles": [*stale_snapshot.members_with_roles, Member(user_id="carol", role="user")],
+        }
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(side_effect=_roster_writer(team_row))
+    mock_prisma_client.db.litellm_auditlog.create = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    tx = _wire_member_delete_tx(mock_prisma_client)
+
+    team_info_patch, upsert_patch = _member_update_patches(stale_snapshot)
+    with team_info_patch, upsert_patch:
+        response = await team_member_update(
+            data=TeamMemberUpdateRequest(team_id="team-race", user_id="bob", role="admin"),
+            http_request=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+            ),
+        )
+    await _settle_audit_log_tasks()
+
+    assert {m.user_id: m.role for m in team_row.members_with_roles} == {
+        "alice": "admin",
+        "bob": "admin",
+        "carol": "user",
+    }
+    assert response.team_id == "team-race" and response.user_id == "bob"
+    assert tx.query_raw.await_args_list[0].args == (TEAM_ADVISORY_LOCK_SQL, "team-race"), (
+        "the roster must be read only after the team advisory lock is held"
+    )
+
+    [event] = _team_roster_events(audit_logger, "updated")
+    assert _roster_user_roles(event["before_value"]) == {"alice": "admin", "bob": "user", "carol": "user"}
+    assert _roster_user_roles(event["updated_values"]) == {"alice": "admin", "bob": "admin", "carol": "user"}
+    assert _roster_team_alias(event["updated_values"]) == "race"
+
+
+@pytest.mark.asyncio
+async def test_team_member_update_role_change_404s_when_the_team_is_gone_under_the_lock(monkeypatch):
+    _wire_audit_log_callback(monkeypatch)
+    snapshot = LiteLLM_TeamTable(
+        team_id="team-gone-race",
+        team_alias="gone-race",
+        metadata={},
+        members_with_roles=[Member(user_id="bob", role="user")],
+    )
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(side_effect=[snapshot, None])
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    _wire_member_delete_tx(mock_prisma_client)
+
+    team_info_patch, upsert_patch = _member_update_patches(snapshot)
+    with team_info_patch, upsert_patch, pytest.raises(HTTPException) as exc_info:
+        await team_member_update(
+            data=TeamMemberUpdateRequest(team_id="team-gone-race", user_id="bob", role="admin"),
+            http_request=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+            ),
+        )
+
+    assert exc_info.value.status_code == 404
+    mock_prisma_client.db.litellm_teamtable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_team_member_delete_response_does_not_wait_for_the_audit_insert(
+    monkeypatch, mock_db_client, mock_admin_auth
+):
+    """Regression: the roster audit row was awaited on the request path, so a slow audit table
+    held every /team/member_delete response."""
+    from litellm.proxy._types import TeamMemberDeleteRequest
+
+    audit_logger = _wire_audit_log_callback(monkeypatch)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+
+    team_row = LiteLLM_TeamTable(
+        team_id="team-slow-audit",
+        team_alias="slow-audit",
+        metadata={},
+        members_with_roles=[Member(user_id="alice", role="admin"), Member(user_id="bob", role="user")],
+    )
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=team_row)
+    mock_db_client.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock(return_value=MagicMock())
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_verificationtoken.delete_many = AsyncMock(return_value=MagicMock())
+    _wire_member_delete_tx(mock_db_client)
+
+    audit_table_answers = asyncio.Event()
+    audit_rows = []
+
+    async def _blocked_create(data):
+        await audit_table_answers.wait()
+        audit_rows.append(data)
+
+    mock_db_client.db.litellm_auditlog.create = AsyncMock(side_effect=_blocked_create)
+
+    await asyncio.wait_for(
+        team_member_delete(
+            data=TeamMemberDeleteRequest(team_id="team-slow-audit", user_id="bob"),
+            user_api_key_dict=mock_admin_auth,
+        ),
+        timeout=1,
+    )
+    assert audit_rows == [], "the response returned while the audit table was still blocked"
+
+    audit_table_answers.set()
+    await _settle_audit_log_tasks()
+
+    assert [row["object_id"] for row in audit_rows] == ["team-slow-audit"]
+    [event] = _team_roster_events(audit_logger, "updated")
+    assert _roster_user_roles(event["before_value"]) == {"alice": "admin", "bob": "user"}
+    assert _roster_user_roles(event["updated_values"]) == {"alice": "admin"}
+
+
+class _UntouchableRoster(Sequence[Member]):
+    """A roster that fails the test the moment anything reads it."""
+
+    def __getitem__(self, index):
+        raise AssertionError("the roster was read while audit logging is off")
+
+    def __len__(self) -> int:
+        raise AssertionError("the roster was read while audit logging is off")
+
+
+def test_membership_audit_scheduling_skips_the_roster_entirely_when_audit_logging_is_off(monkeypatch):
+    """Regression: the before/after rosters were serialized on every membership change, even
+    when audit logs are not stored."""
+    from litellm.proxy.management_endpoints.team_endpoints import _schedule_team_membership_audit_log
+
+    monkeypatch.setattr("litellm.store_audit_logs", False)
+
+    _schedule_team_membership_audit_log(
+        team_id="team-quiet",
+        team_alias="quiet",
+        before_members=_UntouchableRoster(),
+        after_members=_UntouchableRoster(),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"),
+        litellm_proxy_admin_name="admin",
     )
 
 
