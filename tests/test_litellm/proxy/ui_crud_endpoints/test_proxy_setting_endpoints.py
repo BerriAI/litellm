@@ -3184,6 +3184,54 @@ class TestWebSearchInterceptionSettingsEndpoints:
         assert mock_proxy_config["save_call_count"]() == 1
         assert mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] == payload
 
+    def test_get_reports_enabled_when_the_config_file_activates_the_callback(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        mock_proxy_config["config"]["litellm_settings"]["callbacks"] = ["websearch_interception"]
+        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {
+            "enabled_providers": ["bedrock"],
+            "search_tool_name": "my-perplexity-search",
+        }
+
+        resp = client.get("/get/websearch_interception_settings")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["values"]["enabled"] is True
+
+    def test_get_reports_disabled_when_nothing_activates_the_callback(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        mock_proxy_config["config"]["litellm_settings"].pop("callbacks", None)
+        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {
+            "enabled_providers": ["bedrock"],
+        }
+
+        resp = client.get("/get/websearch_interception_settings")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["values"]["enabled"] is False
+
+    def test_update_reapplies_settings_to_the_running_proxy(self, mock_proxy_config, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        reapply = AsyncMock()
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.proxy_config.init_websearch_interception_settings_in_db",
+            reapply,
+        )
+        self._override_auth(LitellmUserRoles.PROXY_ADMIN)
+        try:
+            resp = client.patch("/update/websearch_interception_settings", json={"enabled": True})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        reapply.assert_awaited_once()
+
     def test_update_rejects_zero_max_agentic_loops(self, mock_proxy_config, monkeypatch):
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         self._override_auth(LitellmUserRoles.PROXY_ADMIN)

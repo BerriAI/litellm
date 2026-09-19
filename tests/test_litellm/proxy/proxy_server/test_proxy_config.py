@@ -4558,18 +4558,71 @@ def test_init_websearch_interception_absent_key_leaves_callbacks_untouched(monke
     assert litellm.callbacks == [config_registered]
 
 
-def test_init_websearch_interception_enables_when_enabled_key_missing(monkeypatch):
+def test_init_websearch_interception_without_enabled_key_leaves_callbacks_untouched(monkeypatch):
     logger_cls = _websearch_logger_cls()
+    config_registered = logger_cls(search_tool_name="from-config-yaml")
 
     _run_websearch_init(
         monkeypatch,
         stored_params={"search_tool_name": "stored-tool"},
+        starting_callbacks=[config_registered],
+    )
+
+    assert litellm.callbacks == [config_registered]
+
+
+def test_init_websearch_interception_registers_when_explicitly_enabled(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": True, "search_tool_name": "stored-tool"},
         starting_callbacks=[],
     )
 
     registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
     assert len(registered) == 1
     assert registered[0].search_tool_name == "stored-tool"
+
+
+def test_init_websearch_interception_treats_string_false_as_disabled(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    existing = logger_cls(search_tool_name="stored-tool")
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": "false", "search_tool_name": "stored-tool"},
+        starting_callbacks=[existing],
+    )
+
+    assert [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)] == []
+
+
+def test_init_websearch_interception_empty_providers_falls_back_to_handler_default(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": True, "enabled_providers": [], "search_tool_name": "stored-tool"},
+        starting_callbacks=[],
+    )
+
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
+    assert len(registered) == 1
+    assert registered[0].enabled_providers == ["bedrock"]
+
+
+def test_init_websearch_interception_keeps_working_callback_when_new_one_cannot_be_built(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    working = logger_cls(search_tool_name="stored-tool", max_agentic_loops=3)
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": True, "search_tool_name": "stored-tool", "max_agentic_loops": 0},
+        starting_callbacks=[working],
+    )
+
+    assert litellm.callbacks == [working]
 
 
 def test_init_websearch_interception_disabled_removes_the_callback(monkeypatch):
