@@ -4,6 +4,7 @@ Unit tests for auto router management endpoints
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Final
 
 import pytest
@@ -654,16 +655,42 @@ class TestAutoRouterBenchmarks:
         assert _summed_agg_row([complexity, quality]).tier_turns == {}
 
     @pytest.mark.asyncio
-    async def test_non_admin_roles_cannot_read_benchmarks(self):
+    @pytest.mark.parametrize("user_id", [None, "own-user", "other-user"])
+    async def test_non_admin_roles_cannot_read_benchmarks(self, user_id: str | None):
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
 
         with pytest.raises(HTTPException) as err:
             await get_auto_router_benchmarks(
-                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-x"),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-x", user_id="own-user"
+                ),
                 start_date="2026-08-01",
                 end_date="2026-08-02",
+                user_id=user_id,
             )
         assert err.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_an_empty_user_filter_is_rejected_before_querying_deployment_data(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import httpx
+        from fastapi import FastAPI
+
+        from litellm.proxy import proxy_server
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
+
+        query: Final = AsyncMock(return_value=[])
+        monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=SimpleNamespace(query_raw=query)))
+        app: Final = FastAPI()
+        app.get("/auto_router/benchmarks")(get_auto_router_benchmarks)
+        app.dependency_overrides[user_api_key_auth] = lambda: ADMIN
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response: Final = await client.get("/auto_router/benchmarks", params={"user_id": ""})
+
+        assert response.status_code == 422
+        query.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_a_reversed_window_is_rejected(self, monkeypatch: pytest.MonkeyPatch):
@@ -680,7 +707,11 @@ class TestAutoRouterBenchmarks:
         assert err.value.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_endpoint_returns_groups_and_totals_from_the_rollup(self, monkeypatch: pytest.MonkeyPatch):
+    @pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+    @pytest.mark.parametrize("user_id", [None, "selected-user"])
+    async def test_endpoint_returns_groups_and_totals_from_the_rollup(
+        self, monkeypatch: pytest.MonkeyPatch, role: LitellmUserRoles, user_id: str | None
+    ):
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
 
@@ -695,12 +726,13 @@ class TestAutoRouterBenchmarks:
         monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
 
         response = await get_auto_router_benchmarks(
-            user_api_key_dict=ADMIN,
+            user_api_key_dict=UserAPIKeyAuth(user_role=role, api_key="sk-admin", user_id="viewer"),
             start_date="2026-07-01",
             end_date="2026-08-01",
             api_key="key-hash",
+            user_id=user_id,
         )
-        assert captured["params"] == ("2026-07-01T00:00:00", "2026-08-02T00:00:00", "key-hash")
+        assert captured["params"] == ("2026-07-01T00:00:00", "2026-08-02T00:00:00", "key-hash", user_id)
         assert response.routers_in_scope == 1
         assert response.groups[0].router_name == "live-auto"
         assert response.groups[0].saved_pct == response.totals.saved_pct == 75.0
