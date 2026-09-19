@@ -27460,6 +27460,379 @@
         "completion_tokens": 380,
         "cache_read_cost": 0.00405504
       }
+    },
+    {
+      "name": "gemini-3.1-pro-passthrough-generate_content_priced_via_gemini_key",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-3.1-pro",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "5fdf6b7dd9b9 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "scripted answer 5fdf6b7dd9b9"
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 1840,
+            "candidatesTokenCount": 412,
+            "totalTokenCount": 2252,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 1840
+              }
+            ]
+          },
+          "modelVersion": "gemini-3.1-pro"
+        }
+      },
+      "expected": {
+        "spend": 0.008624,
+        "input_cost": 0.00368,
+        "output_cost": 0.004944,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "breakdown_persisted": false,
+        "cost_header": false
+      },
+      "endpoint": "/gemini/v1beta/models/$MODEL:generateContent"
+    },
+    {
+      "name": "gemini-3.1-pro-passthrough-stream_generate_content_priced_via_vertex_key",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "gemini-3.1-pro",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "52b6a80ff038 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"scripted answer 52b6a80ff038\"}], \"role\": \"model\"}, \"finishReason\": \"STOP\", \"index\": 0}], \"modelVersion\": \"gemini-3.1-pro\"}",
+          "data: {\"candidates\": [], \"usageMetadata\": {\"promptTokenCount\": 1840, \"candidatesTokenCount\": 412, \"totalTokenCount\": 2252, \"promptTokensDetails\": [{\"modality\": \"TEXT\", \"tokenCount\": 1840}]}, \"modelVersion\": \"gemini-3.1-pro\"}"
+        ]
+      },
+      "expected": {
+        "spend": 0.0090552,
+        "input_cost": 0.003864,
+        "output_cost": 0.0051912,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "breakdown_persisted": false,
+        "cost_header": false
+      },
+      "endpoint": "/gemini/v1beta/models/$MODEL:streamGenerateContent?alt=sse"
+    },
+    {
+      "name": "claude-sonnet-5-passthrough-messages",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/anthropic/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0117,
+        "input_cost": 0.00552,
+        "output_cost": 0.00618,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "breakdown_persisted": false,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "claude-sonnet-5-passthrough-messages_cache_read",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/anthropic/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "cached text",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 640,
+            "output_tokens": 380,
+            "cache_read_input_tokens": 12288
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0113064,
+        "input_cost": 0.0056064,
+        "output_cost": 0.0057,
+        "prompt_tokens": 12928,
+        "completion_tokens": 380,
+        "cache_read_cost": 0.0036864,
+        "breakdown_persisted": false,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "anthropic.claude-sonnet-5-v1:0-passthrough-converse",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "anthropic.claude-sonnet-5-v1:0",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "9aad4de0556c summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "output": {
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "text": "scripted answer 9aad4de0556c"
+                }
+              ]
+            }
+          },
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 1840,
+            "outputTokens": 412,
+            "totalTokens": 2252
+          },
+          "metrics": {
+            "latencyMs": 42
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.01287,
+        "input_cost": 0.006072,
+        "output_cost": 0.006798,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "cost_header": false
+      },
+      "endpoint": "/bedrock/model/$MODEL/converse"
+    },
+    {
+      "name": "anthropic.claude-sonnet-5-v1:0-passthrough-converse_stream",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "anthropic.claude-sonnet-5-v1:0",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "a9257967d38a summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/vnd.amazon.eventstream",
+        "events": [
+          {
+            "event_type": "messageStart",
+            "payload": {
+              "role": "assistant"
+            }
+          },
+          {
+            "event_type": "contentBlockDelta",
+            "payload": {
+              "delta": {
+                "text": "scripted answer a9257967d38a"
+              },
+              "contentBlockIndex": 0
+            }
+          },
+          {
+            "event_type": "contentBlockStop",
+            "payload": {
+              "contentBlockIndex": 0
+            }
+          },
+          {
+            "event_type": "messageStop",
+            "payload": {
+              "stopReason": "end_turn"
+            }
+          },
+          {
+            "event_type": "metadata",
+            "payload": {
+              "usage": {
+                "inputTokens": 1840,
+                "outputTokens": 412,
+                "totalTokens": 2252
+              },
+              "metrics": {
+                "latencyMs": 42
+              }
+            }
+          }
+        ]
+      },
+      "expected": {
+        "spend": 0.01287,
+        "input_cost": 0.006072,
+        "output_cost": 0.006798,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "cost_header": false
+      },
+      "endpoint": "/bedrock/model/$MODEL/converse-stream"
     }
   ]
 }
