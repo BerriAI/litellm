@@ -312,23 +312,18 @@ async def test_find_team_with_model_access_preserves_team_claim_order():
         return LiteLLM_TeamTable(team_id=team_id, models=["gpt-4"])
 
     with (
-        patch(
+        patch(  # test-quality-ok: find_team_with_model_access has no injected team lookup seam
             "litellm.proxy.auth.handle_jwt.get_team_object",
             new_callable=AsyncMock,
             side_effect=mock_get_team_object,
         ),
-        patch(
+        patch(  # test-quality-ok: find_team_with_model_access has no injected model-access seam
             "litellm.proxy.auth.handle_jwt.can_team_access_model",
             new_callable=AsyncMock,
             return_value=True,
         ),
-        patch(
+        patch(  # test-quality-ok: find_team_with_model_access has no injected route-check seam
             "litellm.proxy.auth.handle_jwt.allowed_routes_check",
-            return_value=True,
-        ),
-        patch.object(
-            JWTAuthManager,
-            "_team_has_passthrough_route_access",
             return_value=True,
         ),
     ):
