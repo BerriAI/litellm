@@ -3210,13 +3210,14 @@ class TestWebSearchInterceptionSettingsEndpoints:
         assert resp.status_code == 200, resp.text
         assert resp.json()["values"]["enabled"] is True
 
-    def test_get_reports_disabled_when_the_callback_is_not_running(self, mock_proxy_config, mock_auth, monkeypatch):
+    def test_get_reports_disabled_when_nothing_is_stored_and_nothing_is_running(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
         import litellm
 
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
         monkeypatch.setattr(litellm, "callbacks", [])
         mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {
-            "enabled": True,
             "enabled_providers": ["bedrock"],
         }
 
@@ -3224,6 +3225,7 @@ class TestWebSearchInterceptionSettingsEndpoints:
 
         assert resp.status_code == 200, resp.text
         assert resp.json()["values"]["enabled"] is False
+        assert resp.json()["values"]["enabled_providers"] == ["bedrock"]
 
     def test_update_reapplies_settings_to_the_running_proxy(self, mock_proxy_config, monkeypatch):
         from unittest.mock import AsyncMock
@@ -3243,6 +3245,23 @@ class TestWebSearchInterceptionSettingsEndpoints:
 
         assert resp.status_code == 200, resp.text
         reapply.assert_awaited_once()
+
+    def test_get_keeps_the_stored_flag_when_this_pod_has_not_reinitialized(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import litellm
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        monkeypatch.setattr(litellm, "callbacks", [])
+        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {
+            "enabled": True,
+            "search_tool_name": "cluster-search",
+        }
+
+        resp = client.get("/get/websearch_interception_settings")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["values"]["enabled"] is True
 
     def test_get_reports_no_database_instead_of_empty_settings(self, mock_proxy_config, mock_auth, monkeypatch):
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)

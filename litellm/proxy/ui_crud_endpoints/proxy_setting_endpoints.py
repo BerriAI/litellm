@@ -509,13 +509,17 @@ class WebSearchInterceptionSettingsResponse(SettingsResponse):
 
 def _with_websearch_enabled_resolved(config: Mapping[str, object]) -> dict[str, object]:
     """
-    Report whether interception is actually running, rather than what a stored flag claims.
+    Answer with the stored flag when there is one, and only otherwise with what
+    this process is running.
 
-    A proxy can activate it through litellm_settings.callbacks, which stores no
-    flag at all, and a write through the generic config endpoint can drop the
-    flag from a block that is still live. Either way the field's own default
-    would tell an admin the feature is off while it is serving, and saving the
-    page would then persist that answer.
+    A stored flag is the cluster's own answer, so it is the same on every pod and
+    is safe for the page to send back on save. Deriving the answer from this
+    process instead would report off on a pod that has not polled yet, and the
+    next save would persist that as a cluster-wide off. Without a stored flag the
+    only available answer is local: litellm_settings.callbacks activates
+    interception without storing one, and a write through the generic config
+    endpoint can drop the flag from a block that is still live. Reporting the
+    field default there would claim the feature is off while it serves.
     """
     from litellm.integrations.websearch_interception.handler import (
         WebSearchInterceptionLogger,
@@ -523,6 +527,9 @@ def _with_websearch_enabled_resolved(config: Mapping[str, object]) -> dict[str, 
 
     litellm_settings: Final[Mapping[str, object]] = _as_settings_section(config.get("litellm_settings"))
     stored: Final[Mapping[str, object]] = _as_settings_section(litellm_settings.get("websearch_interception_params"))
+    if "enabled" in stored:
+        return dict(config)
+
     resolved: Final = {
         **stored,
         "enabled": bool(litellm.logging_callback_manager.get_custom_loggers_for_type(WebSearchInterceptionLogger)),
