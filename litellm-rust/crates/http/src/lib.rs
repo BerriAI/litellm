@@ -1,6 +1,7 @@
 mod config;
 mod error;
 pub mod media;
+pub mod outbound;
 mod pool;
 mod proxy;
 pub mod request;
