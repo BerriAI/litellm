@@ -1,5 +1,4 @@
 general_settings:
-  max_parallel_requests: 100
   proxy_batch_write_at: 5
   enable_jwt_auth: true
   litellm_jwtauth:

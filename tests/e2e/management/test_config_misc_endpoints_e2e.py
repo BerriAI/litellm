@@ -14,6 +14,15 @@ into a row that outranks the YAML cache_params and is re-applied on a timer, and
 be exercised safely against the shared proxy the suites run on, so they need an
 isolated proxy before a test lands. Do not add a read-then-write-back test for
 either one.
+
+The allowed-IP routes are not covered here either. The first /add/allowed_ip turns
+the request-time address allowlist on for every client, and the proxy checks the
+address of whatever sits in front of it (the router on the stage stack), never the
+test worker's own, so that one write answered every later request with a 403, the
+deferred /delete/allowed_ip included, and the stored list came back after the next
+redeploy. The changed-keys-only persistence that route was standing in for is
+covered by tests/test_litellm/proxy/proxy_server/test_proxy_config.py. Do not add
+an allowed-IP test against the shared proxy.
 """
 
 from __future__ import annotations
@@ -21,10 +30,9 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
-from typing import Final
 
 import pytest
-from pydantic import BaseModel, JsonValue, RootModel
+from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import NoBody, Success, unwrap, unwrap_status
@@ -197,37 +205,6 @@ class ConfigUpdateBody(BaseModel):
 
 class ConfigUpdateResponse(BaseModel):
     message: str
-
-
-class AllowedIpBody(BaseModel):
-    ip: str
-
-
-class ConfigFieldInfoParams(BaseModel):
-    field_name: str
-
-
-class ConfigFieldInfoResponse(BaseModel):
-    field_name: str
-    field_value: JsonValue
-    source: str
-    editable: bool
-
-
-class ConfigListParams(BaseModel):
-    config_type: str
-
-
-class ConfigListEntry(BaseModel):
-    field_name: str
-    field_value: JsonValue
-    stored_in_db: bool | None
-    source: str
-    editable: bool
-
-
-class ConfigListResponse(RootModel[list[ConfigListEntry]]):
-    pass
 
 
 class RouterCurrentValues(BaseModel):
@@ -546,58 +523,6 @@ class TestRouterSettings:
                 response_type=ConfigUpdateResponse,
             )
         )
-
-
-class TestConfigPersistence:
-    @pytest.mark.covers("mgmt.config.allowed_ip.changed_key_only")
-    def test_add_allowed_ip_does_not_store_unrelated_config_value(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
-        allowed_ip: Final = "127.0.0.1"
-        added: Final = unwrap(
-            client.proxy.transport.post(
-                "/add/allowed_ip",
-                headers=client.proxy.transport.master,
-                json=AllowedIpBody(ip=allowed_ip),
-                response_type=ConfigUpdateResponse,
-            )
-        )
-        resources.defer(
-            lambda: unwrap(
-                client.proxy.transport.post(
-                    "/delete/allowed_ip",
-                    headers=client.proxy.transport.master,
-                    json=AllowedIpBody(ip=allowed_ip),
-                    response_type=ConfigUpdateResponse,
-                )
-            )
-        )
-        assert added.message == f"IP {allowed_ip} address added successfully"
-
-        listed: Final = unwrap(
-            client.proxy.transport.get(
-                "/config/list",
-                headers=client.proxy.transport.master,
-                params=ConfigListParams(config_type="general_settings"),
-                response_type=ConfigListResponse,
-            )
-        )
-        unrelated: Final = next(entry for entry in listed.root if entry.field_name == "max_parallel_requests")
-        assert unrelated.stored_in_db is not True
-        assert unrelated.source == "config"
-        assert unrelated.editable is False
-
-        field_info: Final = unwrap(
-            client.proxy.transport.get(
-                "/config/field/info",
-                headers=client.proxy.transport.master,
-                params=ConfigFieldInfoParams(field_name="max_parallel_requests"),
-                response_type=ConfigFieldInfoResponse,
-            )
-        )
-        assert field_info.source == "config"
-        assert field_info.editable is False
-        assert field_info.field_value == unrelated.field_value
 
 
 class TestMcpServerSubmission:
