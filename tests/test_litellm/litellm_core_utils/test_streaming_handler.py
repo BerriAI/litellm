@@ -849,6 +849,49 @@ def test_sync_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logg
     assert excinfo.value.generated_content == ""
 
 
+@pytest.mark.asyncio
+async def test_streaming_rate_limit_midstream_fallback_keeps_provider_headers(
+    logging_obj: Logging,
+):
+    """MidStreamFallbackError keeps the provider headers the non-streaming RateLimitError carries."""
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    provider_headers = {"retry-after": "3", "x-request-id": "req-abc123"}
+
+    async def _raise_rate_limit(**kwargs):
+        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=provider_headers)
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-flash-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_rate_limit,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await response.__anext__()
+
+    assert excinfo.value.status_code == 429
+    assert excinfo.value.litellm_response_headers.get("retry-after") == "3"
+    assert excinfo.value.litellm_response_headers.get("x-request-id") == "req-abc123"
+
+
+def test_midstream_fallback_error_without_provider_headers_adds_no_attribute():
+    """No provider headers means no attribute: Router checks hasattr() before response.headers."""
+    from litellm.exceptions import MidStreamFallbackError
+
+    midstream_error = MidStreamFallbackError(
+        message="stream broke",
+        model="gpt-4o-mini",
+        llm_provider="openai",
+        original_exception=Exception("boom"),
+    )
+
+    assert not hasattr(midstream_error, "litellm_response_headers")
+
+
 def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
     """Ensure __next__ raises BadRequestError (400) directly, not MidStreamFallbackError.
 
