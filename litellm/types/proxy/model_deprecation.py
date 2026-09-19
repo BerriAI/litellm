@@ -30,6 +30,13 @@ class ModelDeprecationInfo(BaseModel):
         ),
     )
     litellm_provider: str | None = Field(default=None, description="The provider this model belongs to.")
+    successor_model: str | None = Field(
+        default=None,
+        description=(
+            "The model to migrate to, taken from model_info.successor_model on the deployment "
+            "or from the model cost map entry."
+        ),
+    )
 
 
 class ModelDeprecationResponse(BaseModel):
