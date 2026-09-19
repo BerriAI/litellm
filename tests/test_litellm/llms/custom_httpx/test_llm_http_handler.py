@@ -3780,11 +3780,17 @@ async def test_async_realtime_bridges_a_transcription_session_through_the_provid
                     yield script.pop(0)
 
     speech_client = FakeSpeechClient()
+
+    async def resolve_access_token() -> str:
+        return "token"
+
     provider_config = VertexChirpRealtimeConfig(
-        access_token="token",
+        resolve_access_token=resolve_access_token,
         project="proj-1",
         location="us",
-        backend_factory=lambda target: SpeechStreamingBackend(target, client_factory=lambda target: speech_client),
+        backend_factory=lambda target: SpeechStreamingBackend(
+            target, client_factory=lambda target, access_token: speech_client
+        ),
     )
     audio = base64.b64encode(b"\x00\x01" * 800).decode()
     client_ws = _ScriptedClientWebSocket(
