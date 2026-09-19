@@ -7693,9 +7693,10 @@ export interface paths {
          *         - max_budget: Optional[float] - Max budget for key
          *         - team_id: Optional[str] - Team ID associated with key
          *         - tags: Optional[List[str]] - Tags for organizing keys
+         *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission, as on /key/update
          *
          *     Only the fields an item carries are written: a field left out keeps its current value and an
-         *     explicit null clears it, the same as /key/update. An item carrying any other field is rejected with 422.
+         *     explicit null clears it, the same as /key/update.
          *
          *     Returns:
          *     - total_requested: int - Total number of keys requested for update
@@ -25240,7 +25241,7 @@ export interface components {
         };
         /**
          * BulkUpdateKeyRequestItem
-         * @description One /key/bulk_update item; only the fields it carries are written, and unknown fields are rejected.
+         * @description One /key/bulk_update item; only the fields it carries are written.
          */
         BulkUpdateKeyRequestItem: {
             /** Budget Id */
@@ -25249,6 +25250,7 @@ export interface components {
             key: string;
             /** Max Budget */
             max_budget?: number | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Tags */
             tags?: string[] | null;
             /** Team Id */
