@@ -7257,9 +7257,6 @@ def _restricted_member_check_deps() -> dict[str, object]:
 
 @pytest.mark.asyncio
 async def test_check_team_member_model_access_fails_closed_when_the_membership_read_hits_a_db_outage():
-    """Regression: with the member's row uncached and the database unreachable, the loader used to swallow the
-    transport error and return None, which every check reads as "no per-member restriction", so a member
-    limited to other models got a 200. The outage must surface as the 503 the rest of auth answers with."""
     from litellm.proxy.auth.auth_checks import _check_team_member_model_access
     from litellm.proxy.auth.auth_exception_handler import _as_proxy_exception
 

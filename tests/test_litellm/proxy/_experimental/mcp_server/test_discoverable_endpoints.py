@@ -11515,7 +11515,9 @@ def jwt_oauth_identity(monkeypatch: pytest.MonkeyPatch) -> tuple["JWTHandler", "
     monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": True})
     monkeypatch.setattr(proxy_server, "premium_user", True)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    prisma: Final = MagicMock()
+    prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     return handler, signing_key
 
 

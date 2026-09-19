@@ -183,9 +183,6 @@ class _UnreachableMembershipPrisma:
 
 
 async def test_resolve_marks_a_membership_read_that_hits_a_db_outage_as_degraded():
-    """Regression: the real membership loader swallowed a database transport error into None, so this outcome
-    was ResolvedGrants with no membership, never LookupDegraded, and a member's own model or budget limits
-    silently dropped for the request."""
     loaders = _Loaders(user=_user(), team=_team())
     resolver = GrantResolver(
         _UnreachableMembershipPrisma(),
