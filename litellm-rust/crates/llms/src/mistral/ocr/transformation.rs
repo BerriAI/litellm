@@ -2,16 +2,13 @@ use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, ur
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{
-    base_llm::ocr::{
-        error::Error,
-        transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage,
-            OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest, credential_env,
-            decode_and_normalize_response,
-        },
+use crate::base_llm::ocr::{
+    error::Error,
+    handler::OcrClient,
+    transformation::{
+        BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrResponseFormat,
+        OcrUsageInfo, PreparedOcrRequest, decode_and_normalize_response,
     },
-    custom_httpx::llm_http_handler::OcrClient,
 };
 
 const MISTRAL_OCR_API_BASE: &str = "https://api.mistral.ai/v1";
@@ -87,7 +84,9 @@ impl BaseOcrConfig for MistralOcrConfig {
         request: &PreparedOcrRequest,
         _client: &OcrClient,
     ) -> Result<Self::Environment, Error> {
-        self.resolve_headers(&request.connection, &credential_env)
+        self.resolve_headers(&request.connection, &|name: &str| {
+            request.connection.secret(name)
+        })
     }
 
     fn get_complete_url(
@@ -129,14 +128,13 @@ impl MistralOcrConfig {
         connection: &OcrConnection,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<Vec<(String, String)>, Error> {
-        if crate::custom_httpx::http_handler::has_header(&connection.extra_headers, "authorization")
-        {
+        if litellm_http::request::has_header(&connection.extra_headers, "authorization") {
             return Ok(connection.extra_headers.clone());
         }
         let api_key = connection
             .api_key
-            .as_deref()
-            .map(str::trim)
+            .as_ref()
+            .map(|key| key.expose().trim())
             .filter(|key| !key.is_empty())
             .map(str::to_string)
             .or_else(|| {
@@ -212,7 +210,7 @@ mod tests {
         #[default(vec![])] extra_headers: Vec<(String, String)>,
     ) -> OcrConnection {
         OcrConnection {
-            api_key: api_key.map(str::to_string),
+            api_key: api_key.map(litellm_auth::SecretValue::new),
             extra_headers,
             ..OcrConnection::default()
         }

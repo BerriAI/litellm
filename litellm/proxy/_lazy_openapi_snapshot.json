@@ -5235,6 +5235,12 @@
       }
     }
   },
+  "claude_code_gateway": {
+    "components": {
+      "schemas": {}
+    },
+    "paths": {}
+  },
   "claude_code_marketplace": {
     "components": {
       "schemas": {
@@ -11149,7 +11155,6 @@
                   "type": "null"
                 }
               ],
-              "default": "v1",
               "description": "API version for Javelin service",
               "title": "Api Version"
             },
@@ -17176,6 +17181,228 @@
             }
           ],
           "summary": "Azure Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/azure_speech/{endpoint}": {
+        "delete": {
+          "description": "Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.\n`POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`\nwith the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.\n\nThe body is forwarded byte for byte and the proxy injects its own\n`Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key\nand is never forwarded.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)",
+          "operationId": "azure_speech_proxy_route_azure_speech__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Speech Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.\n`POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`\nwith the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.\n\nThe body is forwarded byte for byte and the proxy injects its own\n`Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key\nand is never forwarded.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)",
+          "operationId": "azure_speech_proxy_route_azure_speech__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Speech Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.\n`POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`\nwith the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.\n\nThe body is forwarded byte for byte and the proxy injects its own\n`Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key\nand is never forwarded.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)",
+          "operationId": "azure_speech_proxy_route_azure_speech__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Speech Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.\n`POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`\nwith the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.\n\nThe body is forwarded byte for byte and the proxy injects its own\n`Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key\nand is never forwarded.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)",
+          "operationId": "azure_speech_proxy_route_azure_speech__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Speech Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.\n`POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`\nwith the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.\n\nThe body is forwarded byte for byte and the proxy injects its own\n`Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key\nand is never forwarded.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)",
+          "operationId": "azure_speech_proxy_route_azure_speech__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Speech Proxy Route",
           "tags": [
             "llm_passthrough"
           ]
@@ -23456,6 +23683,17 @@
               ],
               "title": "Refresh Token"
             },
+            "requested_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Requested Token Type"
+            },
             "resource": {
               "anyOf": [
                 {
@@ -23477,6 +23715,28 @@
                 }
               ],
               "title": "Scope"
+            },
+            "subject_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token"
+            },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
             }
           },
           "required": [
@@ -23530,6 +23790,17 @@
               ],
               "title": "Refresh Token"
             },
+            "requested_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Requested Token Type"
+            },
             "resource": {
               "anyOf": [
                 {
@@ -23551,6 +23822,28 @@
                 }
               ],
               "title": "Scope"
+            },
+            "subject_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token"
+            },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
             }
           },
           "required": [
@@ -33156,6 +33449,10 @@
             "cache_control": {
               "$ref": "#/components/schemas/ChatCompletionCachedContent"
             },
+            "eager_input_streaming": {
+              "title": "Eager Input Streaming",
+              "type": "boolean"
+            },
             "function": {
               "$ref": "#/components/schemas/ChatCompletionToolParamFunctionChunk"
             },
@@ -33184,6 +33481,10 @@
             "description": {
               "title": "Description",
               "type": "string"
+            },
+            "eager_input_streaming": {
+              "title": "Eager Input Streaming",
+              "type": "boolean"
             },
             "name": {
               "title": "Name",

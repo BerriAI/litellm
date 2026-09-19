@@ -1,8 +1,8 @@
+use litellm_http::request::string_headers as shared_string_headers;
 use litellm_llms::{
     anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
     base_llm::chat::transformation::BaseConfig,
     bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
-    custom_httpx::http_handler::string_headers as shared_string_headers,
 };
 use serde_json::{Map, Value};
 

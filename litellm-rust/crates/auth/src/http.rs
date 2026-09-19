@@ -40,13 +40,22 @@ pub fn apply_credential(
     )
 }
 
-/// How the upstream call is authenticated. API-key strategies are resolved in
-/// `prepare`; SigV4 needs the serialized body, so the handler signs it.
+/// How the upstream call is authenticated. API-key strategies become headers
+/// in `prepare`; SigV4 covers the serialized body, so it is applied where the
+/// outbound request is built.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RequestAuth {
-    Header { name: &'static str, value: String },
-    Bearer { token: String },
-    AwsSigV4 { region: String },
+    Header {
+        name: &'static str,
+        value: String,
+    },
+    Bearer {
+        token: String,
+    },
+    AwsSigV4 {
+        region: String,
+        service: &'static str,
+    },
 }
 
 #[cfg(test)]

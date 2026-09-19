@@ -1,12 +1,16 @@
 import datetime
+import inspect
 from collections.abc import Mapping
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.rust_bridge import legacy_callbacks as legacy
 from litellm.rust_bridge.legacy_callbacks import check_limits, setup
 
 _OCR_KWARGS: Final = MappingProxyType(
@@ -56,13 +60,12 @@ def _supplied_logger() -> Logging:
     )
 
 
-def test_setup_adopts_a_supplied_logger_as_caller_owned() -> None:
+def test_setup_reuses_a_supplied_logger() -> None:
     supplied: Final = _supplied_logger()
     result: Final = setup(
         "aocr", (), {**_OCR_KWARGS, "litellm_logging_obj": supplied}, datetime.datetime.now(), asynchronous=True
     )
     assert result.logger is supplied
-    assert result.bridge_owned is False
 
 
 @pytest.mark.parametrize(
@@ -73,7 +76,15 @@ def test_setup_adopts_a_supplied_logger_as_caller_owned() -> None:
     ],
     ids=["ocr", "embedding"],
 )
-def test_setup_owns_every_logger_it_builds(call_type: str, kwargs: Mapping[str, object]) -> None:
+def test_setup_builds_a_logger_when_none_is_supplied(call_type: str, kwargs: Mapping[str, object]) -> None:
     result: Final = setup(call_type, (), kwargs, datetime.datetime.now(), asynchronous=True)
-    assert result.bridge_owned is True
     assert result.logger.litellm_call_id == result.kwargs["litellm_call_id"]
+
+
+CONTRACT_PATH: Final = Path(__file__).parents[3] / "litellm-rust/crates/callbacks-legacy/python_contract.json"
+
+
+def test_the_rust_contract_matches_the_shim_signatures() -> None:
+    contract: Final = TypeAdapter(dict[str, list[str]]).validate_json(CONTRACT_PATH.read_text())
+
+    assert contract == {name: list(inspect.signature(getattr(legacy, name)).parameters) for name in contract}

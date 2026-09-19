@@ -1,10 +1,12 @@
-use std::{collections::BTreeMap, future::Future, time::Duration};
+use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
 
-use litellm_auth::{InputSource, Sourced, TokenProviderHandle};
+use litellm_auth::{InputSource, SecretValue, Sourced, TokenProviderHandle};
 use litellm_core_utils::{
     call_arguments::CallArguments,
     serde_compat::{FiniteF64, LaxI64},
+    settings::ProcessEnvironment,
 };
+use litellm_http::outbound::{OutboundRequest, RequestSigner};
 use serde::{
     Deserialize, Serialize,
     de::{DeserializeOwned, IntoDeserializer},
@@ -12,20 +14,15 @@ use serde::{
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 
-use crate::{
-    base_llm::ocr::error::Error,
-    custom_httpx::llm_http_handler::{
-        CallHooks, OcrClient, read_response_bytes, transform_request_body,
-    },
+use crate::base_llm::ocr::{
+    error::Error,
+    handler::{CallHooks, OcrClient, read_response_bytes, transform_request_body},
+    settings::{OcrSettings, Secrets},
 };
 
 pub const OCR_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
-pub const OCR_HTTP_TIMEOUT_SECS: u64 = 600;
-pub const OCR_CONNECT_TIMEOUT_SECS: u64 = 10;
 pub const OCR_INLINE_MAX_BYTES: usize = 50 * 1024 * 1024;
-pub const OCR_DOWNLOAD_MAX_BYTES: u64 = 50 * 1024 * 1024;
 pub const OCR_MAX_FETCH_REDIRECTS: usize = 10;
-pub const OCR_POLL_TIMEOUT_SECS: u64 = 120;
 pub const OCR_POLL_RETRY_SECS: u64 = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -90,21 +87,22 @@ pub enum OcrResponseFormat {
 
 #[derive(Clone, Default)]
 pub struct OcrCredentialInputs {
-    pub api_key: Option<Sourced<String>>,
-    pub dynamic_api_key: Option<Sourced<String>>,
+    pub api_key: Option<Sourced<SecretValue>>,
+    pub dynamic_api_key: Option<Sourced<SecretValue>>,
     pub api_base: Option<Sourced<String>>,
     pub dynamic_api_base: Option<Sourced<String>>,
 }
 
 impl OcrCredentialInputs {
     pub fn new(
-        api_key: Option<String>,
+        api_key: Option<SecretValue>,
         api_key_source: InputSource,
         api_base: Option<String>,
         api_base_source: InputSource,
     ) -> Self {
         Self {
-            api_key: nonblank(api_key).map(|value| Sourced::new(value, api_key_source)),
+            api_key: nonblank(api_key.as_ref().map(|key| key.expose().to_string()))
+                .map(|value| Sourced::new(SecretValue::new(value), api_key_source)),
             dynamic_api_key: None,
             api_base: nonblank(api_base).map(|value| Sourced::new(value, api_base_source)),
             dynamic_api_base: None,
@@ -116,10 +114,8 @@ impl OcrCredentialInputs {
 pub struct OcrTransportConfig {
     pub extra_headers: Vec<(String, String)>,
     pub extra_headers_source: InputSource,
-    pub timeout: Duration,
-    pub max_download_bytes: u64,
+    pub timeout: Option<Duration>,
     pub max_response_bytes: usize,
-    pub poll_timeout: Duration,
 }
 
 impl Default for OcrTransportConfig {
@@ -127,10 +123,8 @@ impl Default for OcrTransportConfig {
         Self {
             extra_headers: Vec::new(),
             extra_headers_source: InputSource::Deployment,
-            timeout: Duration::from_secs(OCR_HTTP_TIMEOUT_SECS),
-            max_download_bytes: OCR_DOWNLOAD_MAX_BYTES,
+            timeout: None,
             max_response_bytes: OCR_RESPONSE_MAX_BYTES,
-            poll_timeout: Duration::from_secs(OCR_POLL_TIMEOUT_SECS),
         }
     }
 }
@@ -145,7 +139,7 @@ impl OcrTransportConfig {
         Self {
             extra_headers,
             extra_headers_source,
-            timeout: timeout.unwrap_or(self.timeout),
+            timeout: timeout.or(self.timeout),
             ..self
         }
     }
@@ -159,20 +153,25 @@ fn nonblank(value: Option<String>) -> Option<String> {
 
 #[derive(Clone)]
 pub struct OcrConnection {
-    pub api_key: Option<String>,
+    pub api_key: Option<SecretValue>,
     pub api_key_source: InputSource,
     pub api_base: Option<String>,
     pub api_base_source: InputSource,
     pub extra_headers: Vec<(String, String)>,
     pub extra_headers_source: InputSource,
     pub timeout: Duration,
-    pub max_download_bytes: u64,
     pub max_response_bytes: usize,
-    pub poll_timeout: Duration,
+    pub settings: OcrSettings,
+    pub secrets: Secrets,
 }
 
 impl OcrConnection {
-    pub fn new(credentials: ResolvedOcrCredentials, transport: OcrTransportConfig) -> Self {
+    pub fn new(
+        credentials: ResolvedOcrCredentials,
+        transport: OcrTransportConfig,
+        settings: OcrSettings,
+        secrets: Secrets,
+    ) -> Self {
         let api_key_source = credentials
             .api_key
             .as_ref()
@@ -190,11 +189,18 @@ impl OcrConnection {
             api_base_source,
             extra_headers: transport.extra_headers,
             extra_headers_source: transport.extra_headers_source,
-            timeout: transport.timeout,
-            max_download_bytes: transport.max_download_bytes,
+            timeout: transport
+                .timeout
+                .filter(|timeout| !timeout.is_zero())
+                .unwrap_or(settings.request_timeout),
             max_response_bytes: transport.max_response_bytes,
-            poll_timeout: transport.poll_timeout,
+            settings,
+            secrets,
         }
+    }
+
+    pub fn secret(&self, name: &str) -> Option<String> {
+        self.secrets.get(name)
     }
 }
 
@@ -203,13 +209,15 @@ impl Default for OcrConnection {
         Self::new(
             ResolvedOcrCredentials::default(),
             OcrTransportConfig::default(),
+            OcrSettings::default(),
+            Arc::new(ProcessEnvironment),
         )
     }
 }
 
 #[derive(Clone, Default)]
 pub struct ResolvedOcrCredentials {
-    pub api_key: Option<Sourced<String>>,
+    pub api_key: Option<Sourced<SecretValue>>,
     pub api_base: Option<Sourced<String>>,
 }
 
@@ -387,6 +395,10 @@ const HEALTH_CHECK_PDF_DATA_URI: &str = "data:application/pdf;base64,JVBERi0xLjQ
 /// (headers at minimum; Vertex also carries the project id).
 pub trait OcrEnvironment: Send + Sync {
     fn headers(&self) -> &[(String, String)];
+
+    fn signer(&self) -> Option<&dyn RequestSigner> {
+        None
+    }
 }
 
 impl OcrEnvironment for Vec<(String, String)> {
@@ -428,7 +440,7 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         ResolvedOcrCredentials {
             api_key: inputs
                 .dynamic_api_key
-                .filter(|value| !value.value().is_empty())
+                .filter(|value| !value.value().expose().is_empty())
                 .or(inputs.api_key),
             api_base: inputs
                 .dynamic_api_base
@@ -529,7 +541,7 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         request: &PreparedOcrRequest,
         client: &OcrClient,
         hooks: &dyn CallHooks<Error>,
-    ) -> impl Future<Output = Result<reqwest::Request, Error>> + Send {
+    ) -> impl Future<Output = Result<OutboundRequest, Error>> + Send {
         async move {
             let params = self.map_ocr_params(&request.optional_params, &request.model)?;
             let environment = self.validate_environment(request, client).await?;
@@ -547,7 +559,16 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
                     },
                 )
                 .await?;
-            transform_request_body(self, client, request, &url, headers, body, hooks).await
+            transform_request_body(
+                self,
+                request,
+                &url,
+                headers,
+                body,
+                environment.signer(),
+                hooks,
+            )
+            .await
         }
     }
 }
@@ -565,15 +586,37 @@ pub fn decode_and_normalize_response<T: DeserializeOwned>(
     })
 }
 
-pub fn credential_env(name: &str) -> Option<String> {
-    std::env::var(name).ok()
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn connection_timeout_falls_back_to_the_request_timeout_setting_like_a_python_or() {
+        let settings = OcrSettings {
+            request_timeout: Duration::from_secs(42),
+            ..OcrSettings::default()
+        };
+        let timeout = |call: Option<Duration>| {
+            OcrConnection::new(
+                ResolvedOcrCredentials::default(),
+                OcrTransportConfig {
+                    timeout: call,
+                    ..OcrTransportConfig::default()
+                },
+                settings.clone(),
+                Arc::new(ProcessEnvironment),
+            )
+            .timeout
+        };
+        assert_eq!(timeout(None), Duration::from_secs(42));
+        assert_eq!(timeout(Some(Duration::ZERO)), Duration::from_secs(42));
+        assert_eq!(
+            timeout(Some(Duration::from_secs(5))),
+            Duration::from_secs(5)
+        );
+    }
 
     #[test]
     fn normalized_response_rejects_invalid_shared_fields() {

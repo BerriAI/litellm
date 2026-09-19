@@ -6,7 +6,10 @@ batch under a per-minute RPM/TPM budget. Scopes that configure `tpd_limit`
 are charged against a 24h token window instead of their minute counters.
 """
 
-from datetime import datetime
+import time
+from collections.abc import Iterator
+from datetime import datetime, timezone
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
@@ -257,3 +260,39 @@ def test_online_descriptors_ignore_tpd_limit():
         model_has_failures=False,
     )
     assert [(d["key"], d["rate_limit"]["window_size"]) for d in descriptors] == [("api_key", rate_limiter.window_size)]
+
+
+@pytest.fixture(params=["Europe/Paris", "Asia/Kolkata", "America/Los_Angeles"])
+def process_timezone(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    monkeypatch.setenv("TZ", request.param)
+    time.tzset()
+    yield request.param
+    monkeypatch.undo()
+    time.tzset()
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="switching the process timezone needs time.tzset()")
+@pytest.mark.asyncio
+async def test_batch_rate_limit_error_reports_reset_time_in_utc_on_a_non_utc_proxy(process_timezone: str) -> None:
+    window_start: Final = datetime(2026, 9, 13, 8, 0, 0, tzinfo=timezone.utc)
+    clock: Final = _Clock(window_start)
+    _internal_usage_cache, _rate_limiter, batch_limiter = _make_limiters(clock)
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("tpd-key-utc"), rpm_limit=1, tpd_limit=1000)
+
+    await batch_limiter._check_and_increment_batch_counters(
+        user_api_key_dict=user_api_key_dict,
+        data={},
+        batch_usage=BatchFileUsage(total_tokens=600, request_count=6),
+    )
+    clock.now = datetime(2026, 9, 13, 11, 0, 0, tzinfo=timezone.utc)
+    with pytest.raises(HTTPException) as exc:
+        await batch_limiter._check_and_increment_batch_counters(
+            user_api_key_dict=user_api_key_dict,
+            data={},
+            batch_usage=BatchFileUsage(total_tokens=600, request_count=6),
+        )
+
+    assert exc.value.status_code == 429
+    assert exc.value.headers["retry-after"] == str(BATCH_TPD_WINDOW_SECONDS - 3 * 3600)
+    assert exc.value.headers["reset_at"] == "2026-09-14 08:00:00 UTC"
+    assert str(exc.value.detail).endswith("Limit resets at: 2026-09-14 08:00:00 UTC")

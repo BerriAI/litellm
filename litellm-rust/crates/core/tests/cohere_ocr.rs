@@ -38,7 +38,7 @@ mod transformation {
             )
             .await
             .unwrap();
-        let body: Value = serde_json::from_slice(http.body().unwrap().as_bytes().unwrap()).unwrap();
+        let body: Value = serde_json::from_slice(http.body()).unwrap();
         assert_eq!(
             body,
             json!({
@@ -75,7 +75,7 @@ mod transformation {
             )
             .await
             .unwrap();
-        let body: Value = serde_json::from_slice(http.body().unwrap().as_bytes().unwrap()).unwrap();
+        let body: Value = serde_json::from_slice(http.body()).unwrap();
         assert_eq!(body["output_format"], "markdown");
         assert!(body.get("req_format").is_none());
     }

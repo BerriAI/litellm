@@ -184,6 +184,7 @@ LLM_CONFIG_NAMES: Final = (
     "VertexAIAnthropicConfig",
     "VertexAILlama3Config",
     "VertexAIAi21Config",
+    "VertexAIMistralConfig",
     "AmazonCohereChatConfig",
     "AmazonBedrockGlobalConfig",
     "AmazonAI21Config",
@@ -770,6 +771,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "VertexAIAi21Config": (
         ".llms.vertex_ai.vertex_ai_partner_models.ai21.transformation",
         "VertexAIAi21Config",
+    ),
+    "VertexAIMistralConfig": (
+        ".llms.vertex_ai.vertex_ai_partner_models.mistral.transformation",
+        "VertexAIMistralConfig",
     ),
     "AmazonCohereChatConfig": (
         ".llms.bedrock.chat.invoke_handler",

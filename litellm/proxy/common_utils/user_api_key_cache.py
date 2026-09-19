@@ -325,6 +325,14 @@ def model_access_group_spend_counter_key(access_group_name: str) -> str:
     return f"spend:model_access_group:{access_group_name}"
 
 
+def project_cache_key(project_id: str) -> str:
+    return f"project_id:{project_id}"
+
+
+def project_spend_counter_key(project_id: str) -> str:
+    return f"spend:project:{project_id}"
+
+
 #: Cached under ``end_user_restricted_registry_cache_key`` when the restricted set exceeds
 #: ``END_USER_RESTRICTED_REGISTRY_MAX_SIZE``: registry unusable, fall back to the per-id fetch.
 END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL: Final = "__end_user_restricted_registry_overflow__"
