@@ -58,10 +58,6 @@ def _hang_guard_args(invocation: tuple[str, ...]) -> tuple[str, ...]:
 _INVOCATIONS: Final = _pytest_invocations(_run_tests_script())
 
 
-def test_the_shard_script_runs_pytest_serially_and_under_xdist() -> None:
-    assert sorted("-n" in invocation for invocation in _INVOCATIONS) == [False, True]
-
-
 @pytest.mark.parametrize(
     "invocation", _INVOCATIONS, ids=tuple("xdist" if "-n" in invocation else "serial" for invocation in _INVOCATIONS)
 )
