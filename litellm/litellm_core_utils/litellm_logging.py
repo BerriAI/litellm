@@ -377,6 +377,10 @@ _DEPLOYMENT_PRICING_KEYS: Final = (
     "cache_read_input_token_cost_above_272k_tokens_batches",
     "cache_creation_input_token_cost_batches",
     "cache_creation_input_token_cost_above_272k_tokens_batches",
+    "ocr_cost_per_page",
+    "ocr_cost_per_page_batches",
+    "annotation_cost_per_page",
+    "annotation_cost_per_page_batches",
 )
 _INPUT_PRICING_KEY_PREFIXES: Final = (
     "input_cost_per_token",
@@ -418,7 +422,9 @@ def deployment_pricing_model_info(model_id: str | None, deployment_model: str | 
     standard or flat batch rate for a direction takes that whole direction, so
     a published batch rate can never displace a standard rate the deployment
     configured itself. A tier-only override keeps every published rate it left
-    out.
+    out. OCR per-page rates count as declared pricing too; they pass through as
+    registered and ``ocr_batch_cost`` layers the published rate under each
+    per-page family the deployment leaves out.
     """
     if model_id is None:
         return None
@@ -1280,8 +1286,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 return {"error": f"Unable to parse raw request body. Got - {data}"}
         return data
 
-    def _get_masked_api_base(self, api_base: str) -> str:
-        return str(mask_api_base_credentials(api_base))
+    def _get_masked_api_base(self, api_base: str | None) -> str:
+        return str(mask_api_base_credentials(api_base or ""))
 
     def _pre_call(self, input, api_key, model=None, additional_args={}):
         """
