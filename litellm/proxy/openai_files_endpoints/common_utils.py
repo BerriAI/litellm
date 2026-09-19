@@ -18,7 +18,6 @@ from typing import (
 from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.proxy._types import ProxyException
-from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
     ManagedObjectRepository,
@@ -363,6 +362,8 @@ def get_credentials_for_model(
         HTTPException: If router not initialized or model not found
     """
     from fastapi import HTTPException
+
+    from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 
     if llm_router is None:
         raise HTTPException(
