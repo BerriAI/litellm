@@ -4,16 +4,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::transformation::VertexAiOcrConfig;
-use crate::{
-    base_llm::ocr::{
-        error::Error,
-        transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions,
-            OcrPageImage, OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
-            credential_env, decode_and_normalize_response, decode_response_value,
-        },
+use crate::base_llm::ocr::{
+    error::Error,
+    handler::OcrClient,
+    transformation::{
+        BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage,
+        OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest, credential_env,
+        decode_and_normalize_response, decode_response_value,
     },
-    custom_httpx::llm_http_handler::OcrClient,
 };
 
 const DEFAULT_API_BASE: &str = "https://aiplatform.googleapis.com";

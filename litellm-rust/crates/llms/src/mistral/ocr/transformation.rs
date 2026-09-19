@@ -2,16 +2,13 @@ use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, ur
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{
-    base_llm::ocr::{
-        error::Error,
-        transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage,
-            OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest, credential_env,
-            decode_and_normalize_response,
-        },
+use crate::base_llm::ocr::{
+    error::Error,
+    handler::OcrClient,
+    transformation::{
+        BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrResponseFormat,
+        OcrUsageInfo, PreparedOcrRequest, credential_env, decode_and_normalize_response,
     },
-    custom_httpx::llm_http_handler::OcrClient,
 };
 
 const MISTRAL_OCR_API_BASE: &str = "https://api.mistral.ai/v1";
@@ -129,8 +126,7 @@ impl MistralOcrConfig {
         connection: &OcrConnection,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<Vec<(String, String)>, Error> {
-        if crate::custom_httpx::http_handler::has_header(&connection.extra_headers, "authorization")
-        {
+        if litellm_http::request::has_header(&connection.extra_headers, "authorization") {
             return Ok(connection.extra_headers.clone());
         }
         let api_key = connection

@@ -9,7 +9,7 @@ use host::OcrRouteHost;
 use litellm_auth_gcp::VertexAuth;
 use litellm_callbacks_legacy::{LegacySurface, PublicCall, run_legacy_call};
 use litellm_core::ocr::route::ocr_machine;
-use litellm_llms::custom_httpx::llm_http_handler::OcrClient;
+use litellm_llms::base_llm::ocr::handler::OcrClient;
 use pyo3::{
     prelude::*,
     types::{PyDict, PyTuple},

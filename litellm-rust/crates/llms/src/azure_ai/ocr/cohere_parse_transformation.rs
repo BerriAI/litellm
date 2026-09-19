@@ -5,6 +5,7 @@ use crate::{
     base_llm::ocr::{
         document::{inline_remote_document, validate_inline_document},
         error::Error,
+        handler::OcrClient,
         transformation::{
             BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrRequestContext, OcrResponseFormat,
             PreparedOcrRequest,
@@ -13,7 +14,6 @@ use crate::{
     cohere::ocr::transformation::{
         CohereOptions, CohereParseConfig, CohereRequest, validate_document,
     },
-    custom_httpx::llm_http_handler::OcrClient,
 };
 
 #[derive(Default)]
@@ -108,7 +108,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
     }
 
     fn validate_request_body(&self, body: &Value) -> Result<(), Error> {
-        let document = crate::custom_httpx::llm_http_handler::body_document(body)?;
+        let document = crate::base_llm::ocr::handler::body_document(body)?;
         validate_document(&document)?;
         validate_inline_document(&document)
     }

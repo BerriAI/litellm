@@ -8,8 +8,8 @@ use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_http::{
     HttpClientConfig, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
     Unsupported,
+    media::{PublicDnsResolver, UrlPolicy},
 };
-use litellm_llms::custom_httpx::media::{PublicDnsResolver, UrlPolicy};
 use pyo3::{prelude::*, types::PyDict};
 
 use crate::{errors::RustBridgeDeclined, python_settings::PythonSettings};
