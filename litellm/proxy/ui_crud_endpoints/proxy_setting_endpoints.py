@@ -492,13 +492,13 @@ async def get_allowed_ips():
 
 def _store_allowed_ips(general_settings: MutableMapping[str, object], allowed_ips: Sequence[str]) -> None:
     try:
-        general_settings["allowed_ips"] = list(allowed_ips)
+        general_settings["allowed_ips"] = list(allowed_ips)  # mutable-ok: compared against the file's own list
     except ConfigOwnedKeyError as owned:
         raise HTTPException(
             status_code=400,
-            detail={
+            detail={  # mutable-ok: HTTPException serializes its detail as json
                 "error": f"{owned.section} key '{owned.key}' is set in the config file and cannot be changed here",
-                "keys": [owned.key],
+                "keys": (owned.key,),
                 "section": owned.section,
                 "resolution": (
                     "edit the config file to change it, or remove it from the file to let the database own it"
@@ -527,7 +527,7 @@ async def add_allowed_ip(
     if prisma_client is None:
         raise Exception("No DB Connected")
 
-    _allowed_ips: Final[Sequence[str]] = general_settings.get("allowed_ips") or []
+    _allowed_ips: Final[Sequence[str]] = general_settings.get("allowed_ips") or ()
     if ip_address.ip in _allowed_ips:
         raise HTTPException(status_code=400, detail="IP address already exists")
     _store_allowed_ips(general_settings, (*_allowed_ips, ip_address.ip))
@@ -584,7 +584,7 @@ async def delete_allowed_ip(
         proxy_config,
     )
 
-    _allowed_ips: Final[Sequence[str]] = general_settings.get("allowed_ips") or []
+    _allowed_ips: Final[Sequence[str]] = general_settings.get("allowed_ips") or ()
     if ip_address.ip not in _allowed_ips:
         raise HTTPException(status_code=404, detail="IP address not found")
     _store_allowed_ips(general_settings, tuple(ip for ip in _allowed_ips if ip != ip_address.ip))
