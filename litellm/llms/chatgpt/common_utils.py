@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import httpx
 
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 # OAuth + API constants (derived from openai/codex)
@@ -270,15 +271,41 @@ def _normalize_litellm_params(litellm_params: Any | None) -> dict:
 
 def get_chatgpt_session_id(litellm_params: object) -> str | None:
     params: Final = _normalize_litellm_params(litellm_params)
-    for key in ("litellm_session_id", "session_id"):
-        value = params.get(key)
-        if value:
-            return str(value)
     metadata: Final = params.get("metadata")
-    if isinstance(metadata, dict):
-        value = metadata.get("session_id")
-        if value:
-            return str(value)
+    # A session id the proxy generated for a request that had none
+    # (general_settings.missing_session_id: "generate") is per-request; using
+    # it as identity pins every request to a different ChatGPT cache shard
+    # and the prompt cache never hits (same guard as fireworks'
+    # get_fireworks_session_id). The marker can sit in "metadata" or
+    # "litellm_metadata" -- the LITELLM_METADATA_ROUTES (responses included)
+    # carry internal metadata under the latter. Generated ids are skipped,
+    # not returned, so a caller-supplied stable prompt_cache_key still wins.
+    generated: Final = any(
+        isinstance(params.get(name), dict)
+        and params[name].get(SESSION_ID_GENERATED_METADATA_KEY)
+        for name in ("metadata", "litellm_metadata")
+    )
+    if not generated:
+        for key in ("litellm_session_id", "session_id"):
+            value = params.get(key)
+            if value:
+                return str(value)
+        if isinstance(metadata, dict):
+            value = metadata.get("session_id")
+            if value:
+                return str(value)
+    # ChatGPT derives prompt-cache affinity from the Responses session-id
+    # header (the Codex CLI sends a stable per-conversation key derived from
+    # prompt_cache_key). Callers of the responses API already send a stable
+    # prompt_cache_key; retaining it as the session id lets repeat turns of a
+    # conversation reuse the provider's prompt cache instead of landing on a
+    # fresh shard every request. Explicit operator configuration above still
+    # wins; litellm-internal per-request ids below still lose to it.
+    prompt_cache_key: Final = params.get("prompt_cache_key")
+    if prompt_cache_key:
+        return _safe_header_value(str(prompt_cache_key)) or None
+    if generated:
+        return None
     for key in ("litellm_trace_id", "litellm_call_id"):
         value = params.get(key)
         if value:
