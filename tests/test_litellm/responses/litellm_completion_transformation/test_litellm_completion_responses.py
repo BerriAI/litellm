@@ -5033,3 +5033,17 @@ def test_transform_chat_completion_response_incomplete_details():
     assert result_existing.status == "incomplete"
     assert result_existing.incomplete_details == existing_details
 
+
+@pytest.mark.parametrize("stream", [True, False])
+async def test_bridge_rejects_untranslatable_tool_choice_with_a_400(stream: bool):
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.aresponses(
+            model="anthropic/claude-haiku-4-5",
+            input="Which fruit is red?",
+            tools=[{"type": "function", "name": "lookup_fruit", "parameters": {"type": "object"}}],
+            tool_choice={"type": "file_search"},
+            stream=stream,
+            api_key="sk-unused",
+        )
+    assert exc_info.value.status_code == 400
+    assert "tool_choice={'type': 'file_search'}" in str(exc_info.value)
