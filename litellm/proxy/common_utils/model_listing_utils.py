@@ -256,6 +256,64 @@ class TeamModelNameTranslator:
         return list(TeamModelNameTranslator._response_to_lookup_map(model_names, internal_to_public).items())
 
     @staticmethod
+    def resolve_alias_target(
+        listed_name: str,
+        llm_router: Router | None,
+        alias_maps: Sequence[object] = (),
+    ) -> str | None:
+        """The deployment `listed_name` routes to when it is an alias, else None.
+
+        An alias owns no deployment row, so a metadata lookup keyed on it finds neither
+        a deployment nor a cost-map entry and yields no `mode` or token limits.
+
+        Rewrites are applied in `alias_maps` order, each against the result of the last,
+        because `litellm_pre_call_utils` applies the team map and then the key map to
+        whatever name survived the previous one. Checking every map against
+        `listed_name` instead would report an intermediate deployment's metadata for a
+        chained alias.
+        """
+        if llm_router is None:
+            return None
+
+        resolved: Final = TeamModelNameTranslator._chain_alias_rewrites(
+            listed_name, (*alias_maps, llm_router.model_group_alias)
+        )
+        if resolved == listed_name:
+            return None
+        return resolved if llm_router.model_name_to_deployment_indices.get(resolved) else None
+
+    @staticmethod
+    def _chain_alias_rewrites(listed_name: str, alias_maps: Sequence[object]) -> str:
+        """`listed_name` after each map in turn rewrites the previous result.
+
+        A name already rewritten once is never followed again, so a cycle across maps
+        terminates instead of looping.
+        """
+        resolved = listed_name  # mutable-ok: fold over the alias maps
+        seen: Final[set[str]] = {listed_name}  # mutable-ok: accumulates visited names to break alias cycles
+        for alias_map in alias_maps:
+            target: str | None = TeamModelNameTranslator._alias_lookup(alias_map, resolved)
+            if target is None or target in seen:
+                continue
+            resolved = target
+            seen.add(target)
+        return resolved
+
+    @staticmethod
+    def _alias_lookup(alias_map: object, name: str) -> str | None:
+        """`name`'s target in one alias map, or None when absent or malformed.
+
+        `model_group_alias` entries may be a routing dict rather than a bare name.
+        """
+        if not isinstance(alias_map, Mapping):
+            return None
+        raw_target: Final[object] = cast("Mapping[str, object]", alias_map).get(name)
+        target: Final[object] = (
+            cast("Mapping[str, object]", raw_target).get("model") if isinstance(raw_target, Mapping) else raw_target
+        )
+        return target if isinstance(target, str) and target else None
+
+    @staticmethod
     def translate_listing(
         model_names: list[str],
         llm_router: Router | None,
