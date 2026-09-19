@@ -11,7 +11,9 @@ from typing import Final
 import jsonschema
 import pytest
 
+import litellm
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -363,3 +365,75 @@ def test_active_mistral_chat_rows_price_cache_reads_below_input(path: Path):
         and not cache_read_is_tenth_of_input(entry)
     ]
     assert drifted == []
+
+
+PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse"})
+MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY: Final = frozenset({"search", "evaluation"})
+VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST: Final = frozenset(
+    {
+        "vertex_ai-ai21_models",
+        "vertex_ai-embedding-models",
+        "vertex_ai-image-models",
+        "vertex_ai-llama_models",
+        "vertex_ai-mistral_models",
+        "vertex_ai-openai_models",
+        "vertex_ai-qwen_models",
+        "vertex_ai-video-models",
+    }
+)
+
+
+def is_registered_provider(label: str, model_names: tuple[str, ...]) -> bool:
+    if label in litellm.models_by_provider or JSONProviderRegistry.exists(label):
+        return True
+    family_root: Final = label.split("-", 1)[0]
+    wildcard_models: Final = litellm.models_by_provider.get(family_root, ())
+    return any(
+        name in wildcard_models or name.removeprefix(f"{family_root}/") in wildcard_models for name in model_names
+    )
+
+
+def unregistered_providers(rows: Mapping[str, object]) -> list[str]:
+    labelled_rows: Final = tuple(
+        (name, entry["litellm_provider"])
+        for name, entry in rows.items()
+        if name != "sample_spec"
+        and isinstance(entry, dict)
+        and "litellm_provider" in entry
+        and entry.get("mode") not in MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY
+        and entry["litellm_provider"] not in PROVIDER_LABELS_WITHOUT_A_MODEL_SET
+        and entry["litellm_provider"] not in VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST
+    )
+    return sorted(
+        label
+        for label in {label for _, label in labelled_rows}
+        if not is_registered_provider(label, tuple(name for name, row_label in labelled_rows if row_label == label))
+    )
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_every_cost_map_provider_is_registered(path: Path):
+    assert unregistered_providers(json.loads(path.read_text())) == [], (
+        f"{path.name} carries a litellm_provider whose models a `<provider>/*` grant does not list. A new provider "
+        "needs a `<provider>_models` set in litellm/__init__.py, filled in _populate_provider_model_sets and listed "
+        "in _build_models_by_provider. A new `<provider>-<family>` label needs its rows added to a set that "
+        "`models_by_provider[<provider>]` includes"
+    )
+
+
+def test_unregistered_provider_guard_flags_only_labels_nobody_registered():
+    wired_vertex_model: Final = sorted(litellm.vertex_language_models)[0]
+    rows: Final = {
+        "sample_spec": {"litellm_provider": "one of the supported providers", "mode": "chat"},
+        "nobody_registered/StartJob": {"litellm_provider": "nobody_registered", "mode": "audio_transcription"},
+        "gpt-4o": {"litellm_provider": "openai", "mode": "chat"},
+        wired_vertex_model: {"litellm_provider": "vertex_ai-language-models", "mode": "chat"},
+        "vertex_ai/new-family-model": {"litellm_provider": "vertex_ai-new_family_models", "mode": "chat"},
+        "unknown_root/model": {"litellm_provider": "unknown_root-new_family_models", "mode": "chat"},
+        "some_search/search": {"litellm_provider": "some_search", "mode": "search"},
+    }
+    assert unregistered_providers(rows) == [
+        "nobody_registered",
+        "unknown_root-new_family_models",
+        "vertex_ai-new_family_models",
+    ]
