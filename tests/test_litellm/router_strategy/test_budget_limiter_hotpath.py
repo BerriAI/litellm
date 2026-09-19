@@ -338,7 +338,9 @@ async def test_sync_refused_by_the_open_circuit_breaker_is_quiet_and_leaks_no_ta
 
     assert caplog.records == []
     unretrieved.assert_not_called()
-    assert limiter.redis_increment_operation_queue == []
+    assert limiter.redis_increment_operation_queue == [
+        {"key": "provider_spend:openai:1d", "increment_value": 0.5, "ttl": 60}
+    ]
     assert redis_cache.async_increment_pipeline.await_count == 1
 
 
@@ -353,25 +355,27 @@ async def _limiter_with_redis(redis_cache: MagicMock) -> RouterBudgetLimiting:
 
 
 @pytest.mark.asyncio
-async def test_push_returns_before_redis_answers(disable_budget_sync):
-    """The push runs inside the request success callback, so it must hand the Redis round trip to a task instead of waiting on it."""
+async def test_push_waits_for_redis_before_completing(disable_budget_sync):
+    redis_started = asyncio.Event()
     redis_answered = asyncio.Event()
 
     async def wait_for_redis(**_: object) -> None:
+        redis_started.set()
         await redis_answered.wait()
 
     redis_cache = MagicMock(spec=RedisCache)
     redis_cache.async_increment_pipeline = AsyncMock(side_effect=wait_for_redis)
     limiter = await _limiter_with_redis(redis_cache)
 
-    await asyncio.wait_for(limiter._push_in_memory_increments_to_redis(), timeout=1)
-    await asyncio.sleep(0)
-
-    assert not redis_answered.is_set()
+    push_task = asyncio.create_task(limiter._push_in_memory_increments_to_redis())
+    await asyncio.wait_for(redis_started.wait(), timeout=1)
+    assert not push_task.done()
+    assert limiter._detached_increment_operations is not None
+    redis_answered.set()
+    assert await asyncio.wait_for(push_task, timeout=1) is True
     assert redis_cache.async_increment_pipeline.await_count == 1
     assert limiter.redis_increment_operation_queue == []
-    redis_answered.set()
-    await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
+    assert limiter._detached_increment_operations is None
 
 
 @pytest.mark.asyncio
