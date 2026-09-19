@@ -327,6 +327,91 @@ async def test_apply_guardrail_compresses_at_or_above_min_tokens():
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_min_tokens_never_fetches_image_urls(respx_mock: respx.MockRouter):
+    image_url = "https://images.example.com/a.png"
+    image_fetch = respx_mock.get(image_url).mock(return_value=httpx.Response(200, content=b"\x89PNG"))
+    image_messages = [
+        ORIGINAL_MESSAGES[0],
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this."},
+                {"type": "image_url", "image_url": {"url": image_url, "detail": "high"}},
+            ],
+        },
+        ORIGINAL_MESSAGES[2],
+        ORIGINAL_MESSAGES[3],
+    ]
+    inputs = GenericGuardrailAPIInputs(texts=["Describe this."], structured_messages=image_messages)
+    request_data = {"model": "gpt-4o"}
+    guardrail = _make_guardrail(min_tokens=1_000_000)
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as post:
+        result = await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
+
+    assert not image_fetch.called
+    post.assert_not_awaited()
+    assert result is inputs
+    assert _recorded_guardrail_response(request_data)["skipped"] == "below_min_tokens"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_compresses_when_content_part_is_uncountable():
+    audio_messages = [
+        ORIGINAL_MESSAGES[0],
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Transcribe."},
+                {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
+            ],
+        },
+        ORIGINAL_MESSAGES[2],
+        ORIGINAL_MESSAGES[3],
+    ]
+    inputs = GenericGuardrailAPIInputs(texts=["Transcribe."], structured_messages=audio_messages)
+    request_data = {"model": "gpt-4o"}
+    guardrail = _make_guardrail(min_tokens=1_000_000)
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response([audio_messages[1]]),
+    ) as post:
+        result = await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
+
+    post.assert_awaited_once()
+    assert result["structured_messages"] is not None
+    assert "skipped" not in _recorded_guardrail_response(request_data)
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_compresses_when_token_counter_disabled(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    short_messages = [
+        ORIGINAL_MESSAGES[0],
+        {"role": "user", "content": "A"},
+        ORIGINAL_MESSAGES[2],
+        ORIGINAL_MESSAGES[3],
+    ]
+    inputs = GenericGuardrailAPIInputs(texts=["A"], structured_messages=short_messages)
+    request_data = {"model": "gpt-4o"}
+    guardrail = _make_guardrail(min_tokens=1000)
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response([short_messages[1]]),
+    ) as post:
+        await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
+
+    post.assert_awaited_once()
+    assert "skipped" not in _recorded_guardrail_response(request_data)
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_derives_tokens_saved_when_service_omits_it(
     guardrail: HeadroomGuardrail,
 ):

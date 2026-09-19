@@ -102,6 +102,26 @@ def _flatten_messages_for_compression(messages: list[dict[str, object]]) -> list
     return flattened
 
 
+def _estimate_compressible_tokens(model: object, messages: list[dict[str, object]]) -> int | None:
+    """Token estimate for the min_tokens gate, or None when no trustworthy count exists.
+
+    None keeps the request on the compression path: a disabled global counter
+    reports 0 for everything, and content parts the counter does not know
+    raise, and neither must turn into a skipped or failed request.
+    """
+    if litellm.disable_token_counter:
+        return None
+    try:
+        return token_counter(
+            model=model if isinstance(model, str) else "",
+            messages=messages,
+            use_default_image_token_count=True,
+        )
+    except ValueError as e:
+        verbose_proxy_logger.debug("Headroom: token estimate unavailable, compressing: %s", e)
+        return None
+
+
 def _restore_content_shapes(
     originals: list[dict[str, object]], returned: list[dict[str, object]]
 ) -> list[dict[str, object]]:
@@ -814,15 +834,14 @@ class HeadroomGuardrail(CustomGuardrail):
 
         model: Final = self.headroom_model or request_data.get("model")
         flattened: Final = _flatten_messages_for_compression(compressible)
-        compressible_tokens: Final = token_counter(
-            model=model if isinstance(model, str) else "",
-            messages=flattened,
+        compressible_tokens: Final = (
+            _estimate_compressible_tokens(model=model, messages=flattened) if self.min_tokens > 0 else None
         )
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
 
-        if self.min_tokens > 0 and compressible_tokens < self.min_tokens:
+        if compressible_tokens is not None and compressible_tokens < self.min_tokens:
             verbose_proxy_logger.debug(
                 "Headroom: %s compressible tokens below min_tokens=%s; skipping compression",
                 compressible_tokens,
