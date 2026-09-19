@@ -3085,9 +3085,7 @@ async def _ui_session_grouped_spend_logs(
     page_ends_the_list: Final = cursor is None and page_limit > 0 and not has_more and page_starts_inside_the_list
     if page_ends_the_list:
         count_task.cancel()
-    total_records, total_is_capped = (
-        (offset + len(page_rows), False) if page_ends_the_list else await count_task
-    )
+    total_records, total_is_capped = (offset + len(page_rows), False) if page_ends_the_list else await count_task
 
     session_keys: Final = tuple((row["session_key"], row["api_key"]) for row in visible_rows)
     data: Final[list[dict[str, object]]] = (  # mutable-ok: _build_ui_spend_logs_response writes onto each row
