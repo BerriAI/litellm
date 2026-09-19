@@ -17,12 +17,14 @@ from openai._legacy_response import HttpxBinaryResponseContent
 import litellm
 from litellm._logging import session_id_var, trace_id_var
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
+from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import (
     _get_status_fields,
     set_callbacks,
 )
+from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
@@ -526,6 +528,36 @@ class TestGetRouterDeploymentModelInfo:
             info = logging_obj.get_router_deployment_model_info()
             assert info is not None
             assert info["input_cost_per_token"] == 7e-06
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
+
+    def test_ocr_only_deployment_pricing_reaches_batch_ocr_cost(self, logging_obj) -> None:
+        """Regression: a deployment priced only per page was treated as unpriced, so a retrieved OCR batch
+        billed at the published rate while the same deployment's synchronous OCR calls billed at its own."""
+        deployment_id = "deploy-ocr-only-pricing-1"
+        litellm.model_cost[deployment_id] = {
+            "id": deployment_id,
+            "litellm_provider": "mistral",
+            "mode": "ocr",
+            "ocr_cost_per_page": 0.0456,
+            "ocr_cost_per_page_batches": 0.0123,
+        }
+        logging_obj.litellm_params = {
+            "litellm_metadata": {"model_info": {"id": deployment_id}},
+            "model": "mistral/mistral-ocr-latest",
+        }
+        logging_obj.model_call_details["model"] = "mistral/mistral-ocr-latest"
+        published_annotation_rate = litellm.model_cost["mistral/mistral-ocr-latest"]["annotation_cost_per_page_batches"]
+        try:
+            info = logging_obj.get_router_deployment_model_info()
+            assert info is not None
+            assert info["ocr_cost_per_page_batches"] == 0.0123
+            pages_only = OCRUsageInfo(pages_processed=3)
+            assert ocr_batch_cost("mistral-ocr-latest", "mistral", pages_only, info)[0] == pytest.approx(3 * 0.0123)
+            with_annotations = OCRUsageInfo(pages_processed=3, pages_processed_annotation=2)
+            assert ocr_batch_cost("mistral-ocr-latest", "mistral", with_annotations, info)[0] == pytest.approx(
+                3 * 0.0123 + 2 * published_annotation_rate
+            )
         finally:
             litellm.model_cost.pop(deployment_id, None)
 

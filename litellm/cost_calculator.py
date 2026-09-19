@@ -2115,12 +2115,8 @@ def ocr_cost(
     return ocr_pages_cost + annotation_pages_cost, 0.0
 
 
-_OCR_PRICING_KEYS: Final = (
-    "ocr_cost_per_page",
-    "ocr_cost_per_page_batches",
-    "annotation_cost_per_page",
-    "annotation_cost_per_page_batches",
-)
+_OCR_BATCH_PAGE_RATE_KEYS: Final = ("ocr_cost_per_page_batches", "ocr_cost_per_page")
+_OCR_BATCH_ANNOTATION_RATE_KEYS: Final = ("annotation_cost_per_page_batches", "annotation_cost_per_page")
 
 
 def ocr_batch_cost(
@@ -2133,17 +2129,27 @@ def ocr_batch_cost(
 
     Batch OCR is billed per page at the ``*_batches`` rate, falling back to the
     synchronous per-page rate when a model has no batch price recorded, the same
-    fallback ``batch_cost_calculator`` applies to per-token batch pricing. Returns
-    ``(prompt_cost, completion_cost)`` with the whole cost in the first slot, like
-    ``ocr_cost``.
+    fallback ``batch_cost_calculator`` applies to per-token batch pricing. Each
+    per-page family (OCR pages, annotation pages) belongs to the deployment's
+    ``model_info`` when it prices that family at either rate and to the published
+    cost map otherwise, so a deployment overriding one family keeps the model's
+    published rate for the other, and the cost map is only consulted for a family
+    the deployment leaves out. Returns ``(prompt_cost, completion_cost)`` with the
+    whole cost in the first slot, like ``ocr_cost``.
     """
-    has_ocr_pricing: Final = model_info is not None and any(model_info.get(k) is not None for k in _OCR_PRICING_KEYS)
-    resolved_info: Final = (
-        model_info
-        if has_ocr_pricing
-        else _lookup_model_info_or_none(model=model, custom_llm_provider=custom_llm_provider)
+    pages_processed: Final = usage_info.pages_processed or 0
+    annotation_pages: Final = usage_info.pages_processed_annotation or 0
+    deployment_page_rate: Final = _first_price(model_info, *_OCR_BATCH_PAGE_RATE_KEYS)
+    deployment_annotation_rate: Final = _first_price(model_info, *_OCR_BATCH_ANNOTATION_RATE_KEYS)
+    needs_published_pricing: Final = (pages_processed > 0 and deployment_page_rate is None) or (
+        annotation_pages > 0 and deployment_annotation_rate is None
     )
-    if resolved_info is None:
+    published: Final = (
+        _lookup_model_info_or_none(model=model, custom_llm_provider=custom_llm_provider)
+        if needs_published_pricing
+        else None
+    )
+    if needs_published_pricing and published is None:
         verbose_logger.warning(
             "OCR batch cost: model=%s custom_llm_provider=%s has no pricing entry; returning 0.0 cost.",
             _single_log_line(model),
@@ -2151,10 +2157,16 @@ def ocr_batch_cost(
         )
         return 0.0, 0.0
 
-    page_rate: Final = _first_price(resolved_info, "ocr_cost_per_page_batches", "ocr_cost_per_page")
-    annotation_rate: Final = _first_price(resolved_info, "annotation_cost_per_page_batches", "annotation_cost_per_page")
-    pages_processed: Final = usage_info.pages_processed or 0
-    annotation_pages: Final = usage_info.pages_processed_annotation or 0
+    page_rate: Final = (
+        deployment_page_rate
+        if deployment_page_rate is not None
+        else _first_price(published, *_OCR_BATCH_PAGE_RATE_KEYS)
+    )
+    annotation_rate: Final = (
+        deployment_annotation_rate
+        if deployment_annotation_rate is not None
+        else _first_price(published, *_OCR_BATCH_ANNOTATION_RATE_KEYS)
+    )
     if page_rate is None and pages_processed > 0:
         verbose_logger.warning(
             "OCR batch cost: model=%s custom_llm_provider=%s reported pages_processed=%s but no "
@@ -2178,7 +2190,9 @@ def _lookup_model_info_or_none(model: str, custom_llm_provider: str | None) -> M
         return None
 
 
-def _first_price(model_info: ModelInfo, *keys: str) -> float | None:
+def _first_price(model_info: ModelInfo | None, *keys: str) -> float | None:
+    if model_info is None:
+        return None
     return next((price for price in (model_info.get(k) for k in keys) if isinstance(price, (int, float))), None)
 
 

@@ -13,6 +13,7 @@ import httpx
 import pytest
 from openai.types.file_deleted import FileDeleted
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.mistral.files.transformation import MistralFilesConfig
 from litellm.types.llms.openai import CreateFileRequest, FileContentRequest, OpenAIFileObject
 from litellm.types.utils import LlmProviders
@@ -115,14 +116,16 @@ def test_upload_request_maps_user_data_onto_ocr(config):
 @pytest.mark.parametrize("purpose", ["assistants", "vision", "evals"])
 def test_upload_request_rejects_purposes_mistral_lacks(config, purpose):
     """Regression: these used to be silently rewritten to ``batch``, so an upload that skipped the
-    proxy's batch-only validation and guardrails still landed on Mistral as a batch input file."""
-    with pytest.raises(ValueError, match=f"purpose={purpose!r}"):
+    proxy's batch-only validation and guardrails still landed on Mistral as a batch input file. The
+    rejection is a 400 provider error, so the proxy answers invalid_request_error instead of a 500."""
+    with pytest.raises(BaseLLMException, match=f"purpose={purpose!r}") as exc_info:
         config.transform_create_file_request(
             model="",
             create_file_data=CreateFileRequest(file=("f.bin", b"x"), purpose=purpose),
             optional_params={},
             litellm_params={},
         )
+    assert exc_info.value.status_code == 400
 
 
 def test_upload_request_requires_file(config):
@@ -212,8 +215,9 @@ def test_list_request_accepts_the_purpose_an_ocr_file_reads_back_as(config):
 
 
 def test_list_request_rejects_purposes_mistral_lacks(config):
-    with pytest.raises(ValueError, match="purpose='assistants'"):
+    with pytest.raises(BaseLLMException, match="purpose='assistants'") as exc_info:
         config.transform_list_files_request(purpose="assistants", optional_params={}, litellm_params={})
+    assert exc_info.value.status_code == 400
 
 
 def test_list_response(config):

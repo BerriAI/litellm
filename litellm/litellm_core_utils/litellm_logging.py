@@ -371,6 +371,10 @@ _DEPLOYMENT_PRICING_KEYS: Final = (
     "output_cost_per_token",
     "input_cost_per_token_batches",
     "output_cost_per_token_batches",
+    "ocr_cost_per_page",
+    "ocr_cost_per_page_batches",
+    "annotation_cost_per_page",
+    "annotation_cost_per_page_batches",
 )
 
 
@@ -386,7 +390,9 @@ def deployment_pricing_model_info(model_id: str | None, deployment_model: str | 
     the model's published rates instead of billing as zero. Ownership is per
     token direction: declaring either rate for a direction takes that whole
     direction, so a published batch rate can never displace a standard rate
-    the deployment configured itself.
+    the deployment configured itself. OCR per-page rates count as declared
+    pricing too; they pass through as registered and ``ocr_batch_cost`` layers
+    the published rate under each per-page family the deployment leaves out.
     """
     if model_id is None:
         return None
