@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
@@ -26,7 +26,7 @@ class NativeMessages(Protocol):
         request: LiteLLMMessagesRequest,
         args: tuple[object, ...],
         kwargs: Mapping[str, object],
-    ) -> AnthropicMessagesResponse: ...
+    ) -> AnthropicMessagesResponse | Iterator[bytes]: ...
 
 
 class NativeAmessages(Protocol):
@@ -35,7 +35,7 @@ class NativeAmessages(Protocol):
         request: LiteLLMMessagesRequest,
         args: tuple[object, ...],
         kwargs: Mapping[str, object],
-    ) -> Awaitable[AnthropicMessagesResponse]: ...
+    ) -> Awaitable[AnthropicMessagesResponse | AsyncIterator[bytes]]: ...
 
 
 def _messages_binding(value: object) -> NativeMessages | None:
@@ -50,5 +50,5 @@ def _amessages_binding(value: object) -> NativeAmessages | None:
     return cast("NativeAmessages", value)  # cast-ok: callable validated at the native binding boundary
 
 
-NATIVE_MESSAGES: Final = NativeBinding("anthropic_messages_handler", validate=_messages_binding)
-NATIVE_AMESSAGES: Final = NativeBinding("anthropic_messages", validate=_amessages_binding)
+NATIVE_MESSAGES: Final = NativeBinding("messages", validate=_messages_binding)
+NATIVE_AMESSAGES: Final = NativeBinding("amessages", validate=_amessages_binding)

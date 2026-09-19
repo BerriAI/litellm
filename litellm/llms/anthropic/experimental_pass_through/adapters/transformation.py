@@ -111,6 +111,7 @@ from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
 from litellm.llms.anthropic.common_utils import (
+    eager_input_streaming_flag,
     is_empty_unsigned_thinking_block,
     normalize_anthropic_tool_use_id,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
@@ -195,6 +196,15 @@ def target_supports_mid_conversation_system(model: str | None, custom_llm_provid
     if not model:
         return False
     return supports_mid_conversation_system(model=model, custom_llm_provider=custom_llm_provider)
+
+
+def _chat_tool_param(function_chunk: ChatCompletionToolParamFunctionChunk, tool: object) -> ChatCompletionToolParam:
+    eager_input_streaming: Final = eager_input_streaming_flag(tool)
+    if eager_input_streaming is None:
+        return ChatCompletionToolParam(type="function", function=function_chunk)
+    return ChatCompletionToolParam(
+        type="function", function=function_chunk, eager_input_streaming=eager_input_streaming
+    )
 
 
 class AnthropicAdapter:
@@ -770,6 +780,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "cache_control",
             "strict",
             "type",
+            "eager_input_streaming",
         ]
 
         for idx, tool in enumerate(tools):
@@ -808,7 +819,7 @@ class LiteLLMAnthropicMessagesAdapter:
             for k, v in tool.items():
                 if k not in mapped_tool_params:  # pass additional computer kwargs
                     function_chunk.setdefault("parameters", {}).update({k: v})
-            tool_param = ChatCompletionToolParam(type="function", function=function_chunk)
+            tool_param = _chat_tool_param(function_chunk, tool)
             self._add_cache_control_if_applicable(tool, tool_param, model)
             new_tools.append(tool_param)
 
@@ -1399,6 +1410,8 @@ class LiteLLMAnthropicMessagesAdapter:
             return "max_tokens"
         elif openai_finish_reason == "tool_calls":
             return "tool_use"
+        elif openai_finish_reason in ["content_filter", "refusal"]:
+            return "refusal"
         return "end_turn"
 
     @staticmethod

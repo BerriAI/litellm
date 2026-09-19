@@ -464,3 +464,11 @@ class MCPGatewaySessionsResponse(BaseModel):
     by_client: list[MCPGatewaySessionGroupCount] = Field(default_factory=list)
     by_user: list[MCPGatewaySessionGroupCount] = Field(default_factory=list)
     sessions: list[MCPGatewaySession] = Field(default_factory=list)
+
+
+class MCPGatewaySessionsTerminateResponse(BaseModel):
+    """Stateful sessions an administrator force-closed on this proxy worker."""
+
+    worker_pid: int
+    terminated_sessions: int
+    sessions: list[MCPGatewaySession] = Field(default_factory=list)

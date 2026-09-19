@@ -24,8 +24,12 @@ from litellm.llms.bedrock.common_utils import (
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     strip_unsupported_bedrock_invoke_output_config_keys,
+    tools_without_eager_input_streaming,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
+    ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -237,6 +241,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         # Hoist `custom.defer_loading` then drop `custom` (Bedrock doesn't support it)
         normalize_custom_field_on_tools(anthropic_request)
         normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_request)
+        outbound_tools: Final = tools_without_eager_input_streaming(anthropic_request)
+        if outbound_tools is not None:
+            anthropic_request["tools"] = outbound_tools
         return anthropic_request
 
     def _compute_bedrock_invoke_beta_headers(
@@ -268,6 +275,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
             if bedrock_supports_tool_search(model):
                 beta_set.add("tool-search-tool-2025-10-19")
+
+        if self.is_eager_input_streaming_used(tools):
+            beta_set.add(ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER)
 
         auto_beta_list: Final = filter_and_transform_beta_headers(
             beta_headers=list(beta_set - user_beta_set),

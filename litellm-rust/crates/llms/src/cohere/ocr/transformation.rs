@@ -179,8 +179,8 @@ impl CohereParseConfig {
         }
         let key = connection
             .api_key
-            .as_deref()
-            .map(str::trim)
+            .as_ref()
+            .map(|key| key.expose().trim())
             .filter(|key| !key.is_empty())
             .map(str::to_string)
             .or_else(|| {
@@ -718,7 +718,7 @@ mod tests {
         assert!(matches!(
             CohereParseConfig.resolve_headers(
                 &OcrConnection {
-                    api_key: Some("  ".into()),
+                    api_key: Some(litellm_auth::SecretValue::new("  ")),
                     ..Default::default()
                 },
                 &|_| None,

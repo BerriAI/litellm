@@ -1,6 +1,7 @@
 import asyncio
 import json
 import uuid
+from typing import Final
 from unittest.mock import patch
 
 import httpx
@@ -859,3 +860,58 @@ def test_bedrock_chat_invoke_tool_search_beta_follows_model_map(
     )
 
     assert result.get("anthropic_beta") == expected_betas
+
+
+FINE_GRAINED_TOOL_STREAMING_BETA: Final = "fine-grained-tool-streaming-2025-05-14"
+EAGER_TOOL_SCHEMA: Final = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+
+
+def _chat_invoke_request_with_tools(
+    tools: list[dict[str, object]], headers: dict[str, str] | None = None
+) -> dict[str, object]:
+    config: Final = AmazonAnthropicClaudeConfig()
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"max_tokens": 64, "stream": True, "tools": tools},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    return config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "write a big file"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers=headers or {},
+    )
+
+
+def _eager_openai_tool(name: str, **extra: object) -> dict[str, object]:
+    return {"type": "function", "function": {"name": name, "parameters": EAGER_TOOL_SCHEMA}, **extra}
+
+
+def test_bedrock_chat_invoke_eager_input_streaming_tool_adds_beta_and_strips_key():
+    result = _chat_invoke_request_with_tools(
+        [_eager_openai_tool("write_file", eager_input_streaming=True), _eager_openai_tool("read_file")]
+    )
+
+    assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
+    assert [tool["name"] for tool in result["tools"]] == ["write_file", "read_file"]
+    assert all("eager_input_streaming" not in tool for tool in result["tools"])
+    assert result["tools"][0]["input_schema"] == EAGER_TOOL_SCHEMA
+
+
+def test_bedrock_chat_invoke_eager_input_streaming_false_strips_key_without_beta():
+    result = _chat_invoke_request_with_tools([_eager_openai_tool("write_file", eager_input_streaming=False)])
+
+    assert "anthropic_beta" not in result
+    assert "eager_input_streaming" not in result["tools"][0]
+
+
+def test_bedrock_chat_invoke_eager_input_streaming_beta_not_duplicated_with_client_header():
+    result = _chat_invoke_request_with_tools(
+        [_eager_openai_tool("write_file", eager_input_streaming=True)],
+        headers={"anthropic-beta": FINE_GRAINED_TOOL_STREAMING_BETA},
+    )
+
+    assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]

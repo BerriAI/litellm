@@ -1,3 +1,4 @@
+use litellm_auth::SecretValue;
 use litellm_core::ocr::{
     types::{LiteLLMOcrRequest, OcrDocumentInput},
     wire::{OcrWireRequest, consumed_optional_params, decode_document, decode_request_input},
@@ -31,7 +32,7 @@ struct OcrArguments<'a, 'py> {
 
 impl<'py> OcrArguments<'_, 'py> {
     fn lookup(&self, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        litellm_callbacks_legacy::lookup(self.kwargs, self.request, name)?
+        litellm_host_python::lookup(self.kwargs, self.request, name)?
             .ok_or_else(|| PyValueError::new_err(format!("missing argument: {name}")))
     }
 
@@ -47,8 +48,11 @@ impl<'py> OcrArguments<'_, 'py> {
         self.lookup("document")
     }
 
-    fn api_key(&self) -> PyResult<Option<String>> {
-        self.lookup("api_key")?.extract()
+    fn api_key(&self) -> PyResult<Option<SecretValue>> {
+        Ok(self
+            .lookup("api_key")?
+            .extract::<Option<String>>()?
+            .map(SecretValue::new))
     }
 
     fn api_base(&self) -> PyResult<Option<String>> {

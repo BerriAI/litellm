@@ -3940,12 +3940,24 @@ class Router:
             )
 
             _router_timeout: Final = (
-                float(self._explicit_timeout) if isinstance(self._explicit_timeout, (int, float)) else None
+                self.request_timeout
+                if self.request_timeout is not None
+                else float(self._explicit_timeout)
+                if isinstance(self._explicit_timeout, (int, float))
+                else None
+            )
+            _router_stream_timeout: Final = (
+                self.stream_timeout
+                if self.stream_timeout is not None
+                else self.request_timeout
+                if self.request_timeout is not None
+                else self.default_litellm_params.get("stream_timeout")
             )
             kwargs["timeout"] = resolve_llm_passthrough_timeout(
                 kwargs=kwargs,
                 litellm_params=deployment["litellm_params"],
                 router_timeout=_router_timeout,
+                router_stream_timeout=_router_stream_timeout,
             )
         else:
             kwargs["timeout"] = self._get_timeout(kwargs=kwargs, data=deployment["litellm_params"])
@@ -10575,11 +10587,12 @@ class Router:
         2. If not, check if litellm model name is in model info
         3. If not, return None
         """
-        from litellm.utils import _update_dictionary
+        from litellm.utils import _update_dictionary, cost_map_omits_token_price
 
         model_info: ModelInfo | None = None
         custom_model_info: dict | None = None
         litellm_model_name_model_info: ModelInfo | None = None
+        base_model_key: str | None = None
 
         try:
             custom_model_info = (
@@ -10606,6 +10619,7 @@ class Router:
                     ## update litellm model info with base model info
                     base_model_info: Final = copy.deepcopy(litellm.get_model_info(model=base_model))
                     if base_model_info is not None:
+                        base_model_key = base_model_info.get("key")
                         # Base model provides defaults, custom model info overrides
                         custom_model_info = _update_dictionary(
                             cast(dict, base_model_info),
@@ -10633,6 +10647,15 @@ class Router:
             # custom_model_info already includes base_model defaults at this point, if applicable
             model_info = cast(ModelInfo, custom_model_info)
 
+        if model_info is None:
+            return None
+        builtin_key: Final = (
+            litellm_model_name_model_info.get("key") if litellm_model_name_model_info is not None else None
+        )
+        if cost_map_omits_token_price(model_id, builtin_key, base_model_key):
+            return cast(  # cast-ok: TypedDict spread with overridden keys loses its type
+                ModelInfo, {**model_info, "input_cost_per_token": None, "output_cost_per_token": None}
+            )
         return model_info
 
     def _set_model_group_info(self, model_group: str, user_facing_model_group_name: str) -> ModelGroupInfo | None:

@@ -6370,3 +6370,74 @@ def test_response_format_tool_path_skips_forced_tool_choice_when_unsupported(loc
 
     assert "tools" in result
     assert "tool_choice" not in result
+
+
+def _eager_chat_function(**extra: object) -> dict[str, object]:
+    return {
+        "name": "write_file",
+        "description": "Write a file",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        **extra,
+    }
+
+
+def _eager_chat_tool(**extra: object) -> dict[str, object]:
+    return {"type": "function", "function": _eager_chat_function(), **extra}
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_eager_input_streaming_passed_through_from_tool_top_level(flag):
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(_eager_chat_tool(eager_input_streaming=flag))
+
+    assert mapped_tool == {
+        "name": "write_file",
+        "description": "Write a file",
+        "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        "type": "custom",
+        "eager_input_streaming": flag,
+    }
+
+
+def test_eager_input_streaming_passed_through_from_function():
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(
+        {"type": "function", "function": _eager_chat_function(eager_input_streaming=True)}
+    )
+
+    assert mapped_tool["eager_input_streaming"] is True
+    assert "eager_input_streaming" not in mapped_tool["input_schema"]
+
+
+def test_eager_input_streaming_absent_stays_absent():
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(_eager_chat_tool())
+
+    assert "eager_input_streaming" not in mapped_tool
+
+
+def test_eager_input_streaming_rejects_non_boolean():
+    with pytest.raises(litellm.BadRequestError, match="eager_input_streaming must be a boolean"):
+        AnthropicConfig()._map_tool_helper(_eager_chat_tool(eager_input_streaming="true"))
+
+
+def test_eager_input_streaming_not_set_on_computer_use_tool():
+    computer_tool = {
+        "type": "computer_20250124",
+        "function": {"name": "computer", "parameters": {"display_width_px": 1024, "display_height_px": 768}},
+        "eager_input_streaming": True,
+    }
+
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(computer_tool)
+
+    assert mapped_tool["type"] == "computer_20250124"
+    assert "eager_input_streaming" not in mapped_tool
+
+
+def test_eager_input_streaming_reaches_anthropic_request_tools():
+    result = AnthropicConfig().map_openai_params(
+        non_default_params={"tools": [_eager_chat_tool(eager_input_streaming=True)], "stream": True},
+        optional_params={},
+        model="claude-sonnet-5",
+        drop_params=False,
+    )
+
+    assert result["tools"][0]["eager_input_streaming"] is True
+    assert result["tools"][0]["name"] == "write_file"
