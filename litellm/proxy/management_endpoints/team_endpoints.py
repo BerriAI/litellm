@@ -3069,6 +3069,9 @@ async def _update_team_member_role(
             raise HTTPException(status_code=404, detail={"error": f"Team id={team_id} does not exist in db"})
 
         before: Final = tuple(locked_members)
+        if all(member.user_id != user_id for member in before):
+            raise HTTPException(status_code=404, detail={"error": f"User {user_id} is not a member of team {team_id}"})
+
         after: Final = tuple(
             Member(user_id=member.user_id, role=role, user_email=user_email or member.user_email)
             if member.user_id == user_id
