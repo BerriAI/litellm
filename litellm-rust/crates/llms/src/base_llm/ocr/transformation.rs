@@ -15,14 +15,12 @@ use serde_with::serde_as;
 use crate::base_llm::ocr::{
     error::Error,
     handler::{CallHooks, OcrClient, read_response_bytes, transform_request_body},
+    settings::OcrSettings,
 };
 
 pub const OCR_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
-pub const OCR_HTTP_TIMEOUT_SECS: u64 = 600;
 pub const OCR_INLINE_MAX_BYTES: usize = 50 * 1024 * 1024;
-pub const OCR_DOWNLOAD_MAX_BYTES: u64 = 50 * 1024 * 1024;
 pub const OCR_MAX_FETCH_REDIRECTS: usize = 10;
-pub const OCR_POLL_TIMEOUT_SECS: u64 = 120;
 pub const OCR_POLL_RETRY_SECS: u64 = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -114,10 +112,8 @@ impl OcrCredentialInputs {
 pub struct OcrTransportConfig {
     pub extra_headers: Vec<(String, String)>,
     pub extra_headers_source: InputSource,
-    pub timeout: Duration,
-    pub max_download_bytes: u64,
+    pub timeout: Option<Duration>,
     pub max_response_bytes: usize,
-    pub poll_timeout: Duration,
 }
 
 impl Default for OcrTransportConfig {
@@ -125,10 +121,8 @@ impl Default for OcrTransportConfig {
         Self {
             extra_headers: Vec::new(),
             extra_headers_source: InputSource::Deployment,
-            timeout: Duration::from_secs(OCR_HTTP_TIMEOUT_SECS),
-            max_download_bytes: OCR_DOWNLOAD_MAX_BYTES,
+            timeout: None,
             max_response_bytes: OCR_RESPONSE_MAX_BYTES,
-            poll_timeout: Duration::from_secs(OCR_POLL_TIMEOUT_SECS),
         }
     }
 }
@@ -143,7 +137,7 @@ impl OcrTransportConfig {
         Self {
             extra_headers,
             extra_headers_source,
-            timeout: timeout.unwrap_or(self.timeout),
+            timeout: timeout.or(self.timeout),
             ..self
         }
     }
@@ -164,13 +158,16 @@ pub struct OcrConnection {
     pub extra_headers: Vec<(String, String)>,
     pub extra_headers_source: InputSource,
     pub timeout: Duration,
-    pub max_download_bytes: u64,
     pub max_response_bytes: usize,
-    pub poll_timeout: Duration,
+    pub settings: OcrSettings,
 }
 
 impl OcrConnection {
-    pub fn new(credentials: ResolvedOcrCredentials, transport: OcrTransportConfig) -> Self {
+    pub fn new(
+        credentials: ResolvedOcrCredentials,
+        transport: OcrTransportConfig,
+        settings: OcrSettings,
+    ) -> Self {
         let api_key_source = credentials
             .api_key
             .as_ref()
@@ -188,10 +185,12 @@ impl OcrConnection {
             api_base_source,
             extra_headers: transport.extra_headers,
             extra_headers_source: transport.extra_headers_source,
-            timeout: transport.timeout,
-            max_download_bytes: transport.max_download_bytes,
+            timeout: transport
+                .timeout
+                .filter(|timeout| !timeout.is_zero())
+                .unwrap_or(settings.request_timeout),
             max_response_bytes: transport.max_response_bytes,
-            poll_timeout: transport.poll_timeout,
+            settings,
         }
     }
 }
@@ -201,6 +200,7 @@ impl Default for OcrConnection {
         Self::new(
             ResolvedOcrCredentials::default(),
             OcrTransportConfig::default(),
+            OcrSettings::default(),
         )
     }
 }
@@ -572,6 +572,31 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn connection_timeout_falls_back_to_the_request_timeout_setting_like_a_python_or() {
+        let settings = OcrSettings {
+            request_timeout: Duration::from_secs(42),
+            ..OcrSettings::default()
+        };
+        let timeout = |call: Option<Duration>| {
+            OcrConnection::new(
+                ResolvedOcrCredentials::default(),
+                OcrTransportConfig {
+                    timeout: call,
+                    ..OcrTransportConfig::default()
+                },
+                settings.clone(),
+            )
+            .timeout
+        };
+        assert_eq!(timeout(None), Duration::from_secs(42));
+        assert_eq!(timeout(Some(Duration::ZERO)), Duration::from_secs(42));
+        assert_eq!(
+            timeout(Some(Duration::from_secs(5))),
+            Duration::from_secs(5)
+        );
+    }
 
     #[test]
     fn normalized_response_rejects_invalid_shared_fields() {

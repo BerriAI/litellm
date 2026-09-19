@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use crate::base_llm::ocr::{
     error::Error,
+    settings::OcrSettings,
     transformation::{
         BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OcrDocument, OcrResponseContext,
         PreparedOcrRequest, decode_request_value, decode_response,
@@ -33,6 +34,7 @@ pub struct OcrClient {
     polling_http: reqwest::Client,
     document_fetcher: MediaFetcher,
     vertex_auth: VertexAuth,
+    settings: OcrSettings,
 }
 
 impl OcrClient {
@@ -41,12 +43,14 @@ impl OcrClient {
         config: &HttpClientConfig,
         url_policy: UrlPolicy,
         vertex_auth: VertexAuth,
+        settings: OcrSettings,
     ) -> Result<Self, litellm_http::Error> {
         Ok(Self {
             provider_http: pool.client(config, ClientVariant::Provider)?,
             polling_http: pool.client(config, ClientVariant::NoRedirect)?,
             document_fetcher: MediaFetcher::new(pool, config, url_policy)?,
             vertex_auth,
+            settings,
         })
     }
 
@@ -66,6 +70,10 @@ impl OcrClient {
         &self.vertex_auth
     }
 
+    pub fn settings(&self) -> &OcrSettings {
+        &self.settings
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn for_test(provider_http: reqwest::Client, document_http: reqwest::Client) -> Self {
         Self {
@@ -76,7 +84,13 @@ impl OcrClient {
                 .expect("test polling client builds"),
             document_fetcher: MediaFetcher::for_test(document_http),
             vertex_auth: VertexAuth::default(),
+            settings: OcrSettings::default(),
         }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_settings(self, settings: OcrSettings) -> Self {
+        Self { settings, ..self }
     }
 }
 

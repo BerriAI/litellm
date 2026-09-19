@@ -13,6 +13,7 @@ use litellm_http::{
 use litellm_llms::base_llm::ocr::{
     error::Error as OcrError,
     handler::OcrClient,
+    settings::OcrSettings,
     transformation::{LiteLLMOcrResponse, OCR_RESPONSE_MAX_BYTES, OcrTransportConfig},
 };
 use rstest::rstest;
@@ -185,6 +186,7 @@ async fn ocr_client_uses_the_injected_http_pool_configuration() {
         &Resolution::from(&settings).config,
         UrlPolicy::default(),
         VertexAuth::default(),
+        OcrSettings::default(),
     )
     .unwrap();
     crate::ocr::client::perform(&client, wire_request("mistral/model", &base, json!({})))
