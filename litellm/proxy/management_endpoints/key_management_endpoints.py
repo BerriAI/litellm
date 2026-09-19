@@ -3517,7 +3517,10 @@ async def bulk_update_keys(
         - max_budget: Optional[float] - Max budget for key
         - team_id: Optional[str] - Team ID associated with key
         - tags: Optional[List[str]] - Tags for organizing keys
-    
+
+    Only the fields an item carries are written: a field left out keeps its current value and an
+    explicit null clears it, the same as /key/update. An item carrying any other field is rejected with 422.
+
     Returns:
     - total_requested: int - Total number of keys requested for update
     - successful_updates: List[SuccessfulKeyUpdate] - List of successfully updated keys with their updated info
@@ -3586,15 +3589,8 @@ async def bulk_update_keys(
 
     for key_update_item in data.keys:
         try:
-            update_key_request = UpdateKeyRequest(
-                key=key_update_item.key,
-                budget_id=key_update_item.budget_id,
-                max_budget=key_update_item.max_budget,
-                team_id=key_update_item.team_id,
-                tags=key_update_item.tags,
-            )
             updated_key_info = await _process_single_key_update(
-                update_key_request=update_key_request,
+                update_key_request=UpdateKeyRequest.model_validate(key_update_item.model_dump(exclude_unset=True)),
                 user_api_key_dict=user_api_key_dict,
                 litellm_changed_by=litellm_changed_by,
                 prisma_client=prisma_client,

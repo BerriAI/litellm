@@ -25,7 +25,9 @@ class KeySearchWhere(TypedDict):
 
 
 class BulkUpdateKeyRequestItem(BaseModel):
-    """Individual key update request item"""
+    """One /key/bulk_update item; only the fields it carries are written, and unknown fields are rejected."""
+
+    model_config = ConfigDict(extra="forbid")
 
     key: str  # Key identifier (token)
     budget_id: str | None = None  # Budget ID associated with the key

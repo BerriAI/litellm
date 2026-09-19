@@ -7694,6 +7694,9 @@ export interface paths {
          *         - team_id: Optional[str] - Team ID associated with key
          *         - tags: Optional[List[str]] - Tags for organizing keys
          *
+         *     Only the fields an item carries are written: a field left out keeps its current value and an
+         *     explicit null clears it, the same as /key/update. An item carrying any other field is rejected with 422.
+         *
          *     Returns:
          *     - total_requested: int - Total number of keys requested for update
          *     - successful_updates: List[SuccessfulKeyUpdate] - List of successfully updated keys with their updated info
@@ -25237,7 +25240,7 @@ export interface components {
         };
         /**
          * BulkUpdateKeyRequestItem
-         * @description Individual key update request item
+         * @description One /key/bulk_update item; only the fields it carries are written, and unknown fields are rejected.
          */
         BulkUpdateKeyRequestItem: {
             /** Budget Id */
