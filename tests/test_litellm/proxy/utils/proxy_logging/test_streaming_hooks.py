@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -179,6 +179,29 @@ async def _one_chunk() -> AsyncGenerator[object, None]:
     yield "chunk"
 
 
+class _AttributeStream:
+    _hidden_params = {"model_id": "m-1"}
+    model = "gpt-x"
+
+    def __init__(self) -> None:
+        self._chunks = ("chunk-1", "chunk-2")
+        self._index = 0
+        self.closed = False
+
+    def __aiter__(self) -> "_AttributeStream":
+        return self
+
+    async def __anext__(self) -> str:
+        if self._index >= len(self._chunks):
+            raise StopAsyncIteration
+        chunk = self._chunks[self._index]
+        self._index += 1
+        return chunk
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
 @pytest.mark.asyncio
 async def test_wrap_streaming_iterator_with_enrichment_passes_through_chunks(proxy_logging):
     async def gen():
@@ -245,6 +268,68 @@ async def test_wrap_streaming_iterator_leaves_upstream_http_exception_unattribut
             pass
     assert detail == {"error": "upstream rejected the stream"}
     assert request_data == {}
+
+
+@pytest.mark.asyncio
+async def test_wrap_streaming_iterator_forwards_response_attributes_to_hook(proxy_logging):
+    async def prefix_hook(*, response: AsyncIterator[object]) -> AsyncGenerator[object, None]:
+        async for chunk in response:
+            yield f"{response._hidden_params['model_id']}:{response.model}:{chunk}"
+
+    source = _AttributeStream()
+    wrapped = proxy_logging._wrap_streaming_iterator_with_enrichment(
+        callback=MagicMock(guardrail_name="g", event_hook="post_call"),
+        response=source,
+        hook=prefix_hook,
+        request_data={},
+    )
+
+    assert [chunk async for chunk in wrapped] == [
+        "m-1:gpt-x:chunk-1",
+        "m-1:gpt-x:chunk-2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_wrap_streaming_iterator_forwards_aclose_to_upstream(proxy_logging):
+    async def close_hook(*, response: AsyncIterator[object]) -> AsyncGenerator[object, None]:
+        first: Final = await response.__anext__()
+        yield first
+        await response.aclose()
+
+    source = _AttributeStream()
+    request_data: dict[str, object] = {}
+    wrapped = proxy_logging._wrap_streaming_iterator_with_enrichment(
+        callback=MagicMock(guardrail_name="g", event_hook="post_call"),
+        response=source,
+        hook=close_hook,
+        request_data=request_data,
+    )
+
+    assert [chunk async for chunk in wrapped] == ["chunk-1"]
+    assert source.closed is True
+    assert request_data == {}
+
+
+@pytest.mark.asyncio
+async def test_wrap_streaming_iterator_missing_attribute_still_raises(proxy_logging):
+    async def missing_attribute_hook(*, response: AsyncIterator[object]) -> AsyncGenerator[object, None]:
+        _missing: Final = response.not_there
+        if False:
+            yield
+
+    request_data: dict[str, object] = {}
+    wrapped = proxy_logging._wrap_streaming_iterator_with_enrichment(
+        callback=MagicMock(guardrail_name="hook-bug", event_hook="post_call"),
+        response=_one_chunk(),
+        hook=missing_attribute_hook,
+        request_data=request_data,
+    )
+
+    with pytest.raises(AttributeError):
+        async for _ in wrapped:
+            pass
+    assert request_data["metadata"]["applied_guardrails"] == ["hook-bug"]
 
 
 # ---------------------------------------------------------------------------

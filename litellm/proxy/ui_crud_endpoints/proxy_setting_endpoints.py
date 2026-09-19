@@ -6,6 +6,7 @@ from collections import Counter
 from collections.abc import Mapping, MutableMapping, Sequence
 from types import MappingProxyType
 from typing import (
+    Annotated,
     Final,
     NamedTuple,
     Protocol,
@@ -477,6 +478,72 @@ class MCPToolSearchSettingsResponse(SettingsResponse):
     """Response model for native MCP tool search settings"""
 
 
+class WebSearchInterceptionSettings(BaseModel):
+    """Configuration for server-side web search interception"""
+
+    enabled: bool = Field(
+        default=False,
+        description="Serve web search tool calls from a configured search tool instead of passing them upstream",
+    )
+
+    enabled_providers: list[str] = Field(
+        default_factory=list,
+        description="LLM providers to intercept for (e.g. 'bedrock', 'vertex_ai'). Empty intercepts Bedrock only.",
+    )
+
+    search_tool_name: str | None = Field(
+        default=None,
+        description="Name of the configured search tool to run searches through. Empty uses the first one available.",
+    )
+
+    max_agentic_loops: int | None = Field(
+        default=None,
+        ge=1,
+        description="How many follow-up model calls one intercepted request may chain. Empty applies the default of 3.",
+    )
+
+
+class WebSearchInterceptionSettingsResponse(SettingsResponse):
+    """Response model for web search interception settings"""
+
+
+def _with_websearch_enabled_resolved(config: Mapping[str, object]) -> dict[str, object]:
+    """
+    Answer with the stored flag when there is one, and only otherwise with what
+    this process is running.
+
+    A stored flag is the cluster's own answer, so it is the same on every pod and
+    is safe for the page to send back on save. Deriving the answer from this
+    process instead would report off on a pod that has not polled yet, and the
+    next save would persist that as a cluster-wide off. Without a stored flag the
+    only available answer is local: litellm_settings.callbacks activates
+    interception without storing one, and a write through the generic config
+    endpoint can drop the flag from a block that is still live. Reporting the
+    field default there would claim the feature is off while it serves.
+    """
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    litellm_settings: Final[Mapping[str, object]] = _as_settings_section(config.get("litellm_settings"))
+    stored: Final[Mapping[str, object]] = _as_settings_section(litellm_settings.get("websearch_interception_params"))
+    if "enabled" in stored:
+        return dict(config)
+
+    resolved: Final = {
+        **stored,
+        "enabled": bool(litellm.logging_callback_manager.get_custom_loggers_for_type(WebSearchInterceptionLogger)),
+    }
+    return {
+        **config,
+        "litellm_settings": {**litellm_settings, "websearch_interception_params": resolved},
+    }
+
+
+def _as_settings_section(value: object) -> Mapping[str, object]:
+    return cast("Mapping[str, object]", value) if isinstance(value, Mapping) else MappingProxyType({})
+
+
 @router.get(
     "/get/allowed_ips",
     tags=["Budget & Spend Tracking"],
@@ -497,12 +564,10 @@ def _store_allowed_ips(general_settings: MutableMapping[str, object], allowed_ip
         raise HTTPException(
             status_code=400,
             detail={  # mutable-ok: HTTPException serializes its detail as json
-                "error": f"{owned.section} key '{owned.key}' is set in the config file and cannot be changed here",
+                "error": str(owned),
                 "keys": (owned.key,),
                 "section": owned.section,
-                "resolution": (
-                    "edit the config file to change it, or remove it from the file to let the database own it"
-                ),
+                "stored_database_value_ignored": owned.shadows_db_value,
             },
         ) from owned
 
@@ -877,7 +942,13 @@ async def update_default_team_member_budget(teams: list[NewUserRequestTeam], use
 
 
 async def _update_litellm_setting(
-    settings: DefaultInternalUserParams | DefaultTeamSSOParams | MCPSemanticFilterSettings | MCPToolSearchSettings,
+    settings: (
+        DefaultInternalUserParams
+        | DefaultTeamSSOParams
+        | MCPSemanticFilterSettings
+        | MCPToolSearchSettings
+        | WebSearchInterceptionSettings
+    ),
     settings_key: str,
     success_message: str,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1397,6 +1468,77 @@ async def update_mcp_semantic_filter_settings(
             await proxy_config._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
     except Exception as e:
         verbose_proxy_logger.warning("Failed to reinitialize MCP semantic filter settings immediately: %s", e)
+
+    return result
+
+
+@router.get(
+    "/get/websearch_interception_settings",
+    tags=["Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=WebSearchInterceptionSettingsResponse,
+)
+async def get_websearch_interception_settings(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    Get web search interception configuration.
+
+    Returns the current settings plus their schema, for the Admin UI to render.
+    """
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    config: Final = await proxy_config.get_config()
+
+    return await _get_settings_with_schema(
+        settings_key="websearch_interception_params",
+        settings_class=WebSearchInterceptionSettings,
+        config=_with_websearch_enabled_resolved(config),
+    )
+
+
+@router.patch(
+    "/update/websearch_interception_settings",
+    tags=["Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_websearch_interception_settings(
+    settings: WebSearchInterceptionSettings,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    Update web search interception settings in database.
+
+    Settings will be picked up by all pods within approximately 10 seconds via background polling.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can update web search interception settings.",
+        )
+
+    result: Final = await _update_litellm_setting(
+        settings=settings,
+        settings_key="websearch_interception_params",
+        success_message=(
+            "Web search interception settings updated successfully. "
+            "Changes will be applied across all pods within 10 seconds."
+        ),
+        user_api_key_dict=user_api_key_dict,
+    )
+    try:
+        from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+        if prisma_client is not None:
+            await proxy_config.init_websearch_interception_settings_in_db(prisma_client=prisma_client)
+    except Exception as e:
+        verbose_proxy_logger.warning("Failed to reinitialize web search interception settings immediately: %s", e)
 
     return result
 

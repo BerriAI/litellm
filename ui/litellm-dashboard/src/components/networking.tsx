@@ -3667,6 +3667,34 @@ export const updateMCPSemanticFilterSettings = async (accessToken: string, setti
   }
 };
 
+export type WebSearchInterceptionSettings = components["schemas"]["WebSearchInterceptionSettings"];
+export type WebSearchInterceptionSettingsResponse = components["schemas"]["WebSearchInterceptionSettingsResponse"];
+
+export const getWebSearchInterceptionSettings = async (
+  accessToken: string,
+): Promise<WebSearchInterceptionSettingsResponse> => {
+  try {
+    return await apiClient.get<WebSearchInterceptionSettingsResponse>(`/get/websearch_interception_settings`, {
+      accessToken,
+    });
+  } catch (error) {
+    console.error("Failed to get web search interception settings:", error);
+    throw error;
+  }
+};
+
+export const updateWebSearchInterceptionSettings = async (
+  accessToken: string,
+  settings: WebSearchInterceptionSettings,
+) => {
+  try {
+    return await apiClient.patch(`/update/websearch_interception_settings`, { accessToken, body: settings });
+  } catch (error) {
+    console.error("Failed to update web search interception settings:", error);
+    throw error;
+  }
+};
+
 export const testMCPSemanticFilter = async (accessToken: string, model: string, query: string) => {
   /**
    * Test MCP semantic filter by making a responses API call

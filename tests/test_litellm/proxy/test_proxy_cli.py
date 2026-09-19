@@ -21,6 +21,15 @@ from uvicorn.importer import import_from_string
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
 
 
+@pytest.fixture(autouse=True)
+def fork_reservation():
+    """Reserving is irreversible: it would forbid native routes in this pytest worker for good"""
+    with patch(  # test-quality-ok: process-global native state, a real reservation would poison every later test in the worker
+        "litellm.rust_bridge.fork_guard.reserve_process_for_forking"
+    ) as reserve:
+        yield reserve
+
+
 @pytest.mark.xdist_group("proxy_cli")
 class TestProxyInitializationHelpers:
     @patch("importlib.metadata.version")
@@ -1573,6 +1582,32 @@ class TestProxyInitializationHelpers:
 
         assert captured["options"]["max_requests"] == 1000
         assert captured["options"]["max_requests_jitter"] == 50
+
+    @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
+    def test_gunicorn_master_is_reserved_for_forking_before_it_runs(self, fork_reservation):
+        """preload forks workers from the master, so native routes are forbidden there first"""
+        pytest.importorskip("gunicorn")
+        reserved_before_run: list = []
+
+        def capture_run(self):
+            reserved_before_run.append(fork_reservation.call_args)
+
+        with (
+            patch("gunicorn.app.base.BaseApplication.run", capture_run),
+            patch(  # test-quality-ok: option tests must not start a thread or change the pytest worker's child ownership
+                "litellm.proxy.proxy_cli.start_query_engine_reaper"
+            ),
+        ):
+            ProxyInitializationHelpers._run_gunicorn_server(
+                host="127.0.0.1",
+                port=4012,
+                app=MagicMock(),
+                num_workers=2,
+                ssl_certfile_path=None,
+                ssl_keyfile_path=None,
+            )
+
+        assert [call.args for call in reserved_before_run] == [("the gunicorn master",)]
 
     @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
     def test_gunicorn_jitter_without_base_warns(self):
