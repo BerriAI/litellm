@@ -21,7 +21,9 @@ from litellm.types.llms.openai import OpenAIRealtimeStreamList, ResponseAPIUsage
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CallTypes,
+    Choices,
     LiteLLMRealtimeStreamLoggingObject,
+    Message,
     ModelInfo,
     ModelResponse,
     PromptTokensDetailsWrapper,
@@ -107,6 +109,28 @@ def test_completion_cost_uses_response_model_for_dynamic_routing(_local_model_co
     )
 
     assert cost > 0, "Cost should be calculated using response model"
+
+
+def test_completion_cost_strips_dated_azure_snapshot_model(_local_model_cost_map: None) -> None:
+    dated_response = ModelResponse(
+        model="gpt-5.6-luna-2026-07-09",
+        choices=[Choices(index=0, message=Message(role="assistant", content="hi"), finish_reason="stop")],
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    dated_response._hidden_params = {"custom_llm_provider": "azure"}
+
+    undated_response = ModelResponse(
+        model="gpt-5.6-luna",
+        choices=[Choices(index=0, message=Message(role="assistant", content="hi"), finish_reason="stop")],
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    undated_response._hidden_params = {"custom_llm_provider": "azure"}
+
+    dated_cost = litellm.completion_cost(completion_response=dated_response)
+    undated_cost = litellm.completion_cost(completion_response=undated_response)
+
+    assert dated_cost == undated_cost
+    assert dated_cost > 0
 
 
 def test_cost_calculator_with_response_cost_in_additional_headers():
