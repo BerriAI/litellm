@@ -7,12 +7,12 @@ use crate::{
     base_llm::ocr::{
         document::{inline_remote_document, validate_inline_document},
         error::Error,
+        handler::OcrClient,
         transformation::{
             BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrRequestContext,
-            OcrResponseFormat, PreparedOcrRequest, credential_env,
+            OcrResponseFormat, PreparedOcrRequest,
         },
     },
-    custom_httpx::llm_http_handler::OcrClient,
     mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
 };
 
@@ -50,15 +50,11 @@ impl BaseOcrConfig for AzureAiOcrConfig {
         request: &PreparedOcrRequest,
         _client: &OcrClient,
     ) -> Result<Self::Environment, Error> {
-        let config = AzureAuthInputs {
-            azure_ad_token_provider: request.azure_ad_token_provider.clone(),
-            ..AzureAuthInputs::from_sourced_optional_params(
-                &request.optional_params,
-                &request.input_sources,
-            )?
-        };
-        self.resolve_headers(&request.connection, &config, &credential_env)
-            .await
+        let config = crate::azure_ai::ocr::common_utils::azure_auth_inputs(request)?;
+        self.resolve_headers(&request.connection, &config, &|name: &str| {
+            request.connection.secret(name)
+        })
+        .await
     }
 
     fn get_complete_url(
@@ -67,7 +63,9 @@ impl BaseOcrConfig for AzureAiOcrConfig {
         _optional_params: &Self::OcrParams,
         _environment: &Self::Environment,
     ) -> Result<String, Error> {
-        self.build_ocr_url(request.connection.api_base.as_deref(), &credential_env)
+        self.build_ocr_url(request.connection.api_base.as_deref(), &|name: &str| {
+            request.connection.secret(name)
+        })
     }
 
     fn transform_ocr_request(
@@ -107,7 +105,7 @@ impl BaseOcrConfig for AzureAiOcrConfig {
     }
 
     fn validate_request_body(&self, body: &Value) -> Result<(), Error> {
-        validate_inline_document(&crate::custom_httpx::llm_http_handler::body_document(body)?)
+        validate_inline_document(&crate::base_llm::ocr::handler::body_document(body)?)
     }
 }
 
@@ -134,20 +132,24 @@ impl AzureAiOcrConfig {
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<Vec<(String, String)>, Error> {
         Self::resolve_api_base(connection.api_base.as_deref(), env_lookup)?;
-        if crate::custom_httpx::http_handler::has_header(&connection.extra_headers, "authorization")
-        {
+        if litellm_http::request::has_header(&connection.extra_headers, "authorization") {
             if config.azure_ad_token_provider.is_some() {
                 super::common_utils::resolve_entra(config, env_lookup).await?;
             }
             super::common_utils::validate_destination(connection, connection.extra_headers_source)?;
             return Ok(connection.extra_headers.clone());
         }
-        let key = nonblank(connection.api_key.clone())
-            .map(|value| Sourced::new(value, connection.api_key_source))
-            .or_else(|| {
-                nonblank(self.get_api_key_env_var().and_then(env_lookup))
-                    .map(|value| Sourced::new(value, InputSource::Environment))
-            });
+        let key = nonblank(
+            connection
+                .api_key
+                .as_ref()
+                .map(|key| key.expose().to_string()),
+        )
+        .map(|value| Sourced::new(value, connection.api_key_source))
+        .or_else(|| {
+            nonblank(self.get_api_key_env_var().and_then(env_lookup))
+                .map(|value| Sourced::new(value, InputSource::Environment))
+        });
         if let Some(key) = key {
             super::common_utils::validate_destination(connection, key.source())?;
             return Ok(bearer_headers(connection, key.value()));
@@ -196,7 +198,7 @@ mod tests {
     #[fixture]
     fn connection() -> OcrConnection {
         OcrConnection {
-            api_key: Some("request-key".into()),
+            api_key: Some(litellm_auth::SecretValue::new("request-key")),
             api_base: Some("https://example.com".into()),
             ..Default::default()
         }
@@ -288,7 +290,7 @@ mod tests {
     #[tokio::test]
     async fn request_endpoint_accepts_request_owned_key() {
         let connection = OcrConnection {
-            api_key: Some("request-key".into()),
+            api_key: Some(litellm_auth::SecretValue::new("request-key")),
             api_key_source: InputSource::Request,
             api_base: Some("https://request.example".into()),
             api_base_source: InputSource::Request,

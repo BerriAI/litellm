@@ -293,9 +293,9 @@ async def _clone_team_default_budget_for_member(
     member budget. Returns the new budget_id, or None if the default budget
     no longer exists in the DB.
 
-    Used when adding a new team member without an explicit per-member budget,
-    so the member starts with the team default's values but gets their own
-    private budget row (which can be edited independently).
+    Used when adding a new team member with a per-member ``budget_duration``
+    but no other per-member limit, so the member keeps the team default's
+    values in their own private budget row while the reset window differs.
 
     ``budget_duration_override`` replaces the default's reset window for this
     member while keeping the default's other limits, so an admin can set a
@@ -346,13 +346,20 @@ async def _resolve_member_budget_id(
     """
     Resolve the budget a new team member should be linked to.
 
-    Explicit per-member limits create a fresh budget. Otherwise the team's
-    default member budget is cloned (with ``budget_duration`` overriding its
-    reset window while keeping its other limits). A lone ``budget_duration``
-    with no team default creates a window-only budget. With nothing set the
-    member gets no budget, though ``add_new_member`` still writes its membership row.
+    Explicit per-member limits create a fresh budget. Otherwise the member is
+    linked to the team's shared default member budget, so later ``/team/update``
+    changes reach them; ``/team/member_update`` clones that row on first write.
+    A lone ``budget_duration`` clones the default with the reset window
+    overridden, or creates a window-only budget when there is no team default.
+    With nothing set the member gets no budget, though ``add_new_member`` still writes its membership row.
     """
     has_explicit_limit: Final = max_budget_in_team is not None or allowed_models is not None
+
+    if not has_explicit_limit and default_team_budget_id is not None and budget_duration is None:
+        default_budget: Final = await _budget_table(prisma_client, tx).find_unique(
+            where={"budget_id": default_team_budget_id}
+        )
+        return default_team_budget_id if default_budget is not None else None
 
     if not has_explicit_limit and default_team_budget_id is not None:
         return await _clone_team_default_budget_for_member(

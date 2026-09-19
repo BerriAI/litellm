@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_llms::base_llm::chat::transformation::{BaseConfig, ChatCompletionsAuth};
+use litellm_llms::base_llm::chat::transformation::{BaseConfig, RequestAuth};
 use litellm_types::llms::openai::ChatMessage;
 use serde_json::{Map, Value};
 
@@ -38,7 +38,7 @@ pub struct ProviderChatCompletionsRequest {
     pub url: String,
     pub body: Value,
     pub upstream_headers: Vec<(String, String)>,
-    pub auth: ChatCompletionsAuth,
+    pub auth: RequestAuth,
     pub optional_params: Map<String, Value>,
     pub timeout: Option<Duration>,
 }

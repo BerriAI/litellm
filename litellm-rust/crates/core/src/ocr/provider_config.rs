@@ -1,5 +1,9 @@
 use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
 use litellm_llms::{
+    aws_textract::ocr::{
+        analyze_transformation::TextractAnalyzeDocumentConfig, common_utils::TextractOperation,
+        transformation::TextractDetectTextConfig,
+    },
     azure_ai::ocr::{
         cohere_parse_transformation::AzureAICohereParseConfig,
         document_intelligence::transformation::AzureDocumentIntelligenceOcrConfig,
@@ -7,13 +11,13 @@ use litellm_llms::{
     },
     base_llm::ocr::{
         error::Error,
+        handler::{self, CallHooks, OcrClient},
         transformation::{
             BaseOcrConfig, LiteLLMOcrResponse, OcrCredentialInputs, OcrDocument,
             PreparedOcrRequest, ResolvedOcrCredentials,
         },
     },
     cohere::ocr::transformation::CohereParseConfig,
-    custom_httpx::llm_http_handler::{self, CallHooks, OcrClient},
     mistral::ocr::transformation::MistralOcrConfig,
     reducto::ocr::transformation::{ReductoParseLegacyConfig, ReductoParseV3Config},
     vertex_ai::ocr::{
@@ -25,6 +29,14 @@ use strum::{EnumString, IntoStaticStr};
 macro_rules! with_config {
     ($kind:expr, $config:ident => $body:expr) => {
         match $kind {
+            OcrConfigKind::AwsTextract => {
+                let $config = TextractDetectTextConfig;
+                $body
+            }
+            OcrConfigKind::AwsTextractAnalyze => {
+                let $config = TextractAnalyzeDocumentConfig;
+                $body
+            }
             OcrConfigKind::Cohere => {
                 let $config = CohereParseConfig;
                 $body
@@ -67,6 +79,8 @@ macro_rules! with_config {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OcrConfigKind {
+    AwsTextract,
+    AwsTextractAnalyze,
     Cohere,
     Mistral,
     AzureAi,
@@ -81,6 +95,7 @@ pub(crate) enum OcrConfigKind {
 impl OcrConfigKind {
     pub(crate) const fn provider(self) -> OcrProvider {
         match self {
+            Self::AwsTextract | Self::AwsTextractAnalyze => OcrProvider::AwsTextract,
             Self::Cohere => OcrProvider::Cohere,
             Self::Mistral => OcrProvider::Mistral,
             Self::AzureAi | Self::AzureCohere | Self::AzureDocumentIntelligence => {
@@ -116,7 +131,7 @@ impl OcrConfigKind {
         request: &PreparedOcrRequest,
         hooks: &dyn CallHooks<Error>,
     ) -> Result<LiteLLMOcrResponse, Error> {
-        with_config!(self, config => llm_http_handler::ocr(&config, client, request, hooks).await)
+        with_config!(self, config => handler::ocr(&config, client, request, hooks).await)
     }
 }
 
@@ -141,6 +156,7 @@ pub fn get_health_check_document(
 #[derive(Clone, Copy, Debug, EnumString, IntoStaticStr, PartialEq, Eq)]
 #[strum(serialize_all = "snake_case")]
 pub(crate) enum OcrProvider {
+    AwsTextract,
     Cohere,
     Mistral,
     AzureAi,
@@ -162,6 +178,10 @@ pub(crate) fn resolve_provider_config(
         .parse::<OcrProvider>()
         .map_err(|_| Error::InvalidProvider(provider.custom_llm_provider.to_string()))?;
     let config = match ocr_provider {
+        OcrProvider::AwsTextract => match TextractOperation::from_model(provider.model)? {
+            TextractOperation::DetectDocumentText => OcrConfigKind::AwsTextract,
+            TextractOperation::AnalyzeDocument => OcrConfigKind::AwsTextractAnalyze,
+        },
         OcrProvider::Cohere => OcrConfigKind::Cohere,
         OcrProvider::Mistral => OcrConfigKind::Mistral,
         OcrProvider::AzureAi if is_document_intelligence_model(provider.model) => {
@@ -277,12 +297,18 @@ mod tests {
     #[test]
     fn connection_resolution_preserves_dynamic_precedence_and_input_sources() {
         let connection = OcrConfigKind::Mistral.resolve_connection_params(OcrCredentialInputs {
-            api_key: Some(Sourced::new("explicit-key".into(), InputSource::Deployment)),
+            api_key: Some(Sourced::new(
+                litellm_auth::SecretValue::new("explicit-key"),
+                InputSource::Deployment,
+            )),
             api_base: Some(Sourced::new(
                 "https://explicit.test".into(),
                 InputSource::Deployment,
             )),
-            dynamic_api_key: Some(Sourced::new("dynamic-key".into(), InputSource::Environment)),
+            dynamic_api_key: Some(Sourced::new(
+                litellm_auth::SecretValue::new("dynamic-key"),
+                InputSource::Environment,
+            )),
             dynamic_api_base: Some(Sourced::new(
                 "https://dynamic.test".into(),
                 InputSource::Request,
@@ -292,7 +318,7 @@ mod tests {
             connection
                 .api_key
                 .as_ref()
-                .map(|value| value.value().as_str()),
+                .map(|value| value.value().expose()),
             Some("dynamic-key")
         );
         assert_eq!(
@@ -318,22 +344,31 @@ mod tests {
     fn empty_or_missing_dynamic_credentials_preserve_explicit_values(
         #[case] dynamic_value: Option<&str>,
     ) {
-        let dynamic =
+        let dynamic_key = dynamic_value.map(|value| {
+            Sourced::new(
+                litellm_auth::SecretValue::new(value),
+                InputSource::Environment,
+            )
+        });
+        let dynamic_base =
             dynamic_value.map(|value| Sourced::new(value.into(), InputSource::Environment));
         let connection = OcrConfigKind::Mistral.resolve_connection_params(OcrCredentialInputs {
-            api_key: Some(Sourced::new("explicit-key".into(), InputSource::Deployment)),
+            api_key: Some(Sourced::new(
+                litellm_auth::SecretValue::new("explicit-key"),
+                InputSource::Deployment,
+            )),
             api_base: Some(Sourced::new(
                 "https://explicit.test".into(),
                 InputSource::Deployment,
             )),
-            dynamic_api_key: dynamic.clone(),
-            dynamic_api_base: dynamic,
+            dynamic_api_key: dynamic_key,
+            dynamic_api_base: dynamic_base,
         });
         assert_eq!(
             connection
                 .api_key
                 .as_ref()
-                .map(|value| value.value().as_str()),
+                .map(|value| value.value().expose()),
             Some("explicit-key")
         );
         assert_eq!(
@@ -356,11 +391,18 @@ mod tests {
     ) {
         let connection = OcrConfigKind::AzureDocumentIntelligence.resolve_connection_params(
             OcrCredentialInputs {
-                api_key: explicit_key
-                    .map(|value| Sourced::new(value.into(), InputSource::Deployment)),
+                api_key: explicit_key.map(|value| {
+                    Sourced::new(
+                        litellm_auth::SecretValue::new(value),
+                        InputSource::Deployment,
+                    )
+                }),
                 api_base: explicit_base
                     .map(|value| Sourced::new(value.into(), InputSource::Deployment)),
-                dynamic_api_key: Some(Sourced::new("dynamic-key".into(), InputSource::Environment)),
+                dynamic_api_key: Some(Sourced::new(
+                    litellm_auth::SecretValue::new("dynamic-key"),
+                    InputSource::Environment,
+                )),
                 dynamic_api_base: Some(Sourced::new(
                     "https://dynamic.test".into(),
                     InputSource::Deployment,
@@ -371,7 +413,7 @@ mod tests {
             connection
                 .api_key
                 .as_ref()
-                .map(|value| value.value().as_str()),
+                .map(|value| value.value().expose()),
             explicit_key.map(|_| "dynamic-key")
         );
         assert_eq!(
@@ -397,6 +439,22 @@ mod tests {
     }
 
     #[rstest]
+    #[case::misspelled_operation("aws_textract/analyse-document")]
+    #[case::operation_name_from_the_api("aws_textract/AnalyzeDocument")]
+    fn textract_models_outside_its_two_operations_are_refused(#[case] model: &str) {
+        assert!(matches!(
+            resolve_provider_config(model, None),
+            Err(Error::InvalidModel {
+                provider: "aws_textract",
+                ..
+            })
+        ));
+    }
+
+    #[rstest]
+    #[case("aws_textract/detect-document-text", OcrConfigKind::AwsTextract)]
+    #[case("aws_textract/analyze-document", OcrConfigKind::AwsTextractAnalyze)]
+    #[case("aws_textract/Analyze-Document", OcrConfigKind::AwsTextractAnalyze)]
     #[case("reducto/parse-legacy", OcrConfigKind::ReductoLegacy)]
     #[case("reducto/future-parse-model", OcrConfigKind::ReductoV3)]
     #[case("azure_ai/Cohere-parse-v5", OcrConfigKind::AzureCohere)]

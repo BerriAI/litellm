@@ -41,14 +41,7 @@ pub const STREAM_PARAM: &str = "stream";
 /// presence does not make a request untranslatable.
 const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
 
-/// How the upstream call is authenticated. API-key strategies are resolved in
-/// `prepare`; SigV4 needs the serialized body, so the handler signs it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ChatCompletionsAuth {
-    Header { name: &'static str, value: String },
-    Bearer { token: String },
-    AwsSigV4 { region: String },
-}
+pub use litellm_auth::RequestAuth;
 
 /// Why a request cannot be served by the Rust path.
 ///
@@ -91,7 +84,7 @@ pub trait BaseConfig: Sync {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<ChatCompletionsAuth, Error>;
+    ) -> Result<RequestAuth, Error>;
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         &[("content-type", "application/json")]
