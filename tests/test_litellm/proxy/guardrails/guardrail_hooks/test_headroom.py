@@ -32,12 +32,11 @@ import respx
 from fastapi import HTTPException
 
 import litellm
-
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
     DEFAULT_MIN_TOKENS,
+    HEADROOM_RETRIEVE_TOOL_NAME,
     HeadroomGuardrail,
     has_headroom_retrieve_tool,
-    HEADROOM_RETRIEVE_TOOL_NAME,
 )
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
@@ -356,34 +355,29 @@ async def test_apply_guardrail_min_tokens_never_fetches_image_urls(respx_mock: r
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_compresses_when_content_part_is_uncountable():
-    audio_messages = [
-        ORIGINAL_MESSAGES[0],
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Transcribe."},
-                {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
-            ],
-        },
-        ORIGINAL_MESSAGES[2],
-        ORIGINAL_MESSAGES[3],
+async def test_apply_guardrail_min_tokens_ignores_rows_the_service_cannot_compress():
+    image_part = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA", "detail": "high"}}
+    audio_part = {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}
+    media_history = [
+        {"role": "user", "content": [{"type": "text", "text": "Look."}, image_part]},
+        {"role": "user", "content": "Here is a picture."},
+        {"role": "user", "content": [{"type": "text", "text": "Listen."}, audio_part]},
+        {"role": "user", "content": "Here is a sound."},
     ]
-    inputs = GenericGuardrailAPIInputs(texts=["Transcribe."], structured_messages=audio_messages)
+    messages = [ORIGINAL_MESSAGES[0], *media_history * 4, ORIGINAL_MESSAGES[2], ORIGINAL_MESSAGES[3]]
+    inputs = GenericGuardrailAPIInputs(texts=["Look."], structured_messages=messages)
     request_data = {"model": "gpt-4o"}
-    guardrail = _make_guardrail(min_tokens=1_000_000)
+    text_only_tokens = token_counter(
+        model="gpt-4o", messages=[m for m in messages[1:-2] if isinstance(m["content"], str)]
+    )
+    guardrail = _make_guardrail(min_tokens=text_only_tokens + 1)
 
-    with patch.object(
-        guardrail.async_handler,
-        "post",
-        new_callable=AsyncMock,
-        return_value=_make_compress_response([audio_messages[1]]),
-    ) as post:
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as post:
         result = await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
 
-    post.assert_awaited_once()
-    assert result["structured_messages"] is not None
-    assert "skipped" not in _recorded_guardrail_response(request_data)
+    post.assert_not_awaited()
+    assert result is inputs
+    assert _recorded_guardrail_response(request_data)["compressible_tokens"] == text_only_tokens
 
 
 @pytest.mark.asyncio

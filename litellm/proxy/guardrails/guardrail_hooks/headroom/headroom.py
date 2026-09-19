@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     group_tool_exchanges,
     has_tool_with_name,
 )
+from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]
     httpxSpecialProvider,
@@ -102,24 +103,23 @@ def _flatten_messages_for_compression(messages: list[dict[str, object]]) -> list
     return flattened
 
 
-def _estimate_compressible_tokens(model: object, messages: list[dict[str, object]]) -> int | None:
+async def _estimate_compressible_tokens(model: object, messages: list[dict[str, object]]) -> int | None:
     """Token estimate for the min_tokens gate, or None when no trustworthy count exists.
 
-    None keeps the request on the compression path: a disabled global counter
-    reports 0 for everything, and content parts the counter does not know
-    raise, and neither must turn into a skipped or failed request.
+    Only rows whose flattened content is a plain string count: the service
+    passes list-of-parts rows through untouched, so their tokens can never
+    turn into savings. A disabled global counter reports 0 for everything,
+    so None keeps that case on the compression path.
     """
     if litellm.disable_token_counter:
         return None
-    try:
-        return token_counter(
-            model=model if isinstance(model, str) else "",
-            messages=messages,
-            use_default_image_token_count=True,
-        )
-    except ValueError as e:
-        verbose_proxy_logger.debug("Headroom: token estimate unavailable, compressing: %s", e)
-        return None
+    string_rows: Final = [m for m in messages if isinstance(m.get("content"), str)]
+    if not string_rows:
+        return 0
+    return await offload_token_count(token_counter)(
+        model=model if isinstance(model, str) else "",
+        messages=string_rows,
+    )
 
 
 def _restore_content_shapes(
@@ -835,7 +835,7 @@ class HeadroomGuardrail(CustomGuardrail):
         model: Final = self.headroom_model or request_data.get("model")
         flattened: Final = _flatten_messages_for_compression(compressible)
         compressible_tokens: Final = (
-            _estimate_compressible_tokens(model=model, messages=flattened) if self.min_tokens > 0 else None
+            await _estimate_compressible_tokens(model=model, messages=flattened) if self.min_tokens > 0 else None
         )
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
