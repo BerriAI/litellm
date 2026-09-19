@@ -67,7 +67,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     @staticmethod
     def _translate_adaptive_effort_for_non_adaptive_model(
-        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
+        model: str, optional_params: dict[str, Any], max_tokens: int | None, custom_llm_provider: str
     ) -> None:
         """Keep native Anthropic adaptive fields intact for opted-in deployments."""
 
