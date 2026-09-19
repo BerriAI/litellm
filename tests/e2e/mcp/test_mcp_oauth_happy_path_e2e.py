@@ -102,7 +102,7 @@ class TestMcpOauthHappyPath:
         alias: Final = f"e2elinear{unique_marker()}"
         tool: Final = f"{alias}-{LINEAR_READONLY_TOOL}"
         token: Final = idp.access_token(jwt_identity)
-        observation: Final = OAuthObservation(user_id=jwt_identity.user_id, gateway_token=token)
+        observation: Final = OAuthObservation(gateway_token=token)
         edge: Final = (
             start_provider_edge(
                 LiveEdge(observe_request=observation.observe),
@@ -145,13 +145,6 @@ class TestMcpOauthHappyPath:
         assert client.server_user_credentials(created.server_id) == (), (
             "scenario must start without upstream credentials"
         )
-        observation.server_id = created.server_id
-        client.proxy.update_team(
-            TeamUpdateBody(
-                team_id=jwt_identity.group,
-                object_permission=ObjectPermission(mcp_servers=[created.server_id]),
-            )
-        )
         unwrap(
             client.proxy.transport.post(
                 "/team/member_add",
@@ -160,6 +153,12 @@ class TestMcpOauthHappyPath:
                     team_id=jwt_identity.group, member=TeamMemberEntry(user_id=jwt_identity.user_id, role="user")
                 ),
                 response_type=NoBody,
+            )
+        )
+        client.proxy.update_team(
+            TeamUpdateBody(
+                team_id=jwt_identity.group,
+                object_permission=ObjectPermission(mcp_servers=[created.server_id]),
             )
         )
         headers: Final = {"x-litellm-api-key": f"Bearer {token}"} if route == "explicit_header_jwt" else {}
@@ -185,9 +184,9 @@ class TestMcpOauthHappyPath:
         assert len(credentials) == 1
         assert credentials[0].user_id == jwt_identity.user_id
         assert credentials[0].credential_type == "oauth2"
-        stored_oauth(jwt_identity.user_id, created.server_id)
+        first_stored_oauth: Final = stored_oauth(jwt_identity.user_id, created.server_id)
         if observed:
-            observation.assert_forwarded()
+            observation.assert_forwarded(first_stored_oauth)
         oauth_gateway.restart()
         fresh_token: Final = idp.access_token(jwt_identity)
         observation.gateway_token = fresh_token
@@ -203,6 +202,6 @@ class TestMcpOauthHappyPath:
             allow_upstream_consent=False,
         )
         assert_tool_result(second, tool)
-        stored_oauth(jwt_identity.user_id, created.server_id)
+        second_stored_oauth: Final = stored_oauth(jwt_identity.user_id, created.server_id)
         if observed:
-            observation.assert_forwarded()
+            observation.assert_forwarded(second_stored_oauth)
