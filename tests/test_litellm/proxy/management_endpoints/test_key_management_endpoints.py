@@ -80,7 +80,11 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     validate_key_team_change,
 )
 from litellm.proxy.proxy_server import app
-from litellm.types.proxy.management_endpoints.key_management_endpoints import CustomKeyPolicyRequest
+from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+    BulkUpdateKeyRequest,
+    BulkUpdateKeyResponse,
+    CustomKeyPolicyRequest,
+)
 
 client = TestClient(app)
 
@@ -7098,23 +7102,29 @@ async def test_list_key_helper_applies_search_to_prisma_where():
 
 
 _BULK_UPDATE_TOKEN: Final = "1f2e3d4c5b6a79880123456789abcdef0123456789abcdef0123456789abcdef"
+_BULK_UPDATE_TEAM: Final = LiteLLM_TeamTableCachedObj(team_id="team-1")
 
 
-async def _bulk_update_one_key(monkeypatch, item_payload: Mapping[str, object]) -> AsyncMock:
+async def _run_bulk_update_on_one_key(
+    monkeypatch, item_payload: Mapping[str, object], team: LiteLLM_TeamTableCachedObj = _BULK_UPDATE_TEAM
+) -> tuple[BulkUpdateKeyResponse, AsyncMock]:
     from litellm.proxy.management_endpoints.key_management_endpoints import bulk_update_keys
-    from litellm.types.proxy.management_endpoints.key_management_endpoints import BulkUpdateKeyRequest
 
     key_in_db = LiteLLM_VerificationToken(
         token=_BULK_UPDATE_TOKEN, user_id="test-user", team_id="team-1", max_budget=100.0, budget_id="budget-1"
     )
     mock_prisma_client = AsyncMock()
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_in_db)
+    mock_prisma_client.get_data = AsyncMock(return_value=key_in_db)
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(
         return_value=MagicMock(object_permission_id="objperm-bulk")
     )
     mock_prisma_client.update_data = AsyncMock(return_value={"data": {"token": _BULK_UPDATE_TOKEN}})
     _setup_update_key_mocks(monkeypatch, mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object", AsyncMock(return_value=team)
+    )
 
     with (
         patch(  # test-quality-ok: the handler reads the cache and hook singletons from module globals, no injection seam
@@ -7138,8 +7148,13 @@ async def _bulk_update_one_key(monkeypatch, item_payload: Mapping[str, object]) 
             litellm_changed_by=None,
         )
 
+    return response, mock_prisma_client
+
+
+async def _bulk_update_one_key(monkeypatch, item_payload: Mapping[str, object]) -> AsyncMock:
+    response, prisma = await _run_bulk_update_on_one_key(monkeypatch, item_payload)
     assert response.failed_updates == []
-    return mock_prisma_client
+    return prisma
 
 
 def _written_key_row(prisma: AsyncMock) -> Mapping[str, object]:
@@ -7176,6 +7191,23 @@ async def test_bulk_update_keys_object_permission_is_granted_not_dropped(monkeyp
     written = _written_key_row(prisma)
     assert written["object_permission_id"] == "objperm-bulk"
     assert not {"max_budget", "team_id", "budget_id"} & written.keys()
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_keys_object_permission_outside_the_team_allowlist_is_refused(monkeypatch):
+    """A bulk item's object_permission is checked against the key's team exactly as /key/update
+    checks it, so a team key cannot be granted a search tool its team does not allow."""
+    team = LiteLLM_TeamTableCachedObj(
+        team_id="team-1",
+        object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-team-1", search_tools=["team-search"]),
+    )
+    response, prisma = await _run_bulk_update_on_one_key(
+        monkeypatch, {"object_permission": {"search_tools": ["other-search"]}}, team=team
+    )
+
+    assert response.successful_updates == []
+    assert "not allowed by team 'team-1'" in response.failed_updates[0].failed_reason
+    prisma.update_data.assert_not_called()
 
 
 @pytest.mark.asyncio
