@@ -13676,6 +13676,45 @@ async def test_team_member_update_role_change_404s_when_the_team_is_gone_under_t
 
 
 @pytest.mark.asyncio
+async def test_team_member_update_role_change_404s_when_the_member_left_before_the_locked_read(monkeypatch):
+    """Regression: a member removed between the pre-lock read and the locked read was reported as updated."""
+    audit_logger = _wire_audit_log_callback(monkeypatch)
+    snapshot = LiteLLM_TeamTable(
+        team_id="team-member-gone-race",
+        team_alias="member-gone-race",
+        metadata={},
+        members_with_roles=[Member(user_id="alice", role="admin"), Member(user_id="bob", role="user")],
+    )
+    locked_row = LiteLLM_TeamTable(
+        team_id="team-member-gone-race",
+        team_alias="member-gone-race",
+        metadata={},
+        members_with_roles=[Member(user_id="alice", role="admin")],
+    )
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(side_effect=[snapshot, locked_row])
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    _wire_member_delete_tx(mock_prisma_client)
+
+    team_info_patch, upsert_patch = _member_update_patches(snapshot)
+    with team_info_patch, upsert_patch, pytest.raises(HTTPException) as exc_info:
+        await team_member_update(
+            data=TeamMemberUpdateRequest(team_id="team-member-gone-race", user_id="bob", role="admin"),
+            http_request=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+            ),
+        )
+
+    assert exc_info.value.status_code == 404
+    assert "bob" in str(exc_info.value.detail)
+    mock_prisma_client.db.litellm_teamtable.update.assert_not_awaited()
+    await _settle_audit_log_tasks()
+    assert audit_logger.payloads == []
+
+
+@pytest.mark.asyncio
 async def test_team_member_delete_response_does_not_wait_for_the_audit_insert(
     monkeypatch, mock_db_client, mock_admin_auth
 ):
