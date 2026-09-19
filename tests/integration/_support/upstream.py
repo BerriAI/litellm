@@ -1,19 +1,25 @@
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import struct
-import zlib
 from collections import deque
 from collections.abc import Mapping
+import json
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from queue import SimpleQueue
+import struct
 from typing import Final, cast
+import zlib
 
 import httpx
 import uvicorn
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.routing import Route
+
 from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
 from integration.cost_calculation.cost_tracking_case import (
     EventStreamResponse,
@@ -21,11 +27,6 @@ from integration.cost_calculation.cost_tracking_case import (
     SseResponse,
     StoredResponse,
 )
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
-from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
-from starlette.routing import Route
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 CASES_FILE: Final = Path(__file__).resolve().parents[1] / "cost_calculation" / "cost_tracking_cases.json"
