@@ -1718,7 +1718,7 @@ class JWTAuthManager:
 
                 if team_object and team_object.models is not None:
                     team_models = team_object.models
-                    aliases: Final = team_model_aliases(team_object)
+                    aliases = team_model_aliases(team_object)
                     if isinstance(team_models, list) and (
                         not requested_model
                         or await check_model_access(
