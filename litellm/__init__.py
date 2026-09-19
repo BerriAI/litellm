@@ -289,6 +289,12 @@ maritalk_key: Optional[str] = None
 ai21_key: Optional[str] = None
 ollama_key: Optional[str] = None
 openrouter_key: Optional[str] = None
+opencode_zen_api_key: str | None = None
+opencode_zen_api_base: str | None = None
+opencode_go_api_key: str | None = None
+opencode_go_api_base: str | None = None
+opencode_api_key: str | None = None
+opencode_api_base: str | None = None
 datarobot_key: Optional[str] = None
 predibase_key: Optional[str] = None
 huggingface_key: Optional[str] = None
@@ -705,6 +711,8 @@ gigachat_models: Set = set()
 llamagate_models: Set = set()
 reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
+opencode_zen_models: Set = set()  # mutable-ok: populated at import from model cost map
+opencode_go_models: Set = set()  # mutable-ok: populated at import from model cost map
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -988,6 +996,10 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
             bedrock_mantle_models.add(key)
+        elif value.get("litellm_provider") == "opencode_zen":
+            opencode_zen_models.add(key)
+        elif value.get("litellm_provider") == "opencode_go":
+            opencode_go_models.add(key)
 
 
 def add_known_models(model_cost_map: Optional[Dict] = None):
@@ -1162,6 +1174,8 @@ def _build_models_by_provider() -> dict:
         "text-completion-inception": text_completion_inception_models,
         "xai": xai_models,
         "zai": zai_models,
+        "opencode_zen": opencode_zen_models,
+        "opencode_go": opencode_go_models,
         "fal_ai": fal_ai_models,
         "deepseek": deepseek_models,
         "tencent": tencent_models,
@@ -1575,6 +1589,13 @@ if TYPE_CHECKING:
     from .llms.openrouter.chat.transformation import (
         OpenrouterConfig as OpenrouterConfig,
     )
+    from .llms.opencode.chat.transformation import OpenCodeConfig as OpenCodeConfig
+    from .llms.opencode.chat.anthropic_transformation import (
+        OpenCodeAnthropicConfig as OpenCodeAnthropicConfig,
+    )
+    from .llms.opencode.chat.messages_transformation import (
+        OpenCodeMessagesConfig as OpenCodeMessagesConfig,
+    )
     from .llms.datarobot.chat.transformation import DataRobotConfig as DataRobotConfig
     from .llms.anthropic.chat.transformation import AnthropicConfig as AnthropicConfig
     from .llms.bedrock.claude_platform.transformation import (
@@ -1856,6 +1877,9 @@ if TYPE_CHECKING:
     )
     from .llms.openrouter.responses.transformation import (
         OpenRouterResponsesAPIConfig as OpenRouterResponsesAPIConfig,
+    )
+    from .llms.opencode.zen.responses.transformation import (
+        OpenCodeZenResponsesAPIConfig as OpenCodeZenResponsesAPIConfig,
     )
     from .llms.bedrock_mantle.responses.transformation import (
         BedrockMantleResponsesAPIConfig as BedrockMantleResponsesAPIConfig,
@@ -2429,6 +2453,12 @@ def __getattr__(name: str) -> Any:
         )
 
         return locals()[name]
+
+    # Lazy load OpenCode provider config factory (needs model param)
+    if name in ("get_opencode_config",):
+        from .llms.opencode.config import get_opencode_config
+
+        return get_opencode_config
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

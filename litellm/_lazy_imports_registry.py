@@ -131,6 +131,9 @@ LLM_CONFIG_NAMES: Final = (
     "OobaboogaConfig",
     "MaritalkConfig",
     "OpenrouterConfig",
+    "OpenCodeConfig",
+    "OpenCodeAnthropicConfig",
+    "OpenCodeMessagesConfig",
     "DataRobotConfig",
     "AnthropicConfig",
     "BedrockClaudePlatformConfig",
@@ -244,6 +247,8 @@ LLM_CONFIG_NAMES: Final = (
     "PerplexityResponsesConfig",
     "DatabricksResponsesAPIConfig",
     "OpenRouterResponsesAPIConfig",
+    "OpenCodeZenResponsesAPIConfig",
+    "OpenCodeGoResponsesAPIConfig",
     "BedrockMantleResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
     "VertexAIInteractionsConfig",
@@ -626,6 +631,15 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "OobaboogaConfig": (".llms.oobabooga.chat.transformation", "OobaboogaConfig"),
     "MaritalkConfig": (".llms.maritalk", "MaritalkConfig"),
     "OpenrouterConfig": (".llms.openrouter.chat.transformation", "OpenrouterConfig"),
+    "OpenCodeConfig": (".llms.opencode.chat.transformation", "OpenCodeConfig"),
+    "OpenCodeAnthropicConfig": (
+        ".llms.opencode.chat.anthropic_transformation",
+        "OpenCodeAnthropicConfig",
+    ),
+    "OpenCodeMessagesConfig": (
+        ".llms.opencode.chat.messages_transformation",
+        "OpenCodeMessagesConfig",
+    ),
     "DataRobotConfig": (".llms.datarobot.chat.transformation", "DataRobotConfig"),
     "AnthropicConfig": (".llms.anthropic.chat.transformation", "AnthropicConfig"),
     "BedrockClaudePlatformConfig": (
@@ -991,6 +1005,14 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "OpenRouterResponsesAPIConfig": (
         ".llms.openrouter.responses.transformation",
         "OpenRouterResponsesAPIConfig",
+    ),
+    "OpenCodeZenResponsesAPIConfig": (
+        ".llms.opencode.zen.responses.transformation",
+        "OpenCodeZenResponsesAPIConfig",
+    ),
+    "OpenCodeGoResponsesAPIConfig": (
+        ".llms.opencode.go.responses.transformation",
+        "OpenCodeGoResponsesAPIConfig",
     ),
     "BedrockMantleResponsesAPIConfig": (
         ".llms.bedrock_mantle.responses.transformation",
