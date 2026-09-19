@@ -226,3 +226,60 @@ def test_alerting_settings_happy(client, auth_as, monkeypatch):
         "first_field_value": False,
         "first_field_type": "Boolean",
     }
+
+
+def test_alerting_settings_only_returns_explicitly_configured_values(client, auth_as, monkeypatch):
+    pc = MagicMock()
+    pc.db.litellm_config.find_first = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", pc)
+
+    logging_obj = MagicMock()
+    args_model = MagicMock()
+    args_model.model_dump = MagicMock(return_value={"budget_alert_ttl": -30})
+    logging_obj.slack_alerting_instance.alerting_args = args_model
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging_obj)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/alerting/settings")
+
+    assert response.status_code == 200
+    setting = next(item for item in response.json() if item["field_name"] == "budget_alert_ttl")
+    assert setting["field_value"] is None
+    assert setting["stored_in_db"] is None
+
+
+def test_alerting_settings_returns_configured_values(client, auth_as, monkeypatch):
+    pc = MagicMock()
+    pc.db.litellm_config.find_first = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", pc)
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"alerting_args": {"budget_alert_ttl": 60}},
+    )
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/alerting/settings")
+
+    assert response.status_code == 200
+    setting = next(item for item in response.json() if item["field_name"] == "budget_alert_ttl")
+    assert setting["field_value"] == 60
+    assert setting["stored_in_db"] is False
+
+
+def test_alerting_settings_returns_database_values(client, auth_as, monkeypatch):
+    db_settings = MagicMock()
+    db_settings.param_value = {"alerting_args": {"budget_alert_ttl": 60}}
+    pc = MagicMock()
+    pc.db.litellm_config.find_first = AsyncMock(return_value=db_settings)
+    monkeypatch.setattr(proxy_server, "prisma_client", pc)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/alerting/settings")
+
+    assert response.status_code == 200
+    setting = next(item for item in response.json() if item["field_name"] == "budget_alert_ttl")
+    assert setting["field_value"] == 60
+    assert setting["stored_in_db"] is True
