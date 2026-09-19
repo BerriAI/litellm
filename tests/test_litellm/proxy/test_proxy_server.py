@@ -1988,6 +1988,39 @@ def test_add_team_models_to_all_models_excludes_other_teams_byok_with_shared_nam
     assert result == {"model-a-id": {"team-a"}}
 
 
+def test_add_team_models_to_all_models_resolves_a_deployment_id_grant_to_only_that_deployment():
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import _add_team_models_to_all_models
+    from litellm.types.router import Deployment
+
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "team-a"
+    team.models = ["azure-gpt-4-id", "other-team-byok-id", "missing-id"]
+
+    deployments = {
+        "azure-gpt-4-id": Deployment(
+            model_name="gpt-4", litellm_params={"model": "azure/gpt-4"}, model_info={"id": "azure-gpt-4-id"}
+        ),
+        "other-team-byok-id": Deployment(
+            model_name="gpt-4",
+            litellm_params={"model": "openai/gpt-4"},
+            model_info={"id": "other-team-byok-id", "team_id": "team-b"},
+        ),
+    }
+    llm_router = _make_router_with_access_groups(
+        model_names=["gpt-4"],
+        model_access_groups={},
+        deployments=[
+            {"model_name": "gpt-4", "model_info": {"id": "azure-gpt-4-id"}},
+            {"model_name": "gpt-4", "model_info": {"id": "openai-gpt-4-id"}},
+        ],
+    )
+    llm_router.get_deployment.side_effect = lambda model_id: deployments.get(model_id)
+
+    result = _add_team_models_to_all_models(team_db_objects_typed=[team], llm_router=llm_router)
+    assert result == {"azure-gpt-4-id": {"team-a"}}
+
+
 @pytest.mark.asyncio
 async def test_non_admin_all_models_returns_user_models_when_user_row_missing():
     """

@@ -1800,6 +1800,27 @@ def test_get_direct_access_models_expands_access_group_grant():
     assert result == ("gpt4o-id", "sonnet-id")
 
 
+def test_get_direct_access_models_resolves_a_deployment_id_grant_to_only_that_deployment():
+    from litellm.types.router import Deployment
+
+    router = MagicMock()
+    router.get_model_access_groups.return_value = {}
+    router.get_model_list.return_value = []
+    router.get_deployment.side_effect = lambda model_id: (
+        Deployment(model_name="gpt-4", litellm_params={"model": "azure/gpt-4"}, model_info={"id": "azure-gpt-4-id"})
+        if model_id == "azure-gpt-4-id"
+        else None
+    )
+
+    user = LiteLLM_UserTable(user_id="u", models=["azure-gpt-4-id"], teams=[])
+
+    assert ps.get_direct_access_models(user_db_object=user, llm_router=router) == ("azure-gpt-4-id",)
+    assert ps.get_direct_access_models(user_db_object=user, llm_router=router, key_models=("openai-gpt-4-id",)) == ()
+    assert ps.get_direct_access_models(user_db_object=user, llm_router=router, key_models=("azure-gpt-4-id",)) == (
+        "azure-gpt-4-id",
+    )
+
+
 @pytest.mark.asyncio
 async def test_populate_team_access_hides_models_the_calling_key_cannot_call(monkeypatch):
     """An unrestricted user calling with a key scoped to one model must only see that

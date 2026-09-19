@@ -13360,6 +13360,20 @@ async def non_admin_all_models(
     return unique_models
 
 
+def _granted_deployment_ids(models: Sequence[str], llm_router: Router, team_id: str | None = None) -> tuple[str, ...]:
+    deployments: Final = tuple(
+        deployment
+        for model in models
+        if isinstance(deployment := llm_router.get_deployment(model_id=model), Deployment)
+    )
+    return tuple(
+        deployment.model_info.id
+        for deployment in deployments
+        if deployment.model_info.id is not None
+        and (team_id is None or deployment.model_info.team_id in (None, team_id))
+    )
+
+
 def _add_team_models_to_all_models(
     team_db_objects_typed: list[LiteLLM_TeamTable],
     llm_router: Router,
@@ -13403,6 +13417,10 @@ def _add_team_models_to_all_models(
                         model_id = model.get("model_info", {}).get("id", None)
                         if model_id is not None:
                             team_models.setdefault(model_id, set()).add(team_object.team_id)
+            for model_id in _granted_deployment_ids(
+                models=team_object.models, llm_router=llm_router, team_id=team_object.team_id
+            ):
+                team_models.setdefault(model_id, set()).add(team_object.team_id)
     return team_models
 
 
@@ -13531,12 +13549,13 @@ def _resolve_model_grant_to_deployment_ids(
 
     access_groups: Final = llm_router.get_model_access_groups()
     granted_model_names: Final = tuple(name for model in models for name in (model, *access_groups.get(model, ())))
-    return tuple(
+    by_name: Final = tuple(
         model_id
         for name in granted_model_names
         for deployment in (llm_router.get_model_list(model_name=name) or ())
         if (model_id := deployment.get("model_info", {}).get("id", None)) is not None
     )
+    return tuple(dict.fromkeys((*by_name, *_granted_deployment_ids(models=models, llm_router=llm_router))))
 
 
 def get_direct_access_models(
