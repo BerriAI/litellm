@@ -1040,12 +1040,29 @@ def get_vertex_project_id_from_url(url: str) -> str | None:
 
 def get_vertex_location_from_url(url: str) -> str | None:
     """
-    Get the vertex location from the url
+    Get the vertex location from the url.
 
-    `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL_ID}:streamGenerateContent`
+    Handles both URL shapes ``get_vertex_base_url`` produces:
+
+    - Classic long-form path, which carries the location in the path, e.g.
+      `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL_ID}:streamGenerateContent`
+    - Native GenAI short-form path, which has no `/locations/` segment and encodes the
+      location in the host instead: regional (`${LOCATION}-aiplatform.googleapis.com`),
+      multi-region (`aiplatform.${GEO}.rep.googleapis.com`), or global
+      (`aiplatform.googleapis.com`, with no location anywhere in the URL)
     """
-    match: Final = re.search(r"/locations/([^/]+)", url)
-    return match.group(1) if match else None
+    path_match: Final = re.search(r"/locations/([^/]+)", url)
+    if path_match:
+        return path_match.group(1)
+    if re.search(r"://aiplatform\.googleapis\.com(?:[/:]|$)", url):
+        return "global"
+    regional_match: Final = re.search(r"://([a-z0-9-]+)-aiplatform\.googleapis\.com(?:[/:]|$)", url)
+    if regional_match:
+        return regional_match.group(1)
+    multi_region_match: Final = re.search(r"://aiplatform\.([a-z0-9-]+)\.rep\.googleapis\.com(?:[/:]|$)", url)
+    if multi_region_match:
+        return multi_region_match.group(1)
+    return None
 
 
 def get_vertex_model_id_from_url(url: str) -> str | None:
