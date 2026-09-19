@@ -1426,14 +1426,19 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 },
             )
 
-            if "extra_body" in data and isinstance(data["extra_body"], dict):
-                data["extra_body"].pop("extra_headers", None)
-                data["extra_body"].pop("headers", None)
-                if not data["extra_body"]:
-                    data.pop("extra_body", None)
+            sanitized_extra_body: Final = (
+                {k: v for k, v in data["extra_body"].items() if k not in ("extra_headers", "headers")}
+                if isinstance(data.get("extra_body"), dict)
+                else None
+            )
+            sanitized_data: Final = {
+                k: (sanitized_extra_body if k == "extra_body" else v)
+                for k, v in data.items()
+                if k != "extra_body" or sanitized_extra_body
+            }
 
             request_data: Final = (  # mutable-ok: the OpenAI SDK takes the request body as a dict
-                {**data, "extra_headers": headers} if headers else data
+                {**sanitized_data, "extra_headers": headers} if headers else sanitized_data
             )
             response = await openai_aclient.images.generate(**request_data, timeout=timeout)
             stringified_response: Final = response.model_dump()
@@ -1517,15 +1522,20 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 },
             )
 
-            if "extra_body" in data and isinstance(data["extra_body"], dict):
-                data["extra_body"].pop("extra_headers", None)
-                data["extra_body"].pop("headers", None)
-                if not data["extra_body"]:
-                    data.pop("extra_body", None)
+            sanitized_extra_body: Final = (
+                {k: v for k, v in data["extra_body"].items() if k not in ("extra_headers", "headers")}
+                if isinstance(data.get("extra_body"), dict)
+                else None
+            )
+            sanitized_data: Final = {
+                k: (sanitized_extra_body if k == "extra_body" else v)
+                for k, v in data.items()
+                if k != "extra_body" or sanitized_extra_body
+            }
 
             ## COMPLETION CALL
             request_data: Final = (  # mutable-ok: the OpenAI SDK takes the request body as a dict
-                {**data, "extra_headers": headers} if headers else data
+                {**sanitized_data, "extra_headers": headers} if headers else sanitized_data
             )
             _response: Final = openai_client.images.generate(**request_data, timeout=timeout)
 
