@@ -2911,3 +2911,55 @@ async def test_cache_key_in_hidden_params_acompletion():
     assert response1.id == response2.id
 
     litellm.cache = None
+
+
+@pytest.mark.asyncio
+async def test_redis_async_increment_keeps_ttl_when_client_cancels_mid_reply():
+    """A counter increment cancelled while Redis is replying still carries its TTL."""
+    from redis.asyncio import Redis
+
+    from litellm.caching.redis_cache import RedisCache
+
+    redis_host = os.environ["REDIS_HOST"]
+    redis_port = int(os.environ.get("REDIS_PORT", "6379"))
+    redis_password = os.environ.get("REDIS_PASSWORD")
+
+    async def pump(src: asyncio.StreamReader, dst: asyncio.StreamWriter, delay: float) -> None:
+        while data := await src.read(65536):
+            await asyncio.sleep(delay)
+            dst.write(data)
+            await dst.drain()
+
+    async def relay(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        up_reader, up_writer = await asyncio.open_connection(redis_host, redis_port)
+        pumps = [
+            asyncio.ensure_future(pump(reader, up_writer, 0.0)),
+            asyncio.ensure_future(pump(up_reader, writer, 0.3)),
+        ]
+        await asyncio.wait(pumps, return_when=asyncio.FIRST_COMPLETED)
+        for pending in pumps:
+            pending.cancel()
+        up_writer.close()
+        writer.close()
+
+    server = await asyncio.start_server(relay, "127.0.0.1", 0)
+    relay_port = server.sockets[0].getsockname()[1]
+    cache = RedisCache(host="127.0.0.1", port=relay_port, password=redis_password, namespace="cancel-probe")
+    key = f"spend:key:{uuid.uuid4()}"
+    admin = Redis(host=redis_host, port=redis_port, password=redis_password)
+    try:
+        await cache.init_async_client().ping()
+        task = asyncio.ensure_future(cache.async_increment(key=key, value=0.25, ttl=60, refresh_ttl=False))
+        await asyncio.sleep(0.15)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.5)
+
+        assert await admin.get(f"cancel-probe:{key}") == b"0.25"
+        assert 0 < await admin.ttl(f"cancel-probe:{key}") <= 60
+    finally:
+        await admin.delete(f"cancel-probe:{key}")
+        await admin.aclose()
+        await cache.init_async_client().aclose()
+        server.close()
