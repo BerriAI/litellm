@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
+from litellm.llms.openai.common_utils import with_openai_project_header, without_openai_project
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
@@ -184,7 +185,23 @@ async def create_batch(
             or get_custom_llm_provider_from_request_headers(request=request)
         )
         custom_llm_provider: Final = requested_provider or "openai"
-        _create_batch_data: Final = LiteLLMBatchCreateRequest(**data)
+        request_fields: Final = cast(  # cast-ok: parsed batch payload is a string-keyed mapping
+            Mapping[str, object], data
+        )
+        _create_batch_data: Final = cast(  # cast-ok: preserve the parsed batch fields without runtime filtering
+            LiteLLMBatchCreateRequest,
+            dict(request_fields),  # mutable-ok: request copy receives provider credentials before dispatch
+        )
+        forward_project: Final = (
+            cast(  # cast-ok: resolved server configuration mapping
+                Mapping[str, object], general_settings
+            ).get("forward_openai_project_id")
+            is True
+        )
+        header_project: Final = request.headers.get("openai-project") if forward_project else None
+        query_project: Final = request.query_params.get("project") if forward_project else None
+        requested_project: Final = _create_batch_data.get("project")
+        body_project: Final = requested_project if forward_project and isinstance(requested_project, str) else None
 
         # Apply team-level batch output expiry enforcement
         team_metadata: Final = user_api_key_dict.team_metadata or {}
@@ -234,15 +251,33 @@ async def create_batch(
 
             original_file_id: Final = get_original_file_id(input_file_id)
             _create_batch_data["input_file_id"] = original_file_id
+            encoded_request_data: Final = cast(  # cast-ok: conversion preserves batch request fields
+                LiteLLMBatchCreateRequest,
+                without_openai_project(
+                    _create_batch_data,
+                    cast(str, credentials["custom_llm_provider"]),  # cast-ok: router credentials identify the provider
+                ),
+            )
             prepare_data_with_credentials(
-                data=_create_batch_data,
+                data=encoded_request_data,
                 credentials=credentials,
+            )
+
+            encoded_batch_data: Final = cast(  # cast-ok: conversion preserves batch request fields
+                LiteLLMBatchCreateRequest,
+                with_openai_project_header(
+                    encoded_request_data,
+                    cast(str, credentials["custom_llm_provider"]),  # cast-ok: router credentials identify the provider
+                    header_project,
+                    query_project,
+                    body_project=body_project,
+                ),
             )
 
             # Create batch using model credentials
             response = await litellm.acreate_batch(
                 custom_llm_provider=credentials["custom_llm_provider"],
-                **_create_batch_data,
+                **encoded_batch_data,
             )
 
             # Encode the batch ID and related file IDs with model information
@@ -281,7 +316,17 @@ async def create_batch(
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
-            response = await llm_router.acreate_batch(**_create_batch_data)
+            loadbalanced_batch_data: Final = cast(  # cast-ok: conversion preserves batch request fields
+                LiteLLMBatchCreateRequest,
+                with_openai_project_header(
+                    without_openai_project(_create_batch_data, custom_llm_provider),
+                    custom_llm_provider,
+                    header_project,
+                    query_project,
+                    body_project=body_project,
+                ),
+            )
+            response = await llm_router.acreate_batch(**loadbalanced_batch_data)
         elif (
             unified_file_id and input_file_id
         ):  # litellm_proxy:application/octet-stream;unified_id,c4843482-b176-4901-8292-7523fd0f2c6e;target_model_names,gpt-4o-mini
@@ -307,7 +352,17 @@ async def create_batch(
                 )
 
             _create_batch_data.update(disable_fallbacks=True)  # pyright: ignore[reportCallIssue]  # router flag
-            response = await llm_router.acreate_batch(**_create_batch_data)
+            unified_batch_data: Final = cast(  # cast-ok: conversion preserves batch request fields
+                LiteLLMBatchCreateRequest,
+                with_openai_project_header(
+                    without_openai_project(_create_batch_data, custom_llm_provider),
+                    custom_llm_provider,
+                    header_project,
+                    query_project,
+                    body_project=body_project,
+                ),
+            )
+            response = await llm_router.acreate_batch(**unified_batch_data)
             response.input_file_id = input_file_id
             response._hidden_params["unified_file_id"] = unified_file_id
         else:
@@ -326,15 +381,37 @@ async def create_batch(
                     operation_context="batch creation",
                 )
 
+                model_request_data: Final = cast(  # cast-ok: conversion preserves batch request fields
+                    LiteLLMBatchCreateRequest,
+                    without_openai_project(
+                        _create_batch_data,
+                        cast(  # cast-ok: router credentials identify the provider
+                            str, credentials["custom_llm_provider"]
+                        ),
+                    ),
+                )
                 prepare_data_with_credentials(
-                    data=_create_batch_data,
+                    data=model_request_data,
                     credentials=credentials,
+                )
+
+                model_batch_data: Final = cast(  # cast-ok: conversion preserves batch request fields
+                    LiteLLMBatchCreateRequest,
+                    with_openai_project_header(
+                        model_request_data,
+                        cast(  # cast-ok: router credentials identify the provider
+                            str, credentials["custom_llm_provider"]
+                        ),
+                        header_project,
+                        query_project,
+                        body_project=body_project,
+                    ),
                 )
 
                 # Create batch using model credentials
                 response = await litellm.acreate_batch(
                     custom_llm_provider=credentials["custom_llm_provider"],
-                    **_create_batch_data,
+                    **model_batch_data,
                 )
 
                 encode_batch_response_ids(response, model=model_param)
@@ -342,20 +419,34 @@ async def create_batch(
                 verbose_proxy_logger.debug("Created batch using model: %s", model_param)
             else:
                 # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
+                provider_request_data: Final = cast(  # cast-ok: conversion preserves batch request fields
+                    LiteLLMBatchCreateRequest,
+                    without_openai_project(_create_batch_data, custom_llm_provider),
+                )
                 apply_team_provider_credentials(
-                    data=cast(dict, _create_batch_data),  # cast-ok: TypedDict is a dict at runtime
+                    data=cast(dict, provider_request_data),  # cast-ok: TypedDict is a dict at runtime
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                     custom_llm_provider=custom_llm_provider,
                 )
+                direct_batch_data: Final = cast(  # cast-ok: conversion preserves batch request fields
+                    LiteLLMBatchCreateRequest,
+                    with_openai_project_header(
+                        provider_request_data,
+                        cast(str, custom_llm_provider),  # cast-ok: request provider selection is a string
+                        header_project,
+                        query_project,
+                        body_project=body_project,
+                    ),
+                )
                 _raise_not_found_when_openai_fallback_unservable(
                     requested_provider=requested_provider,
-                    data=cast(dict, _create_batch_data),  # cast-ok: TypedDict is a dict at runtime
+                    data=cast(dict, provider_request_data),  # cast-ok: TypedDict is a dict at runtime
                     not_found_message=f"No such File object: {input_file_id}",
                 )
                 response = await litellm.acreate_batch(
                     custom_llm_provider=custom_llm_provider,
-                    **_create_batch_data,
+                    **direct_batch_data,
                 )
 
         response._hidden_params[BATCH_CREATE_HIDDEN_PARAM] = True

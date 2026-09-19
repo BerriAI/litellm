@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.llms.base_llm.managed_resources.isolation import build_list_page
+from litellm.llms.openai.common_utils import with_openai_project_header
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -232,6 +233,9 @@ async def route_create_file(
     custom_llm_provider: str,
     model: str | None = None,
     target_storage: str | None = "default",
+    request: Request | None = None,
+    request_project: str | None = None,
+    forward_request_project: bool = False,
 ) -> OpenAIFileObject:
     """
     Route file creation request to the appropriate provider.
@@ -243,6 +247,14 @@ async def route_create_file(
     4. If enable_loadbalancing_on_batch_endpoints -> deprecated loadbalancing
     5. Else -> use custom_llm_provider with files_settings
     """
+
+    header_project: Final = (
+        request.headers.get("openai-project") if forward_request_project and request is not None else None
+    )
+    query_project: Final = (
+        request.query_params.get("project") if forward_request_project and request is not None else None
+    )
+    body_project: Final = request_project if forward_request_project else None
 
     # Handle custom storage backend
     if target_storage and target_storage != "default":
@@ -284,9 +296,20 @@ async def route_create_file(
             credentials=credentials,
         )
 
+        model_file_request: Final = cast(  # cast-ok: conversion preserves file request fields
+            CreateFileRequest,
+            with_openai_project_header(
+                _create_file_request,
+                cast(str, credentials["custom_llm_provider"]),  # cast-ok: router credentials identify the provider
+                header_project,
+                query_project,
+                body_project=body_project,
+            ),
+        )
+
         # Create the file with model credentials
         response = await litellm.acreate_file(
-            **_create_file_request,
+            **model_file_request,
             custom_llm_provider=credentials["custom_llm_provider"],
         )
 
@@ -324,20 +347,40 @@ async def route_create_file(
                 param=None,
                 code=500,
             )
+        managed_file_request: Final = cast(  # cast-ok: conversion preserves file request fields
+            CreateFileRequest,
+            with_openai_project_header(
+                _create_file_request,
+                custom_llm_provider,
+                header_project,
+                query_project,
+                body_project=body_project,
+            ),
+        )
         # Managed files internally calls llm_router.acreate_file() which includes loadbalancing
         response = await managed_files_obj.acreate_file(
             llm_router=llm_router,
-            create_file_request=_create_file_request,
+            create_file_request=managed_file_request,
             target_model_names_list=target_model_names_list,
             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             user_api_key_dict=user_api_key_dict,
         )
     # EXISTING: Deprecated loadbalancing approach (for backwards compatibility when not using managed files)
     elif litellm.enable_loadbalancing_on_batch_endpoints is True and is_router_model and router_model is not None:
+        loadbalanced_file_request: Final = cast(  # cast-ok: conversion preserves file request fields
+            CreateFileRequest,
+            with_openai_project_header(
+                _create_file_request,
+                custom_llm_provider,
+                header_project,
+                query_project,
+                body_project=body_project,
+            ),
+        )
         response = await _deprecated_loadbalanced_create_file(
             llm_router=llm_router,
             router_model=router_model,
-            _create_file_request=_create_file_request,
+            _create_file_request=loadbalanced_file_request,
         )
     else:
         apply_team_provider_credentials(
@@ -352,8 +395,18 @@ async def route_create_file(
             # add llm_provider_config to data
             _create_file_request.update(llm_provider_config)
         _create_file_request.pop("custom_llm_provider", None)
+        direct_file_request: Final = cast(  # cast-ok: conversion preserves file request fields
+            CreateFileRequest,
+            with_openai_project_header(
+                _create_file_request,
+                custom_llm_provider,
+                header_project,
+                query_project,
+                body_project=body_project,
+            ),
+        )
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-        response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)
+        response = await litellm.acreate_file(**direct_file_request, custom_llm_provider=custom_llm_provider)
 
     return response
 
@@ -667,6 +720,8 @@ async def create_file(
             **data,
         )
 
+        project_in_body: Final = cast(Mapping[str, object], request_body).get("project")  # cast-ok: parsed form fields
+
         response = await route_create_file(
             llm_router=llm_router,
             _create_file_request=_create_file_request,
@@ -679,6 +734,12 @@ async def create_file(
             custom_llm_provider=custom_llm_provider,
             model=model_param,
             target_storage=target_storage,
+            request=request,
+            request_project=project_in_body if isinstance(project_in_body, str) else None,
+            forward_request_project=cast(  # cast-ok: resolved server configuration mapping
+                Mapping[str, object], general_settings
+            ).get("forward_openai_project_id")
+            is True,
         )
 
         if response is None:

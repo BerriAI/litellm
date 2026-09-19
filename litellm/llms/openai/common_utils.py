@@ -10,6 +10,7 @@ import ssl
 import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Optional
 from urllib.parse import urlsplit
 
@@ -21,6 +22,7 @@ from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
 from openai.types.completion_usage import CompletionUsage
+from pydantic import TypeAdapter
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -34,6 +36,55 @@ from litellm.llms.custom_httpx.http_handler import (
     get_ssl_configuration,
     http2_enabled,
 )
+
+_PROJECT_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
+
+
+def without_openai_project(data: Mapping[str, object], provider: str) -> Mapping[str, object]:
+    if provider != "openai":
+        return data
+    return {  # mutable-ok: proxy request copy receives provider credentials before dispatch
+        key: value for key, value in data.items() if key != "project"
+    }
+
+
+def with_openai_project_header(
+    data: Mapping[str, object],
+    provider: str,
+    header_project: str | None = None,
+    query_project: str | None = None,
+    body_project: str | None = None,
+) -> Mapping[str, object]:
+    if provider != "openai":
+        return data
+    configured_project: Final = data.get("project")
+    raw_headers: Final = data.get("extra_headers")
+    extra_headers: Final[Mapping[str, str]] = (
+        _PROJECT_HEADERS_ADAPTER.validate_python(raw_headers)
+        if isinstance(raw_headers, Mapping)
+        else MappingProxyType({})
+    )
+    project: Final = (
+        (configured_project if isinstance(configured_project, str) else None)
+        or next((value for key, value in extra_headers.items() if key.lower() == "openai-project"), None)
+        or body_project
+        or header_project
+        or query_project
+    )
+    request_data: Final = without_openai_project(data, provider)
+    if not project:
+        return request_data
+    return {  # mutable-ok: file endpoint hooks consume dict request payloads
+        **request_data,
+        "extra_headers": MappingProxyType(
+            {
+                **MappingProxyType(
+                    {key: value for key, value in extra_headers.items() if key.lower() != "openai-project"}
+                ),
+                "OpenAI-Project": project,
+            }
+        ),
+    }
 
 
 def _get_client_init_params(cls: type) -> tuple[str, ...]:

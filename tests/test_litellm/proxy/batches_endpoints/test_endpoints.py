@@ -559,8 +559,11 @@ async def test_create__unified_file_id_single_model_disables_cross_model_fallbac
     with (
         patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
         patch.object(endpoints, "get_models_from_unified_file_id", return_value=["gpt-4o-mini"]),
+        patch.object(  # test-quality-ok: TQ008 configures server opt-in without replacing request processing
+            proxy_server, "general_settings", {"forward_openai_project_id": True}
+        ),
     ):
-        resp = await call_create(harness)
+        resp = await call_create(harness, headers={"openai-project": "proj-request"})
 
     # DISPATCH - router fired, direct litellm did not.
     assert harness.router_acreate.call_count == 1
@@ -568,6 +571,7 @@ async def test_create__unified_file_id_single_model_disables_cross_model_fallbac
     # model injected from the unified id, input_file_id restored, hidden param set
     assert harness.router_kwargs()["model"] == "gpt-4o-mini"
     assert harness.router_kwargs()["disable_fallbacks"] is True
+    assert harness.router_kwargs()["extra_headers"] == {"OpenAI-Project": "proj-request"}
     assert resp.input_file_id == "litellm_proxy_unified_id"
     assert resp._hidden_params["unified_file_id"] == "unified-xyz"
 
@@ -806,11 +810,17 @@ async def test_create__loadbalancing_routes_to_router(harness):
         },
     )
     harness.is_known_model.return_value = True
-    with patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", True):
-        await call_create(harness)
+    with (
+        patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", True),
+        patch.object(  # test-quality-ok: TQ008 configures server opt-in without replacing request processing
+            proxy_server, "general_settings", {"forward_openai_project_id": True}
+        ),
+    ):
+        await call_create(harness, headers={"openai-project": "proj-request"})
 
     harness.is_known_model.assert_called_once_with(model="lb-model", llm_router=harness.router)
     assert harness.router_acreate.call_count == 1
+    assert harness.router_kwargs()["extra_headers"] == {"OpenAI-Project": "proj-request"}
     harness.litellm_acreate.assert_not_called()
     harness.creds_resolver.assert_not_called()
 
@@ -994,6 +1004,133 @@ async def test_create__uses_acreate_batch_route_type(harness, openai_env_creds):
     await call_create(harness)
 
     assert harness.pre_call.call_args.kwargs["route_type"] == "acreate_batch"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forward_project", [None, False, True])
+@pytest.mark.parametrize("source", ["header", "query", "body"])
+@pytest.mark.parametrize("route", ["direct", "model", "encoded", "loadbalanced", "unified"])
+async def test_create__project_alias_forwarding_requires_opt_in(harness, openai_env_creds, forward_project, source, route):
+    harness.creds_resolver.side_effect = lambda *, model_id: {
+        "custom_llm_provider": "openai",
+        "api_key": "sk-test-openai",
+    }
+    input_file_id = {
+        "encoded": encode_file_id_with_model("file-plain", "openai-model"),
+        "unified": base64.urlsafe_b64encode(
+            b"litellm_proxy:application/octet-stream;unified_id,input-uuid;target_model_names,openai-model"
+        ).decode(),
+    }.get(route, "file-plain")
+    set_body(
+        harness,
+        {
+            "input_file_id": input_file_id,
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            **({"model": "openai-model"} if route in ("model", "loadbalanced") else {}),
+            **({"project": "proj-request"} if source == "body" else {}),
+        },
+    )
+    harness.is_known_model.return_value = route == "loadbalanced"
+    with (
+        patch.object(  # test-quality-ok: TQ008 parameterizes server opt-in without replacing request processing
+            proxy_server,
+            "general_settings",
+            {} if forward_project is None else {"forward_openai_project_id": forward_project},
+        ),
+        patch.object(  # test-quality-ok: TQ008 selects configured routing mode while real routing logic executes
+            litellm, "enable_loadbalancing_on_batch_endpoints", route == "loadbalanced"
+        ),
+    ):
+        await call_create(
+            harness,
+            headers={"openai-project": "proj-request"} if source == "header" else None,
+            query={"project": "proj-request"} if source == "query" else None,
+        )
+
+    kwargs = harness.router_kwargs() if route in ("loadbalanced", "unified") else harness.acreate_kwargs()
+    assert kwargs.get("extra_headers", {}) == ({"OpenAI-Project": "proj-request"} if forward_project is True else {})
+    assert "project" not in kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forward_project", [None, False, True])
+@pytest.mark.parametrize(
+    "configured_project", [{"project": "proj-config"}, {"extra_headers": {"openai-project": "proj-config"}}]
+)
+async def test_create__model_project_overrides_request_aliases(harness, forward_project, configured_project):
+    harness.creds_resolver.side_effect = lambda *, model_id: {
+        "custom_llm_provider": "openai",
+        "api_key": "sk-test-openai",
+        **configured_project,
+    }
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "model": "openai-model",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "project": "proj-body",
+        },
+    )
+
+    with patch.object(  # test-quality-ok: TQ008 parameterizes server opt-in without replacing request processing
+        proxy_server,
+        "general_settings",
+        {} if forward_project is None else {"forward_openai_project_id": forward_project},
+    ):
+        await call_create(harness, headers={"openai-project": "proj-header"}, query={"project": "proj-query"})
+
+    kwargs = harness.acreate_kwargs()
+    assert kwargs["extra_headers"] == {"OpenAI-Project": "proj-config"}
+    assert "project" not in kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forward_project", [None, False, True])
+async def test_create__explicit_extra_headers_unchanged_by_project_alias_opt_in(harness, openai_env_creds, forward_project):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "extra_headers": {"OpenAI-Project": "proj-explicit", "X-Caller": "preserved"},
+            "project": "proj-body",
+        },
+    )
+
+    with patch.object(  # test-quality-ok: TQ008 parameterizes server opt-in without replacing request processing
+        proxy_server,
+        "general_settings",
+        {} if forward_project is None else {"forward_openai_project_id": forward_project},
+    ):
+        await call_create(harness, headers={"openai-project": "proj-header"}, query={"project": "proj-query"})
+
+    kwargs = harness.acreate_kwargs()
+    assert kwargs["extra_headers"] == {"OpenAI-Project": "proj-explicit", "X-Caller": "preserved"}
+    assert "project" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_create__non_openai_body_project_is_preserved(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": AZURE_FILE_ID,
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "project": "azure-project",
+        },
+    )
+
+    await call_create(harness)
+
+    kwargs = harness.acreate_kwargs()
+    assert kwargs["custom_llm_provider"] == "azure"
+    assert kwargs["project"] == "azure-project"
+    assert "extra_headers" not in kwargs
 
 
 def install_managed_files_hook(harness: Harness) -> AsyncMock:

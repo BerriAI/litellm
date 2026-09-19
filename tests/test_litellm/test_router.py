@@ -45,6 +45,7 @@ from litellm.router import (
     _anthropic_stream_should_decline_fallback,
     _anthropic_stream_should_drop_pre_content_ping,
     _is_retriable_anthropic_status,
+    _merged_file_batch_headers,
 )
 from litellm.router_strategy import simple_shuffle
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
@@ -437,6 +438,80 @@ async def test_async_router_acreate_file():
 
         # assert that the mock_acreate_file was called twice
         assert mock_acreate_file.call_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["file", "batch"])
+@pytest.mark.parametrize("project_header", [None, "OpenAI-Project", "openai-project"])
+@pytest.mark.parametrize("project_field", [False, True])
+async def test_routed_file_and_batch_keep_deployment_headers(
+    operation: str, project_header: str | None, project_field: bool
+) -> None:
+    deployment_headers: Final = {
+        "X-Deployment": "keep",
+        **({project_header: "proj-deployment"} if project_header else {}),
+    }
+    request_headers: Final = {"OpenAI-Project": "proj-request", "x-deployment": "override", "X-Caller": "keep"}
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai-batch",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-test",
+                    "extra_headers": deployment_headers,
+                    **({"project": "proj-configured"} if project_field else {}),
+                },
+            }
+        ]
+    )
+    provider_call: Final = AsyncMock(return_value=MagicMock())
+    with patch(f"litellm.acreate_{operation}", provider_call):
+        if operation == "file":
+            await router.acreate_file(
+                model="openai-batch",
+                purpose="batch",
+                file=MagicMock(),
+                extra_headers=request_headers,
+            )
+        else:
+            await router.acreate_batch(
+                model="openai-batch",
+                input_file_id="file-123",
+                endpoint="/v1/chat/completions",
+                completion_window="24h",
+                extra_headers=request_headers,
+            )
+
+    assert provider_call.call_args.kwargs["extra_headers"] == {
+        "X-Deployment": "keep",
+        "X-Caller": "keep",
+        "OpenAI-Project": (
+            "proj-configured" if project_field else "proj-deployment" if project_header else "proj-request"
+        ),
+    }
+    assert request_headers == {"OpenAI-Project": "proj-request", "x-deployment": "override", "X-Caller": "keep"}
+    assert deployment_headers == {
+        "X-Deployment": "keep",
+        **({project_header: "proj-deployment"} if project_header else {}),
+    }
+
+
+def test_merged_file_batch_headers_keeps_unrelated_deployment_headers() -> None:
+    deployment: Final = {"extra_headers": {"X-Deployment": "keep"}}
+    request: Final = {"extra_headers": {"OpenAI-Project": "proj-request"}}
+
+    assert _merged_file_batch_headers(deployment, request, "openai") == {
+        "extra_headers": {"X-Deployment": "keep", "OpenAI-Project": "proj-request"}
+    }
+    assert _merged_file_batch_headers(deployment, {}, "openai") == deployment
+    assert _merged_file_batch_headers(deployment, {"extra_headers": None}, "openai") == deployment
+    assert _merged_file_batch_headers({}, request, "openai") == {}
+    assert _merged_file_batch_headers({"project": "proj-configured"}, {}, "azure") == {}
+    assert _merged_file_batch_headers({**deployment, "project": "proj-configured"}, request, "azure") == {
+        "extra_headers": {"X-Deployment": "keep", "OpenAI-Project": "proj-request"}
+    }
+    assert deployment["extra_headers"] == {"X-Deployment": "keep"}
 
 
 @pytest.mark.asyncio

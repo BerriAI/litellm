@@ -512,6 +512,7 @@ class CreateBatchRequest(TypedDict, total=False):
 
 class LiteLLMBatchCreateRequest(CreateBatchRequest, total=False):
     model: str
+    project: str  # writable-ok: proxy removes caller aliases before merging provider credentials
 
 
 class RetrieveBatchRequest(TypedDict, total=False):

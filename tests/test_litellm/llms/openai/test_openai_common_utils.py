@@ -1,3 +1,6 @@
+from copy import deepcopy
+from types import MappingProxyType
+from typing import Final
 from unittest.mock import MagicMock, call, patch
 
 import httpx
@@ -7,7 +10,7 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
-from litellm.llms.openai.common_utils import BaseOpenAILLM, is_openai_backed_api_base
+from litellm.llms.openai.common_utils import BaseOpenAILLM, is_openai_backed_api_base, with_openai_project_header
 
 # Test parameters for different API functions
 API_FUNCTION_PARAMS = [
@@ -413,3 +416,46 @@ def test_is_openai_backed_api_base_decides_by_hostname_only(api_base, expected):
     assert is_openai_backed_api_base(api_base) is expected
 
 
+@pytest.mark.parametrize(
+    ("data", "provider", "header_project", "query_project", "expected"),
+    [
+        (
+            {
+                "project": "proj-config",
+                "extra_headers": {"X-Custom": "keep", "openai-project": "proj-header", "OPENAI-PROJECT": "duplicate"},
+            },
+            "openai",
+            "proj-request",
+            "proj-query",
+            {"extra_headers": {"X-Custom": "keep", "OpenAI-Project": "proj-config"}},
+        ),
+        (
+            {"extra_headers": {"X-Custom": "keep", "openai-project": "proj-config"}},
+            "openai",
+            "proj-request",
+            "proj-query",
+            {"extra_headers": {"X-Custom": "keep", "OpenAI-Project": "proj-config"}},
+        ),
+        ({}, "openai", "proj-request", "proj-query", {"extra_headers": {"OpenAI-Project": "proj-request"}}),
+        ({}, "openai", None, "proj-query", {"extra_headers": {"OpenAI-Project": "proj-query"}}),
+        ({"project": None, "extra_headers": None}, "openai", None, None, {"extra_headers": None}),
+        ({"purpose": "batch"}, "openai", None, None, {"purpose": "batch"}),
+        ({"project": "proj-other"}, "azure", "proj-request", "proj-query", {"project": "proj-other"}),
+    ],
+)
+def test_project_header_preserves_inputs_and_project_precedence(
+    data, provider, header_project, query_project, expected
+):
+    original: Final = deepcopy(data)
+    result: Final = with_openai_project_header(data, provider, header_project, query_project)
+    assert data == original
+    assert result == expected
+
+
+def test_project_header_accepts_read_only_headers():
+    headers: Final = MappingProxyType({"openai-project": "proj-config", "X-Custom": "keep"})
+    data: Final = MappingProxyType({"extra_headers": headers})
+    assert with_openai_project_header(data, "openai", "proj-request") == {
+        "extra_headers": {"OpenAI-Project": "proj-config", "X-Custom": "keep"}
+    }
+    assert data["extra_headers"] == {"openai-project": "proj-config", "X-Custom": "keep"}

@@ -110,6 +110,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     vector_store_request_metadata,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.llms.openai.common_utils import with_openai_project_header
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
     MODEL_INFO_DISCOVERY_PROVIDERS,
@@ -707,6 +708,36 @@ def as_output_cap(value: object) -> int | None:
     except (ValueError, OverflowError):
         return None
     return cap if cap >= 0 else None
+
+
+def _merged_file_batch_headers(
+    deployment_params: Mapping[str, object], request_kwargs: Mapping[str, object], provider: str
+) -> Mapping[str, object]:
+    deployment_headers: Final = with_openai_project_header(deployment_params, provider).get("extra_headers")
+    request_headers: Final = request_kwargs.get("extra_headers")
+    if not isinstance(deployment_headers, Mapping):
+        return MappingProxyType({})
+    configured_headers: Final = cast(Mapping[str, object], deployment_headers)  # cast-ok: validated header mapping
+    if not isinstance(request_headers, Mapping):
+        return MappingProxyType({"extra_headers": configured_headers})
+    caller_headers: Final = cast(Mapping[str, object], request_headers)  # cast-ok: validated header mapping
+    deployment_header_names: Final = frozenset(key.lower() for key in configured_headers)
+    return MappingProxyType(
+        {
+            "extra_headers": MappingProxyType(
+                {
+                    **MappingProxyType(
+                        {
+                            key: value
+                            for key, value in caller_headers.items()
+                            if key.lower() not in deployment_header_names
+                        }
+                    ),
+                    **configured_headers,
+                }
+            )
+        }
+    )
 
 
 class Router:
@@ -5977,6 +6008,7 @@ class Router:
                             "caching": self.cache_responses,
                             "client": model_client,
                             **kwargs_copy,
+                            **_merged_file_batch_headers(data, kwargs_copy, custom_llm_provider),
                         }
                     )
 
@@ -6171,6 +6203,7 @@ class Router:
                         "caching": self.cache_responses,
                         "client": model_client,
                         **kwargs,
+                        **_merged_file_batch_headers(data, kwargs, custom_llm_provider),
                     }
                 )
 
