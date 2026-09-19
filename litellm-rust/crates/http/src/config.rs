@@ -6,6 +6,7 @@ use std::{
 
 use crate::{
     error::Error,
+    proxy::EnvironmentProxies,
     settings::{HttpSettings, SslVerify, TcpKeepalive},
     tls::{CipherSelection, KeyExchangeGroup, Tls12CipherSuite, Unsupported},
 };
@@ -26,7 +27,7 @@ pub struct HttpClientConfig {
     pub force_ipv4: bool,
     pub http2: bool,
     pub user_agent: Option<String>,
-    pub trust_proxy_env: bool,
+    pub proxies: EnvironmentProxies,
     pub connect_timeout: Duration,
     pub tcp_keepalive: Option<TcpKeepalive>,
     pub pool_idle_timeout: Duration,
@@ -72,7 +73,11 @@ impl From<&HttpSettings> for Resolution {
                 force_ipv4: settings.force_ipv4,
                 http2: settings.http2,
                 user_agent: settings.user_agent.clone(),
-                trust_proxy_env: settings.trust_proxy_env,
+                proxies: if settings.trust_proxy_env {
+                    settings.proxies.clone()
+                } else {
+                    EnvironmentProxies::default()
+                },
                 connect_timeout: settings.connect_timeout,
                 tcp_keepalive: settings.tcp_keepalive,
                 pool_idle_timeout: settings.pool_idle_timeout,
@@ -111,11 +116,11 @@ impl TryFrom<&HttpClientConfig> for reqwest::ClientBuilder {
             Some(agent) => with_protocol.user_agent(agent),
             None => with_protocol,
         };
-        Ok(if config.trust_proxy_env {
-            with_agent
-        } else {
-            with_agent.no_proxy()
-        })
+        Ok(config
+            .proxies
+            .reqwest_proxies()
+            .into_iter()
+            .fold(with_agent.no_proxy(), reqwest::ClientBuilder::proxy))
     }
 }
 
@@ -227,6 +232,25 @@ mod tests {
         );
     }
 
+    fn proxies() -> EnvironmentProxies {
+        EnvironmentProxies::from_environment(&|name: &str| {
+            (name == "HTTPS_PROXY").then(|| "http://proxy.corp:3128".to_string())
+        })
+    }
+
+    #[test]
+    fn proxies_are_dropped_when_the_transport_does_not_trust_the_environment() {
+        let settings = HttpSettings {
+            trust_proxy_env: false,
+            proxies: proxies(),
+            ..HttpSettings::default()
+        };
+        assert_eq!(
+            Resolution::from(&settings).config.proxies,
+            EnvironmentProxies::default()
+        );
+    }
+
     #[test]
     fn connection_settings_carry_over_unchanged() {
         let keepalive = TcpKeepalive {
@@ -240,6 +264,7 @@ mod tests {
             http2: true,
             user_agent: Some("litellm/1.0".into()),
             trust_proxy_env: true,
+            proxies: proxies(),
             connect_timeout: Duration::from_secs(7),
             tcp_keepalive: Some(keepalive),
             pool_idle_timeout: Duration::from_secs(45),
@@ -256,7 +281,7 @@ mod tests {
                 force_ipv4: true,
                 http2: true,
                 user_agent: Some("litellm/1.0".into()),
-                trust_proxy_env: true,
+                proxies: proxies(),
                 connect_timeout: Duration::from_secs(7),
                 tcp_keepalive: Some(keepalive),
                 pool_idle_timeout: Duration::from_secs(45),

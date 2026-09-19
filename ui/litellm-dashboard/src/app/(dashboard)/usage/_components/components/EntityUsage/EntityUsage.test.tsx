@@ -5,7 +5,39 @@ import type { ReactNode } from "react";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import * as networking from "@/components/networking";
+import type { DailyData, KeyMetadata, KeyMetricWithMetadata, SpendMetrics } from "@/components/UsagePage/types";
 import EntityUsage from "./EntityUsage";
+import { getGlobalTopKeys, getTopAPIKeys } from "./entityUsageAggregations";
+
+const emptySpendMetrics: SpendMetrics = {
+  spend: 0,
+  prompt_tokens: 0,
+  completion_tokens: 0,
+  total_tokens: 0,
+  api_requests: 0,
+  successful_requests: 0,
+  failed_requests: 0,
+  cache_read_input_tokens: 0,
+  cache_creation_input_tokens: 0,
+};
+
+const createKeyMetrics = (spend: number, metadata: KeyMetadata): KeyMetricWithMetadata => ({
+  metrics: { ...emptySpendMetrics, spend },
+  metadata,
+});
+
+const createDailyData = (date: string, apiKeys: Record<string, KeyMetricWithMetadata>): DailyData => ({
+  date,
+  metrics: { ...emptySpendMetrics },
+  breakdown: {
+    models: {},
+    model_groups: {},
+    mcp_servers: {},
+    providers: {},
+    api_keys: apiKeys,
+    entities: {},
+  },
+});
 
 beforeAll(() => {
   if (typeof window !== "undefined" && !window.ResizeObserver) {
@@ -44,10 +76,10 @@ vi.mock("../EndpointUsage/EndpointUsage", () => ({
 }));
 
 vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
-  default: ({ topKeys }: { topKeys: { api_key: string; spend: number }[] }) => (
+  default: ({ topKeys }: { topKeys: { api_key: string; user?: string | null; spend: number }[] }) => (
     <div>
       <span>Top Keys</span>
-      <span>{`top-keys:${topKeys.map((row) => `${row.api_key}=${row.spend}`).join("|")}`}</span>
+      <span>{`top-keys:${topKeys.map((row) => `${row.api_key}=${row.spend}=${row.user ?? "-"}`).join("|")}`}</span>
     </div>
   ),
 }));
@@ -429,6 +461,55 @@ describe("EntityUsage", () => {
         { user_id: "user-002", user_alias: null, user_email: "bob@example.com" },
       ]),
     );
+  });
+
+  describe("top key aggregations", () => {
+    it("sums, sorts, limits, and carries email attribution for global top keys", () => {
+      const results = [
+        createDailyData("2025-01-01", {
+          "key-low": createKeyMetrics(10, { key_alias: "Low", team_id: null, user_email: "low@example.com" }),
+          "key-high": createKeyMetrics(25, { key_alias: "High", team_id: null, user_email: "high@example.com" }),
+        }),
+        createDailyData("2025-01-02", {
+          "key-low": createKeyMetrics(30, { key_alias: "Low", team_id: null, user_email: "low@example.com" }),
+        }),
+      ];
+
+      expect(getGlobalTopKeys(results, 1)).toEqual([
+        {
+          api_key: "key-low",
+          key_alias: "Low",
+          user: "low@example.com",
+          tags: [],
+          spend: 40,
+        },
+      ]);
+    });
+
+    it("falls back to user ID attribution for global and entity top keys", () => {
+      const results = [
+        createDailyData("2025-01-01", {
+          "key-123": createKeyMetrics(12.5, { key_alias: "User ID key", team_id: null, user_id: "user-123" }),
+        }),
+      ];
+
+      expect(getGlobalTopKeys(results, 5)[0]?.user).toBe("user-123");
+      expect(getTopAPIKeys(results, 5)[0]?.user).toBe("user-123");
+    });
+
+    it("carries whether each key still exists for global and entity top keys", () => {
+      const results = [
+        createDailyData("2025-01-01", {
+          "stored-key": createKeyMetrics(20, { key_alias: "Stored", team_id: null, key_exists: true }),
+          "session-key": createKeyMetrics(10, { key_alias: null, team_id: null, key_exists: false }),
+        }),
+      ];
+      const existsByKey = (rows: { api_key: string; key_exists?: boolean | null }[]) =>
+        Object.fromEntries(rows.map((row) => [row.api_key, row.key_exists]));
+
+      expect(existsByKey(getGlobalTopKeys(results, 5))).toEqual({ "stored-key": true, "session-key": false });
+      expect(existsByKey(getTopAPIKeys(results, 5))).toEqual({ "stored-key": true, "session-key": false });
+    });
   });
 
   it("should render with tag entity type and display spend metrics", async () => {
@@ -1099,7 +1180,12 @@ describe("EntityUsage", () => {
           breakdown: {
             ...mockSpendData.results[0].breakdown,
             model_groups: { "gpt-4o": { metrics: { ...usageMetrics, spend: 70.25 }, metadata: {} } },
-            api_keys: { "sk-abc": { metrics: usageMetrics, metadata: { key_alias: "prod-key", team_id: null } } },
+            api_keys: {
+              "sk-abc": {
+                metrics: usageMetrics,
+                metadata: { key_alias: "prod-key", team_id: null, user_email: "alice@example.com" },
+              },
+            },
           },
         },
       ],
@@ -1108,7 +1194,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} entityType="team" />);
 
     await waitFor(() => {
-      expect(screen.getByText("top-keys:sk-abc=30.75")).toBeInTheDocument();
+      expect(screen.getByText("top-keys:sk-abc=30.75=alice@example.com")).toBeInTheDocument();
     });
     expect(screen.getByText("top-models:gpt-4o=70.25")).toBeInTheDocument();
     expect(screen.getByText(/^top-models:Code Review Agent=/)).toBeInTheDocument();

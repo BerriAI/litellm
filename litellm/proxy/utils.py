@@ -470,11 +470,15 @@ def _record_raising_guardrail(request_data: Mapping[str, object], callback: obje
 
 
 class _UpstreamStreamBoundary(Generic[_T]):
-    __slots__ = ("_upstream", "failure")
+    __slots__ = ("_source", "_upstream", "failure")
 
     def __init__(self, upstream: AsyncIterable[_T]) -> None:
+        self._source: Final = upstream
         self._upstream: Final = upstream.__aiter__()
         self.failure: BaseException | None = None
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._source, name)
 
     def __aiter__(self) -> "_UpstreamStreamBoundary[_T]":
         return self

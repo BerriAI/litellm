@@ -39,6 +39,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_error_information_for_spend_logs,
     _sanitize_guardrail_information_for_spend_logs,
     _sanitize_request_body_for_spend_logs_payload,
+    _scrub_raw_model_from_error_information,
     get_logging_payload,
     get_spend_logs_id,
     should_store_prompts_and_responses_in_spend_logs,
@@ -50,6 +51,7 @@ from litellm.types.utils import (
     StandardLoggingMetadata,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
 )
 
 
@@ -1075,13 +1077,18 @@ def test_get_logging_payload_replaces_a_non_string_model_with_the_placeholder(
     [
         ({"user_api_key": "sk-test"}, litellm.ModelResponse(id="chatcmpl-test", choices=[])),
         (
-            {"user_api_key": "sk-test", "model_group": "team alias", "status": "failure"},
+            {
+                "user_api_key": "sk-test",
+                "model_group": "team alias",
+                "model_info": {"id": "team-alias-deployment"},
+                "status": "failure",
+            },
             ValueError("provider timed out"),
         ),
     ],
 )
 def test_get_logging_payload_keeps_a_whitespace_model_name_on_success_or_a_routed_failure(
-    metadata: dict[str, str], response_obj: litellm.ModelResponse | Exception
+    metadata: dict[str, object], response_obj: litellm.ModelResponse | Exception
 ):
     kwargs: Final = {
         "model": _RAW_MODEL_WITH_PROMPT,
@@ -1098,6 +1105,301 @@ def test_get_logging_payload_keeps_a_whitespace_model_name_on_success_or_a_route
     )
 
     assert payload["model"] == _RAW_MODEL_WITH_PROMPT
+
+
+@pytest.mark.parametrize("redact_messages", [False, True])
+@pytest.mark.parametrize(
+    ("metadata", "expected_stored_model"),
+    [
+        ({"user_api_key": "sk-test", "status": "failure"}, UNKNOWN_MODEL_SPEND_LOG_MODEL),
+        (
+            {"user_api_key": "sk-test", "status": "failure", "model_info": {"id": "routed-deployment"}},
+            _RAW_MODEL_WITH_PROMPT,
+        ),
+    ],
+)
+def test_get_logging_payload_placeholders_the_stored_request_body_model_only_when_the_row_is_placeholdered(
+    monkeypatch: pytest.MonkeyPatch,
+    metadata: dict[str, object],
+    expected_stored_model: str,
+    redact_messages: bool,
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    kwargs: Final = {
+        "model": _RAW_MODEL_WITH_PROMPT,
+        "call_type": "amoderation",
+        "standard_callback_dynamic_params": {"turn_off_message_logging": redact_messages},
+        "litellm_params": {
+            "metadata": metadata,
+            "proxy_server_request": {
+                "url": "http://localhost:4000/v1/moderations",
+                "body": {"input": "hi", "model": _RAW_MODEL_WITH_PROMPT},
+            },
+        },
+    }
+
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=ValueError("Invalid value for 'model'"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    stored_request_body: Final = json.loads(payload["proxy_server_request"])
+    assert stored_request_body["model"] == expected_stored_model
+
+
+@pytest.mark.parametrize(
+    ("deployment_info", "expected_stored_model_group", "expected_stored_error_message"),
+    [
+        ({}, "", f"Invalid value for 'model' = {UNKNOWN_MODEL_SPEND_LOG_MODEL}"),
+        (
+            {"model_info": {"id": "routed-deployment"}},
+            _RAW_MODEL_WITH_PROMPT,
+            f"Invalid value for 'model' = {_RAW_MODEL_WITH_PROMPT}",
+        ),
+    ],
+)
+def test_get_logging_payload_placeholders_the_metadata_copied_into_the_stored_request_body(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_info: dict[str, object],
+    expected_stored_model_group: str,
+    expected_stored_error_message: str,
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    metadata: Final = {
+        "user_api_key": "sk-test",
+        "status": "failure",
+        "model_group": _RAW_MODEL_WITH_PROMPT,
+        "error_information": {
+            "error_code": "400",
+            "error_class": "BadRequestError",
+            "llm_provider": "openai",
+            "error_message": f"Invalid value for 'model' = {_RAW_MODEL_WITH_PROMPT}",
+            "traceback": "",
+        },
+        **deployment_info,
+    }
+    kwargs: Final = {
+        "model": _RAW_MODEL_WITH_PROMPT,
+        "call_type": "amoderation",
+        "litellm_params": {
+            "metadata": metadata,
+            "proxy_server_request": {
+                "url": "http://localhost:4000/v1/moderations",
+                "body": {"input": "hi", "model": _RAW_MODEL_WITH_PROMPT, "metadata": metadata},
+            },
+        },
+    }
+
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=ValueError("Invalid value for 'model'"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    stored_request_body: Final = json.loads(payload["proxy_server_request"])
+    assert stored_request_body["metadata"]["model_group"] == expected_stored_model_group
+    assert stored_request_body["metadata"]["error_information"]["error_message"] == expected_stored_error_message
+    assert stored_request_body["metadata"]["user_api_key"] == "sk-test"
+    assert ("medical records" in payload["proxy_server_request"]) == bool(deployment_info)
+
+
+_WHITESPACE_MODEL_GROUP: Final = "Broken GPT Mini"
+_WHITESPACE_MODEL_GROUP_ALIAS: Final = "Broken GPT Alias"
+_COOLDOWN_ERROR_MESSAGE: Final = (
+    f"No deployments available for selected model. Passed model={_WHITESPACE_MODEL_GROUP}. Try again in 300 seconds"
+)
+
+
+def _router_serving_the_whitespace_model_group() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": _WHITESPACE_MODEL_GROUP,
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-test"},
+            }
+        ],
+        model_group_alias={_WHITESPACE_MODEL_GROUP_ALIAS: _WHITESPACE_MODEL_GROUP},
+    )
+
+
+def _router_serving_only_a_wildcard() -> litellm.Router:
+    return litellm.Router(
+        model_list=[{"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "sk-test"}}]
+    )
+
+
+@pytest.mark.parametrize(
+    ("requested_model", "llm_router", "expected_model", "expected_model_group", "expected_error_message"),
+    [
+        (
+            _WHITESPACE_MODEL_GROUP,
+            _router_serving_the_whitespace_model_group(),
+            _WHITESPACE_MODEL_GROUP,
+            _WHITESPACE_MODEL_GROUP,
+            _COOLDOWN_ERROR_MESSAGE,
+        ),
+        (
+            _WHITESPACE_MODEL_GROUP_ALIAS,
+            _router_serving_the_whitespace_model_group(),
+            _WHITESPACE_MODEL_GROUP_ALIAS,
+            _WHITESPACE_MODEL_GROUP_ALIAS,
+            _COOLDOWN_ERROR_MESSAGE,
+        ),
+        (
+            _WHITESPACE_MODEL_GROUP,
+            _router_serving_only_a_wildcard(),
+            UNKNOWN_MODEL_SPEND_LOG_MODEL,
+            "",
+            _COOLDOWN_ERROR_MESSAGE.replace(_WHITESPACE_MODEL_GROUP, UNKNOWN_MODEL_SPEND_LOG_MODEL),
+        ),
+        (
+            _WHITESPACE_MODEL_GROUP,
+            None,
+            UNKNOWN_MODEL_SPEND_LOG_MODEL,
+            "",
+            _COOLDOWN_ERROR_MESSAGE.replace(_WHITESPACE_MODEL_GROUP, UNKNOWN_MODEL_SPEND_LOG_MODEL),
+        ),
+    ],
+)
+def test_get_logging_payload_keeps_a_configured_whitespace_model_group_that_failed_before_a_deployment_was_picked(
+    requested_model: str,
+    llm_router: litellm.Router | None,
+    expected_model: str,
+    expected_model_group: str,
+    expected_error_message: str,
+):
+    kwargs: Final = {
+        "model": requested_model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test",
+                "model_group": requested_model,
+                "status": "failure",
+                "error_information": {"error_message": _COOLDOWN_ERROR_MESSAGE, "error_class": "RateLimitError"},
+            }
+        },
+    }
+
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=litellm.RateLimitError(message=_COOLDOWN_ERROR_MESSAGE, model=requested_model, llm_provider=""),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+        llm_router=llm_router,
+    )
+
+    persisted_error: Final = json.loads(payload["metadata"])["error_information"]
+    assert (payload["model"], payload["model_group"], persisted_error["error_message"]) == (
+        expected_model,
+        expected_model_group,
+        expected_error_message,
+    )
+
+
+def _openai_invalid_model_error_message(model: str) -> str:
+    body: Final = {
+        "error": {
+            "message": f"Invalid value for 'model' = {model}. Please check the OpenAI documentation and try again.",
+            "type": "invalid_request_error",
+            "param": "model",
+            "code": None,
+        }
+    }
+    return f"Error code: 400 - {body}"
+
+
+def test_get_logging_payload_persists_no_raw_model_for_a_prompt_shaped_moderation_rejected_by_the_provider():
+    provider_rejection: Final = litellm.BadRequestError(
+        message=_openai_invalid_model_error_message(_RAW_MODEL_WITH_PROMPT),
+        model=_RAW_MODEL_WITH_PROMPT,
+        llm_provider="openai",
+    )
+    error_information: Final = _sanitize_error_information_for_spend_logs(
+        StandardLoggingPayloadSetup.get_error_information(
+            original_exception=provider_rejection,
+            traceback_str=(
+                f"Traceback (most recent call last):\n  ...\nlitellm.exceptions.BadRequestError: {provider_rejection}"
+            ),
+        ),
+        original_exception=provider_rejection,
+    )
+    kwargs: Final = {
+        "model": _RAW_MODEL_WITH_PROMPT,
+        "input": "hi",
+        "call_type": "",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test",
+                "model_group": _RAW_MODEL_WITH_PROMPT,
+                "status": "failure",
+                "error_information": error_information,
+            }
+        },
+    }
+
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=provider_rejection,
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    persisted_error: Final = json.loads(payload["metadata"])["error_information"]
+    scrubbed_message: Final = (
+        f"litellm.BadRequestError: {_openai_invalid_model_error_message(UNKNOWN_MODEL_SPEND_LOG_MODEL)}"
+    )
+    assert (payload["model"], payload["model_group"]) == (UNKNOWN_MODEL_SPEND_LOG_MODEL, "")
+    assert persisted_error["error_message"] == scrubbed_message
+    assert persisted_error["traceback"].endswith(scrubbed_message)
+    assert "medical records" not in payload["metadata"]
+
+
+_TRUNCATION_MARKER_TEXT: Final = (
+    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped 10 chars. {LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
+)
+
+
+@pytest.mark.parametrize(
+    ("error_text", "expected"),
+    [
+        (f"Invalid model {_RAW_MODEL_WITH_PROMPT}", f"Invalid model {UNKNOWN_MODEL_SPEND_LOG_MODEL}"),
+        (
+            f"OpenAIException - {{'message': {_RAW_MODEL_WITH_PROMPT!r}}}",
+            f"OpenAIException - {{'message': '{UNKNOWN_MODEL_SPEND_LOG_MODEL}'}}",
+        ),
+        (
+            (
+                f"Invalid model {_RAW_MODEL_WITH_PROMPT[:20]}{_TRUNCATION_MARKER_TEXT}"
+                f"{_RAW_MODEL_WITH_PROMPT[30:]} rejected"
+            ),
+            (
+                f"Invalid model {UNKNOWN_MODEL_SPEND_LOG_MODEL}{_TRUNCATION_MARKER_TEXT}"
+                f"{UNKNOWN_MODEL_SPEND_LOG_MODEL} rejected"
+            ),
+        ),
+    ],
+)
+def test_scrub_raw_model_from_error_information_covers_literal_escaped_and_truncation_split_spellings(
+    error_text: str, expected: str
+):
+    scrubbed: Final = _scrub_raw_model_from_error_information(
+        cast(
+            StandardLoggingPayloadErrorInformation,
+            {"error_message": error_text, "traceback": error_text, "error_class": "BadRequestError"},
+        ),
+        _RAW_MODEL_WITH_PROMPT,
+    )
+
+    assert scrubbed == {"error_message": expected, "traceback": expected, "error_class": "BadRequestError"}
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
