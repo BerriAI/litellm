@@ -4160,6 +4160,31 @@ class TestModelInfoCostMapEchoFilter:
         assert not frozenset(info).intersection(frozenset(entry) - frozenset(("mode",)))
         assert info["base_model"] == "azure/gpt-5.6"
 
+    def test_encrypted_stored_model_is_decrypted_for_the_lookup(self, monkeypatch):
+        import litellm
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        entry = litellm.get_model_info("openai/gpt-5.6")
+        db_model = Deployment(
+            model_name="gpt-5.6",
+            litellm_params=LiteLLM_Params(model=encrypt_value_helper(value="openai/gpt-5.6")),
+            model_info=ModelInfo(id="dep-echo-7", mode="chat"),
+        )
+        echo = {**entry, "id": "dep-echo-7", "db_model": True, "access_groups": ["prod"]}
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_info=ModelInfo(**echo)),
+        )
+
+        info = json.loads(result["model_info"])
+        assert not frozenset(info).intersection(frozenset(entry) - frozenset(("mode",)))
+        assert info["mode"] == "chat"
+        assert info["access_groups"] == ["prod"]
+
 
 class TestUpdateDBModelClearCacheControlInjectionPoints:
     def test_explicit_null_removes_stored_injection_points(self):

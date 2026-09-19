@@ -877,7 +877,9 @@ def _ptu_priced_deployment(model_params: Deployment) -> Deployment:
 
 def _cost_map_entry(db_model: Deployment, incoming_model_info: Mapping[str, object]) -> Mapping[str, object]:
     base_model: Final = incoming_model_info.get("base_model")
-    lookup: Final = base_model if isinstance(base_model, str) else db_model.litellm_params.model
+    lookup: Final = base_model if isinstance(base_model, str) else _decrypted_model(db_model.litellm_params.model)
+    if lookup is None:
+        return MappingProxyType({})
     try:
         return MappingProxyType(dict(litellm.get_model_info(model=lookup)))
     except Exception:
