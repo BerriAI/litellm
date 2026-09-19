@@ -1,4 +1,4 @@
-"""Client for registering scenarios with the integration scripted provider."""
+"""Client for registering scenarios with the integration upstream."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Final
 
 import httpx
-from integration._support.scripted_provider import (
+from integration._support.scripted_wires import (
     WIRE_MOUNTS,
     Scenario,
     ScenarioDeleted,
@@ -15,7 +15,7 @@ from integration._support.scripted_provider import (
     Wire,
 )
 
-CONTROL_URL: Final = os.environ.get("INTEGRATION_SCRIPTED_PROVIDER_URL", "http://127.0.0.1:8191").rstrip("/")
+CONTROL_URL: Final = os.environ.get("INTEGRATION_UPSTREAM_URL", "http://127.0.0.1:8190").rstrip("/")
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +33,7 @@ class ScenarioHandle:
 
 def register_scenario(scenario: Scenario) -> ScenarioHandle:
     response: Final = httpx.post(
-        f"{CONTROL_URL}/_scenarios",
+        f"{CONTROL_URL}/__scenarios",
         json=scenario.model_dump(mode="json"),
         trust_env=False,
         timeout=15,
@@ -49,7 +49,7 @@ def register_scenario(scenario: Scenario) -> ScenarioHandle:
 
 def delete_scenario(handle: ScenarioHandle) -> None:
     response: Final = httpx.delete(
-        f"{CONTROL_URL}/_scenarios/{handle.scenario_id}",
+        f"{CONTROL_URL}/__scenarios/{handle.scenario_id}",
         trust_env=False,
         timeout=15,
     )

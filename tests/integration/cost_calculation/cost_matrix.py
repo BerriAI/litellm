@@ -27,7 +27,7 @@ from types import MappingProxyType
 from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
-from integration._support.scripted_provider import Scenario, ScriptedOutput, ScriptedToolCall, ScriptedUsage, Wire
+from integration._support.scripted_wires import Scenario, ScriptedOutput, ScriptedToolCall, ScriptedUsage, Wire
 
 COST_MAP_PATH: Final = Path(__file__).resolve().parent / "cost_map.json"
 CASES_PATH: Final = Path(__file__).resolve().parent / "cases.json"

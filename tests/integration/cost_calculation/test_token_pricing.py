@@ -1,4 +1,4 @@
-"""Token pricing coverage for the integration scripted-provider cost shard."""
+"""Token pricing coverage for the integration scripted-wire cost shard."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pytest
 from pydantic import JsonValue
 
 from integration._support.client import JSON_OBJECT, Gateway
-from integration._support.scripted_provider import ScriptedUsage, Wire
+from integration._support.scripted_wires import ScriptedUsage, Wire
 from integration.cost_calculation.conftest import (
     approx_equal,
     assert_total_is_sum_of_components,

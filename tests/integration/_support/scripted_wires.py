@@ -1,22 +1,17 @@
-"""Scripted provider sidecar for the cost-calculation integration suite.
+"""Scripted provider wires for the cost-calculation integration suite.
 
-A standalone process (``python -m integration._support.scripted_provider``) that
-pretends to be an LLM provider for the proxy under test. The suite registers a
-Scenario over a small control API; the provider wire routes then answer the
-proxy's upstream calls with the scripted usage figures, in the exact wire shape
+The shared integration upstream registers a Scenario over a small control API;
+the provider wire routes answer the proxy's upstream calls with the scripted usage figures, in the exact wire shape
 the real provider would emit (OpenAI chat completions, OpenAI Responses,
 Anthropic Messages, Gemini generateContent, or the OpenAI-compatible Together /
 Fireworks surfaces). Because the usage is scripted, expected spend is literal
 arithmetic on the test cost map's rates, with no dependency on what a real
 provider would report.
 
-Layout on one port:
+The upstream exposes:
 
-- ``GET  /health``                      liveness
-- ``POST /_scenarios``                  register a Scenario JSON, returns its id
-- ``DELETE /_scenarios/<id>``           remove it
-- ``POST /_oauth/token``              fake Google OAuth token endpoint for the
-  Vertex service-account credential's refresh call
+- ``POST /__scenarios``                 register a Scenario JSON, returns its id
+- ``DELETE /__scenarios/<id>``          remove it
 - ``POST /<id>/<mount>/<provider path>`` provider wire; mount is one of
   ``openai``, ``anthropic``, ``gemini``, ``together``, ``fireworks``, ``azure``,
   ``bedrock``, ``vertex`` and the remainder is whatever path the provider
@@ -32,22 +27,18 @@ final stream chunk carries usage or the provider reports none.
 
 from __future__ import annotations
 
-import argparse
 import json
 import struct
-import sys
 import threading
 import time
 import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias, cast
+from typing import Final, Literal, TypeAlias
 from urllib.parse import unquote, urlsplit
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
 
 Wire: TypeAlias = Literal[
     "openai_chat",
@@ -1307,7 +1298,7 @@ def _render(
 # ---------- registry + request routing ----------
 
 
-class _ScenarioStore:
+class ScenarioStore:
     def __init__(self) -> None:
         self._lock: Final = threading.Lock()
         self._scenarios: dict[str, Scenario] = {}  # mutable-ok: server state, guarded by _lock
@@ -1359,55 +1350,9 @@ def _request_model(body: bytes, path_tail: str, scenario: Scenario) -> str:
     return scenario.model
 
 
-def handle_request(store: _ScenarioStore, method: str, raw_path: str, body: bytes) -> RenderedResponse:
+def render(store: ScenarioStore, method: str, raw_path: str, body: bytes) -> RenderedResponse:
     path: Final = urlsplit(raw_path).path
     segments: Final = tuple(segment for segment in path.split("/") if segment)
-    if method == "GET" and segments == ("health",):
-        return RenderedResponse(200, "application/json", _json_bytes(_jobj(("status", "ok"))))
-    if method == "GET" and segments == ("_cost_map",):
-        return RenderedResponse(
-            200,
-            "application/json",
-            (Path(__file__).resolve().parents[1] / "cost_calculation" / "cost_map.json").read_bytes(),
-        )
-    if segments and segments[0] == "_oauth":
-        if method == "POST" and segments == ("_oauth", "token"):
-            return RenderedResponse(
-                200,
-                "application/json",
-                _json_bytes(
-                    _jobj(
-                        ("access_token", "scripted-token"),
-                        ("token_type", "Bearer"),
-                        ("expires_in", 3600),
-                    )
-                ),
-            )
-        return RenderedResponse(
-            404, "application/json", _json_bytes(_jobj(("error", "unknown control route")))
-        )
-    if segments and segments[0] == "_scenarios":
-        if method == "POST" and len(segments) == 1:
-            try:
-                scenario: Final = Scenario.model_validate_json(body)
-            except ValidationError as exc:
-                return RenderedResponse(
-                    400, "application/json", _json_bytes(_jobj(("error", str(exc))))
-                )
-            store.put(scenario)
-            return RenderedResponse(
-                200, "application/json", _json_bytes(_jobj(("scenario_id", scenario.scenario_id)))
-            )
-        if method == "DELETE" and len(segments) == 2:
-            deleted: Final = store.drop(segments[1])
-            return RenderedResponse(
-                200 if deleted else 404,
-                "application/json",
-                _json_bytes(_jobj(("deleted", deleted))),
-            )
-        return RenderedResponse(
-            404, "application/json", _json_bytes(_jobj(("error", "unknown control route")))
-        )
     if len(segments) < 2 or method != "POST":
         return RenderedResponse(
             404, "application/json", _json_bytes(_jobj(("error", f"no route for {method} {path}")))
@@ -1441,42 +1386,3 @@ def handle_request(store: _ScenarioStore, method: str, raw_path: str, body: byte
         requested_model=_request_model(body, tail, found),
         path_tail=tail,
     )
-
-
-class _ScriptedHandler(BaseHTTPRequestHandler):
-    store: Final[_ScenarioStore] = _ScenarioStore()
-
-    def _dispatch(self, method: str) -> None:
-        length: Final = int(self.headers.get("content-length") or 0)
-        body: Final = self.rfile.read(length) if length else b""
-        rendered: Final = handle_request(self.store, method, self.path, body)
-        self.send_response(rendered.status_code)
-        self.send_header("content-type", rendered.content_type)
-        self.send_header("content-length", str(len(rendered.body)))
-        self.end_headers()
-        self.wfile.write(rendered.body)
-
-    def do_GET(self) -> None:
-        self._dispatch("GET")
-
-    def do_POST(self) -> None:
-        self._dispatch("POST")
-
-    def do_DELETE(self) -> None:
-        self._dispatch("DELETE")
-
-
-
-DEFAULT_PORT: Final = 8191
-
-
-def serve(port: int = DEFAULT_PORT, bind_host: str = "127.0.0.1") -> None:
-    server: Final = ThreadingHTTPServer((bind_host, port), _ScriptedHandler)
-    sys.stderr.write(f"scripted-provider listening on http://{bind_host}:{port}\n")
-    server.serve_forever()
-
-
-if __name__ == "__main__":
-    parser: Final = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8191)
-    serve(port=cast(int, parser.parse_args().port))

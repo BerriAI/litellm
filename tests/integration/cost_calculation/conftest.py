@@ -122,7 +122,7 @@ def register_scenario_deployment(
     case: Case,
     marker: str,
 ) -> str:
-    control_url: Final = os.environ["INTEGRATION_SCRIPTED_PROVIDER_URL"].rstrip("/")
+    control_url: Final = os.environ["INTEGRATION_UPSTREAM_URL"].rstrip("/")
     sidecar_scenario: Final = case.scenario(
         scenario_id=f"sc-{marker}", model=model, text=f"scripted answer {marker}"
     )

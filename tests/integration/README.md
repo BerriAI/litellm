@@ -2,7 +2,7 @@
 
 These tests exercise a running gateway, PostgreSQL and Redis with an owned local upstream. CircleCI owns this suite. Tests are grouped by behavior, with no automatic test retries or fallback to paid provider calls
 
-The `cost` group runs the scripted-provider cost matrix through a dedicated sidecar. The sidecar serves the test-owned cost map over loopback through `LITELLM_MODEL_COST_MAP_URL`; cost goldens are checked into the integration suite and must not be copied into the E2E coverage registry
+The `cost` group runs the scripted-wire cost matrix through the shared integration upstream. The upstream serves the test-owned cost map over loopback through `LITELLM_MODEL_COST_MAP_URL`; cost goldens are checked into the integration suite and must not be copied into the E2E coverage registry
 
 Use `tests/integration/run.py management`, `accounting`, `database`, `providers`, `extensions`, `sdk` or `cost` to run a selected group. Set `INTEGRATION_PROXY_URL`, `INTEGRATION_UPSTREAM_URL`, `INTEGRATION_MASTER_KEY` and `DATABASE_URL` to an isolated test deployment. The runner selects the new domain directories explicitly; the legacy OCI and sandbox selections remain separate
 
@@ -22,7 +22,7 @@ Fixtures must contain synthetic data only. Keep private incident records and sou
 
 Database cases own their temporary schemas, roles, constraints and proxy processes. They prove reader-versus-writer execution with PostgreSQL lock observations, exercise real transaction wait limits and verify rollback after a reached database failure
 
-Accounting cases compare persisted input and output cost components against literal rates, including zero and default prices. Cache state models assert actual upstream calls, response identity and every persisted charge. Generated accounting tests have a 180-second test limit to accommodate the asynchronous spend writer; CircleCI keeps other shards capped at 11 minutes and gives the cost shard 20 minutes
+Accounting cases compare persisted input and output cost components against literal rates, including zero and default prices. Cache state models assert actual upstream calls, response identity and every persisted charge. Generated accounting tests have a 180-second test limit to accommodate the asynchronous spend writer; CircleCI keeps the whole shard capped at 11 minutes
 
 Provider contracts exercise actual TCP requests with synthetic credentials and local protocol peers. The S3 verifier uses independently implemented equations, a published known-answer vector, a fixed signing clock and deliberately invalid signed requests. Bedrock cases clear ambient AWS credential sources and check the literal model path, loaded role references, STS requests and bearer-only behavior
 

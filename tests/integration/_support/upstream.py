@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, field
 from collections import deque
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
 from queue import SimpleQueue
-from typing import Final
+from typing import Final, cast
 
 import uvicorn
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
+from integration._support.scripted_wires import RenderedResponse, Scenario, ScenarioStore, render
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 INTERNAL_FIELDS: Final = frozenset(
@@ -48,6 +51,7 @@ class Observation:
 class Provider:
     observations: SimpleQueue[Observation] = field(default_factory=SimpleQueue)
     scripts: dict[str, deque[int]] = field(default_factory=dict)
+    scenario_store: ScenarioStore = field(default_factory=ScenarioStore)
 
     async def chat(self, request: Request) -> Response:
         body: Final = JSON_OBJECT.validate_json(await request.body())
@@ -103,16 +107,89 @@ class Provider:
             }
         )
 
+    async def register_scenario(self, request: Request) -> Response:
+        try:
+            scenario: Final = Scenario.model_validate_json(await request.body())
+        except ValidationError as exc:
+            return self._render(
+                RenderedResponse(400, "application/json", json.dumps({"error": str(exc)}).encode("utf-8"))
+            )
+        self.scenario_store.put(scenario)
+        return self._render(
+            RenderedResponse(
+                200,
+                "application/json",
+                json.dumps({"scenario_id": scenario.scenario_id}).encode("utf-8"),
+            )
+        )
+
+    async def delete_scenario(self, request: Request) -> Response:
+        scenario_id: Final = cast(str, request.path_params["scenario_id"])
+        deleted: Final = self.scenario_store.drop(scenario_id)
+        return self._render(
+            RenderedResponse(
+                200 if deleted else 404,
+                "application/json",
+                json.dumps({"deleted": deleted}).encode("utf-8"),
+            )
+        )
+
+    async def cost_map(self, _request: Request) -> Response:
+        return self._render(
+            RenderedResponse(
+                200,
+                "application/json",
+                (Path(__file__).resolve().parents[1] / "cost_calculation" / "cost_map.json").read_bytes(),
+            )
+        )
+
+    async def oauth_token(self, _request: Request) -> Response:
+        return self._render(
+            RenderedResponse(
+                200,
+                "application/json",
+                json.dumps(
+                    {
+                        "access_token": "scripted-token",
+                        "token_type": "Bearer",
+                        "expires_in": 3600,
+                    }
+                ).encode("utf-8"),
+            )
+        )
+
+    async def scripted(self, request: Request) -> Response:
+        rendered: Final = render(
+            self.scenario_store,
+            request.method,
+            request.url.path,
+            await request.body(),
+        )
+        return self._render(rendered)
+
+    @staticmethod
+    def _render(rendered: RenderedResponse) -> Response:
+        return Response(
+            content=rendered.body,
+            status_code=rendered.status_code,
+            media_type=rendered.content_type,
+        )
+
     def app(self) -> Starlette:
         return Starlette(
             routes=[
                 Route("/health", health),
                 Route("/__observations", self.observed),
                 Route("/__scripts/{model}", self.script, methods=["POST", "DELETE", "GET"]),
+                Route("/__scenarios", self.register_scenario, methods=["POST"]),
+                Route("/__scenarios/{scenario_id}", self.delete_scenario, methods=["DELETE"]),
+                Route("/_cost_map", self.cost_map, methods=["GET"]),
+                Route("/_oauth/token", self.oauth_token, methods=["POST"]),
                 Route("/v1/chat/completions", self.chat, methods=["POST"]),
                 Route("/v1/completions", completions, methods=["POST"]),
                 Route("/v1/embeddings", embeddings, methods=["POST"]),
                 Route("/v1/moderations", moderations, methods=["POST"]),
+                Route("/{scenario_id}/{tail:path}", self.scripted, methods=["POST"]),
             ]
         )
 
@@ -121,7 +198,7 @@ def main() -> None:
     parser: Final = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8190)
     arguments: Final = parser.parse_args()
-    uvicorn.run(Provider().app(), host="127.0.0.1", port=arguments.port, access_log=False)
+    uvicorn.run(Provider().app(), host="127.0.0.1", port=cast(int, arguments.port), access_log=False)
 
 
 if __name__ == "__main__":
