@@ -1845,6 +1845,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
               possibleUIRoles={possibleUIRoles}
               onUserCreated={handleUserCreated}
               isEmbedded={true}
+              premiumUser={premiumUser === true}
             />
           </DialogContent>
         </Dialog>

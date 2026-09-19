@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -6,6 +6,8 @@ import { CreateUserButton } from "./CreateUserButton";
 import * as networking from "./networking";
 import { toast } from "@/lib/toast";
 import { expectControlBesideLabel } from "../../tests/fieldOrientation";
+import { chooseSelectOption } from "../../tests/test-utils";
+import { MODEL_MAX_BUDGET_PREMIUM_HINT } from "./key_team_helpers/ModelMaxBudgetEditor";
 
 vi.mock("./networking", () => ({
   userCreateCall: vi.fn(),
@@ -749,6 +751,152 @@ describe("CreateUserButton", () => {
         expect(mockUserCreateCall).toHaveBeenCalled();
       });
       expect(submittedPayload().models).toEqual(["no-default-models"]);
+    });
+  });
+
+  describe("per-model budgets", () => {
+    const openStandaloneModal = async (user: ReturnType<typeof userEvent.setup>) => {
+      expect(await screen.findByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+      return screen.getByRole("dialog", { name: /invite user/i });
+    };
+
+    it("locks the per-model budget editor when the proxy has no enterprise license", async () => {
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      renderWithProviders(<CreateUserButton {...defaultProps} premiumUser={false} />);
+      const dialog = await openStandaloneModal(user);
+
+      expect(within(dialog).getByRole("button", { name: /Add Model Budget/i })).toBeDisabled();
+      expect(within(dialog).getByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).toBeInTheDocument();
+    });
+
+    it("sends model_max_budget with budget_limit and time_period when a budget is entered", async () => {
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      vi.mocked(networking.modelAvailableCall).mockResolvedValue({ data: [{ id: "gpt-4" }] } as any);
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "budget-user" } });
+      mockInvitationCreateCall.mockResolvedValue({
+        id: "inv-budget",
+        user_id: "budget-user",
+        has_user_setup_sso: false,
+      } as any);
+
+      renderWithProviders(
+        <CreateUserButton
+          {...defaultProps}
+          premiumUser
+          possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }}
+        />,
+      );
+      const dialog = await openStandaloneModal(user);
+
+      await user.type(within(dialog).getByLabelText(/user email/i), "budget@example.com");
+      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
+      await user.click(screen.getByText("User"));
+      await user.click(within(dialog).getByRole("button", { name: /Add Model Budget/i }));
+      await chooseSelectOption(user, within(dialog).getByPlaceholderText("Select model"), "gpt-4");
+      fireEvent.change(within(dialog).getByPlaceholderText("Max spend ($)"), { target: { value: "3" } });
+      await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalled();
+      });
+      expect(mockUserCreateCall.mock.calls[0][2].model_max_budget).toStrictEqual({
+        "gpt-4": { budget_limit: 3, time_period: "30d" },
+      });
+    });
+
+    it("omits model_max_budget from the payload when no budget is entered", async () => {
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "no-budget-user" } });
+      mockInvitationCreateCall.mockResolvedValue({
+        id: "inv-nobudget",
+        user_id: "no-budget-user",
+        has_user_setup_sso: false,
+      } as any);
+
+      renderWithProviders(
+        <CreateUserButton
+          {...defaultProps}
+          premiumUser
+          possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }}
+        />,
+      );
+      const dialog = await openStandaloneModal(user);
+
+      await user.type(within(dialog).getByLabelText(/user email/i), "nobudget@example.com");
+      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
+      await user.click(screen.getByText("User"));
+      await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalled();
+      });
+      expect(mockUserCreateCall.mock.calls[0][2]).not.toHaveProperty("model_max_budget");
+    });
+
+    it("clears the per-model budget rows after a user is created in standalone mode", async () => {
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      vi.mocked(networking.modelAvailableCall).mockResolvedValue({ data: [{ id: "gpt-4" }] } as any);
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "budget-user" } });
+      mockInvitationCreateCall.mockResolvedValue({
+        id: "inv-budget",
+        user_id: "budget-user",
+        has_user_setup_sso: false,
+      } as any);
+
+      renderWithProviders(
+        <CreateUserButton
+          {...defaultProps}
+          premiumUser
+          possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }}
+        />,
+      );
+      const dialog = await openStandaloneModal(user);
+
+      await user.type(within(dialog).getByLabelText(/user email/i), "budget@example.com");
+      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
+      await user.click(screen.getByText("User"));
+      await user.click(within(dialog).getByRole("button", { name: /Add Model Budget/i }));
+      await chooseSelectOption(user, within(dialog).getByPlaceholderText("Select model"), "gpt-4");
+      fireEvent.change(within(dialog).getByPlaceholderText("Max spend ($)"), { target: { value: "3" } });
+      await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalled();
+      });
+      expect(within(dialog).queryByPlaceholderText("Max spend ($)")).not.toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: /Add Model Budget/i, hidden: true })).toBeInTheDocument();
+    });
+
+    it("clears the per-model budget rows after a user is created in embedded mode", async () => {
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      const onUserCreated = vi.fn();
+      vi.mocked(networking.modelAvailableCall).mockResolvedValue({ data: [{ id: "gpt-4" }] } as any);
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "embedded-budget-user" } });
+
+      renderWithProviders(
+        <CreateUserButton
+          {...defaultProps}
+          premiumUser
+          onUserCreated={onUserCreated}
+          possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }}
+          isEmbedded
+        />,
+      );
+
+      await user.type(screen.getByLabelText(/user email/i), "embedded-budget@example.com");
+      await user.click(screen.getByRole("combobox", { name: /user role/i }));
+      await user.click(screen.getByText("User"));
+      await user.click(screen.getByRole("button", { name: /Add Model Budget/i }));
+      await chooseSelectOption(user, screen.getByPlaceholderText("Select model"), "gpt-4");
+      fireEvent.change(screen.getByPlaceholderText("Max spend ($)"), { target: { value: "3" } });
+      await user.click(screen.getByRole("button", { name: /create user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalled();
+      });
+      expect(screen.queryByPlaceholderText("Max spend ($)")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Add Model Budget/i })).toBeInTheDocument();
     });
   });
 });
