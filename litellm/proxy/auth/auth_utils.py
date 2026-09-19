@@ -1709,18 +1709,13 @@ _MODEL_ROUTING_BODY_TARGET_MODEL_ROUTE_MARKERS: Final = (
     "/vector_stores",
 )
 _MODEL_ROUTING_COMPLETION_MODEL_ROUTE_MARKERS: Final = ("/evals",)
-# The chat-completions, completions and embeddings handlers (and the queue
-# variant) declare a ``model`` parameter that FastAPI binds from the URL —
-# from ``?model=`` on the plain routes, from ``{model:path}`` on the
-# deployment-style routes — and request processing prefers that value over the
-# body ``model``. Every model a request can resolve to is a candidate for the
-# access checks, so the URL-bound value is collected here alongside the body
-# value. The two sets below are the exact route templates those handlers are
-# mounted on (proxy_server.py); classification is by matched template, never
-# by substring, so unrelated routes that merely contain ``/completions`` do not
-# get a stray ``?model=`` promoted to an authorization input. On a
+# Route templates on which the handler binds ``model`` from the URL
+# (``?model=`` on the plain routes, ``{model:path}`` on the deployment-style
+# routes). The URL-bound value is collected as a model candidate alongside the
+# body value. Classification is by matched template, never by substring, so a
+# route that merely contains ``/completions`` is not affected. On a
 # ``{model:path}`` route FastAPI binds the path value and ignores a same-named
-# query parameter, so only the path value is a candidate there.
+# query parameter, so only the path value is read there.
 _LLM_HANDLER_QUERY_MODEL_ROUTES: Final = frozenset(
     {
         "/v1/chat/completions",
@@ -1823,10 +1818,10 @@ def _llm_handler_url_model(
     Mirrors the handlers' ``model`` parameter binding: the ``{model:path}``
     segment on the deployment-style templates (a same-named query parameter
     is ignored there, as FastAPI does), the exact-case ``model`` query
-    parameter on the plain routes (``?MODEL=`` is not bound, so it is not a
-    candidate; duplicates are last-wins in both FastAPI and the parsed
-    mapping). ``route_template`` comes from the matched Starlette route when a
-    request is available; without one, the literal path is classified instead.
+    parameter on the plain routes (``?MODEL=`` is not bound; duplicates are
+    last-wins in both FastAPI and the parsed mapping). ``route_template``
+    comes from the matched Starlette route when a request is available;
+    without one, the literal path is classified instead.
     """
     if route_template is None:
         if route in _LLM_HANDLER_QUERY_MODEL_ROUTES:
@@ -1993,9 +1988,8 @@ def _extract_model_candidates_from_request(
             _append_model_candidates(candidates, session.get("model"))
     if uses_completion_model_sources and isinstance(request_data.get("completion"), dict):
         _append_model_candidates(candidates, request_data["completion"].get("model"))
-    # URL-bound model on the LLM handler routes (request processing prefers it
-    # over the body model). The ``x-litellm-model`` header is deliberately not
-    # read: these handlers do not route from it.
+    # URL-bound model on the LLM handler routes. The ``x-litellm-model`` header
+    # is deliberately not read: these handlers do not bind it.
     _append_model_candidates(
         candidates,
         _llm_handler_url_model(

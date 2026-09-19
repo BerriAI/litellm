@@ -3922,8 +3922,8 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
 # --- URL-bound model on the LLM handler routes ---------------------------------------
 # chat-completions, completions and embeddings bind ``model`` from the URL
 # (``?model=`` on the plain routes, ``{model:path}`` on the deployment-style
-# routes) and request processing prefers it over the body model, so it is part
-# of the model candidates the access checks see.
+# routes); that value is part of the model candidates get_model_from_request
+# returns.
 
 
 def _matched_request(template: str, path_params: dict[str, object] | None = None) -> Request:
@@ -3949,8 +3949,7 @@ def _matched_request(template: str, path_params: dict[str, object] | None = None
     ],
 )
 def test_get_model_from_request_includes_query_model_on_llm_handler_routes(route):
-    """Body says allowed-model, query string says denied-model: both are candidates,
-    so the allowlist check rejects the request if either is outside the key's models."""
+    """Body model and query-string model are both returned as candidates."""
     assert get_model_from_request(
         request_data={"model": "allowed-model"},
         route=route,
@@ -3994,7 +3993,7 @@ def test_get_model_from_request_query_model_equal_to_body_dedupes():
 
 def test_get_model_from_request_query_model_lookup_is_exact_case():
     """FastAPI binds ``model`` case-sensitively: ``?MODEL=`` is not bound by the
-    handler, so it must not become a candidate either (it would only false-403)."""
+    handler, so it is not a candidate either."""
     assert (
         get_model_from_request(
             request_data={"model": "allowed-model"},
@@ -4020,8 +4019,7 @@ def test_get_model_from_request_query_model_lookup_is_exact_case():
     ],
 )
 def test_get_model_from_request_includes_deployment_path_model(template, path, path_model):
-    """The ``{model:path}`` segment is bound to the handler and routed from even when
-    the body carries a different model, so it is validated alongside the body."""
+    """The resolved ``{model:path}`` segment is returned alongside the body model."""
     assert get_model_from_request(
         request_data={"model": "allowed-model"},
         route=path,
@@ -4039,7 +4037,7 @@ def test_get_model_from_request_deployment_path_model_without_request_object():
 
 def test_get_model_from_request_deployment_route_ignores_query_model():
     """On a ``{model:path}`` route FastAPI binds the path value and ignores a
-    same-named query parameter, so auth validates exactly what will be routed."""
+    same-named query parameter, so only the path value is read."""
     assert (
         get_model_from_request(
             request_data={"model": "allowed-model"},
