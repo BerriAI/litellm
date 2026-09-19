@@ -159,7 +159,7 @@ describe("forecast classifier form", () => {
       const effectiveText = override ?? catalog.models[0].text;
       await waitFor(() => expect(screen.getByLabelText("Efficient solver profile")).toHaveValue(effectiveText));
       await user.click(screen.getByRole("combobox", { name: "Efficient solver profile preset" }));
-      await user.click(screen.getByRole("option", { name: "Custom", exact: true }));
+      await user.click(screen.getByRole("option", { name: "Custom" }));
       expect(screen.getByLabelText("Efficient solver profile")).not.toHaveAttribute("readonly");
       expect(screen.getByLabelText("Efficient solver profile")).toHaveValue(effectiveText);
       fireEvent.change(screen.getByLabelText("Efficient solver profile"), { target: { value: "Custom budget" } });
@@ -216,6 +216,81 @@ describe("forecast classifier form", () => {
       expect(
         JSON.parse(screen.getByRole("status", { name: "Saved configuration" }).textContent!).llm_v2_config,
       ).toEqual({ ...settings, efficient_profile: "Typed while loading" });
+    },
+  );
+
+  it.each([
+    ["efficient_profile", "Efficient solver profile"],
+    ["capable_profile", "Capable solver profile"],
+    ["harness", "Harness and budget"],
+  ] as const)(
+    "preserves the saved %s reference during a catalog outage until Custom text replaces it",
+    async (field, label) => {
+      const user = userEvent.setup();
+      vi.mocked(fetch).mockImplementation(async () => Response.json({ error: "unavailable" }, { status: 503 }));
+      renderWithProviders(<Form initialValue={presetInitial} />);
+      expect(await screen.findByText(/Profile presets could not be loaded/)).toBeInTheDocument();
+      const save = screen.getByRole("button", { name: "Save configuration" });
+      const output = screen.getByRole("status", { name: "Saved configuration" });
+      expect(save).toBeEnabled();
+      await user.click(save);
+      expect(JSON.parse(output.textContent!).llm_v2_config).toEqual(presetConfig);
+
+      await user.click(screen.getByRole("combobox", { name: `${label} preset` }));
+      await user.click(screen.getByRole("option", { name: "Custom" }));
+      expect(screen.getByLabelText(label)).toHaveValue("");
+      expect(screen.getByLabelText(label)).not.toHaveAttribute("readonly");
+      expect(screen.getByRole("combobox", { name: `${label} preset` })).toHaveValue("Custom");
+      expect(save).toBeEnabled();
+      await user.click(save);
+      expect(JSON.parse(output.textContent!).llm_v2_config).toEqual(presetConfig);
+
+      fireEvent.change(screen.getByLabelText(label), { target: { value: "   " } });
+      expect(save).toBeDisabled();
+      await user.click(screen.getByRole("button", { name: `Keep saved ${label.toLowerCase()} preset` }));
+      expect(screen.getByLabelText(label)).toHaveAttribute("readonly");
+      expect(save).toBeEnabled();
+      await user.click(save);
+      expect(JSON.parse(output.textContent!).llm_v2_config).toEqual(presetConfig);
+
+      await user.click(screen.getByRole("combobox", { name: `${label} preset` }));
+      await user.click(screen.getByRole("option", { name: "Custom" }));
+      const replacement = "Manually authored replacement";
+      fireEvent.change(screen.getByLabelText(label), { target: { value: replacement } });
+      expect(save).toBeEnabled();
+      await user.click(save);
+      const referenceKey = `${field}_preset` as const;
+      const { [referenceKey]: _reference, ...remaining } = presetConfig;
+      expect(JSON.parse(output.textContent!).llm_v2_config).toEqual({ ...remaining, [field]: replacement });
+    },
+  );
+
+  it.each([true, false])(
+    "keeps a reference selected as Custom while the catalog settles, success=%s",
+    async (success) => {
+      const user = userEvent.setup();
+      const response = Promise.withResolvers<Response>();
+      vi.mocked(fetch).mockReturnValue(response.promise);
+      renderWithProviders(<Form initialValue={presetInitial} />);
+      await user.click(screen.getByRole("combobox", { name: "Efficient solver profile preset" }));
+      await user.click(screen.getByRole("option", { name: "Custom" }));
+      await act(async () => response.resolve(success ? Response.json(catalog) : Response.json({}, { status: 503 })));
+      if (success) await screen.findAllByText(`Catalog version: ${catalog.version}`);
+      else await screen.findByText(/Profile presets could not be loaded/);
+      expect(screen.getByLabelText("Efficient solver profile")).toHaveValue(success ? catalog.models[0].text : "");
+      await user.click(screen.getByRole("button", { name: "Save configuration" }));
+      expect(
+        JSON.parse(screen.getByRole("status", { name: "Saved configuration" }).textContent!).llm_v2_config,
+      ).toEqual(presetConfig);
+      fireEvent.change(screen.getByLabelText("Efficient solver profile"), { target: { value: "Replacement" } });
+      await user.click(screen.getByRole("button", { name: "Save configuration" }));
+      const { efficient_profile_preset: _reference, ...remaining } = presetConfig;
+      expect(
+        JSON.parse(screen.getByRole("status", { name: "Saved configuration" }).textContent!).llm_v2_config,
+      ).toEqual({
+        ...remaining,
+        efficient_profile: "Replacement",
+      });
     },
   );
 
@@ -330,7 +405,7 @@ describe("forecast classifier form", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Complexity" }));
     fireEvent.click(screen.getByRole("radio", { name: new RegExp(`^${target}`) }));
     await user.click(screen.getByRole("combobox", { name: "Classifier Model" }));
-    await user.click(screen.getByRole("option", { name: "judge", exact: true }));
+    await user.click(screen.getByRole("option", { name: "judge" }));
     fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
     const output = screen.getByRole("status", { name: "Saved configuration" });
     expect(output).toHaveTextContent('"classification_rubric":"agentic"');
