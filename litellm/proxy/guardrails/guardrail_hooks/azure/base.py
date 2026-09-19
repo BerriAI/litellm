@@ -21,6 +21,13 @@ AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH: Final = 10000
 AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH: Final = 1000
 
 AZURE_CONTENT_SAFETY_DEFAULT_API_VERSION: Final = "2024-09-01"
+JAVELIN_API_VERSION_STORED_BY_OLDER_RELEASES: Final = "v1"
+
+
+def resolve_content_safety_api_version(configured: str | None) -> str:
+    if not configured or configured == JAVELIN_API_VERSION_STORED_BY_OLDER_RELEASES:
+        return AZURE_CONTENT_SAFETY_DEFAULT_API_VERSION
+    return configured
 
 
 class AzureGuardrailBase:
@@ -58,7 +65,7 @@ class AzureGuardrailBase:
         Returns:
             Parsed JSON response dict.
         """
-        api_version: Final = self.api_version or AZURE_CONTENT_SAFETY_DEFAULT_API_VERSION
+        api_version: Final = resolve_content_safety_api_version(self.api_version)
         url: Final = f"{self.api_base}/contentsafety/{endpoint_path}?api-version={api_version}"
         headers: Final = {
             "Ocp-Apim-Subscription-Key": self.api_key,
