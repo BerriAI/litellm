@@ -74,7 +74,7 @@ class _FakeSettlementTable:
         matched = self._matching(where)
         for row in matched:
             for column, value in data.items():
-                setattr(row, column, value)
+                setattr(row, column, getattr(value, "data", value) if column == "create_context" else value)
         return len(matched)
 
     def _matching(self, where) -> list:
@@ -184,11 +184,12 @@ async def test_unclaimed_skips_claimed_and_unreadable_rows():
 
 
 @pytest.mark.asyncio
-async def test_record_outcome_keeps_the_audit_trail_on_the_row():
+async def test_record_outcome_keeps_the_audit_trail_and_drops_the_stored_request_context():
     table = _FakeSettlementTable()
     store = PrismaBackgroundSettlementStore(table=table, claimed_by="replica-a:1")
     await store.register(_pending("interactions/bg-1"))
     assert await store.claim("interactions/bg-1")
+    assert table.rows["interactions/bg-1"].create_context
 
     await store.record_outcome("interactions/bg-1", "billed")
 
@@ -196,6 +197,7 @@ async def test_record_outcome_keeps_the_audit_trail_on_the_row():
     assert row.outcome == "billed"
     assert row.settled_at is not None
     assert row.claimed_at <= row.settled_at
+    assert row.create_context == {}
 
 
 @pytest.mark.asyncio

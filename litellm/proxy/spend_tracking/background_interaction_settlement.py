@@ -1,7 +1,7 @@
 import asyncio
 import os
 import socket
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Protocol
@@ -69,6 +69,7 @@ class _Claim(TypedDict):
 class _Outcome(TypedDict):
     settled_at: ReadOnly[datetime]
     outcome: ReadOnly[SettlementOutcome]
+    create_context: ReadOnly[object]
 
 
 class _SettlementTableActions(Protocol):
@@ -83,6 +84,12 @@ class _SettlementTableActions(Protocol):
 
 def _settlement_table(prisma_client: "PrismaClient") -> _SettlementTableActions:
     return BackgroundInteractionSettlementRepository(prisma_client).table
+
+
+def _json(data: Mapping[str, object]) -> object:
+    from prisma import Json  # noqa: PLC0415  # local import: prisma may be ungenerated at module load in some tools
+
+    return Json(data)
 
 
 def _pending_rows(rows: Sequence[_SettlementRow]) -> tuple[PendingBackgroundInteraction, ...]:
@@ -114,13 +121,11 @@ class PrismaBackgroundSettlementStore:
     claimed_by: str
 
     async def register(self, pending: PendingBackgroundInteraction) -> None:
-        from prisma import Json  # noqa: PLC0415  # local import: prisma may be ungenerated at module load in some tools
-
         await self.table.create(
             data=_NewSettlementRow(
                 interaction_id=pending.interaction_id,
                 custom_llm_provider=pending.custom_llm_provider,
-                create_context=Json(pending.create_context.model_dump(mode="json")),
+                create_context=_json(pending.create_context.model_dump(mode="json")),
                 created_at=pending.created_at,
             )
         )
@@ -144,7 +149,7 @@ class PrismaBackgroundSettlementStore:
 
     async def record_outcome(self, interaction_id: str, outcome: SettlementOutcome) -> None:
         await self.table.update_many(
-            data=_Outcome(settled_at=datetime.now(timezone.utc), outcome=outcome),
+            data=_Outcome(settled_at=datetime.now(timezone.utc), outcome=outcome, create_context=_json({})),
             where=_RowKey(interaction_id=interaction_id),
         )
 
