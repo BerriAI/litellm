@@ -2722,6 +2722,59 @@ def test_proxy_server_request_payload_excludes_secret_fields(mock_should_store):
     assert parsed["messages"] == [{"role": "user", "content": "hello"}]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redact", [False, True], ids=["stored", "redacted"])
+async def test_websocket_snapshot_spend_serialization_preserves_transport(
+    monkeypatch: pytest.MonkeyPatch, redact: bool
+) -> None:
+    from starlette.websockets import WebSocket
+
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
+
+    class AppTraversalTrap:
+        @property
+        def __dict__(self):
+            raise AssertionError("Spend logging must not traverse the WebSocket app graph")
+
+    send = AsyncMock()
+    websocket = WebSocket(
+        scope={"type": "websocket", "app": AppTraversalTrap()},
+        receive=AsyncMock(return_value={"type": "websocket.connect"}),
+        send=send,
+    )
+    await websocket.accept()
+    data = {
+        "model": "gpt-4o-realtime-preview",
+        "messages": [{"role": "user", "content": "<MASKED>"}],
+        "metadata": {"trace_id": "realtime-trace", "websocket": "user metadata"},
+        "websocket": websocket,
+        "proxy_server_request": {},
+    }
+    refresh_proxy_server_request_body_snapshot(data)
+
+    stored = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={},
+            litellm_params={"proxy_server_request": data["proxy_server_request"]},
+            kwargs={"standard_callback_dynamic_params": {"turn_off_message_logging": redact}},
+        )
+    )
+    assert "websocket" not in stored
+    assert stored["model"] == data["model"]
+    assert stored["metadata"] == data["metadata"]
+    if redact:
+        assert "<MASKED>" not in json.dumps(stored)
+    else:
+        assert stored["messages"] == [{"role": "user", "content": "<MASKED>"}]
+
+    assert data["messages"] == [{"role": "user", "content": "<MASKED>"}]
+    assert data["websocket"] is websocket
+    await data["websocket"].send_text("still connected")
+    send.assert_awaited_with({"type": "websocket.send", "text": "still connected"})
+
+
 # ---------------------------------------------------------------------------
 # LIT-2992: error_information sanitization for spend logs
 # ---------------------------------------------------------------------------
