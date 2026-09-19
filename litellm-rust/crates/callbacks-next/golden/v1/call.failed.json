@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "call_id": "call-123",
+  "call_type": "ocr",
+  "seq": 4,
+  "event": {
+    "type": "call.failed",
+    "timing": {"start_time": 10.0, "end_time": 11.0, "duration": 1.0},
+    "streamed": true,
+    "origin": "call",
+    "error": {"class": "builtins.ValueError", "message": "bad request", "status_code": 400}
+  }
+}

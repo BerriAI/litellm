@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "call_id": "call-123",
+  "call_type": "ocr",
+  "seq": 0,
+  "event": {
+    "type": "call.started",
+    "start_time": 10.0,
+    "asynchronous": true,
+    "metadata": {"team": "core"},
+    "metadata_dropped": ["broken"]
+  }
+}

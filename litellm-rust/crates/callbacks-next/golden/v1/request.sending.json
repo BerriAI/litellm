@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "call_id": "call-123",
+  "call_type": "ocr",
+  "seq": 1,
+  "event": {
+    "type": "request.sending",
+    "model": "model",
+    "custom_llm_provider": "provider",
+    "optional_params": {"temperature": 0.2},
+    "url": "https://provider.example/v1",
+    "headers": [["Authorization", "[REDACTED]"]],
+    "body": {"input": "hello"}
+  }
+}

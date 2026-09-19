@@ -1,0 +1,20 @@
+- Target invariants, not completion claims
+- Keep this crate the versioned callback contract and nothing else: the envelope, the wire patch, redaction, the subscriber snapshot and one `PythonLifecycle` that delivers them
+  - The driver, the routes and core see one `PythonLifecycle`; nothing outside this crate learns the envelope's shape
+  - `litellm/rust_bridge/callbacks_next.py` is the only Python module behind it; `python_contract.json` pins its functions on both sides, `golden/v1` pins the envelope on both sides
+- No Python object of the call reaches a callback; a callback influences a call only through a patch Rust validates
+  - `begin` returns the dict it was given and `after_success` the response it was given, by identity
+  - Every callback gets a freshly built envelope per event; never cache or share a converted one
+  - `envelope.rs`, `patch.rs` and `redact.rs` never import `pyo3`
+- Nothing secret crosses: `RequestFacts::new` is the only constructor and always redacts; `RequestContext::api_key` is never read
+  - A patch cannot change the URL and cannot set or remove a credential header
+- Schema v1 is additive-only; a rename, removal or retype is a new version served beside it
+  - Everything rejectable is rejected at `register`, never during a call
+- Observers cannot affect a call: ordinary exceptions are reported and swallowed at every event, awaited or not; an interceptor failure fails the call
+  - A cancellation (anything that is not a `PyException`) is returned at once, with no further dispatch and no report
+  - Exactly one terminal envelope, last; none after a cancellation
+- In a sync call no step suspends: handler selection happens once, at snapshot, from what registration recorded
+  - Every suspension is awaited inline in the caller's task; never `into_future`, never spawn
+- The subscriber snapshot is taken once per call before the driver starts; later registrations do not reach that call
+- `close` is idempotent; `traverse` visits every retained Python edge and calls no Python
+- This crate has none of `callbacks-legacy`'s obligations and must not grow them; shared behaviour belongs to `PythonLifecycle`, not to either adapter

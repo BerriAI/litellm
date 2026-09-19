@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "call_id": "call-123",
+  "call_type": "ocr",
+  "seq": 2,
+  "event": {
+    "type": "response.received",
+    "body": "raw response"
+  }
+}
