@@ -6087,6 +6087,107 @@ async def test_organization_budget_check_carries_org_state_on_the_token():
     assert token.org_budget_snapshot == OrgBudgetSnapshot(spend=12.5, max_budget=100.0)
 
 
+@pytest.mark.parametrize("warmed_by_auth_prefetch", [False, True])
+@pytest.mark.asyncio
+async def test_get_org_object_for_request_serves_last_known_org_through_db_outage(warmed_by_auth_prefetch):
+    """A JWT whose team sits in an org resolves the org on every request, and the org row
+    is cached for only DEFAULT_IN_MEMORY_TTL seconds while the team and user rows ride the
+    60s management-object TTL. Without a last-known copy, a DB outage a few seconds old
+    turned that traffic into 503s while the same request through a virtual key kept
+    succeeding on its cached team. The copy must exist whoever filled the short-lived entry:
+    this lookup's own DB read, or the virtual-key auth prefetch warming it for the same org."""
+    from litellm.proxy._types import LiteLLM_OrganizationTable
+    from litellm.proxy.auth.auth_checks import get_org_object_for_request
+
+    org_columns = {
+        "organization_id": "org-1",
+        "organization_alias": "platform-org",
+        "budget_id": "b1",
+        "created_by": "admin",
+        "updated_by": "admin",
+        "litellm_budget_table": {"budget_id": "b1", "max_budget": 50.0, "tpm_limit": 700, "rpm_limit": 7},
+    }
+    org_row = MagicMock()
+    org_row.model_dump = lambda: org_columns
+    db_outage = ConnectionRefusedError("db unavailable")
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_organizationtable.find_unique = AsyncMock(
+        side_effect=[db_outage] if warmed_by_auth_prefetch else [org_row, db_outage]
+    )
+    user_api_key_cache = UserApiKeyCache()
+    if warmed_by_auth_prefetch:
+        await user_api_key_cache.async_set_cache(
+            key="org_id:org-1:with_budget",
+            value=LiteLLM_OrganizationTable.model_validate(org_columns),
+            model_type=LiteLLM_OrganizationTable,
+        )
+
+    async def _lookup():
+        return await get_org_object_for_request(
+            org_id="org-1",
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    with patch("litellm.proxy.proxy_server.general_settings", {}):  # test-quality-ok: the outage fallback reads this module global; no dependency injection seam exists
+        warm = await _lookup()
+        assert warm is not None and warm.organization_alias == "platform-org"
+        await user_api_key_cache.async_delete_cache("org_id:org-1:with_budget")
+
+        during_outage = await _lookup()
+
+    assert prisma_client.db.litellm_organizationtable.find_unique.await_count == (1 if warmed_by_auth_prefetch else 2)
+    assert during_outage is not None
+    assert during_outage.organization_alias == "platform-org"
+    assert during_outage.litellm_budget_table is not None
+    assert during_outage.litellm_budget_table.rpm_limit == 7
+    assert during_outage.litellm_budget_table.max_budget == 50.0
+
+
+@pytest.mark.asyncio
+async def test_get_org_object_for_request_writes_the_last_known_org_only_when_absent():
+    """The last-known copy is written when this worker holds none, never per request:
+    with Redis attached, a write on every cached org hit would cost one SET per JWT request."""
+    from litellm.proxy._types import LiteLLM_OrganizationTable
+    from litellm.proxy.auth.auth_checks import get_org_object_for_request
+
+    class _WriteRecordingCache(UserApiKeyCache):
+        def __init__(self):
+            super().__init__()
+            self.written_keys = []
+
+        async def async_set_cache(self, key, value, local_only=False, **kwargs):
+            self.written_keys.append(key)
+            return await super().async_set_cache(key=key, value=value, local_only=local_only, **kwargs)
+
+    user_api_key_cache = _WriteRecordingCache()
+    await user_api_key_cache.async_set_cache(
+        key="org_id:org-1:with_budget",
+        value=LiteLLM_OrganizationTable(
+            organization_id="org-1",
+            organization_alias="platform-org",
+            budget_id="b1",
+            created_by="admin",
+            updated_by="admin",
+        ),
+        model_type=LiteLLM_OrganizationTable,
+    )
+
+    for _ in range(3):
+        org = await get_org_object_for_request(
+            org_id="org-1",
+            prisma_client=MagicMock(),
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+        assert org is not None and org.organization_alias == "platform-org"
+
+    assert user_api_key_cache.written_keys.count("org_id:org-1:with_budget:last_known") == 1
+
+
 @pytest.mark.parametrize(
     "max_budget, spend, expect_blocked",
     [
