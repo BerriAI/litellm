@@ -8779,6 +8779,104 @@ class TestAdvisorSubCallCooldown:
         assert "dep-1" not in self._cooled_down_ids(router)
 
 
+class TestBackgroundResponseCostPollCooldown:
+    def _router(self):
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4.1",
+                    "litellm_params": {"model": "openai/gpt-4.1"},
+                    "model_info": {"id": "dep-1"},
+                }
+            ],
+        )
+
+    def _cooled_down_ids(self, router):
+        active = router.cooldown_cache.get_active_cooldowns(model_ids=["dep-1"], parent_otel_span=None)
+        return [entry[0] for entry in active]
+
+    def _not_found(self):
+        return litellm.NotFoundError(
+            message="Response with id 'resp_gone' not found.", llm_provider="openai", model="gpt-4.1"
+        )
+
+    def _deployment_callback_on_failure(self, router, kwargs):
+        import asyncio
+        from datetime import datetime
+
+        async def callback():
+            now = datetime.now()
+            return router.deployment_callback_on_failure(kwargs, None, now, now)
+
+        return asyncio.run(callback())
+
+    def test_untagged_not_found_cools_down_deployment(self):
+        router = self._router()
+        assert (
+            self._deployment_callback_on_failure(
+                router,
+                {
+                    "exception": self._not_found(),
+                    "litellm_params": {"model_info": {"id": "dep-1"}, "metadata": {}},
+                },
+            )
+            is True
+        )
+        assert "dep-1" in self._cooled_down_ids(router)
+
+    def test_cost_poll_not_found_does_not_cool_down_deployment(self):
+        from datetime import datetime
+
+        from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+            get_deployment_failures_for_current_minute,
+        )
+        from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+
+        router = self._router()
+        now = datetime.now()
+        assert (
+            router.deployment_callback_on_failure(
+                {
+                    "exception": self._not_found(),
+                    "litellm_params": {
+                        "model_info": {"id": "dep-1"},
+                        "litellm_metadata": {
+                            INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+                        },
+                    },
+                },
+                None,
+                now,
+                now,
+            )
+            is False
+        )
+        assert self._cooled_down_ids(router) == []
+        value = get_deployment_failures_for_current_minute(litellm_router_instance=router, deployment_id="dep-1")
+        assert not value
+
+    def test_other_internal_origin_not_found_still_cools_down_deployment(self):
+        from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+        from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+
+        router = self._router()
+        assert (
+            self._deployment_callback_on_failure(
+                router,
+                {
+                    "exception": self._not_found(),
+                    "litellm_params": {
+                        "model_info": {"id": "dep-1"},
+                        "litellm_metadata": {INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN},
+                    },
+                },
+            )
+            is True
+        )
+        assert "dep-1" in self._cooled_down_ids(router)
+
+
 class TestCallerTimeoutCooldown:
     """A timeout the caller set (the proxy's `timeout` body field or x-litellm-timeout
     header) comes back as a 408 whatever the deployment's health, so it must neither
