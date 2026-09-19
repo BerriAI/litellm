@@ -1,9 +1,3 @@
-"""
-Tests for ChatGPT subscription chat transformation
-
-Source: litellm/llms/chatgpt/chat/transformation.py
-"""
-
 import json
 import time
 

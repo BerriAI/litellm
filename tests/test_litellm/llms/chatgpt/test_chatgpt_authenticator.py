@@ -107,6 +107,14 @@ class TestChatGPTMultiAccountAuthenticator:
 
         assert authenticator.auth_file == str(tmp_path / "env-dir" / "env.json")
 
+    def test_bare_filename_auth_file_resolves_against_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+
+        authenticator = Authenticator(auth_file="auth.json")
+
+        assert authenticator.auth_file == str(tmp_path / "auth.json")
+        assert authenticator.token_dir == str(tmp_path)
+
     def test_two_auth_files_are_isolated(self, tmp_path):
         file_a = tmp_path / "account-a.json"
         file_b = tmp_path / "account-b.json"

@@ -68,7 +68,7 @@ class Authenticator:
             os.getenv("CHATGPT_TOKEN_DIR", os.path.expanduser("~/.config/litellm/chatgpt")),
             os.getenv("CHATGPT_AUTH_FILE", "auth.json"),
         )
-        self.auth_file = os.path.expanduser(auth_file or default_auth_file)
+        self.auth_file = os.path.abspath(os.path.expanduser(auth_file or default_auth_file))
         self.token_dir = os.path.dirname(self.auth_file)
         self._ensure_token_dir()
 
