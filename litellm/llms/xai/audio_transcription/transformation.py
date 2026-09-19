@@ -48,7 +48,9 @@ _OBJECT_TUPLE: Final = TypeAdapter(tuple[object, ...])
 _STRING_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
 
 
-def _serialize_form_value(value: object) -> str | list[str]:  # mutable-ok: httpx multipart data takes list values for repeated form fields
+def _serialize_form_value(
+    value: object,
+) -> str | list[str]:  # mutable-ok: httpx multipart data takes list values for repeated form fields
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (list, tuple)):
@@ -61,7 +63,9 @@ class XAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def custom_llm_provider(self) -> str:
         return litellm.LlmProviders.XAI.value
 
-    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:  # mutable-ok: base class signature returns list
+    def get_supported_openai_params(
+        self, model: str
+    ) -> list[OpenAIAudioTranscriptionOptionalParams]:  # mutable-ok: base class signature returns list
         return ["language"]
 
     def map_openai_params(
@@ -78,7 +82,10 @@ class XAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         }
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict[str, object] | Headers  # mutable-ok: base class signature takes dict
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | Headers,  # mutable-ok: base class signature takes dict
     ) -> BaseLLMException:
         return XAIAudioTranscriptionError(message=error_message, status_code=status_code, headers=headers)
 
@@ -93,16 +100,14 @@ class XAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         extra_body: Final = optional_params.get("extra_body")
         flat_params: Final[Mapping[str, object]] = {
-            **(
-                _STRING_OBJECT_DICT.validate_python(extra_body)
-                if isinstance(extra_body, Mapping)
-                else {}
-            ),
+            **(_STRING_OBJECT_DICT.validate_python(extra_body) if isinstance(extra_body, Mapping) else {}),
             **{k: v for k, v in optional_params.items() if k != "extra_body"},
         }
 
         excluded_params: Final = frozenset({"model", "OPENAI_TRANSCRIPTION_PARAMS", "extra_body"})
-        form_data: Final[dict[str, str | list[str]]] = {  # mutable-ok: AudioTranscriptionRequestData.data requires dict and httpx needs list values
+        form_data: Final[
+            dict[str, str | list[str]]
+        ] = {  # mutable-ok: AudioTranscriptionRequestData.data requires dict and httpx needs list values
             "model": model,
             **{
                 k: _serialize_form_value(v)
@@ -152,7 +157,9 @@ class XAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 for word in payload.words
             ]
 
-        hidden_params: Final[dict[str, object]] = dict(payload.model_dump(mode="json"))  # mutable-ok: TranscriptionResponse._hidden_params is a dict
+        hidden_params: Final[dict[str, object]] = dict(
+            payload.model_dump(mode="json")
+        )  # mutable-ok: TranscriptionResponse._hidden_params is a dict
         if payload.duration is not None:
             hidden_params["audio_transcription_duration"] = payload.duration
         response._hidden_params = hidden_params  # pyright: ignore[reportPrivateUsage]  # TranscriptionResponse exposes no public hidden-params setter
