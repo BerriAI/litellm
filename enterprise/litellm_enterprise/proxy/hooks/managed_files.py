@@ -20,6 +20,7 @@ from typing import (
 )
 from uuid import NAMESPACE_URL, uuid5
 
+import httpx
 from fastapi import HTTPException
 from pydantic import ValidationError
 
@@ -77,6 +78,7 @@ from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccess
     CreateFileRequest,
     FileListPage,
     FileObject,
+    HttpxBinaryResponseContent,
     OpenAIFileObject,
     ResponsesAPIResponse,
 )
@@ -87,10 +89,6 @@ from litellm.types.utils import (
     LLMResponseTypes,
     SpecialEnums,
 )
-
-if TYPE_CHECKING:
-    from litellm.types.llms.openai import HttpxBinaryResponseContent
-
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -1867,10 +1865,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         litellm_parent_otel_span: Optional[Span],
         llm_router: Router,
         **data: Dict,
-    ) -> "HttpxBinaryResponseContent":
+    ) -> HttpxBinaryResponseContent:
         """
         Get the content of a file from first model that has it
         """
+        managed_file: Final = await self.get_unified_file_id(file_id, litellm_parent_otel_span)
+        if managed_file is not None and managed_file.storage_backend and managed_file.storage_url:
+            return await self._storage_backend_content(managed_file.storage_backend, managed_file.storage_url)
+
         model_file_id_mapping = data.pop("model_file_id_mapping", None)
         model_file_id_mapping = model_file_id_mapping or await self.get_model_file_id_mapping(
             [file_id], litellm_parent_otel_span
@@ -1899,6 +1901,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
         else:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
+
+    async def _storage_backend_content(self, storage_backend_name: str, storage_url: str) -> HttpxBinaryResponseContent:
+        storage_backend: Final = get_storage_backend(storage_backend_name, prisma_client=self.prisma_client)
+        content: Final = await storage_backend.download_file(storage_url)
+        return HttpxBinaryResponseContent(response=httpx.Response(status_code=httpx.codes.OK, content=content))
 
     async def _convert_storage_files_to_base64(
         self,
