@@ -3,8 +3,8 @@
 //! `Logging` exists, and then the v1 contract whenever anything is subscribed to it.
 //! Both are a [`PythonLifecycle`]; that trait is the whole boundary the driver knows.
 
-use litellm_legacy_callbacks::{LegacyPythonLifecycle, LegacyPythonSurface};
-pub(crate) use litellm_legacy_callbacks::{PassThroughStream, PublicCall};
+use litellm_callbacks_legacy::{LegacyPythonLifecycle, LegacyPythonSurface};
+pub(crate) use litellm_callbacks_legacy::{PassThroughStream, PublicCall};
 use litellm_callbacks_v1_python::{V1PythonLifecycle, V1PythonSurface};
 use litellm_host::{machine::Machine, route::Route};
 use litellm_host_python::{LifecycleChain, PythonLifecycle, RouteHost, run_call};

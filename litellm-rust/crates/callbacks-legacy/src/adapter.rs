@@ -21,7 +21,7 @@ use crate::{
     before_deployment_call,
     deferred::{PendingLogging, PendingSuccess},
     finalize, is_internal_call, prepare,
-    python::Streaming,
+    legacy_python::Streaming,
     setup,
 };
 
