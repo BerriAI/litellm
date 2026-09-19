@@ -1311,25 +1311,76 @@ def test_create_s3_batch_logging_element_flat_key_for_arn_response_id():
 
 
 # --------------------------------------------------------------
-# object keys bounded to S3's 1024 UTF-8 byte limit
+# object keys bounded to S3 and filesystem-compatible limits
 # --------------------------------------------------------------
 def _oversized_response_id() -> str:
     return "resp_" + "A" * 1100
 
 
-def test_s3_object_key_at_the_byte_limit_is_left_alone():
-    """A key that still fits is left byte-identical."""
-    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+def test_s3_object_key_at_the_segment_byte_limit_is_left_alone():
+    """A final key segment that still fits is left byte-identical."""
     from litellm.integrations.s3 import get_s3_object_key
 
     start_time = datetime(2026, 8, 24, 6, 18, 41, 948021)
-    fixed_len = len("input/2026-08-24/.json")
-    file_name = "x" * (MAX_S3_OBJECT_KEY_BYTES - fixed_len)
+    file_name = "x" * 250
 
     key = get_s3_object_key(s3_path="input", prefix="", start_time=start_time, s3_file_name=file_name)
 
     assert key == f"input/2026-08-24/{file_name}.json"
-    assert len(key.encode("utf-8")) == MAX_S3_OBJECT_KEY_BYTES
+    assert len(key.rsplit("/", 1)[1].encode("utf-8")) == 255
+
+
+def test_s3_object_key_just_over_the_file_name_limit_is_bounded():
+    """A 256-byte final key segment is shortened below the local filesystem limit."""
+    from litellm.integrations.s3 import get_s3_object_key
+
+    key = get_s3_object_key(
+        s3_path="input",
+        prefix="",
+        start_time=datetime(2026, 8, 24, 6, 18, 41, 948021),
+        s3_file_name="x" * 251,
+    )
+
+    assert len(key.rsplit("/", 1)[1].encode("utf-8")) <= 255
+
+
+def test_s3_object_key_bounds_the_file_segment_when_the_full_key_fits():
+    """A locally stored object name is bounded even when its full S3 key is below 1024 bytes."""
+    import hashlib
+
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+    from litellm.integrations.s3 import get_s3_object_key
+
+    file_name = "time-01-14-19-015434_resp_" + "A" * 300
+
+    key = get_s3_object_key(
+        s3_path="requests",
+        prefix="",
+        start_time=datetime(2026, 9, 12, 1, 14, 19, 15434),
+        s3_file_name=file_name,
+    )
+
+    file_segment = key.rsplit("/", 1)[1]
+    assert len(key.encode("utf-8")) < MAX_S3_OBJECT_KEY_BYTES
+    assert len(file_segment.encode("utf-8")) <= 255
+    assert file_segment.startswith("time-01-14-19-015434_resp_")
+    assert file_segment.endswith(f"_{hashlib.sha256(file_name.encode('utf-8')).hexdigest()}.json")
+
+
+def test_s3_object_key_file_segment_limit_counts_utf8_bytes():
+    """The final key segment is bounded by encoded bytes without splitting a character."""
+    from litellm.integrations.s3 import get_s3_object_key
+
+    key = get_s3_object_key(
+        s3_path="requests",
+        prefix="",
+        start_time=datetime(2026, 9, 12, 1, 14, 19, 15434),
+        s3_file_name="time-01-14-19-015434_resp_" + "日" * 100,
+    )
+
+    file_segment = key.rsplit("/", 1)[1]
+    assert len(file_segment.encode("utf-8")) <= 255
+    assert "\ufffd" not in file_segment
 
 
 def test_s3_object_key_is_bounded_for_oversized_response_id():
