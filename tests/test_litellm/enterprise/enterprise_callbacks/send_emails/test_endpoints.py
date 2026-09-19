@@ -291,7 +291,7 @@ async def test_save_email_settings_refuses_a_config_owned_email_settings():
     client = _prisma_recording_upserts(upserts)
     proxy_config = _proxy_config_owning({"email_settings": {EmailEvent.new_user_invitation.value: True}})
 
-    with mock.patch("litellm.proxy.proxy_server.proxy_config", proxy_config):
+    with mock.patch("litellm.proxy.proxy_server.proxy_config", proxy_config):  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
         with pytest.raises(HTTPException) as refused:
             await _save_email_settings(client, {EmailEvent.new_user_invitation.value: False})
 
@@ -309,8 +309,8 @@ async def test_update_event_settings_surfaces_the_config_owned_refusal(mock_user
         settings=[EmailEventSettings(event=EmailEvent.virtual_key_created, enabled=True)]
     )
 
-    with mock.patch("litellm.proxy.proxy_server.prisma_client", client):
-        with mock.patch("litellm.proxy.proxy_server.proxy_config", proxy_config):
+    with mock.patch("litellm.proxy.proxy_server.prisma_client", client):  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+        with mock.patch("litellm.proxy.proxy_server.proxy_config", proxy_config):  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
             with pytest.raises(HTTPException) as refused:
                 await update_event_settings(request=request, user_api_key_dict=mock_user_api_key_auth)
 
@@ -325,7 +325,7 @@ async def test_save_email_settings_still_writes_when_the_config_file_is_silent()
     client = _prisma_recording_upserts(upserts)
     proxy_config = _proxy_config_owning({})
 
-    with mock.patch("litellm.proxy.proxy_server.proxy_config", proxy_config):
+    with mock.patch("litellm.proxy.proxy_server.proxy_config", proxy_config):  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
         await _save_email_settings(client, {EmailEvent.new_user_invitation.value: False})
 
     assert len(upserts) == 1
