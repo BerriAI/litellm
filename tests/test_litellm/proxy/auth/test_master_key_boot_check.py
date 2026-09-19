@@ -9,6 +9,7 @@ import pytest
 from litellm.proxy.auth.master_key_boot_check import (
     GENERATE_MASTER_KEY_COMMAND,
     MASTER_KEY_ENV_VAR,
+    PRINT_NEW_MASTER_KEY_COMMAND,
     ROTATION_DOCS_URL,
     UNSAFE_PROXY_OVERRIDE_ENV_VAR,
     UNSAFE_PROXY_OVERRIDE_SETTING,
@@ -172,12 +173,23 @@ def test_unset_key_refusal_says_nothing_supplied_one():
     assert "Neither general_settings.master_key nor" in text
 
 
-def test_rotation_warning_appears_only_when_needed():
+def test_rotation_guide_appears_only_when_needed():
     with_rotation = render_refusal(_refusal(stored_credentials_need_rotation=True))
     without_rotation = render_refusal(_refusal(stored_credentials_need_rotation=False))
 
     assert ROTATION_DOCS_URL in with_rotation
     assert ROTATION_DOCS_URL not in without_rotation
+
+
+@pytest.mark.parametrize("source", [EnvironmentSource(), ConfigFileSource(config_file_path="/app/config.yaml")])
+def test_refusal_never_tells_a_user_who_must_rotate_to_save_the_new_key_first(
+    source: ConfigFileSource | EnvironmentSource,
+):
+    text = render_refusal(_refusal(source=source, stored_credentials_need_rotation=True))
+
+    assert PRINT_NEW_MASTER_KEY_COMMAND in text
+    assert ".env" not in text
+    assert "os.environ/" not in text
 
 
 @pytest.mark.parametrize("stored_credentials_need_rotation", [True, False])
@@ -200,6 +212,17 @@ def test_printed_command_saves_a_key_the_boot_check_accepts(tmp_path: Path):
     assert match is not None
     assert completed.stdout == saved
     assert _verdict(match.group(1)) == SafeMasterKey()
+
+
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="the printed command shells out to openssl")
+def test_rotation_command_prints_a_key_the_boot_check_accepts_and_saves_nothing(tmp_path: Path):
+    completed = subprocess.run(
+        ["bash", "-c", PRINT_NEW_MASTER_KEY_COMMAND], cwd=tmp_path, capture_output=True, text=True, check=True
+    )
+
+    assert re.fullmatch(r"sk-[0-9a-f]{64}\n", completed.stdout) is not None
+    assert _verdict(completed.stdout.strip()) == SafeMasterKey()
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_refusal_announces_the_fix_and_aborts_the_boot():

@@ -17,7 +17,9 @@ MASTER_KEY_ENV_VAR: Final = "LITELLM_MASTER_KEY"
 SALT_KEY_ENV_VAR: Final = "LITELLM_SALT_KEY"
 PUBLICLY_KNOWN_MASTER_KEYS: Final = frozenset({"sk-1234"})
 ROTATION_DOCS_URL: Final = "https://docs.litellm.ai/docs/proxy/master_key_rotations#proxy-refuses-to-start"
-GENERATE_MASTER_KEY_COMMAND: Final = f'echo "{MASTER_KEY_ENV_VAR}=sk-$(openssl rand -hex 32)" | tee -a .env'
+_NEW_MASTER_KEY: Final = "sk-$(openssl rand -hex 32)"
+GENERATE_MASTER_KEY_COMMAND: Final = f'echo "{MASTER_KEY_ENV_VAR}={_NEW_MASTER_KEY}" | tee -a .env'
+PRINT_NEW_MASTER_KEY_COMMAND: Final = f'echo "{_NEW_MASTER_KEY}"'
 
 
 class UnsafeMasterKeyReason(Enum):
@@ -129,8 +131,7 @@ def render_refusal(refusal: UnsafeMasterKeyRefused) -> str:
     return "\n\n".join(
         (
             f"LiteLLM proxy refused to start: {_REFUSAL_HEADLINE[refusal.reason]}\n{_source_line(refusal)}",
-            _fix_steps(refusal.source),
-            *((_ROTATION_WARNING,) if refusal.stored_credentials_need_rotation else ()),
+            _ROTATE_INSTEAD_OF_REPLACING if refusal.stored_credentials_need_rotation else _fix_steps(refusal.source),
             _OVERRIDE_HINT,
         )
     )
@@ -161,9 +162,12 @@ _SAVE_KEY_STEP: Final = (
     f"   {MASTER_KEY_ENV_VAR} environment variable instead."
 )
 
-_ROTATION_WARNING: Final = (
-    f"Credentials stored in your database are encrypted with the current master key because {SALT_KEY_ENV_VAR}\n"
-    f"is not set. Rotate the key before changing it, or they become undecryptable:\n{ROTATION_DOCS_URL}"
+_ROTATE_INSTEAD_OF_REPLACING: Final = (
+    f"Credentials stored in your database are encrypted with this master key because {SALT_KEY_ENV_VAR} is not\n"
+    "set, so replacing the key makes them undecryptable. Rotate it by following this guide, which re-encrypts them:\n"
+    f"     {ROTATION_DOCS_URL}\n"
+    "Generate the new key for it with (save it only once the guide says to):\n"
+    f"     {PRINT_NEW_MASTER_KEY_COMMAND}"
 )
 
 _OVERRIDE_HINT: Final = (
