@@ -37,7 +37,7 @@ fn run_ocr(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    let config = http::call_config(py, &kwargs)?;
+    let config = http::call_config(py, &kwargs, asynchronous)?;
     let client = OcrClient::new(http::pool(), &config, VERTEX_AUTH.clone())
         .map_err(|error| RustBridgeDeclined::new_err(error.to_string()))?;
     run_legacy_call(

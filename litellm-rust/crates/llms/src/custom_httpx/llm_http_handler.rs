@@ -42,7 +42,7 @@ impl OcrClient {
         pool: &HttpClientPool,
         config: &HttpClientConfig,
         vertex_auth: VertexAuth,
-    ) -> Result<Self, transport::Error> {
+    ) -> Result<Self, litellm_http::Error> {
         Ok(Self {
             provider_http: pool.client(config, ClientVariant::Provider)?,
             polling_http: pool.client(config, ClientVariant::NoRedirect)?,

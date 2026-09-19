@@ -1,33 +1,44 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
+    time::{Duration, Instant},
 };
 
 use reqwest::dns::Resolve;
 
 use crate::{config::HttpClientConfig, error::Error};
 
-/// The client shapes routes need; each is the shared base plus one policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ClientVariant {
     Provider,
     NoRedirect,
-    /// Media downloads: no redirects (the fetcher validates each hop), never a proxy, and the
-    /// pool's media resolver.
     Media,
 }
 
-/// Counterpart of `get_async_httpx_client`: one `reqwest::Client` per resolved configuration
-/// and variant, built on first use and shared afterwards.
+const CLIENT_TTL: Duration = Duration::from_secs(3600);
+
+struct PooledClient {
+    client: reqwest::Client,
+    built_at: Instant,
+}
+
+type Clients = HashMap<(HttpClientConfig, ClientVariant), PooledClient>;
+
 pub struct HttpClientPool {
     media_resolver: Arc<dyn Resolve>,
-    clients: Mutex<HashMap<(HttpClientConfig, ClientVariant), reqwest::Client>>,
+    ttl: Duration,
+    clients: Mutex<Clients>,
 }
 
 impl HttpClientPool {
     pub fn new(media_resolver: Arc<dyn Resolve>) -> Self {
+        Self::with_ttl(media_resolver, CLIENT_TTL)
+    }
+
+    pub fn with_ttl(media_resolver: Arc<dyn Resolve>, ttl: Duration) -> Self {
         Self {
             media_resolver,
+            ttl,
             clients: Mutex::default(),
         }
     }
@@ -37,15 +48,31 @@ impl HttpClientPool {
         config: &HttpClientConfig,
         variant: ClientVariant,
     ) -> Result<reqwest::Client, Error> {
-        let key = (config.clone(), variant);
-        if let Some(client) = self.lock().get(&key) {
-            return Ok(client.clone());
+        let effective = match variant {
+            ClientVariant::Media => HttpClientConfig {
+                client_certificate: None,
+                ..config.clone()
+            },
+            ClientVariant::Provider | ClientVariant::NoRedirect => config.clone(),
+        };
+        let key = (effective, variant);
+        if let Some(pooled) = self.lock().get(&key)
+            && pooled.built_at.elapsed() < self.ttl
+        {
+            return Ok(pooled.client.clone());
         }
-        let client = self.apply(variant, config.client_builder()?).build()?;
-        Ok(self.lock().entry(key).or_insert(client).clone())
+        let client = self.apply(variant, key.0.client_builder()?).build()?;
+        self.lock().insert(
+            key,
+            PooledClient {
+                client: client.clone(),
+                built_at: Instant::now(),
+            },
+        );
+        Ok(client)
     }
 
-    fn lock(&self) -> MutexGuard<'_, HashMap<(HttpClientConfig, ClientVariant), reqwest::Client>> {
+    fn lock(&self) -> MutexGuard<'_, Clients> {
         self.clients.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -102,8 +129,6 @@ mod tests {
         }
     }
 
-    /// Answers every request on every connection with `status_line` and counts connections,
-    /// so a reused client shows up as a reused keep-alive connection.
     async fn serve(
         status_line: &'static str,
     ) -> (SocketAddr, Arc<AtomicUsize>, Arc<Mutex<Vec<String>>>) {
@@ -166,6 +191,33 @@ mod tests {
         assert_eq!(connections.load(Ordering::SeqCst), 2);
         get(&pool, &config("b"), ClientVariant::Provider, &url).await;
         assert_eq!(connections.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn expired_clients_are_rebuilt() {
+        let (address, connections, _) = serve("HTTP/1.1 204 No Content").await;
+        let url = format!("http://{address}");
+        let pool = HttpClientPool::with_ttl(
+            Arc::new(FixedResolver(([192, 0, 2, 1], 80).into())),
+            Duration::ZERO,
+        );
+        get(&pool, &config("a"), ClientVariant::Provider, &url).await;
+        get(&pool, &config("a"), ClientVariant::Provider, &url).await;
+        assert_eq!(connections.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn media_variant_never_loads_the_client_certificate() {
+        let pool = pool();
+        let with_identity = HttpClientConfig {
+            client_certificate: Some(std::env::temp_dir().join("litellm-http-absent-client.pem")),
+            ..config("a")
+        };
+        assert!(
+            pool.client(&with_identity, ClientVariant::Provider)
+                .is_err()
+        );
+        assert!(pool.client(&with_identity, ClientVariant::Media).is_ok());
     }
 
     #[test]

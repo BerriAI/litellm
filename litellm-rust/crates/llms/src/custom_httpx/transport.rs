@@ -26,12 +26,6 @@ impl From<reqwest::Error> for Error {
     }
 }
 
-impl From<litellm_http::Error> for Error {
-    fn from(error: litellm_http::Error) -> Self {
-        Self::Connect(error.to_string())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #[tokio::test]

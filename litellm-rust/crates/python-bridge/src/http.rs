@@ -1,5 +1,5 @@
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, LazyLock},
 };
 
@@ -12,25 +12,44 @@ use crate::{errors::RustBridgeDeclined, python_settings::PythonSettings};
 static POOL: LazyLock<HttpClientPool> =
     LazyLock::new(|| HttpClientPool::new(Arc::new(PublicDnsResolver)));
 
-/// Keyword arguments that carry a live Python HTTP client or session. They cannot cross into
-/// Rust, so a call that supplies one stays on the Python path.
 const LIVE_CLIENT_ARGUMENTS: [&str; 3] = ["client", "shared_session", "aclient_session"];
 
 pub(crate) fn pool() -> &'static HttpClientPool {
     &POOL
 }
 
-/// The client configuration for one call: the `litellm.*` HTTP settings with the environment
-/// overlaid, the same way `http_handler.py` combines them.
 pub(crate) fn call_config(
     py: Python<'_>,
     kwargs: &Bound<'_, PyDict>,
+    asynchronous: bool,
 ) -> PyResult<HttpClientConfig> {
     decline_live_clients(kwargs)?;
-    let settings = settings(&PythonSettings::Http.read(py)?)?
+    let configured = settings(&PythonSettings::Http.read(py)?)?
         .with_environment(&|name| std::env::var(name).ok());
+    let settings = for_call(configured, call_ssl_verify(kwargs)?, asynchronous)
+        .without_missing_files(&|path: &Path| path.exists());
     HttpClientConfig::resolve(&settings)
         .map_err(|error| RustBridgeDeclined::new_err(error.to_string()))
+}
+
+fn call_ssl_verify(kwargs: &Bound<'_, PyDict>) -> PyResult<Option<SslVerify>> {
+    kwargs
+        .get_item("ssl_verify")?
+        .filter(|value| !value.is_none())
+        .map(|value| ssl_verify(&value, "the ssl_verify argument"))
+        .transpose()
+}
+
+fn for_call(
+    configured: HttpSettings,
+    call_ssl_verify: Option<SslVerify>,
+    asynchronous: bool,
+) -> HttpSettings {
+    HttpSettings {
+        ssl_verify: call_ssl_verify.or(configured.ssl_verify),
+        httpx_transport: configured.httpx_transport || !asynchronous,
+        ..configured
+    }
 }
 
 pub(crate) fn decline_live_clients(kwargs: &Bound<'_, PyDict>) -> PyResult<()> {
@@ -53,25 +72,31 @@ struct PythonHttpSettings<'py> {
     force_ipv4: bool,
     http2: bool,
     aiohttp_trust_env: bool,
+    disable_aiohttp_transport: bool,
     user_agent: String,
 }
 
 fn settings(value: &Bound<'_, PyAny>) -> PyResult<HttpSettings> {
-    let python: PythonHttpSettings = value.extract()?;
+    let python: PythonHttpSettings = value.extract().map_err(|error: PyErr| {
+        RustBridgeDeclined::new_err(format!(
+            "litellm HTTP settings cannot be used by the Rust route: {error}"
+        ))
+    })?;
     Ok(HttpSettings {
-        ssl_verify: Some(ssl_verify(&python.ssl_verify)?),
+        ssl_verify: Some(ssl_verify(&python.ssl_verify, "litellm.ssl_verify")?),
         ssl_certificate: python.ssl_certificate.map(PathBuf::from),
         ssl_security_level: python.ssl_security_level,
         ssl_ecdh_curve: python.ssl_ecdh_curve,
         force_ipv4: python.force_ipv4,
         http2: python.http2,
+        httpx_transport: python.disable_aiohttp_transport,
         user_agent: Some(python.user_agent),
         trust_proxy_env: python.aiohttp_trust_env,
         ..HttpSettings::default()
     })
 }
 
-fn ssl_verify(value: &Bound<'_, PyAny>) -> PyResult<SslVerify> {
+fn ssl_verify(value: &Bound<'_, PyAny>, source: &str) -> PyResult<SslVerify> {
     if let Ok(enabled) = value.extract::<bool>() {
         return Ok(if enabled {
             SslVerify::Enabled
@@ -82,9 +107,9 @@ fn ssl_verify(value: &Bound<'_, PyAny>) -> PyResult<SslVerify> {
     if let Ok(path) = value.extract::<String>() {
         return Ok(SslVerify::parse(&path));
     }
-    Err(RustBridgeDeclined::new_err(
-        "litellm.ssl_verify is a live Python object and cannot be used by the Rust route",
-    ))
+    Err(RustBridgeDeclined::new_err(format!(
+        "{source} is a live Python object and cannot be used by the Rust route"
+    )))
 }
 
 #[cfg(test)]
@@ -95,8 +120,6 @@ mod tests {
     use super::*;
     use crate::python_settings::CONTRACT;
 
-    /// A stand-in for `http_settings()` carrying exactly the fields the contract declares, so a
-    /// field Rust reads but Python does not return fails here.
     fn python_settings<'py>(py: Python<'py>, overrides: &str) -> Bound<'py, PyAny> {
         let source = format!(
             "
@@ -110,6 +133,7 @@ defaults = dict(
     force_ipv4=False,
     http2=False,
     aiohttp_trust_env=False,
+    disable_aiohttp_transport=False,
     user_agent='litellm/test',
 )
 defaults.update(dict({overrides}))
@@ -153,6 +177,7 @@ ssl_ecdh_curve='X25519',
 force_ipv4=True,
 http2=True,
 aiohttp_trust_env=True,
+disable_aiohttp_transport=True,
 user_agent='litellm/9.9.9',
 ",
             ))
@@ -166,6 +191,7 @@ user_agent='litellm/9.9.9',
                     ssl_ecdh_curve: Some("X25519".into()),
                     force_ipv4: true,
                     http2: true,
+                    httpx_transport: true,
                     user_agent: Some("litellm/9.9.9".into()),
                     trust_proxy_env: true,
                     ..HttpSettings::default()
@@ -212,6 +238,70 @@ user_agent='litellm/9.9.9',
             assert!(error.is_instance_of::<RustBridgeDeclined>(py));
             assert!(error.value(py).to_string().contains("litellm.ssl_verify"));
         });
+    }
+
+    #[test]
+    fn mistyped_python_settings_decline_instead_of_raising() {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = settings(&python_settings(py, "force_ipv4='yes'")).unwrap_err();
+            assert!(error.is_instance_of::<RustBridgeDeclined>(py));
+        });
+    }
+
+    #[test]
+    fn call_ssl_verify_beats_the_configured_and_environment_value() {
+        Python::initialize();
+        Python::attach(|py| {
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("ssl_verify", false).unwrap();
+            let configured = HttpSettings {
+                ssl_verify: Some(SslVerify::Enabled),
+                ..HttpSettings::default()
+            };
+            let settings = for_call(configured, call_ssl_verify(&kwargs).unwrap(), true);
+            assert_eq!(settings.ssl_verify, Some(SslVerify::Disabled));
+        });
+    }
+
+    #[test]
+    fn absent_call_ssl_verify_keeps_the_configured_value() {
+        Python::initialize();
+        Python::attach(|py| {
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("ssl_verify", py.None()).unwrap();
+            let configured = HttpSettings {
+                ssl_verify: Some(SslVerify::Disabled),
+                ..HttpSettings::default()
+            };
+            let settings = for_call(configured.clone(), call_ssl_verify(&kwargs).unwrap(), true);
+            assert_eq!(settings, configured);
+        });
+    }
+
+    #[test]
+    fn live_ssl_context_argument_declines() {
+        Python::initialize();
+        Python::attach(|py| {
+            let kwargs = PyDict::new(py);
+            kwargs
+                .set_item("ssl_verify", py.eval(c"object()", None, None).unwrap())
+                .unwrap();
+            let error = call_ssl_verify(&kwargs).unwrap_err();
+            assert!(error.is_instance_of::<RustBridgeDeclined>(py));
+        });
+    }
+
+    #[rstest]
+    #[case::asynchronous(true, false)]
+    #[case::synchronous(false, true)]
+    fn synchronous_calls_honor_environment_proxies_like_httpx(
+        #[case] asynchronous: bool,
+        #[case] expected: bool,
+    ) {
+        let settings = for_call(HttpSettings::default(), None, asynchronous);
+        let config = HttpClientConfig::resolve(&settings).unwrap();
+        assert_eq!(config.trust_proxy_env, expected);
     }
 
     #[rstest]
