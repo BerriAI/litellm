@@ -1069,6 +1069,38 @@ async def test_arealtime_marks_litellm_params_async(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_aresponses_websocket_hands_back_the_provider_failure_without_a_success_log(monkeypatch):
+    """A native Responses WebSocket connection the provider rejected comes back from the ``@client``
+    wrapper as the mapped failure, and the wrapper books no success for it: the relay's own dispatch
+    is the connection's single log, so the proxy can record the connection as a failed request."""
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.responses.main import base_llm_http_handler
+
+    success_events = []
+
+    class CaptureLogger(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            success_events.append(response_obj)
+
+    monkeypatch.setattr(litellm, "callbacks", [CaptureLogger()])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    failure = litellm.BadRequestError(message="invalid_encrypted_content", model="gpt-4o", llm_provider="openai")
+    with patch.object(  # test-quality-ok: the provider socket is the seam; how the wrapper treats the relay's outcome is under test
+        base_llm_http_handler, "async_responses_websocket", AsyncMock(return_value=failure)
+    ):
+        outcome = await litellm._aresponses_websocket(model="openai/gpt-4o", websocket=MagicMock(), api_key="sk-test")
+    await asyncio.sleep(0)
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+
+    assert outcome is failure
+    assert success_events == []
+
+
+@pytest.mark.asyncio
 async def test_agenerate_content_marks_litellm_params_async():
     """LIT-4475: the async ``agenerate_content`` entrypoint must plant
     ``agenerate_content`` in ``litellm_params`` so ``_is_sync_litellm_request``

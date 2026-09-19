@@ -1567,7 +1567,13 @@ async def responses_websocket_endpoint(
             llm_router=llm_router,
             user_model=user_model,
         )
-        await llm_call
+        failure: Final = await llm_call
+        if isinstance(failure, Exception):
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=failure,
+                request_data=data,
+            )
     except Exception:
         verbose_proxy_logger.exception("Responses WebSocket error")
         await websocket.close(code=1011, reason="Internal server error")

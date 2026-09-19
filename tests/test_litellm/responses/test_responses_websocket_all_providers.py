@@ -2894,3 +2894,115 @@ class TestNativeWebSocketEncryptedContentAffinity:
         assert response_cost == 0.01
         logging_obj.dispatch_success_handlers.assert_not_awaited()
         logging_obj.dispatch_failure_handlers.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_bidirectional_forward_returns_the_provider_failure(self):
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        backend_drained = asyncio.Event()
+        backend_events = [
+            json.dumps({"type": "response.created", "response": {"id": "resp_1", "status": "in_progress"}}),
+            json.dumps(
+                {
+                    "type": "error",
+                    "status": 400,
+                    "error": {
+                        "type": "invalid_request_error",
+                        "code": "invalid_encrypted_content",
+                        "message": "could not be verified",
+                    },
+                }
+            ),
+        ]
+
+        async def recv(decode=False):
+            if backend_events:
+                return backend_events.pop(0)
+            backend_drained.set()
+            raise Exception("stop")
+
+        async def receive_text():
+            await backend_drained.wait()
+            raise Exception("client gone")
+
+        websocket = MagicMock()
+        websocket.send_text = AsyncMock()
+        websocket.receive_text = receive_text
+        backend_ws = MagicMock()
+        backend_ws.recv = recv
+        backend_ws.send = AsyncMock()
+        backend_ws.close = AsyncMock()
+        logging_obj = MagicMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.dispatch_failure_handlers = AsyncMock()
+        logging_obj._response_cost_calculator = MagicMock(return_value=0.0)
+        handler = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            logging_obj=logging_obj,
+            request_data={},
+            authorized_model="gpt-5.6",
+            custom_llm_provider="openai",
+        )
+
+        failure = await handler.bidirectional_forward()
+
+        assert isinstance(failure, Exception)
+        assert failure.status_code == 400
+        assert "could not be verified" in str(failure)
+
+    @pytest.mark.asyncio
+    async def test_bidirectional_forward_returns_none_after_a_completed_turn(self):
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        backend_drained = asyncio.Event()
+        backend_events = [
+            json.dumps(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_1",
+                        "status": "completed",
+                        "output": [],
+                        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                    },
+                }
+            ),
+        ]
+
+        async def recv(decode=False):
+            if backend_events:
+                return backend_events.pop(0)
+            backend_drained.set()
+            raise Exception("stop")
+
+        async def receive_text():
+            await backend_drained.wait()
+            raise Exception("client gone")
+
+        websocket = MagicMock()
+        websocket.send_text = AsyncMock()
+        websocket.receive_text = receive_text
+        backend_ws = MagicMock()
+        backend_ws.recv = recv
+        backend_ws.send = AsyncMock()
+        backend_ws.close = AsyncMock()
+        logging_obj = MagicMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.dispatch_failure_handlers = AsyncMock()
+        handler = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            logging_obj=logging_obj,
+            request_data={},
+            authorized_model="gpt-5.6",
+            custom_llm_provider="openai",
+        )
+
+        assert await handler.bidirectional_forward() is None
