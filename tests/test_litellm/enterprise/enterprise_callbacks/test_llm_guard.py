@@ -20,13 +20,8 @@ from litellm.types.utils import CallTypesLiteral
         ("embeddings", "input"),
         ("embedding", "input"),
         ("aembedding", "input"),
-        ("moderation", "input"),
-        ("amoderation", "input"),
         ("image_generation", "prompt"),
         ("aimage_generation", "prompt"),
-        ("audio_transcription", "prompt"),
-        ("transcription", "prompt"),
-        ("atranscription", "prompt"),
     ),
 )
 @pytest.mark.parametrize("is_valid", (True, False))
@@ -66,6 +61,24 @@ async def test_llm_guard_call_type_aliases(
     assert data[payload_key] == (
         [{"role": "user", "content": "email: [REDACTED]"}] if payload_key == "messages" else "email: [REDACTED]"
     )
+
+
+@pytest.mark.parametrize("call_type", ("amoderation", "atranscription", "aresponses", "aanthropic_messages"))
+@pytest.mark.asyncio
+async def test_llm_guard_ignores_call_types_the_proxy_never_moderates(
+    call_type: CallTypesLiteral, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "llm_guard_mode", "all")
+    llm_guard: Final = _ENTERPRISE_LLMGuard(
+        mock_testing=True,
+        mock_redacted_text={"sanitized_prompt": "[REDACTED]", "is_valid": False},
+    )
+    data: Final = {"input": "email: person@example.com"}
+    result: Final = await llm_guard.async_moderation_hook(
+        data=data, user_api_key_dict=UserAPIKeyAuth(), call_type=call_type
+    )
+    assert result is data
+    assert data["input"] == "email: person@example.com"
 
 
 @pytest.mark.parametrize("call_type", ("text_completion", "atext_completion"))
